@@ -793,8 +793,9 @@ namespace lfs::training {
                 };
 
                 // shN is 1D swizzled — its capacity must be in FLOATS, not row count.
-                auto ensure_shN_capacity_direct = [capacity](Tensor& param) {
-                    const size_t cap_floats = lfs::core::sh_swizzled_float_count(capacity);
+                const auto active_rest = static_cast<uint32_t>(_splat_data->active_sh_coeffs_rest());
+                auto ensure_shN_capacity_direct = [capacity, active_rest](Tensor& param) {
+                    const size_t cap_floats = lfs::core::sh_swizzled_float_count(capacity, active_rest);
                     if (param.capacity() >= cap_floats)
                         return;
                     auto new_param = Tensor::zeros_direct(param.shape(), cap_floats);
@@ -805,7 +806,7 @@ namespace lfs::training {
 
                 ensure_capacity_direct(_splat_data->means());
                 ensure_capacity_direct(_splat_data->sh0());
-                if (_splat_data->shN().is_valid() && _splat_data->shN().numel() > 0) {
+                if (active_rest > 0 && _splat_data->shN().is_valid() && _splat_data->shN().numel() > 0) {
                     ensure_shN_capacity_direct(_splat_data->shN());
                 }
                 ensure_capacity_direct(_splat_data->scaling_raw());

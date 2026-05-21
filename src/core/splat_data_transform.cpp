@@ -582,11 +582,12 @@ namespace lfs::core {
             splat_data._means.device());
 
         Tensor shN_selected_swizzled;
+        const auto active_rest = static_cast<uint32_t>(splat_data.active_sh_coeffs_rest());
         if (splat_data._shN.is_valid() && splat_data._shN.numel() > 0 &&
-            splat_data.active_sh_coeffs_rest() > 0) {
+            active_rest > 0) {
             shN_selected_swizzled = Tensor::zeros_direct(
-                {sh_swizzled_float_count(static_cast<size_t>(num_required_splat))},
-                sh_swizzled_float_count(static_cast<size_t>(num_required_splat)),
+                {sh_swizzled_float_count(static_cast<size_t>(num_required_splat), active_rest)},
+                sh_swizzled_float_count(static_cast<size_t>(num_required_splat), active_rest),
                 splat_data._shN.device());
             auto indices_i32 = indices_tensor.dtype() == DataType::Int32
                                    ? indices_tensor
@@ -595,7 +596,9 @@ namespace lfs::core {
                 splat_data._shN.ptr<float>(),
                 shN_selected_swizzled.ptr<float>(),
                 indices_i32.ptr<int>(),
-                static_cast<size_t>(num_required_splat));
+                static_cast<size_t>(num_required_splat),
+                0,
+                active_rest);
         }
 
         splat_data._means = splat_data._means.index_select(0, indices_tensor).contiguous();

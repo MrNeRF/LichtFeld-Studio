@@ -18,17 +18,7 @@ namespace lfs::training {
             const size_t capacity = static_cast<size_t>(max_cap);
             LOG_INFO("Pre-allocating tensor capacity for {} Gaussians (parameters)", capacity);
 
-            // Reserve capacity for all parameters (skip empty tensors like shN at sh_degree=0)
-            auto reserve_if_valid = [capacity](lfs::core::Tensor& t) {
-                if (t.is_valid() && t.numel() > 0)
-                    t.reserve(capacity);
-            };
-            reserve_if_valid(splat_data.means());
-            reserve_if_valid(splat_data.sh0());
-            reserve_if_valid(splat_data.shN());
-            reserve_if_valid(splat_data.scaling_raw());
-            reserve_if_valid(splat_data.rotation_raw());
-            reserve_if_valid(splat_data.opacity_raw());
+            splat_data.reserve_capacity(capacity);
         }
     }
 

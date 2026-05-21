@@ -26,7 +26,7 @@ namespace fast_lfs::rasterization {
         const float4* rotations_raw,
         const float* opacities_raw,
         const float3* sh_coefficients_0,
-        const float4* sh_coefficients_rest, // float4-packed swizzled layout (12 slots/primitive)
+        const float4* sh_coefficients_rest, // compact float4-packed swizzled layout
         const float4* w2c,
         const float3* cam_position,
         float* image,

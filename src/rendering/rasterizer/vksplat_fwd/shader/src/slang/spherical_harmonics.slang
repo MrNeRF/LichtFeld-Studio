@@ -164,11 +164,14 @@ SpherHarmCoeffs read_spherical_harmonics_coeffs_split(
     if (active_sh == 0)
         return g_sh_coeffs;
 
+    uint32_t shN_slots_per_primitive =
+        active_sh > 2 ? 12 : active_sh > 1 ? 6 : 3;
+
   #if SH_REORDER_SIZE <= 1
-    uint32_t base = 12*g_idx;
+    uint32_t base = shN_slots_per_primitive*g_idx;
     #define _SHN_COEFF(idx) float4(shN[base+idx])
   #else
-    uint32_t base = (g_idx/SH_REORDER_SIZE) * (12*SH_REORDER_SIZE);
+    uint32_t base = (g_idx/SH_REORDER_SIZE) * (shN_slots_per_primitive*SH_REORDER_SIZE);
     uint32_t offset = g_idx%SH_REORDER_SIZE;
     #define _SHN_COEFF(idx) float4(shN[base+SH_REORDER_SIZE*idx+offset])
   #endif

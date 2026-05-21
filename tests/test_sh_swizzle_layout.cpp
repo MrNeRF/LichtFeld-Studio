@@ -57,7 +57,7 @@ namespace {
         ASSERT_EQ(canonical.shape()[2], 3u);
 
         // Build a swizzled buffer from the canonical view.
-        const size_t swizzled_floats = sh_swizzled_float_count(N);
+        const size_t swizzled_floats = sh_swizzled_float_count(N, K);
         Tensor swizzled = Tensor::zeros({swizzled_floats}, Device::CUDA);
         reorder_sh_to_swizzled(canonical.ptr<float>(), swizzled.ptr<float>(), N, K);
 
@@ -84,6 +84,23 @@ namespace {
             }
         }
         EXPECT_EQ(mismatches, 0u) << "max_abs_diff=" << max_abs_diff;
+    }
+
+    TEST(ShSwizzleLayout, CompactStorageMatchesActiveDegree) {
+        using namespace lfs::core;
+        constexpr std::size_t N = 70;
+        constexpr std::size_t BLOCKS = 3;
+
+        EXPECT_EQ(sh_float4_slots_for_rest(0), 0u);
+        EXPECT_EQ(sh_float4_slots_for_rest(3), 3u);
+        EXPECT_EQ(sh_float4_slots_for_rest(8), 6u);
+        EXPECT_EQ(sh_float4_slots_for_rest(15), 12u);
+
+        EXPECT_EQ(sh_swizzled_float_count(N, 0), 0u);
+        EXPECT_EQ(sh_swizzled_float_count(N, 3), BLOCKS * 3u * kShReorderSize * 4u);
+        EXPECT_EQ(sh_swizzled_float_count(N, 8), BLOCKS * 6u * kShReorderSize * 4u);
+        EXPECT_EQ(sh_swizzled_float_count(N, 15), BLOCKS * 12u * kShReorderSize * 4u);
+        EXPECT_EQ(sh_swizzled_float_count(N), sh_swizzled_float_count(N, 15));
     }
 
     // Verify the float4 shuffle: the swizzled buffer's float4 at sh_swizzled_index(p, k)

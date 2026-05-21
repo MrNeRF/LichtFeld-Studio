@@ -10,10 +10,31 @@
 #include <cstdint>
 #include <cub/cub.cuh>
 #include <cuda_fp16.h>
+#include <iostream>
+#include <stdexcept>
+#include <string>
 
 namespace fast_lfs::rasterization {
 
     using InstanceKey = std::uint32_t;
+
+    enum FastGSForwardStatusFlags : unsigned int {
+        kFastGSForwardStatusTileIndexOutOfRange = 1u << 0,
+        kFastGSForwardStatusInstanceWriteMismatch = 1u << 1,
+    };
+
+    struct FastGSForwardStatus {
+        unsigned int flags;
+        unsigned int source_index;
+        unsigned int tile_index;
+        unsigned int expected_count;
+        unsigned int actual_count;
+        unsigned int bounds_x;
+        unsigned int bounds_y;
+        unsigned int bounds_z;
+        unsigned int bounds_w;
+        std::uint64_t value;
+    };
 
     inline int extract_end_bit(uint n) {
         int leading_zeros = 0;
@@ -84,6 +105,7 @@ namespace fast_lfs::rasterization {
         float2* mean2d;
         float4* conic_opacity;
         float3* color;
+        FastGSForwardStatus* forward_status;
 
         static PerPrimitiveBuffers from_blob(char*& blob, int n_primitives) {
             PerPrimitiveBuffers buffers{};
@@ -94,11 +116,28 @@ namespace fast_lfs::rasterization {
             obtain(blob, buffers.mean2d, n_primitives, 128);
             obtain(blob, buffers.conic_opacity, n_primitives, 128);
             obtain(blob, buffers.color, n_primitives, 128);
-            CUDA_CHECK(cub::DeviceScan::InclusiveSum(
-                           nullptr, buffers.cub_workspace_size,
-                           buffers.n_touched_tiles, buffers.offset,
-                           n_primitives),
-                       "cub::DeviceScan::InclusiveSum workspace query");
+            obtain(blob, buffers.forward_status, 1, 128);
+            const cudaError_t scan_err = cub::DeviceScan::InclusiveSum(
+                nullptr, buffers.cub_workspace_size,
+                buffers.n_touched_tiles, buffers.offset,
+                n_primitives);
+            if (scan_err != cudaSuccess) {
+                int device_count = -1;
+                int current_device = -1;
+                const cudaError_t count_err = cudaGetDeviceCount(&device_count);
+                const cudaError_t device_err = cudaGetDevice(&current_device);
+                const std::string message =
+                    std::string("CUDA error in cub::DeviceScan::InclusiveSum workspace query at ") +
+                    __FILE__ + ":" + std::to_string(__LINE__) +
+                    " (n_primitives=" + std::to_string(n_primitives) +
+                    ", current_device=" + std::to_string(current_device) +
+                    ", device_count=" + std::to_string(device_count) +
+                    ", cudaGetDevice=" + cudaGetErrorName(device_err) +
+                    ", cudaGetDeviceCount=" + cudaGetErrorName(count_err) +
+                    ") - " + cudaGetErrorName(scan_err) + ": " + cudaGetErrorString(scan_err);
+                std::cerr << "\n[CUDA ERROR] " << message;
+                throw std::runtime_error(message);
+            }
             obtain(blob, buffers.cub_workspace, buffers.cub_workspace_size, 128);
             return buffers;
         }

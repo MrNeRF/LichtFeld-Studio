@@ -462,18 +462,18 @@ namespace lfs::training {
 
             // shN state is swizzled — zero out by primitive index via the dedicated kernel.
             if (param_type == ParamType::ShN) {
-                if (!state->exp_avg.is_valid() || state->exp_avg.numel() == 0)
+                if (active_rest_u32 == 0 || !state->exp_avg.is_valid() || state->exp_avg.numel() == 0)
                     return;
                 auto idx_i32 = sampled_idxs.dtype() == lfs::core::DataType::Int32
                                    ? sampled_idxs
                                    : sampled_idxs.to(lfs::core::DataType::Int32);
                 lfs::core::shN_swizzled_zero_at_indices(
-                    state->exp_avg.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel());
+                    state->exp_avg.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), active_rest_u32);
                 lfs::core::shN_swizzled_zero_at_indices(
-                    state->exp_avg_sq.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel());
+                    state->exp_avg_sq.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), active_rest_u32);
                 if (state->grad.is_valid() && state->grad.numel() > 0) {
                     lfs::core::shN_swizzled_zero_at_indices(
-                        state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel());
+                        state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), active_rest_u32);
                 }
                 return;
             }
@@ -555,7 +555,7 @@ namespace lfs::training {
             if (use_shN) {
                 auto append_shN = second_shN.slice(0, num_filled, budget_for_alloc);
                 const size_t new_size = old_size + n_remaining;
-                const size_t needed_floats = lfs::core::sh_swizzled_float_count(new_size);
+                const size_t needed_floats = lfs::core::sh_swizzled_float_count(new_size, active_rest_u32);
                 if (_splat_data->shN().numel() < needed_floats) {
                     _splat_data->shN().append_zeros(needed_floats - _splat_data->shN().numel());
                 }
@@ -863,18 +863,19 @@ namespace lfs::training {
 
             // shN state is swizzled — use the swizzle-aware zero kernel.
             if (param_type == ParamType::ShN) {
-                if (!state->exp_avg.is_valid() || state->exp_avg.numel() == 0)
+                const auto active_rest = static_cast<uint32_t>(_splat_data->active_sh_coeffs_rest());
+                if (active_rest == 0 || !state->exp_avg.is_valid() || state->exp_avg.numel() == 0)
                     return;
                 auto idx_i32 = prune_indices.dtype() == lfs::core::DataType::Int32
                                    ? prune_indices
                                    : prune_indices.to(lfs::core::DataType::Int32);
                 lfs::core::shN_swizzled_zero_at_indices(
-                    state->exp_avg.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel());
+                    state->exp_avg.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), active_rest);
                 lfs::core::shN_swizzled_zero_at_indices(
-                    state->exp_avg_sq.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel());
+                    state->exp_avg_sq.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), active_rest);
                 if (state->grad.is_valid() && state->grad.numel() > 0) {
                     lfs::core::shN_swizzled_zero_at_indices(
-                        state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel());
+                        state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), active_rest);
                 }
                 return;
             }
@@ -973,18 +974,18 @@ namespace lfs::training {
 
             // shN state is swizzled — zero by primitive index via the dedicated kernel.
             if (param_type == ParamType::ShN) {
-                if (!state->exp_avg.is_valid() || state->exp_avg.numel() == 0)
+                if (active_rest == 0 || !state->exp_avg.is_valid() || state->exp_avg.numel() == 0)
                     return;
                 auto idx_i32 = target_indices.dtype() == lfs::core::DataType::Int32
                                    ? target_indices
                                    : target_indices.to(lfs::core::DataType::Int32);
                 lfs::core::shN_swizzled_zero_at_indices(
-                    state->exp_avg.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel());
+                    state->exp_avg.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), active_rest);
                 lfs::core::shN_swizzled_zero_at_indices(
-                    state->exp_avg_sq.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel());
+                    state->exp_avg_sq.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), active_rest);
                 if (state->grad.is_valid() && state->grad.numel() > 0) {
                     lfs::core::shN_swizzled_zero_at_indices(
-                        state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel());
+                        state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), active_rest);
                 }
                 return;
             }

@@ -94,7 +94,7 @@ struct VulkanGSPipelineBuffers {
     // Raw split SplatData projection inputs used by the Vulkan viewer. These can
     // directly alias Vulkan-external tensor storage during training.
     Buffer<float> sh0;         // (N, 1, 3) flattened
-    Buffer<float> shN;         // swizzled rest-only SH: [ceil(N/32), 12, 32] float4
+    Buffer<float> shN;         // swizzled rest-only SH: [ceil(N/32), active slots, 32] float4
     Buffer<float> scaling_raw; // (N, 3), log-scale
     Buffer<float> opacity_raw; // (N, 1), logits
 

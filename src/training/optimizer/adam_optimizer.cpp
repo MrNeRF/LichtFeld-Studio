@@ -47,13 +47,17 @@ namespace lfs::training {
     size_t AdamOptimizer::compute_state_growth(ParamType type, size_t n_new) const {
         if (type != ParamType::ShN)
             return n_new;
+        const auto active_rest = static_cast<uint32_t>(splat_data_.active_sh_coeffs_rest());
+        if (active_rest == 0)
+            return 0;
         const size_t n_old = static_cast<size_t>(splat_data_.size());
         // splat_data_.size() reflects the post-growth N at this point; the caller already
         // resized the SplatData. So n_old here is the new total, and the old N was n_old - n_new.
         if (n_old < n_new)
-            return lfs::core::sh_swizzled_float_count(n_old);
+            return lfs::core::sh_swizzled_float_count(n_old, active_rest);
         const size_t prev = n_old - n_new;
-        return lfs::core::sh_swizzled_float_count(n_old) - lfs::core::sh_swizzled_float_count(prev);
+        return lfs::core::sh_swizzled_float_count(n_old, active_rest) -
+               lfs::core::sh_swizzled_float_count(prev, active_rest);
     }
 
     void AdamOptimizer::allocate_gradients() {
@@ -82,7 +86,9 @@ namespace lfs::training {
             // shN is stored in vksplat swizzled layout as a 1D float tensor; capacity
             // along dim 0 must be expressed in floats, not primitive rows.
             const size_t effective_capacity = (type == ParamType::ShN)
-                                                  ? lfs::core::sh_swizzled_float_count(capacity)
+                                                  ? lfs::core::sh_swizzled_float_count(
+                                                        capacity,
+                                                        static_cast<uint32_t>(splat_data_.active_sh_coeffs_rest()))
                                                   : capacity;
             const size_t alloc_cap = (effective_capacity > param_size) ? effective_capacity : param_size;
 
@@ -179,8 +185,12 @@ namespace lfs::training {
 
         auto& state = states_[name];
         const size_t param_size = param.shape()[0];
-        const size_t initial_cap = (type == ParamType::ShN && config_.initial_capacity > 0)
-                                       ? std::max(lfs::core::sh_swizzled_float_count(config_.initial_capacity), param_size)
+        const size_t initial_cap = type == ParamType::ShN
+                                       ? std::max(
+                                             param_size,
+                                             lfs::core::sh_swizzled_float_count(
+                                                 config_.initial_capacity,
+                                                 static_cast<uint32_t>(splat_data_.active_sh_coeffs_rest())))
                                        : compute_new_capacity(0, param_size);
 
         if (allocate_grad && (!state.grad.is_valid() || state.grad.numel() == 0)) {
@@ -337,11 +347,10 @@ namespace lfs::training {
         // shN is laid out in swizzled float4 order (vksplat shAt). The fused-backward kernel
         // indexes it via shAt(p, k) float4-slot reads/writes, not via
         // primitive_idx*n_attributes+offset, so n_attributes is informational only.
-        // We report 12 float4 * 4 floats = 48 floats per primitive.
+        const auto active_rest = static_cast<uint32_t>(splat_data_.active_sh_coeffs_rest());
         fused.shN = prepare_param(ParamType::ShN,
-                                  static_cast<int>(lfs::core::kShRestFloat4PerPrimitive * 4u),
-                                  iteration > SH_WARMUP_ITERATIONS &&
-                                      splat_data_.active_sh_coeffs_rest() > 0);
+                                  static_cast<int>(lfs::core::sh_float4_slots_for_rest(active_rest) * 4u),
+                                  active_rest > 0 && iteration > SH_WARMUP_ITERATIONS);
         fused.scaling = prepare_param(ParamType::Scaling, 3, true);
         fused.rotation = prepare_param(ParamType::Rotation, 4, true);
         fused.opacity = prepare_param(ParamType::Opacity, 1, true);
@@ -380,7 +389,8 @@ namespace lfs::training {
         // Skip ShN when not initialized (sh_degree=0 case)
         if (type == ParamType::ShN) {
             const auto& param = get_param(type);
-            if (!param.is_valid() || (param.ndim() >= 2 && param.shape()[1] == 0)) {
+            if (!param.is_valid() || param.numel() == 0 ||
+                splat_data_.active_sh_coeffs_rest() == 0) {
                 return; // ShN is empty at sh-degree 0, nothing to reset
             }
         }
@@ -397,15 +407,25 @@ namespace lfs::training {
             return;
         }
 
+        int64_t* d_indices;
+        CHECK_CUDA(cudaMalloc(&d_indices, indices.size() * sizeof(int64_t)));
+        CHECK_CUDA(cudaMemcpy(d_indices, indices.data(), indices.size() * sizeof(int64_t), cudaMemcpyHostToDevice));
+
+        if (type == ParamType::ShN) {
+            const auto active_rest = static_cast<uint32_t>(splat_data_.active_sh_coeffs_rest());
+            lfs::core::shN_swizzled_zero_at_indices_i64(
+                state.exp_avg.ptr<float>(), d_indices, indices.size(), active_rest);
+            lfs::core::shN_swizzled_zero_at_indices_i64(
+                state.exp_avg_sq.ptr<float>(), d_indices, indices.size(), active_rest);
+            CHECK_CUDA(cudaFree(d_indices));
+            return;
+        }
+
         const auto& shape = state.exp_avg.shape();
         int row_size = 1;
         for (size_t i = 1; i < shape.rank(); i++) {
             row_size *= static_cast<int>(shape[i]);
         }
-
-        int64_t* d_indices;
-        CHECK_CUDA(cudaMalloc(&d_indices, indices.size() * sizeof(int64_t)));
-        CHECK_CUDA(cudaMemcpy(d_indices, indices.data(), indices.size() * sizeof(int64_t), cudaMemcpyHostToDevice));
 
         fast_lfs::optimizer::zero_rows_at_indices(state.exp_avg.ptr<float>(), d_indices, indices.size(), row_size);
         fast_lfs::optimizer::zero_rows_at_indices(state.exp_avg_sq.ptr<float>(), d_indices, indices.size(), row_size);
@@ -519,7 +539,8 @@ namespace lfs::training {
         // 1D and may be empty when allocated for SH degree 0.
         if (type == ParamType::ShN) {
             const auto& shN_param = get_param(type);
-            if (!shN_param.is_valid() || shN_param.numel() == 0) {
+            if (!shN_param.is_valid() || shN_param.numel() == 0 ||
+                splat_data_.active_sh_coeffs_rest() == 0) {
                 return;
             }
         }
@@ -661,13 +682,17 @@ namespace lfs::training {
                 // SH degree 0 — no shN data to extend. The param length tracks via sh0.
                 return;
             }
+            const auto active_rest = static_cast<uint32_t>(splat_data_.active_sh_coeffs_rest());
+            if (active_rest == 0) {
+                return;
+            }
             const size_t n_new = indices.numel();
             if (n_new == 0)
                 return;
             const size_t old_N = static_cast<size_t>(splat_data_.size()) - n_new;
             const size_t new_N = old_N + n_new;
-            const size_t old_floats = lfs::core::sh_swizzled_float_count(old_N);
-            const size_t new_floats = lfs::core::sh_swizzled_float_count(new_N);
+            const size_t old_floats = lfs::core::sh_swizzled_float_count(old_N, active_rest);
+            const size_t new_floats = lfs::core::sh_swizzled_float_count(new_N, active_rest);
             const size_t growth = new_floats - old_floats;
 
             // Extend the swizzled param buffer by `growth` zero floats. The new range
@@ -675,18 +700,28 @@ namespace lfs::training {
             // [old_N, new_N).
             param.append_zeros(growth);
 
-            // Scatter values from source primitive indices into the new primitive range.
-            float* shN_ptr = param.ptr<float>();
-            if (indices.dtype() == lfs::core::DataType::Int64) {
-                lfs::core::shN_swizzled_gather_self_i64(
-                    shN_ptr, shN_ptr, indices.ptr<int64_t>(), n_new, old_N);
-            } else {
-                auto idx_i32 = indices.dtype() == lfs::core::DataType::Int32
-                                   ? indices
-                                   : indices.to(lfs::core::DataType::Int32);
-                lfs::core::shN_swizzled_gather_self(
-                    shN_ptr, shN_ptr, idx_i32.ptr<int>(), n_new, old_N);
+            const bool indices_are_i64 = indices.dtype() == lfs::core::DataType::Int64;
+            lfs::core::Tensor indices_i32;
+            const int* indices_i32_ptr = nullptr;
+            if (!indices_are_i64) {
+                indices_i32 = indices.dtype() == lfs::core::DataType::Int32
+                                  ? indices
+                                  : indices.to(lfs::core::DataType::Int32);
+                indices_i32_ptr = indices_i32.ptr<int>();
             }
+
+            auto gather_new_swizzled_rows = [&](lfs::core::Tensor& tensor) {
+                float* ptr = tensor.ptr<float>();
+                if (indices_are_i64) {
+                    lfs::core::shN_swizzled_gather_self_i64(
+                        ptr, ptr, indices.ptr<int64_t>(), n_new, old_N, active_rest);
+                } else {
+                    lfs::core::shN_swizzled_gather_self(
+                        ptr, ptr, indices_i32_ptr, n_new, old_N, active_rest);
+                }
+            };
+
+            gather_new_swizzled_rows(param);
 
             // Extend the Adam state (exp_avg, exp_avg_sq) with gather-from-self in swizzled.
             const auto name = param_name(type);
@@ -699,24 +734,8 @@ namespace lfs::training {
                     if (fits) {
                         state.exp_avg.append_zeros(growth);
                         state.exp_avg_sq.append_zeros(growth);
-                        if (indices.dtype() == lfs::core::DataType::Int64) {
-                            lfs::core::shN_swizzled_gather_self_i64(
-                                state.exp_avg.ptr<float>(), state.exp_avg.ptr<float>(),
-                                indices.ptr<int64_t>(), n_new, old_N);
-                            lfs::core::shN_swizzled_gather_self_i64(
-                                state.exp_avg_sq.ptr<float>(), state.exp_avg_sq.ptr<float>(),
-                                indices.ptr<int64_t>(), n_new, old_N);
-                        } else {
-                            auto idx_i32 = indices.dtype() == lfs::core::DataType::Int32
-                                               ? indices
-                                               : indices.to(lfs::core::DataType::Int32);
-                            lfs::core::shN_swizzled_gather_self(
-                                state.exp_avg.ptr<float>(), state.exp_avg.ptr<float>(),
-                                idx_i32.ptr<int>(), n_new, old_N);
-                            lfs::core::shN_swizzled_gather_self(
-                                state.exp_avg_sq.ptr<float>(), state.exp_avg_sq.ptr<float>(),
-                                idx_i32.ptr<int>(), n_new, old_N);
-                        }
+                        gather_new_swizzled_rows(state.exp_avg);
+                        gather_new_swizzled_rows(state.exp_avg_sq);
                         state.size = new_floats;
                         state.capacity = state.exp_avg.capacity();
                     } else {
@@ -730,24 +749,8 @@ namespace lfs::training {
                         };
                         realloc(state.exp_avg);
                         realloc(state.exp_avg_sq);
-                        if (indices.dtype() == lfs::core::DataType::Int64) {
-                            lfs::core::shN_swizzled_gather_self_i64(
-                                state.exp_avg.ptr<float>(), state.exp_avg.ptr<float>(),
-                                indices.ptr<int64_t>(), n_new, old_N);
-                            lfs::core::shN_swizzled_gather_self_i64(
-                                state.exp_avg_sq.ptr<float>(), state.exp_avg_sq.ptr<float>(),
-                                indices.ptr<int64_t>(), n_new, old_N);
-                        } else {
-                            auto idx_i32 = indices.dtype() == lfs::core::DataType::Int32
-                                               ? indices
-                                               : indices.to(lfs::core::DataType::Int32);
-                            lfs::core::shN_swizzled_gather_self(
-                                state.exp_avg.ptr<float>(), state.exp_avg.ptr<float>(),
-                                idx_i32.ptr<int>(), n_new, old_N);
-                            lfs::core::shN_swizzled_gather_self(
-                                state.exp_avg_sq.ptr<float>(), state.exp_avg_sq.ptr<float>(),
-                                idx_i32.ptr<int>(), n_new, old_N);
-                        }
+                        gather_new_swizzled_rows(state.exp_avg);
+                        gather_new_swizzled_rows(state.exp_avg_sq);
                         state.size = new_floats;
                         state.capacity = 0;
                     }
@@ -826,10 +829,11 @@ namespace lfs::training {
 
         // shN state is swizzled — zero by primitive index via the swizzle-aware kernel.
         if (type == ParamType::ShN) {
+            const auto active_rest = static_cast<uint32_t>(splat_data_.active_sh_coeffs_rest());
             lfs::core::shN_swizzled_zero_at_indices_i64(
-                state.exp_avg.ptr<float>(), indices_device, n_indices);
+                state.exp_avg.ptr<float>(), indices_device, n_indices, active_rest);
             lfs::core::shN_swizzled_zero_at_indices_i64(
-                state.exp_avg_sq.ptr<float>(), indices_device, n_indices);
+                state.exp_avg_sq.ptr<float>(), indices_device, n_indices, active_rest);
             return;
         }
 
@@ -949,8 +953,8 @@ namespace lfs::training {
                 const size_t N = static_cast<size_t>(state.exp_avg.shape()[0]);
                 const uint32_t K = static_cast<uint32_t>(state.exp_avg.shape()[1]);
                 const size_t cap_rows = std::max<size_t>(state.capacity, N);
-                const size_t cap_floats = lfs::core::sh_swizzled_float_count(cap_rows);
-                const size_t logical_floats = lfs::core::sh_swizzled_float_count(N);
+                const size_t cap_floats = lfs::core::sh_swizzled_float_count(cap_rows, K);
+                const size_t logical_floats = lfs::core::sh_swizzled_float_count(N, K);
 
                 auto swizzled_avg = lfs::core::Tensor::zeros_direct(
                     lfs::core::TensorShape({logical_floats}), cap_floats, lfs::core::Device::CUDA);
@@ -984,7 +988,10 @@ namespace lfs::training {
     void AdamOptimizer::reserve_capacity(const size_t capacity) {
         for (auto& [name, state] : states_) {
             const size_t target_capacity =
-                name == "shN" ? lfs::core::sh_swizzled_float_count(capacity) : capacity;
+                name == "shN" ? lfs::core::sh_swizzled_float_count(
+                                    capacity,
+                                    static_cast<uint32_t>(splat_data_.active_sh_coeffs_rest()))
+                              : capacity;
             if (target_capacity > state.capacity) {
                 if (state.grad.is_valid())
                     state.grad.reserve(target_capacity);

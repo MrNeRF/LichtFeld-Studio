@@ -148,7 +148,8 @@ namespace lfs::training {
         void reset_optimizer_state_at_indices(
             AdamOptimizer& optimizer,
             const ParamType param_type,
-            const lfs::core::Tensor& indices) {
+            const lfs::core::Tensor& indices,
+            const uint32_t shN_active_rest = 0) {
             if (!indices.is_valid() || indices.numel() == 0) {
                 return;
             }
@@ -160,18 +161,21 @@ namespace lfs::training {
 
             // shN state is swizzled — zero by primitive index via the swizzle-aware kernel.
             if (param_type == ParamType::ShN) {
+                const auto active_rest = shN_active_rest;
+                if (active_rest == 0)
+                    return;
                 if (!state->exp_avg.is_valid() || state->exp_avg.numel() == 0)
                     return;
                 auto idx_i32 = indices.dtype() == lfs::core::DataType::Int32
                                    ? indices
                                    : indices.to(lfs::core::DataType::Int32);
                 lfs::core::shN_swizzled_zero_at_indices(
-                    state->exp_avg.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel());
+                    state->exp_avg.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), active_rest);
                 lfs::core::shN_swizzled_zero_at_indices(
-                    state->exp_avg_sq.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel());
+                    state->exp_avg_sq.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), active_rest);
                 if (state->grad.is_valid() && state->grad.numel() > 0) {
                     lfs::core::shN_swizzled_zero_at_indices(
-                        state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel());
+                        state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), active_rest);
                 }
                 return;
             }
@@ -392,8 +396,9 @@ namespace lfs::training {
             };
 
             // shN is 1D swizzled — its capacity must be in FLOATS, not row count.
-            auto ensure_shN_capacity_direct = [capacity](Tensor& param) {
-                const size_t cap_floats = lfs::core::sh_swizzled_float_count(capacity);
+            const auto active_rest = static_cast<uint32_t>(_splat_data->active_sh_coeffs_rest());
+            auto ensure_shN_capacity_direct = [capacity, active_rest](Tensor& param) {
+                const size_t cap_floats = lfs::core::sh_swizzled_float_count(capacity, active_rest);
                 if (param.capacity() >= cap_floats)
                     return;
                 auto new_param = Tensor::zeros_direct(param.shape(), cap_floats);
@@ -404,7 +409,7 @@ namespace lfs::training {
 
             ensure_capacity_direct(_splat_data->means());
             ensure_capacity_direct(_splat_data->sh0());
-            if (_splat_data->shN().is_valid() && _splat_data->shN().numel() > 0) {
+            if (active_rest > 0 && _splat_data->shN().is_valid() && _splat_data->shN().numel() > 0) {
                 ensure_shN_capacity_direct(_splat_data->shN());
             }
             ensure_capacity_direct(_splat_data->scaling_raw());
@@ -678,9 +683,10 @@ namespace lfs::training {
             auto zero_rotation = Tensor::zeros({static_cast<size_t>(pruned_count), 4}, _splat_data->rotation_raw().device());
             _splat_data->rotation_raw().index_put_(prune_indices, zero_rotation);
 
+            const auto active_rest = static_cast<uint32_t>(_splat_data->active_sh_coeffs_rest());
             reset_optimizer_state_at_indices(*_optimizer, ParamType::Means, prune_indices);
             reset_optimizer_state_at_indices(*_optimizer, ParamType::Sh0, prune_indices);
-            reset_optimizer_state_at_indices(*_optimizer, ParamType::ShN, prune_indices);
+            reset_optimizer_state_at_indices(*_optimizer, ParamType::ShN, prune_indices, active_rest);
             reset_optimizer_state_at_indices(*_optimizer, ParamType::Scaling, prune_indices);
             reset_optimizer_state_at_indices(*_optimizer, ParamType::Rotation, prune_indices);
             reset_optimizer_state_at_indices(*_optimizer, ParamType::Opacity, prune_indices);
@@ -857,7 +863,7 @@ namespace lfs::training {
 
         reset_optimizer_state_at_indices(*_optimizer, ParamType::Means, split_indices);
         reset_optimizer_state_at_indices(*_optimizer, ParamType::Sh0, split_indices);
-        reset_optimizer_state_at_indices(*_optimizer, ParamType::ShN, split_indices);
+        reset_optimizer_state_at_indices(*_optimizer, ParamType::ShN, split_indices, active_rest);
         reset_optimizer_state_at_indices(*_optimizer, ParamType::Scaling, split_indices);
         reset_optimizer_state_at_indices(*_optimizer, ParamType::Rotation, split_indices);
         reset_optimizer_state_at_indices(*_optimizer, ParamType::Opacity, split_indices);
@@ -900,9 +906,9 @@ namespace lfs::training {
             _optimizer->add_new_params(ParamType::Means, append_means, true);
             _optimizer->add_new_params(ParamType::Sh0, append_sh0, true);
 
-            const size_t new_size = old_size + n_append;
-            if (_splat_data->shN().is_valid() && _splat_data->shN().numel() > 0) {
-                const size_t needed_floats = sh_swizzled_float_count(new_size);
+            if (use_shN && append_shN.is_valid() && append_shN.numel() > 0) {
+                const size_t new_size = old_size + n_append;
+                const size_t needed_floats = sh_swizzled_float_count(new_size, active_rest);
                 if (_splat_data->shN().numel() < needed_floats) {
                     _splat_data->shN().append_zeros(needed_floats - _splat_data->shN().numel());
                 }
@@ -947,19 +953,22 @@ namespace lfs::training {
         };
 
         // shN is swizzled — compact via block-aware gather.
+        const auto active_rest_u32 = static_cast<uint32_t>(_splat_data->active_sh_coeffs_rest());
         auto compact_shN_swizzled = [&](Tensor& t, size_t cap_rows) {
             if (!t.is_valid() || t.numel() == 0)
+                return;
+            if (active_rest_u32 == 0)
                 return;
             auto idx_i32 = valid_indices.dtype() == lfs::core::DataType::Int32
                                ? valid_indices
                                : valid_indices.to(lfs::core::DataType::Int32);
-            const size_t cap_floats = cap_rows > 0 ? lfs::core::sh_swizzled_float_count(cap_rows)
-                                                   : lfs::core::sh_swizzled_float_count(new_size);
-            const size_t logical_floats = lfs::core::sh_swizzled_float_count(new_size);
+            const size_t cap_floats = cap_rows > 0 ? lfs::core::sh_swizzled_float_count(cap_rows, active_rest_u32)
+                                                   : lfs::core::sh_swizzled_float_count(new_size, active_rest_u32);
+            const size_t logical_floats = lfs::core::sh_swizzled_float_count(new_size, active_rest_u32);
             auto fresh = Tensor::zeros_direct(TensorShape({logical_floats}), cap_floats, Device::CUDA);
             lfs::core::shN_swizzled_gather_self(
                 t.ptr<float>(), fresh.ptr<float>(),
-                idx_i32.ptr<int>(), new_size, 0);
+                idx_i32.ptr<int>(), new_size, 0, active_rest_u32);
             t = std::move(fresh);
         };
 
@@ -982,9 +991,9 @@ namespace lfs::training {
             if (pt == ParamType::ShN) {
                 compact_shN_swizzled(state->exp_avg, cap);
                 compact_shN_swizzled(state->exp_avg_sq, cap);
-                state->size = lfs::core::sh_swizzled_float_count(new_size);
-                state->capacity = cap > 0 ? lfs::core::sh_swizzled_float_count(cap)
-                                          : lfs::core::sh_swizzled_float_count(new_size);
+                state->size = lfs::core::sh_swizzled_float_count(new_size, active_rest_u32);
+                state->capacity = cap > 0 ? lfs::core::sh_swizzled_float_count(cap, active_rest_u32)
+                                          : lfs::core::sh_swizzled_float_count(new_size, active_rest_u32);
             } else {
                 compact(state->exp_avg);
                 compact(state->exp_avg_sq);
@@ -1208,7 +1217,7 @@ namespace lfs::training {
 
         reset_optimizer_state_at_indices(*_optimizer, ParamType::Means, target_indices);
         reset_optimizer_state_at_indices(*_optimizer, ParamType::Sh0, target_indices);
-        reset_optimizer_state_at_indices(*_optimizer, ParamType::ShN, target_indices);
+        reset_optimizer_state_at_indices(*_optimizer, ParamType::ShN, target_indices, active_rest);
         reset_optimizer_state_at_indices(*_optimizer, ParamType::Scaling, target_indices);
         reset_optimizer_state_at_indices(*_optimizer, ParamType::Rotation, target_indices);
         reset_optimizer_state_at_indices(*_optimizer, ParamType::Opacity, target_indices);

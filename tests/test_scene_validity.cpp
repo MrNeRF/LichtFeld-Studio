@@ -7,6 +7,7 @@
 #include <thread>
 #include <vector>
 
+#include "core/cuda/sh_layout.cuh"
 #include "core/parameters.hpp"
 #include "core/point_cloud.hpp"
 #include "core/scene.hpp"
@@ -18,14 +19,6 @@
 namespace lfs::python {
 
     namespace {
-        size_t sh_rest_coefficients_for_degree(const int degree) {
-            if (degree <= 0) {
-                return 0;
-            }
-            const auto d = static_cast<size_t>(degree);
-            return (d + 1) * (d + 1) - 1;
-        }
-
         std::unique_ptr<core::SplatData> make_test_splat(size_t count, const int sh_degree = 0) {
             std::vector<float> means(count * 3, 0.0f);
             std::vector<float> rotations(count * 4, 0.0f);
@@ -38,24 +31,37 @@ namespace lfs::python {
                 sh_degree,
                 core::Tensor::from_vector(means, {count, size_t{3}}, core::Device::CPU),
                 core::Tensor::zeros({count, size_t{1}, size_t{3}}, core::Device::CPU, core::DataType::Float32),
-                core::Tensor::zeros({count, sh_rest_coefficients_for_degree(sh_degree), size_t{3}}, core::Device::CPU, core::DataType::Float32),
+                core::Tensor::zeros({count, core::sh_rest_coefficients_for_degree(sh_degree), size_t{3}}, core::Device::CPU, core::DataType::Float32),
                 core::Tensor::zeros({count, size_t{3}}, core::Device::CPU, core::DataType::Float32),
                 core::Tensor::from_vector(rotations, {count, size_t{4}}, core::Device::CPU),
                 core::Tensor::zeros({count, size_t{1}}, core::Device::CPU, core::DataType::Float32),
                 1.0f);
         }
 
-        void expect_sh_degree(const core::SplatData& splat, const int sh_degree, const size_t count) {
-            const size_t expected_rest_coeffs = sh_rest_coefficients_for_degree(sh_degree);
+        void expect_sh_degree(const core::SplatData& splat,
+                              const int max_sh_degree,
+                              const int active_sh_degree,
+                              const size_t count) {
+            const size_t expected_rest_coeffs = core::sh_rest_coefficients_for_degree(active_sh_degree);
+            const size_t expected_swizzled_floats =
+                core::sh_swizzled_float_count(count, static_cast<std::uint32_t>(expected_rest_coeffs));
 
-            EXPECT_EQ(splat.get_max_sh_degree(), sh_degree);
-            EXPECT_EQ(splat.get_active_sh_degree(), sh_degree);
-            ASSERT_TRUE(splat.shN().is_valid());
-            ASSERT_EQ(splat.shN().ndim(), 3);
-            EXPECT_EQ(splat.shN().shape()[0], count);
-            EXPECT_EQ(splat.shN().shape()[1], expected_rest_coeffs);
-            EXPECT_EQ(splat.shN().shape()[2], size_t{3});
+            EXPECT_EQ(splat.get_max_sh_degree(), max_sh_degree);
+            EXPECT_EQ(splat.get_active_sh_degree(), active_sh_degree);
+            ASSERT_TRUE(splat.shN_raw().is_valid());
+            ASSERT_EQ(splat.shN_raw().ndim(), 1);
+            EXPECT_EQ(splat.shN_raw().shape()[0], expected_swizzled_floats);
+
+            const auto shN_canonical = splat.shN_canonical();
+            ASSERT_EQ(shN_canonical.ndim(), 3);
+            EXPECT_EQ(shN_canonical.shape()[0], count);
+            EXPECT_EQ(shN_canonical.shape()[1], expected_rest_coeffs);
+            EXPECT_EQ(shN_canonical.shape()[2], size_t{3});
             EXPECT_EQ(splat.get_shs().shape()[1], expected_rest_coeffs + 1);
+        }
+
+        void expect_sh_degree(const core::SplatData& splat, const int sh_degree, const size_t count) {
+            expect_sh_degree(splat, sh_degree, sh_degree, count);
         }
     } // namespace
 
@@ -236,7 +242,7 @@ namespace lfs::python {
         ASSERT_TRUE(result.has_value()) << result.error();
         const auto* model = dummy_scene_.getTrainingModel();
         ASSERT_NE(model, nullptr);
-        expect_sh_degree(*model, 1, count);
+        expect_sh_degree(*model, 1, 0, count);
     }
 
     TEST_F(SceneValidityTest, SceneManagerEmptyStateKeepsApplicationSceneContext) {

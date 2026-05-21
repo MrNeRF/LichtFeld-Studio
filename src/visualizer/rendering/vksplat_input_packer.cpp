@@ -66,14 +66,16 @@ namespace lfs::vis::vksplat {
             const std::vector<float>& shN,
             const std::size_t primitive_idx,
             const std::size_t rest_coeff_idx,
-            const std::size_t channel) {
+            const std::size_t channel,
+            const std::uint32_t active_rest) {
             const std::size_t packed_offset = rest_coeff_idx * 3 + channel;
             const std::size_t slot = packed_offset / 4;
             const std::size_t component = packed_offset % 4;
             const std::size_t float4_index =
                 lfs::core::sh_swizzled_index(
                     static_cast<std::uint32_t>(primitive_idx),
-                    static_cast<std::uint32_t>(slot));
+                    static_cast<std::uint32_t>(slot),
+                    active_rest);
             return shN[float4_index * 4 + component];
         }
 
@@ -96,17 +98,19 @@ namespace lfs::vis::vksplat {
             if (!shN) {
                 return std::unexpected(shN.error());
             }
-            const std::size_t expected_floats = lfs::core::sh_swizzled_float_count(n);
+            const std::size_t expected_floats =
+                lfs::core::sh_swizzled_float_count(n, static_cast<std::uint32_t>(active_rest));
             if (shN->size() < expected_floats) {
                 return std::unexpected("VkSplat staged swizzled SH rest tensor is smaller than expected");
             }
 
             const std::size_t rest = std::min<std::size_t>(15, active_rest);
+            const auto active_rest_u32 = static_cast<std::uint32_t>(rest);
             for (std::size_t i = 0; i < n; ++i) {
                 for (std::size_t k = 0; k < rest; ++k) {
                     for (std::size_t c = 0; c < 3; ++c) {
                         packed_sh[((i * 16) + (k + 1)) * 3 + c] =
-                            readSwizzledRestCoeff(*shN, i, k, c);
+                            readSwizzledRestCoeff(*shN, i, k, c, active_rest_u32);
                     }
                 }
             }
@@ -246,7 +250,8 @@ namespace lfs::vis::vksplat {
                 sh0.ptr<float>(),
                 shN_ptr,
                 packed.ptr<float>(),
-                n);
+                n,
+                static_cast<std::uint32_t>(splat_data.active_sh_coeffs_rest()));
             return packed;
         }
 
@@ -343,9 +348,11 @@ namespace lfs::vis::vksplat {
             return std::unexpected("VkSplat expected swizzled SH rest coefficients as a 1D tensor");
         }
 
+        const auto active_rest = static_cast<std::uint32_t>(splat_data.active_sh_coeffs_rest());
         const std::size_t sh_padded_floats = lfs::core::sh_swizzled_float_count(n);
+        const std::size_t expected_shN_floats = lfs::core::sh_swizzled_float_count(n, active_rest);
         if (shN.is_valid() && shN.numel() > 0 &&
-            static_cast<std::size_t>(shN.numel()) < sh_padded_floats) {
+            static_cast<std::size_t>(shN.numel()) < expected_shN_floats) {
             return std::unexpected("VkSplat swizzled SH rest tensor is smaller than expected");
         }
 
@@ -383,12 +390,15 @@ namespace lfs::vis::vksplat {
         if (!validSh0Shape(sh0_raw, n)) {
             return std::unexpected("VkSplat expected SH DC coefficients shaped [N, 1, 3] or [N, 3]");
         }
-        const std::size_t shN_bytes = lfs::core::sh_swizzled_float_count(n) * sizeof(float);
+        const auto active_rest = static_cast<std::uint32_t>(splat_data.active_sh_coeffs_rest());
+        const std::size_t active_shN_bytes =
+            lfs::core::sh_swizzled_float_count(n, active_rest) * sizeof(float);
+        const std::size_t shN_bytes = active_rest == 0 ? sizeof(float4) : active_shN_bytes;
         if (shN_raw.is_valid() && shN_raw.numel() > 0) {
             if (shN_raw.ndim() != 1) {
                 return std::unexpected("VkSplat expected swizzled SH rest coefficients as a 1D tensor");
             }
-            if (static_cast<std::size_t>(shN_raw.numel()) * sizeof(float) < shN_bytes) {
+            if (static_cast<std::size_t>(shN_raw.numel()) * sizeof(float) < active_shN_bytes) {
                 return std::unexpected("VkSplat swizzled SH rest tensor is smaller than expected");
             }
         } else if (splat_data.active_sh_coeffs_rest() > 0) {
@@ -626,6 +636,7 @@ namespace lfs::vis::vksplat {
             has_shN ? shN_raw.ptr<float>() : nullptr,
             static_cast<float*>(sh_coeffs_dst),
             layout->num_splats,
+            static_cast<std::uint32_t>(splat_data.active_sh_coeffs_rest()),
             stream);
         status = cudaGetLastError();
         if (status != cudaSuccess) {

@@ -35,7 +35,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float3* __restrict__ means,
         const float3* __restrict__ raw_scales,
         const float4* __restrict__ raw_rotations,
-        const float4* __restrict__ sh_coefficients_rest, // float4-packed swizzled layout (12 slots/primitive)
+        const float4* __restrict__ sh_coefficients_rest, // compact float4-packed swizzled layout
         const float4* __restrict__ w2c,
         const float3* __restrict__ cam_position,
         const float* __restrict__ raw_opacities,
@@ -91,14 +91,14 @@ namespace fast_lfs::rasterization::kernels::backward {
             adam_step_helper(0.0f, fused_adam.sh0, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
             adam_step_helper(0.0f, fused_adam.sh0, primitive_idx, 2, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
 
-            // shN: grad = 0, all 12 float4 slots via swizzle-aware indexing (matches the
+            // shN: grad = 0, all active float4 slots via swizzle-aware indexing (matches the
             // packed-grad path used in the visible branch).
             if constexpr (ACTIVE_SH_BASES > 1) {
                 const float4 zero = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
                 constexpr uint N_SLOTS = (ACTIVE_SH_BASES > 9) ? 12u : (ACTIVE_SH_BASES > 4) ? 6u
                                                                                              : 3u;
                 for (uint k = 0; k < N_SLOTS; ++k) {
-                    adam_step_f4(zero, fused_adam.shN, shAt(primitive_idx, k),
+                    adam_step_f4(zero, fused_adam.shN, shAt(primitive_idx, k, N_SLOTS),
                                  fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
                 }
             }
@@ -382,11 +382,12 @@ namespace fast_lfs::rasterization::kernels::backward {
     }
 
     // Swizzle-aware Adam decay for shN's invisible primitives. One thread per primitive;
-    // if invisible, iterate over all 12 float4 slots via shAt indexing.
+    // if invisible, iterate over the active compact float4 slots via shAt indexing.
     __global__ void adam_step_invisible_shN(
         const std::uint64_t* __restrict__ primitive_n_touched_tiles,
         FusedAdamParam param,
         const uint n_primitives,
+        const uint n_slots,
         const float beta1,
         const float beta2,
         const float eps) {
@@ -399,7 +400,9 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float4 zero = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 #pragma unroll
         for (uint k = 0; k < 12u; ++k) {
-            adam_step_f4(zero, param, shAt(primitive_idx, k), beta1, beta2, eps);
+            if (k >= n_slots)
+                break;
+            adam_step_f4(zero, param, shAt(primitive_idx, k, n_slots), beta1, beta2, eps);
         }
     }
 

@@ -16,12 +16,20 @@ namespace fast_lfs::rasterization::kernels {
     // matching vksplat/vksplat/slang/spherical_harmonics.slang. Adjacent primitives in a warp hit
     // adjacent float4 slots -> a single 16B vector load per coefficient slot per lane.
     // Returns the float4 slot index (multiply by 4 to get the float offset).
-    __device__ __host__ __forceinline__ unsigned int shAt(unsigned int primitive_idx, unsigned int float4_slot) {
+    __device__ __host__ __forceinline__ unsigned int shSlotsForBases(unsigned int active_sh_bases) {
+        const unsigned int rest_coeffs = active_sh_bases > 1u ? active_sh_bases - 1u : 0u;
+        const unsigned int slots = (rest_coeffs * 3u + 3u) / 4u;
+        return slots > config::sh_rest_float4_per_primitive ? config::sh_rest_float4_per_primitive : slots;
+    }
+
+    __device__ __host__ __forceinline__ unsigned int shAt(
+        unsigned int primitive_idx,
+        unsigned int float4_slot,
+        unsigned int slots_per_primitive) {
         constexpr unsigned int R = config::sh_reorder_size;
-        constexpr unsigned int K_F4 = config::sh_rest_float4_per_primitive;
         const unsigned int block = primitive_idx / R;
         const unsigned int lane = primitive_idx % R;
-        return block * (K_F4 * R) + float4_slot * R + lane;
+        return block * (slots_per_primitive * R) + float4_slot * R + lane;
     }
 
     // Safe normalize: returns (0,0,1) for degenerate vectors to prevent NaN
@@ -51,9 +59,10 @@ namespace fast_lfs::rasterization::kernels {
         if (active_sh_bases <= 1)
             return;
 
-        const float4 a0 = sh_f4[shAt(primitive_idx, 0)];
-        const float4 a1 = sh_f4[shAt(primitive_idx, 1)];
-        const float4 a2 = sh_f4[shAt(primitive_idx, 2)];
+        const uint slots_per_primitive = shSlotsForBases(active_sh_bases);
+        const float4 a0 = sh_f4[shAt(primitive_idx, 0, slots_per_primitive)];
+        const float4 a1 = sh_f4[shAt(primitive_idx, 1, slots_per_primitive)];
+        const float4 a2 = sh_f4[shAt(primitive_idx, 2, slots_per_primitive)];
         c[0] = make_float3(a0.x, a0.y, a0.z);
         c[1] = make_float3(a0.w, a1.x, a1.y);
         c[2] = make_float3(a1.z, a1.w, a2.x);
@@ -64,9 +73,9 @@ namespace fast_lfs::rasterization::kernels {
         if (active_sh_bases <= 4)
             return;
 
-        const float4 a3 = sh_f4[shAt(primitive_idx, 3)];
-        const float4 a4 = sh_f4[shAt(primitive_idx, 4)];
-        const float4 a5 = sh_f4[shAt(primitive_idx, 5)];
+        const float4 a3 = sh_f4[shAt(primitive_idx, 3, slots_per_primitive)];
+        const float4 a4 = sh_f4[shAt(primitive_idx, 4, slots_per_primitive)];
+        const float4 a5 = sh_f4[shAt(primitive_idx, 5, slots_per_primitive)];
         c[4] = make_float3(a3.x, a3.y, a3.z);
         c[5] = make_float3(a3.w, a4.x, a4.y);
         c[6] = make_float3(a4.z, a4.w, a5.x);
@@ -75,12 +84,12 @@ namespace fast_lfs::rasterization::kernels {
         if (active_sh_bases <= 9)
             return;
 
-        const float4 a6 = sh_f4[shAt(primitive_idx, 6)];
-        const float4 a7 = sh_f4[shAt(primitive_idx, 7)];
-        const float4 a8 = sh_f4[shAt(primitive_idx, 8)];
-        const float4 a9 = sh_f4[shAt(primitive_idx, 9)];
-        const float4 a10 = sh_f4[shAt(primitive_idx, 10)];
-        const float4 a11 = sh_f4[shAt(primitive_idx, 11)];
+        const float4 a6 = sh_f4[shAt(primitive_idx, 6, slots_per_primitive)];
+        const float4 a7 = sh_f4[shAt(primitive_idx, 7, slots_per_primitive)];
+        const float4 a8 = sh_f4[shAt(primitive_idx, 8, slots_per_primitive)];
+        const float4 a9 = sh_f4[shAt(primitive_idx, 9, slots_per_primitive)];
+        const float4 a10 = sh_f4[shAt(primitive_idx, 10, slots_per_primitive)];
+        const float4 a11 = sh_f4[shAt(primitive_idx, 11, slots_per_primitive)];
         c[8] = make_float3(a6.x, a6.y, a6.z);
         c[9] = make_float3(a6.w, a7.x, a7.y);
         c[10] = make_float3(a7.z, a7.w, a8.x);
@@ -257,7 +266,7 @@ namespace fast_lfs::rasterization::kernels {
             case 11: gk = make_float4(g[14].z, 0.0f, 0.0f, 0.0f); break;
             default: gk = make_float4(0.0f, 0.0f, 0.0f, 0.0f); break;
             }
-            adam_step_f4(gk, p, shAt(primitive_idx, k),
+            adam_step_f4(gk, p, shAt(primitive_idx, k, n_slots_to_update),
                          fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
         }
     }

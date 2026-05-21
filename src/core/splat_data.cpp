@@ -217,14 +217,6 @@ namespace {
         return result.to(points.device());
     }
 
-    size_t sh_rest_coefficients_for_degree(const int degree) {
-        if (degree <= 0) {
-            return 0;
-        }
-        const auto d = static_cast<size_t>(degree);
-        return (d + 1) * (d + 1) - 1;
-    }
-
     // Allocate a 1D swizzled-layout shN tensor sized for `n` primitives with `capacity`
     // primitive-row slots reserved. Zero-initialised so dead lanes & inactive coefficient
     // slots contribute nothing in Adam updates.
@@ -246,15 +238,32 @@ namespace {
         return tensor;
     }
 
-    lfs::core::Tensor allocate_swizzled_shN(size_t n, size_t capacity) {
+    [[nodiscard]] uint32_t infer_swizzled_rest_coefficients(size_t n, size_t numel) {
+        using namespace lfs::core;
+        const size_t blocks = sh_swizzled_block_count(n);
+        if (blocks == 0 || numel == 0) {
+            return 0;
+        }
+        const size_t denom = blocks * kShReorderSize * 4u;
+        const size_t slots = denom > 0 ? numel / denom : 0;
+        if (slots == 0) {
+            return 0;
+        }
+        if (slots <= 3) {
+            return sh_rest_coefficients_for_degree(1);
+        }
+        if (slots <= 6) {
+            return sh_rest_coefficients_for_degree(2);
+        }
+        return sh_rest_coefficients_for_degree(3);
+    }
+
+    lfs::core::Tensor allocate_swizzled_shN(size_t n, size_t capacity, uint32_t active_coeffs_rest) {
         using namespace lfs::core;
         const size_t cap = std::max(capacity, n);
-        const size_t logical_floats = sh_swizzled_float_count(n);
-        const size_t capacity_floats = sh_swizzled_float_count(cap);
+        const size_t logical_floats = sh_swizzled_float_count(n, active_coeffs_rest);
+        const size_t capacity_floats = sh_swizzled_float_count(cap, active_coeffs_rest);
         if (capacity_floats == 0) {
-            // Even for SH degree 0 (active_coeffs_rest=0) we still allocate the swizzled
-            // shape since the kernels always run the all-15-coeff Adam path. capacity_floats
-            // would be 0 only if N == 0.
             return Tensor::zeros({0}, Device::CUDA);
         }
         return Tensor::zeros_direct(TensorShape({logical_floats}), capacity_floats, Device::CUDA);
@@ -262,12 +271,13 @@ namespace {
 
     lfs::core::Tensor allocate_swizzled_shN(size_t n,
                                             size_t capacity,
+                                            uint32_t active_coeffs_rest,
                                             const lfs::core::SplatTensorAllocator& allocator,
                                             std::string_view name) {
         using namespace lfs::core;
         const size_t cap = std::max(capacity, n);
-        const size_t logical_floats = sh_swizzled_float_count(n);
-        const size_t capacity_floats = sh_swizzled_float_count(cap);
+        const size_t logical_floats = sh_swizzled_float_count(n, active_coeffs_rest);
+        const size_t capacity_floats = sh_swizzled_float_count(cap, active_coeffs_rest);
         if (capacity_floats == 0) {
             Tensor tensor = Tensor::zeros({0}, Device::CUDA);
             tensor.set_name(std::string{name});
@@ -298,7 +308,6 @@ namespace {
             return;
         }
         if (active_coeffs_rest == 0) {
-            cudaMemset(dst_swizzled, 0, sh_swizzled_byte_count(n_primitives));
             return;
         }
         Tensor src = canonical;
@@ -348,20 +357,28 @@ namespace lfs::core {
           _opacity(std::move(opacity_)) {
         const size_t n = _means.is_valid() ? static_cast<size_t>(_means.shape()[0]) : 0;
         const size_t capacity = _means.is_valid() ? std::max<size_t>(_means.capacity(), n) : n;
+        uint32_t active_coeffs_rest =
+            static_cast<uint32_t>(sh_rest_coefficients_for_degree(sh_degree));
         if (shN_layout == ShNLayout::Swizzled) {
             _shN = std::move(shN_);
-            const size_t expected_floats = sh_swizzled_float_count(n);
+            if (_shN.is_valid() && _shN.ndim() == 1 && n > 0) {
+                const auto stored_rest = infer_swizzled_rest_coefficients(n, static_cast<size_t>(_shN.numel()));
+                const size_t expected_for_requested_degree = sh_swizzled_float_count(n, active_coeffs_rest);
+                if (static_cast<size_t>(_shN.numel()) < expected_for_requested_degree) {
+                    active_coeffs_rest = stored_rest;
+                    _active_sh_degree = sh_degree_for_rest_coefficients(stored_rest);
+                }
+            }
+            const size_t expected_floats = sh_swizzled_float_count(n, active_coeffs_rest);
             if (!_shN.is_valid() || _shN.ndim() != 1 ||
-                static_cast<size_t>(_shN.shape()[0]) < expected_floats) {
-                _shN = allocate_swizzled_shN(n, capacity);
+                static_cast<size_t>(_shN.shape()[0]) != expected_floats) {
+                _shN = allocate_swizzled_shN(n, capacity, active_coeffs_rest);
             }
             return;
         }
 
         // Convert the canonical-layout shN argument into swizzled storage.
-        const uint32_t active_coeffs_rest =
-            static_cast<uint32_t>(sh_rest_coefficients_for_degree(sh_degree));
-        _shN = allocate_swizzled_shN(n, capacity);
+        _shN = allocate_swizzled_shN(n, capacity, active_coeffs_rest);
         if (shN_.is_valid() && shN_.numel() > 0 && n > 0 && active_coeffs_rest > 0) {
             reorder_canonical_into_swizzled(shN_, _shN.ptr<float>(), n, active_coeffs_rest);
         }
@@ -441,7 +458,11 @@ namespace lfs::core {
         if (active_rest == 0) {
             return _sh0;
         }
-        return _sh0.cat(shN_canonical(), 1);
+        auto shN = shN_canonical();
+        if (shN.device() != _sh0.device()) {
+            shN = shN.to(_sh0.device());
+        }
+        return _sh0.cat(shN, 1);
     }
 
     Tensor SplatData::shN_canonical() const {
@@ -483,7 +504,7 @@ namespace lfs::core {
                 const auto slot = static_cast<std::uint32_t>(offset / 4u);
                 const auto component = static_cast<std::uint32_t>(offset % 4u);
                 const size_t src_offset =
-                    static_cast<size_t>(sh_swizzled_index(static_cast<std::uint32_t>(p), slot)) * 4u +
+                    static_cast<size_t>(sh_swizzled_index(static_cast<std::uint32_t>(p), slot, static_cast<uint32_t>(k))) * 4u +
                     component;
                 dst_row[offset] = src_offset < src_floats ? src[src_offset] : 0.0f;
             }
@@ -496,7 +517,7 @@ namespace lfs::core {
         const size_t n = static_cast<size_t>(size());
         const size_t cap = std::max<size_t>(capacity, n);
         const uint32_t active_rest = static_cast<uint32_t>(active_sh_coeffs_rest());
-        const size_t needed_floats = sh_swizzled_float_count(n);
+        const size_t needed_floats = sh_swizzled_float_count(n, active_rest);
 
         // Adjust _shN's logical size to match the new N without losing reserved capacity
         // when possible. Reallocating drops the pre-alloc buffer and can break async
@@ -508,11 +529,11 @@ namespace lfs::core {
                 // N shrank (e.g. random_choose, crop, prune-then-compact). The Tensor lib
                 // doesn't have a "shrink logical size" op other than reassigning shape.
                 // Allocate a smaller buffer in this case — it's a one-shot edit operation.
-                _shN = allocate_swizzled_shN(n, cap);
+                _shN = allocate_swizzled_shN(n, cap, active_rest);
             }
             // else: numel() == needed_floats, nothing to do.
         } else {
-            _shN = allocate_swizzled_shN(n, cap);
+            _shN = allocate_swizzled_shN(n, cap, active_rest);
         }
 
         if (canonical.is_valid() && canonical.numel() > 0 && n > 0 && active_rest > 0) {
@@ -528,43 +549,57 @@ namespace lfs::core {
 
     void SplatData::increment_sh_degree() {
         if (_active_sh_degree < _max_sh_degree) {
-            _active_sh_degree++;
+            set_active_sh_degree(_active_sh_degree + 1);
         }
     }
 
     void SplatData::set_active_sh_degree(int sh_degree) {
-        if (sh_degree <= _max_sh_degree) {
-            _active_sh_degree = sh_degree;
-        } else {
-            _active_sh_degree = _max_sh_degree;
+        const int target_degree = std::clamp(sh_degree, 0, _max_sh_degree);
+        const auto old_rest = static_cast<uint32_t>(active_sh_coeffs_rest());
+        const auto new_rest = static_cast<uint32_t>(sh_rest_coefficients_for_degree(target_degree));
+        const size_t n = static_cast<size_t>(size());
+        const size_t cap = _means.is_valid() ? std::max<size_t>(_means.capacity(), n) : n;
+        const size_t expected_floats = sh_swizzled_float_count(n, new_rest);
+        const bool shape_ok = _shN.is_valid() && _shN.ndim() == 1 &&
+                              static_cast<size_t>(_shN.shape()[0]) == expected_floats;
+
+        if (!shape_ok || old_rest != new_rest) {
+            Tensor old_canonical;
+            uint32_t old_read_rest = old_rest;
+            if (_shN.is_valid() && _shN.numel() > 0 && n > 0 && old_read_rest > 0) {
+                const size_t old_expected = sh_swizzled_float_count(n, old_read_rest);
+                if (static_cast<size_t>(_shN.numel()) < old_expected) {
+                    old_read_rest = infer_swizzled_rest_coefficients(n, static_cast<size_t>(_shN.numel()));
+                }
+                if (old_read_rest > 0) {
+                    old_canonical = Tensor::empty({n, static_cast<size_t>(old_read_rest), SH_CHANNELS}, _shN.device());
+                    undo_reorder_sh_from_swizzled(_shN.ptr<float>(), old_canonical.ptr<float>(), n, old_read_rest);
+                }
+            }
+
+            auto resized = allocate_swizzled_shN(n, cap, new_rest);
+            if (new_rest > 0 && old_canonical.is_valid() && old_canonical.numel() > 0) {
+                Tensor canonical_new = Tensor::zeros({n, static_cast<size_t>(new_rest), SH_CHANNELS}, old_canonical.device());
+                const size_t copy_coeffs = std::min<size_t>(old_read_rest, new_rest);
+                if (copy_coeffs > 0) {
+                    canonical_new.slice(1, 0, copy_coeffs) =
+                        old_canonical.slice(1, 0, copy_coeffs);
+                }
+                reorder_canonical_into_swizzled(canonical_new, resized.ptr<float>(), n, new_rest);
+            }
+            _shN = std::move(resized);
         }
+        _active_sh_degree = target_degree;
     }
 
     bool SplatData::set_sh_degree(const int sh_degree) {
         assert(_means.is_valid());
 
         const int target_degree = std::clamp(sh_degree, 0, MAX_SUPPORTED_SH_DEGREE);
-        const size_t n = static_cast<size_t>(size());
-        const size_t expected_floats = sh_swizzled_float_count(n);
-
-        const bool shape_ok = _shN.is_valid() && _shN.ndim() == 1 &&
-                              static_cast<size_t>(_shN.shape()[0]) == expected_floats;
-
         bool changed = _max_sh_degree != target_degree || _active_sh_degree != target_degree;
 
-        if (!shape_ok) {
-            // Reallocate the swizzled buffer. Since all SH_MAX_COEFFS_REST slots are always
-            // present in the swizzled layout, no slicing/copy is needed for SH-degree promotion;
-            // we just need a correctly sized buffer. Preserve capacity if present.
-            const size_t cap = _means.is_valid()
-                                   ? std::max<size_t>(_means.capacity(), n)
-                                   : n;
-            _shN = allocate_swizzled_shN(n, cap);
-            changed = true;
-        }
-
         _max_sh_degree = target_degree;
-        _active_sh_degree = target_degree;
+        set_active_sh_degree(target_degree);
         return changed;
     }
 
@@ -575,7 +610,7 @@ namespace lfs::core {
             _sh0.reserve(capacity);
         if (_shN.is_valid()) {
             // shN is 1D swizzled — reserve in float count.
-            _shN.reserve(sh_swizzled_float_count(capacity));
+            _shN.reserve(sh_swizzled_float_count(capacity, static_cast<uint32_t>(active_sh_coeffs_rest())));
         }
         if (_scaling.is_valid())
             _scaling.reserve(capacity);
@@ -707,7 +742,8 @@ namespace lfs::core {
         _opacity = std::move(new_opacity);
 
         // shN is in swizzled layout — block-aware gather of kept primitives.
-        if (_shN.is_valid() && _shN.numel() > 0) {
+        const auto active_rest = static_cast<uint32_t>(active_sh_coeffs_rest());
+        if (_shN.is_valid() && _shN.numel() > 0 && active_rest > 0) {
             // nonzero() returns [num_kept, 1] int tensor of true indices.
             auto kept_indices_2d = keep_mask.nonzero();
             const auto kept_numel = static_cast<int>(kept_indices_2d.numel());
@@ -716,13 +752,9 @@ namespace lfs::core {
                                       : kept_indices_2d;
             kept_indices = kept_indices.to(DataType::Int32);
 
-            // Allocate new swizzled buffer matching new size (use existing capacity policy).
-            const size_t cap_new = std::max<size_t>(new_size, _shN.capacity() > 0
-                                                                  ? new_size
-                                                                  : new_size);
-            auto new_shN = allocate_swizzled_shN(new_size, cap_new);
+            auto new_shN = allocate_swizzled_shN(new_size, new_size, active_rest);
             shN_swizzled_gather_self(_shN.ptr<float>(), new_shN.ptr<float>(),
-                                     kept_indices.ptr<int>(), new_size);
+                                     kept_indices.ptr<int>(), new_size, 0, active_rest);
             _shN = std::move(new_shN);
         }
 
@@ -815,7 +847,7 @@ namespace lfs::core {
             // Allocate an empty swizzled tensor so _shN is valid even at SH degree 0.
             const size_t n = static_cast<size_t>(size());
             const size_t cap = std::max<size_t>(_means.capacity(), n);
-            _shN = allocate_swizzled_shN(n, cap);
+            _shN = allocate_swizzled_shN(n, cap, static_cast<uint32_t>(active_sh_coeffs_rest()));
         }
 
         uint8_t has_deleted = 0;
@@ -978,6 +1010,7 @@ namespace lfs::core {
                 // is large enough to show up in the VRAM profile.
                 shN_ = allocate_swizzled_shN(num_points,
                                              static_cast<size_t>(capacity),
+                                             static_cast<uint32_t>(feature_shape - 1),
                                              tensor_allocator,
                                              "SplatData.shN");
                 LOG_DEBUG("  shN_ allocated: is_valid={}, ptr={}, shape={}, numel={}",

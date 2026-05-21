@@ -3,6 +3,7 @@
 
 class MRNFStrategyTest_EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores_Test;
 class MRNFStrategyTest_GrowAndSplitResetsOptimizerStateForParents_Test;
+class MRNFStrategyTest_SHDegree0KeepsShNEmptyAndFusedAdamUsableAfterGrowth_Test;
 class MRNFStrategyTest_GrowAndSplitUsesIgsPlusSplitRule_Test;
 class MRNFStrategyTest_GrowAndSplitWithoutMaxCapExtendsBookkeepingMasks_Test;
 class MRNFStrategyTest_GrowAndSplitReplacementSkipsZeroWeightCandidates_Test;
@@ -12,6 +13,7 @@ class MRNFStrategyTest_SerializeRoundTripPreservesLrScheduleState_Test;
 class MRNFStrategyTest_DeserializeResizesTransientBuffersToLoadedModel_Test;
 class MRNFStrategyTest_SetOptimizationParamsRecomputesDecayFromCurrentState_Test;
 
+#include "core/cuda/sh_layout.cuh"
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "training/strategies/mrnf.hpp"
@@ -26,7 +28,7 @@ using namespace lfs::training;
 
 namespace {
 
-    SplatData create_mrnf_test_splat_data(const int n_gaussians = 10) {
+    SplatData create_mrnf_test_splat_data(const int n_gaussians = 10, const int sh_degree = 3) {
         const size_t n = static_cast<size_t>(n_gaussians);
         std::vector<float> means_data(n_gaussians * 3, 0.0f);
         for (int i = 0; i < n_gaussians; ++i) {
@@ -34,10 +36,10 @@ namespace {
         }
 
         std::vector<float> sh0_data(n_gaussians * 3, 0.5f);
-        std::vector<float> shN_data(n_gaussians * 15 * 3, 0.0f);
         std::vector<float> scaling_data(n_gaussians * 3, 0.0f);
         std::vector<float> rotation_data(n_gaussians * 4, 0.0f);
         std::vector<float> opacity_data(n_gaussians, 0.0f);
+        const size_t sh_rest = sh_rest_coefficients_for_degree(sh_degree);
 
         for (int i = 0; i < n_gaussians; ++i) {
             rotation_data[i * 4 + 0] = 1.0f; // identity quaternion
@@ -45,12 +47,12 @@ namespace {
 
         auto means = Tensor::from_vector(means_data, TensorShape({n, 3}), Device::CUDA);
         auto sh0 = Tensor::from_vector(sh0_data, TensorShape({n, 1, 3}), Device::CUDA);
-        auto shN = Tensor::from_vector(shN_data, TensorShape({n, 15, 3}), Device::CUDA);
+        auto shN = Tensor::zeros(TensorShape({n, sh_rest, 3}), Device::CUDA);
         auto scaling = Tensor::from_vector(scaling_data, TensorShape({n, 3}), Device::CUDA);
         auto rotation = Tensor::from_vector(rotation_data, TensorShape({n, 4}), Device::CUDA);
         auto opacity = Tensor::from_vector(opacity_data, TensorShape({n, 1}), Device::CUDA);
 
-        return SplatData(3, means, sh0, shN, scaling, rotation, opacity, 1.0f);
+        return SplatData(sh_degree, means, sh0, shN, scaling, rotation, opacity, 1.0f);
     }
 
 } // namespace
@@ -177,6 +179,52 @@ TEST(MRNFStrategyTest, GrowAndSplitResetsOptimizerStateForParents) {
         EXPECT_FLOAT_EQ(exp_avg_sq_ptr[child_offset + c], 0.0f);
         EXPECT_FLOAT_EQ(grad_ptr[child_offset + c], 0.0f);
     }
+}
+
+TEST(MRNFStrategyTest, SHDegree0KeepsShNEmptyAndFusedAdamUsableAfterGrowth) {
+    auto splat_data = create_mrnf_test_splat_data(10, 0);
+    MRNF strategy(splat_data);
+
+    auto opt_params = param::OptimizationParameters::mrnf_defaults();
+    opt_params.iterations = 10'000;
+    opt_params.sh_degree_interval = 10'000;
+    opt_params.max_cap = 32;
+    opt_params.growth_grad_threshold = 0.5f;
+    opt_params.grow_fraction = 1.0f;
+    opt_params.grow_until_iter = 10'000;
+
+    strategy.initialize(opt_params);
+
+    ASSERT_TRUE(splat_data.shN().is_valid());
+    EXPECT_EQ(splat_data.shN().numel(), 0u);
+    auto* shN_state = strategy.get_optimizer().get_state_mutable(ParamType::ShN);
+    ASSERT_NE(shN_state, nullptr);
+    EXPECT_EQ(shN_state->size, 0u);
+
+    EXPECT_NO_THROW({
+        const auto fused = strategy.get_optimizer().prepare_fastgs_fused_adam(457);
+        EXPECT_TRUE(fused.means.enabled);
+        EXPECT_FALSE(fused.shN.enabled);
+    });
+
+    strategy._refine_weight_max = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
+    strategy._vis_count = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
+
+    const auto split_idx = Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
+    strategy._refine_weight_max.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
+    strategy._vis_count.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
+
+    const size_t initial_size = splat_data.size();
+    strategy.grow_and_split(1, 0);
+
+    EXPECT_EQ(splat_data.size(), initial_size + 1);
+    EXPECT_EQ(splat_data.shN().numel(), 0u);
+    EXPECT_EQ(shN_state->size, 0u);
+    EXPECT_NO_THROW({
+        const auto fused = strategy.get_optimizer().prepare_fastgs_fused_adam(457);
+        EXPECT_TRUE(fused.means.enabled);
+        EXPECT_FALSE(fused.shN.enabled);
+    });
 }
 
 TEST(MRNFStrategyTest, GrowAndSplitUsesIgsPlusSplitRule) {

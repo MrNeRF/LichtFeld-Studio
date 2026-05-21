@@ -20,13 +20,14 @@ namespace lfs::training::kernels {
 
         __device__ __forceinline__ int64_t sh_swizzled_float_offset(
             const int64_t primitive_idx,
-            const int64_t packed_coeff_channel_offset) {
+            const int64_t packed_coeff_channel_offset,
+            const int64_t slots_per_primitive) {
             const int64_t slot = packed_coeff_channel_offset / 4;
             const int64_t component = packed_coeff_channel_offset % 4;
             const int64_t block = primitive_idx / lfs::core::kShReorderSize;
             const int64_t lane = primitive_idx % lfs::core::kShReorderSize;
             const int64_t float4_index =
-                block * (lfs::core::kShRestFloat4PerPrimitive * lfs::core::kShReorderSize) +
+                block * (slots_per_primitive * lfs::core::kShReorderSize) +
                 slot * lfs::core::kShReorderSize +
                 lane;
             return float4_index * 4 + component;
@@ -404,12 +405,13 @@ namespace lfs::training::kernels {
         const int64_t max_rest = K_src - 1 < lfs::core::kShMaxCoeffsRest
                                      ? K_src - 1
                                      : lfs::core::kShMaxCoeffsRest;
+        const int64_t slots_per_primitive = (max_rest * 3 + 3) / 4;
         for (int64_t k = 0; k < max_rest; ++k) {
             const int64_t src_coeff = src_base + (k + 1) * 3;
             const int64_t packed_offset = k * 3;
-            dst_shN[sh_swizzled_float_offset(idx, packed_offset + 0)] += src[src_coeff + 0];
-            dst_shN[sh_swizzled_float_offset(idx, packed_offset + 1)] += src[src_coeff + 1];
-            dst_shN[sh_swizzled_float_offset(idx, packed_offset + 2)] += src[src_coeff + 2];
+            dst_shN[sh_swizzled_float_offset(idx, packed_offset + 0, slots_per_primitive)] += src[src_coeff + 0];
+            dst_shN[sh_swizzled_float_offset(idx, packed_offset + 1, slots_per_primitive)] += src[src_coeff + 1];
+            dst_shN[sh_swizzled_float_offset(idx, packed_offset + 2, slots_per_primitive)] += src[src_coeff + 2];
         }
     }
 

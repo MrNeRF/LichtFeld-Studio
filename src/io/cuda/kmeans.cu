@@ -34,10 +34,13 @@ namespace lfs::io {
             return data.cuda().contiguous();
         }
 
-        __device__ __forceinline__ std::uint32_t shAt_device(std::uint32_t p, std::uint32_t k) {
+        __device__ __forceinline__ std::uint32_t shAt_device(
+            std::uint32_t p,
+            std::uint32_t k,
+            std::uint32_t slots_per_primitive) {
             const std::uint32_t block = p / lfs::core::kShReorderSize;
             const std::uint32_t lane = p % lfs::core::kShReorderSize;
-            return block * (lfs::core::kShRestFloat4PerPrimitive * lfs::core::kShReorderSize) +
+            return block * (slots_per_primitive * lfs::core::kShReorderSize) +
                    k * lfs::core::kShReorderSize + lane;
         }
 
@@ -54,13 +57,15 @@ namespace lfs::io {
             }
         }
 
+        template <int N_DIMS>
         __device__ __forceinline__ float read_swizzled_sh_dim(
             const float4* __restrict__ shN,
             const std::uint32_t primitive_idx,
             const std::uint32_t dim) {
+            constexpr std::uint32_t slots_per_primitive = (N_DIMS + 3u) / 4u;
             const std::uint32_t slot = dim / 4u;
             const std::uint32_t component = dim % 4u;
-            return float4_component(shN[shAt_device(primitive_idx, slot)], component);
+            return float4_component(shN[shAt_device(primitive_idx, slot, slots_per_primitive)], component);
         }
 
         template <int N_DIMS>
@@ -93,7 +98,7 @@ namespace lfs::io {
             const std::uint32_t src_idx = static_cast<std::uint32_t>(indices[tid]);
 #pragma unroll
             for (int d = 0; d < N_DIMS; ++d) {
-                centroids[tid * N_DIMS + d] = read_swizzled_sh_dim(shN, src_idx, static_cast<std::uint32_t>(d));
+                centroids[tid * N_DIMS + d] = read_swizzled_sh_dim<N_DIMS>(shN, src_idx, static_cast<std::uint32_t>(d));
             }
         }
 
@@ -291,7 +296,7 @@ namespace lfs::io {
             if (tid < n_points) {
 #pragma unroll
                 for (int d = 0; d < N_DIMS; ++d) {
-                    point[d] = read_swizzled_sh_dim(shN, static_cast<std::uint32_t>(tid), static_cast<std::uint32_t>(d));
+                    point[d] = read_swizzled_sh_dim<N_DIMS>(shN, static_cast<std::uint32_t>(tid), static_cast<std::uint32_t>(d));
                 }
             }
 
@@ -371,7 +376,7 @@ namespace lfs::io {
 #pragma unroll
             for (int d = 0; d < N_DIMS; ++d) {
                 atomicAdd(&centroid_sums[label * N_DIMS + d],
-                          read_swizzled_sh_dim(shN, static_cast<std::uint32_t>(tid), static_cast<std::uint32_t>(d)));
+                          read_swizzled_sh_dim<N_DIMS>(shN, static_cast<std::uint32_t>(tid), static_cast<std::uint32_t>(d)));
             }
             atomicAdd(&counts[label], 1);
         }
@@ -431,7 +436,7 @@ namespace lfs::io {
 #pragma unroll
                 for (int d = 0; d < N_DIMS; ++d) {
                     centroids[cid * N_DIMS + d] =
-                        read_swizzled_sh_dim(shN, rand_idx, static_cast<std::uint32_t>(d));
+                        read_swizzled_sh_dim<N_DIMS>(shN, rand_idx, static_cast<std::uint32_t>(d));
                 }
             }
         }
@@ -743,7 +748,7 @@ namespace lfs::io {
             if (tid < n_points) {
 #pragma unroll
                 for (int d = 0; d < N_DIMS; ++d) {
-                    point[d] = read_swizzled_sh_dim(shN, static_cast<std::uint32_t>(tid), static_cast<std::uint32_t>(d));
+                    point[d] = read_swizzled_sh_dim<N_DIMS>(shN, static_cast<std::uint32_t>(tid), static_cast<std::uint32_t>(d));
                 }
             }
 
@@ -1147,7 +1152,9 @@ namespace lfs::io {
             LOG_ERROR("kmeans_sh_swizzled expects positive n_points and k");
             return {Tensor(), Tensor()};
         }
-        const auto required_floats = static_cast<int64_t>(lfs::core::sh_swizzled_float_count(static_cast<size_t>(n_points)));
+        const auto required_floats = static_cast<int64_t>(
+            lfs::core::sh_swizzled_float_count(static_cast<size_t>(n_points),
+                                               static_cast<std::uint32_t>(sh_coeffs)));
         if (shN_swizzled.numel() < required_floats) {
             LOG_ERROR("kmeans_sh_swizzled input has {} floats but needs at least {} for {} points",
                       shN_swizzled.numel(), required_floats, n_points);
