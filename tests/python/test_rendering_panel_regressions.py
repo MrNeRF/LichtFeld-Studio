@@ -261,8 +261,8 @@ def test_rendering_rml_only_exposes_vksplat_backends():
     rendering_rml = project_root / "src" / "visualizer" / "gui" / "rmlui" / "resources" / "rendering.rml"
     content = rendering_rml.read_text()
 
-    assert '<option value="vksplat">VkSplat</option>' in content
-    assert '<option value="vksplat_3dgut">VkSplat 3DGUT</option>' in content
+    assert '<option value="vksplat">3DGS</option>' in content
+    assert '<option value="vksplat_3dgut">3DGUT</option>' in content
     assert 'value="fast_gs"' not in content
     assert 'value="3dgut"' not in content
     assert "vksplat_available" not in content

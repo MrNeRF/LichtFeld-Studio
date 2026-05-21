@@ -826,7 +826,7 @@
     "color_blue_prefix": "B:"
   },
   "tooltip": {
-    "raster_backend": "Gaussiaanse rasterizer: VkSplat of VkSplat 3DGUT",
+    "raster_backend": "Gaussiaanse rasterizer: 3DGS of 3DGUT",
     "gut_mode": "Voor fisheye/vervormde/equirectangulaire camera's",
     "mip_filter": "Verminder aliasing voor sub-pixel Gaussians",
     "appearance_correction": "PPISP Correction",

@@ -284,8 +284,8 @@ namespace lfs::python {
         add_bool(&Proxy::equirectangular, "equirectangular", "Equirectangular", "Equirectangular projection mode",
                  false);
         add_int_enum(&Proxy::raster_backend, "raster_backend", "Raster Backend", "Gaussian rasterization backend",
-                     {{"VkSplat", "vksplat", 2},
-                      {"VkSplat 3DGUT", "vksplat_3dgut", 3}},
+                     {{"3DGS", "vksplat", 2},
+                      {"3DGUT", "vksplat_3dgut", 3}},
                      2);
         add_bool(&Proxy::gut, "gut", "GUT Mode", "Enable GUT rendering mode", false);
         add_bool(&Proxy::mip_filter, "mip_filter", "Mip Filter", "Enable mip-map filtering", false);

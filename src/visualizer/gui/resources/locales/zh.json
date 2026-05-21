@@ -656,7 +656,7 @@
     "color_blue_prefix": "B:"
   },
   "tooltip": {
-    "raster_backend": "高斯光栅化器：VkSplat 或 VkSplat 3DGUT",
+    "raster_backend": "高斯光栅化器：3DGS 或 3DGUT",
     "gut_mode": "用于鱼眼/畸变/等距柱状相机",
     "mip_filter": "减少亚像素高斯的锯齿",
     "appearance_correction": "PPISP Correction",

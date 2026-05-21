@@ -826,7 +826,7 @@
     "color_blue_prefix": "B:"
   },
   "tooltip": {
-    "raster_backend": "Rasteryzator gaussowski: VkSplat albo VkSplat 3DGUT",
+    "raster_backend": "Rasteryzator gaussowski: 3DGS albo 3DGUT",
     "gut_mode": "Dla kamer rybie oko/zniekształconych/równokątnych",
     "mip_filter": "Zmniejsz aliasing dla sub-pikselowych Gaussowskich",
     "appearance_correction": "PPISP Correction",

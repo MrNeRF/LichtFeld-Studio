@@ -826,7 +826,7 @@
     "color_blue_prefix": "B:"
   },
   "tooltip": {
-    "raster_backend": "Rasterizzatore gaussiano: VkSplat o VkSplat 3DGUT",
+    "raster_backend": "Rasterizzatore gaussiano: 3DGS o 3DGUT",
     "gut_mode": "Per fotocamere fisheye/distorte/equirettangolari",
     "mip_filter": "Riduci aliasing per Gaussiani sub-pixel",
     "appearance_correction": "PPISP Correction",
