@@ -27,8 +27,6 @@ ASSET_TYPE_COLORS: dict[str, str] = {
     # USD files - Red
     "usd": "#D9534F",
     "usdz": "#D9534F",
-    # HTML - Teal
-    "html": "#5BC0DE",
     # JSON - Gray
     "json": "#777777",
 }

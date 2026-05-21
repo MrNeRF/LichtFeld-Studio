@@ -1261,16 +1261,21 @@ namespace lfs::io {
             // Filter out deleted splats if deletion mask exists
             Tensor means, sh0, shN, opacity, scaling, rotation;
 
+            // Export wants canonical [N, K, 3], but resident shN is swizzled. Unpack on
+            // the host so saving cannot allocate a full canonical SH tensor in VRAM.
+            const auto shN_canonical_cpu = splat_data.shN_canonical_cpu();
+
             if (splat_data.has_deleted_mask()) {
                 // Create keep mask (inverse of deleted mask)
                 const auto keep_mask = splat_data.deleted().logical_not();
+                const auto keep_mask_cpu = keep_mask.cpu().contiguous();
 
                 // Filter all tensors by keep mask
                 means = splat_data.means().index_select(0, keep_mask);
                 if (splat_data.sh0().is_valid())
                     sh0 = splat_data.sh0().index_select(0, keep_mask);
-                if (splat_data.shN().is_valid())
-                    shN = splat_data.shN().index_select(0, keep_mask);
+                if (shN_canonical_cpu.is_valid() && shN_canonical_cpu.numel() > 0)
+                    shN = shN_canonical_cpu.index_select(0, keep_mask_cpu);
                 if (splat_data.opacity_raw().is_valid())
                     opacity = splat_data.opacity_raw().index_select(0, keep_mask);
                 if (splat_data.scaling_raw().is_valid())
@@ -1278,10 +1283,10 @@ namespace lfs::io {
                 if (splat_data.rotation_raw().is_valid())
                     rotation = splat_data.rotation_raw().index_select(0, keep_mask);
             } else {
-                // No deletion mask, use original tensors
+                // No deletion mask, use original tensors (canonical shN view)
                 means = splat_data.means();
                 sh0 = splat_data.sh0();
-                shN = splat_data.shN();
+                shN = shN_canonical_cpu;
                 opacity = splat_data.opacity_raw();
                 scaling = splat_data.scaling_raw();
                 rotation = splat_data.rotation_raw();
@@ -1362,8 +1367,10 @@ namespace lfs::io {
 
         if (splat_data.sh0().is_valid())
             add_indexed_attrs("f_dc_", get_feature_count(splat_data.sh0()));
-        if (splat_data.shN().is_valid())
-            add_indexed_attrs("f_rest_", get_feature_count(splat_data.shN()));
+        // shN is stored swizzled; compute attribute count from active SH degree directly.
+        const size_t active_rest = splat_data.active_sh_coeffs_rest();
+        if (active_rest > 0)
+            add_indexed_attrs("f_rest_", active_rest * 3);
 
         attrs.emplace_back("opacity");
 

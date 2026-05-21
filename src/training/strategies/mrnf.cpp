@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "mrnf.hpp"
+#include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
 #include "edge_rasterizer.hpp"
 #include "io/pipelined_image_loader.hpp"
@@ -144,10 +145,6 @@ namespace lfs::training {
             return false;
         }
 
-        [[nodiscard]] bool has_shN_coefficients(const lfs::core::Tensor& shN) {
-            return shN.is_valid() && shN.ndim() >= 2 && shN.shape()[1] > 0;
-        }
-
         void reset_optimizer_state_at_indices(
             AdamOptimizer& optimizer,
             const ParamType param_type,
@@ -158,6 +155,24 @@ namespace lfs::training {
 
             auto* state = optimizer.get_state_mutable(param_type);
             if (!state) {
+                return;
+            }
+
+            // shN state is swizzled — zero by primitive index via the swizzle-aware kernel.
+            if (param_type == ParamType::ShN) {
+                if (!state->exp_avg.is_valid() || state->exp_avg.numel() == 0)
+                    return;
+                auto idx_i32 = indices.dtype() == lfs::core::DataType::Int32
+                                   ? indices
+                                   : indices.to(lfs::core::DataType::Int32);
+                lfs::core::shN_swizzled_zero_at_indices(
+                    state->exp_avg.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel());
+                lfs::core::shN_swizzled_zero_at_indices(
+                    state->exp_avg_sq.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel());
+                if (state->grad.is_valid() && state->grad.numel() > 0) {
+                    lfs::core::shN_swizzled_zero_at_indices(
+                        state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel());
+                }
                 return;
             }
 
@@ -363,21 +378,38 @@ namespace lfs::training {
             LOG_INFO("MRNF: pre-allocating capacity for {} Gaussians (current: {}, utilization: {:.1f}%)",
                      capacity, current_size, 100.0f * current_size / capacity);
 
-            auto replace_with_direct = [capacity](Tensor& param) {
+            // When init_model_from_pointcloud was called with capacity = max_cap, every param
+            // is already direct-allocated at that capacity. Re-allocating would briefly hold
+            // both old and new buffers (≈2× peak) before the cuda caching allocator releases the
+            // freed chunk — so only replace if the param's capacity is actually below the target.
+            auto ensure_capacity_direct = [capacity](Tensor& param) {
+                if (param.capacity() >= capacity)
+                    return;
                 auto new_param = Tensor::zeros_direct(param.shape(), capacity);
                 cudaMemcpy(new_param.ptr<float>(), param.ptr<float>(),
                            param.numel() * sizeof(float), cudaMemcpyDeviceToDevice);
                 param = new_param;
             };
 
-            replace_with_direct(_splat_data->means());
-            replace_with_direct(_splat_data->sh0());
-            if (_splat_data->shN().is_valid() && _splat_data->shN().ndim() > 0) {
-                replace_with_direct(_splat_data->shN());
+            // shN is 1D swizzled — its capacity must be in FLOATS, not row count.
+            auto ensure_shN_capacity_direct = [capacity](Tensor& param) {
+                const size_t cap_floats = lfs::core::sh_swizzled_float_count(capacity);
+                if (param.capacity() >= cap_floats)
+                    return;
+                auto new_param = Tensor::zeros_direct(param.shape(), cap_floats);
+                cudaMemcpy(new_param.ptr<float>(), param.ptr<float>(),
+                           param.numel() * sizeof(float), cudaMemcpyDeviceToDevice);
+                param = new_param;
+            };
+
+            ensure_capacity_direct(_splat_data->means());
+            ensure_capacity_direct(_splat_data->sh0());
+            if (_splat_data->shN().is_valid() && _splat_data->shN().numel() > 0) {
+                ensure_shN_capacity_direct(_splat_data->shN());
             }
-            replace_with_direct(_splat_data->scaling_raw());
-            replace_with_direct(_splat_data->rotation_raw());
-            replace_with_direct(_splat_data->opacity_raw());
+            ensure_capacity_direct(_splat_data->scaling_raw());
+            ensure_capacity_direct(_splat_data->rotation_raw());
+            ensure_capacity_direct(_splat_data->opacity_raw());
         }
 
         _optimizer = create_optimizer(*_splat_data, *_params);
@@ -778,10 +810,11 @@ namespace lfs::training {
                current_active + split_indices.numel() <= static_cast<size_t>(_params->max_cap));
 
         const size_t K = split_indices.numel();
-        const size_t sh_rest = (_splat_data->shN().is_valid() && _splat_data->shN().ndim() >= 2)
-                                   ? _splat_data->shN().shape()[1]
-                                   : 0;
-        const int shN_dim = static_cast<int>(sh_rest * 3);
+        const size_t sh_rest = _splat_data->active_sh_coeffs_rest();
+        const auto active_rest = static_cast<uint32_t>(sh_rest);
+        const bool use_shN = active_rest > 0 &&
+                             _splat_data->shN().is_valid() &&
+                             _splat_data->shN().numel() > 0;
 
         auto child_means = Tensor::empty({K, 3}, Device::CUDA);
         auto child_log_scales = Tensor::empty({K, 3}, Device::CUDA);
@@ -789,28 +822,38 @@ namespace lfs::training {
         auto child_rotations = Tensor::empty({K, 4}, Device::CUDA);
         auto child_sh0 = Tensor::empty({K, 1, 3}, Device::CUDA);
         Tensor child_shN;
-        if (sh_rest > 0) {
+        if (use_shN) {
             child_shN = Tensor::empty({K, sh_rest, 3}, Device::CUDA);
-        } else {
-            child_shN = Tensor::empty({K, 0, 3}, Device::CUDA);
         }
 
+        // The LAS kernel only needs linear shN to copy child rows. shN itself is unchanged
+        // for the parent rows, so keep the resident swizzled buffer in place and gather the
+        // selected child rows below.
         kernels::launch_long_axis_split_gaussians_inplace(
             _splat_data->means().ptr<float>(),
             _splat_data->rotation_raw().ptr<float>(),
             _splat_data->scaling_raw().ptr<float>(),
             _splat_data->sh0().ptr<float>(),
-            shN_dim > 0 ? _splat_data->shN().ptr<float>() : nullptr,
+            nullptr,
             _splat_data->opacity_raw().ptr<float>(),
             child_means.ptr<float>(),
             child_rotations.ptr<float>(),
             child_log_scales.ptr<float>(),
             child_sh0.ptr<float>(),
-            shN_dim > 0 ? child_shN.ptr<float>() : nullptr,
+            nullptr,
             child_raw_opacities.ptr<float>(),
             split_indices.ptr<int64_t>(),
             static_cast<int>(K),
-            shN_dim);
+            0);
+
+        if (use_shN) {
+            shN_swizzled_gather_to_linear_i64(
+                _splat_data->shN().ptr<float>(),
+                split_indices.ptr<int64_t>(),
+                child_shN.ptr<float>(),
+                K,
+                active_rest);
+        }
 
         reset_optimizer_state_at_indices(*_optimizer, ParamType::Means, split_indices);
         reset_optimizer_state_at_indices(*_optimizer, ParamType::Sh0, split_indices);
@@ -834,6 +877,7 @@ namespace lfs::training {
 
         const size_t n_append = K - append_start;
         if (n_append > 0) {
+            const size_t old_size = static_cast<size_t>(_splat_data->size());
             append_live_deleted_rows(*_splat_data, _free_mask, n_append);
             if (_free_mask.is_valid() && _free_mask.numel() < _splat_data->size() + n_append) {
                 _free_mask.reserve(_splat_data->size() + n_append);
@@ -842,7 +886,10 @@ namespace lfs::training {
 
             auto append_means = child_means.slice(0, append_start, K);
             auto append_sh0 = child_sh0.slice(0, append_start, K);
-            auto append_shN = child_shN.slice(0, append_start, K);
+            Tensor append_shN;
+            if (use_shN) {
+                append_shN = child_shN.slice(0, append_start, K);
+            }
             auto append_scaling = child_log_scales.slice(0, append_start, K);
             auto append_rotation = child_rotations.slice(0, append_start, K);
             auto append_opacity = child_raw_opacities.slice(0, append_start, K);
@@ -852,7 +899,23 @@ namespace lfs::training {
 
             _optimizer->add_new_params(ParamType::Means, append_means, true);
             _optimizer->add_new_params(ParamType::Sh0, append_sh0, true);
-            _optimizer->add_new_params(ParamType::ShN, append_shN, false);
+
+            if (use_shN && append_shN.is_valid() && append_shN.numel() > 0) {
+                const size_t new_size = old_size + n_append;
+                const size_t needed_floats = sh_swizzled_float_count(new_size);
+                if (_splat_data->shN().numel() < needed_floats) {
+                    _splat_data->shN().append_zeros(needed_floats - _splat_data->shN().numel());
+                }
+                shN_swizzled_gather_from_linear(
+                    _splat_data->shN().ptr<float>(),
+                    old_size,
+                    append_shN.ptr<float>(),
+                    n_append,
+                    active_rest);
+                _optimizer->extend_state_for_new_params(ParamType::ShN, n_append);
+            } else {
+                _optimizer->extend_state_for_new_params(ParamType::ShN, n_append);
+            }
             _optimizer->add_new_params(ParamType::Scaling, append_scaling, true);
             _optimizer->add_new_params(ParamType::Rotation, append_rotation, true);
             _optimizer->add_new_params(ParamType::Opacity, append_opacity, true);
@@ -880,10 +943,27 @@ namespace lfs::training {
             t = std::move(compacted);
         };
 
+        // shN is swizzled — compact via block-aware gather.
+        auto compact_shN_swizzled = [&](Tensor& t, size_t cap_rows) {
+            if (!t.is_valid() || t.numel() == 0)
+                return;
+            auto idx_i32 = valid_indices.dtype() == lfs::core::DataType::Int32
+                               ? valid_indices
+                               : valid_indices.to(lfs::core::DataType::Int32);
+            const size_t cap_floats = cap_rows > 0 ? lfs::core::sh_swizzled_float_count(cap_rows)
+                                                   : lfs::core::sh_swizzled_float_count(new_size);
+            const size_t logical_floats = lfs::core::sh_swizzled_float_count(new_size);
+            auto fresh = Tensor::zeros_direct(TensorShape({logical_floats}), cap_floats, Device::CUDA);
+            lfs::core::shN_swizzled_gather_self(
+                t.ptr<float>(), fresh.ptr<float>(),
+                idx_i32.ptr<int>(), new_size, 0);
+            t = std::move(fresh);
+        };
+
         compact(_splat_data->means());
         compact(_splat_data->sh0());
-        if (_splat_data->shN().is_valid() && _splat_data->shN().ndim() > 0)
-            compact(_splat_data->shN());
+        if (_splat_data->shN().is_valid() && _splat_data->shN().numel() > 0)
+            compact_shN_swizzled(_splat_data->shN(), cap);
         compact(_splat_data->scaling_raw());
         compact(_splat_data->rotation_raw());
         compact(_splat_data->opacity_raw());
@@ -896,15 +976,30 @@ namespace lfs::training {
             auto* state = _optimizer->get_state_mutable(pt);
             if (!state)
                 continue;
-            compact(state->exp_avg);
-            compact(state->exp_avg_sq);
+            if (pt == ParamType::ShN) {
+                compact_shN_swizzled(state->exp_avg, cap);
+                compact_shN_swizzled(state->exp_avg_sq, cap);
+                state->size = lfs::core::sh_swizzled_float_count(new_size);
+                state->capacity = cap > 0 ? lfs::core::sh_swizzled_float_count(cap)
+                                          : lfs::core::sh_swizzled_float_count(new_size);
+            } else {
+                compact(state->exp_avg);
+                compact(state->exp_avg_sq);
+                state->size = new_size;
+                state->capacity = cap;
+            }
             if (state->exp_avg.is_valid()) {
-                state->grad = Tensor::zeros(state->exp_avg.shape(), state->exp_avg.device());
-                if (cap > 0)
+                if (pt == ParamType::ShN && state->capacity > state->size) {
+                    state->grad = Tensor::zeros_direct(
+                        state->exp_avg.shape(),
+                        state->capacity,
+                        state->exp_avg.device());
+                } else {
+                    state->grad = Tensor::zeros(state->exp_avg.shape(), state->exp_avg.device());
+                }
+                if (cap > 0 && pt != ParamType::ShN)
                     state->grad.reserve(cap);
             }
-            state->size = new_size;
-            state->capacity = cap;
         }
 
         const auto& info = _splat_data->_densification_info;
@@ -1093,8 +1188,19 @@ namespace lfs::training {
         }
         _splat_data->opacity_raw().index_put_(target_indices, opacity_slice);
 
-        if (shN.is_valid() && has_shN_coefficients(_splat_data->shN())) {
-            _splat_data->shN().index_put_(target_indices, shN.slice(0, 0, slots_to_fill));
+        const auto active_rest = static_cast<uint32_t>(_splat_data->active_sh_coeffs_rest());
+        if (active_rest > 0 && shN.is_valid() && shN.numel() > 0 &&
+            _splat_data->shN().is_valid() && _splat_data->shN().numel() > 0) {
+            auto target_i32 = target_indices.dtype() == DataType::Int32
+                                  ? target_indices
+                                  : target_indices.to(DataType::Int32);
+            auto shN_slice = shN.slice(0, 0, slots_to_fill);
+            shN_swizzled_scatter_linear(
+                _splat_data->shN().ptr<float>(),
+                target_i32.ptr<int>(),
+                shN_slice.ptr<float>(),
+                static_cast<size_t>(slots_to_fill),
+                active_rest);
         }
 
         reset_optimizer_state_at_indices(*_optimizer, ParamType::Means, target_indices);

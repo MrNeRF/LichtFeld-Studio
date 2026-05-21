@@ -287,7 +287,11 @@ namespace lfs::training {
                 mask_mode == lfs::core::param::MaskMode::Segment ||
                 mask_mode == lfs::core::param::MaskMode::Ignore;
 
-            if (use_masking && opt_params.use_alpha_as_mask && camera.has_alpha()) {
+            // Sidecar mask file wins when present; alpha-as-mask is only used as fallback
+            // (some datasets ship RGBA images with a degenerate constant alpha alongside
+            // real per-pixel masks in masks/, and we must not let the alpha channel mask
+            // them out).
+            if (use_masking && !camera.has_mask() && opt_params.use_alpha_as_mask && camera.has_alpha()) {
                 return load_alpha_masked_metrics_inputs(camera, gt_config, opt_params);
             }
 
@@ -1157,6 +1161,13 @@ namespace lfs::training {
                 ++masks_found;
         }
 
+        // Sidecar masks take precedence over the alpha channel (see dataset prefetch),
+        // so report them first; alpha-as-mask only covers cameras without a sidecar.
+        if (masks_found > 0) {
+            LOG_INFO("Found {} masks{}", masks_found, opt.invert_masks ? " (inverted)" : "");
+            return {};
+        }
+
         if (opt.use_alpha_as_mask && alpha_count > 0) {
             LOG_INFO("Using alpha channel as mask source ({}/{} cameras){}",
                      alpha_count, train_dataset_->get_cameras().size(),
@@ -1164,20 +1175,15 @@ namespace lfs::training {
             return {};
         }
 
-        if (masks_found == 0) {
-            const auto path_str = lfs::core::path_to_utf8(params_.dataset.data_path);
-            if (opt.use_alpha_as_mask) {
-                return std::unexpected(std::format(
-                    "Mask mode enabled with use_alpha_as_mask but no images have alpha and no mask files found in {}/masks/",
-                    path_str));
-            }
+        const auto path_str = lfs::core::path_to_utf8(params_.dataset.data_path);
+        if (opt.use_alpha_as_mask) {
             return std::unexpected(std::format(
-                "Mask mode enabled but no masks found in {}/masks/",
+                "Mask mode enabled with use_alpha_as_mask but no images have alpha and no mask files found in {}/masks/",
                 path_str));
         }
-
-        LOG_INFO("Found {} masks{}", masks_found, opt.invert_masks ? " (inverted)" : "");
-        return {};
+        return std::unexpected(std::format(
+            "Mask mode enabled but no masks found in {}/masks/",
+            path_str));
     }
 
     std::expected<Trainer::MaskLossResult, std::string> Trainer::compute_photometric_loss_with_mask(

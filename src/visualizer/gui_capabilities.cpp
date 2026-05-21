@@ -550,14 +550,31 @@ namespace lfs::vis::cap {
         if (!node || !node->model)
             return std::unexpected("Gaussian node not found: " + node_name);
 
-        auto* const field = resolve_gaussian_field(*node->model, field_name);
         const auto canonical_field_name = canonical_gaussian_field_name(field_name);
-        if (!field || canonical_field_name.empty())
+        if (canonical_field_name.empty())
             return std::unexpected("Unsupported gaussian field: " + std::string(field_name));
 
         for (const int index : indices) {
             if (index < 0 || static_cast<size_t>(index) >= node->model->size())
                 return std::unexpected("Gaussian index out of range: " + std::to_string(index));
+        }
+
+        // shN is stored swizzled; the API contract here is canonical [N, K, 3] writes.
+        // Deswizzle into a working buffer, apply the index_copy_, then reswizzle.
+        const bool is_shN = (canonical_field_name == "shN");
+        core::Tensor shN_canon;
+        core::Tensor* field = nullptr;
+        if (is_shN) {
+            if (!node->model->shN_raw().is_valid() || node->model->shN_raw().numel() == 0 ||
+                node->model->active_sh_coeffs_rest() == 0) {
+                return std::unexpected("shN is not active (sh-degree 0)");
+            }
+            shN_canon = node->model->shN_canonical();
+            field = &shN_canon;
+        } else {
+            field = resolve_gaussian_field(*node->model, field_name);
+            if (!field)
+                return std::unexpected("Unsupported gaussian field: " + std::string(field_name));
         }
 
         const auto field_shape = field->shape();
@@ -574,11 +591,22 @@ namespace lfs::vis::cap {
 
         auto shape_dims = field_shape.dims();
         shape_dims[0] = indices.size();
-        const auto before = field->clone();
+        // Capture undo state: for shN, snapshot the swizzled storage bytes (cheaper than
+        // recomputing canonical); resolve_gaussian_field returns the swizzled raw which
+        // is what we'll reswizzle into after the write.
+        const auto before =
+            is_shN ? node->model->shN_raw().clone() : field->clone();
 
         const auto index_tensor = core::Tensor::from_vector(indices, {indices.size()}, field->device());
         const auto src_tensor = core::Tensor::from_vector(values, core::TensorShape(shape_dims), field->device());
         field->index_copy_(0, index_tensor, src_tensor);
+
+        // Reswizzle the mutated canonical view back into model.shN_raw().
+        if (is_shN) {
+            const size_t cap_rows = std::max<size_t>(node->model->means().capacity(),
+                                                     node->model->size());
+            node->model->shN_set_from_canonical(shN_canon, cap_rows);
+        }
 
         auto entry = std::make_unique<vis::op::TensorUndoEntry>(
             "gaussians.write",

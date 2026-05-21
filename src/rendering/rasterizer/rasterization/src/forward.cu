@@ -431,7 +431,7 @@ void lfs::rendering::forward(
     const float4* rotations_raw,
     const float* opacities_raw,
     const float3* sh_coefficients_0,
-    const float3* sh_coefficients_rest,
+    const float4* sh_coefficients_rest,
     const float4* w2c,
     const float3* cam_position,
     float* image,

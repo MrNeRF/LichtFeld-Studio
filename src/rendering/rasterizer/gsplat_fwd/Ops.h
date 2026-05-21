@@ -16,14 +16,14 @@ namespace gsplat_fwd {
     // Spherical Harmonics - Forward Only
     //=========================================================================
 
-    void spherical_harmonics_fwd(
+    void spherical_harmonics_swizzled_fwd(
         uint32_t degrees_to_use,
         const float* dirs,              // [M, 3] viewing directions
-        const float* coeffs,            // [N_total, K, 3] SH coefficients (N-sized when using visible_indices)
+        const float* sh0,               // [N_total, 1, 3] or [N_total, 3]
+        const float* sh_rest_swizzled,  // resident swizzled shN rest layout
         const bool* masks,              // [M] optional (can be nullptr)
         const int32_t* visible_indices, // [M] maps elem_id -> global_idx, nullptr = direct
         int64_t total_elements,         // M (visible gaussians)
-        int32_t K,                      // number of SH coefficients
         float* colors,                  // [M, 3] output (pre-allocated)
         cudaStream_t stream = nullptr);
 
@@ -209,11 +209,12 @@ namespace gsplat_fwd {
 
     void rasterize_from_world_with_sh_fwd(
         // Gaussian parameters
-        const float* means,     // [N_total, 3]
-        const float* quats,     // [N_total, 4]
-        const float* scales,    // [N_total, 3]
-        const float* opacities, // [N_total]
-        const float* sh_coeffs, // [N_total, K, 3]
+        const float* means,                // [N_total, 3]
+        const float* quats,                // [N_total, 4]
+        const float* scales,               // [N_total, 3]
+        const float* opacities,            // [N_total]
+        const float* sh_coefficients_0,    // [N_total, 1, 3]
+        const float* sh_coefficients_rest, // resident swizzled shN rest layout
         uint32_t sh_degree,
         const float* backgrounds, // [C, channels] optional
         const bool* masks,        // optional
@@ -221,7 +222,6 @@ namespace gsplat_fwd {
         uint32_t N_total, // Total gaussians in input arrays
         uint32_t M,       // Visible gaussians to process (M <= N_total)
         uint32_t C,
-        uint32_t K, // number of SH coefficients
         uint32_t image_width,
         uint32_t image_height,
         uint32_t tile_size,

@@ -15,6 +15,7 @@ set(LFS_CORE_CUDA_SOURCES
     kernels/kdtree_kmeans.cu
     kernels/morton_encoding_new.cu
     kernels/selection_ops.cu
+    kernels/sh_layout.cu
     tensor_debug.cu
 )
 

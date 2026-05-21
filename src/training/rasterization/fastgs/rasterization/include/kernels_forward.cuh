@@ -39,11 +39,11 @@ namespace fast_lfs::rasterization::kernels::forward {
         const float4* __restrict__ raw_rotations,
         const float* __restrict__ raw_opacities,
         const float3* __restrict__ sh_coefficients_0,
-        const float3* __restrict__ sh_coefficients_rest,
+        const float4* __restrict__ sh_coefficients_rest, // float4-packed swizzled layout (12 slots/primitive)
         const float4* __restrict__ w2c,
         const float3* __restrict__ cam_position,
         uint* __restrict__ primitive_depth_keys,
-        uint* __restrict__ primitive_n_touched_tiles,
+        std::uint64_t* __restrict__ primitive_n_touched_tiles,
         ushort4* __restrict__ primitive_screen_bounds,
         float2* __restrict__ primitive_mean2d,
         float4* __restrict__ primitive_conic_opacity,
@@ -52,7 +52,6 @@ namespace fast_lfs::rasterization::kernels::forward {
         const uint grid_width,
         const uint grid_height,
         const uint active_sh_bases,
-        const uint total_bases_sh_rest,
         const float w,
         const float h,
         const float fx,
@@ -218,14 +217,14 @@ namespace fast_lfs::rasterization::kernels::forward {
         primitive_color[primitive_idx] = convert_sh_to_color(
             sh_coefficients_0, sh_coefficients_rest,
             mean3d, cam_position[0],
-            primitive_idx, active_sh_bases, total_bases_sh_rest);
+            primitive_idx, active_sh_bases);
         primitive_depth_keys[primitive_idx] = quantize_depth_key(depth, depth_bits);
     }
 
     // based on https://github.com/r4dl/StopThePop-Rasterization/blob/d8cad09919ff49b11be3d693d1e71fa792f559bb/cuda_rasterizer/stopthepop/stopthepop_common.cuh#L325
     __global__ void create_instances_cu(
-        const uint* __restrict__ primitive_n_touched_tiles,
-        const uint* __restrict__ primitive_offsets,
+        const std::uint64_t* __restrict__ primitive_n_touched_tiles,
+        const std::uint64_t* __restrict__ primitive_offsets,
         const uint* __restrict__ primitive_depth_keys,
         const ushort4* __restrict__ primitive_screen_bounds,
         const float2* __restrict__ primitive_mean2d,
@@ -244,7 +243,7 @@ namespace fast_lfs::rasterization::kernels::forward {
         }
 
         const uint primitive_idx = idx;
-        const uint n_touched_tiles = active ? primitive_n_touched_tiles[primitive_idx] : 0;
+        const uint n_touched_tiles = active ? static_cast<uint>(primitive_n_touched_tiles[primitive_idx]) : 0;
         active = active && n_touched_tiles > 0;
 
         if (__ballot_sync(0xffffffffu, active) == 0)
@@ -252,7 +251,7 @@ namespace fast_lfs::rasterization::kernels::forward {
 
         const ushort4 screen_bounds = active ? primitive_screen_bounds[primitive_idx] : make_ushort4(0, 0, 0, 0);
         const uint depth_key = active ? primitive_depth_keys[primitive_idx] : 0;
-        const uint write_offset_end = active ? primitive_offsets[idx] : 0;
+        const uint write_offset_end = active ? static_cast<uint>(primitive_offsets[idx]) : 0;
 
         const float2 mean2d_shifted = active ? primitive_mean2d[primitive_idx] - 0.5f : make_float2(0.0f, 0.0f);
         const float4 conic_opacity_loaded = active ? primitive_conic_opacity[primitive_idx] : make_float4(0.0f, 0.0f, 0.0f, config::min_alpha_threshold);
@@ -260,7 +259,7 @@ namespace fast_lfs::rasterization::kernels::forward {
         const float power_threshold_precomputed = logf(conic_opacity_loaded.w * config::min_alpha_threshold_rcp);
         const float radius_sq = 2.0f * power_threshold_precomputed;
 
-        uint current_write_offset = idx == 0 ? 0 : primitive_offsets[idx - 1];
+        uint current_write_offset = idx == 0 ? 0 : static_cast<uint>(primitive_offsets[idx - 1]);
 
         if (active) {
             const uint screen_bounds_width = static_cast<uint>(screen_bounds.y - screen_bounds.x);

@@ -4,6 +4,7 @@
 
 #include "scene/scene_manager.hpp"
 #include "core/checkpoint_format.hpp"
+#include "core/cuda/sh_layout.cuh"
 #include "core/editor_context.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
@@ -3525,9 +3526,10 @@ namespace lfs::vis {
                 auto cloned = std::make_unique<lfs::core::SplatData>(
                     src.get_max_sh_degree(),
                     src.means_raw().cpu(), src.sh0_raw().cpu(),
-                    src.shN_raw().is_valid() ? src.shN_raw().cpu() : lfs::core::Tensor{},
+                    src.shN_raw().is_valid() ? src.shN_raw().clone() : lfs::core::Tensor{},
                     src.scaling_raw().cpu(), src.rotation_raw().cpu(), src.opacity_raw().cpu(),
-                    src.get_scene_scale());
+                    src.get_scene_scale(),
+                    lfs::core::SplatData::ShNLayout::Swizzled);
                 cloned->set_active_sh_degree(src.get_active_sh_degree());
                 entry.data = std::move(cloned);
             } else {
@@ -3575,9 +3577,18 @@ namespace lfs::vis {
             indices_vec, {indices_vec.size()}, lfs::core::Device::CUDA);
 
         const auto& src = *combined;
-        lfs::core::Tensor shN_selected = src.shN_raw().is_valid()
-                                             ? src.shN_raw().index_select(0, indices).contiguous()
-                                             : lfs::core::Tensor{};
+        lfs::core::Tensor shN_selected;
+        const size_t active_rest = src.active_sh_coeffs_rest();
+        if (src.shN_raw().is_valid() && src.shN_raw().numel() > 0 && active_rest > 0) {
+            shN_selected = lfs::core::Tensor::empty(
+                {indices_vec.size(), active_rest, 3}, src.shN_raw().device());
+            lfs::core::shN_swizzled_gather_to_linear(
+                src.shN_raw().ptr<float>(),
+                indices.ptr<int>(),
+                shN_selected.ptr<float>(),
+                indices_vec.size(),
+                static_cast<uint32_t>(active_rest));
+        }
 
         gaussian_clipboard_ = std::make_unique<lfs::core::SplatData>(
             src.get_max_sh_degree(),
@@ -3604,7 +3615,8 @@ namespace lfs::vis {
             src.means_raw().cuda(), src.sh0_raw().cuda(),
             src.shN_raw().is_valid() ? src.shN_raw().cuda() : lfs::core::Tensor{},
             src.scaling_raw().cuda(), src.rotation_raw().cuda(), src.opacity_raw().cuda(),
-            src.get_scene_scale());
+            src.get_scene_scale(),
+            lfs::core::SplatData::ShNLayout::Swizzled);
         data->set_active_sh_degree(src.get_active_sh_degree());
 
         const std::string name = std::format("Selection_{}", ++clipboard_counter_);
@@ -3717,7 +3729,8 @@ namespace lfs::vis {
                     entry.data->means_raw().cuda(), entry.data->sh0_raw().cuda(),
                     entry.data->shN_raw().is_valid() ? entry.data->shN_raw().cuda() : lfs::core::Tensor{},
                     entry.data->scaling_raw().cuda(), entry.data->rotation_raw().cuda(), entry.data->opacity_raw().cuda(),
-                    entry.data->get_scene_scale());
+                    entry.data->get_scene_scale(),
+                    lfs::core::SplatData::ShNLayout::Swizzled);
                 paste_data->set_active_sh_degree(entry.data->get_active_sh_degree());
 
                 scene_.addNode(name, std::move(paste_data));

@@ -4,7 +4,7 @@ SCENE_DIR="data"
 RESULT_DIR="results/benchmark"
 SCENE_LIST="garden bicycle stump bonsai counter kitchen room" # treehill flowers
 
-# Check if results directory exists and prompt for deletion
+# Check if results directory e`xists and prompt for deletion
 if [ -d "$RESULT_DIR" ]; then
     echo "Results directory '$RESULT_DIR' already exists."
     read -p "Do you want to delete it and start fresh? (y/N): " -n 1 -r

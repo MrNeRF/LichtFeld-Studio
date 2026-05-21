@@ -74,7 +74,7 @@ namespace fast_lfs::optimizer {
             n_indices,
             row_size);
 
-        CHECK_CUDA(config::debug, "zero_rows_at_indices")
+        CHECK_CUDA(config::debug, "zero_rows_at_indices");
     }
 
 } // namespace fast_lfs::optimizer

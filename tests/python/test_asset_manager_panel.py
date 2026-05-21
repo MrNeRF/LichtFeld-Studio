@@ -28,7 +28,8 @@ def _install_lf_stub(monkeypatch):
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = SimpleNamespace(
         PanelSpace=SimpleNamespace(FLOATING="FLOATING"),
-        PanelHeightMode=SimpleNamespace(FILL="FILL"),
+        PanelHeightMode=SimpleNamespace(FILL="FILL", CONTENT="CONTENT"),
+        tr=lambda key: key,
     )
     lf_stub.log = _LogStub()
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
@@ -67,6 +68,10 @@ class _ElementStub:
         self._attrs = attrs or {}
         self._parent = parent
         self.tag_name = tag_name
+        self.listeners = {}
+        self.scroll_height = 0.0
+        self.client_height = 0.0
+        self.scroll_top = 0.0
 
     def get_attribute(self, name, default=""):
         return self._attrs.get(name, default)
@@ -76,6 +81,9 @@ class _ElementStub:
 
     def parent(self):
         return self._parent
+
+    def add_event_listener(self, event, callback):
+        self.listeners[event] = callback
 
 
 class _EventStub:
@@ -106,6 +114,18 @@ class _EventStub:
 
     def stop_propagation(self):
         self.stopped = True
+
+
+class _DocumentStub:
+    def __init__(self, elements=None):
+        self._elements = elements or {}
+        self.listeners = {}
+
+    def get_element_by_id(self, element_id):
+        return self._elements.get(element_id)
+
+    def add_event_listener(self, event, callback):
+        self.listeners[event] = callback
 
 
 def _make_asset():
@@ -189,7 +209,22 @@ def test_asset_manager_rml_uses_text_interpolation_for_display_values():
 def test_asset_manager_load_context_actions_are_localized():
     project_root = Path(__file__).parent.parent.parent
     locale_dir = project_root / "src" / "visualizer" / "gui" / "resources" / "locales"
-    required_keys = ("action.load_new", "action.add_to_scene")
+    required_keys = (
+        "action.load_new",
+        "action.add_to_scene",
+        "action.refresh",
+        "action.clean_missing",
+        "tooltip.refresh",
+        "tooltip.clean_missing",
+        "import_from_url",
+        "import_button",
+        "import_button_downloading",
+        "panel_title",
+        "property.assets",
+        "status_connecting",
+        "status_extracting",
+        "status_complete",
+    )
 
     for locale_path in sorted(locale_dir.glob("*.json")):
         data = json.loads(locale_path.read_text(encoding="utf-8"))
@@ -214,8 +249,9 @@ def test_asset_selection_dirties_info_fields(asset_manager_panel_module):
     assert panel.get_selected_asset_name() == "bicycle"
     assert panel.get_selected_asset_path() == "/tmp/bicycle"
     assert panel.get_selected_asset_dataset_image_count() == "194"
-    assert "selected_asset_path" in panel._handle.dirty_fields
-    assert "show_selection_asset" in panel._handle.dirty_fields
+    dirty = panel._handle.dirty_fields
+    assert "selected_asset_path" in dirty or "__all__" in dirty
+    assert "show_selection_asset" in dirty or "__all__" in dirty
 
 
 def test_asset_selection_resolves_asset_id_from_clicked_element(asset_manager_panel_module):
@@ -413,3 +449,71 @@ def test_dataset_remove_deletes_catalog_json_entry(asset_manager_panel_module, t
     assert scene.id not in data["scenes"]
     assert project.id not in data["projects"]
     assert panel.get_selected_count() == 0
+
+
+def test_edit_watch_dirs_uses_clicked_project_without_selecting_it(
+    asset_manager_panel_module,
+    monkeypatch,
+):
+    panel = asset_manager_panel_module.AssetManagerPanel()
+    panel._handle = _HandleStub()
+    panel._asset_index = SimpleNamespace(
+        assets={},
+        projects={
+            "default": {"id": "default", "name": "Default", "scene_ids": []},
+            "target": {"id": "target", "name": "Target", "scene_ids": []},
+        },
+        scenes={},
+        tags={},
+        collections={},
+    )
+    panel._selected_project_id = "default"
+    opened = []
+
+    monkeypatch.setattr(
+        asset_manager_panel_module,
+        "open_watch_dirs_dialog",
+        lambda project_id: opened.append(project_id) or True,
+    )
+
+    panel.on_edit_watch_dirs(None, None, ["target"])
+
+    assert panel._selected_project_id == "default"
+    assert opened == ["target"]
+
+
+def test_bind_dom_event_listeners_registers_gallery_wheel_handler(
+    asset_manager_panel_module,
+):
+    panel = asset_manager_panel_module.AssetManagerPanel()
+    content = _ElementStub({"id": "asset-popup-content"})
+    gallery_scroll = _ElementStub({"id": "asset-gallery-scroll"})
+    doc = _DocumentStub(
+        {
+            "asset-popup-content": content,
+            "asset-gallery-scroll": gallery_scroll,
+        }
+    )
+
+    panel._bind_dom_event_listeners(doc)
+
+    assert "mousescroll" in gallery_scroll.listeners
+    assert "click" in content.listeners
+    assert "mousemove" in doc.listeners
+
+
+def test_gallery_precise_scroll_moves_scroll_container(asset_manager_panel_module):
+    panel = asset_manager_panel_module.AssetManagerPanel()
+    gallery_scroll = _ElementStub({"id": "asset-gallery-scroll"})
+    gallery_scroll.scroll_height = 900.0
+    gallery_scroll.client_height = 300.0
+    gallery_scroll.scroll_top = 120.0
+    event = _EventStub(
+        current_target=gallery_scroll,
+        params={"wheel_delta_y": "1"},
+    )
+
+    panel._on_gallery_precise_scroll(event)
+
+    assert gallery_scroll.scroll_top == 152.0
+    assert event.stopped is True

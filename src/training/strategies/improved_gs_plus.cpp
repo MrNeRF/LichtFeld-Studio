@@ -4,6 +4,7 @@
 
 #include "improved_gs_plus.hpp"
 
+#include "core/cuda/sh_layout.cuh"
 #include "core/igs_failure_diagnostics.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
@@ -39,11 +40,6 @@ namespace lfs::training {
                     return true;
             }
             return false;
-        }
-
-        // Returns true if shN tensor has non-zero coefficients
-        [[nodiscard]] inline bool has_shN_coefficients(const lfs::core::Tensor& shN) {
-            return shN.is_valid() && shN.ndim() >= 2 && shN.shape()[1] > 0;
         }
 
         const float get_percentil_value(const float q_percent, const lfs::core::Tensor tensor) {
@@ -409,17 +405,11 @@ namespace lfs::training {
             _pending_failure_snapshot.sampled_scale_exp_max = sampled_scale_summary.exp_max;
         }
 
-        // Get SH dimensions
-        const bool has_shN = _splat_data->shN().is_valid();
-        int shN_dim = 0;
-        if (has_shN) {
-            const auto& shN_shape = _splat_data->shN().shape();
-            if (shN_shape.rank() == 2) {
-                shN_dim = shN_shape[1];
-            } else if (shN_shape.rank() == 3) {
-                shN_dim = shN_shape[1] * shN_shape[2];
-            }
-        }
+        const size_t active_rest = _splat_data->active_sh_coeffs_rest();
+        const auto active_rest_u32 = static_cast<uint32_t>(active_rest);
+        const bool use_shN = active_rest > 0 &&
+                             _splat_data->shN().is_valid() &&
+                             _splat_data->shN().numel() > 0;
 
         const lfs::core::Device device = _splat_data->means().device();
 
@@ -429,38 +419,64 @@ namespace lfs::training {
         auto second_scales = lfs::core::Tensor::empty({static_cast<size_t>(budget_for_alloc), 3}, device);
         auto second_sh0 = lfs::core::Tensor::empty({static_cast<size_t>(budget_for_alloc), 3}, device);
         lfs::core::Tensor second_shN;
-        if (has_shN) {
-            second_shN = lfs::core::Tensor::empty({static_cast<size_t>(budget_for_alloc), static_cast<size_t>(shN_dim)}, device);
+        if (use_shN) {
+            second_shN = lfs::core::Tensor::empty(
+                {static_cast<size_t>(budget_for_alloc), active_rest, 3}, device);
         }
         auto second_opacities = lfs::core::Tensor::empty({static_cast<size_t>(budget_for_alloc)}, device);
 
-        // Skip shN pointer when shN_dim = 0 (sh-degree 0)
-        const bool use_shN = has_shN && shN_dim > 0;
-
-        // Kernel launch: First result modifies in-place, seconds will go to temporaries:
+        // SH is unchanged by LAS. Keep resident shN swizzled, run the split kernel without
+        // SH, then gather selected child SH rows below.
         kernels::launch_long_axis_split_gaussians_inplace(
             _splat_data->means().ptr<float>(),
             _splat_data->rotation_raw().ptr<float>(),
             _splat_data->scaling_raw().ptr<float>(),
             _splat_data->sh0().ptr<float>(),
-            use_shN ? _splat_data->shN().ptr<float>() : nullptr,
+            nullptr,
             _splat_data->opacity_raw().ptr<float>(),
             second_positions.ptr<float>(),
             second_rotations.ptr<float>(),
             second_scales.ptr<float>(),
             second_sh0.ptr<float>(),
-            use_shN ? second_shN.ptr<float>() : nullptr,
+            nullptr,
             second_opacities.ptr<float>(),
             sampled_idxs.ptr<int64_t>(),
             static_cast<int>(budget_for_alloc),
-            shN_dim,
+            0,
             nullptr);
+
+        if (use_shN) {
+            lfs::core::shN_swizzled_gather_to_linear_i64(
+                _splat_data->shN().ptr<float>(),
+                sampled_idxs.ptr<int64_t>(),
+                second_shN.ptr<float>(),
+                static_cast<size_t>(budget_for_alloc),
+                active_rest_u32);
+        }
 
         // Reset optimizer states for long-axis-split indices
         auto reset_optimizer_state_at_indices = [&](ParamType param_type) {
             auto* state = _optimizer->get_state_mutable(param_type);
             if (!state)
                 return;
+
+            // shN state is swizzled — zero out by primitive index via the dedicated kernel.
+            if (param_type == ParamType::ShN) {
+                if (!state->exp_avg.is_valid() || state->exp_avg.numel() == 0)
+                    return;
+                auto idx_i32 = sampled_idxs.dtype() == lfs::core::DataType::Int32
+                                   ? sampled_idxs
+                                   : sampled_idxs.to(lfs::core::DataType::Int32);
+                lfs::core::shN_swizzled_zero_at_indices(
+                    state->exp_avg.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel());
+                lfs::core::shN_swizzled_zero_at_indices(
+                    state->exp_avg_sq.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel());
+                if (state->grad.is_valid() && state->grad.numel() > 0) {
+                    lfs::core::shN_swizzled_zero_at_indices(
+                        state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel());
+                }
+                return;
+            }
 
             const auto& shape = state->exp_avg.shape();
             if (has_zero_dimension(shape))
@@ -538,13 +554,17 @@ namespace lfs::training {
 
             if (use_shN) {
                 auto append_shN = second_shN.slice(0, num_filled, budget_for_alloc);
-                const auto& shN_shape = _splat_data->shN().shape();
-                if (shN_shape.rank() == 3) {
-                    append_shN = append_shN.reshape(
-                        lfs::core::TensorShape({n_remaining, shN_shape[1], shN_shape[2]}));
+                const size_t new_size = old_size + n_remaining;
+                const size_t needed_floats = lfs::core::sh_swizzled_float_count(new_size);
+                if (_splat_data->shN().numel() < needed_floats) {
+                    _splat_data->shN().append_zeros(needed_floats - _splat_data->shN().numel());
                 }
-                _splat_data->shN().append_zeros(n_remaining);
-                _splat_data->shN().index_put_(new_indices, append_shN);
+                lfs::core::shN_swizzled_gather_from_linear(
+                    _splat_data->shN().ptr<float>(),
+                    old_size,
+                    append_shN.ptr<float>(),
+                    n_remaining,
+                    active_rest_u32);
             }
 
             // Update optimizer states
@@ -841,6 +861,24 @@ namespace lfs::training {
             if (!state)
                 return;
 
+            // shN state is swizzled — use the swizzle-aware zero kernel.
+            if (param_type == ParamType::ShN) {
+                if (!state->exp_avg.is_valid() || state->exp_avg.numel() == 0)
+                    return;
+                auto idx_i32 = prune_indices.dtype() == lfs::core::DataType::Int32
+                                   ? prune_indices
+                                   : prune_indices.to(lfs::core::DataType::Int32);
+                lfs::core::shN_swizzled_zero_at_indices(
+                    state->exp_avg.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel());
+                lfs::core::shN_swizzled_zero_at_indices(
+                    state->exp_avg_sq.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel());
+                if (state->grad.is_valid() && state->grad.numel() > 0) {
+                    lfs::core::shN_swizzled_zero_at_indices(
+                        state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel());
+                }
+                return;
+            }
+
             const auto& shape = state->exp_avg.shape();
             if (has_zero_dimension(shape))
                 return;
@@ -912,13 +950,19 @@ namespace lfs::training {
 
         _splat_data->opacity_raw().index_put_(target_indices, opacities.slice(0, 0, slots_to_fill));
 
-        if (shN.is_valid() && has_shN_coefficients(_splat_data->shN())) {
-            const auto& shN_shape = _splat_data->shN().shape();
-            const auto n = static_cast<int>(slots_to_fill);
-            const auto shN_slice = (shN_shape.rank() == 3)
-                                       ? shN.slice(0, 0, slots_to_fill).reshape({n, static_cast<int>(shN_shape[1]), static_cast<int>(shN_shape[2])})
-                                       : shN.slice(0, 0, slots_to_fill).reshape({n, static_cast<int>(shN_shape[1])});
-            _splat_data->shN().index_put_(target_indices, shN_slice);
+        const auto active_rest = static_cast<uint32_t>(_splat_data->active_sh_coeffs_rest());
+        if (active_rest > 0 && shN.is_valid() && shN.numel() > 0 &&
+            _splat_data->shN().is_valid() && _splat_data->shN().numel() > 0) {
+            auto target_i32 = target_indices.dtype() == lfs::core::DataType::Int32
+                                  ? target_indices
+                                  : target_indices.to(lfs::core::DataType::Int32);
+            auto shN_slice = shN.slice(0, 0, slots_to_fill);
+            lfs::core::shN_swizzled_scatter_linear(
+                _splat_data->shN().ptr<float>(),
+                target_i32.ptr<int>(),
+                shN_slice.ptr<float>(),
+                static_cast<size_t>(slots_to_fill),
+                active_rest);
         }
 
         // Reset optimizer states for filled slots
@@ -926,6 +970,24 @@ namespace lfs::training {
             auto* state = _optimizer->get_state_mutable(param_type);
             if (!state)
                 return;
+
+            // shN state is swizzled — zero by primitive index via the dedicated kernel.
+            if (param_type == ParamType::ShN) {
+                if (!state->exp_avg.is_valid() || state->exp_avg.numel() == 0)
+                    return;
+                auto idx_i32 = target_indices.dtype() == lfs::core::DataType::Int32
+                                   ? target_indices
+                                   : target_indices.to(lfs::core::DataType::Int32);
+                lfs::core::shN_swizzled_zero_at_indices(
+                    state->exp_avg.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel());
+                lfs::core::shN_swizzled_zero_at_indices(
+                    state->exp_avg_sq.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel());
+                if (state->grad.is_valid() && state->grad.numel() > 0) {
+                    lfs::core::shN_swizzled_zero_at_indices(
+                        state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel());
+                }
+                return;
+            }
 
             const auto& shape = state->exp_avg.shape();
             if (has_zero_dimension(shape))

@@ -1,0 +1,29 @@
+/* Watched Directories dialog — minimal overrides on import_dialog.rcss */
+
+.watchdirs-dialog {
+    min-width: 420dp;
+    max-width: 560dp;
+}
+
+.watchdirs-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4dp;
+    max-height: 240dp;
+    overflow-y: auto;
+}
+
+.watchdirs-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8dp;
+    padding: 4dp 0;
+}
+
+.watchdirs-path {
+    flex: 1;
+    min-width: 0;
+    font-size: 12dp;
+    word-break: break-word;
+}

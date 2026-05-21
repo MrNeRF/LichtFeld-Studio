@@ -15,26 +15,27 @@ namespace gsplat_lfs {
     // Spherical Harmonics
     //=========================================================================
 
-    void spherical_harmonics_fwd(
+    void spherical_harmonics_swizzled_fwd(
         uint32_t degrees_to_use,
-        const float* dirs,      // [..., 3] flattened
-        const float* coeffs,    // [..., K, 3] flattened
-        const bool* masks,      // [...] optional (can be nullptr)
-        int64_t total_elements, // total batch size
-        int32_t K,              // number of SH coefficients
-        float* colors,          // [..., 3] output (pre-allocated)
+        const float* dirs,             // [..., 3] flattened
+        const float* sh0,              // [N, 1, 3] / [N, 3]
+        const float* sh_rest_swizzled, // vksplat swizzled SH-rest storage
+        const bool* masks,             // [...] optional (can be nullptr)
+        int64_t total_elements,        // total batch size
+        float* colors,                 // [..., 3] output (pre-allocated)
         cudaStream_t stream = nullptr);
 
-    void spherical_harmonics_bwd(
+    void spherical_harmonics_swizzled_bwd(
         uint32_t K,
         uint32_t degrees_to_use,
-        const float* dirs,     // [..., 3]
-        const float* coeffs,   // [..., K, 3]
-        const bool* masks,     // [...] optional
-        const float* v_colors, // [..., 3] gradient
+        const float* dirs,             // [..., 3]
+        const float* sh0,              // [N, 1, 3] / [N, 3]
+        const float* sh_rest_swizzled, // vksplat swizzled SH-rest storage
+        const bool* masks,             // [...] optional
+        const float* v_colors,         // [..., 3] gradient
         int64_t total_elements,
         bool compute_v_dirs,
-        float* v_coeffs, // [..., K, 3] output
+        float* v_coeffs, // [..., K, 3] canonical output for accumulation
         float* v_dirs,   // [..., 3] optional output
         cudaStream_t stream = nullptr);
 
@@ -278,7 +279,8 @@ namespace gsplat_lfs {
         const float* quats,     // [N, 4]
         const float* scales,    // [N, 3]
         const float* opacities, // [N]
-        const float* sh_coeffs, // [N, K, 3]
+        const float* sh0,       // [N, 1, 3]
+        const float* shN,       // swizzled SH-rest storage
         uint32_t sh_degree,
         const float* backgrounds, // [C, channels] optional - solid color
         const float* bg_images,   // [C, channels, H, W] optional - per-pixel background
@@ -318,7 +320,8 @@ namespace gsplat_lfs {
         const float* quats,     // [N, 4]
         const float* scales,    // [N, 3]
         const float* opacities, // [N]
-        const float* sh_coeffs, // [N, K, 3]
+        const float* sh0,       // [N, 1, 3]
+        const float* shN,       // swizzled SH-rest storage
         uint32_t sh_degree,
         const float* backgrounds, // [C, channels] optional - solid color
         const float* bg_images,   // [C, channels, H, W] optional - per-pixel background
@@ -355,6 +358,7 @@ namespace gsplat_lfs {
         const int32_t* flatten_ids,  // [n_isects]
         uint32_t n_isects,
         const float* colors,        // [C, N, channels]
+        const float* dirs,          // [C, N, 3]
         const int32_t* radii,       // [C, N, 2]
         const float* means2d,       // [C, N, 2]
         const float* depths,        // [C, N]

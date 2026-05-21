@@ -264,7 +264,12 @@ namespace lfs::training {
             return &model.sh0_raw();
         }
         if (name == "shN" || name == "sh") {
-            row_dim_out = model.shN_raw().shape()[0];
+            // TODO(swizzle): shN is stored in vksplat swizzled layout (1D). Returning the
+            // raw pointer exposes the swizzled buffer; callers that expect [N, K, 3] will
+            // misinterpret it. Until set_attribute is rewritten with swizzle awareness,
+            // report N=size() so row masks have correct length; the byte content is still
+            // swizzled.
+            row_dim_out = static_cast<std::size_t>(model.size());
             return &model.shN_raw();
         }
         return std::unexpected(std::string("Unknown attribute: ") + name);
@@ -377,16 +382,34 @@ namespace lfs::training {
         auto& model = strategy.get_model();
 
         const auto attr_name = std::get<std::string>(cmd.args.at("attribute"));
+        const bool is_shN = (attr_name == "shN" || attr_name == "sh");
 
         const size_t rows = model.size();
-        size_t row_dim = 0;
-        const auto tensor_ref = resolve_attribute(model, attr_name, row_dim);
-        (void)row_dim;
-        if (!tensor_ref) {
-            return std::unexpected(tensor_ref.error());
+
+        // shN is stored swizzled — operate on a deswizzled [N, K, 3] working buffer,
+        // then reswizzle. Other params can mutate in place via the resolved pointer.
+        core::Tensor shN_canon;
+        core::Tensor* tensor = nullptr;
+        size_t prev_capacity = 0;
+        if (is_shN) {
+            if (!model.shN_raw().is_valid() || model.shN_raw().numel() == 0 ||
+                model.active_sh_coeffs_rest() == 0) {
+                return std::unexpected("shN is not active (sh-degree 0)");
+            }
+            shN_canon = model.shN_canonical();
+            prev_capacity = std::max<size_t>(model.means().capacity(), model.size());
+            tensor = &shN_canon;
+        } else {
+            size_t row_dim = 0;
+            const auto tensor_ref = resolve_attribute(model, attr_name, row_dim);
+            (void)row_dim;
+            if (!tensor_ref) {
+                return std::unexpected(tensor_ref.error());
+            }
+            tensor = *tensor_ref;
+            prev_capacity = tensor->capacity();
         }
-        core::Tensor* const tensor = *tensor_ref;
-        const size_t prev_capacity = tensor->capacity();
+
         auto mask = build_row_mask(cmd.selection, rows, tensor->device());
         if (!mask) {
             return std::unexpected(mask.error());
@@ -427,17 +450,26 @@ namespace lfs::training {
             return result;
         }
 
+        // For shN, write the mutated canonical view back into swizzled storage.
+        if (is_shN) {
+            model.shN_set_from_canonical(shN_canon, prev_capacity);
+        }
+
         if (auto p = param_type_from_attribute(attr_name)) {
             auto& opt = strategy.get_optimizer();
             opt.reset_state(*p);
 
-            size_t desired_cap = prev_capacity;
-            if (const auto* st = opt.get_state(*p)) {
-                desired_cap = std::max(desired_cap, st->capacity);
-            }
-            desired_cap = std::max(desired_cap, tensor->shape()[0]);
-            if (desired_cap > 0 && tensor->capacity() < desired_cap) {
-                tensor->reserve(desired_cap);
+            // shN capacity is in swizzled floats — managed by SplatData/allocator, skip
+            // the row-count reserve here.
+            if (!is_shN) {
+                size_t desired_cap = prev_capacity;
+                if (const auto* st = opt.get_state(*p)) {
+                    desired_cap = std::max(desired_cap, st->capacity);
+                }
+                desired_cap = std::max(desired_cap, tensor->shape()[0]);
+                if (desired_cap > 0 && tensor->capacity() < desired_cap) {
+                    tensor->reserve(desired_cap);
+                }
             }
         }
 

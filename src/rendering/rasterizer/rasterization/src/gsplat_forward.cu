@@ -28,10 +28,10 @@ namespace lfs::rendering {
         const float* quats,
         const float* scales,
         const float* opacities,
-        const float* sh_coeffs,
+        const float* sh_coefficients_0,
+        const float* sh_coefficients_rest,
         const uint32_t sh_degree,
         const uint32_t N,
-        const uint32_t K,
         const uint32_t image_width,
         const uint32_t image_height,
         const float* viewmat,
@@ -140,9 +140,9 @@ namespace lfs::rendering {
             UnscentedTransformParameters ut_params;
 
             gsplat_fwd::rasterize_from_world_with_sh_fwd(
-                means, quats, scales, opacities, sh_coeffs, sh_degree,
+                means, quats, scales, opacities, sh_coefficients_0, sh_coefficients_rest, sh_degree,
                 background, nullptr,
-                N, M, NUM_CAMERAS, K, image_width, image_height, TILE_SIZE,
+                N, M, NUM_CAMERAS, image_width, image_height, TILE_SIZE,
                 viewmat, nullptr, K_intrinsics,
                 static_cast<CameraModelType>(camera_model),
                 EPS_2D, NEAR_PLANE, FAR_PLANE, RADIUS_CLIP,

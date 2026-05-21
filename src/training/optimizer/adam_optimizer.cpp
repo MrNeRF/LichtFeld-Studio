@@ -4,6 +4,7 @@
 
 #include "adam_optimizer.hpp"
 #include "adam_api.h" // fast_lfs::optimizer::adam_step_raw
+#include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include <algorithm>
@@ -43,6 +44,18 @@ namespace lfs::training {
         }
     }
 
+    size_t AdamOptimizer::compute_state_growth(ParamType type, size_t n_new) const {
+        if (type != ParamType::ShN)
+            return n_new;
+        const size_t n_old = static_cast<size_t>(splat_data_.size());
+        // splat_data_.size() reflects the post-growth N at this point; the caller already
+        // resized the SplatData. So n_old here is the new total, and the old N was n_old - n_new.
+        if (n_old < n_new)
+            return lfs::core::sh_swizzled_float_count(n_old);
+        const size_t prev = n_old - n_new;
+        return lfs::core::sh_swizzled_float_count(n_old) - lfs::core::sh_swizzled_float_count(prev);
+    }
+
     void AdamOptimizer::allocate_gradients() {
         allocate_gradients(config_.initial_capacity);
     }
@@ -59,12 +72,22 @@ namespace lfs::training {
             }
 
             const size_t param_size = param.shape()[0];
-            const size_t alloc_cap = (capacity > param_size) ? capacity : param_size;
+            // shN is stored in vksplat swizzled layout as a 1D float tensor; capacity
+            // along dim 0 must be expressed in floats, not primitive rows.
+            const size_t effective_capacity = (type == ParamType::ShN)
+                                                  ? lfs::core::sh_swizzled_float_count(capacity)
+                                                  : capacity;
+            const size_t alloc_cap = (effective_capacity > param_size) ? effective_capacity : param_size;
 
             // Handle zero-size tensors (e.g., shN with sh-degree 0 has shape [N, 0, 3]).
             // Moment tensors are persistent Adam state. Gradients are transient and allocated
             // lazily by get_grad(); fused fastgs backward never needs the full gradient buffers.
-            if (alloc_cap > param_size) {
+            //
+            // Force the direct/reserved allocator for shN so capacity is recorded even when
+            // N already fits in the current swizzled block. Without this, the fast path in
+            // extend_state_for_new_params trips on capacity()==0.
+            const bool use_direct = (alloc_cap > param_size) || type == ParamType::ShN;
+            if (use_direct && alloc_cap > 0) {
                 state.exp_avg = lfs::core::Tensor::zeros_direct(param.shape(), alloc_cap);
                 state.exp_avg_sq = lfs::core::Tensor::zeros_direct(param.shape(), alloc_cap);
             } else {
@@ -293,10 +316,12 @@ namespace lfs::training {
 
         fused.means = prepare_param(ParamType::Means, 3, true);
         fused.sh0 = prepare_param(ParamType::Sh0, 3, true);
+        // shN is laid out in swizzled float4 order (vksplat shAt). The fused-backward kernel
+        // indexes it via shAt(p, k) float4-slot reads/writes, not via
+        // primitive_idx*n_attributes+offset, so n_attributes is informational only.
+        // We report 12 float4 * 4 floats = 48 floats per primitive.
         fused.shN = prepare_param(ParamType::ShN,
-                                  splat_data_.shN().is_valid() && splat_data_.shN().ndim() >= 2
-                                      ? static_cast<int>(splat_data_.shN().shape()[1] * 3)
-                                      : 0,
+                                  static_cast<int>(lfs::core::kShRestFloat4PerPrimitive * 4u),
                                   iteration > SH_WARMUP_ITERATIONS);
         fused.scaling = prepare_param(ParamType::Scaling, 3, true);
         fused.rotation = prepare_param(ParamType::Rotation, 4, true);
@@ -465,17 +490,21 @@ namespace lfs::training {
             return;
         }
 
-        // Skip zero-coefficient ShN (sh-degree 0)
+        // Skip zero-coefficient ShN (sh-degree 0): with swizzled storage the tensor is
+        // 1D and may be empty when allocated for SH degree 0.
         if (type == ParamType::ShN) {
             const auto& shN_param = get_param(type);
-            if (!shN_param.is_valid() || (shN_param.ndim() >= 2 && shN_param.shape()[1] == 0)) {
+            if (!shN_param.is_valid() || shN_param.numel() == 0) {
                 return;
             }
         }
 
         auto& param = get_param(type);
         auto& state = states_[name];
-        const size_t new_size = state.size + n_new;
+        // For swizzled shN, growth is measured in floats: (swizzled_floats(N+n_new) -
+        // swizzled_floats(N)). For everything else, growth is measured in primitive rows.
+        const size_t growth = compute_state_growth(type, n_new);
+        const size_t new_size = state.size + growth;
 
         if (!param.is_valid() || param.shape().rank() == 0) {
             throw std::runtime_error("extend_state: " + name + " invalid");
@@ -495,9 +524,9 @@ namespace lfs::training {
                                       new_size <= state.exp_avg_sq.capacity();
         if (all_have_capacity && fits_in_capacity) {
             if (state.grad.is_valid())
-                state.grad.append_zeros(n_new);
-            state.exp_avg.append_zeros(n_new);
-            state.exp_avg_sq.append_zeros(n_new);
+                state.grad.append_zeros(growth);
+            state.exp_avg.append_zeros(growth);
+            state.exp_avg_sq.append_zeros(growth);
             state.size = new_size;
             state.capacity = state.exp_avg.capacity();
             LOG_DEBUG("extend_state_for_new_params({}): fast path done, new size = {}", name, new_size);
@@ -525,9 +554,9 @@ namespace lfs::training {
             CHECK_CUDA(cudaMemcpyAsync(new_exp_avg_sq.ptr<float>(), state.exp_avg_sq.ptr<float>(), old_bytes, cudaMemcpyDeviceToDevice, nullptr));
         }
 
-        const size_t row_size = param.numel() / shape[0];
+        const size_t row_size = shape[0] == 0 ? 0 : param.numel() / shape[0];
         const size_t offset = state.exp_avg.numel() * sizeof(float);
-        const size_t new_bytes = n_new * row_size * sizeof(float);
+        const size_t new_bytes = growth * row_size * sizeof(float);
         CHECK_CUDA(cudaMemsetAsync(reinterpret_cast<char*>(new_exp_avg.ptr<float>()) + offset, 0, new_bytes, nullptr));
         CHECK_CUDA(cudaMemsetAsync(reinterpret_cast<char*>(new_exp_avg_sq.ptr<float>()) + offset, 0, new_bytes, nullptr));
 
@@ -595,39 +624,108 @@ namespace lfs::training {
     void AdamOptimizer::add_new_params_gather(ParamType type, const lfs::core::Tensor& indices) {
         auto& param = get_param(type);
 
-        // Special case: ShN with 0 higher-order SH coefficients (sh_degree=0)
-        // The tensor may be either:
-        // 1. Completely uninitialized (ndim=0) - need to create [new_size, 0, 3]
-        // 2. Exists with shape [N, 0, 3] - need to resize to [new_size, 0, 3]
-        // We still need to resize dim 0 to match the new number of gaussians for cat() in get_shs()
+        // ShN: swizzled 1D buffer. append_gather doesn't apply; do swizzle-aware gather.
         if (type == ParamType::ShN) {
-            const bool is_uninitialized = (param.ndim() == 0);
-            const bool has_zero_sh_coeffs = (param.ndim() >= 2 && param.shape()[1] == 0);
-
-            if (is_uninitialized || has_zero_sh_coeffs) {
-                // sh0 is already updated at this point, so just match its size
-                // (don't add n_new again - that would double-count)
-                const auto& sh0 = splat_data_.sh0();
-                const size_t new_size = sh0.shape()[0];
-
-                LOG_DEBUG("add_new_params_gather: ShN resize to {} (uninitialized={})",
-                          new_size, is_uninitialized);
-
-                // Create new tensor with correct shape [new_size, 0, 3]
-                auto new_tensor = lfs::core::Tensor::empty(
-                    {new_size, 0, 3},
-                    lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-
-                // Assign to the reference (this updates splat_data_._shN)
-                param = std::move(new_tensor);
-                // No optimizer state to extend for empty tensors
+            if (!param.is_valid() || param.numel() == 0) {
+                // SH degree 0 — no shN data to extend. The param length tracks via sh0.
                 return;
             }
+            const size_t n_new = indices.numel();
+            if (n_new == 0)
+                return;
+            const size_t old_N = static_cast<size_t>(splat_data_.size()) - n_new;
+            const size_t new_N = old_N + n_new;
+            const size_t old_floats = lfs::core::sh_swizzled_float_count(old_N);
+            const size_t new_floats = lfs::core::sh_swizzled_float_count(new_N);
+            const size_t growth = new_floats - old_floats;
+
+            // Extend the swizzled param buffer by `growth` zero floats. The new range
+            // [old_floats, new_floats) covers all swizzled slots of primitives in
+            // [old_N, new_N).
+            param.append_zeros(growth);
+
+            // Scatter values from source primitive indices into the new primitive range.
+            float* shN_ptr = param.ptr<float>();
+            if (indices.dtype() == lfs::core::DataType::Int64) {
+                lfs::core::shN_swizzled_gather_self_i64(
+                    shN_ptr, shN_ptr, indices.ptr<int64_t>(), n_new, old_N);
+            } else {
+                auto idx_i32 = indices.dtype() == lfs::core::DataType::Int32
+                                   ? indices
+                                   : indices.to(lfs::core::DataType::Int32);
+                lfs::core::shN_swizzled_gather_self(
+                    shN_ptr, shN_ptr, idx_i32.ptr<int>(), n_new, old_N);
+            }
+
+            // Extend the Adam state (exp_avg, exp_avg_sq) with gather-from-self in swizzled.
+            const auto name = param_name(type);
+            if (states_.contains(name)) {
+                auto& state = states_[name];
+                if (state.exp_avg.is_valid() && state.exp_avg_sq.is_valid()) {
+                    const bool fits =
+                        state.exp_avg.capacity() >= new_floats &&
+                        state.exp_avg_sq.capacity() >= new_floats;
+                    if (fits) {
+                        state.exp_avg.append_zeros(growth);
+                        state.exp_avg_sq.append_zeros(growth);
+                        if (indices.dtype() == lfs::core::DataType::Int64) {
+                            lfs::core::shN_swizzled_gather_self_i64(
+                                state.exp_avg.ptr<float>(), state.exp_avg.ptr<float>(),
+                                indices.ptr<int64_t>(), n_new, old_N);
+                            lfs::core::shN_swizzled_gather_self_i64(
+                                state.exp_avg_sq.ptr<float>(), state.exp_avg_sq.ptr<float>(),
+                                indices.ptr<int64_t>(), n_new, old_N);
+                        } else {
+                            auto idx_i32 = indices.dtype() == lfs::core::DataType::Int32
+                                               ? indices
+                                               : indices.to(lfs::core::DataType::Int32);
+                            lfs::core::shN_swizzled_gather_self(
+                                state.exp_avg.ptr<float>(), state.exp_avg.ptr<float>(),
+                                idx_i32.ptr<int>(), n_new, old_N);
+                            lfs::core::shN_swizzled_gather_self(
+                                state.exp_avg_sq.ptr<float>(), state.exp_avg_sq.ptr<float>(),
+                                idx_i32.ptr<int>(), n_new, old_N);
+                        }
+                        state.size = new_floats;
+                        state.capacity = state.exp_avg.capacity();
+                    } else {
+                        // Fallback: state has no reserved capacity. Reallocate at exact size.
+                        auto realloc = [&](lfs::core::Tensor& t) {
+                            auto fresh = lfs::core::Tensor::zeros({new_floats}, lfs::core::Device::CUDA);
+                            cudaMemcpyAsync(fresh.ptr<float>(), t.ptr<float>(),
+                                            old_floats * sizeof(float),
+                                            cudaMemcpyDeviceToDevice, nullptr);
+                            t = std::move(fresh);
+                        };
+                        realloc(state.exp_avg);
+                        realloc(state.exp_avg_sq);
+                        if (indices.dtype() == lfs::core::DataType::Int64) {
+                            lfs::core::shN_swizzled_gather_self_i64(
+                                state.exp_avg.ptr<float>(), state.exp_avg.ptr<float>(),
+                                indices.ptr<int64_t>(), n_new, old_N);
+                            lfs::core::shN_swizzled_gather_self_i64(
+                                state.exp_avg_sq.ptr<float>(), state.exp_avg_sq.ptr<float>(),
+                                indices.ptr<int64_t>(), n_new, old_N);
+                        } else {
+                            auto idx_i32 = indices.dtype() == lfs::core::DataType::Int32
+                                               ? indices
+                                               : indices.to(lfs::core::DataType::Int32);
+                            lfs::core::shN_swizzled_gather_self(
+                                state.exp_avg.ptr<float>(), state.exp_avg.ptr<float>(),
+                                idx_i32.ptr<int>(), n_new, old_N);
+                            lfs::core::shN_swizzled_gather_self(
+                                state.exp_avg_sq.ptr<float>(), state.exp_avg_sq.ptr<float>(),
+                                idx_i32.ptr<int>(), n_new, old_N);
+                        }
+                        state.size = new_floats;
+                        state.capacity = 0;
+                    }
+                }
+            }
+            return;
         }
 
         if (!param.is_valid()) {
-            if (type == ParamType::ShN)
-                return; // ShN may not be initialized at sh-degree 0
             LOG_ERROR("add_new_params_gather: {} not initialized", param_name(type));
             return;
         }
@@ -674,11 +772,12 @@ namespace lfs::training {
         if (!states_.contains(name))
             return;
 
-        // Skip ShN when not initialized (sh_degree=0 case)
+        // Skip ShN when not initialized (sh_degree=0 case): swizzled storage is 1D.
         if (type == ParamType::ShN) {
             const auto& param = get_param(type);
-            if (!param.is_valid() || (param.ndim() >= 2 && param.shape()[1] == 0)) {
-                return; // ShN is empty at sh-degree 0, nothing to relocate
+            if (!param.is_valid() || param.numel() == 0 ||
+                splat_data_.active_sh_coeffs_rest() == 0) {
+                return;
             }
         }
 
@@ -691,6 +790,15 @@ namespace lfs::training {
         }
         if (!state.exp_avg_sq.is_valid() || state.exp_avg_sq.ptr<float>() == nullptr) {
             LOG_WARN("relocate_params_at_indices_gpu: {} exp_avg_sq tensor is invalid or null", name);
+            return;
+        }
+
+        // shN state is swizzled — zero by primitive index via the swizzle-aware kernel.
+        if (type == ParamType::ShN) {
+            lfs::core::shN_swizzled_zero_at_indices_i64(
+                state.exp_avg.ptr<float>(), indices_device, n_indices);
+            lfs::core::shN_swizzled_zero_at_indices_i64(
+                state.exp_avg_sq.ptr<float>(), indices_device, n_indices);
             return;
         }
 
@@ -803,6 +911,32 @@ namespace lfs::training {
             state.exp_avg = state.exp_avg.cuda();
             state.exp_avg_sq = state.exp_avg_sq.cuda();
 
+            // Compat bridge: a checkpoint produced by a pre-vksplat-swizzle build has
+            // shN Adam state in canonical [N, K, 3] layout. New code expects 1D swizzled.
+            // Detect rank-3 and convert.
+            if (name == "shN" && state.exp_avg.is_valid() && state.exp_avg.ndim() == 3) {
+                const size_t N = static_cast<size_t>(state.exp_avg.shape()[0]);
+                const uint32_t K = static_cast<uint32_t>(state.exp_avg.shape()[1]);
+                const size_t cap_rows = std::max<size_t>(state.capacity, N);
+                const size_t cap_floats = lfs::core::sh_swizzled_float_count(cap_rows);
+                const size_t logical_floats = lfs::core::sh_swizzled_float_count(N);
+
+                auto swizzled_avg = lfs::core::Tensor::zeros_direct(
+                    lfs::core::TensorShape({logical_floats}), cap_floats, lfs::core::Device::CUDA);
+                auto swizzled_avg_sq = lfs::core::Tensor::zeros_direct(
+                    lfs::core::TensorShape({logical_floats}), cap_floats, lfs::core::Device::CUDA);
+                lfs::core::reorder_sh_to_swizzled(
+                    state.exp_avg.ptr<float>(), swizzled_avg.ptr<float>(), N, K);
+                lfs::core::reorder_sh_to_swizzled(
+                    state.exp_avg_sq.ptr<float>(), swizzled_avg_sq.ptr<float>(), N, K);
+                state.exp_avg = std::move(swizzled_avg);
+                state.exp_avg_sq = std::move(swizzled_avg_sq);
+                state.size = logical_floats;
+                state.capacity = cap_floats;
+                states_[name] = std::move(state);
+                continue;
+            }
+
             const size_t target_cap = std::max(state.capacity, compute_new_capacity(state.size, state.size));
             if (target_cap > state.size) {
                 state.exp_avg.reserve(target_cap);
@@ -817,15 +951,17 @@ namespace lfs::training {
     }
 
     void AdamOptimizer::reserve_capacity(const size_t capacity) {
-        for (auto& [_, state] : states_) {
-            if (capacity > state.capacity) {
+        for (auto& [name, state] : states_) {
+            const size_t target_capacity =
+                name == "shN" ? lfs::core::sh_swizzled_float_count(capacity) : capacity;
+            if (target_capacity > state.capacity) {
                 if (state.grad.is_valid())
-                    state.grad.reserve(capacity);
+                    state.grad.reserve(target_capacity);
                 if (state.exp_avg.is_valid())
-                    state.exp_avg.reserve(capacity);
+                    state.exp_avg.reserve(target_capacity);
                 if (state.exp_avg_sq.is_valid())
-                    state.exp_avg_sq.reserve(capacity);
-                state.capacity = capacity;
+                    state.exp_avg_sq.reserve(target_capacity);
+                state.capacity = target_capacity;
             }
         }
     }

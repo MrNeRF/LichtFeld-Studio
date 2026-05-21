@@ -57,5 +57,5 @@ void fast_lfs::optimizer::adam_step(
         throw std::runtime_error(std::string("adam_step_cu kernel launch failed: ") + cudaGetErrorString(err));
     }
 
-    CHECK_CUDA(config::debug, "adam step")
+    CHECK_CUDA(config::debug, "adam step");
 }

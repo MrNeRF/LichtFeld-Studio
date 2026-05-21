@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/splat_data_mirror.hpp"
+#include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
 #include "core/splat_data.hpp"
 #include <mutex>
@@ -131,11 +132,28 @@ namespace lfs::core {
             rot.index_copy_(0, indices, rot.index_select(0, indices) * g_cache.quat_mult[a]);
         }
 
-        // SH coefficients (degrees 1-3 only, shN excludes DC)
-        if (auto& shN = splat_data.shN(); shN.is_valid() && shN.size(0) > 0 && shN.size(1) > 0) {
-            const int degree = static_cast<int>(std::sqrt(shN.size(1) + 1)) - 1;
+        // SH coefficients (degrees 1-3 only, shN excludes DC). Gather only selected
+        // rows to linear form, apply signs, then scatter back into swizzled storage.
+        const size_t active_rest = splat_data.active_sh_coeffs_rest();
+        if (splat_data.shN().is_valid() && splat_data.shN().numel() > 0 && active_rest > 0) {
+            const int degree = static_cast<int>(std::sqrt(active_rest + 1)) - 1;
             if (degree >= 1 && degree <= 3) {
-                shN.index_copy_(0, indices, shN.index_select(0, indices) * g_cache.sh_mult[a][degree - 1]);
+                const auto active_rest_u32 = static_cast<uint32_t>(active_rest);
+                Tensor selected_shN = Tensor::empty(
+                    {static_cast<size_t>(indices.numel()), active_rest, 3}, device);
+                shN_swizzled_gather_to_linear(
+                    splat_data.shN().ptr<float>(),
+                    indices.ptr<int>(),
+                    selected_shN.ptr<float>(),
+                    indices.numel(),
+                    active_rest_u32);
+                selected_shN = selected_shN * g_cache.sh_mult[a][degree - 1];
+                shN_swizzled_scatter_linear(
+                    splat_data.shN().ptr<float>(),
+                    indices.ptr<int>(),
+                    selected_shN.ptr<float>(),
+                    indices.numel(),
+                    active_rest_u32);
             }
         }
     }

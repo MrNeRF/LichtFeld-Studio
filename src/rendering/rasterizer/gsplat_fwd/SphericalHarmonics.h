@@ -9,28 +9,15 @@
 
 namespace gsplat_fwd {
 
-    void launch_spherical_harmonics_fwd_kernel(
+    void launch_spherical_harmonics_swizzled_fwd_kernel(
         uint32_t degrees_to_use,
         const float* dirs,              // [M, 3]
-        const float* coeffs,            // [N_total, K, 3] (N-sized when using visible_indices)
+        const float* sh0,               // [N_total, 1, 3] or [N_total, 3]
+        const float* sh_rest_swizzled,  // resident swizzled shN rest layout
         const bool* masks,              // [M] optional
         const int32_t* visible_indices, // [M] maps elem_id -> global_idx, nullptr = direct
         int64_t n_elements,             // M (visible gaussians)
-        int32_t K,
-        float* colors, // [M, 3]
-        cudaStream_t stream = nullptr);
-
-    void launch_spherical_harmonics_bwd_kernel(
-        uint32_t degrees_to_use,
-        const float* dirs,     // [..., 3]
-        const float* coeffs,   // [..., K, 3]
-        const bool* masks,     // [...] optional
-        const float* v_colors, // [..., 3]
-        int64_t n_elements,
-        int32_t K,
-        bool compute_v_dirs,
-        float* v_coeffs, // [..., K, 3]
-        float* v_dirs,   // [..., 3] optional
+        float* colors,                  // [M, 3]
         cudaStream_t stream = nullptr);
 
 } // namespace gsplat_fwd

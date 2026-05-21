@@ -626,14 +626,14 @@ namespace lfs::training {
                     request.params.undistort = request.undistort;
                 }
 
-                if (mask_config_.use_alpha_as_mask && cam->has_alpha()) {
-                    request.extract_alpha_as_mask = true;
-                    request.alpha_mask_params.invert = mask_config_.invert_masks;
-                    request.alpha_mask_params.threshold = mask_config_.mask_threshold;
-                } else if (mask_config_.load_masks && cam->has_mask()) {
+                if (mask_config_.load_masks && cam->has_mask()) {
                     request.mask_path = cam->mask_path();
                     request.mask_params.invert = mask_config_.invert_masks;
                     request.mask_params.threshold = mask_config_.mask_threshold;
+                } else if (mask_config_.use_alpha_as_mask && cam->has_alpha()) {
+                    request.extract_alpha_as_mask = true;
+                    request.alpha_mask_params.invert = mask_config_.invert_masks;
+                    request.alpha_mask_params.threshold = mask_config_.mask_threshold;
                 }
 
                 loader_->prefetch({request});

@@ -38,6 +38,11 @@ namespace lfs::core {
      */
     class LFS_CORE_API SplatData {
     public:
+        enum class ShNLayout {
+            Canonical,
+            Swizzled
+        };
+
         SplatData() = default;
         ~SplatData();
 
@@ -57,7 +62,8 @@ namespace lfs::core {
                   Tensor scaling,
                   Tensor rotation,
                   Tensor opacity,
-                  float scene_scale);
+                  float scene_scale,
+                  ShNLayout shN_layout = ShNLayout::Canonical);
 
         // ========== Computed getters ==========
         Tensor get_means() const;
@@ -87,10 +93,39 @@ namespace lfs::core {
         inline const Tensor& sh0() const { return _sh0; }
         inline Tensor& sh0_raw() { return _sh0; }
         inline const Tensor& sh0_raw() const { return _sh0; }
+
+        // shN is stored in vksplat-style float4-packed swizzled layout: 1D float tensor of
+        // sh_swizzled_float_count(N) = ceil(N / SH_REORDER_SIZE)
+        //                              * SH_REST_FLOAT4_PER_PRIMITIVE
+        //                              * SH_REORDER_SIZE * 4 floats
+        // (with SH_REORDER_SIZE = 32 and SH_REST_FLOAT4_PER_PRIMITIVE = 12 → 12 float4 slots
+        // per primitive, see core/cuda/sh_layout.cuh for the slot→coefficient shuffle).
+        // All 12 float4 slots are always allocated regardless of active SH degree; unused
+        // slots are zero. sh_swizzled_index(p, k) / shAt(p, k) returns a float4-slot index
+        // (multiply by 4 for the float offset).
+        // shN() / shN_raw() return the swizzled tensor directly. Use shN_canonical() to
+        // materialise a deswizzled [N, K, 3] view for I/O / transforms / scene merge.
         inline Tensor& shN() { return _shN; }
         inline const Tensor& shN() const { return _shN; }
         inline Tensor& shN_raw() { return _shN; }
         inline const Tensor& shN_raw() const { return _shN; }
+
+        // Materialise a deswizzled [N, K, 3] copy of shN where K = sh_rest_coeffs of the
+        // currently active SH degree. Always allocates a new tensor — not a view.
+        Tensor shN_canonical() const;
+
+        // Host-side variant for export/checkpoint paths. Copies the resident swizzled buffer
+        // to CPU first and unpacks there, avoiding a full canonical SH allocation on CUDA.
+        Tensor shN_canonical_cpu() const;
+
+        // Replace _shN with the swizzled form of a canonical-layout source tensor.
+        // `canonical` may be [N, K, 3] or [N, K*3]; K may be 0 for SH degree 0. The
+        // swizzled buffer is allocated/resized to fit N with optional `capacity`.
+        void shN_set_from_canonical(const Tensor& canonical, size_t capacity = 0);
+
+        // Number of "rest" SH coefficients implied by the current active SH degree
+        // (0 / 3 / 8 / 15 for degree 0 / 1 / 2 / 3).
+        size_t active_sh_coeffs_rest() const;
 
         // ========== Soft deletion (for undo/redo crop support) ==========
         Tensor& deleted() { return _deleted; }

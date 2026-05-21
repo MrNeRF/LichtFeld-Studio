@@ -85,7 +85,7 @@ namespace lfs::rendering {
      * @param rotations_raw Gaussian rotations (unnormalized quaternions) [N, 4]
      * @param opacities_raw Gaussian opacities in logit-space [N, 1]
      * @param sh_coefficients_0 SH coefficients degree 0 [N, 1, 3]
-     * @param sh_coefficients_rest SH coefficients degree 1+ [N, (degree+1)²-1, 3]
+     * @param sh_coefficients_rest SH coefficients degree 1+ in resident swizzled layout
      * @param w2c World-to-camera transform matrix [4, 4]
      * @param cam_position Camera position in world space [3]
      * @param active_sh_bases Number of active SH bases (degree+1)²
@@ -288,7 +288,7 @@ namespace lfs::rendering {
         const Tensor& rotations_raw, // [N, 4] unnormalized
         const Tensor& opacities_raw, // [N, 1] logit-space
         const Tensor& sh0,           // [N, 1, 3]
-        const Tensor& sh_rest,       // [N, K-1, 3]
+        const Tensor& sh_rest,       // resident swizzled shN rest layout
         const Tensor& w2c,           // [4, 4]
         const Tensor& K,             // [3, 3]
         int sh_degree,

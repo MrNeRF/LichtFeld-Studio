@@ -12,7 +12,8 @@ namespace {
 
 namespace lfs::python {
 
-    // Raw tensor access - return views (no copy)
+    // Raw tensor access — most accessors return a view (no copy); shN_raw is the
+    // exception (it materialises the canonical layout from swizzled storage).
     PyTensor PySplatData::means_raw() const {
         return PyTensor(data_->means_raw(), false);
     }
@@ -22,7 +23,9 @@ namespace lfs::python {
     }
 
     PyTensor PySplatData::shN_raw() const {
-        return PyTensor(data_->shN_raw(), false);
+        // shN is stored swizzled internally. Python callers expect canonical [N, K, 3];
+        // materialise that view (this allocates a fresh tensor — not a view).
+        return PyTensor(data_->shN_canonical(), true);
     }
 
     PyTensor PySplatData::scaling_raw() const {
@@ -101,7 +104,9 @@ namespace lfs::python {
             .def_prop_ro("sh0_raw", &PySplatData::sh0_raw,
                          "Raw SH0 tensor [N, 1, 3] (view)")
             .def_prop_ro("shN_raw", &PySplatData::shN_raw,
-                         "Raw SHN tensor [N, (degree+1)^2-1, 3] (view)")
+                         "SHN tensor in canonical [N, (degree+1)^2-1, 3] layout "
+                         "(materialised from the internal swizzled storage — this allocates, "
+                         "not a view).")
             .def_prop_ro("scaling_raw", &PySplatData::scaling_raw,
                          "Raw scaling tensor [N, 3] (log-space, view)")
             .def_prop_ro("rotation_raw", &PySplatData::rotation_raw,

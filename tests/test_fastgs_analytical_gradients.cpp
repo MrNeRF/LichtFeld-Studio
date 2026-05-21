@@ -16,7 +16,9 @@
 #include <torch/torch.h>
 
 #include <cmath>
+#include <cstdint>
 
+#include "core/cuda/sh_layout.cuh"
 #include "training/rasterization/gsplat/SphericalHarmonics.h"
 
 namespace {
@@ -32,6 +34,31 @@ namespace {
         auto diff = (a - b).abs();
         auto scale = torch::max(a.abs(), b.abs()) + 1e-8f;
         return (diff / scale).max().item<float>();
+    }
+
+    struct SplitSHTensors {
+        torch::Tensor sh0;
+        torch::Tensor shN;
+    };
+
+    SplitSHTensors make_split_sh_tensors(const torch::Tensor& sh_coeffs) {
+        const auto n = static_cast<std::size_t>(sh_coeffs.size(0));
+        const auto k = static_cast<std::size_t>(sh_coeffs.size(1));
+        SplitSHTensors result{
+            .sh0 = sh_coeffs.select(1, 0).contiguous(),
+            .shN = torch::empty({0}, sh_coeffs.options())};
+        if (k > 1) {
+            auto sh_rest = sh_coeffs.slice(1, 1, static_cast<int64_t>(k)).contiguous();
+            result.shN = torch::empty(
+                {static_cast<int64_t>(lfs::core::sh_swizzled_float_count(n))},
+                sh_coeffs.options());
+            lfs::core::reorder_sh_to_swizzled(
+                sh_rest.data_ptr<float>(),
+                result.shN.data_ptr<float>(),
+                n,
+                static_cast<std::uint32_t>(k - 1));
+        }
+        return result;
     }
 
 } // namespace
@@ -591,11 +618,13 @@ TEST_F(CUDAKernelGradientTest, SHDegree0_CUDA_vs_Autograd) {
 
     // CUDA kernel path
     auto v_coeffs_cuda = torch::zeros_like(sh_coeffs);
+    auto split_sh = make_split_sh_tensors(sh_coeffs);
 
-    gsplat_lfs::launch_spherical_harmonics_bwd_kernel(
+    gsplat_lfs::launch_spherical_harmonics_swizzled_bwd_kernel(
         0,       // degrees_to_use
         nullptr, // dirs (not needed for degree 0)
-        sh_coeffs.data_ptr<float>(),
+        split_sh.sh0.data_ptr<float>(),
+        nullptr,
         nullptr, // masks
         v_colors.data_ptr<float>(),
         N,
@@ -670,6 +699,7 @@ TEST_F(CUDAKernelGradientTest, SHDegree1_CUDA_vs_Autograd) {
     // CUDA kernel path
     auto v_coeffs_cuda = torch::zeros({N, K, 3}, torch::dtype(torch::kFloat32).device(torch::kCUDA));
     auto v_dirs_cuda = torch::zeros({N, 3}, torch::dtype(torch::kFloat32).device(torch::kCUDA));
+    auto split_sh = make_split_sh_tensors(sh_coeffs);
 
     // Debug: verify tensor layout
     std::cout << "v_dirs_cuda is_contiguous: " << v_dirs_cuda.is_contiguous() << std::endl;
@@ -680,10 +710,11 @@ TEST_F(CUDAKernelGradientTest, SHDegree1_CUDA_vs_Autograd) {
     std::cout << "Before kernel: v_dirs_cuda[0,1,2] = "
               << test_before[0] << ", " << test_before[1] << ", " << test_before[2] << std::endl;
 
-    gsplat_lfs::launch_spherical_harmonics_bwd_kernel(
+    gsplat_lfs::launch_spherical_harmonics_swizzled_bwd_kernel(
         degree,
         dirs.data_ptr<float>(),
-        sh_coeffs.data_ptr<float>(),
+        split_sh.sh0.data_ptr<float>(),
+        split_sh.shN.data_ptr<float>(),
         nullptr, // masks
         v_colors.data_ptr<float>(),
         N,
@@ -785,11 +816,13 @@ TEST_F(CUDAKernelGradientTest, SHDegree2_CUDA_vs_Autograd) {
     // CUDA kernel path
     auto v_coeffs_cuda = torch::zeros_like(sh_coeffs);
     auto v_dirs_cuda = torch::zeros_like(dirs);
+    auto split_sh = make_split_sh_tensors(sh_coeffs);
 
-    gsplat_lfs::launch_spherical_harmonics_bwd_kernel(
+    gsplat_lfs::launch_spherical_harmonics_swizzled_bwd_kernel(
         degree,
         dirs.data_ptr<float>(),
-        sh_coeffs.data_ptr<float>(),
+        split_sh.sh0.data_ptr<float>(),
+        split_sh.shN.data_ptr<float>(),
         nullptr,
         v_colors.data_ptr<float>(),
         N,
@@ -896,11 +929,13 @@ TEST_F(CUDAKernelGradientTest, SHDegree3_CUDA_vs_Autograd) {
     // CUDA kernel path
     auto v_coeffs_cuda = torch::zeros_like(sh_coeffs);
     auto v_dirs_cuda = torch::zeros_like(dirs);
+    auto split_sh = make_split_sh_tensors(sh_coeffs);
 
-    gsplat_lfs::launch_spherical_harmonics_bwd_kernel(
+    gsplat_lfs::launch_spherical_harmonics_swizzled_bwd_kernel(
         degree,
         dirs.data_ptr<float>(),
-        sh_coeffs.data_ptr<float>(),
+        split_sh.sh0.data_ptr<float>(),
+        split_sh.shN.data_ptr<float>(),
         nullptr,
         v_colors.data_ptr<float>(),
         N,
@@ -940,14 +975,15 @@ TEST_F(CUDAKernelGradientTest, SH_ForwardBackward_RoundTrip) {
 
     // Forward pass with CUDA kernel
     auto colors_cuda = torch::zeros({N, 3}, torch::dtype(torch::kFloat32).device(torch::kCUDA));
+    auto split_sh = make_split_sh_tensors(sh_coeffs);
 
-    gsplat_lfs::launch_spherical_harmonics_fwd_kernel(
+    gsplat_lfs::launch_spherical_harmonics_swizzled_fwd_kernel(
         degree,
         dirs.data_ptr<float>(),
-        sh_coeffs.data_ptr<float>(),
+        split_sh.sh0.data_ptr<float>(),
+        split_sh.shN.data_ptr<float>(),
         nullptr,
         N,
-        K,
         colors_cuda.data_ptr<float>(),
         nullptr);
 
@@ -1004,10 +1040,11 @@ TEST_F(CUDAKernelGradientTest, SH_ForwardBackward_RoundTrip) {
     auto v_coeffs_cuda = torch::zeros_like(sh_coeffs);
     auto v_dirs_cuda = torch::zeros_like(dirs);
 
-    gsplat_lfs::launch_spherical_harmonics_bwd_kernel(
+    gsplat_lfs::launch_spherical_harmonics_swizzled_bwd_kernel(
         degree,
         dirs.data_ptr<float>(),
-        sh_coeffs.data_ptr<float>(),
+        split_sh.sh0.data_ptr<float>(),
+        split_sh.shN.data_ptr<float>(),
         nullptr,
         v_colors.data_ptr<float>(),
         N,

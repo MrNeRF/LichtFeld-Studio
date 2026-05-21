@@ -162,6 +162,11 @@ namespace lfs::training {
         void ensure_grad(ParamType type);
         void step_param(ParamType type, int iteration);
         size_t compute_new_capacity(size_t current_capacity, size_t required_size) const;
+
+        // Translate a primitive-row delta into the actual tensor growth along dim 0.
+        // shN (1D swizzled): delta = swizzled_float_count(N + n_new) - swizzled_float_count(N).
+        // Others: delta = n_new.
+        size_t compute_state_growth(ParamType type, size_t n_new) const;
     };
 
 } // namespace lfs::training

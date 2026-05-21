@@ -6,6 +6,7 @@
 
 #include "helper_math.h"
 #include "rasterization_config.h"
+#include "utils.h"
 #include <cstdint>
 #include <cub/cub.cuh>
 #include <cuda_fp16.h>
@@ -77,15 +78,15 @@ namespace fast_lfs::rasterization {
         size_t cub_workspace_size;
         char* cub_workspace;
         uint* depth_keys;
-        uint* n_touched_tiles;
-        uint* offset;
+        std::uint64_t* n_touched_tiles;
+        std::uint64_t* offset;
         ushort4* screen_bounds;
         float2* mean2d;
         float4* conic_opacity;
         float3* color;
 
         static PerPrimitiveBuffers from_blob(char*& blob, int n_primitives) {
-            PerPrimitiveBuffers buffers;
+            PerPrimitiveBuffers buffers{};
             obtain(blob, buffers.depth_keys, n_primitives, 128);
             obtain(blob, buffers.n_touched_tiles, n_primitives, 128);
             obtain(blob, buffers.offset, n_primitives, 128);
@@ -93,10 +94,11 @@ namespace fast_lfs::rasterization {
             obtain(blob, buffers.mean2d, n_primitives, 128);
             obtain(blob, buffers.conic_opacity, n_primitives, 128);
             obtain(blob, buffers.color, n_primitives, 128);
-            cub::DeviceScan::InclusiveSum(
-                nullptr, buffers.cub_workspace_size,
-                buffers.n_touched_tiles, buffers.offset,
-                n_primitives);
+            CUDA_CHECK(cub::DeviceScan::InclusiveSum(
+                           nullptr, buffers.cub_workspace_size,
+                           buffers.n_touched_tiles, buffers.offset,
+                           n_primitives),
+                       "cub::DeviceScan::InclusiveSum workspace query");
             obtain(blob, buffers.cub_workspace, buffers.cub_workspace_size, 128);
             return buffers;
         }
@@ -108,7 +110,7 @@ namespace fast_lfs::rasterization {
         float* final_transmittance;
 
         static PerTileBuffers from_blob(char*& blob, int n_tiles) {
-            PerTileBuffers buffers;
+            PerTileBuffers buffers{};
             obtain(blob, buffers.instance_ranges, n_tiles, 128);
             obtain(blob, buffers.n_contributions,
                    static_cast<std::size_t>(n_tiles) * static_cast<std::size_t>(config::block_size_blend), 128);

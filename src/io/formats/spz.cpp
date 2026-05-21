@@ -123,8 +123,9 @@ namespace lfs::io {
                 cloud.alphas[i] = opacity_ptr[i];
             }
 
-            if (sh_coeffs > 0 && splat.shN().is_valid()) {
-                const auto shN = splat.shN().contiguous().to(Device::CPU);
+            if (sh_coeffs > 0 && splat.shN().is_valid() && splat.shN().numel() > 0) {
+                // shN is stored swizzled; unpack on CPU to avoid a canonical CUDA copy.
+                const auto shN = splat.shN_canonical_cpu().contiguous();
                 cloud.sh.resize(num_points * sh_coeffs * 3);
                 const auto* const shN_ptr = static_cast<const float*>(shN.data_ptr());
                 std::copy(shN_ptr, shN_ptr + num_points * sh_coeffs * 3, cloud.sh.begin());

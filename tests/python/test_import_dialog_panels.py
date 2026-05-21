@@ -57,6 +57,26 @@ def _install_lf_stub(monkeypatch, tmp_path):
         checkpoint_path=str(checkpoint_path),
     )
 
+    def _load_file(
+        path,
+        is_dataset=False,
+        output_path="",
+        init_path="",
+        centralize_dataset="off",
+        max_width=None,
+        **_kwargs,
+    ):
+        state.load_file_calls.append(
+            {
+                "path": path,
+                "is_dataset": is_dataset,
+                "output_path": output_path,
+                "init_path": init_path,
+                "centralize_dataset": centralize_dataset,
+                "max_width": max_width,
+            }
+        )
+
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = SimpleNamespace(
         PanelSpace=panel_space,
@@ -65,22 +85,14 @@ def _install_lf_stub(monkeypatch, tmp_path):
         tr=lambda key: key,
         get_current_language=lambda: state.language[0],
         set_panel_enabled=lambda panel_id, enabled: state.panel_enabled_calls.append((panel_id, enabled)),
+        set_save_asset_callback=lambda _callback: None,
         open_dataset_folder_dialog=lambda: state.output_browse_path,
         open_ply_file_dialog=lambda _start_dir="": state.init_browse_path,
     )
     lf_stub.detect_dataset_info = lambda path: state.dataset_infos[str(path)]
     lf_stub.is_dataset_path = lambda path: str(path) in state.dataset_infos
     lf_stub.optimization_params = lambda: None
-    lf_stub.load_file = lambda path, is_dataset=False, output_path="", init_path="", centralize_dataset="off", max_width=None: state.load_file_calls.append(
-        {
-            "path": path,
-            "is_dataset": is_dataset,
-            "output_path": output_path,
-            "init_path": init_path,
-            "centralize_dataset": centralize_dataset,
-            "max_width": max_width,
-        }
-    )
+    lf_stub.load_file = _load_file
     lf_stub.read_checkpoint_header = lambda _path: state.checkpoint_header
     lf_stub.read_checkpoint_params = lambda _path: state.checkpoint_params
     lf_stub.load_checkpoint_for_training = lambda checkpoint_path, dataset_path, output_path: state.load_checkpoint_calls.append(
@@ -147,6 +159,7 @@ class _DocumentStub:
     def __init__(self):
         self.listeners = {}
         self.close_btn = _ElementStub()
+        self.removed_models = []
 
     def add_event_listener(self, event, callback):
         self.listeners[event] = callback
@@ -158,6 +171,31 @@ class _DocumentStub:
 
     def query_selector_all(self, _selector):
         return []
+
+    def remove_data_model(self, name):
+        self.removed_models.append(name)
+
+
+class _ThreadStub:
+    def __init__(self, alive=True):
+        self.alive = alive
+        self.join_calls = []
+
+    def join(self, timeout=None):
+        self.join_calls.append(timeout)
+        self.alive = False
+
+    def is_alive(self):
+        return self.alive
+
+
+class _TimerStub(_ThreadStub):
+    def __init__(self, alive=True):
+        super().__init__(alive=alive)
+        self.cancel_calls = 0
+
+    def cancel(self):
+        self.cancel_calls += 1
 
 
 def test_dataset_import_panel_show_and_load(import_dialog_module):
@@ -255,6 +293,141 @@ def test_dataset_import_panel_loads_updated_dataset_path(import_dialog_module, t
             "max_width": 3840,
         }
     ]
+
+
+def test_watch_directory_discovery_imports_resume_checkpoints(import_dialog_module, tmp_path):
+    module, _state = import_dialog_module
+    scanner_module = import_module("lfs_plugins.asset_scanner")
+    index_module = import_module("lfs_plugins.asset_index")
+
+    watched_dir = tmp_path / "watched"
+    watched_dir.mkdir()
+    checkpoint_path = watched_dir / "checkpoint.resume"
+    checkpoint_path.write_bytes(b"checkpoint data")
+
+    index = index_module.AssetIndex(tmp_path / "asset_manager" / "library.json")
+    index.ensure_default_catalog()
+    project = index.create_project("Default")
+
+    metadata_list = module._discover_asset_metadata(
+        scanner_module.AssetScanner(),
+        str(watched_dir),
+    )
+    assert [metadata["path"] for metadata in metadata_list] == [str(checkpoint_path)]
+    assert metadata_list[0]["type"] == "checkpoint"
+
+    created_assets = module._register_discovered_assets(
+        index,
+        None,
+        metadata_list,
+        project_id=project.id,
+    )
+    assert [asset.name for asset in created_assets] == ["checkpoint.resume"]
+
+    reloaded = index_module.AssetIndex(tmp_path / "asset_manager" / "library.json")
+    assert reloaded.load() is True
+    assert list(reloaded.assets.values())[0]["type"] == "checkpoint"
+
+
+def test_watch_directory_import_allows_same_path_in_multiple_projects(
+    import_dialog_module,
+    tmp_path,
+):
+    module, _state = import_dialog_module
+    index_module = import_module("lfs_plugins.asset_index")
+
+    watched_dir = tmp_path / "watched"
+    watched_dir.mkdir()
+    checkpoint_path = watched_dir / "checkpoint.resume"
+    checkpoint_path.write_bytes(b"checkpoint data")
+
+    index = index_module.AssetIndex(tmp_path / "asset_manager" / "library.json")
+    index.ensure_default_catalog()
+    default_project = index.create_project("Default")
+    target_project = index.create_project("Target")
+
+    metadata_list = [{"path": str(checkpoint_path), "type": "checkpoint"}]
+    default_assets = module._register_discovered_assets(
+        index,
+        None,
+        metadata_list,
+        project_id=default_project.id,
+    )
+    target_assets = module._register_discovered_assets(
+        index,
+        None,
+        metadata_list,
+        project_id=target_project.id,
+    )
+
+    assert len(default_assets) == 1
+    assert len(target_assets) == 1
+    assert default_assets[0].id != target_assets[0].id
+    assert default_assets[0].absolute_path == target_assets[0].absolute_path
+
+    reloaded = index_module.AssetIndex(tmp_path / "asset_manager" / "library.json")
+    assert reloaded.load() is True
+    assert len(reloaded.list_assets(project_id=default_project.id)) == 1
+    assert len(reloaded.list_assets(project_id=target_project.id)) == 1
+
+
+def test_watch_dialog_uses_loaded_catalog_state(
+    import_dialog_module,
+    monkeypatch,
+    tmp_path,
+):
+    module, _state = import_dialog_module
+    index_module = import_module("lfs_plugins.asset_index")
+
+    index = index_module.AssetIndex(tmp_path / "asset_manager" / "library.json")
+    index.ensure_default_catalog()
+    project = index.create_project("Default")
+    index.set_watch_dirs(project.id, [str(tmp_path / "watched")])
+    monkeypatch.setattr(module, "load_asset_index", lambda: index)
+
+    panel = module.WatchDirsDialogPanel()
+    assert panel.show(project.id) is True
+    assert panel._project_id == project.id
+    assert panel._watch_dirs == [str(tmp_path / "watched")]
+
+
+def test_watch_dialog_does_not_mutate_active_panel_selection(import_dialog_module, monkeypatch, tmp_path):
+    module, _state = import_dialog_module
+    index_module = import_module("lfs_plugins.asset_index")
+
+    index = index_module.AssetIndex(tmp_path / "asset_manager" / "library.json")
+    index.ensure_default_catalog()
+    default_project = index.create_project("Default")
+    target_project = index.create_project("Target")
+
+    selection_calls = []
+
+    class _PanelStub:
+        def __init__(self):
+            self._asset_index = index
+            self._selected_project_id = default_project.id
+
+        def _select_project_id(self, project_id):
+            selection_calls.append(project_id)
+            self._selected_project_id = project_id
+            return True
+
+    active_panel = _PanelStub()
+    monkeypatch.setattr(module, "get_asset_manager_panel", lambda: active_panel)
+    monkeypatch.setattr(module, "load_asset_index", lambda: index)
+
+    panel = module.WatchDirsDialogPanel()
+    assert panel.show(target_project.id) is True
+    assert selection_calls == []
+    assert panel._project_id == target_project.id
+    assert active_panel._selected_project_id == default_project.id
+
+
+def test_asset_scanner_rejects_html_assets(import_dialog_module):
+    scanner_module = import_module("lfs_plugins.asset_scanner")
+    scanner = scanner_module.AssetScanner()
+
+    assert scanner.detect_type("viewer.html") is None
 
 
 def test_dataset_import_panel_clears_init_and_sidecar_on_dataset_change(import_dialog_module, tmp_path):
@@ -431,3 +604,42 @@ def test_resume_checkpoint_panel_binds_enter_and_escape(import_dialog_module):
 
     assert state.panel_enabled_calls[-1] == ("lfs.resume_checkpoint", False)
     assert escape_event.propagation_stopped is True
+
+
+def test_url_import_panel_unmount_cancels_and_joins_worker_threads(import_dialog_module):
+    module, _state = import_dialog_module
+    panel = module.URLImportPanel()
+    document = _DocumentStub()
+    worker = _ThreadStub()
+    close_timer = _TimerStub()
+
+    panel._url_import_in_progress = True
+    panel._url_import_cancelled = False
+    panel._url_import_thread = worker
+    panel._url_import_close_timer = close_timer
+
+    panel.on_unmount(document)
+
+    assert panel._url_import_cancelled is True
+    assert close_timer.cancel_calls == 1
+    assert close_timer.join_calls == [module.THREAD_JOIN_TIMEOUT_SEC]
+    assert worker.join_calls == [module.THREAD_JOIN_TIMEOUT_SEC]
+    assert panel._url_import_thread is None
+    assert panel._url_import_close_timer is None
+    assert document.removed_models == ["url_import"]
+
+
+def test_watch_dirs_dialog_unmount_cancels_and_joins_scan_thread(import_dialog_module):
+    module, _state = import_dialog_module
+    panel = module.WatchDirsDialogPanel()
+    document = _DocumentStub()
+    scan_thread = _ThreadStub()
+
+    panel._scan_thread = scan_thread
+
+    panel.on_unmount(document)
+
+    assert panel._scan_cancel_event.is_set() is True
+    assert scan_thread.join_calls == [module.THREAD_JOIN_TIMEOUT_SEC]
+    assert panel._scan_thread is None
+    assert document.removed_models == ["watch_dirs_dialog"]

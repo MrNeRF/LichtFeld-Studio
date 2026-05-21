@@ -121,7 +121,8 @@ namespace lfs::training {
                 std::move(merged->scaling_raw()),
                 std::move(merged->rotation_raw()),
                 std::move(merged->opacity_raw()),
-                scene_scale);
+                scene_scale,
+                lfs::core::SplatData::ShNLayout::Swizzled);
             merged_with_base_scale.set_active_sh_degree(merged->get_active_sh_degree());
             applyTrainingSHDegree(merged_with_base_scale, params.optimization.sh_degree);
             model = std::move(merged_with_base_scale);

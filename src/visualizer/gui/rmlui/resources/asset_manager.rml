@@ -16,10 +16,6 @@
         <span>{{sort_label}}</span>
       </button>
 
-      <button class="asset-sort-button" data-event-click="clean_missing">
-        <span>{{clean_missing_label}}</span>
-      </button>
-
       <div class="asset-view-toggle">
         <button class="asset-view-button" data-class-is-active="is_gallery_view" data-event-click="set_view_mode('gallery')">{{gallery_label}}</button>
         <button class="asset-view-button" data-class-is-active="is_list_view" data-event-click="set_view_mode('list')">{{list_label}}</button>
@@ -32,6 +28,8 @@
           <div class="asset-import-menu-item" data-event-click="on_import_splat">{{import_splat_label}}</div>
           <div class="asset-import-menu-item" data-event-click="on_import_mesh">{{import_mesh_label}}</div>
           <div class="asset-import-menu-item" data-event-click="on_import_checkpoint">{{import_checkpoint_label}}</div>
+          <div class="asset-import-menu-separator"></div>
+          <div class="asset-import-menu-item" data-event-click="on_import_from_url">{{import_from_url_label}}</div>
         </div>
       </div>
     </div>
@@ -40,8 +38,11 @@
       <div id="asset-sidebar" data-style-width="sidebar_width">
         <div class="asset-sidebar-inner">
         <div class="asset-sidebar-section">
-          <div class="asset-sidebar-title" style="display: flex; justify-content: space-between; align-items: center;">
-            <span>{{projects_title}}</span>
+          <div class="asset-sidebar-title" style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;" data-event-click="toggle_projects_collapsed">
+            <div style="display: flex; align-items: center; gap: 4dp;">
+              <span class="section-arrow" data-class-is-expanded="!projects_collapsed">&#x25B6;</span>
+              <span>{{projects_title}}</span>
+            </div>
             <div style="position: relative;">
               <button class="asset-project-menu" data-event-click="toggle_new_project_menu"><svg width="10" height="10" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 1V11M1 6H11" stroke="#d8d0c3" stroke-width="2" stroke-linecap="round"/></svg></button>
               <div class="asset-project-dropdown" data-class-is-visible="new_project_menu_open" style="position: absolute; top: 100%; right: 0; z-index: 100; margin-top: 4px; min-width: 140px; white-space: nowrap;">
@@ -49,17 +50,20 @@
               </div>
             </div>
           </div>
-          <div data-for="project : projects">
-            <div class="asset-filter-row" data-class-is-active="project.id == selected_project_id" data-attr-data-project-id="project.id">
-              <span class="asset-row-label">{{project.name}}</span>
-              <div class="asset-project-row-right">
-                <span class="asset-row-count">{{project.scene_count}}</span>
-                <button class="asset-project-menu" data-attr-data-project-id="project.id" data-project-action="menu"><img src="../icon/more-horizontal.png" /></button>
+          <div class="section-content" data-visible="projects_expanded">
+            <div data-for="project : projects">
+              <div class="asset-filter-row" data-class-is-active="project.id == selected_project_id" data-attr-data-project-id="project.id">
+                <span class="asset-row-label">{{project.name}}</span>
+                <div class="asset-project-row-right">
+                  <span class="asset-row-count">{{project.scene_count}}</span>
+                  <button class="asset-project-menu" data-attr-data-project-id="project.id" data-project-action="menu"><img src="../icon/more-horizontal.png" /></button>
+                </div>
               </div>
-            </div>
-            <div class="asset-project-dropdown" data-class-is-visible="project.menu_open">
-              <div class="asset-dropdown-item" data-attr-data-project-id="project.id" data-project-action="rename">{{rename_project_label}}</div>
-              <div class="asset-dropdown-item is-danger" data-attr-data-project-id="project.id" data-project-action="delete">{{delete_project_label}}</div>
+              <div class="asset-project-dropdown" data-class-is-visible="project.menu_open">
+                <div class="asset-dropdown-item" data-attr-data-project-id="project.id" data-project-action="watch_dirs">{{edit_watch_dirs_label}}</div>
+                <div class="asset-dropdown-item" data-attr-data-project-id="project.id" data-project-action="rename">{{rename_project_label}}</div>
+                <div class="asset-dropdown-item is-danger" data-attr-data-project-id="project.id" data-project-action="delete">{{delete_project_label}}</div>
+              </div>
             </div>
           </div>
         </div>
@@ -75,13 +79,23 @@
         </div>
 
         <div class="asset-sidebar-section">
-          <div class="asset-sidebar-title" data-tooltip="asset_manager.sidebar.filter_hint">{{filters_title}}</div>
-          <div data-for="filter : filters">
-            <div class="asset-filter-checkbox-row" data-event-click="toggle_filter(filter.id)">
-              <input type="checkbox" data-checked="filter.is_selected" />
-              <span class="asset-row-label">{{filter.label}}</span>
+          <div class="asset-sidebar-title" style="display: flex; align-items: center; gap: 4dp; cursor: pointer;" data-event-click="toggle_filters_collapsed" data-tooltip="asset_manager.sidebar.filter_hint">
+            <span class="section-arrow" data-class-is-expanded="!filters_collapsed">&#x25B6;</span>
+            <span>{{filters_title}}</span>
+          </div>
+          <div class="section-content" data-visible="filters_expanded">
+            <div data-for="filter : filters">
+              <div class="asset-filter-checkbox-row" data-event-click="toggle_filter(filter.id)">
+                <input type="checkbox" data-checked="filter.is_selected" />
+                <span class="asset-row-label">{{filter.label}}</span>
+              </div>
             </div>
           </div>
+        </div>
+00
+        <div class="asset-sidebar-actions">
+          <button class="asset-action-button" data-event-click="refresh_catalog" data-tooltip="asset_manager.tooltip.refresh">{{refresh_label}}</button>
+          <button class="asset-action-button" data-event-click="clean_missing" data-tooltip="asset_manager.tooltip.clean_missing">{{clean_missing_label}}</button>
         </div>
         </div>
       </div>
@@ -94,7 +108,7 @@
           <span class="asset-gallery-title" data-if="is_list_view">{{list_title}}</span>
         </div>
 
-        <div class="asset-gallery-scroll">
+        <div id="asset-gallery-scroll" class="asset-gallery-scroll">
           <div class="asset-card-grid" data-if="is_gallery_view">
             <div data-for="asset : assets">
               <div class="asset-card" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-attr-data-asset-id="asset.id" data-asset-action="select">
@@ -106,7 +120,6 @@
                 <div class="asset-card-body">
                   <div class="asset-card-title-row">
                     <span class="asset-card-title">{{asset.display_name}}</span>
-                    <span class="asset-favorite" data-if="asset.is_favorite">*</span>
                   </div>
                   <div class="asset-card-subtitle">{{asset.display_subtitle}}</div>
                   <div class="asset-card-meta">
@@ -122,6 +135,10 @@
                   </div>
                 </div>
                 <button class="asset-card-menu" data-attr-data-asset-id="asset.id" data-asset-action="menu"><img src="../icon/more-vertical.png" /></button>
+                <div class="asset-load-menu" data-class-is-visible="asset.load_menu_open">
+                  <div class="asset-dropdown-item" data-attr-data-asset-id="asset.id" data-asset-action="load_new">{{load_new_label}}</div>
+                  <div class="asset-dropdown-item" data-attr-data-asset-id="asset.id" data-asset-action="add_to_scene">{{add_to_scene_label}}</div>
+                </div>
                 <div class="asset-card-dropdown" data-class-is-visible="asset.menu_open">
                   <div class="asset-dropdown-item" data-attr-data-asset-id="asset.id" data-asset-action="rename">{{rename_label}}</div>
                   <div class="asset-dropdown-item has-submenu" data-attr-data-asset-id="asset.id">
@@ -160,6 +177,10 @@
                 <span class="asset-col asset-col-project">{{asset.project_name}}</span>
                 <span class="asset-col asset-col-size">{{asset.size_label}}</span>
                 <span class="asset-col asset-col-modified">{{asset.modified_label}}</span>
+                <div class="asset-load-menu" data-class-is-visible="asset.load_menu_open">
+                  <div class="asset-dropdown-item" data-attr-data-asset-id="asset.id" data-asset-action="load_new">{{load_new_label}}</div>
+                  <div class="asset-dropdown-item" data-attr-data-asset-id="asset.id" data-asset-action="add_to_scene">{{add_to_scene_label}}</div>
+                </div>
               </div>
             </div>
           </div>
@@ -189,7 +210,6 @@
           <div data-if="show_selection_asset">
             <div class="asset-info-header">
               <span class="asset-info-name">{{selected_asset_name}}</span>
-              <span class="asset-info-favorite" data-if="selected_asset_is_favorite">*</span>
               <span data-attr-class="'asset-pill ' + selected_asset_pill_class">{{selected_asset_type_label}}</span>
             </div>
 
@@ -202,6 +222,10 @@
               <div class="parameter-row" data-if="selected_asset_scene_name">
                 <span class="parameter-label">{{prop_scene_label}}</span>
                 <span class="parameter-value">{{selected_asset_scene_name}}</span>
+              </div>
+              <div class="parameter-row" data-if="selected_asset_role">
+                <span class="parameter-label">{{prop_role_label}}</span>
+                <span class="parameter-value">{{selected_asset_role}}</span>
               </div>
               <div class="parameter-row">
                 <span class="parameter-label">{{prop_points_label}}</span>

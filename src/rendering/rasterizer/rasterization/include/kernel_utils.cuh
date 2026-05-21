@@ -10,6 +10,15 @@
 
 namespace lfs::rendering::kernels {
 
+    constexpr unsigned int kShReorderSize = 32u;
+    constexpr unsigned int kShRestFloat4PerPrimitive = 12u;
+
+    __device__ __host__ __forceinline__ unsigned int shAt(unsigned int primitive_idx, unsigned int float4_slot) {
+        const unsigned int block = primitive_idx / kShReorderSize;
+        const unsigned int lane = primitive_idx % kShReorderSize;
+        return block * (kShRestFloat4PerPrimitive * kShReorderSize) + float4_slot * kShReorderSize + lane;
+    }
+
     __device__ inline float3 mat3_transpose_mul_vec3(
         const mat3x3& m,
         const float3& v) {
@@ -19,25 +28,75 @@ namespace lfs::rendering::kernels {
             m.m13 * v.x + m.m23 * v.y + m.m33 * v.z);
     }
 
+    __device__ inline void load_shN_coeffs(
+        const float4* __restrict__ sh_f4,
+        const uint primitive_idx,
+        const uint active_sh_bases,
+        float3 (&c)[15]) {
+#pragma unroll
+        for (int i = 0; i < 15; ++i)
+            c[i] = make_float3(0.0f, 0.0f, 0.0f);
+
+        if (active_sh_bases <= 1 || sh_f4 == nullptr)
+            return;
+
+        const float4 a0 = sh_f4[shAt(primitive_idx, 0)];
+        const float4 a1 = sh_f4[shAt(primitive_idx, 1)];
+        const float4 a2 = sh_f4[shAt(primitive_idx, 2)];
+        c[0] = make_float3(a0.x, a0.y, a0.z);
+        c[1] = make_float3(a0.w, a1.x, a1.y);
+        c[2] = make_float3(a1.z, a1.w, a2.x);
+        c[3] = make_float3(a2.y, a2.z, a2.w);
+
+        if (active_sh_bases <= 4)
+            return;
+
+        const float4 a3 = sh_f4[shAt(primitive_idx, 3)];
+        const float4 a4 = sh_f4[shAt(primitive_idx, 4)];
+        const float4 a5 = sh_f4[shAt(primitive_idx, 5)];
+        c[4] = make_float3(a3.x, a3.y, a3.z);
+        c[5] = make_float3(a3.w, a4.x, a4.y);
+        c[6] = make_float3(a4.z, a4.w, a5.x);
+        c[7] = make_float3(a5.y, a5.z, a5.w);
+
+        if (active_sh_bases <= 9)
+            return;
+
+        const float4 a6 = sh_f4[shAt(primitive_idx, 6)];
+        const float4 a7 = sh_f4[shAt(primitive_idx, 7)];
+        const float4 a8 = sh_f4[shAt(primitive_idx, 8)];
+        const float4 a9 = sh_f4[shAt(primitive_idx, 9)];
+        const float4 a10 = sh_f4[shAt(primitive_idx, 10)];
+        const float4 a11 = sh_f4[shAt(primitive_idx, 11)];
+        c[8] = make_float3(a6.x, a6.y, a6.z);
+        c[9] = make_float3(a6.w, a7.x, a7.y);
+        c[10] = make_float3(a7.z, a7.w, a8.x);
+        c[11] = make_float3(a8.y, a8.z, a8.w);
+        c[12] = make_float3(a9.x, a9.y, a9.z);
+        c[13] = make_float3(a9.w, a10.x, a10.y);
+        c[14] = make_float3(a10.z, a10.w, a11.x);
+    }
+
     __device__ inline float3 convert_sh_to_color_from_dir(
         const float3* sh_coefficients_0,
-        const float3* sh_coefficients_rest,
+        const float4* sh_coefficients_rest,
         const float3& view_dir,
         const uint primitive_idx,
         const uint active_sh_bases,
-        const uint total_bases_sh_rest) {
+        const uint /*total_bases_sh_rest*/) {
         // computation adapted from https://github.com/NVlabs/tiny-cuda-nn/blob/212104156403bd87616c1a4f73a1c5f2c2e172a9/include/tiny-cuda-nn/common_device.h#L340
         float3 result = 0.5f + 0.28209479177387814f * sh_coefficients_0[primitive_idx];
         if (active_sh_bases > 1) {
-            const float3* coefficients_ptr = sh_coefficients_rest + primitive_idx * total_bases_sh_rest;
             auto [x, y, z] = normalize(view_dir);
-            result = result + (-0.48860251190291987f * y) * coefficients_ptr[0] + (0.48860251190291987f * z) * coefficients_ptr[1] + (-0.48860251190291987f * x) * coefficients_ptr[2];
+            float3 coefficients[15];
+            load_shN_coeffs(sh_coefficients_rest, primitive_idx, active_sh_bases, coefficients);
+            result = result + (-0.48860251190291987f * y) * coefficients[0] + (0.48860251190291987f * z) * coefficients[1] + (-0.48860251190291987f * x) * coefficients[2];
             if (active_sh_bases > 4) {
                 const float xx = x * x, yy = y * y, zz = z * z;
                 const float xy = x * y, xz = x * z, yz = y * z;
-                result = result + (1.0925484305920792f * xy) * coefficients_ptr[3] + (-1.0925484305920792f * yz) * coefficients_ptr[4] + (0.94617469575755997f * zz - 0.31539156525251999f) * coefficients_ptr[5] + (-1.0925484305920792f * xz) * coefficients_ptr[6] + (0.54627421529603959f * xx - 0.54627421529603959f * yy) * coefficients_ptr[7];
+                result = result + (1.0925484305920792f * xy) * coefficients[3] + (-1.0925484305920792f * yz) * coefficients[4] + (0.94617469575755997f * zz - 0.31539156525251999f) * coefficients[5] + (-1.0925484305920792f * xz) * coefficients[6] + (0.54627421529603959f * xx - 0.54627421529603959f * yy) * coefficients[7];
                 if (active_sh_bases > 9) {
-                    result = result + (0.59004358992664352f * y * (-3.0f * xx + yy)) * coefficients_ptr[8] + (2.8906114426405538f * xy * z) * coefficients_ptr[9] + (0.45704579946446572f * y * (1.0f - 5.0f * zz)) * coefficients_ptr[10] + (0.3731763325901154f * z * (5.0f * zz - 3.0f)) * coefficients_ptr[11] + (0.45704579946446572f * x * (1.0f - 5.0f * zz)) * coefficients_ptr[12] + (1.4453057213202769f * z * (xx - yy)) * coefficients_ptr[13] + (0.59004358992664352f * x * (-xx + 3.0f * yy)) * coefficients_ptr[14];
+                    result = result + (0.59004358992664352f * y * (-3.0f * xx + yy)) * coefficients[8] + (2.8906114426405538f * xy * z) * coefficients[9] + (0.45704579946446572f * y * (1.0f - 5.0f * zz)) * coefficients[10] + (0.3731763325901154f * z * (5.0f * zz - 3.0f)) * coefficients[11] + (0.45704579946446572f * x * (1.0f - 5.0f * zz)) * coefficients[12] + (1.4453057213202769f * z * (xx - yy)) * coefficients[13] + (0.59004358992664352f * x * (-xx + 3.0f * yy)) * coefficients[14];
                 }
             }
         }

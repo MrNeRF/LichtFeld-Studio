@@ -549,7 +549,7 @@ namespace lfs::rendering {
         check_tensor_input(config::debug, sh_coefficients_rest, "sh_coefficients_rest");
 
         const int n_primitives = checked_to_int(means.size(0), "n_primitives exceeds int range");
-        const int total_bases_sh_rest = checked_to_int(sh_coefficients_rest.size(1), "SH rest basis count exceeds int range");
+        const int total_bases_sh_rest = std::max(active_sh_bases - 1, 0);
 
         Tensor image = Tensor::empty({3, static_cast<size_t>(height), static_cast<size_t>(width)},
                                      lfs::core::Device::CUDA, lfs::core::DataType::Float32);
@@ -611,7 +611,7 @@ namespace lfs::rendering {
                 reinterpret_cast<const float4*>(rotations_raw.ptr<float>()),
                 opacities_raw.ptr<float>(),
                 reinterpret_cast<const float3*>(sh_coefficients_0.ptr<float>()),
-                reinterpret_cast<const float3*>(sh_coefficients_rest.ptr<float>()),
+                reinterpret_cast<const float4*>(sh_coefficients_rest.ptr<float>()),
                 reinterpret_cast<const float4*>(w2c_contig.ptr<float>()),
                 reinterpret_cast<const float3*>(cam_pos_contig.ptr<float>()),
                 image.ptr<float>(),
@@ -706,7 +706,7 @@ namespace lfs::rendering {
         check_tensor_input(config::debug, sh_coefficients_rest, "sh_coefficients_rest");
 
         const int n_primitives = checked_to_int(means.size(0), "n_primitives exceeds int range");
-        const int total_bases_sh_rest = checked_to_int(sh_coefficients_rest.size(1), "SH rest basis count exceeds int range");
+        const int total_bases_sh_rest = std::max(shared.active_sh_bases - 1, 0);
         const std::vector<bool> empty_mask;
         const std::vector<bool>& emphasized_node_mask =
             shared.emphasized_node_mask ? *shared.emphasized_node_mask : empty_mask;
@@ -790,7 +790,7 @@ namespace lfs::rendering {
                         reinterpret_cast<const float4*>(rotations_raw.ptr<float>()),
                         opacities_raw.ptr<float>(),
                         reinterpret_cast<const float3*>(sh_coefficients_0.ptr<float>()),
-                        reinterpret_cast<const float3*>(sh_coefficients_rest.ptr<float>()),
+                        reinterpret_cast<const float4*>(sh_coefficients_rest.ptr<float>()),
                         reinterpret_cast<const float4*>(w2c_contig[i].ptr<float>()),
                         reinterpret_cast<const float3*>(cam_pos_contig[i].ptr<float>()),
                         outputs[i].image.ptr<float>(),
@@ -1415,7 +1415,6 @@ namespace lfs::rendering {
 
         const size_t H = static_cast<size_t>(height);
         const size_t W = static_cast<size_t>(width);
-        const int num_sh_coeffs = checked_to_int(sh_rest.size(1) + uint64_t{1}, "SH coefficient count exceeds int range");
 
         // Output tensors
         Tensor image = Tensor::empty({3, H, W}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
@@ -1427,16 +1426,13 @@ namespace lfs::rendering {
         const Tensor rotations = rotations_raw / rotations_raw.norm(2, -1, true).clamp_min(QUAT_NORM_EPS);
         const Tensor opacities = opacities_raw.sigmoid().squeeze(-1);
 
-        // Concatenate SH coefficients [N_total, K, 3] - N-sized, accessed via visible_indices in kernel
-        const Tensor sh_coeffs = (sh_rest.numel() > 0 && num_sh_coeffs > 1)
-                                     ? Tensor::cat({sh0, sh_rest}, 1).contiguous()
-                                     : sh0.contiguous();
-
         // Contiguous copies (N-sized)
         const Tensor means_c = means.contiguous();
         const Tensor scales_c = scales.contiguous();
         const Tensor rotations_c = rotations.contiguous();
         const Tensor opacities_c = opacities.contiguous();
+        const Tensor sh0_c = sh0.contiguous();
+        const Tensor sh_rest_c = sh_rest.contiguous();
         const Tensor w2c_c = w2c.contiguous();
         const Tensor K_c = K.contiguous();
 
@@ -1469,10 +1465,10 @@ namespace lfs::rendering {
             rotations_c.ptr<float>(),
             scales_c.ptr<float>(),
             opacities_c.ptr<float>(),
-            sh_coeffs.ptr<float>(),
+            sh0_c.ptr<float>(),
+            sh_rest_c.ptr<float>(),
             static_cast<uint32_t>(sh_degree),
             static_cast<uint32_t>(N_total), // N_total - full array size
-            static_cast<uint32_t>(num_sh_coeffs),
             static_cast<uint32_t>(width),
             static_cast<uint32_t>(height),
             w2c_c.ptr<float>(),

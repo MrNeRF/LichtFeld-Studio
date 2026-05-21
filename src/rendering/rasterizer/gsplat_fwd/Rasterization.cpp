@@ -114,14 +114,14 @@ namespace gsplat_fwd {
         const float* quats,
         const float* scales,
         const float* opacities,
-        const float* sh_coeffs,
+        const float* sh_coefficients_0,
+        const float* sh_coefficients_rest,
         uint32_t sh_degree,
         const float* backgrounds,
         const bool* masks,
         uint32_t N_total,
         uint32_t M,
         uint32_t C,
-        uint32_t K,
         uint32_t image_width,
         uint32_t image_height,
         uint32_t tile_size,
@@ -153,7 +153,10 @@ namespace gsplat_fwd {
         GSPLAT_CHECK_CUDA_PTR(quats, "quats");
         GSPLAT_CHECK_CUDA_PTR(scales, "scales");
         GSPLAT_CHECK_CUDA_PTR(opacities, "opacities");
-        GSPLAT_CHECK_CUDA_PTR(sh_coeffs, "sh_coeffs");
+        GSPLAT_CHECK_CUDA_PTR(sh_coefficients_0, "sh_coefficients_0");
+        if (sh_degree > 0) {
+            GSPLAT_CHECK_CUDA_PTR(sh_coefficients_rest, "sh_coefficients_rest");
+        }
 
         const uint32_t tile_width = (image_width + tile_size - 1) / tile_size;
         const uint32_t tile_height = (image_height + tile_size - 1) / tile_size;
@@ -212,9 +215,10 @@ namespace gsplat_fwd {
                 visible_indices,
                 result.dirs, stream);
 
-            spherical_harmonics_fwd(
-                sh_degree, result.dirs, sh_coeffs, nullptr, visible_indices,
-                static_cast<int64_t>(C) * M, K,
+            spherical_harmonics_swizzled_fwd(
+                sh_degree, result.dirs, sh_coefficients_0, sh_coefficients_rest,
+                nullptr, visible_indices,
+                static_cast<int64_t>(C) * M,
                 result.colors, stream);
         }
 

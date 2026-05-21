@@ -823,13 +823,39 @@ Rml::TextureHandle RenderInterface_VK::LoadTexture(Rml::Vector2i& texture_dimens
 
         texture_dimensions.x = width;
         texture_dimensions.y = height;
+
+        // Probe the file's native channel count. Single-channel images are masks:
+        // stbi expands them to (gray, gray, gray, 255) which renders as fully-opaque
+        // gray over the underlying image — useless as an overlay. The mask branch
+        // below instead drives the alpha from the gray value so an image-color CSS
+        // tint paints only the foreground.
+        int probe_w = 0, probe_h = 0, probe_channels = 0;
+        const bool is_single_channel =
+            stbi_info(path.c_str(), &probe_w, &probe_h, &probe_channels) &&
+            probe_channels == 1;
+
         const int pixel_count = width * height;
-        for (int i = 0; i < pixel_count; ++i) {
-            unsigned char* p = data + i * 4;
-            const unsigned int alpha = p[3];
-            p[0] = static_cast<unsigned char>((p[0] * alpha + 127) / 255);
-            p[1] = static_cast<unsigned char>((p[1] * alpha + 127) / 255);
-            p[2] = static_cast<unsigned char>((p[2] * alpha + 127) / 255);
+        if (is_single_channel) {
+            // Mask: the gray value becomes the alpha. RGB is set to the same value so
+            // the texture is premultiplied (matching the non-mask branch below and the
+            // backend's premultiplied-alpha blend), which keeps alpha==0 pixels fully
+            // transparent instead of adding their color over the image.
+            for (int i = 0; i < pixel_count; ++i) {
+                unsigned char* p = data + i * 4;
+                const unsigned char gray = p[0];
+                p[0] = gray;
+                p[1] = gray;
+                p[2] = gray;
+                p[3] = gray;
+            }
+        } else {
+            for (int i = 0; i < pixel_count; ++i) {
+                unsigned char* p = data + i * 4;
+                const unsigned int alpha = p[3];
+                p[0] = static_cast<unsigned char>((p[0] * alpha + 127) / 255);
+                p[1] = static_cast<unsigned char>((p[1] * alpha + 127) / 255);
+                p[2] = static_cast<unsigned char>((p[2] * alpha + 127) / 255);
+            }
         }
 
         const size_t image_size = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;

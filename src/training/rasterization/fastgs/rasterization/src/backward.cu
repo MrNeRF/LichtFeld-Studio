@@ -20,7 +20,7 @@ void fast_lfs::rasterization::backward(
     const float3* scales_raw,
     const float4* rotations_raw,
     const float* raw_opacities,
-    const float3* sh_coefficients_rest,
+    const float4* sh_coefficients_rest,
     const float4* w2c,
     const float3* cam_position,
     char* per_primitive_buffers_blob,
@@ -35,7 +35,6 @@ void fast_lfs::rasterization::backward(
     const int n_primitives,
     const int n_instances,
     const int active_sh_bases,
-    const int total_bases_sh_rest,
     const int width,
     const int height,
     const float fx,
@@ -53,7 +52,7 @@ void fast_lfs::rasterization::backward(
     PerPrimitiveBuffers per_primitive_buffers = PerPrimitiveBuffers::from_blob(per_primitive_buffers_blob, n_primitives);
     PerTileBuffers per_tile_buffers = PerTileBuffers::from_blob(per_tile_buffers_blob, n_tiles);
 
-    if (n_instances != 0) {
+    if (n_instances > 0) {
         // Backward blend (template dispatch eliminates densification branch from inner loop)
         auto launch_blend_backward = [&]<DensificationType DENS_TYPE>() {
             kernels::backward::blend_backward_cu<DENS_TYPE><<<n_tiles, config::block_size_blend_backward>>>(
@@ -86,9 +85,13 @@ void fast_lfs::rasterization::backward(
         } else {
             launch_blend_backward.template operator()<DensificationType::None>();
         }
-        CHECK_CUDA(config::debug, "blend_backward")
+        CHECK_CUDA(config::debug, "blend_backward");
+    }
 
-        // Backward preprocess
+    // Backward preprocess — runs UNCONDITIONALLY now (handles both visible primitives'
+    // backward + Adam, and invisible primitives' Adam-only momentum decay via the
+    // vksplat-style fold). Replaces the previous adam_step_invisible launches.
+    if (n_primitives > 0) {
         auto launch_preprocess_backward = [&]<bool MIP_FILTER, int ACTIVE_SH_BASES>() {
             kernels::backward::preprocess_backward_cu<MIP_FILTER, ACTIVE_SH_BASES><<<div_round_up(n_primitives, config::block_size_preprocess_backward), config::block_size_preprocess_backward>>>(
                 means,
@@ -106,7 +109,6 @@ void fast_lfs::rasterization::backward(
                 grad_w2c,
                 (densification_error_map == nullptr && densification_type == DensificationType::None) ? densification_info : nullptr,
                 n_primitives,
-                total_bases_sh_rest,
                 static_cast<float>(width),
                 static_cast<float>(height),
                 fx,
@@ -131,27 +133,6 @@ void fast_lfs::rasterization::backward(
         } else {
             launch_preprocess_backward_for_mip.template operator()<16>();
         }
-        CHECK_CUDA(config::debug, "preprocess_backward")
+        CHECK_CUDA(config::debug, "preprocess_backward");
     }
-
-    auto launch_invisible = [&](const FusedAdamParam& param, const char* name, const int extra_grad_kind = 0) {
-        if (!param.enabled || param.n_elements <= 0 || param.n_attributes <= 0)
-            return;
-        kernels::backward::adam_step_invisible<<<div_round_up(param.n_elements, config::block_size_adam_step_invisible), config::block_size_adam_step_invisible>>>(
-            per_primitive_buffers.n_touched_tiles,
-            param,
-            fused_adam,
-            extra_grad_kind,
-            fused_adam.beta1,
-            fused_adam.beta2,
-            fused_adam.eps);
-        CHECK_CUDA(config::debug, name)
-    };
-
-    launch_invisible(fused_adam.means, "adam_step_invisible (means)");
-    launch_invisible(fused_adam.scaling, "adam_step_invisible (scaling)", 1);
-    launch_invisible(fused_adam.rotation, "adam_step_invisible (rotation)");
-    launch_invisible(fused_adam.opacity, "adam_step_invisible (opacity)", 2);
-    launch_invisible(fused_adam.sh0, "adam_step_invisible (sh0)");
-    launch_invisible(fused_adam.shN, "adam_step_invisible (shN)");
 }

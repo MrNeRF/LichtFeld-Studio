@@ -60,7 +60,8 @@ namespace lfs::vis::gui {
             src.scaling_raw().clone(),
             src.rotation_raw().clone(),
             src.opacity_raw().clone(),
-            src.get_scene_scale());
+            src.get_scene_scale(),
+            lfs::core::SplatData::ShNLayout::Swizzled);
         cloned->set_active_sh_degree(src.get_active_sh_degree());
         cloned->set_max_sh_degree(src.get_max_sh_degree());
         if (src.has_deleted_mask()) {

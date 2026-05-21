@@ -28,7 +28,7 @@ namespace lfs::rendering::kernels::forward {
         const float4* raw_rotations,
         const float* raw_opacities,
         const float3* sh_coefficients_0,
-        const float3* sh_coefficients_rest,
+        const float4* sh_coefficients_rest,
         const float4* w2c,
         const float3* cam_position,
         uint* primitive_depth_keys,

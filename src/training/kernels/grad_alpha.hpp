@@ -150,27 +150,21 @@ namespace lfs::training::kernels {
         cudaStream_t stream = nullptr);
 
     /**
-     * @brief Add SH gradients with slice (src [N, K_src, 3] -> dst0 [N, 1, 3], dst_rest [N, K_dst, 3])
-     *
-     * Accumulates SH coefficient gradients, splitting sh0 and shN.
-     * K_src is the active SH coefficients from gsplat backward.
-     * K_dst is the full buffer size (max_sh_degree^2 - 1).
+     * @brief Add SH gradients into split sh0 + swizzled shN storage.
      *
      * @param dst_sh0 Destination sh0 gradient buffer [N, 1, 3], modified in-place
-     * @param dst_shN Destination shN gradient buffer [N, K_dst, 3], modified in-place (can be nullptr if K_src=1)
-     * @param src Source gradient buffer [N, K_src, 3]
+     * @param dst_shN Destination swizzled shN gradient buffer, modified in-place (nullable when K_src=1)
+     * @param src Source canonical gradient buffer [N, K_src, 3]
      * @param N Number of Gaussians
-     * @param K_src Active SH coefficients in source
-     * @param K_dst Destination buffer width (may be larger than K_src-1)
+     * @param K_src Active SH coefficients in source, including sh0
      * @param stream CUDA stream
      */
-    void launch_grad_accumulate_sh(
+    void launch_grad_accumulate_sh_swizzled(
         float* dst_sh0,
         float* dst_shN,
         const float* src,
         int64_t N,
         int64_t K_src,
-        int64_t K_dst,
         cudaStream_t stream = nullptr);
 
     /**

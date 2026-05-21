@@ -4057,6 +4057,20 @@ namespace lfs::app {
 
                     json field_payloads = json::object();
                     for (const auto& field_name : fields) {
+                        // shN is stored swizzled; expose canonical [N, K, 3] view here.
+                        if (field_name == "shN") {
+                            if (!node->model->shN_raw().is_valid() ||
+                                node->model->shN_raw().numel() == 0 ||
+                                node->model->active_sh_coeffs_rest() == 0) {
+                                field_payloads[field_name] = tensor_payload_json(
+                                    core::Tensor::zeros({static_cast<size_t>(resolved_indices.size()), 0, 3},
+                                                        core::Device::CUDA));
+                                continue;
+                            }
+                            const core::Tensor canon = node->model->shN_canonical();
+                            field_payloads[field_name] = tensor_payload_json(canon.index_select(0, index_tensor));
+                            continue;
+                        }
                         const auto* const field = resolve_gaussian_field(*node->model, field_name);
                         if (!field)
                             return json{{"error", "Unsupported gaussian field: " + field_name}};

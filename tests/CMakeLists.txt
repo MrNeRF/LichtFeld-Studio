@@ -243,6 +243,7 @@ set(TEST_FILES
     test_torch_conversion.cpp
     test_fastgs_kernels.cpp
     test_fastgs_fuzz.cpp
+    test_sh_swizzle_layout.cpp
     test_python_io.cpp
     test_extended_unary_ops_vs_torch.cpp
     # test_property_system.cpp  # Disabled: needs API update after merge

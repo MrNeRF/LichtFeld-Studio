@@ -132,6 +132,8 @@ TEST(MRNFStrategyTest, GrowAndSplitResetsOptimizerStateForParents) {
 
     auto* means_state = strategy.get_optimizer().get_state_mutable(ParamType::Means);
     ASSERT_NE(means_state, nullptr);
+    // grad is allocated lazily via get_grad(); force allocation before fill.
+    strategy.get_optimizer().get_grad(ParamType::Means);
     means_state->exp_avg.fill_(5.0f);
     means_state->exp_avg_sq.fill_(6.0f);
     means_state->grad.fill_(7.0f);

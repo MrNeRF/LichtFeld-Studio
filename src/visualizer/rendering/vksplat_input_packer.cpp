@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdint>
 #include <cstring>
 #include <format>
 #include <string_view>
@@ -56,6 +57,57 @@ namespace lfs::vis::vksplat {
             } catch (const std::exception& e) {
                 return std::unexpected(std::format("VkSplat failed to stage {}: {}", label, e.what()));
             }
+        }
+
+        [[nodiscard]] float readSwizzledRestCoeff(
+            const std::vector<float>& shN,
+            const std::size_t primitive_idx,
+            const std::size_t rest_coeff_idx,
+            const std::size_t channel) {
+            const std::size_t packed_offset = rest_coeff_idx * 3 + channel;
+            const std::size_t slot = packed_offset / 4;
+            const std::size_t component = packed_offset % 4;
+            const std::size_t float4_index =
+                lfs::core::sh_swizzled_index(
+                    static_cast<std::uint32_t>(primitive_idx),
+                    static_cast<std::uint32_t>(slot));
+            return shN[float4_index * 4 + component];
+        }
+
+        template <typename PackedSh>
+        [[nodiscard]] std::expected<void, std::string> copySwizzledRestToPaddedSh(
+            const lfs::core::SplatData& splat_data,
+            const std::size_t n,
+            PackedSh& packed_sh,
+            const std::string_view label) {
+            const std::size_t active_rest = splat_data.active_sh_coeffs_rest();
+            const Tensor& shN_tensor = splat_data.shN();
+            if (active_rest == 0 || !shN_tensor.is_valid() || shN_tensor.numel() == 0) {
+                return {};
+            }
+            if (shN_tensor.ndim() != 1) {
+                return std::unexpected("VkSplat expected swizzled SH rest coefficients as a 1D tensor");
+            }
+
+            auto shN = tensorToCpuVector(shN_tensor, label);
+            if (!shN) {
+                return std::unexpected(shN.error());
+            }
+            const std::size_t expected_floats = lfs::core::sh_swizzled_float_count(n);
+            if (shN->size() < expected_floats) {
+                return std::unexpected("VkSplat staged swizzled SH rest tensor is smaller than expected");
+            }
+
+            const std::size_t rest = std::min<std::size_t>(15, active_rest);
+            for (std::size_t i = 0; i < n; ++i) {
+                for (std::size_t k = 0; k < rest; ++k) {
+                    for (std::size_t c = 0; c < 3; ++c) {
+                        packed_sh[((i * 16) + (k + 1)) * 3 + c] =
+                            readSwizzledRestCoeff(*shN, i, k, c);
+                    }
+                }
+            }
+            return {};
         }
     } // namespace
 
@@ -119,28 +171,9 @@ namespace lfs::vis::vksplat {
             }
         }
 
-        const Tensor& shn_tensor = splat_data.shN();
-        if (shn_tensor.is_valid() && shn_tensor.numel() > 0) {
-            if (shn_tensor.ndim() != 3 || shn_tensor.size(0) != n || shn_tensor.size(2) != 3) {
-                return std::unexpected("VkSplat expected SH rest coefficients shaped [N, coeffs, 3]");
-            }
-            auto shn = tensorToCpuVector(shn_tensor, "model.shN");
-            if (!shn) {
-                return std::unexpected(shn.error());
-            }
-            const std::size_t source_rest = static_cast<std::size_t>(shn_tensor.size(1));
-            const std::size_t rest = std::min<std::size_t>(15, source_rest);
-            if (shn->size() < n * source_rest * 3) {
-                return std::unexpected("VkSplat staged SH rest tensor is smaller than [N, coeffs, 3]");
-            }
-            for (std::size_t i = 0; i < n; ++i) {
-                for (std::size_t k = 0; k < rest; ++k) {
-                    for (std::size_t c = 0; c < 3; ++c) {
-                        sh_coeffs[((i * 16) + (k + 1)) * 3 + c] =
-                            (*shn)[(i * source_rest + k) * 3 + c];
-                    }
-                }
-            }
+        auto shN_copy = copySwizzledRestToPaddedSh(splat_data, n, sh_coeffs, "model.shN");
+        if (!shN_copy) {
+            return std::unexpected(shN_copy.error());
         }
         VulkanGSPipelineBuffers::reorderSH(sh_coeffs);
         return {};
@@ -160,7 +193,7 @@ namespace lfs::vis::vksplat {
             return rotation_raw.div(norm);
         }
 
-        [[nodiscard]] std::expected<Tensor, std::string> buildPaddedShTensor(
+        [[nodiscard]] std::expected<Tensor, std::string> buildPackedShTensor(
             const lfs::core::SplatData& splat_data) {
             const std::size_t n = static_cast<std::size_t>(splat_data.size());
 
@@ -182,42 +215,36 @@ namespace lfs::vis::vksplat {
             if (sh0.size(1) != 1) {
                 return std::unexpected("VkSplat expected SH DC tensor with a single coefficient slot");
             }
+            sh0 = sh0.contiguous();
 
-            const Tensor& shN_raw = splat_data.shN();
-            const std::size_t source_rest = (shN_raw.is_valid() && shN_raw.numel() > 0)
-                                                ? static_cast<std::size_t>(shN_raw.size(1))
-                                                : 0;
-            const std::size_t rest = std::min<std::size_t>(15, source_rest);
-
-            std::vector<Tensor> parts;
-            parts.reserve(3);
-            parts.push_back(sh0.contiguous());
-
-            if (rest > 0) {
-                if (shN_raw.ndim() != 3 || shN_raw.size(0) != n || shN_raw.size(2) != 3) {
-                    return std::unexpected("VkSplat expected SH rest coefficients shaped [N, coeffs, 3]");
+            Tensor shN = splat_data.shN();
+            if (shN.is_valid() && shN.numel() > 0) {
+                if (shN.dtype() != DataType::Float32) {
+                    shN = shN.to(DataType::Float32);
                 }
-                Tensor shn = shN_raw;
-                if (shn.dtype() != DataType::Float32) {
-                    shn = shn.to(DataType::Float32);
+                if (shN.device() != Device::CUDA) {
+                    shN = shN.to(Device::CUDA);
                 }
-                if (shn.device() != Device::CUDA) {
-                    shn = shn.to(Device::CUDA);
+                if (!shN.is_contiguous()) {
+                    shN = shN.contiguous();
                 }
-                if (rest < source_rest) {
-                    shn = shn.slice(1, 0, rest);
-                }
-                parts.push_back(shn.contiguous());
             }
+            const float* shN_ptr = (shN.is_valid() && shN.numel() > 0) ? shN.ptr<float>() : nullptr;
 
-            const std::size_t pad_slots = static_cast<std::size_t>(kShCoeffsPerSplat) - 1 - rest;
-            if (pad_slots > 0) {
-                parts.push_back(Tensor::zeros({n, pad_slots, std::size_t{3}},
-                                              Device::CUDA,
-                                              DataType::Float32));
-            }
-
-            return Tensor::cat(parts, 1).contiguous(); // [N, 16, 3]
+            const std::size_t padded_n = lfs::core::sh_swizzled_padded_n(n);
+            const std::size_t n_groups = padded_n / static_cast<std::size_t>(SH_REORDER_SIZE);
+            Tensor packed = Tensor::empty({n_groups,
+                                           static_cast<std::size_t>(kShDim),
+                                           static_cast<std::size_t>(SH_REORDER_SIZE),
+                                           static_cast<std::size_t>(kShChunkFloats)},
+                                          Device::CUDA,
+                                          DataType::Float32);
+            lfs::core::sh_swizzled_pack_full_from_split(
+                sh0.ptr<float>(),
+                shN_ptr,
+                packed.ptr<float>(),
+                n);
+            return packed;
         }
 
     } // namespace
@@ -279,37 +306,17 @@ namespace lfs::vis::vksplat {
                                       .reshape(lfs::core::TensorShape{n, std::size_t{4}})
                                       .contiguous();
 
-            auto sh_padded = buildPaddedShTensor(splat_data);
-            if (!sh_padded) {
-                return std::unexpected(sh_padded.error());
+            auto sh_packed = buildPackedShTensor(splat_data);
+            if (!sh_packed) {
+                return std::unexpected(sh_packed.error());
             }
-
-            const std::size_t reorder = static_cast<std::size_t>(SH_REORDER_SIZE);
-            const std::size_t padded_n = ((n + reorder - 1) / reorder) * reorder;
-            Tensor sh_chunks = sh_padded->reshape(lfs::core::TensorShape{n,
-                                                                         static_cast<std::size_t>(kShDim),
-                                                                         static_cast<std::size_t>(kShChunkFloats)});
-            if (padded_n != n) {
-                Tensor pad = Tensor::zeros({padded_n - n,
-                                            static_cast<std::size_t>(kShDim),
-                                            static_cast<std::size_t>(kShChunkFloats)},
-                                           Device::CUDA,
-                                           DataType::Float32);
-                sh_chunks = Tensor::cat({sh_chunks, pad}, 0);
-            }
-            const std::size_t n_groups = padded_n / reorder;
-            Tensor sh_grouped = sh_chunks.reshape(lfs::core::TensorShape{n_groups,
-                                                                         reorder,
-                                                                         static_cast<std::size_t>(kShDim),
-                                                                         static_cast<std::size_t>(kShChunkFloats)});
-            result.sh_coeffs = sh_grouped.permute({0, 2, 1, 3}).contiguous();
+            result.sh_coeffs = std::move(*sh_packed);
             result.sh_padded_floats = static_cast<std::size_t>(result.sh_coeffs.numel());
 
             assert(static_cast<std::size_t>(result.xyz_ws.numel()) == n * 3);
             assert(static_cast<std::size_t>(result.rotations.numel()) == n * 4);
             assert(static_cast<std::size_t>(result.scales_opacs.numel()) == n * 4);
-            assert(result.sh_padded_floats == n_groups * reorder * static_cast<std::size_t>(kShDim) *
-                                                  static_cast<std::size_t>(kShChunkFloats));
+            assert(result.sh_padded_floats == lfs::core::sh_swizzled_float_count(n));
 
             return result;
         } catch (const std::exception& e) {
@@ -340,25 +347,9 @@ namespace lfs::vis::vksplat {
             }
         }
 
-        const Tensor& shn_tensor = splat_data.shN();
-        if (shn_tensor.is_valid() && shn_tensor.numel() > 0) {
-            if (shn_tensor.ndim() != 3 || shn_tensor.size(0) != n || shn_tensor.size(2) != 3) {
-                return std::unexpected("VkSplat expected SH rest coefficients shaped [N, coeffs, 3]");
-            }
-            auto shn = tensorToCpuVector(shn_tensor, "model.shN");
-            if (!shn) {
-                return std::unexpected(shn.error());
-            }
-            const std::size_t source_rest = static_cast<std::size_t>(shn_tensor.size(1));
-            const std::size_t rest = std::min<std::size_t>(15, source_rest);
-            for (std::size_t i = 0; i < n; ++i) {
-                for (std::size_t k = 0; k < rest; ++k) {
-                    for (std::size_t c = 0; c < 3; ++c) {
-                        sh[((i * 16) + (k + 1)) * 3 + c] =
-                            (*shn)[(i * source_rest + k) * 3 + c];
-                    }
-                }
-            }
+        auto shN_copy = copySwizzledRestToPaddedSh(splat_data, n, sh, "model.shN");
+        if (!shN_copy) {
+            return std::unexpected(shN_copy.error());
         }
         return sh;
     }

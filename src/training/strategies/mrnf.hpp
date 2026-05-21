@@ -87,6 +87,7 @@ namespace lfs::training {
         size_t free_count() const;
         [[nodiscard]] lfs::core::Tensor get_active_indices() const;
         void mark_as_free(const lfs::core::Tensor& indices);
+        // Writes child shN linear rows directly into resident swizzled splat_data.shN().
         std::pair<lfs::core::Tensor, int64_t> fill_free_slots_with_data(
             const lfs::core::Tensor& positions,
             const lfs::core::Tensor& rotations,

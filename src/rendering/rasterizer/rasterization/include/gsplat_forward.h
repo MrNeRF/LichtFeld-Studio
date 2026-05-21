@@ -26,14 +26,14 @@ namespace lfs::rendering {
 
     // Forward-only GUT rasterization (no backward pass, uses memory arena)
     void gsplat_forward_gut(
-        const float* means,     // [N, 3]
-        const float* quats,     // [N, 4] normalized
-        const float* scales,    // [N, 3] activated
-        const float* opacities, // [N] activated
-        const float* sh_coeffs, // [N, K, 3]
+        const float* means,                // [N, 3]
+        const float* quats,                // [N, 4] normalized
+        const float* scales,               // [N, 3] activated
+        const float* opacities,            // [N] activated
+        const float* sh_coefficients_0,    // [N, 1, 3]
+        const float* sh_coefficients_rest, // resident swizzled shN rest layout
         uint32_t sh_degree,
         uint32_t N,
-        uint32_t K,
         uint32_t image_width,
         uint32_t image_height,
         const float* viewmat,      // [4, 4]

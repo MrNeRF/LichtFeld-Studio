@@ -333,13 +333,15 @@ namespace lfs::rendering {
                                                                    0.0f, 0.0f, 1.0f};
         const Tensor K = Tensor::from_vector(K_data, {3, 3}, lfs::core::Device::CPU).cuda();
 
+        const auto& shN = model.shN_raw();
+
         auto [image, alpha, depth] = forward_gut_tensor(
             model.means_raw(),
             model.scaling_raw(),
             model.rotation_raw(),
             model.opacity_raw(),
             model.sh0_raw(),
-            model.shN_raw(),
+            shN,
             w2c, K,
             sh_degree, width, height,
             camera_model,

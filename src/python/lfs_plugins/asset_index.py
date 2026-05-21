@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import shutil
+import tempfile
 import uuid
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
@@ -15,7 +16,137 @@ from typing import Any, Dict, List, Optional, Tuple
 _log = logging.getLogger(__name__)
 
 LIBRARY_VERSION = "1.0.0"
-DEFAULT_LIBRARY_PATH = Path.home() / ".lichtfeld" / "asset_manager" / "library.json"
+LEGACY_STORAGE_PATH = Path.home() / ".lichtfeld" / "asset_manager"
+DEFAULT_LIBRARY_PATH = LEGACY_STORAGE_PATH / "library.json"
+LEGACY_LIBRARY_PATH = LEGACY_STORAGE_PATH / "library.json"
+
+
+def _dedupe_paths(paths: List[Path]) -> List[Path]:
+    seen: set[str] = set()
+    result: List[Path] = []
+    for path in paths:
+        try:
+            expanded = path.expanduser()
+            key = str(expanded.resolve())
+        except Exception:
+            expanded = path.expanduser()
+            key = str(expanded)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(expanded)
+    return result
+
+
+def _storage_candidates() -> List[Path]:
+    candidates: List[Path] = []
+
+    for env_name in ("LICHTFELD_ASSET_MANAGER_DIR", "LFS_ASSET_MANAGER_DIR"):
+        env_value = os.environ.get(env_name, "").strip()
+        if env_value:
+            candidates.append(Path(env_value))
+
+    candidates.append(LEGACY_STORAGE_PATH)
+
+    xdg_data_home = os.environ.get("XDG_DATA_HOME", "").strip()
+    if xdg_data_home:
+        candidates.append(Path(xdg_data_home) / "LichtFeldStudio" / "asset_manager")
+
+    appdata = os.environ.get("APPDATA", "").strip()
+    if appdata:
+        candidates.append(Path(appdata) / "LichtFeldStudio" / "asset_manager")
+
+    local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
+    if local_appdata:
+        candidates.append(Path(local_appdata) / "LichtFeldStudio" / "asset_manager")
+
+    candidates.append(
+        Path.home() / ".local" / "share" / "LichtFeldStudio" / "asset_manager"
+    )
+    candidates.append(Path(tempfile.gettempdir()) / "LichtFeldStudio" / "asset_manager")
+    return _dedupe_paths(candidates)
+
+
+def _path_accepts_writes(path: Path) -> bool:
+    probe_path: Optional[Path] = None
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            prefix=".lfs-write-test-",
+            dir=path,
+            delete=False,
+        ) as probe:
+            probe.write(b"ok")
+            probe_path = Path(probe.name)
+        probe_path.unlink(missing_ok=True)
+        return True
+    except OSError as exc:
+        _log.debug("Asset Manager storage path is not writable: %s (%s)", path, exc)
+        if probe_path is not None:
+            try:
+                probe_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+        return False
+    except Exception as exc:
+        _log.debug("Asset Manager storage path probe failed: %s (%s)", path, exc)
+        return False
+
+
+def _copy_existing_storage(source_dir: Path, target_dir: Path) -> None:
+    if source_dir == target_dir:
+        return
+
+    source_library = source_dir / "library.json"
+    target_library = target_dir / "library.json"
+    try:
+        if source_library.exists() and not target_library.exists():
+            target_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_library, target_library)
+            _log.info(
+                "Copied Asset Manager catalog from %s to writable storage %s",
+                source_library,
+                target_library,
+            )
+    except Exception as exc:
+        _log.warning(
+            "Failed to copy Asset Manager catalog from %s to %s: %s",
+            source_library,
+            target_library,
+            exc,
+        )
+
+    source_thumbnails = source_dir / "thumbnails"
+    target_thumbnails = target_dir / "thumbnails"
+    try:
+        if source_thumbnails.exists() and not target_thumbnails.exists():
+            shutil.copytree(source_thumbnails, target_thumbnails)
+    except Exception as exc:
+        _log.debug(
+            "Failed to copy Asset Manager thumbnails from %s to %s: %s",
+            source_thumbnails,
+            target_thumbnails,
+            exc,
+        )
+
+
+def resolve_asset_manager_storage_path() -> Path:
+    for candidate in _storage_candidates():
+        if _path_accepts_writes(candidate):
+            if candidate != LEGACY_STORAGE_PATH:
+                _copy_existing_storage(LEGACY_STORAGE_PATH, candidate)
+                _log.warning(
+                    "Asset Manager catalog path %s is not writable; using %s",
+                    LEGACY_STORAGE_PATH,
+                    candidate,
+                )
+            return candidate
+
+    return LEGACY_STORAGE_PATH
+
+
+def resolve_asset_manager_library_path() -> Path:
+    return resolve_asset_manager_storage_path() / "library.json"
 
 
 @dataclass
@@ -31,6 +162,7 @@ class Project:
     tags: List[str] = field(default_factory=list)
     notes: str = ""
     thumbnail_asset_id: Optional[str] = None
+    watch_directories: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -49,6 +181,7 @@ class Project:
             tags=data.get("tags", []),
             notes=data.get("notes", ""),
             thumbnail_asset_id=data.get("thumbnail_asset_id"),
+            watch_directories=data.get("watch_directories", []),
         )
 
 
@@ -104,15 +237,9 @@ class Asset:
     modified_at: str = field(default_factory=lambda: datetime.now().isoformat())
     file_size_bytes: int = 0
     tags: List[str] = field(default_factory=list)
-    collection_ids: List[str] = field(default_factory=list)
-    notes: str = ""
-    is_favorite: bool = False
     thumbnail_path: Optional[str] = None
-    preview_path: Optional[str] = None
     geometry_metadata: Dict[str, Any] = field(default_factory=dict)
-    training_metadata: Dict[str, Any] = field(default_factory=dict)
     dataset_metadata: Dict[str, Any] = field(default_factory=dict)
-    video_metadata: Dict[str, Any] = field(default_factory=dict)
     transform_metadata: Dict[str, Any] = field(default_factory=dict)
     exists: bool = True
 
@@ -136,15 +263,9 @@ class Asset:
             modified_at=data.get("modified_at", datetime.now().isoformat()),
             file_size_bytes=data.get("file_size_bytes", 0),
             tags=data.get("tags", []),
-            collection_ids=data.get("collection_ids", []),
-            notes=data.get("notes", ""),
-            is_favorite=data.get("is_favorite", False),
             thumbnail_path=data.get("thumbnail_path"),
-            preview_path=data.get("preview_path"),
             geometry_metadata=data.get("geometry_metadata", {}),
-            training_metadata=data.get("training_metadata", {}),
             dataset_metadata=data.get("dataset_metadata", {}),
-            video_metadata=data.get("video_metadata", {}),
             transform_metadata=data.get("transform_metadata", {}),
             exists=data.get("exists", True),
         )
@@ -159,7 +280,7 @@ class AssetIndex:
         Args:
             library_path: Path to library.json. Defaults to ~/.lichtfeld/asset_manager/library.json
         """
-        self._library_path = library_path or DEFAULT_LIBRARY_PATH
+        self._library_path = library_path or resolve_asset_manager_library_path()
         self._library_path.parent.mkdir(parents=True, exist_ok=True)
 
         # In-memory catalog storage
@@ -401,6 +522,43 @@ class AssetIndex:
         """
         return self._projects.get(project_id)
 
+    def get_watch_dirs(self, project_id: str) -> List[str]:
+        """Get watched directories for a project.
+
+        Args:
+            project_id: Project ID
+
+        Returns:
+            List of watched directory paths
+        """
+        project = self._projects.get(project_id)
+        if project is None:
+            return []
+        return list(project.watch_directories)
+
+    def set_watch_dirs(self, project_id: str, paths: List[str]) -> bool:
+        """Set watched directories for a project.
+
+        Args:
+            project_id: Project ID
+            paths: List of directory paths to watch
+
+        Returns:
+            True if updated, False if project not found
+        """
+        if project_id not in self._projects:
+            return False
+        project = self._projects[project_id]
+        previous_paths = list(project.watch_directories)
+        previous_modified_at = project.modified_at
+        project.watch_directories = list(paths)
+        project.modified_at = datetime.now().isoformat()
+        if not self.save():
+            project.watch_directories = previous_paths
+            project.modified_at = previous_modified_at
+            return False
+        return True
+
     def list_projects(self) -> List[Project]:
         """List all projects.
 
@@ -579,11 +737,8 @@ class AssetIndex:
         tags: Optional[List[str]] = None,
         file_size_bytes: int = 0,
         thumbnail_path: Optional[str] = None,
-        preview_path: Optional[str] = None,
         geometry_metadata: Optional[Dict[str, Any]] = None,
-        training_metadata: Optional[Dict[str, Any]] = None,
         dataset_metadata: Optional[Dict[str, Any]] = None,
-        video_metadata: Optional[Dict[str, Any]] = None,
         transform_metadata: Optional[Dict[str, Any]] = None,
         created_at: Optional[str] = None,
         modified_at: Optional[str] = None,
@@ -613,7 +768,10 @@ class AssetIndex:
             return None
 
         normalized_abs_path = os.path.abspath(absolute_path or path)
-        existing_asset = self.find_asset_by_path(normalized_abs_path)
+        existing_asset = self.find_asset_by_path(
+            normalized_abs_path,
+            project_id=project_id,
+        )
         if existing_asset is not None:
             merged_tags = list(
                 dict.fromkeys((existing_asset.tags or []) + (tags or []))
@@ -633,21 +791,12 @@ class AssetIndex:
                 thumbnail_path=thumbnail_path
                 if thumbnail_path is not None
                 else existing_asset.thumbnail_path,
-                preview_path=preview_path
-                if preview_path is not None
-                else existing_asset.preview_path,
                 geometry_metadata=geometry_metadata
                 if geometry_metadata is not None
                 else existing_asset.geometry_metadata,
-                training_metadata=training_metadata
-                if training_metadata is not None
-                else existing_asset.training_metadata,
                 dataset_metadata=dataset_metadata
                 if dataset_metadata is not None
                 else existing_asset.dataset_metadata,
-                video_metadata=video_metadata
-                if video_metadata is not None
-                else existing_asset.video_metadata,
                 tags=merged_tags,
                 created_at=created_at or existing_asset.created_at,
                 exists=os.path.exists(normalized_abs_path)
@@ -670,11 +819,8 @@ class AssetIndex:
             tags=tags or [],
             file_size_bytes=file_size_bytes,
             thumbnail_path=thumbnail_path,
-            preview_path=preview_path,
             geometry_metadata=geometry_metadata or {},
-            training_metadata=training_metadata or {},
             dataset_metadata=dataset_metadata or {},
-            video_metadata=video_metadata or {},
             transform_metadata=transform_metadata or {},
             exists=os.path.exists(normalized_abs_path) if exists is None else exists,
         )
@@ -785,17 +931,24 @@ class AssetIndex:
         """
         return self._assets.get(asset_id)
 
-    def find_asset_by_path(self, absolute_path: str) -> Optional[Asset]:
+    def find_asset_by_path(
+        self,
+        absolute_path: str,
+        project_id: Optional[str] = None,
+    ) -> Optional[Asset]:
         """Find an asset by its absolute path.
 
         Args:
             absolute_path: Absolute file path
+            project_id: Optional project ID to scope the lookup
 
         Returns:
             Asset or None if not found
         """
         normalized = os.path.abspath(absolute_path)
         for asset in self._assets.values():
+            if project_id is not None and asset.project_id != project_id:
+                continue
             if os.path.abspath(asset.absolute_path) == normalized:
                 return asset
         return None
@@ -991,14 +1144,6 @@ class AssetIndex:
                 results.append(asset)
         return results
 
-    def get_favorite_assets(self) -> List[Asset]:
-        """Get all favorite assets.
-
-        Returns:
-            List of favorite assets
-        """
-        return [a for a in self._assets.values() if a.is_favorite]
-
     def get_recent_assets(self, limit: int = 10) -> List[Asset]:
         """Get most recently modified assets.
 
@@ -1014,17 +1159,6 @@ class AssetIndex:
             reverse=True,
         )
         return sorted_assets[:limit]
-
-    def get_assets_by_collection(self, collection_id: str) -> List[Asset]:
-        """Get all assets in a collection.
-
-        Args:
-            collection_id: Collection ID
-
-        Returns:
-            List of assets in the collection
-        """
-        return [a for a in self._assets.values() if collection_id in a.collection_ids]
 
     def get_statistics(self) -> Dict[str, Any]:
         """Get catalog statistics.

@@ -6,12 +6,15 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "io/formats/ply.hpp"
+#include "rasterization/fastgs/utils/utils.h"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 #include <cuda_runtime.h>
 #include <filesystem>
 #include <gtest/gtest.h>
+#include <limits>
 #include <random>
+#include <stdexcept>
 #include <torch/torch.h>
 
 using namespace lfs::training;
@@ -34,6 +37,14 @@ namespace {
         return adam_moment(opt, type).mul(1.0f / (1.0f - beta1));
     }
 } // namespace
+
+TEST(FastGSOverflowGuards, RejectsInstanceCountsBeyondIntRange) {
+    const uint64_t max_int = static_cast<uint64_t>(std::numeric_limits<int>::max());
+    EXPECT_EQ(checked_fastgs_instance_count(max_int, 1, 1), std::numeric_limits<int>::max());
+    EXPECT_THROW(
+        checked_fastgs_instance_count(max_int + 1, 595037, 11907),
+        std::overflow_error);
+}
 
 class FastGSKernelTest : public ::testing::Test {
 protected:
