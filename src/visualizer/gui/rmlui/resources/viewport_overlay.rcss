@@ -156,6 +156,127 @@ body {
     cursor: move;
 }
 
+.vram-hud-tabs {
+    display: flex;
+    gap: 0dp;
+    border-bottom-width: 1dp;
+}
+
+.vram-hud-tab {
+    flex: 1;
+    height: 24dp;
+    font-size: 11dp;
+    text-align: center;
+    cursor: pointer;
+    border-width: 0dp;
+    border-radius: 0dp;
+}
+
+.vram-hud-panel {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6dp;
+    overflow-y: auto;
+}
+
+.vram-hud-panel.hidden {
+    display: none;
+}
+
+.vram-hud-counters-header,
+.vram-hud-breakdown-header {
+    font-size: 11dp;
+    font-weight: bold;
+    padding-top: 4dp;
+}
+
+.vram-hud-breakdown {
+    display: flex;
+    flex-direction: column;
+    gap: 1dp;
+}
+
+.vram-hud-breakdown-row {
+    display: flex;
+    gap: 8dp;
+    align-items: baseline;
+    padding: 1dp 3dp;
+}
+
+
+.vram-hud-breakdown-name {
+    flex: 1;
+    font-size: 11dp;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.vram-hud-breakdown-bytes {
+    font-size: 11dp;
+    font-weight: bold;
+    width: 90dp;
+    text-align: right;
+}
+
+.vram-hud-breakdown-pct {
+    font-size: 11dp;
+    width: 52dp;
+    text-align: right;
+}
+
+.vram-hud-counters-empty {
+    font-size: 11dp;
+}
+
+.vram-hud-allocs-summary {
+    display: flex;
+    justify-content: space-between;
+    padding: 2dp 3dp;
+    font-size: 11dp;
+    font-weight: bold;
+}
+
+.vram-hud-allocs-rows {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1dp;
+}
+
+.vram-hud-allocs-row {
+    display: flex;
+    gap: 8dp;
+    align-items: baseline;
+    padding: 1dp 3dp;
+}
+
+.vram-hud-allocs-name {
+    flex: 1;
+    font-size: 11dp;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.vram-hud-allocs-bytes {
+    font-size: 11dp;
+    font-weight: bold;
+    width: 90dp;
+    text-align: right;
+}
+
+.vram-hud-allocs-pct {
+    font-size: 11dp;
+    width: 52dp;
+    text-align: right;
+}
+
 .vram-hud-filter-row {
     display: flex;
     align-items: center;

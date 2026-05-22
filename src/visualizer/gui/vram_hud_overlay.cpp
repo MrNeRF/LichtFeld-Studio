@@ -176,6 +176,7 @@ namespace lfs::vis::gui {
         resize_drag_listener_.owner = this;
         filter_listener_.owner = this;
         filter_clear_listener_.owner = this;
+        tab_listener_.owner = this;
         loadPersistedState();
     }
 
@@ -188,6 +189,10 @@ namespace lfs::vis::gui {
         pos_y_ = ls.vram_hud_y;
         size_w_ = ls.vram_hud_width;
         size_h_ = ls.vram_hud_height;
+        if (ls.vram_hud_active_tab == "overview" || ls.vram_hud_active_tab == "allocations" ||
+            ls.vram_hud_active_tab == "tree") {
+            active_tab_ = ls.vram_hud_active_tab;
+        }
         collapsed_paths_.clear();
         for (const auto& p : ls.vram_hud_collapsed_paths)
             collapsed_paths_.insert(p);
@@ -207,6 +212,7 @@ namespace lfs::vis::gui {
         ls.vram_hud_y = pos_y_;
         ls.vram_hud_width = size_w_;
         ls.vram_hud_height = size_h_;
+        ls.vram_hud_active_tab = active_tab_;
         ls.vram_hud_collapsed_paths.assign(collapsed_paths_.begin(), collapsed_paths_.end());
         ls.save();
         persistence_dirty_ = false;
@@ -217,7 +223,8 @@ namespace lfs::vis::gui {
         listeners_attached_ = false;
         rows_by_path_.clear();
         counter_rows_by_key_.clear();
-        topn_rows_.clear();
+        allocs_rows_.clear();
+        cached_allocs_summary_.clear();
         summary_by_key_.clear();
         cached_iteration_text_.clear();
         cached_throughput_text_.clear();
@@ -232,8 +239,14 @@ namespace lfs::vis::gui {
         throughput_label_ = nullptr;
         summary_root_ = nullptr;
         counters_root_ = nullptr;
-        topn_root_ = nullptr;
-        topn_rows_root_ = nullptr;
+        counters_empty_ = nullptr;
+        panel_overview_ = nullptr;
+        panel_allocations_ = nullptr;
+        panel_tree_ = nullptr;
+        tabs_root_ = nullptr;
+        allocs_rows_root_ = nullptr;
+        allocs_summary_value_ = nullptr;
+        breakdown_root_ = nullptr;
         rows_root_ = nullptr;
         device_label_ = nullptr;
         empty_row_ = nullptr;
@@ -250,14 +263,28 @@ namespace lfs::vis::gui {
         throughput_label_ = document_->GetElementById("vram-hud-throughput");
         summary_root_ = document_->GetElementById("vram-hud-summary");
         counters_root_ = document_->GetElementById("vram-hud-counters");
-        topn_root_ = document_->GetElementById("vram-hud-topn");
-        topn_rows_root_ = document_->GetElementById("vram-hud-topn-rows");
+        counters_empty_ = document_->GetElementById("vram-hud-counters-empty");
+        panel_overview_ = document_->GetElementById("vram-hud-panel-overview");
+        panel_allocations_ = document_->GetElementById("vram-hud-panel-allocations");
+        panel_tree_ = document_->GetElementById("vram-hud-panel-tree");
+        tabs_root_ = document_->GetElementById("vram-hud-tabs");
+        allocs_rows_root_ = document_->GetElementById("vram-hud-allocs-rows");
+        allocs_summary_value_ = document_->GetElementById("vram-hud-allocs-summary-value");
+        breakdown_root_ = document_->GetElementById("vram-hud-breakdown");
         rows_root_ = document_->GetElementById("vram-hud-rows");
 
-        if (counters_root_)
-            counters_root_->SetInnerRML("");
-        if (topn_rows_root_)
-            topn_rows_root_->SetInnerRML("");
+        if (counters_root_) {
+            for (auto* it = counters_root_->GetFirstChild(); it != nullptr;) {
+                auto* next = it->GetNextSibling();
+                if (it != counters_empty_)
+                    counters_root_->RemoveChild(it);
+                it = next;
+            }
+        }
+        if (allocs_rows_root_)
+            allocs_rows_root_->SetInnerRML("");
+        if (breakdown_root_)
+            breakdown_root_->SetInnerRML("");
 
         if (summary_root_) {
             summary_root_->SetInnerRML("");
@@ -292,6 +319,7 @@ namespace lfs::vis::gui {
         updateFilterClearVisibility();
 
         applyPersistedGeometry();
+        refreshTabClasses();
         attachListeners();
         apply();
     }
@@ -307,14 +335,21 @@ namespace lfs::vis::gui {
         throughput_label_ = nullptr;
         summary_root_ = nullptr;
         counters_root_ = nullptr;
-        topn_root_ = nullptr;
-        topn_rows_root_ = nullptr;
+        counters_empty_ = nullptr;
+        panel_overview_ = nullptr;
+        panel_allocations_ = nullptr;
+        panel_tree_ = nullptr;
+        tabs_root_ = nullptr;
+        allocs_rows_root_ = nullptr;
+        allocs_summary_value_ = nullptr;
+        breakdown_root_ = nullptr;
         rows_root_ = nullptr;
         device_label_ = nullptr;
         empty_row_ = nullptr;
         rows_by_path_.clear();
         counter_rows_by_key_.clear();
-        topn_rows_.clear();
+        allocs_rows_.clear();
+        breakdown_rows_.clear();
         summary_by_key_.clear();
         listeners_attached_ = false;
         dragging_header_ = false;
@@ -341,7 +376,52 @@ namespace lfs::vis::gui {
             filter_input_->AddEventListener(Rml::EventId::Change, &filter_listener_);
         if (filter_clear_)
             filter_clear_->AddEventListener(Rml::EventId::Click, &filter_clear_listener_);
+        if (tabs_root_)
+            tabs_root_->AddEventListener(Rml::EventId::Click, &tab_listener_);
         listeners_attached_ = true;
+    }
+
+    void VramHudOverlay::TabListener::ProcessEvent(Rml::Event& event) {
+        if (!owner)
+            return;
+        auto* target = event.GetTargetElement();
+        while (target) {
+            const auto key = target->GetAttribute<Rml::String>("data-vram-tab", "");
+            if (!key.empty()) {
+                owner->setActiveTab(std::string(key));
+                event.StopPropagation();
+                return;
+            }
+            target = target->GetParentNode();
+        }
+    }
+
+    void VramHudOverlay::setActiveTab(std::string_view tab) {
+        const std::string requested(tab);
+        if (requested != "overview" && requested != "allocations" && requested != "tree")
+            return;
+        if (active_tab_ == requested)
+            return;
+        active_tab_ = requested;
+        refreshTabClasses();
+        schedulePersistSave();
+        persistNow();
+        apply();
+    }
+
+    void VramHudOverlay::refreshTabClasses() {
+        if (tabs_root_) {
+            for (auto* el = tabs_root_->GetFirstChild(); el != nullptr; el = el->GetNextSibling()) {
+                const auto key = el->GetAttribute<Rml::String>("data-vram-tab", "");
+                el->SetClass("active", !key.empty() && key == active_tab_);
+            }
+        }
+        if (panel_overview_)
+            panel_overview_->SetClass("hidden", active_tab_ != "overview");
+        if (panel_allocations_)
+            panel_allocations_->SetClass("hidden", active_tab_ != "allocations");
+        if (panel_tree_)
+            panel_tree_->SetClass("hidden", active_tab_ != "tree");
     }
 
     void VramHudOverlay::updateFilterClearVisibility() {
@@ -435,8 +515,9 @@ namespace lfs::vis::gui {
         }
 
         applySummary(process_used, process_total);
+        applyBreakdown(process_used);
         applyCounters();
-        applyTopN();
+        applyAllocations();
 
         if (!default_collapse_applied_ && !s.tree.empty()) {
             primeDefaultCollapse();
@@ -488,6 +569,77 @@ namespace lfs::vis::gui {
         }
     }
 
+    void VramHudOverlay::applyBreakdown(std::size_t process_used) {
+        if (!breakdown_root_)
+            return;
+
+        const auto top_segment = [](std::string_view scope) -> std::string {
+            const auto end = scope.find_first_of("/.");
+            return std::string(end == std::string_view::npos ? scope : scope.substr(0, end));
+        };
+
+        std::unordered_map<std::string, std::size_t> groups;
+        for (const auto& r : state_.snapshot.rows) {
+            if (r.live_bytes == 0)
+                continue;
+            groups[top_segment(r.scope)] += r.live_bytes;
+        }
+
+        struct Entry {
+            std::string label;
+            std::size_t bytes;
+            bool unaccounted;
+        };
+        std::vector<Entry> entries;
+        entries.reserve(groups.size() + 1);
+        std::size_t tracked_total = 0;
+        for (auto& [k, v] : groups) {
+            tracked_total += v;
+            entries.push_back({k, v, false});
+        }
+        std::sort(entries.begin(), entries.end(),
+                  [](const Entry& a, const Entry& b) { return a.bytes > b.bytes; });
+
+        if (process_used > 0) {
+            const std::size_t unacc =
+                process_used > tracked_total ? process_used - tracked_total : 0;
+            if (unacc > 0)
+                entries.push_back({"(unaccounted)", unacc, true});
+        }
+
+        const std::size_t denom = process_used > 0 ? process_used : tracked_total;
+
+        while (breakdown_rows_.size() > entries.size()) {
+            breakdown_root_->RemoveChild(breakdown_rows_.back().row);
+            breakdown_rows_.pop_back();
+        }
+        while (breakdown_rows_.size() < entries.size()) {
+            auto row_ptr = document_->CreateElement("div");
+            row_ptr->SetAttribute("class", "vram-hud-breakdown-row");
+            auto* row = breakdown_root_->AppendChild(std::move(row_ptr));
+            BreakdownRowElements e{};
+            e.row = row;
+            e.name = createSpan(document_, row, "vram-hud-breakdown-name");
+            e.bytes = createSpan(document_, row, "vram-hud-breakdown-bytes");
+            e.pct = createSpan(document_, row, "vram-hud-breakdown-pct");
+            breakdown_rows_.push_back(std::move(e));
+        }
+
+        for (std::size_t i = 0; i < entries.size(); ++i) {
+            auto& row = breakdown_rows_[i];
+            const std::string klass = entries[i].unaccounted
+                                          ? std::string("vram-hud-breakdown-row unaccounted")
+                                          : std::string("vram-hud-breakdown-row");
+            if (row.cached_classes != klass) {
+                row.cached_classes = klass;
+                row.row->SetAttribute("class", Rml::String(row.cached_classes));
+            }
+            setText(row.name, row.cached_name, std::string(entries[i].label));
+            setText(row.bytes, row.cached_bytes, formatBytes(entries[i].bytes));
+            setText(row.pct, row.cached_pct, formatPercent(entries[i].bytes, denom));
+        }
+    }
+
     void VramHudOverlay::applyCounters() {
         if (!counters_root_)
             return;
@@ -515,16 +667,14 @@ namespace lfs::vis::gui {
             entries.push_back({g.key, std::move(vs)});
         }
 
-        counters_root_->SetClass("hidden", entries.empty());
-        if (entries.empty()) {
-            for (auto& [_, row] : counter_rows_by_key_)
-                row.row->SetClass("hidden", true);
-            return;
-        }
+        if (counters_empty_)
+            counters_empty_->SetClass("hidden", !entries.empty());
 
         std::unordered_set<std::string> seen;
         seen.reserve(entries.size());
         Rml::Element* cursor = counters_root_->GetFirstChild();
+        if (cursor == counters_empty_)
+            cursor = cursor ? cursor->GetNextSibling() : nullptr;
         for (const auto& e : entries) {
             seen.insert(e.label);
             auto [it, inserted] = counter_rows_by_key_.try_emplace(e.label);
@@ -558,42 +708,61 @@ namespace lfs::vis::gui {
         }
     }
 
-    void VramHudOverlay::applyTopN() {
-        if (!topn_root_ || !topn_rows_root_)
+    void VramHudOverlay::applyAllocations() {
+        if (!allocs_rows_root_)
             return;
 
-        const auto& top = state_.snapshot.top_live;
-        topn_root_->SetClass("hidden", top.empty());
-
-        while (topn_rows_.size() > top.size()) {
-            topn_rows_root_->RemoveChild(topn_rows_.back().row);
-            topn_rows_.pop_back();
+        struct Entry {
+            std::string scope;
+            std::string label;
+            std::size_t live_bytes;
+        };
+        std::vector<Entry> entries;
+        entries.reserve(state_.snapshot.rows.size());
+        for (const auto& r : state_.snapshot.rows) {
+            if (r.live_bytes == 0)
+                continue;
+            entries.push_back({r.scope, r.label, r.live_bytes});
         }
-        while (topn_rows_.size() < top.size()) {
+        std::sort(entries.begin(), entries.end(),
+                  [](const Entry& a, const Entry& b) { return a.live_bytes > b.live_bytes; });
+
+        std::size_t total_live = 0;
+        for (const auto& e : entries)
+            total_live += e.live_bytes;
+        const std::size_t denom = bestProcessUsed(state_.snapshot) > 0
+                                      ? bestProcessUsed(state_.snapshot)
+                                      : total_live;
+
+        if (allocs_summary_value_) {
+            std::string text = std::format("{} · {}", entries.size(), formatBytes(total_live));
+            setText(allocs_summary_value_, cached_allocs_summary_, std::move(text));
+        }
+
+        while (allocs_rows_.size() > entries.size()) {
+            allocs_rows_root_->RemoveChild(allocs_rows_.back().row);
+            allocs_rows_.pop_back();
+        }
+        while (allocs_rows_.size() < entries.size()) {
             auto row_ptr = document_->CreateElement("div");
-            row_ptr->SetAttribute("class", "vram-hud-topn-row");
-            auto* row = topn_rows_root_->AppendChild(std::move(row_ptr));
-            TopRowElements t{};
-            t.row = row;
-            t.name = createSpan(document_, row, "vram-hud-topn-name");
-            t.bytes = createSpan(document_, row, "vram-hud-topn-bytes");
-            t.pct = createSpan(document_, row, "vram-hud-topn-pct");
-            topn_rows_.push_back(std::move(t));
+            row_ptr->SetAttribute("class", "vram-hud-allocs-row");
+            auto* row = allocs_rows_root_->AppendChild(std::move(row_ptr));
+            AllocRowElements e{};
+            e.row = row;
+            e.name = createSpan(document_, row, "vram-hud-allocs-name");
+            e.bytes = createSpan(document_, row, "vram-hud-allocs-bytes");
+            e.pct = createSpan(document_, row, "vram-hud-allocs-pct");
+            allocs_rows_.push_back(std::move(e));
         }
 
-        std::size_t denom = bestProcessUsed(state_.snapshot);
-        if (denom == 0) {
-            for (const auto& row : top)
-                denom += row.live_bytes;
-        }
-        for (std::size_t i = 0; i < top.size(); ++i) {
-            auto& row = topn_rows_[i];
-            std::string name = top[i].label.empty()
-                                   ? top[i].scope
-                                   : top[i].scope + " · " + top[i].label;
+        for (std::size_t i = 0; i < entries.size(); ++i) {
+            auto& row = allocs_rows_[i];
+            std::string name = entries[i].label.empty()
+                                   ? entries[i].scope
+                                   : entries[i].scope + " \xC2\xB7 " + entries[i].label;
             setText(row.name, row.cached_name, std::move(name));
-            setText(row.bytes, row.cached_bytes, formatBytes(top[i].live_bytes));
-            setText(row.pct, row.cached_pct, formatPercent(top[i].live_bytes, denom));
+            setText(row.bytes, row.cached_bytes, formatBytes(entries[i].live_bytes));
+            setText(row.pct, row.cached_pct, formatPercent(entries[i].live_bytes, denom));
         }
     }
 

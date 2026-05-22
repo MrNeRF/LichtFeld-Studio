@@ -24,6 +24,7 @@ namespace lfs::vis::gui {
         float vram_hud_y = -1.0f;
         float vram_hud_width = -1.0f;
         float vram_hud_height = -1.0f;
+        std::string vram_hud_active_tab;
         std::vector<std::string> vram_hud_collapsed_paths;
 
         void save() const;

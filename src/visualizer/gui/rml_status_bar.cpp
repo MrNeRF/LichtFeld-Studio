@@ -568,18 +568,19 @@ namespace lfs::vis::gui {
             next_gpu_refresh_at_ = now + kGpuRefreshInterval;
         }
         const auto mem = cached_gpu_mem_;
-        float app_gb = mem.process_used / 1e9f;
-        float used_gb = mem.total_used / 1e9f;
-        float total_gb = mem.total / 1e9f;
-        float pct = total_gb > 0.0f ? (used_gb / total_gb) * 100.0f : 0.0f;
+        constexpr float gib = 1024.0f * 1024.0f * 1024.0f;
+        float app_gib = mem.process_used / gib;
+        float used_gib = mem.total_used / gib;
+        float total_gib = mem.total / gib;
+        float pct = total_gib > 0.0f ? (used_gib / total_gib) * 100.0f : 0.0f;
 
         ImVec4 mem_color = pct < 50.0f ? p.success : (pct < 75.0f ? p.warning : p.error);
-        setModelString("lfs_mem_text", model_.lfs_mem_text, std::format("LFS {:.1f}GB", app_gb));
+        setModelString("lfs_mem_text", model_.lfs_mem_text, std::format("LFS {:.2f} GiB", app_gib));
         setModelString("lfs_mem_color", model_.lfs_mem_color, colorToRml(p.info));
         setModelBool("show_gpu_model", model_.show_gpu_model, !mem.device_name.empty());
         setModelString("gpu_model_text", model_.gpu_model_text, mem.device_name);
         setModelString("gpu_mem_text", model_.gpu_mem_text,
-                       std::format("{} {:.1f}/{:.1f}GB", LOC("status_bar.gpu"), used_gb, total_gb));
+                       std::format("{} {:.2f}/{:.2f} GiB", LOC("status_bar.gpu"), used_gib, total_gib));
         setModelString("gpu_mem_color", model_.gpu_mem_color, colorToRml(mem_color));
 
         // FPS

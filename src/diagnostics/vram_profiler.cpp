@@ -413,42 +413,29 @@ namespace lfs::diagnostics {
         impl_->iter_allocation_events_start = impl_->allocation_events;
         impl_->iter_free_events_start = impl_->free_events;
 
-        const auto is_iteration_scope = [](const std::string& path) {
-            return path == "iter" || path.rfind("iter/", 0) == 0 ||
-                   path == "train" || path.rfind("train/", 0) == 0 ||
-                   path == "rasterizer" || path.rfind("rasterizer/", 0) == 0 ||
-                   path == "model" || path.rfind("model/", 0) == 0 ||
-                   path == "optimizer" || path.rfind("optimizer/", 0) == 0;
-        };
-        for (auto it = impl_->metrics.begin(); it != impl_->metrics.end();) {
-            if (it->first.scope.rfind("iter.", 0) == 0 ||
-                it->first.scope.rfind("train.", 0) == 0 ||
-                it->first.scope.rfind("rasterizer.", 0) == 0 ||
-                it->first.scope.rfind("model.", 0) == 0 ||
-                it->first.scope.rfind("optimizer.", 0) == 0) {
-                it = impl_->metrics.erase(it);
-            } else {
-                ++it;
+        // live_bytes is derived state: zero it for every allocator-tracked metric, then
+        // rebuild from the ground-truth live allocations map below. Sampled (current_sample)
+        // metrics own their own live_bytes via recordCurrentBytes and must not be reset here.
+        for (auto& [_, metric] : impl_->metrics) {
+            if (!metric.current_sample) {
+                metric.live_bytes = 0;
             }
         }
+        // Per-iteration timer/delta stats reset on every scope (not just a hard-coded
+        // prefix list — nested top-level scopes like "Training execution/train.*" never
+        // matched the prefix and were silently accumulating call counts across runs).
         for (auto& [_, node] : impl_->scope_nodes) {
-            if (!is_iteration_scope(node.path)) {
-                continue;
-            }
             node.timer_call_count = 0;
             node.total_ms = 0.0;
             node.last_ms = 0.0;
-            node.max_ms = 0.0;
             node.wall_ring.clear();
             node.gpu_call_count = 0;
             node.gpu_total_ms = 0.0;
             node.gpu_last_ms = 0.0;
-            node.gpu_max_ms = 0.0;
             node.vram_delta_count = 0;
             node.last_vram_delta_bytes = 0;
             node.net_vram_delta_bytes = 0;
-            node.max_vram_increase_bytes = 0;
-            node.max_vram_decrease_bytes = 0;
+            // max_ms / gpu_max_ms / max_vram_increase / max_vram_decrease keep lifetime maxima.
         }
         for (const auto& [_, allocation] : impl_->allocations) {
             auto& metric = impl_->metrics[allocation.key];

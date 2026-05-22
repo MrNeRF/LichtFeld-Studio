@@ -64,13 +64,20 @@ namespace lfs::vis::gui {
             VramHudOverlay* owner = nullptr;
             void ProcessEvent(Rml::Event& event) override;
         };
+        struct TabListener final : Rml::EventListener {
+            VramHudOverlay* owner = nullptr;
+            void ProcessEvent(Rml::Event& event) override;
+        };
 
         void attachListeners();
         void apply();
         void applySummary(std::size_t process_used, std::size_t process_total);
+        void applyBreakdown(std::size_t process_used);
         void applyCounters();
-        void applyTopN();
+        void applyAllocations();
         void applyTree(std::size_t process_used);
+        void setActiveTab(std::string_view tab);
+        void refreshTabClasses();
         void primeDefaultCollapse();
         void toggleNode(const std::string& path);
         void pruneCollapsedSet();
@@ -101,8 +108,14 @@ namespace lfs::vis::gui {
         Rml::Element* throughput_label_ = nullptr;
         Rml::Element* summary_root_ = nullptr;
         Rml::Element* counters_root_ = nullptr;
-        Rml::Element* topn_root_ = nullptr;
-        Rml::Element* topn_rows_root_ = nullptr;
+        Rml::Element* counters_empty_ = nullptr;
+        Rml::Element* panel_overview_ = nullptr;
+        Rml::Element* panel_allocations_ = nullptr;
+        Rml::Element* panel_tree_ = nullptr;
+        Rml::Element* tabs_root_ = nullptr;
+        Rml::Element* allocs_rows_root_ = nullptr;
+        Rml::Element* allocs_summary_value_ = nullptr;
+        Rml::Element* breakdown_root_ = nullptr;
         Rml::Element* rows_root_ = nullptr;
         Rml::Element* empty_row_ = nullptr;
 
@@ -136,7 +149,7 @@ namespace lfs::vis::gui {
             std::string cached_value;
         };
 
-        struct TopRowElements {
+        struct AllocRowElements {
             Rml::Element* row = nullptr;
             Rml::Element* name = nullptr;
             Rml::Element* bytes = nullptr;
@@ -146,9 +159,23 @@ namespace lfs::vis::gui {
             std::string cached_pct;
         };
 
+        struct BreakdownRowElements {
+            Rml::Element* row = nullptr;
+            Rml::Element* name = nullptr;
+            Rml::Element* bytes = nullptr;
+            Rml::Element* pct = nullptr;
+            std::string cached_name;
+            std::string cached_bytes;
+            std::string cached_pct;
+            std::string cached_classes;
+        };
+
         std::unordered_map<std::string, RowElements> rows_by_path_;
         std::unordered_map<std::string, CounterRowElements> counter_rows_by_key_;
-        std::vector<TopRowElements> topn_rows_;
+        std::vector<AllocRowElements> allocs_rows_;
+        std::vector<BreakdownRowElements> breakdown_rows_;
+        std::string cached_allocs_summary_;
+        std::string active_tab_ = "overview";
         std::unordered_set<std::string> collapsed_paths_;
         std::unordered_set<std::string> visible_paths_;
         std::unordered_set<std::string> snapshot_paths_;
@@ -171,6 +198,7 @@ namespace lfs::vis::gui {
         ResizeDragListener resize_drag_listener_;
         FilterListener filter_listener_;
         FilterClearListener filter_clear_listener_;
+        TabListener tab_listener_;
         bool listeners_attached_ = false;
 
         float pos_x_ = -1.0f;

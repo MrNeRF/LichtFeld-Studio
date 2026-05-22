@@ -166,6 +166,37 @@ namespace {
         EXPECT_TRUE(snap.histograms.empty());
     }
 
+    TEST_F(VramProfilerMetricsTest, LiveBytesDoesNotAccumulateAcrossIterations) {
+        // Regression: when allocations live under a deeply-nested scope path
+        // ("Training execution/train.step/..."), beginIteration() previously
+        // failed to reset metric.live_bytes (the brittle prefix match missed
+        // the outer scope), then re-added the allocation bytes on every
+        // rebuild — exploding live_bytes far past physical VRAM.
+        auto& p = VramProfiler::instance();
+        p.pushScope("Training execution");
+        p.pushScope("train.step");
+        int dummy = 0;
+        p.recordAllocation(&dummy, 1024, VramAllocationMethod::Bucketed);
+
+        for (int i = 0; i < 50; ++i) {
+            p.beginIteration(i);
+        }
+
+        const auto snap = p.snapshot();
+        std::size_t total_live_in_training = 0;
+        for (const auto& row : snap.rows) {
+            if (row.scope.find("Training execution") != std::string::npos) {
+                total_live_in_training += row.live_bytes;
+            }
+        }
+        EXPECT_EQ(total_live_in_training, 1024u);
+        EXPECT_EQ(snap.accounted_live_bytes, 1024u);
+
+        p.recordDeallocation(&dummy);
+        p.popScope();
+        p.popScope();
+    }
+
     TEST_F(VramProfilerMetricsTest, IterPerSecondGrowsAcrossIterations) {
         auto& p = VramProfiler::instance();
         p.beginIteration(0);
