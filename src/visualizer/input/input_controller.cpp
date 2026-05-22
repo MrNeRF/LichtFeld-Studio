@@ -1367,11 +1367,18 @@ namespace lfs::vis {
             if (services().renderingOrNull()) {
                 auto settings = services().renderingOrNull()->getSettings();
                 if (settings.orthographic) {
-                    // Zoom factor: positive delta = zoom in (increase scale)
                     constexpr float ORTHO_ZOOM_FACTOR = 0.1f;
+                    constexpr float MIN_ORTHO_SCALE = 1.0f;
+                    constexpr float MAX_ORTHO_SCALE = 10000.0f;
                     const float scale_factor = 1.0f + delta * ORTHO_ZOOM_FACTOR;
-                    settings.ortho_scale = std::clamp(settings.ortho_scale * scale_factor, 1.0f, 10000.0f);
-                    services().renderingOrNull()->updateSettings(settings);
+                    if (&target_viewport != &viewport_) {
+                        const float current = target_viewport.ortho_scale_override.value_or(settings.ortho_scale);
+                        target_viewport.ortho_scale_override =
+                            std::clamp(current * scale_factor, MIN_ORTHO_SCALE, MAX_ORTHO_SCALE);
+                    } else {
+                        settings.ortho_scale = std::clamp(settings.ortho_scale * scale_factor, MIN_ORTHO_SCALE, MAX_ORTHO_SCALE);
+                        services().renderingOrNull()->updateSettings(settings);
+                    }
                     services().renderingOrNull()->markDirty(DirtyFlag::CAMERA);
                 } else {
                     target_viewport.camera.zoom(delta);

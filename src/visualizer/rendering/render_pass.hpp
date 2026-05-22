@@ -101,7 +101,7 @@ namespace lfs::vis {
                     .far_plane = settings.depth_clip_enabled ? settings.depth_clip_far
                                                              : lfs::rendering::DEFAULT_FAR_PLANE,
                     .orthographic = settings.orthographic,
-                    .ortho_scale = settings.ortho_scale,
+                    .ortho_scale = source.ortho_scale_override.value_or(settings.ortho_scale),
                     .background_color = settings.background_color};
         }
 
