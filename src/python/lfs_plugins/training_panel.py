@@ -1371,6 +1371,15 @@ class TrainingPanel(Panel):
 
     # ── Setters ────────────────────────────────────────────
 
+    def _sync_render_setting(self, prop, val):
+        rs = lf.get_render_settings()
+        if not rs:
+            return
+        if prop == "gut":
+            rs.set("raster_backend", "3dgut" if val else "3dgs")
+            return
+        rs.set(prop, val)
+
     def _set_bool_prop(self, prop, val):
         params = lf.optimization_params()
         if not params or not params.has_params():
@@ -1390,9 +1399,8 @@ class TrainingPanel(Panel):
         setattr(params, prop, val)
         if prop == "enable_eval" and val:
             self._sync_eval_steps_with_save_steps(params)
-        rs = lf.get_render_settings()
-        if rs and prop in RENDER_SYNC:
-            rs.set(RENDER_SYNC[prop], val)
+        if prop in RENDER_SYNC:
+            self._sync_render_setting(RENDER_SYNC[prop], val)
         if self._handle:
             self._sync_text_bufs()
             self._handle.dirty_all()

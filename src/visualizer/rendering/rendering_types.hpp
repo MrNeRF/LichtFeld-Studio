@@ -221,11 +221,12 @@ namespace lfs::vis {
         float split_position = 0.5f;
         size_t split_view_offset = 0;
 
-        lfs::rendering::GaussianRasterBackend raster_backend = lfs::rendering::GaussianRasterBackend::VkSplat;
+        lfs::rendering::GaussianRasterBackend raster_backend = lfs::rendering::GaussianRasterBackend::ThreeDgs;
         bool gut = false;
         bool equirectangular = false;
         bool orthographic = false;
         float ortho_scale = 100.0f; // Pixels per world unit (larger = more zoomed in)
+        bool depth_view = false;
 
         // Selection colors (RGB: committed=219,83,83 preview=0,222,76 center=0,154,187)
         glm::vec3 selection_color_committed{0.859f, 0.325f, 0.325f};

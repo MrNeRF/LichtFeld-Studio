@@ -284,10 +284,9 @@ namespace lfs::python {
         add_bool(&Proxy::equirectangular, "equirectangular", "Equirectangular", "Equirectangular projection mode",
                  false);
         add_int_enum(&Proxy::raster_backend, "raster_backend", "Raster Backend", "Gaussian rasterization backend",
-                     {{"3DGS", "vksplat", 2},
-                      {"3DGUT", "vksplat_3dgut", 3}},
+                     {{"3DGS", "3dgs", 2},
+                      {"3DGUT", "3dgut", 3}},
                      2);
-        add_bool(&Proxy::gut, "gut", "GUT Mode", "Enable GUT rendering mode", false);
         add_bool(&Proxy::mip_filter, "mip_filter", "Mip Filter", "Enable mip-map filtering", false);
         add_float(&Proxy::render_scale, "render_scale", "Render Scale", "Render resolution scale", 1.0, 0.25, 1.0);
         add_int_enum(&Proxy::camera_metrics_mode, "camera_metrics_mode", "Camera Metrics",
@@ -384,12 +383,6 @@ namespace lfs::python {
     void PyRenderSettings::set(const std::string& name, nb::object value) {
         prop_.setattr(name, value);
         if (name == "raster_backend") {
-            const auto backend = static_cast<rendering::GaussianRasterBackend>(settings_.raster_backend);
-            settings_.raster_backend =
-                static_cast<int>(rendering::normalizeViewerRasterBackend(backend, settings_.gut));
-            settings_.gut = rendering::isGutBackend(
-                static_cast<rendering::GaussianRasterBackend>(settings_.raster_backend));
-        } else if (name == "gut") {
             const auto backend = static_cast<rendering::GaussianRasterBackend>(settings_.raster_backend);
             settings_.raster_backend =
                 static_cast<int>(rendering::normalizeViewerRasterBackend(backend, settings_.gut));
@@ -701,7 +694,8 @@ namespace lfs::python {
                     return static_cast<float>(self.height) / self.ortho_scale;
                 },
                 "Vertical view extent in world units (Blender-compatible orthographic scale). Larger when zoomed out, smaller when zoomed in.")
-            .def_prop_ro("position", [](const PyViewInfo& self) -> std::tuple<float, float, float> {
+            .def_prop_ro(
+                "position", [](const PyViewInfo& self) -> std::tuple<float, float, float> {
                     auto t = self.translation.tensor().cpu();
                     auto acc = t.accessor<float, 1>();
                     return {acc(0), acc(1), acc(2)}; }, "Camera position as (x, y, z) tuple");

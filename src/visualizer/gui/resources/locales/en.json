@@ -769,7 +769,8 @@
     "perspective": "Perspective",
     "orthographic": "Orthographic",
     "sequencer": "Sequencer",
-    "histogram": "Histogram"
+    "histogram": "Histogram",
+    "depth_map": "Depth Map"
   },
   "transform": {
     "node": "Node: %s",

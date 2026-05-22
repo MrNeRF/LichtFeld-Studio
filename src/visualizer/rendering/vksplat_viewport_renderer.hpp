@@ -146,7 +146,10 @@ namespace lfs::vis {
             const VulkanGSRendererUniforms& uniforms,
             const glm::vec3& background,
             OutputSlot output_slot,
-            bool transparent_background);
+            bool transparent_background,
+            bool depth_view,
+            float depth_min,
+            float depth_max);
 
         // Fallback coalesced CUDA-imported VkBuffer per ring slot, holding raw
         // SplatData input regions back-to-back. Training tensors created as

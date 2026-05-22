@@ -309,7 +309,7 @@ The async-compute queue probe correctly picked NVIDIA family 2 (graphics on fami
 Reproduce locally:
 ```
 ./build/LichtFeld-Studio -v <splat>.ply --log-level debug --no-splash
-# in the rendering panel, switch raster_backend to "vksplat",
+# in the rendering panel, switch raster_backend to "3dgs",
 # then in stderr: grep -E "vksplat\.render took"
 ```
 

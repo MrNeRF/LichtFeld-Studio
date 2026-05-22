@@ -4,10 +4,10 @@
 
 #include "vksplat_viewport_renderer.hpp"
 
-#include "core/logger.hpp"
 #include "core/cuda/sh_layout.cuh"
-#include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/logger.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "viewport/vksplat_compose.comp.spv.h"
 #include "vksplat_input_packer.hpp"
@@ -733,8 +733,12 @@ namespace lfs::vis {
             std::uint32_t width = 0;
             std::uint32_t height = 0;
             std::uint32_t transparent_background = 0;
-            std::uint32_t pad1 = 0;
+            std::uint32_t depth_view = 0;
             glm::vec4 background{0.0f, 0.0f, 0.0f, 1.0f};
+            float depth_min = 0.0f;
+            float depth_max = 1.0f;
+            float pad1 = 0.0f;
+            float pad2 = 0.0f;
         };
 
     } // namespace
@@ -1536,7 +1540,6 @@ namespace lfs::vis {
         bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         bindings[3].descriptorCount = 1;
         bindings[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-
         VkDescriptorSetLayoutCreateInfo layout_info{};
         layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
         layout_info.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
@@ -1583,7 +1586,10 @@ namespace lfs::vis {
         const VulkanGSRendererUniforms& uniforms,
         const glm::vec3& background,
         const OutputSlot output_slot,
-        const bool transparent_background) {
+        const bool transparent_background,
+        const bool depth_view,
+        const float depth_min,
+        const float depth_max) {
         if (auto ok = ensureComposePipeline(context); !ok) {
             return ok;
         }
@@ -1687,6 +1693,7 @@ namespace lfs::vis {
         pixel_dep.bufferMemoryBarrierCount = static_cast<std::uint32_t>(pixel_barriers.size());
         pixel_dep.pBufferMemoryBarriers = pixel_barriers.data();
         vkCmdPipelineBarrier2(cmd, &pixel_dep);
+
         context.imageBarriers().transitionImage(cmd,
                                                 output.image.image,
                                                 VK_IMAGE_ASPECT_COLOR_BIT,
@@ -1707,7 +1714,10 @@ namespace lfs::vis {
             .width = uniforms.image_width,
             .height = uniforms.image_height,
             .transparent_background = transparent_background ? 1u : 0u,
+            .depth_view = depth_view ? 1u : 0u,
             .background = glm::vec4(background, 1.0f),
+            .depth_min = depth_min,
+            .depth_max = depth_max,
         };
         vkCmdPushConstants(cmd,
                            compose_->pipeline_layout,
@@ -2378,7 +2388,10 @@ namespace lfs::vis {
                 uniforms,
                 request.frame_view.background_color,
                 output_slot,
-                request.transparent_background);
+                request.transparent_background,
+                request.depth_view,
+                request.depth_view_min,
+                request.depth_view_max);
         } catch (const std::exception& e) {
             return std::unexpected(std::format("VkSplat forward pass failed: {}", e.what()));
         }

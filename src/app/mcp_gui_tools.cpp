@@ -29,6 +29,7 @@
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "rendering/render_constants.hpp"
 #include "sequencer/keyframe.hpp"
 #include "training/training_manager.hpp"
 #include "visualizer/gui/html_viewer_export.hpp"
@@ -574,7 +575,7 @@ namespace lfs::app {
                                  {"show_pivot", settings.show_pivot},
                                  {"split_view_mode", settings.split_view_mode},
                                  {"split_position", settings.split_position},
-                                 {"gut", settings.gut},
+                                 {"raster_backend", std::string(lfs::rendering::gaussianRasterBackendId(static_cast<lfs::rendering::GaussianRasterBackend>(settings.raster_backend)))},
                                  {"equirectangular", settings.equirectangular},
                                  {"orthographic", settings.orthographic},
                                  {"ortho_scale", settings.ortho_scale},
@@ -628,6 +629,23 @@ namespace lfs::app {
                     field = args[key].get<std::string>();
                     touched = true;
                 }
+            };
+
+            const auto set_raster_backend = [&args, &touched](vis::RenderSettingsProxy& settings)
+                -> std::expected<void, std::string> {
+                if (!args.contains("raster_backend"))
+                    return {};
+                const auto& value = args["raster_backend"];
+                if (!value.is_string())
+                    return std::unexpected("Field 'raster_backend' must be '3dgs' or '3dgut'");
+                const std::string backend_id = value.get<std::string>();
+                if (!lfs::rendering::isGaussianRasterBackendId(backend_id))
+                    return std::unexpected("Field 'raster_backend' must be '3dgs' or '3dgut'");
+                const auto backend = lfs::rendering::gaussianRasterBackendFromId(backend_id);
+                settings.raster_backend = static_cast<int>(backend);
+                settings.gut = lfs::rendering::isGutBackend(backend);
+                touched = true;
+                return {};
             };
 
             const auto set_vec3 = [&args, &touched](const char* key,
@@ -691,7 +709,8 @@ namespace lfs::app {
             set_bool("show_pivot", settings.show_pivot);
             set_int("split_view_mode", settings.split_view_mode);
             set_float("split_position", settings.split_position);
-            set_bool("gut", settings.gut);
+            if (auto result = set_raster_backend(settings); !result)
+                return std::unexpected(result.error());
             set_bool("equirectangular", settings.equirectangular);
             set_bool("orthographic", settings.orthographic);
             set_float("ortho_scale", settings.ortho_scale);
@@ -2187,6 +2206,7 @@ namespace lfs::app {
                         {"environment_map_path", json{{"type", "string"}}},
                         {"environment_exposure", json{{"type", "number"}}},
                         {"environment_rotation_degrees", json{{"type", "number"}}},
+                        {"raster_backend", json{{"type", "string"}, {"enum", json::array({"3dgs", "3dgut"})}}},
                         {"antialiasing", json{{"type", "boolean"}}},
                         {"show_grid", json{{"type", "boolean"}}},
                         {"show_camera_frustums", json{{"type", "boolean"}}},

@@ -144,9 +144,15 @@ namespace lfs::vis {
                 clear_metrics = true;
             }
 
+            const auto previous_backend = settings_.raster_backend;
+            const bool previous_gut = settings_.gut;
             settings_ = new_settings;
-            settings_.raster_backend =
-                lfs::rendering::normalizeViewerRasterBackend(settings_.raster_backend, settings_.gut);
+            const bool gut_toggle_only =
+                settings_.raster_backend == previous_backend && settings_.gut != previous_gut;
+            settings_.raster_backend = gut_toggle_only
+                                           ? lfs::rendering::viewerRasterBackendForGutMode(settings_.gut)
+                                           : lfs::rendering::normalizeViewerRasterBackend(
+                                                 settings_.raster_backend, settings_.gut);
             settings_.gut = lfs::rendering::isGutBackend(settings_.raster_backend);
             settings_.grid_plane = clampGridPlane(settings_.grid_plane);
             if (split_view_service_.isIndependentDualActive(settings_)) {

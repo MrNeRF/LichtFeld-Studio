@@ -597,7 +597,8 @@
     "orthographic": "正交",
     "sequencer": "序列器",
     "ellipsoid": "Ellipsoid",
-    "histogram": "Histogram"
+    "histogram": "Histogram",
+    "depth_map": "深度图"
   },
   "transform": {
     "node": "节点：%s",

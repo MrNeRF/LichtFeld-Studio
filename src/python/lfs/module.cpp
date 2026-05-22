@@ -1536,6 +1536,24 @@ NB_MODULE(lichtfeld, m) {
         "Check if orthographic projection is active");
 
     m.def(
+        "get_depth_view", []() -> bool {
+            const auto* rm = lfs::python::get_rendering_manager();
+            return rm ? rm->getSettings().depth_view : false;
+        },
+        "Check if depth-map view is active");
+
+    m.def(
+        "set_depth_view", [](bool enabled) {
+            auto* rm = lfs::python::get_rendering_manager();
+            if (!rm)
+                return;
+            auto settings = rm->getSettings();
+            settings.depth_view = enabled;
+            rm->updateSettings(settings);
+        },
+        nb::arg("enabled"), "Enable or disable depth-map view");
+
+    m.def(
         "set_orthographic", [](bool ortho) {
             auto* rm = lfs::python::get_rendering_manager();
             if (!rm)

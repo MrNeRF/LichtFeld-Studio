@@ -767,7 +767,8 @@
     "orthographic": "平行投影",
     "sequencer": "シーケンサー",
     "ellipsoid": "Ellipsoid",
-    "histogram": "Histogram"
+    "histogram": "Histogram",
+    "depth_map": "深度マップ"
   },
   "transform": {
     "node": "ノード: %s",

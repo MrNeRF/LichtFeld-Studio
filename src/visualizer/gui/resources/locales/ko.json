@@ -767,7 +767,8 @@
     "orthographic": "직교 투영",
     "sequencer": "시퀀서",
     "ellipsoid": "Ellipsoid",
-    "histogram": "Histogram"
+    "histogram": "Histogram",
+    "depth_map": "깊이 맵"
   },
   "transform": {
     "node": "노드: %s",

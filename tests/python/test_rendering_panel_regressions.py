@@ -162,9 +162,9 @@ def test_rendering_panel_binds_theme_vignette_controls(rendering_panel_module):
     assert set_calls["intensity"] == [0.4]
 
 
-def test_rendering_panel_raster_backend_updates_gut_mirror(rendering_panel_module):
+def test_rendering_panel_raster_backend_uses_3dgs_ids(rendering_panel_module):
     module = rendering_panel_module
-    settings = SimpleNamespace(raster_backend="3dgut", gut=True)
+    settings = SimpleNamespace(raster_backend="3dgut")
     module.lf.get_render_settings = lambda: settings
 
     model = _BindingModelStub()
@@ -174,23 +174,13 @@ def test_rendering_panel_raster_backend_updates_gut_mirror(rendering_panel_modul
 
     backend_getter, backend_setter = model.bindings["raster_backend"]
 
-    assert backend_getter() == "vksplat_3dgut"
+    assert backend_getter() == "3dgut"
 
-    backend_setter("fast_gs")
-    assert settings.raster_backend == "vksplat"
-    assert settings.gut is False
+    backend_setter("3dgs")
+    assert settings.raster_backend == "3dgs"
 
     backend_setter("3dgut")
-    assert settings.raster_backend == "vksplat_3dgut"
-    assert settings.gut is True
-
-    backend_setter("vksplat")
-    assert settings.raster_backend == "vksplat"
-    assert settings.gut is False
-
-    backend_setter("vksplat_3dgut")
-    assert settings.raster_backend == "vksplat_3dgut"
-    assert settings.gut is True
+    assert settings.raster_backend == "3dgut"
 
 
 def test_rendering_panel_custom_environment_map_appears_in_dropdown(rendering_panel_module):
@@ -256,13 +246,10 @@ def test_rendering_rml_exposes_simplify_tooltips_and_locale_labels():
     assert "{{label_simplify_cancel}}" in content
 
 
-def test_rendering_rml_only_exposes_vksplat_backends():
+def test_rendering_rml_only_exposes_3dgs_backends():
     project_root = Path(__file__).parent.parent.parent
     rendering_rml = project_root / "src" / "visualizer" / "gui" / "rmlui" / "resources" / "rendering.rml"
     content = rendering_rml.read_text()
 
-    assert '<option value="vksplat">3DGS</option>' in content
-    assert '<option value="vksplat_3dgut">3DGUT</option>' in content
-    assert 'value="fast_gs"' not in content
-    assert 'value="3dgut"' not in content
-    assert "vksplat_available" not in content
+    assert '<option value="3dgs">3DGS</option>' in content
+    assert '<option value="3dgut">3DGUT</option>' in content

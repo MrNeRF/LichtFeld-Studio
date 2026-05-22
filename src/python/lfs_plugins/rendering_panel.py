@@ -104,11 +104,7 @@ SCRUB_FIELD_DEFS = {
 SELECT_PROPS = [
     "grid_plane", "sh_degree", "raster_backend", "camera_metrics_mode", "mesh_shadow_resolution",
 ]
-RASTER_BACKEND_ALIASES = {
-    "fast_gs": "vksplat",
-    "3dgut": "vksplat_3dgut",
-}
-GUT_RASTER_BACKENDS = {"vksplat_3dgut"}
+RASTER_BACKENDS = {"3dgs", "3dgut"}
 
 ENVIRONMENT_PRESET_PATHS = (
     "environments/kloofendal_48d_partly_cloudy_puresky_1k.hdr",
@@ -153,7 +149,6 @@ LOCALE_KEY = {
     "hide_outside_depth_box": "main_panel.hide_outside_depth_box",
     "equirectangular": "main_panel.equirectangular",
     "raster_backend": "main_panel.raster_backend",
-    "gut": "main_panel.gut_mode",
     "mip_filter": "main_panel.mip_filter",
     "axes_size": "main_panel.axes_size",
     "grid_opacity": "main_panel.grid_opacity",
@@ -211,8 +206,8 @@ def _entry_label(text: str) -> str:
 
 
 def _normalize_raster_backend(value):
-    backend = str(value or "")
-    return RASTER_BACKEND_ALIASES.get(backend, backend or "vksplat")
+    backend = str(value or "").lower()
+    return backend if backend in RASTER_BACKENDS else "3dgs"
 
 
 def _color_to_hex(c):
@@ -558,7 +553,6 @@ class RenderingPanel(Panel):
             return
         backend = _normalize_raster_backend(value)
         settings.raster_backend = backend
-        settings.gut = backend in GUT_RASTER_BACKENDS
 
     def _environment_map_is_custom(self):
         settings = lf.get_render_settings()

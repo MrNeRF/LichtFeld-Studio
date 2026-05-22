@@ -767,7 +767,8 @@
     "orthographic": "Ortograficzna",
     "sequencer": "Sekwencer",
     "ellipsoid": "Ellipsoid",
-    "histogram": "Histogram"
+    "histogram": "Histogram",
+    "depth_map": "Mapa glebokosci"
   },
   "transform": {
     "node": "Węzeł: %s",

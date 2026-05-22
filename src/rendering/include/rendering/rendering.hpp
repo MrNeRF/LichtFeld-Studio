@@ -162,13 +162,16 @@ namespace lfs::rendering {
         bool antialiasing = false;
         bool mip_filter = false;
         int sh_degree = 3;
-        GaussianRasterBackend raster_backend = GaussianRasterBackend::VkSplat;
+        GaussianRasterBackend raster_backend = GaussianRasterBackend::ThreeDgs;
         bool gut = false;
         bool equirectangular = false;
         GaussianSceneState scene;
         GaussianFilterState filters;
         GaussianOverlayState overlay;
         bool transparent_background = false;
+        bool depth_view = false;
+        float depth_view_min = DEFAULT_NEAR_PLANE;
+        float depth_view_max = DEFAULT_FAR_PLANE;
     };
 
     struct PointCloudSceneState {
@@ -244,7 +247,7 @@ namespace lfs::rendering {
         bool antialiasing = false;
         bool mip_filter = false;
         int sh_degree = 3;
-        GaussianRasterBackend raster_backend = GaussianRasterBackend::VkSplat;
+        GaussianRasterBackend raster_backend = GaussianRasterBackend::ThreeDgs;
         bool gut = false;
         bool equirectangular = false;
         GaussianSceneState scene;

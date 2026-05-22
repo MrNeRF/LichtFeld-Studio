@@ -112,6 +112,9 @@ namespace lfs::vis {
         const Viewport& viewport = source_viewport ? *source_viewport : ctx.viewport;
         const auto frame_view = ctx.makeFrameView(viewport, render_size);
         const bool overlay_visible = panelMatches(ctx.cursor_preview.panel, render_panel);
+        const float depth_view_max = ctx.settings.depth_clip_far > frame_view.near_plane
+                                         ? ctx.settings.depth_clip_far
+                                         : frame_view.far_plane;
 
         lfs::rendering::ViewportRenderRequest request{
             .frame_view = frame_view,
@@ -155,7 +158,10 @@ namespace lfs::vis {
                                               overlay_visible)
                                                  ? ctx.cursor_preview.focused_gaussian_id
                                                  : -1}},
-            .transparent_background = environmentBackgroundUsesTransparentViewerCompositing(ctx.settings)};
+            .transparent_background = environmentBackgroundUsesTransparentViewerCompositing(ctx.settings),
+            .depth_view = ctx.settings.depth_view,
+            .depth_view_min = frame_view.near_plane,
+            .depth_view_max = depth_view_max};
 
         request.overlay.selection_colors[0] = glm::vec4(ctx.settings.selection_color_center_marker, 1.0f);
         request.overlay.selection_colors[lfs::rendering::kSelectionPreviewColorIndex] =
