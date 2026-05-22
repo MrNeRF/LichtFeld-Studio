@@ -6,6 +6,7 @@
 
 #include "diagnostics/export.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -54,6 +55,13 @@ namespace lfs::diagnostics {
         double total_ms = 0.0;
         double last_ms = 0.0;
         double max_ms = 0.0;
+        double wall_p50_ms = 0.0;
+        double wall_p95_ms = 0.0;
+        double wall_p99_ms = 0.0;
+        std::uint64_t gpu_call_count = 0;
+        double gpu_total_ms = 0.0;
+        double gpu_last_ms = 0.0;
+        double gpu_max_ms = 0.0;
         std::uint64_t vram_delta_count = 0;
         std::int64_t last_vram_delta_bytes = 0;
         std::int64_t net_vram_delta_bytes = 0;
@@ -61,11 +69,41 @@ namespace lfs::diagnostics {
         std::int64_t max_vram_decrease_bytes = 0;
     };
 
+    struct NamedGauge {
+        std::string key;
+        double value = 0.0;
+        std::uint64_t generation = 0;
+    };
+
+    struct NamedCounter {
+        std::string key;
+        std::uint64_t value = 0;
+    };
+
+    struct NamedHistogram {
+        std::string key;
+        std::uint64_t count = 0;
+        double sum = 0.0;
+        double min_value = 0.0;
+        double max_value = 0.0;
+        double p50 = 0.0;
+        double p95 = 0.0;
+        double p99 = 0.0;
+    };
+
+    struct TopAlloc {
+        std::string scope;
+        std::string label;
+        std::size_t live_bytes = 0;
+    };
+
     struct VramProcessSnapshot {
         std::size_t cuda_used = 0;
         std::size_t cuda_total = 0;
         std::size_t cuda_pool_used = 0;
         std::size_t cuda_pool_reserved = 0;
+        std::size_t cuda_pool_fragmentation = 0;
+        std::size_t pinned_host_used = 0;
         std::size_t process_used = 0;
         std::size_t total_used = 0;
         std::size_t total = 0;
@@ -81,12 +119,23 @@ namespace lfs::diagnostics {
         std::uint64_t sequence = 0;
         std::uint64_t allocation_events = 0;
         std::uint64_t free_events = 0;
+        std::uint64_t iter_allocation_events = 0;
+        std::uint64_t iter_free_events = 0;
+        double iter_per_second = 0.0;
+        double iter_ms_p95 = 0.0;
+        double iter_ms_last = 0.0;
         std::size_t accounted_live_bytes = 0;
         std::size_t accounted_peak_bytes = 0;
         std::size_t sampled_live_bytes = 0;
+        std::vector<std::size_t> accounted_live_history;
         VramProcessSnapshot process;
         std::vector<VramMetricSnapshot> rows;
         std::vector<VramTreeNodeSnapshot> tree;
+        std::vector<NamedGauge> gauges;
+        std::vector<NamedCounter> iter_counters;
+        std::vector<NamedCounter> total_counters;
+        std::vector<NamedHistogram> histograms;
+        std::vector<TopAlloc> top_live;
     };
 
     class LFS_DIAGNOSTICS_API VramScope {
@@ -120,6 +169,37 @@ namespace lfs::diagnostics {
         bool start_valid_ = false;
         bool pushed_scope_ = false;
         std::size_t start_used_bytes_ = 0;
+    };
+
+    class LFS_DIAGNOSTICS_API TraceScope {
+    public:
+        explicit TraceScope(std::string_view scope);
+        ~TraceScope();
+
+        TraceScope(const TraceScope&) = delete;
+        TraceScope& operator=(const TraceScope&) = delete;
+        TraceScope(TraceScope&&) = delete;
+        TraceScope& operator=(TraceScope&&) = delete;
+
+    private:
+        bool active_ = false;
+        std::int64_t start_ns_ = 0;
+    };
+
+    class LFS_DIAGNOSTICS_API GpuTimeScope {
+    public:
+        GpuTimeScope(std::string_view scope, void* stream);
+        ~GpuTimeScope();
+
+        GpuTimeScope(const GpuTimeScope&) = delete;
+        GpuTimeScope& operator=(const GpuTimeScope&) = delete;
+        GpuTimeScope(GpuTimeScope&&) = delete;
+        GpuTimeScope& operator=(GpuTimeScope&&) = delete;
+
+    private:
+        bool active_ = false;
+        std::int32_t event_pair_ = -1;
+        void* stream_ = nullptr;
     };
 
     class LFS_DIAGNOSTICS_API VramProfiler {
@@ -160,7 +240,18 @@ namespace lfs::diagnostics {
                                VramAllocationMethod method = VramAllocationMethod::External);
         void clearStaticScope(std::string_view scope);
         void recordTimerSample(std::string_view scope, double elapsed_ms);
+        void recordGpuTimerSample(std::string_view scope, double elapsed_ms);
         void clearScope(std::string_view scope);
+
+        std::int32_t acquireGpuEventPair(std::string_view scope, void* stream);
+        void releaseGpuEventPair(std::int32_t pair, void* stream);
+        void drainGpuEvents();
+
+        void setGauge(std::string_view key, double value);
+        void addCounter(std::string_view key, std::uint64_t delta, bool per_iteration);
+        void recordHistogram(std::string_view key, double value);
+
+        void setPinnedHostUsed(std::size_t bytes);
 
         void sampleCudaMemory();
         void updateProcessMemory(std::size_t process_used,
@@ -183,8 +274,25 @@ namespace lfs::diagnostics {
 } // namespace lfs::diagnostics
 
 #define LFS_DIAGNOSTICS_CONCAT_INNER(a, b) a##b
-#define LFS_DIAGNOSTICS_CONCAT(a, b) LFS_DIAGNOSTICS_CONCAT_INNER(a, b)
+#define LFS_DIAGNOSTICS_CONCAT(a, b)       LFS_DIAGNOSTICS_CONCAT_INNER(a, b)
 #define LFS_VRAM_SCOPE(name) \
     ::lfs::diagnostics::VramScope LFS_DIAGNOSTICS_CONCAT(_lfs_vram_scope_, __LINE__)(name)
 #define LOG_VRAM_DIFF(name) \
     ::lfs::diagnostics::VramDeltaScope LFS_DIAGNOSTICS_CONCAT(_lfs_vram_delta_scope_, __LINE__)(name)
+#define LFS_TRACE(name) \
+    ::lfs::diagnostics::TraceScope LFS_DIAGNOSTICS_CONCAT(_lfs_trace_scope_, __LINE__)(name)
+#define LFS_GPU_TIME(name, stream)                                                           \
+    ::lfs::diagnostics::GpuTimeScope LFS_DIAGNOSTICS_CONCAT(_lfs_gpu_time_scope_, __LINE__)( \
+        name, static_cast<void*>(stream))
+#define LFS_GAUGE(key, value) \
+    ::lfs::diagnostics::VramProfiler::instance().setGauge(key, static_cast<double>(value))
+#define LFS_COUNTER_ADD(key, n)                                                            \
+    ::lfs::diagnostics::VramProfiler::instance().addCounter(key,                           \
+                                                            static_cast<std::uint64_t>(n), \
+                                                            true)
+#define LFS_COUNTER_TOTAL_ADD(key, n)                                                      \
+    ::lfs::diagnostics::VramProfiler::instance().addCounter(key,                           \
+                                                            static_cast<std::uint64_t>(n), \
+                                                            false)
+#define LFS_HIST(key, value) \
+    ::lfs::diagnostics::VramProfiler::instance().recordHistogram(key, static_cast<double>(value))

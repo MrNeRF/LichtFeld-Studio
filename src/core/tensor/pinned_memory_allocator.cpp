@@ -3,6 +3,7 @@
 
 #include "core/pinned_memory_allocator.hpp"
 #include "core/logger.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include <chrono>
 #include <cmath>
 #include <cuda_runtime.h>
@@ -154,6 +155,7 @@ namespace lfs::core {
                     stats_.allocated_bytes += size;
                     stats_.cached_bytes -= size;
                     stats_.cache_hits++;
+                    lfs::diagnostics::VramProfiler::instance().setPinnedHostUsed(stats_.allocated_bytes);
 
                     LOG_TRACE("Pinned memory cache HIT (stream-safe): {} bytes (total allocated: {} MB)",
                               bytes, stats_.allocated_bytes / (1024.0 * 1024.0));
@@ -190,6 +192,7 @@ namespace lfs::core {
         stats_.allocated_bytes += rounded_size;
         stats_.num_allocs++;
         stats_.cache_misses++;
+        lfs::diagnostics::VramProfiler::instance().setPinnedHostUsed(stats_.allocated_bytes);
 
         LOG_TRACE("Pinned memory allocated: {} bytes (total: {} MB, {} allocs)",
                   bytes, stats_.allocated_bytes / (1024.0 * 1024.0), stats_.num_allocs);
@@ -226,6 +229,7 @@ namespace lfs::core {
         allocated_blocks_.erase(it);
         stats_.allocated_bytes -= size;
         stats_.num_deallocs++;
+        lfs::diagnostics::VramProfiler::instance().setPinnedHostUsed(stats_.allocated_bytes);
 
         // Create block with stream tracking and record event
         Block block{ptr, size, stream};

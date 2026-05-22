@@ -219,10 +219,14 @@ body {
 }
 
 .vram-hud-summary-label,
-.vram-hud-summary-value,
 .vram-hud-device,
 .vram-hud-empty {
-    font-size: 11dp;
+    font-size: 12dp;
+}
+
+.vram-hud-summary-value {
+    font-size: 12dp;
+    font-weight: bold;
 }
 
 .vram-hud-device {
@@ -259,7 +263,7 @@ body {
 
 .vram-hud-row-name,
 .vram-hud-col-source {
-    width: 250dp;
+    width: 240dp;
 }
 
 .vram-hud-row-name {
@@ -282,8 +286,108 @@ body {
 }
 
 .vram-hud-col-time {
-    width: 64dp;
+    width: 68dp;
 }
+
+.vram-hud-col-gpu {
+    width: 68dp;
+}
+
+.vram-hud-header-meta {
+    display: flex;
+    gap: 8dp;
+    align-items: baseline;
+}
+
+.vram-hud-throughput {
+    font-size: 11dp;
+}
+
+.vram-hud-throughput.hidden {
+    display: none;
+}
+
+.vram-hud-counters {
+    display: flex;
+    flex-direction: column;
+    gap: 2dp;
+    padding-bottom: 6dp;
+}
+
+.vram-hud-counters.hidden {
+    display: none;
+}
+
+.vram-hud-counter-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12dp;
+}
+
+.vram-hud-counter-label {
+    font-size: 12dp;
+}
+
+.vram-hud-counter-value {
+    font-size: 12dp;
+    font-weight: bold;
+}
+
+.vram-hud-topn {
+    display: flex;
+    flex-direction: column;
+    gap: 2dp;
+    padding-bottom: 6dp;
+}
+
+.vram-hud-topn.hidden {
+    display: none;
+}
+
+.vram-hud-topn-header {
+    font-size: 11dp;
+    font-weight: bold;
+    padding: 2dp 3dp;
+}
+
+.vram-hud-topn-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 1dp;
+}
+
+.vram-hud-topn-row {
+    display: flex;
+    gap: 8dp;
+    align-items: baseline;
+    padding: 1dp 3dp;
+}
+
+.vram-hud-topn-name {
+    flex: 1;
+    font-size: 11dp;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.vram-hud-topn-bytes {
+    font-size: 11dp;
+    font-weight: bold;
+    width: 90dp;
+    text-align: right;
+}
+
+.vram-hud-topn-pct {
+    font-size: 11dp;
+}
+
+.vram-hud-topn-pct {
+    width: 52dp;
+    text-align: right;
+}
+
 
 .vram-hud-node-label {
     min-width: 0;
@@ -307,6 +411,9 @@ body {
     display: block;
     font-style: normal;
     font-size: 9dp;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .vram-hud-expand-toggle {

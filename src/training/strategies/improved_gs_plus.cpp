@@ -8,6 +8,7 @@
 #include "core/igs_failure_diagnostics.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "edge_rasterizer.hpp"
 #include "gsplat_rasterizer.hpp"
 #include "strategy_utils.hpp"
@@ -913,6 +914,8 @@ namespace lfs::training {
         }
 
         LOG_DEBUG("remove(): soft-deleted {} Gaussians (marked as free, rotation & gradients zeroed)", num_pruned);
+        LFS_COUNTER_ADD("strategy.igs_plus.pruned", num_pruned);
+        LFS_GAUGE("model.gaussians.live", _splat_data->size());
     }
 
     std::pair<lfs::core::Tensor, int64_t> ImprovedGSPlus::fill_free_slots_with_data(

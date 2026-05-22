@@ -5,6 +5,7 @@
 #include "mrnf.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "edge_rasterizer.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "kernels/densification_kernels.hpp"
@@ -693,6 +694,7 @@ namespace lfs::training {
 
             LOG_DEBUG("MRNF: soft-pruned {} splats at iter {} (active: {}, total slots: {})",
                       pruned_count, iter, active_count(), _splat_data->size());
+            LFS_COUNTER_ADD("strategy.mrnf.pruned", pruned_count);
         }
 
         // Replacement should stay active even after growth stop.
@@ -934,6 +936,10 @@ namespace lfs::training {
 
         LOG_DEBUG("MRNF: split {} splats at iter {} (reused: {}, appended: {}, active: {}, total slots: {})",
                   K, iter, append_start, n_append, active_count(), _splat_data->size());
+        LFS_COUNTER_ADD("strategy.mrnf.split", K);
+        LFS_COUNTER_ADD("strategy.mrnf.appended", n_append);
+        LFS_GAUGE("model.gaussians.live", active_count());
+        LFS_GAUGE("model.gaussians.capacity", static_cast<double>(_splat_data->size()));
     }
 
     void MRNF::compact_splats(const lfs::core::Tensor& keep_mask) {

@@ -288,6 +288,7 @@ set(TEST_FILES
     test_rotated_sh_correctness.cpp
     test_tensor_stream.cpp
     test_tensor_memory_planner.cpp
+    test_vram_profiler_metrics.cpp
 )
 if(ENABLE_VULKAN_VIEWER)
     list(APPEND TEST_FILES test_vksplat_input_packer.cpp)

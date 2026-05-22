@@ -68,6 +68,8 @@ namespace lfs::vis::gui {
         void attachListeners();
         void apply();
         void applySummary(std::size_t process_used, std::size_t process_total);
+        void applyCounters();
+        void applyTopN();
         void applyTree(std::size_t process_used);
         void primeDefaultCollapse();
         void toggleNode(const std::string& path);
@@ -96,7 +98,11 @@ namespace lfs::vis::gui {
         Rml::Element* filter_input_ = nullptr;
         Rml::Element* filter_clear_ = nullptr;
         Rml::Element* iteration_label_ = nullptr;
+        Rml::Element* throughput_label_ = nullptr;
         Rml::Element* summary_root_ = nullptr;
+        Rml::Element* counters_root_ = nullptr;
+        Rml::Element* topn_root_ = nullptr;
+        Rml::Element* topn_rows_root_ = nullptr;
         Rml::Element* rows_root_ = nullptr;
         Rml::Element* empty_row_ = nullptr;
 
@@ -110,11 +116,13 @@ namespace lfs::vis::gui {
             Rml::Element* peak = nullptr;
             Rml::Element* delta = nullptr;
             Rml::Element* time = nullptr;
+            Rml::Element* gpu = nullptr;
             std::string cached_name;
             std::string cached_live;
             std::string cached_peak;
             std::string cached_delta;
             std::string cached_time;
+            std::string cached_gpu;
             std::string cached_badges;
             std::string cached_classes;
             std::string cached_padding;
@@ -122,13 +130,32 @@ namespace lfs::vis::gui {
             bool cached_has_children = false;
         };
 
+        struct CounterRowElements {
+            Rml::Element* row = nullptr;
+            Rml::Element* value = nullptr;
+            std::string cached_value;
+        };
+
+        struct TopRowElements {
+            Rml::Element* row = nullptr;
+            Rml::Element* name = nullptr;
+            Rml::Element* bytes = nullptr;
+            Rml::Element* pct = nullptr;
+            std::string cached_name;
+            std::string cached_bytes;
+            std::string cached_pct;
+        };
+
         std::unordered_map<std::string, RowElements> rows_by_path_;
+        std::unordered_map<std::string, CounterRowElements> counter_rows_by_key_;
+        std::vector<TopRowElements> topn_rows_;
         std::unordered_set<std::string> collapsed_paths_;
         std::unordered_set<std::string> visible_paths_;
         std::unordered_set<std::string> snapshot_paths_;
         std::unordered_set<std::string> filter_ancestors_;
         std::string filter_text_;
         std::string filter_text_lower_;
+        std::string cached_throughput_text_;
 
         struct SummaryEntry {
             Rml::Element* value = nullptr;

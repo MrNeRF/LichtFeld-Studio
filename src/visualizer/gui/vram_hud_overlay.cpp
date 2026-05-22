@@ -37,14 +37,17 @@ namespace lfs::vis::gui {
 
         constexpr SummaryRowSpec kSummaryRows[] = {
             {"process", "Process"},
-            {"cuda_context", "CUDA context"},
+            {"cuda_context", "GPU used (all procs)"},
             {"cuda_pool_used", "CUDA pool used"},
             {"cuda_pool_reserved", "CUDA pool reserved"},
+            {"cuda_pool_fragmentation", "Pool fragmentation"},
+            {"pinned_host", "Pinned host"},
             {"sampled", "Sampled subtotal"},
             {"allocator_live", "Allocator live"},
             {"process_gap", "Process gap"},
             {"allocator_peak", "Allocator peak"},
             {"events", "Events"},
+            {"iter_events", "Events (iter)"},
         };
 
         void escapeRmlInto(std::string& out, std::string_view text) {
@@ -213,8 +216,11 @@ namespace lfs::vis::gui {
         document_ = document;
         listeners_attached_ = false;
         rows_by_path_.clear();
+        counter_rows_by_key_.clear();
+        topn_rows_.clear();
         summary_by_key_.clear();
         cached_iteration_text_.clear();
+        cached_throughput_text_.clear();
         cached_device_text_.clear();
         last_sequence_ = 0;
         last_visible_ = false;
@@ -223,7 +229,11 @@ namespace lfs::vis::gui {
         resize_handle_ = nullptr;
         filter_input_ = nullptr;
         iteration_label_ = nullptr;
+        throughput_label_ = nullptr;
         summary_root_ = nullptr;
+        counters_root_ = nullptr;
+        topn_root_ = nullptr;
+        topn_rows_root_ = nullptr;
         rows_root_ = nullptr;
         device_label_ = nullptr;
         empty_row_ = nullptr;
@@ -237,8 +247,17 @@ namespace lfs::vis::gui {
         filter_input_ = document_->GetElementById("vram-hud-filter");
         filter_clear_ = document_->GetElementById("vram-hud-filter-clear");
         iteration_label_ = document_->GetElementById("vram-hud-iteration");
+        throughput_label_ = document_->GetElementById("vram-hud-throughput");
         summary_root_ = document_->GetElementById("vram-hud-summary");
+        counters_root_ = document_->GetElementById("vram-hud-counters");
+        topn_root_ = document_->GetElementById("vram-hud-topn");
+        topn_rows_root_ = document_->GetElementById("vram-hud-topn-rows");
         rows_root_ = document_->GetElementById("vram-hud-rows");
+
+        if (counters_root_)
+            counters_root_->SetInnerRML("");
+        if (topn_rows_root_)
+            topn_rows_root_->SetInnerRML("");
 
         if (summary_root_) {
             summary_root_->SetInnerRML("");
@@ -285,11 +304,17 @@ namespace lfs::vis::gui {
         resize_handle_ = nullptr;
         filter_input_ = nullptr;
         iteration_label_ = nullptr;
+        throughput_label_ = nullptr;
         summary_root_ = nullptr;
+        counters_root_ = nullptr;
+        topn_root_ = nullptr;
+        topn_rows_root_ = nullptr;
         rows_root_ = nullptr;
         device_label_ = nullptr;
         empty_row_ = nullptr;
         rows_by_path_.clear();
+        counter_rows_by_key_.clear();
+        topn_rows_.clear();
         summary_by_key_.clear();
         listeners_attached_ = false;
         dragging_header_ = false;
@@ -397,7 +422,21 @@ namespace lfs::vis::gui {
             setText(iteration_label_, cached_iteration_text_, std::format("iter {}", s.iteration));
         }
 
+        if (throughput_label_) {
+            std::string text;
+            if (s.iter_per_second > 0.0) {
+                text = std::format("{:.1f} iter/s", s.iter_per_second);
+                if (s.iter_ms_p95 > 0.0)
+                    text += std::format(" · p95 {:.1f} ms", s.iter_ms_p95);
+            }
+            throughput_label_->SetClass("hidden", text.empty());
+            if (!text.empty())
+                setText(throughput_label_, cached_throughput_text_, std::move(text));
+        }
+
         applySummary(process_used, process_total);
+        applyCounters();
+        applyTopN();
 
         if (!default_collapse_applied_ && !s.tree.empty()) {
             primeDefaultCollapse();
@@ -428,6 +467,9 @@ namespace lfs::vis::gui {
               formatBytes(s.process.cuda_pool_valid ? s.process.cuda_pool_used : 0));
         write("cuda_pool_reserved",
               formatBytes(s.process.cuda_pool_valid ? s.process.cuda_pool_reserved : 0));
+        write("cuda_pool_fragmentation",
+              formatBytes(s.process.cuda_pool_valid ? s.process.cuda_pool_fragmentation : 0));
+        write("pinned_host", formatBytes(s.process.pinned_host_used));
         write("sampled", formatBytes(s.sampled_live_bytes),
               formatPercent(s.sampled_live_bytes, process_used));
         write("allocator_live", formatBytes(s.accounted_live_bytes),
@@ -435,12 +477,123 @@ namespace lfs::vis::gui {
         write("process_gap", formatBytes(gap), formatPercent(gap, process_used));
         write("allocator_peak", formatBytes(s.accounted_peak_bytes));
         write("events", std::format("{} alloc / {} free", s.allocation_events, s.free_events));
+        write("iter_events",
+              std::format("{} alloc / {} free", s.iter_allocation_events, s.iter_free_events));
 
         if (device_label_) {
             const std::string device_text = s.process.device_name.empty()
                                                 ? std::string{"No device"}
                                                 : s.process.device_name;
             setText(device_label_, cached_device_text_, std::string(device_text));
+        }
+    }
+
+    void VramHudOverlay::applyCounters() {
+        if (!counters_root_)
+            return;
+
+        struct Entry {
+            std::string label;
+            std::string value;
+        };
+        std::vector<Entry> entries;
+        entries.reserve(state_.snapshot.iter_counters.size() + state_.snapshot.gauges.size());
+
+        for (const auto& c : state_.snapshot.iter_counters) {
+            if (c.value == 0)
+                continue;
+            entries.push_back({c.key + " (iter)", std::to_string(c.value)});
+        }
+        for (const auto& g : state_.snapshot.gauges) {
+            const double v = g.value;
+            std::string vs;
+            if (std::abs(v) >= 1000.0 || v == std::floor(v)) {
+                vs = std::format("{:.0f}", v);
+            } else {
+                vs = std::format("{:.3f}", v);
+            }
+            entries.push_back({g.key, std::move(vs)});
+        }
+
+        counters_root_->SetClass("hidden", entries.empty());
+        if (entries.empty()) {
+            for (auto& [_, row] : counter_rows_by_key_)
+                row.row->SetClass("hidden", true);
+            return;
+        }
+
+        std::unordered_set<std::string> seen;
+        seen.reserve(entries.size());
+        Rml::Element* cursor = counters_root_->GetFirstChild();
+        for (const auto& e : entries) {
+            seen.insert(e.label);
+            auto [it, inserted] = counter_rows_by_key_.try_emplace(e.label);
+            auto& row = it->second;
+            if (inserted) {
+                auto row_ptr = document_->CreateElement("div");
+                row_ptr->SetAttribute("class", "vram-hud-counter-row");
+                Rml::Element* anchor = cursor;
+                row.row = anchor ? counters_root_->InsertBefore(std::move(row_ptr), anchor)
+                                 : counters_root_->AppendChild(std::move(row_ptr));
+                auto* label = createSpan(document_, row.row, "vram-hud-counter-label");
+                label->SetInnerRML(Rml::String(e.label));
+                row.value = createSpan(document_, row.row, "vram-hud-counter-value");
+            } else if (row.row != cursor) {
+                auto owned = counters_root_->RemoveChild(row.row);
+                row.row = cursor ? counters_root_->InsertBefore(std::move(owned), cursor)
+                                 : counters_root_->AppendChild(std::move(owned));
+            }
+            cursor = row.row->GetNextSibling();
+            setText(row.value, row.cached_value, std::string(e.value));
+            row.row->SetClass("hidden", false);
+        }
+
+        for (auto it = counter_rows_by_key_.begin(); it != counter_rows_by_key_.end();) {
+            if (!seen.contains(it->first)) {
+                counters_root_->RemoveChild(it->second.row);
+                it = counter_rows_by_key_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    void VramHudOverlay::applyTopN() {
+        if (!topn_root_ || !topn_rows_root_)
+            return;
+
+        const auto& top = state_.snapshot.top_live;
+        topn_root_->SetClass("hidden", top.empty());
+
+        while (topn_rows_.size() > top.size()) {
+            topn_rows_root_->RemoveChild(topn_rows_.back().row);
+            topn_rows_.pop_back();
+        }
+        while (topn_rows_.size() < top.size()) {
+            auto row_ptr = document_->CreateElement("div");
+            row_ptr->SetAttribute("class", "vram-hud-topn-row");
+            auto* row = topn_rows_root_->AppendChild(std::move(row_ptr));
+            TopRowElements t{};
+            t.row = row;
+            t.name = createSpan(document_, row, "vram-hud-topn-name");
+            t.bytes = createSpan(document_, row, "vram-hud-topn-bytes");
+            t.pct = createSpan(document_, row, "vram-hud-topn-pct");
+            topn_rows_.push_back(std::move(t));
+        }
+
+        std::size_t denom = bestProcessUsed(state_.snapshot);
+        if (denom == 0) {
+            for (const auto& row : top)
+                denom += row.live_bytes;
+        }
+        for (std::size_t i = 0; i < top.size(); ++i) {
+            auto& row = topn_rows_[i];
+            std::string name = top[i].label.empty()
+                                   ? top[i].scope
+                                   : top[i].scope + " · " + top[i].label;
+            setText(row.name, row.cached_name, std::move(name));
+            setText(row.bytes, row.cached_bytes, formatBytes(top[i].live_bytes));
+            setText(row.pct, row.cached_pct, formatPercent(top[i].live_bytes, denom));
         }
     }
 
@@ -555,6 +708,7 @@ namespace lfs::vis::gui {
                 row.peak = createSpan(document_, row.row, "vram-hud-col-peak");
                 row.delta = createSpan(document_, row.row, "vram-hud-col-delta");
                 row.time = createSpan(document_, row.row, "vram-hud-col-time");
+                row.gpu = createSpan(document_, row.row, "vram-hud-col-gpu");
             } else if (row.row != cursor) {
                 auto owned = rows_root_->RemoveChild(row.row);
                 Rml::Element* anchor = cursor ? cursor : empty_row_;
@@ -656,6 +810,19 @@ namespace lfs::vis::gui {
                 time_rml = "--";
             }
             setRawRml(row.time, row.cached_time, std::move(time_rml));
+
+            std::string gpu_rml;
+            if (node.gpu_call_count > 0) {
+                gpu_rml = formatTime(node.gpu_last_ms > 0.0 ? node.gpu_last_ms : node.gpu_total_ms);
+                if (node.gpu_call_count > 1) {
+                    gpu_rml += "<em>x";
+                    gpu_rml += std::to_string(node.gpu_call_count);
+                    gpu_rml += "</em>";
+                }
+            } else {
+                gpu_rml = "--";
+            }
+            setRawRml(row.gpu, row.cached_gpu, std::move(gpu_rml));
 
             row.row->SetClass("hidden", false);
         }

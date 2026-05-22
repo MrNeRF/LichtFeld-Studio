@@ -251,19 +251,30 @@
         <div class="vram-hud-card">
             <div id="vram-hud-header" class="vram-hud-header">
                 <span class="vram-hud-title">VRAM</span>
-                <span id="vram-hud-iteration" class="vram-hud-iteration">iter 0</span>
+                <span class="vram-hud-header-meta">
+                    <span id="vram-hud-throughput" class="vram-hud-throughput hidden"></span>
+                    <span id="vram-hud-iteration" class="vram-hud-iteration">iter 0</span>
+                </span>
             </div>
             <div class="vram-hud-filter-row">
                 <input id="vram-hud-filter" type="text" placeholder="Filter..." />
                 <button id="vram-hud-filter-clear" class="vram-hud-filter-clear hidden">X</button>
             </div>
             <div id="vram-hud-summary" class="vram-hud-summary"></div>
+            <div id="vram-hud-counters" class="vram-hud-counters hidden"></div>
+            <div id="vram-hud-topn" class="vram-hud-topn hidden">
+                <div class="vram-hud-topn-header">
+                    <span>Top live allocations</span>
+                </div>
+                <div id="vram-hud-topn-rows" class="vram-hud-topn-rows"></div>
+            </div>
             <div class="vram-hud-tree-row vram-hud-row-header">
                 <span class="vram-hud-col-source">Source</span>
                 <span class="vram-hud-col-live">Live</span>
                 <span class="vram-hud-col-peak">Peak</span>
                 <span class="vram-hud-col-delta">Delta</span>
                 <span class="vram-hud-col-time">Time</span>
+                <span class="vram-hud-col-gpu">GPU</span>
             </div>
             <div id="vram-hud-rows" class="vram-hud-rows"></div>
             <div id="vram-hud-resize" class="vram-hud-resize"></div>

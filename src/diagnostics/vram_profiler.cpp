@@ -6,10 +6,13 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cuda_runtime.h>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <cuda_runtime.h>
+#include <deque>
 #include <iterator>
+#include <list>
 #include <mutex>
 #include <unordered_map>
 #include <utility>
@@ -51,6 +54,50 @@ namespace lfs::diagnostics {
             VramAllocationMethod method = VramAllocationMethod::Unknown;
         };
 
+        constexpr std::size_t kWallRingCapacity = 256;
+        constexpr std::size_t kIterRingCapacity = 60;
+        constexpr std::size_t kTopNLive = 10;
+        constexpr std::size_t kHistRingCapacity = 256;
+        constexpr std::size_t kGpuEventPoolSize = 64;
+        constexpr std::size_t kAccountedHistoryLength = 64;
+
+        template <std::size_t Capacity>
+        struct RingBuffer {
+            std::array<double, Capacity> data{};
+            std::size_t count = 0;
+            std::size_t next = 0;
+
+            void push(double v) {
+                data[next] = v;
+                next = (next + 1) % Capacity;
+                if (count < Capacity)
+                    ++count;
+            }
+
+            void clear() {
+                count = 0;
+                next = 0;
+            }
+
+            [[nodiscard]] bool empty() const { return count == 0; }
+            [[nodiscard]] std::size_t size() const { return count; }
+        };
+
+        template <std::size_t Capacity>
+        [[nodiscard]] double ring_percentile(const RingBuffer<Capacity>& ring, double q) {
+            if (ring.empty())
+                return 0.0;
+            std::array<double, Capacity> scratch{};
+            for (std::size_t i = 0; i < ring.count; ++i)
+                scratch[i] = ring.data[i];
+            std::sort(scratch.begin(), scratch.begin() + ring.count);
+            const double rank = q * static_cast<double>(ring.count - 1);
+            const auto lo = static_cast<std::size_t>(std::floor(rank));
+            const auto hi = static_cast<std::size_t>(std::ceil(rank));
+            const double frac = rank - static_cast<double>(lo);
+            return scratch[lo] * (1.0 - frac) + scratch[hi] * frac;
+        }
+
         struct ScopeNodeStats {
             std::string path;
             std::string name;
@@ -62,11 +109,32 @@ namespace lfs::diagnostics {
             double total_ms = 0.0;
             double last_ms = 0.0;
             double max_ms = 0.0;
+            RingBuffer<kWallRingCapacity> wall_ring;
+            std::uint64_t gpu_call_count = 0;
+            double gpu_total_ms = 0.0;
+            double gpu_last_ms = 0.0;
+            double gpu_max_ms = 0.0;
             std::uint64_t vram_delta_count = 0;
             std::int64_t last_vram_delta_bytes = 0;
             std::int64_t net_vram_delta_bytes = 0;
             std::int64_t max_vram_increase_bytes = 0;
             std::int64_t max_vram_decrease_bytes = 0;
+        };
+
+        struct PendingGpuEvent {
+            std::string scope;
+            cudaEvent_t start = nullptr;
+            cudaEvent_t stop = nullptr;
+            bool start_recorded = false;
+            bool stop_recorded = false;
+        };
+
+        struct HistogramSeries {
+            RingBuffer<kHistRingCapacity> ring;
+            double min_value = 0.0;
+            double max_value = 0.0;
+            double sum = 0.0;
+            std::uint64_t count = 0;
         };
 
         struct TimerVramSample {
@@ -238,10 +306,31 @@ namespace lfs::diagnostics {
         std::unordered_map<void*, AllocationRecord> allocations;
         std::unordered_map<std::string, ScopeNodeStats> scope_nodes;
         VramProcessSnapshot process;
+        std::size_t pinned_host_used = 0;
         std::uint64_t allocation_events = 0;
         std::uint64_t free_events = 0;
+        std::uint64_t iter_allocation_events_start = 0;
+        std::uint64_t iter_free_events_start = 0;
         std::size_t accounted_live_bytes = 0;
         std::size_t accounted_peak_bytes = 0;
+
+        std::unordered_map<std::string, double> gauges;
+        std::uint64_t gauge_generation = 0;
+        std::unordered_map<std::string, std::uint64_t> iter_counters;
+        std::unordered_map<std::string, std::uint64_t> total_counters;
+        std::unordered_map<std::string, HistogramSeries> histograms;
+
+        std::array<PendingGpuEvent, kGpuEventPoolSize> gpu_event_pool{};
+        std::array<bool, kGpuEventPoolSize> gpu_event_in_use{};
+        std::deque<std::int32_t> gpu_event_pending;
+
+        RingBuffer<kIterRingCapacity> iter_ms_ring;
+        double iter_ms_last = 0.0;
+        std::chrono::steady_clock::time_point last_iteration_tp{};
+        std::chrono::steady_clock::time_point iter_window_origin{};
+        std::uint64_t iter_window_count = 0;
+        double iter_per_second = 0.0;
+        std::deque<std::size_t> accounted_history;
     };
 
     VramProfiler& VramProfiler::instance() {
@@ -267,6 +356,19 @@ namespace lfs::diagnostics {
             impl_->accounted_peak_bytes = 0;
             impl_->allocation_events = 0;
             impl_->free_events = 0;
+            impl_->iter_allocation_events_start = 0;
+            impl_->iter_free_events_start = 0;
+            impl_->gauges.clear();
+            impl_->iter_counters.clear();
+            impl_->total_counters.clear();
+            impl_->histograms.clear();
+            impl_->iter_ms_ring.clear();
+            impl_->iter_ms_last = 0.0;
+            impl_->iter_per_second = 0.0;
+            impl_->last_iteration_tp = std::chrono::steady_clock::time_point{};
+            impl_->iter_window_origin = std::chrono::steady_clock::time_point{};
+            impl_->iter_window_count = 0;
+            impl_->accounted_history.clear();
             impl_->sequence.fetch_add(1, std::memory_order_relaxed);
         }
     }
@@ -282,6 +384,35 @@ namespace lfs::diagnostics {
         }
 
         std::lock_guard lock(impl_->mutex);
+
+        const auto now = std::chrono::steady_clock::now();
+        if (impl_->last_iteration_tp != std::chrono::steady_clock::time_point{}) {
+            const double iter_ms =
+                std::chrono::duration<double, std::milli>(now - impl_->last_iteration_tp).count();
+            impl_->iter_ms_last = iter_ms;
+            impl_->iter_ms_ring.push(iter_ms);
+        } else {
+            impl_->iter_window_origin = now;
+            impl_->iter_window_count = 0;
+        }
+        impl_->last_iteration_tp = now;
+        ++impl_->iter_window_count;
+        const double window_seconds =
+            std::chrono::duration<double>(now - impl_->iter_window_origin).count();
+        if (window_seconds >= 1.0) {
+            impl_->iter_per_second = static_cast<double>(impl_->iter_window_count) / window_seconds;
+            impl_->iter_window_origin = now;
+            impl_->iter_window_count = 0;
+        }
+
+        impl_->accounted_history.push_back(impl_->accounted_live_bytes);
+        while (impl_->accounted_history.size() > kAccountedHistoryLength)
+            impl_->accounted_history.pop_front();
+
+        impl_->iter_counters.clear();
+        impl_->iter_allocation_events_start = impl_->allocation_events;
+        impl_->iter_free_events_start = impl_->free_events;
+
         const auto is_iteration_scope = [](const std::string& path) {
             return path == "iter" || path.rfind("iter/", 0) == 0 ||
                    path == "train" || path.rfind("train/", 0) == 0 ||
@@ -308,6 +439,11 @@ namespace lfs::diagnostics {
             node.total_ms = 0.0;
             node.last_ms = 0.0;
             node.max_ms = 0.0;
+            node.wall_ring.clear();
+            node.gpu_call_count = 0;
+            node.gpu_total_ms = 0.0;
+            node.gpu_last_ms = 0.0;
+            node.gpu_max_ms = 0.0;
             node.vram_delta_count = 0;
             node.last_vram_delta_bytes = 0;
             node.net_vram_delta_bytes = 0;
@@ -405,6 +541,7 @@ namespace lfs::diagnostics {
             node.total_ms += std::max(elapsed_ms, 0.0);
             node.last_ms = std::max(elapsed_ms, 0.0);
             node.max_ms = std::max(node.max_ms, node.last_ms);
+            node.wall_ring.push(std::max(elapsed_ms, 0.0));
             if (end_valid) {
                 const auto delta = static_cast<std::int64_t>(end_used_bytes) -
                                    static_cast<std::int64_t>(timer_sample.start_used_bytes);
@@ -625,6 +762,160 @@ namespace lfs::diagnostics {
         node.total_ms += elapsed_ms;
         node.last_ms = elapsed_ms;
         node.max_ms = std::max(node.max_ms, elapsed_ms);
+        node.wall_ring.push(std::max(elapsed_ms, 0.0));
+        impl_->sequence.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    void VramProfiler::recordGpuTimerSample(std::string_view scope, const double elapsed_ms) {
+        if (!enabled() || scope.empty() || !std::isfinite(elapsed_ms) || elapsed_ms < 0.0) {
+            return;
+        }
+        std::lock_guard lock(impl_->mutex);
+        const auto parts = split_scope_path(scope);
+        if (parts.empty()) {
+            return;
+        }
+        const auto path = join_parts(parts, parts.size());
+        upsert_scope_node(impl_->scope_nodes, path, false, true, false);
+        auto& node = impl_->scope_nodes[path];
+        node.timer_scope = true;
+        node.gpu_call_count += 1;
+        node.gpu_total_ms += elapsed_ms;
+        node.gpu_last_ms = elapsed_ms;
+        node.gpu_max_ms = std::max(node.gpu_max_ms, elapsed_ms);
+        impl_->sequence.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    std::int32_t VramProfiler::acquireGpuEventPair(std::string_view scope, void* stream) {
+        if (!enabled()) {
+            return -1;
+        }
+        std::lock_guard lock(impl_->mutex);
+        for (std::size_t i = 0; i < kGpuEventPoolSize; ++i) {
+            if (impl_->gpu_event_in_use[i]) {
+                continue;
+            }
+            auto& slot = impl_->gpu_event_pool[i];
+            if (!slot.start) {
+                if (cudaEventCreateWithFlags(&slot.start, cudaEventDefault) != cudaSuccess) {
+                    return -1;
+                }
+            }
+            if (!slot.stop) {
+                if (cudaEventCreateWithFlags(&slot.stop, cudaEventDefault) != cudaSuccess) {
+                    return -1;
+                }
+            }
+            slot.scope = std::string(scope);
+            slot.start_recorded = false;
+            slot.stop_recorded = false;
+            if (cudaEventRecord(slot.start, static_cast<cudaStream_t>(stream)) != cudaSuccess) {
+                return -1;
+            }
+            slot.start_recorded = true;
+            impl_->gpu_event_in_use[i] = true;
+            return static_cast<std::int32_t>(i);
+        }
+        return -1;
+    }
+
+    void VramProfiler::releaseGpuEventPair(const std::int32_t pair, void* stream) {
+        if (pair < 0 || static_cast<std::size_t>(pair) >= kGpuEventPoolSize) {
+            return;
+        }
+        std::lock_guard lock(impl_->mutex);
+        auto& slot = impl_->gpu_event_pool[static_cast<std::size_t>(pair)];
+        if (!impl_->gpu_event_in_use[static_cast<std::size_t>(pair)]) {
+            return;
+        }
+        if (slot.start_recorded && slot.stop) {
+            if (cudaEventRecord(slot.stop, static_cast<cudaStream_t>(stream)) == cudaSuccess) {
+                slot.stop_recorded = true;
+                impl_->gpu_event_pending.push_back(pair);
+                return;
+            }
+        }
+        impl_->gpu_event_in_use[static_cast<std::size_t>(pair)] = false;
+    }
+
+    void VramProfiler::drainGpuEvents() {
+        if (!enabled()) {
+            return;
+        }
+        std::lock_guard lock(impl_->mutex);
+        for (auto it = impl_->gpu_event_pending.begin(); it != impl_->gpu_event_pending.end();) {
+            const auto idx = static_cast<std::size_t>(*it);
+            auto& slot = impl_->gpu_event_pool[idx];
+            const auto status = cudaEventQuery(slot.stop);
+            if (status == cudaErrorNotReady) {
+                ++it;
+                continue;
+            }
+            float elapsed_ms = 0.0f;
+            if (status == cudaSuccess &&
+                cudaEventElapsedTime(&elapsed_ms, slot.start, slot.stop) == cudaSuccess) {
+                const auto parts = split_scope_path(slot.scope);
+                if (!parts.empty()) {
+                    const auto path = join_parts(parts, parts.size());
+                    upsert_scope_node(impl_->scope_nodes, path, false, true, false);
+                    auto& node = impl_->scope_nodes[path];
+                    node.timer_scope = true;
+                    node.gpu_call_count += 1;
+                    node.gpu_total_ms += static_cast<double>(elapsed_ms);
+                    node.gpu_last_ms = static_cast<double>(elapsed_ms);
+                    node.gpu_max_ms = std::max(node.gpu_max_ms, node.gpu_last_ms);
+                    impl_->sequence.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+            impl_->gpu_event_in_use[idx] = false;
+            it = impl_->gpu_event_pending.erase(it);
+        }
+    }
+
+    void VramProfiler::setGauge(std::string_view key, const double value) {
+        if (!enabled() || key.empty()) {
+            return;
+        }
+        std::lock_guard lock(impl_->mutex);
+        impl_->gauges[std::string(key)] = value;
+        ++impl_->gauge_generation;
+        impl_->sequence.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    void VramProfiler::addCounter(std::string_view key, const std::uint64_t delta, const bool per_iteration) {
+        if (!enabled() || key.empty() || delta == 0) {
+            return;
+        }
+        std::lock_guard lock(impl_->mutex);
+        if (per_iteration) {
+            impl_->iter_counters[std::string(key)] += delta;
+        }
+        impl_->total_counters[std::string(key)] += delta;
+        impl_->sequence.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    void VramProfiler::recordHistogram(std::string_view key, const double value) {
+        if (!enabled() || key.empty() || !std::isfinite(value)) {
+            return;
+        }
+        std::lock_guard lock(impl_->mutex);
+        auto& hist = impl_->histograms[std::string(key)];
+        if (hist.count == 0) {
+            hist.min_value = value;
+            hist.max_value = value;
+        } else {
+            hist.min_value = std::min(hist.min_value, value);
+            hist.max_value = std::max(hist.max_value, value);
+        }
+        hist.sum += value;
+        ++hist.count;
+        hist.ring.push(value);
+        impl_->sequence.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    void VramProfiler::setPinnedHostUsed(const std::size_t bytes) {
+        std::lock_guard lock(impl_->mutex);
+        impl_->pinned_host_used = bytes;
         impl_->sequence.fetch_add(1, std::memory_order_relaxed);
     }
 
@@ -690,9 +981,19 @@ namespace lfs::diagnostics {
         }
 #endif
 
-        std::lock_guard lock(impl_->mutex);
-        impl_->process = std::move(process);
-        impl_->sequence.fetch_add(1, std::memory_order_relaxed);
+        {
+            std::lock_guard lock(impl_->mutex);
+            if (process.cuda_pool_valid) {
+                process.cuda_pool_fragmentation =
+                    process.cuda_pool_reserved > process.cuda_pool_used
+                        ? process.cuda_pool_reserved - process.cuda_pool_used
+                        : 0;
+            }
+            process.pinned_host_used = impl_->pinned_host_used;
+            impl_->process = std::move(process);
+            impl_->sequence.fetch_add(1, std::memory_order_relaxed);
+        }
+        drainGpuEvents();
     }
 
     void VramProfiler::updateProcessMemory(const std::size_t process_used,
@@ -725,8 +1026,20 @@ namespace lfs::diagnostics {
         out.sequence = impl_->sequence.load(std::memory_order_relaxed);
         out.allocation_events = impl_->allocation_events;
         out.free_events = impl_->free_events;
+        out.iter_allocation_events =
+            impl_->allocation_events > impl_->iter_allocation_events_start
+                ? impl_->allocation_events - impl_->iter_allocation_events_start
+                : 0;
+        out.iter_free_events = impl_->free_events > impl_->iter_free_events_start
+                                   ? impl_->free_events - impl_->iter_free_events_start
+                                   : 0;
+        out.iter_per_second = impl_->iter_per_second;
+        out.iter_ms_p95 = ring_percentile(impl_->iter_ms_ring, 0.95);
+        out.iter_ms_last = impl_->iter_ms_last;
         out.accounted_live_bytes = impl_->accounted_live_bytes;
         out.accounted_peak_bytes = impl_->accounted_peak_bytes;
+        out.accounted_live_history.assign(impl_->accounted_history.begin(),
+                                          impl_->accounted_history.end());
         out.process = impl_->process;
         out.rows.reserve(impl_->metrics.size() + impl_->static_metrics.size());
         std::unordered_map<std::string, VramTreeNodeSnapshot> tree_nodes;
@@ -766,7 +1079,7 @@ namespace lfs::diagnostics {
         const auto add_scope_to_tree = [&](const ScopeNodeStats& stats) {
             const auto parts = split_scope_path(stats.path);
             for (std::size_t i = 1; i <= parts.size(); ++i) {
-                (void) ensure_tree_path(parts, i);
+                (void)ensure_tree_path(parts, i);
             }
 
             auto& node = ensure_tree_path(parts, parts.size());
@@ -777,6 +1090,15 @@ namespace lfs::diagnostics {
             node.total_ms += stats.total_ms;
             node.last_ms = std::max(node.last_ms, stats.last_ms);
             node.max_ms = std::max(node.max_ms, stats.max_ms);
+            if (!stats.wall_ring.empty()) {
+                node.wall_p50_ms = ring_percentile(stats.wall_ring, 0.50);
+                node.wall_p95_ms = ring_percentile(stats.wall_ring, 0.95);
+                node.wall_p99_ms = ring_percentile(stats.wall_ring, 0.99);
+            }
+            node.gpu_call_count += stats.gpu_call_count;
+            node.gpu_total_ms += stats.gpu_total_ms;
+            node.gpu_last_ms = std::max(node.gpu_last_ms, stats.gpu_last_ms);
+            node.gpu_max_ms = std::max(node.gpu_max_ms, stats.gpu_max_ms);
             node.vram_delta_count += stats.vram_delta_count;
             if (stats.vram_delta_count > 0) {
                 node.last_vram_delta_bytes = stats.last_vram_delta_bytes;
@@ -834,7 +1156,7 @@ namespace lfs::diagnostics {
                 if (!parent.empty()) {
                     tree_nodes[parent].has_children = true;
                 }
-                (void) child;
+                (void)child;
             }
             std::sort(list.begin(), list.end(), [&](const auto& lhs_path, const auto& rhs_path) {
                 const auto& lhs = tree_nodes[lhs_path];
@@ -892,7 +1214,7 @@ namespace lfs::diagnostics {
         };
         if (const auto root_it = children.find(std::string{}); root_it != children.end()) {
             for (const auto& child_path : root_it->second) {
-                (void) aggregate_tree(aggregate_tree, child_path);
+                (void)aggregate_tree(aggregate_tree, child_path);
             }
         }
         for (auto& [parent, list] : children) {
@@ -929,6 +1251,53 @@ namespace lfs::diagnostics {
             }
             return lhs.label < rhs.label;
         });
+
+        out.top_live.reserve(std::min<std::size_t>(kTopNLive, out.rows.size()));
+        for (const auto& row : out.rows) {
+            if (row.live_bytes == 0)
+                continue;
+            out.top_live.push_back({row.scope, row.label, row.live_bytes});
+            if (out.top_live.size() >= kTopNLive)
+                break;
+        }
+
+        out.gauges.reserve(impl_->gauges.size());
+        for (const auto& [k, v] : impl_->gauges) {
+            out.gauges.push_back({k, v, impl_->gauge_generation});
+        }
+        std::sort(out.gauges.begin(), out.gauges.end(),
+                  [](const auto& a, const auto& b) { return a.key < b.key; });
+
+        out.iter_counters.reserve(impl_->iter_counters.size());
+        for (const auto& [k, v] : impl_->iter_counters) {
+            out.iter_counters.push_back({k, v});
+        }
+        std::sort(out.iter_counters.begin(), out.iter_counters.end(),
+                  [](const auto& a, const auto& b) { return a.key < b.key; });
+
+        out.total_counters.reserve(impl_->total_counters.size());
+        for (const auto& [k, v] : impl_->total_counters) {
+            out.total_counters.push_back({k, v});
+        }
+        std::sort(out.total_counters.begin(), out.total_counters.end(),
+                  [](const auto& a, const auto& b) { return a.key < b.key; });
+
+        out.histograms.reserve(impl_->histograms.size());
+        for (const auto& [k, hist] : impl_->histograms) {
+            NamedHistogram h;
+            h.key = k;
+            h.count = hist.count;
+            h.sum = hist.sum;
+            h.min_value = hist.min_value;
+            h.max_value = hist.max_value;
+            h.p50 = ring_percentile(hist.ring, 0.50);
+            h.p95 = ring_percentile(hist.ring, 0.95);
+            h.p99 = ring_percentile(hist.ring, 0.99);
+            out.histograms.push_back(std::move(h));
+        }
+        std::sort(out.histograms.begin(), out.histograms.end(),
+                  [](const auto& a, const auto& b) { return a.key < b.key; });
+
         return out;
     }
 
@@ -1010,6 +1379,55 @@ namespace lfs::diagnostics {
             start_used_bytes_ = std::exchange(other.start_used_bytes_, 0);
         }
         return *this;
+    }
+
+    TraceScope::TraceScope(std::string_view scope)
+        : active_(VramProfiler::instance().enabled()) {
+        if (!active_)
+            return;
+        try {
+            VramProfiler::instance().pushTimerScope(scope);
+            start_ns_ = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch())
+                            .count();
+        } catch (...) {
+            active_ = false;
+        }
+    }
+
+    TraceScope::~TraceScope() {
+        if (!active_)
+            return;
+        try {
+            const auto end_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                    std::chrono::steady_clock::now().time_since_epoch())
+                                    .count();
+            const double elapsed_ms = static_cast<double>(end_ns - start_ns_) / 1.0e6;
+            VramProfiler::instance().popTimerScope(elapsed_ms);
+        } catch (...) {
+        }
+    }
+
+    GpuTimeScope::GpuTimeScope(std::string_view scope, void* stream)
+        : stream_(stream) {
+        if (!VramProfiler::instance().enabled())
+            return;
+        try {
+            event_pair_ = VramProfiler::instance().acquireGpuEventPair(scope, stream);
+            active_ = event_pair_ >= 0;
+        } catch (...) {
+            active_ = false;
+            event_pair_ = -1;
+        }
+    }
+
+    GpuTimeScope::~GpuTimeScope() {
+        if (!active_)
+            return;
+        try {
+            VramProfiler::instance().releaseGpuEventPair(event_pair_, stream_);
+        } catch (...) {
+        }
     }
 
 } // namespace lfs::diagnostics
