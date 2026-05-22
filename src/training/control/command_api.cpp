@@ -393,8 +393,8 @@ namespace lfs::training {
         size_t prev_capacity = 0;
         if (is_shN) {
             if (!model.shN_raw().is_valid() || model.shN_raw().numel() == 0 ||
-                model.active_sh_coeffs_rest() == 0) {
-                return std::unexpected("shN is not active (sh-degree 0)");
+                model.max_sh_coeffs_rest() == 0) {
+                return std::unexpected("shN storage is not allocated (max sh-degree 0)");
             }
             shN_canon = model.shN_canonical();
             prev_capacity = std::max<size_t>(model.means().capacity(), model.size());

@@ -51,6 +51,7 @@ namespace fast_lfs::rasterization::kernels {
         const float4* __restrict__ sh_f4,
         const uint primitive_idx,
         const uint active_sh_bases,
+        const uint sh_layout_slots,
         float3 (&c)[15]) {
 #pragma unroll
         for (int i = 0; i < 15; ++i)
@@ -59,7 +60,9 @@ namespace fast_lfs::rasterization::kernels {
         if (active_sh_bases <= 1)
             return;
 
-        const uint slots_per_primitive = shSlotsForBases(active_sh_bases);
+        const uint slots_per_primitive = sh_layout_slots;
+        if (slots_per_primitive == 0u)
+            return;
         const float4 a0 = sh_f4[shAt(primitive_idx, 0, slots_per_primitive)];
         const float4 a1 = sh_f4[shAt(primitive_idx, 1, slots_per_primitive)];
         const float4 a2 = sh_f4[shAt(primitive_idx, 2, slots_per_primitive)];
@@ -106,13 +109,14 @@ namespace fast_lfs::rasterization::kernels {
         const float3& position,
         const float3& cam_position,
         const uint primitive_idx,
-        const uint active_sh_bases) {
+        const uint active_sh_bases,
+        const uint sh_layout_slots) {
         // computation adapted from https://github.com/NVlabs/tiny-cuda-nn/blob/212104156403bd87616c1a4f73a1c5f2c2e172a9/include/tiny-cuda-nn/common_device.h#L340
         float3 result = 0.5f + 0.28209479177387814f * sh_coefficients_0[primitive_idx];
         if (active_sh_bases > 1) {
             auto [x, y, z] = safe_normalize(position - cam_position);
             float3 c[15];
-            load_shN_coeffs(sh_coefficients_rest, primitive_idx, active_sh_bases, c);
+            load_shN_coeffs(sh_coefficients_rest, primitive_idx, active_sh_bases, sh_layout_slots, c);
             result = result + (-0.48860251190291987f * y) * c[0] + (0.48860251190291987f * z) * c[1] + (-0.48860251190291987f * x) * c[2];
             if (active_sh_bases > 4) {
                 const float xx = x * x, yy = y * y, zz = z * z;
@@ -240,9 +244,10 @@ namespace fast_lfs::rasterization::kernels {
         const FusedAdamSettings& fused_adam,
         const uint primitive_idx,
         const float3 (&g)[15],
-        const uint n_slots_to_update) {
+        const uint n_slots_to_update,
+        const uint sh_layout_slots) {
         const FusedAdamParam& p = fused_adam.shN;
-        if (!p.enabled || n_slots_to_update == 0u)
+        if (!p.enabled || n_slots_to_update == 0u || sh_layout_slots == 0u)
             return;
 
 #pragma unroll
@@ -266,7 +271,7 @@ namespace fast_lfs::rasterization::kernels {
             case 11: gk = make_float4(g[14].z, 0.0f, 0.0f, 0.0f); break;
             default: gk = make_float4(0.0f, 0.0f, 0.0f, 0.0f); break;
             }
-            adam_step_f4(gk, p, shAt(primitive_idx, k, n_slots_to_update),
+            adam_step_f4(gk, p, shAt(primitive_idx, k, sh_layout_slots),
                          fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
         }
     }
@@ -278,7 +283,8 @@ namespace fast_lfs::rasterization::kernels {
         const FusedAdamSettings& fused_adam,
         const float3& position,
         const float3& cam_position,
-        const uint primitive_idx) {
+        const uint primitive_idx,
+        const uint sh_layout_slots) {
         // computation adapted from https://github.com/NVlabs/tiny-cuda-nn/blob/212104156403bd87616c1a4f73a1c5f2c2e172a9/include/tiny-cuda-nn/common_device.h#L340
         const float3 grad_color = grad_color_helper[primitive_idx];
         const float3 dL_dsh0 = 0.28209479177387814f * grad_color;
@@ -292,7 +298,7 @@ namespace fast_lfs::rasterization::kernels {
 
             // Load all coeffs we need via the float4-packed shuffle.
             float3 c[15];
-            load_shN_coeffs(sh_coefficients_rest, primitive_idx, ACTIVE_SH_BASES, c);
+            load_shN_coeffs(sh_coefficients_rest, primitive_idx, ACTIVE_SH_BASES, sh_layout_slots, c);
 
             // Compute grad-of-coeff (15 float3 grads); inactive lanes left at 0.
             float3 g[15];
@@ -337,7 +343,7 @@ namespace fast_lfs::rasterization::kernels {
             //   bases > 1 : 3 slots cover c0..c2 (slot 2's c3 lane has 0 grad -> harmless decay)
             constexpr uint n_slots = (ACTIVE_SH_BASES > 9) ? 12u : (ACTIVE_SH_BASES > 4) ? 6u
                                                                                          : 3u;
-            apply_shN_grads_packed(fused_adam, primitive_idx, g, n_slots);
+            apply_shN_grads_packed(fused_adam, primitive_idx, g, n_slots, sh_layout_slots);
 
             const float3 grad_direction = make_float3(
                 dot(grad_direction_x, grad_color),

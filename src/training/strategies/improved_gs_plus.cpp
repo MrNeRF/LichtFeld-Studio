@@ -405,9 +405,9 @@ namespace lfs::training {
             _pending_failure_snapshot.sampled_scale_exp_max = sampled_scale_summary.exp_max;
         }
 
-        const size_t active_rest = _splat_data->active_sh_coeffs_rest();
-        const auto active_rest_u32 = static_cast<uint32_t>(active_rest);
-        const bool use_shN = active_rest > 0 &&
+        const size_t layout_rest = _splat_data->max_sh_coeffs_rest();
+        const auto layout_rest_u32 = static_cast<uint32_t>(layout_rest);
+        const bool use_shN = layout_rest > 0 &&
                              _splat_data->shN().is_valid() &&
                              _splat_data->shN().numel() > 0;
 
@@ -421,7 +421,7 @@ namespace lfs::training {
         lfs::core::Tensor second_shN;
         if (use_shN) {
             second_shN = lfs::core::Tensor::empty(
-                {static_cast<size_t>(budget_for_alloc), active_rest, 3}, device);
+                {static_cast<size_t>(budget_for_alloc), layout_rest, 3}, device);
         }
         auto second_opacities = lfs::core::Tensor::empty({static_cast<size_t>(budget_for_alloc)}, device);
 
@@ -451,7 +451,8 @@ namespace lfs::training {
                 sampled_idxs.ptr<int64_t>(),
                 second_shN.ptr<float>(),
                 static_cast<size_t>(budget_for_alloc),
-                active_rest_u32);
+                layout_rest_u32,
+                layout_rest_u32);
         }
 
         // Reset optimizer states for long-axis-split indices
@@ -462,18 +463,18 @@ namespace lfs::training {
 
             // shN state is swizzled — zero out by primitive index via the dedicated kernel.
             if (param_type == ParamType::ShN) {
-                if (active_rest_u32 == 0 || !state->exp_avg.is_valid() || state->exp_avg.numel() == 0)
+                if (layout_rest_u32 == 0 || !state->exp_avg.is_valid() || state->exp_avg.numel() == 0)
                     return;
                 auto idx_i32 = sampled_idxs.dtype() == lfs::core::DataType::Int32
                                    ? sampled_idxs
                                    : sampled_idxs.to(lfs::core::DataType::Int32);
                 lfs::core::shN_swizzled_zero_at_indices(
-                    state->exp_avg.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), active_rest_u32);
+                    state->exp_avg.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest_u32);
                 lfs::core::shN_swizzled_zero_at_indices(
-                    state->exp_avg_sq.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), active_rest_u32);
+                    state->exp_avg_sq.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest_u32);
                 if (state->grad.is_valid() && state->grad.numel() > 0) {
                     lfs::core::shN_swizzled_zero_at_indices(
-                        state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), active_rest_u32);
+                        state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest_u32);
                 }
                 return;
             }
@@ -555,7 +556,7 @@ namespace lfs::training {
             if (use_shN) {
                 auto append_shN = second_shN.slice(0, num_filled, budget_for_alloc);
                 const size_t new_size = old_size + n_remaining;
-                const size_t needed_floats = lfs::core::sh_swizzled_float_count(new_size, active_rest_u32);
+                const size_t needed_floats = lfs::core::sh_swizzled_float_count(new_size, layout_rest_u32);
                 if (_splat_data->shN().numel() < needed_floats) {
                     _splat_data->shN().append_zeros(needed_floats - _splat_data->shN().numel());
                 }
@@ -564,7 +565,8 @@ namespace lfs::training {
                     old_size,
                     append_shN.ptr<float>(),
                     n_remaining,
-                    active_rest_u32);
+                    layout_rest_u32,
+                    layout_rest_u32);
             }
 
             // Update optimizer states
@@ -863,19 +865,19 @@ namespace lfs::training {
 
             // shN state is swizzled — use the swizzle-aware zero kernel.
             if (param_type == ParamType::ShN) {
-                const auto active_rest = static_cast<uint32_t>(_splat_data->active_sh_coeffs_rest());
-                if (active_rest == 0 || !state->exp_avg.is_valid() || state->exp_avg.numel() == 0)
+                const auto layout_rest = static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
+                if (layout_rest == 0 || !state->exp_avg.is_valid() || state->exp_avg.numel() == 0)
                     return;
                 auto idx_i32 = prune_indices.dtype() == lfs::core::DataType::Int32
                                    ? prune_indices
                                    : prune_indices.to(lfs::core::DataType::Int32);
                 lfs::core::shN_swizzled_zero_at_indices(
-                    state->exp_avg.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), active_rest);
+                    state->exp_avg.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
                 lfs::core::shN_swizzled_zero_at_indices(
-                    state->exp_avg_sq.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), active_rest);
+                    state->exp_avg_sq.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
                 if (state->grad.is_valid() && state->grad.numel() > 0) {
                     lfs::core::shN_swizzled_zero_at_indices(
-                        state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), active_rest);
+                        state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
                 }
                 return;
             }
@@ -951,8 +953,8 @@ namespace lfs::training {
 
         _splat_data->opacity_raw().index_put_(target_indices, opacities.slice(0, 0, slots_to_fill));
 
-        const auto active_rest = static_cast<uint32_t>(_splat_data->active_sh_coeffs_rest());
-        if (active_rest > 0 && shN.is_valid() && shN.numel() > 0 &&
+        const auto layout_rest = static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
+        if (layout_rest > 0 && shN.is_valid() && shN.numel() > 0 &&
             _splat_data->shN().is_valid() && _splat_data->shN().numel() > 0) {
             auto target_i32 = target_indices.dtype() == lfs::core::DataType::Int32
                                   ? target_indices
@@ -963,7 +965,8 @@ namespace lfs::training {
                 target_i32.ptr<int>(),
                 shN_slice.ptr<float>(),
                 static_cast<size_t>(slots_to_fill),
-                active_rest);
+                layout_rest,
+                layout_rest);
         }
 
         // Reset optimizer states for filled slots
@@ -974,18 +977,18 @@ namespace lfs::training {
 
             // shN state is swizzled — zero by primitive index via the dedicated kernel.
             if (param_type == ParamType::ShN) {
-                if (active_rest == 0 || !state->exp_avg.is_valid() || state->exp_avg.numel() == 0)
+                if (layout_rest == 0 || !state->exp_avg.is_valid() || state->exp_avg.numel() == 0)
                     return;
                 auto idx_i32 = target_indices.dtype() == lfs::core::DataType::Int32
                                    ? target_indices
                                    : target_indices.to(lfs::core::DataType::Int32);
                 lfs::core::shN_swizzled_zero_at_indices(
-                    state->exp_avg.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), active_rest);
+                    state->exp_avg.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
                 lfs::core::shN_swizzled_zero_at_indices(
-                    state->exp_avg_sq.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), active_rest);
+                    state->exp_avg_sq.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
                 if (state->grad.is_valid() && state->grad.numel() > 0) {
                     lfs::core::shN_swizzled_zero_at_indices(
-                        state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), active_rest);
+                        state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
                 }
                 return;
             }

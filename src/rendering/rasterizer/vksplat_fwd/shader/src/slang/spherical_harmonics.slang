@@ -154,7 +154,8 @@ SpherHarmCoeffs read_spherical_harmonics_coeffs_split(
     uint32_t g_idx,
     IArray<float> sh0,
     IArray<float4> shN,
-    uint32_t active_sh)
+    uint32_t active_sh,
+    uint32_t shN_slots_per_primitive)
 {
     float3 z = float3(0.0);
     SpherHarmCoeffs g_sh_coeffs = { z, z,z,z, z,z,z,z,z, z,z,z,z,z,z,z };
@@ -164,8 +165,8 @@ SpherHarmCoeffs read_spherical_harmonics_coeffs_split(
     if (active_sh == 0)
         return g_sh_coeffs;
 
-    uint32_t shN_slots_per_primitive =
-        active_sh > 2 ? 12 : active_sh > 1 ? 6 : 3;
+    if (shN_slots_per_primitive == 0)
+        return g_sh_coeffs;
 
   #if SH_REORDER_SIZE <= 1
     uint32_t base = shN_slots_per_primitive*g_idx;

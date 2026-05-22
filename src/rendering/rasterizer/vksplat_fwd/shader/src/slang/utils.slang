@@ -909,7 +909,7 @@ struct Uniforms {
     uint step;
     uint camera_model;
     uint sort_capacity;
-    uint pad0;
+    uint shN_layout_slots;
     uint pad1;
     uint pad2;
     float fx;

@@ -3578,16 +3578,17 @@ namespace lfs::vis {
 
         const auto& src = *combined;
         lfs::core::Tensor shN_selected;
-        const size_t active_rest = src.active_sh_coeffs_rest();
-        if (src.shN_raw().is_valid() && src.shN_raw().numel() > 0 && active_rest > 0) {
+        const size_t layout_rest = src.max_sh_coeffs_rest();
+        if (src.shN_raw().is_valid() && src.shN_raw().numel() > 0 && layout_rest > 0) {
             shN_selected = lfs::core::Tensor::empty(
-                {indices_vec.size(), active_rest, 3}, src.shN_raw().device());
+                {indices_vec.size(), layout_rest, 3}, src.shN_raw().device());
             lfs::core::shN_swizzled_gather_to_linear(
                 src.shN_raw().ptr<float>(),
                 indices.ptr<int>(),
                 shN_selected.ptr<float>(),
                 indices_vec.size(),
-                static_cast<uint32_t>(active_rest));
+                static_cast<uint32_t>(layout_rest),
+                static_cast<uint32_t>(layout_rest));
         }
 
         gaussian_clipboard_ = std::make_unique<lfs::core::SplatData>(

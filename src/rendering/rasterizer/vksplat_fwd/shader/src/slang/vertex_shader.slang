@@ -45,10 +45,12 @@ Gaussian_3D load_gaussian_split(
     StructuredBuffer<float4> rotations,
     StructuredBuffer<float> scaling_raw,
     StructuredBuffer<float> opacity_raw,
-    uint active_sh
+    uint active_sh,
+    uint shN_layout_slots
 ) {
     float3 g_xyz_ws = read_t3_float3(g_idx, xyz_ws);
-    SpherHarmCoeffs g_sh_coeffs = read_spherical_harmonics_coeffs_split(g_idx, sh0, shN, active_sh);
+    SpherHarmCoeffs g_sh_coeffs = read_spherical_harmonics_coeffs_split(
+        g_idx, sh0, shN, active_sh, shN_layout_slots);
     float4 g_rotations = rotations[g_idx];
     float3 g_scales = exp(read_t3_float3(g_idx, scaling_raw));
     float g_opacities = sigmoid_activation(opacity_raw[g_idx]);
@@ -362,7 +364,8 @@ void main(
     Gaussian_3D gauss = load_gaussian_split(
         g_idx, xyz_ws, sh0, shN, rotations,
         scaling_raw, opacity_raw,
-        active_sh
+        active_sh,
+        uniforms.shN_layout_slots
       );
   #else
     #if EXPORT_MODE == EXPORT_MODE_VULKAN_BACKWARD && !EARLY_RETURN_ON_ZERO_GRAD

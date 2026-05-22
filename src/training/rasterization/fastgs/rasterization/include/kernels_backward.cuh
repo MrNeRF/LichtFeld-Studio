@@ -53,6 +53,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float fy,
         const float cx,
         const float cy,
+        const uint sh_layout_slots,
         FusedAdamSettings fused_adam) {
         auto primitive_idx = cg::this_grid().thread_rank();
         if (primitive_idx >= n_primitives)
@@ -98,7 +99,7 @@ namespace fast_lfs::rasterization::kernels::backward {
                 constexpr uint N_SLOTS = (ACTIVE_SH_BASES > 9) ? 12u : (ACTIVE_SH_BASES > 4) ? 6u
                                                                                              : 3u;
                 for (uint k = 0; k < N_SLOTS; ++k) {
-                    adam_step_f4(zero, fused_adam.shN, shAt(primitive_idx, k, N_SLOTS),
+                    adam_step_f4(zero, fused_adam.shN, shAt(primitive_idx, k, sh_layout_slots),
                                  fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
                 }
             }
@@ -113,7 +114,8 @@ namespace fast_lfs::rasterization::kernels::backward {
             sh_coefficients_rest, grad_color_helper,
             fused_adam,
             mean3d, cam_position[0],
-            primitive_idx);
+            primitive_idx,
+            sh_layout_slots);
 
         const float4 w2c_r3 = w2c[2];
         const float depth = w2c_r3.x * mean3d.x + w2c_r3.y * mean3d.y + w2c_r3.z * mean3d.z + w2c_r3.w;

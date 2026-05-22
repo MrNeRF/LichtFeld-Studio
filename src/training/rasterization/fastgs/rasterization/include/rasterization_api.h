@@ -15,6 +15,7 @@ namespace fast_lfs::rasterization {
     struct FastGSSettings {
         const float* cam_position_ptr; // Device pointer [3]
         int active_sh_bases;
+        int sh_layout_bases;
         int width;
         int height;
         float focal_x;
@@ -35,6 +36,7 @@ namespace fast_lfs::rasterization {
         size_t per_instance_sort_scratch_size = 0;
         size_t per_instance_sort_total_size = 0;
         int n_instances = 0;
+        int sh_layout_bases = 1;
         uint64_t frame_id = 0;
         // Add helper buffer pointers to avoid re-allocation in backward
         void* grad_mean2d_helper = nullptr;
@@ -59,6 +61,7 @@ namespace fast_lfs::rasterization {
         float* alpha_ptr,                      // Device pointer [H*W]
         int n_primitives,
         int active_sh_bases,
+        int sh_layout_bases,
         int width,
         int height,
         float focal_x,
@@ -94,6 +97,7 @@ namespace fast_lfs::rasterization {
         float* grad_w2c_ptr, // Device pointer [4*4] - output or nullptr
         int n_primitives,
         int active_sh_bases,
+        int sh_layout_bases,
         int width,
         int height,
         float focal_x,

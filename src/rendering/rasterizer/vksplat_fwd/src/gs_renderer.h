@@ -14,7 +14,7 @@ PACK_STRUCT(struct VulkanGSRendererUniforms {
     uint32_t step;
     uint32_t camera_model;
     uint32_t sort_capacity;
-    uint32_t pad0;
+    uint32_t shN_layout_slots;
     uint32_t pad1;
     uint32_t pad2;
     float fx;

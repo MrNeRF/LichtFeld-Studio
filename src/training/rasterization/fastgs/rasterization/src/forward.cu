@@ -213,6 +213,7 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     float* alpha,
     const int n_primitives,
     const int active_sh_bases,
+    const int sh_layout_bases,
     const int width,
     const int height,
     const float fx,
@@ -230,6 +231,7 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     const uint n_tiles_u32 = static_cast<uint>(n_tiles);
     const uint depth_bits = static_cast<uint>(packed_instance_depth_bits(n_tiles_u32));
     const int key_end_bit = packed_instance_key_end_bit(n_tiles_u32);
+    const uint sh_layout_slots = kernels::shSlotsForBases(static_cast<uint>(sh_layout_bases));
 
     // Allocate per-tile buffers through arena
     char* per_tile_buffers_blob = per_tile_buffers_func(required<PerTileBuffers>(n_tiles));
@@ -282,6 +284,7 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
         grid.x,
         grid.y,
         active_sh_bases,
+        sh_layout_slots,
         static_cast<float>(width),
         static_cast<float>(height),
         fx,

@@ -33,6 +33,7 @@ namespace fast_lfs::rasterization {
         float* alpha,
         const int n_primitives,
         const int active_sh_bases,
+        const int sh_layout_bases,
         const int width,
         const int height,
         const float fx,

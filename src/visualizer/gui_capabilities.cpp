@@ -566,8 +566,8 @@ namespace lfs::vis::cap {
         core::Tensor* field = nullptr;
         if (is_shN) {
             if (!node->model->shN_raw().is_valid() || node->model->shN_raw().numel() == 0 ||
-                node->model->active_sh_coeffs_rest() == 0) {
-                return std::unexpected("shN is not active (sh-degree 0)");
+                node->model->max_sh_coeffs_rest() == 0) {
+                return std::unexpected("shN storage is not allocated (max sh-degree 0)");
             }
             shN_canon = node->model->shN_canonical();
             field = &shN_canon;

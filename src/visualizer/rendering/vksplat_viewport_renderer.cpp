@@ -5,6 +5,7 @@
 #include "vksplat_viewport_renderer.hpp"
 
 #include "core/logger.hpp"
+#include "core/cuda/sh_layout.cuh"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor.hpp"
 #include "rendering/coordinate_conventions.hpp"
@@ -667,6 +668,7 @@ namespace lfs::vis {
             const lfs::rendering::FrameView& frame_view,
             const lfs::rendering::GaussianSceneState& scene,
             const int active_sh_degree,
+            const std::uint32_t shN_layout_slots,
             const std::size_t num_splats,
             const bool gut) {
             (void)scene;
@@ -677,6 +679,7 @@ namespace lfs::vis {
             uniforms.grid_height = _CEIL_DIV(uniforms.image_height, TILE_HEIGHT);
             uniforms.num_splats = static_cast<std::uint32_t>(num_splats);
             uniforms.active_sh = static_cast<std::uint32_t>(active_sh_degree);
+            uniforms.shN_layout_slots = shN_layout_slots;
             uniforms.camera_model = packedVksplatCameraModel(frame_view, gut);
 
             if (frame_view.orthographic) {
@@ -2207,6 +2210,7 @@ namespace lfs::vis {
                                       request.frame_view,
                                       request.scene,
                                       0,
+                                      0,
                                       num_splats,
                                       request.gut);
         VulkanGSSelectionMaskUniforms selection_uniforms{};
@@ -2326,6 +2330,8 @@ namespace lfs::vis {
                                       request.frame_view,
                                       request.scene,
                                       active_sh_degree,
+                                      lfs::core::sh_float4_slots_for_rest(
+                                          static_cast<std::uint32_t>(splat_data.max_sh_coeffs_rest())),
                                       buffers_.num_splats,
                                       request.gut);
         uniforms.step = static_cast<std::uint32_t>(modelTransformCount(request.scene.model_transforms));

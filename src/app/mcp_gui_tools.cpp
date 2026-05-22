@@ -4037,7 +4037,7 @@ namespace lfs::app {
                         if (field_name == "shN") {
                             if (!node->model->shN_raw().is_valid() ||
                                 node->model->shN_raw().numel() == 0 ||
-                                node->model->active_sh_coeffs_rest() == 0) {
+                                node->model->max_sh_coeffs_rest() == 0) {
                                 field_payloads[field_name] = tensor_payload_json(
                                     core::Tensor::zeros({static_cast<size_t>(resolved_indices.size()), 0, 3},
                                                         core::Device::CUDA));

@@ -368,7 +368,7 @@ TEST(VksplatInputPackerTest, ScalesOpacsByteLayout) {
     }
 }
 
-TEST(VksplatInputPackerTest, RawDeviceLayoutUsesCompactActiveShRest) {
+TEST(VksplatInputPackerTest, RawDeviceLayoutUsesCompactMaxShRest) {
     constexpr std::size_t n = SH_REORDER_SIZE + 5;
 
     for (const int max_sh_degree : {0, 1, 2, 3}) {
@@ -377,12 +377,12 @@ TEST(VksplatInputPackerTest, RawDeviceLayoutUsesCompactActiveShRest) {
 
         auto raw_layout = rawDeviceInputLayout(*splat);
         ASSERT_TRUE(raw_layout.has_value()) << raw_layout.error();
-        const std::size_t active_rest =
+        const std::size_t layout_rest =
             lfs::core::sh_rest_coefficients_for_degree(max_sh_degree);
         const std::size_t expected_raw_shN_bytes =
-            active_rest == 0
+            layout_rest == 0
                 ? 4 * sizeof(float)
-                : lfs::core::sh_swizzled_float_count(n, static_cast<std::uint32_t>(active_rest)) * sizeof(float);
+                : lfs::core::sh_swizzled_float_count(n, static_cast<std::uint32_t>(layout_rest)) * sizeof(float);
         EXPECT_EQ(raw_layout->shN_bytes, expected_raw_shN_bytes)
             << "max_sh_degree=" << max_sh_degree;
 
@@ -392,4 +392,15 @@ TEST(VksplatInputPackerTest, RawDeviceLayoutUsesCompactActiveShRest) {
                   lfs::core::sh_swizzled_float_count(n) * sizeof(float))
             << "max_sh_degree=" << max_sh_degree;
     }
+
+    SyntheticInputs in = makeInputs(n, /*max_sh_degree=*/2, /*seed=*/0xA110u);
+    auto splat = buildSplatData(in);
+    splat->set_active_sh_degree(0);
+    auto raw_layout = rawDeviceInputLayout(*splat);
+    ASSERT_TRUE(raw_layout.has_value()) << raw_layout.error();
+    EXPECT_EQ(raw_layout->shN_bytes,
+              lfs::core::sh_swizzled_float_count(
+                  n,
+                  static_cast<std::uint32_t>(lfs::core::sh_rest_coefficients_for_degree(2))) *
+                  sizeof(float));
 }

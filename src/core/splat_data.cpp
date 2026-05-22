@@ -258,11 +258,11 @@ namespace {
         return sh_rest_coefficients_for_degree(3);
     }
 
-    lfs::core::Tensor allocate_swizzled_shN(size_t n, size_t capacity, uint32_t active_coeffs_rest) {
+    lfs::core::Tensor allocate_swizzled_shN(size_t n, size_t capacity, uint32_t layout_coeffs_rest) {
         using namespace lfs::core;
         const size_t cap = std::max(capacity, n);
-        const size_t logical_floats = sh_swizzled_float_count(n, active_coeffs_rest);
-        const size_t capacity_floats = sh_swizzled_float_count(cap, active_coeffs_rest);
+        const size_t logical_floats = sh_swizzled_float_count(n, layout_coeffs_rest);
+        const size_t capacity_floats = sh_swizzled_float_count(cap, layout_coeffs_rest);
         if (capacity_floats == 0) {
             return Tensor::zeros({0}, Device::CUDA);
         }
@@ -271,13 +271,13 @@ namespace {
 
     lfs::core::Tensor allocate_swizzled_shN(size_t n,
                                             size_t capacity,
-                                            uint32_t active_coeffs_rest,
+                                            uint32_t layout_coeffs_rest,
                                             const lfs::core::SplatTensorAllocator& allocator,
                                             std::string_view name) {
         using namespace lfs::core;
         const size_t cap = std::max(capacity, n);
-        const size_t logical_floats = sh_swizzled_float_count(n, active_coeffs_rest);
-        const size_t capacity_floats = sh_swizzled_float_count(cap, active_coeffs_rest);
+        const size_t logical_floats = sh_swizzled_float_count(n, layout_coeffs_rest);
+        const size_t capacity_floats = sh_swizzled_float_count(cap, layout_coeffs_rest);
         if (capacity_floats == 0) {
             Tensor tensor = Tensor::zeros({0}, Device::CUDA);
             tensor.set_name(std::string{name});
@@ -296,32 +296,49 @@ namespace {
         return tensor;
     }
 
+    [[nodiscard]] uint32_t canonical_rest_coefficients(const lfs::core::Tensor& canonical) {
+        if (!canonical.is_valid() || canonical.numel() == 0) {
+            return 0;
+        }
+        if (canonical.ndim() == 3) {
+            return static_cast<uint32_t>(std::min<size_t>(
+                canonical.size(1), lfs::core::kShMaxCoeffsRest));
+        }
+        if (canonical.ndim() == 2) {
+            return static_cast<uint32_t>(std::min<size_t>(
+                canonical.size(1) / SH_CHANNELS, lfs::core::kShMaxCoeffsRest));
+        }
+        return 0;
+    }
+
     // Reorder a canonical-layout shN tensor into the swizzled `dst` buffer.
-    // canonical may be [N, K, 3] or [N, K*3]; K must equal active_coeffs_rest.
+    // canonical may be [N, K, 3] or [N, K*3]. K may be smaller than the resident
+    // layout; missing coefficients are zero-filled.
     void reorder_canonical_into_swizzled(
         const lfs::core::Tensor& canonical,
         float* dst_swizzled,
         size_t n_primitives,
-        uint32_t active_coeffs_rest) {
+        uint32_t src_coeffs_rest,
+        uint32_t layout_coeffs_rest) {
         using namespace lfs::core;
         if (n_primitives == 0) {
             return;
         }
-        if (active_coeffs_rest == 0) {
+        if (src_coeffs_rest == 0 || layout_coeffs_rest == 0) {
             return;
         }
         Tensor src = canonical;
         Tensor truncated;
         if (canonical.ndim() == 3 &&
-            canonical.size(1) > active_coeffs_rest) {
-            truncated = canonical.slice(1, 0, static_cast<int>(active_coeffs_rest)).contiguous();
+            canonical.size(1) > src_coeffs_rest) {
+            truncated = canonical.slice(1, 0, static_cast<int>(src_coeffs_rest)).contiguous();
             src = truncated;
         } else if (canonical.ndim() == 2 &&
-                   canonical.size(1) > static_cast<size_t>(active_coeffs_rest) * SH_CHANNELS) {
+                   canonical.size(1) > static_cast<size_t>(src_coeffs_rest) * SH_CHANNELS) {
             truncated = canonical.slice(
                                       1,
                                       0,
-                                      static_cast<int>(active_coeffs_rest * SH_CHANNELS))
+                                      static_cast<int>(src_coeffs_rest * SH_CHANNELS))
                             .contiguous();
             src = truncated;
         }
@@ -329,7 +346,56 @@ namespace {
         if (!src_cuda.is_contiguous()) {
             src_cuda = src_cuda.contiguous();
         }
-        reorder_sh_to_swizzled(src_cuda.ptr<float>(), dst_swizzled, n_primitives, active_coeffs_rest);
+        reorder_sh_to_swizzled(src_cuda.ptr<float>(),
+                               dst_swizzled,
+                               n_primitives,
+                               src_coeffs_rest,
+                               layout_coeffs_rest);
+    }
+
+    [[nodiscard]] bool swizzled_storage_matches(const lfs::core::Tensor& shN,
+                                                size_t n,
+                                                size_t capacity,
+                                                uint32_t layout_coeffs_rest) {
+        using namespace lfs::core;
+        const size_t cap = std::max(capacity, n);
+        return shN.is_valid() &&
+               shN.ndim() == 1 &&
+               static_cast<size_t>(shN.shape()[0]) == sh_swizzled_float_count(n, layout_coeffs_rest) &&
+               shN.capacity() >= sh_swizzled_float_count(cap, layout_coeffs_rest);
+    }
+
+    void resize_swizzled_storage_preserving(lfs::core::Tensor& shN,
+                                            size_t n,
+                                            size_t capacity,
+                                            uint32_t layout_coeffs_rest) {
+        using namespace lfs::core;
+        const size_t cap = std::max(capacity, n);
+        const uint32_t old_layout_rest =
+            (shN.is_valid() && shN.ndim() == 1 && n > 0)
+                ? infer_swizzled_rest_coefficients(n, static_cast<size_t>(shN.numel()))
+                : 0u;
+
+        Tensor old_canonical;
+        if (shN.is_valid() && shN.numel() > 0 && n > 0 && old_layout_rest > 0) {
+            old_canonical = Tensor::empty({n, static_cast<size_t>(old_layout_rest), SH_CHANNELS}, shN.device());
+            undo_reorder_sh_from_swizzled(shN.ptr<float>(),
+                                          old_canonical.ptr<float>(),
+                                          n,
+                                          old_layout_rest,
+                                          old_layout_rest);
+        }
+
+        Tensor resized = allocate_swizzled_shN(n, cap, layout_coeffs_rest);
+        const auto copy_rest = std::min(old_layout_rest, layout_coeffs_rest);
+        if (copy_rest > 0 && old_canonical.is_valid() && old_canonical.numel() > 0) {
+            reorder_canonical_into_swizzled(old_canonical,
+                                            resized.ptr<float>(),
+                                            n,
+                                            copy_rest,
+                                            layout_coeffs_rest);
+        }
+        shN = std::move(resized);
     }
 
 } // anonymous namespace
@@ -357,30 +423,50 @@ namespace lfs::core {
           _opacity(std::move(opacity_)) {
         const size_t n = _means.is_valid() ? static_cast<size_t>(_means.shape()[0]) : 0;
         const size_t capacity = _means.is_valid() ? std::max<size_t>(_means.capacity(), n) : n;
-        uint32_t active_coeffs_rest =
-            static_cast<uint32_t>(sh_rest_coefficients_for_degree(sh_degree));
+        uint32_t layout_coeffs_rest =
+            static_cast<uint32_t>(sh_rest_coefficients_for_degree(_max_sh_degree));
         if (shN_layout == ShNLayout::Swizzled) {
             _shN = std::move(shN_);
             if (_shN.is_valid() && _shN.ndim() == 1 && n > 0) {
                 const auto stored_rest = infer_swizzled_rest_coefficients(n, static_cast<size_t>(_shN.numel()));
-                const size_t expected_for_requested_degree = sh_swizzled_float_count(n, active_coeffs_rest);
-                if (static_cast<size_t>(_shN.numel()) < expected_for_requested_degree) {
-                    active_coeffs_rest = stored_rest;
-                    _active_sh_degree = sh_degree_for_rest_coefficients(stored_rest);
+                const size_t expected_for_requested_degree = sh_swizzled_float_count(n, layout_coeffs_rest);
+                if (stored_rest > 0 && stored_rest != layout_coeffs_rest &&
+                    static_cast<size_t>(_shN.numel()) == sh_swizzled_float_count(n, stored_rest)) {
+                    Tensor old_canonical = Tensor::empty({n, static_cast<size_t>(stored_rest), SH_CHANNELS}, _shN.device());
+                    undo_reorder_sh_from_swizzled(_shN.ptr<float>(),
+                                                  old_canonical.ptr<float>(),
+                                                  n,
+                                                  stored_rest,
+                                                  stored_rest);
+                    Tensor resized = allocate_swizzled_shN(n, capacity, layout_coeffs_rest);
+                    const auto copy_rest = std::min(stored_rest, layout_coeffs_rest);
+                    reorder_canonical_into_swizzled(old_canonical,
+                                                    resized.ptr<float>(),
+                                                    n,
+                                                    copy_rest,
+                                                    layout_coeffs_rest);
+                    _shN = std::move(resized);
+                } else if (stored_rest > 0 &&
+                           static_cast<size_t>(_shN.numel()) < expected_for_requested_degree) {
+                    _max_sh_degree = sh_degree_for_rest_coefficients(stored_rest);
+                    _active_sh_degree = std::min(_active_sh_degree, _max_sh_degree);
+                    layout_coeffs_rest =
+                        static_cast<uint32_t>(sh_rest_coefficients_for_degree(_max_sh_degree));
                 }
             }
-            const size_t expected_floats = sh_swizzled_float_count(n, active_coeffs_rest);
+            const size_t expected_floats = sh_swizzled_float_count(n, layout_coeffs_rest);
             if (!_shN.is_valid() || _shN.ndim() != 1 ||
                 static_cast<size_t>(_shN.shape()[0]) != expected_floats) {
-                _shN = allocate_swizzled_shN(n, capacity, active_coeffs_rest);
+                _shN = allocate_swizzled_shN(n, capacity, layout_coeffs_rest);
             }
             return;
         }
 
         // Convert the canonical-layout shN argument into swizzled storage.
-        _shN = allocate_swizzled_shN(n, capacity, active_coeffs_rest);
-        if (shN_.is_valid() && shN_.numel() > 0 && n > 0 && active_coeffs_rest > 0) {
-            reorder_canonical_into_swizzled(shN_, _shN.ptr<float>(), n, active_coeffs_rest);
+        _shN = allocate_swizzled_shN(n, capacity, layout_coeffs_rest);
+        const auto src_rest = std::min(canonical_rest_coefficients(shN_), layout_coeffs_rest);
+        if (shN_.is_valid() && shN_.numel() > 0 && n > 0 && src_rest > 0 && layout_coeffs_rest > 0) {
+            reorder_canonical_into_swizzled(shN_, _shN.ptr<float>(), n, src_rest, layout_coeffs_rest);
         }
     }
 
@@ -459,6 +545,9 @@ namespace lfs::core {
             return _sh0;
         }
         auto shN = shN_canonical();
+        if (shN.ndim() == 3 && shN.size(1) > active_rest) {
+            shN = shN.slice(1, 0, static_cast<int>(active_rest)).contiguous();
+        }
         if (shN.device() != _sh0.device()) {
             shN = shN.to(_sh0.device());
         }
@@ -467,7 +556,7 @@ namespace lfs::core {
 
     Tensor SplatData::shN_canonical() const {
         const size_t n = static_cast<size_t>(size());
-        const size_t k = active_sh_coeffs_rest();
+        const size_t k = max_sh_coeffs_rest();
         // The swizzled buffer is CUDA-only (see allocate_swizzled_shN); align the canonical
         // output device with where the source data actually lives.
         const Device dst_device = _shN.is_valid() ? _shN.device() : Device::CUDA;
@@ -475,13 +564,17 @@ namespace lfs::core {
             return Tensor::zeros({n, k, SH_CHANNELS}, dst_device);
         }
         Tensor out = Tensor::empty({n, k, SH_CHANNELS}, dst_device);
-        undo_reorder_sh_from_swizzled(_shN.ptr<float>(), out.ptr<float>(), n, static_cast<uint32_t>(k));
+        undo_reorder_sh_from_swizzled(_shN.ptr<float>(),
+                                      out.ptr<float>(),
+                                      n,
+                                      static_cast<uint32_t>(k),
+                                      static_cast<uint32_t>(k));
         return out;
     }
 
     Tensor SplatData::shN_canonical_cpu() const {
         const size_t n = static_cast<size_t>(size());
-        const size_t k = active_sh_coeffs_rest();
+        const size_t k = max_sh_coeffs_rest();
         if (n == 0 || k == 0) {
             return Tensor::zeros({n, k, SH_CHANNELS}, Device::CPU);
         }
@@ -516,33 +609,42 @@ namespace lfs::core {
     void SplatData::shN_set_from_canonical(const Tensor& canonical, size_t capacity) {
         const size_t n = static_cast<size_t>(size());
         const size_t cap = std::max<size_t>(capacity, n);
-        const uint32_t active_rest = static_cast<uint32_t>(active_sh_coeffs_rest());
-        const size_t needed_floats = sh_swizzled_float_count(n, active_rest);
+        const uint32_t layout_rest = static_cast<uint32_t>(max_sh_coeffs_rest());
+        const size_t needed_floats = sh_swizzled_float_count(n, layout_rest);
+        const size_t needed_capacity = sh_swizzled_float_count(cap, layout_rest);
 
         // Adjust _shN's logical size to match the new N without losing reserved capacity
         // when possible. Reallocating drops the pre-alloc buffer and can break async
         // pointer aliasing for downstream kernels; we only do it when capacity is short.
-        if (_shN.is_valid() && _shN.capacity() >= needed_floats) {
+        if (_shN.is_valid() && _shN.capacity() >= needed_capacity) {
             if (_shN.numel() < needed_floats) {
                 _shN.append_zeros(needed_floats - _shN.numel());
             } else if (_shN.numel() > needed_floats) {
                 // N shrank (e.g. random_choose, crop, prune-then-compact). The Tensor lib
                 // doesn't have a "shrink logical size" op other than reassigning shape.
                 // Allocate a smaller buffer in this case — it's a one-shot edit operation.
-                _shN = allocate_swizzled_shN(n, cap, active_rest);
+                _shN = allocate_swizzled_shN(n, cap, layout_rest);
             }
             // else: numel() == needed_floats, nothing to do.
         } else {
-            _shN = allocate_swizzled_shN(n, cap, active_rest);
+            _shN = allocate_swizzled_shN(n, cap, layout_rest);
         }
 
-        if (canonical.is_valid() && canonical.numel() > 0 && n > 0 && active_rest > 0) {
-            reorder_canonical_into_swizzled(canonical, _shN.ptr<float>(), n, active_rest);
+        const auto src_rest = std::min(canonical_rest_coefficients(canonical), layout_rest);
+        if (n > 0 && layout_rest > 0 && src_rest == 0 && _shN.is_valid() && _shN.numel() > 0) {
+            _shN.zero_();
+        }
+        if (canonical.is_valid() && canonical.numel() > 0 && n > 0 && src_rest > 0 && layout_rest > 0) {
+            reorder_canonical_into_swizzled(canonical, _shN.ptr<float>(), n, src_rest, layout_rest);
         }
     }
 
     size_t SplatData::active_sh_coeffs_rest() const {
         return sh_rest_coefficients_for_degree(_active_sh_degree);
+    }
+
+    size_t SplatData::max_sh_coeffs_rest() const {
+        return sh_rest_coefficients_for_degree(_max_sh_degree);
     }
 
     // ========== UTILITY METHODS ==========
@@ -555,41 +657,41 @@ namespace lfs::core {
 
     void SplatData::set_active_sh_degree(int sh_degree) {
         const int target_degree = std::clamp(sh_degree, 0, _max_sh_degree);
-        const auto old_rest = static_cast<uint32_t>(active_sh_coeffs_rest());
-        const auto new_rest = static_cast<uint32_t>(sh_rest_coefficients_for_degree(target_degree));
         const size_t n = static_cast<size_t>(size());
         const size_t cap = _means.is_valid() ? std::max<size_t>(_means.capacity(), n) : n;
-        const size_t expected_floats = sh_swizzled_float_count(n, new_rest);
-        const bool shape_ok = _shN.is_valid() && _shN.ndim() == 1 &&
-                              static_cast<size_t>(_shN.shape()[0]) == expected_floats;
-
-        if (!shape_ok || old_rest != new_rest) {
-            Tensor old_canonical;
-            uint32_t old_read_rest = old_rest;
-            if (_shN.is_valid() && _shN.numel() > 0 && n > 0 && old_read_rest > 0) {
-                const size_t old_expected = sh_swizzled_float_count(n, old_read_rest);
-                if (static_cast<size_t>(_shN.numel()) < old_expected) {
-                    old_read_rest = infer_swizzled_rest_coefficients(n, static_cast<size_t>(_shN.numel()));
-                }
-                if (old_read_rest > 0) {
-                    old_canonical = Tensor::empty({n, static_cast<size_t>(old_read_rest), SH_CHANNELS}, _shN.device());
-                    undo_reorder_sh_from_swizzled(_shN.ptr<float>(), old_canonical.ptr<float>(), n, old_read_rest);
-                }
-            }
-
-            auto resized = allocate_swizzled_shN(n, cap, new_rest);
-            if (new_rest > 0 && old_canonical.is_valid() && old_canonical.numel() > 0) {
-                Tensor canonical_new = Tensor::zeros({n, static_cast<size_t>(new_rest), SH_CHANNELS}, old_canonical.device());
-                const size_t copy_coeffs = std::min<size_t>(old_read_rest, new_rest);
-                if (copy_coeffs > 0) {
-                    canonical_new.slice(1, 0, copy_coeffs) =
-                        old_canonical.slice(1, 0, copy_coeffs);
-                }
-                reorder_canonical_into_swizzled(canonical_new, resized.ptr<float>(), n, new_rest);
-            }
-            _shN = std::move(resized);
+        const auto layout_rest = static_cast<uint32_t>(max_sh_coeffs_rest());
+        if (!swizzled_storage_matches(_shN, n, cap, layout_rest)) {
+            resize_swizzled_storage_preserving(_shN, n, cap, layout_rest);
         }
         _active_sh_degree = target_degree;
+    }
+
+    void SplatData::set_max_sh_degree(int sh_degree) {
+        const int target_degree = std::clamp(sh_degree, 0, MAX_SUPPORTED_SH_DEGREE);
+        if (_max_sh_degree == target_degree) {
+            if (_active_sh_degree > _max_sh_degree) {
+                _active_sh_degree = _max_sh_degree;
+            }
+            const size_t n = static_cast<size_t>(size());
+            const size_t cap = _means.is_valid() ? std::max<size_t>(_means.capacity(), n) : n;
+            const auto layout_rest = static_cast<uint32_t>(max_sh_coeffs_rest());
+            if (!swizzled_storage_matches(_shN, n, cap, layout_rest)) {
+                resize_swizzled_storage_preserving(_shN, n, cap, layout_rest);
+            }
+            return;
+        }
+
+        _max_sh_degree = target_degree;
+        if (_active_sh_degree > _max_sh_degree) {
+            _active_sh_degree = _max_sh_degree;
+        }
+
+        const size_t n = static_cast<size_t>(size());
+        const size_t cap = _means.is_valid() ? std::max<size_t>(_means.capacity(), n) : n;
+        resize_swizzled_storage_preserving(_shN,
+                                           n,
+                                           cap,
+                                           static_cast<uint32_t>(max_sh_coeffs_rest()));
     }
 
     bool SplatData::set_sh_degree(const int sh_degree) {
@@ -598,8 +700,8 @@ namespace lfs::core {
         const int target_degree = std::clamp(sh_degree, 0, MAX_SUPPORTED_SH_DEGREE);
         bool changed = _max_sh_degree != target_degree || _active_sh_degree != target_degree;
 
-        _max_sh_degree = target_degree;
-        set_active_sh_degree(target_degree);
+        set_max_sh_degree(target_degree);
+        _active_sh_degree = target_degree;
         return changed;
     }
 
@@ -610,7 +712,7 @@ namespace lfs::core {
             _sh0.reserve(capacity);
         if (_shN.is_valid()) {
             // shN is 1D swizzled — reserve in float count.
-            _shN.reserve(sh_swizzled_float_count(capacity, static_cast<uint32_t>(active_sh_coeffs_rest())));
+            _shN.reserve(sh_swizzled_float_count(capacity, static_cast<uint32_t>(max_sh_coeffs_rest())));
         }
         if (_scaling.is_valid())
             _scaling.reserve(capacity);
@@ -742,8 +844,8 @@ namespace lfs::core {
         _opacity = std::move(new_opacity);
 
         // shN is in swizzled layout — block-aware gather of kept primitives.
-        const auto active_rest = static_cast<uint32_t>(active_sh_coeffs_rest());
-        if (_shN.is_valid() && _shN.numel() > 0 && active_rest > 0) {
+        const auto layout_rest = static_cast<uint32_t>(max_sh_coeffs_rest());
+        if (_shN.is_valid() && _shN.numel() > 0 && layout_rest > 0) {
             // nonzero() returns [num_kept, 1] int tensor of true indices.
             auto kept_indices_2d = keep_mask.nonzero();
             const auto kept_numel = static_cast<int>(kept_indices_2d.numel());
@@ -752,9 +854,9 @@ namespace lfs::core {
                                       : kept_indices_2d;
             kept_indices = kept_indices.to(DataType::Int32);
 
-            auto new_shN = allocate_swizzled_shN(new_size, new_size, active_rest);
+            auto new_shN = allocate_swizzled_shN(new_size, new_size, layout_rest);
             shN_swizzled_gather_self(_shN.ptr<float>(), new_shN.ptr<float>(),
-                                     kept_indices.ptr<int>(), new_size, 0, active_rest);
+                                     kept_indices.ptr<int>(), new_size, 0, layout_rest);
             _shN = std::move(new_shN);
         }
 
@@ -834,11 +936,11 @@ namespace lfs::core {
         _scaling = std::move(scaling).cuda();
         _rotation = std::move(rotation).cuda();
         _opacity = std::move(opacity).cuda();
-        _active_sh_degree = active_sh;
-        _max_sh_degree = max_sh;
+        _max_sh_degree = std::clamp(max_sh, 0, MAX_SUPPORTED_SH_DEGREE);
+        _active_sh_degree = std::clamp(active_sh, 0, _max_sh_degree);
         _scene_scale = scene_scale;
 
-        if (max_sh > 0) {
+        if (_max_sh_degree > 0) {
             Tensor shN_canon;
             is >> shN_canon;
             // shN_canon is canonical [N, K, 3]; reorder into swizzled storage.
@@ -847,7 +949,7 @@ namespace lfs::core {
             // Allocate an empty swizzled tensor so _shN is valid even at SH degree 0.
             const size_t n = static_cast<size_t>(size());
             const size_t cap = std::max<size_t>(_means.capacity(), n);
-            _shN = allocate_swizzled_shN(n, cap, static_cast<uint32_t>(active_sh_coeffs_rest()));
+            _shN = allocate_swizzled_shN(n, cap, static_cast<uint32_t>(max_sh_coeffs_rest()));
         }
 
         uint8_t has_deleted = 0;
@@ -1231,6 +1333,7 @@ namespace lfs::core {
                     shN_cpu,
                     shN_.ptr<float>(),
                     num_points,
+                    static_cast<uint32_t>(feature_shape - 1),
                     static_cast<uint32_t>(feature_shape - 1));
                 err = cudaGetLastError();
                 if (err != cudaSuccess) {

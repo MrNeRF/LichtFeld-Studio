@@ -282,17 +282,34 @@ namespace lfs::core {
         std::size_t n_primitives,
         std::uint32_t active_coeffs_rest,
         cudaStream_t stream) {
-        if (active_coeffs_rest == 0) {
+        reorder_sh_to_swizzled(src_canonical,
+                               dst_swizzled,
+                               n_primitives,
+                               active_coeffs_rest,
+                               active_coeffs_rest,
+                               stream);
+    }
+
+    void reorder_sh_to_swizzled(
+        const float* src_canonical,
+        float* dst_swizzled,
+        std::size_t n_primitives,
+        std::uint32_t src_coeffs_rest,
+        std::uint32_t layout_coeffs_rest,
+        cudaStream_t stream) {
+        if (src_coeffs_rest == 0) {
             return;
         }
         const std::uint32_t padded_n = static_cast<std::uint32_t>(sh_swizzled_padded_n(n_primitives));
         if (padded_n == 0)
             return;
-        const auto slots = sh_float4_slots_for_rest(active_coeffs_rest);
+        const auto slots = sh_float4_slots_for_rest(layout_coeffs_rest);
+        if (slots == 0)
+            return;
         const int grid = static_cast<int>((padded_n + BLOCK - 1) / BLOCK);
         reorder_sh_kernel<<<grid, BLOCK, 0, stream>>>(
             src_canonical, reinterpret_cast<float4*>(dst_swizzled),
-            static_cast<std::uint32_t>(n_primitives), active_coeffs_rest, padded_n, slots);
+            static_cast<std::uint32_t>(n_primitives), src_coeffs_rest, padded_n, slots);
     }
 
     void undo_reorder_sh_from_swizzled(
@@ -301,13 +318,30 @@ namespace lfs::core {
         std::size_t n_primitives,
         std::uint32_t active_coeffs_rest,
         cudaStream_t stream) {
-        if (n_primitives == 0 || active_coeffs_rest == 0)
+        undo_reorder_sh_from_swizzled(src_swizzled,
+                                      dst_canonical,
+                                      n_primitives,
+                                      active_coeffs_rest,
+                                      active_coeffs_rest,
+                                      stream);
+    }
+
+    void undo_reorder_sh_from_swizzled(
+        const float* src_swizzled,
+        float* dst_canonical,
+        std::size_t n_primitives,
+        std::uint32_t dst_coeffs_rest,
+        std::uint32_t layout_coeffs_rest,
+        cudaStream_t stream) {
+        if (n_primitives == 0 || dst_coeffs_rest == 0)
             return;
-        const auto slots = sh_float4_slots_for_rest(active_coeffs_rest);
+        const auto slots = sh_float4_slots_for_rest(layout_coeffs_rest);
+        if (slots == 0)
+            return;
         const int grid = static_cast<int>((n_primitives + BLOCK - 1) / BLOCK);
         undo_reorder_sh_kernel<<<grid, BLOCK, 0, stream>>>(
             reinterpret_cast<const float4*>(src_swizzled), dst_canonical,
-            static_cast<std::uint32_t>(n_primitives), active_coeffs_rest, slots);
+            static_cast<std::uint32_t>(n_primitives), dst_coeffs_rest, slots);
     }
 
     void shN_swizzled_zero_at_indices(
@@ -405,13 +439,32 @@ namespace lfs::core {
         std::size_t n_src,
         std::uint32_t active_coeffs_rest,
         cudaStream_t stream) {
-        if (n_src == 0 || active_coeffs_rest == 0)
+        shN_swizzled_gather_to_linear(src_swizzled,
+                                      src_indices,
+                                      dst_linear,
+                                      n_src,
+                                      active_coeffs_rest,
+                                      active_coeffs_rest,
+                                      stream);
+    }
+
+    void shN_swizzled_gather_to_linear(
+        const float* src_swizzled,
+        const int* src_indices,
+        float* dst_linear,
+        std::size_t n_src,
+        std::uint32_t dst_coeffs_rest,
+        std::uint32_t layout_coeffs_rest,
+        cudaStream_t stream) {
+        if (n_src == 0 || dst_coeffs_rest == 0)
             return;
-        const auto slots = sh_float4_slots_for_rest(active_coeffs_rest);
+        const auto slots = sh_float4_slots_for_rest(layout_coeffs_rest);
+        if (slots == 0)
+            return;
         const int grid = static_cast<int>((n_src + BLOCK - 1) / BLOCK);
         gather_to_linear_kernel<int><<<grid, BLOCK, 0, stream>>>(
             reinterpret_cast<const float4*>(src_swizzled), src_indices, dst_linear,
-            static_cast<std::uint32_t>(n_src), active_coeffs_rest, slots);
+            static_cast<std::uint32_t>(n_src), dst_coeffs_rest, slots);
     }
 
     void shN_swizzled_gather_to_linear_i64(
@@ -421,13 +474,32 @@ namespace lfs::core {
         std::size_t n_src,
         std::uint32_t active_coeffs_rest,
         cudaStream_t stream) {
-        if (n_src == 0 || active_coeffs_rest == 0)
+        shN_swizzled_gather_to_linear_i64(src_swizzled,
+                                          src_indices,
+                                          dst_linear,
+                                          n_src,
+                                          active_coeffs_rest,
+                                          active_coeffs_rest,
+                                          stream);
+    }
+
+    void shN_swizzled_gather_to_linear_i64(
+        const float* src_swizzled,
+        const std::int64_t* src_indices,
+        float* dst_linear,
+        std::size_t n_src,
+        std::uint32_t dst_coeffs_rest,
+        std::uint32_t layout_coeffs_rest,
+        cudaStream_t stream) {
+        if (n_src == 0 || dst_coeffs_rest == 0)
             return;
-        const auto slots = sh_float4_slots_for_rest(active_coeffs_rest);
+        const auto slots = sh_float4_slots_for_rest(layout_coeffs_rest);
+        if (slots == 0)
+            return;
         const int grid = static_cast<int>((n_src + BLOCK - 1) / BLOCK);
         gather_to_linear_kernel<std::int64_t><<<grid, BLOCK, 0, stream>>>(
             reinterpret_cast<const float4*>(src_swizzled), src_indices, dst_linear,
-            static_cast<std::uint32_t>(n_src), active_coeffs_rest, slots);
+            static_cast<std::uint32_t>(n_src), dst_coeffs_rest, slots);
     }
 
     void shN_swizzled_gather_from_linear(
@@ -437,13 +509,30 @@ namespace lfs::core {
         std::size_t n_src,
         std::uint32_t active_coeffs_rest,
         cudaStream_t stream) {
-        const auto slots = sh_float4_slots_for_rest(active_coeffs_rest);
+        shN_swizzled_gather_from_linear(dst_swizzled,
+                                        dst_offset,
+                                        src_linear,
+                                        n_src,
+                                        active_coeffs_rest,
+                                        active_coeffs_rest,
+                                        stream);
+    }
+
+    void shN_swizzled_gather_from_linear(
+        float* dst_swizzled,
+        std::size_t dst_offset,
+        const float* src_linear,
+        std::size_t n_src,
+        std::uint32_t src_coeffs_rest,
+        std::uint32_t layout_coeffs_rest,
+        cudaStream_t stream) {
+        const auto slots = sh_float4_slots_for_rest(layout_coeffs_rest);
         if (n_src == 0 || slots == 0)
             return;
         const int grid = static_cast<int>((n_src + BLOCK - 1) / BLOCK);
         gather_from_linear_kernel<<<grid, BLOCK, 0, stream>>>(
             reinterpret_cast<float4*>(dst_swizzled), static_cast<std::uint32_t>(dst_offset),
-            src_linear, static_cast<std::uint32_t>(n_src), active_coeffs_rest, slots);
+            src_linear, static_cast<std::uint32_t>(n_src), src_coeffs_rest, slots);
     }
 
     void shN_swizzled_scatter_linear(
@@ -453,13 +542,30 @@ namespace lfs::core {
         std::size_t n_src,
         std::uint32_t active_coeffs_rest,
         cudaStream_t stream) {
-        const auto slots = sh_float4_slots_for_rest(active_coeffs_rest);
+        shN_swizzled_scatter_linear(dst_swizzled,
+                                    dst_indices,
+                                    src_linear,
+                                    n_src,
+                                    active_coeffs_rest,
+                                    active_coeffs_rest,
+                                    stream);
+    }
+
+    void shN_swizzled_scatter_linear(
+        float* dst_swizzled,
+        const int* dst_indices,
+        const float* src_linear,
+        std::size_t n_src,
+        std::uint32_t src_coeffs_rest,
+        std::uint32_t layout_coeffs_rest,
+        cudaStream_t stream) {
+        const auto slots = sh_float4_slots_for_rest(layout_coeffs_rest);
         if (n_src == 0 || slots == 0)
             return;
         const int grid = static_cast<int>((n_src + BLOCK - 1) / BLOCK);
         scatter_linear_kernel<<<grid, BLOCK, 0, stream>>>(
             reinterpret_cast<float4*>(dst_swizzled), dst_indices, src_linear,
-            static_cast<std::uint32_t>(n_src), active_coeffs_rest, slots);
+            static_cast<std::uint32_t>(n_src), src_coeffs_rest, slots);
     }
 
     void sh_swizzled_pack_full_from_split(

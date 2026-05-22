@@ -388,7 +388,8 @@ namespace lfs::training::kernels {
         float* __restrict__ dst_shN,
         const float* __restrict__ src,
         int64_t N,
-        int64_t K_src) {
+        int64_t K_src,
+        uint32_t shN_layout_rest) {
         const int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
         if (idx >= N)
             return;
@@ -405,7 +406,10 @@ namespace lfs::training::kernels {
         const int64_t max_rest = K_src - 1 < lfs::core::kShMaxCoeffsRest
                                      ? K_src - 1
                                      : lfs::core::kShMaxCoeffsRest;
-        const int64_t slots_per_primitive = (max_rest * 3 + 3) / 4;
+        const int64_t slots_per_primitive =
+            static_cast<int64_t>(lfs::core::sh_float4_slots_for_rest(shN_layout_rest));
+        if (slots_per_primitive == 0)
+            return;
         for (int64_t k = 0; k < max_rest; ++k) {
             const int64_t src_coeff = src_base + (k + 1) * 3;
             const int64_t packed_offset = k * 3;
@@ -421,10 +425,11 @@ namespace lfs::training::kernels {
         const float* src,
         int64_t N,
         int64_t K_src,
+        uint32_t shN_layout_rest,
         cudaStream_t stream) {
         const unsigned int blocks = num_blocks_1d(N);
         grad_accumulate_sh_swizzled_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
-            dst_sh0, dst_shN, src, N, K_src);
+            dst_sh0, dst_shN, src, N, K_src, shN_layout_rest);
     }
 
     // ==================== Gradient Norm Accumulate ====================

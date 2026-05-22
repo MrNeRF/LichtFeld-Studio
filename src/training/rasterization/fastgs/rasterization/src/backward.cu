@@ -35,6 +35,7 @@ void fast_lfs::rasterization::backward(
     const int n_primitives,
     const int n_instances,
     const int active_sh_bases,
+    const int sh_layout_bases,
     const int width,
     const int height,
     const float fx,
@@ -47,6 +48,7 @@ void fast_lfs::rasterization::backward(
     const dim3 grid(div_round_up(width, config::tile_width), div_round_up(height, config::tile_height), 1);
     const uint64_t n_tiles_u64 = static_cast<uint64_t>(grid.x) * static_cast<uint64_t>(grid.y);
     const int n_tiles = checked_to_int(n_tiles_u64, "n_tiles exceeds int range");
+    const uint sh_layout_slots = kernels::shSlotsForBases(static_cast<uint>(sh_layout_bases));
 
     // These blobs are from the arena and are guaranteed to be valid
     PerPrimitiveBuffers per_primitive_buffers = PerPrimitiveBuffers::from_blob(per_primitive_buffers_blob, n_primitives);
@@ -115,6 +117,7 @@ void fast_lfs::rasterization::backward(
                 fy,
                 cx,
                 cy,
+                sh_layout_slots,
                 fused_adam);
         };
         auto launch_preprocess_backward_for_mip = [&]<int ACTIVE_SH_BASES>() {

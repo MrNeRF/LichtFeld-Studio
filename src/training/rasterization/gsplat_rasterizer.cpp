@@ -766,6 +766,7 @@ namespace lfs::training {
                 v_sh_coeffs_ptr,
                 N,
                 K,
+                static_cast<std::uint32_t>(gaussian_model.max_sh_coeffs_rest()),
                 stream);
 
             // Accumulate gradient norms when pixel-error map is not provided

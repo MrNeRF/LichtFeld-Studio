@@ -289,6 +289,8 @@ namespace lfs::training {
 
         const int sh_degree = gaussian_model.get_active_sh_degree();
         const int active_sh_bases = (sh_degree + 1) * (sh_degree + 1);
+        const int max_sh_degree = gaussian_model.get_max_sh_degree();
+        const int sh_layout_bases = (max_sh_degree + 1) * (max_sh_degree + 1);
 
         constexpr float near_plane = 0.01f;
         constexpr float far_plane = 1e10f;
@@ -333,6 +335,7 @@ namespace lfs::training {
                 alpha.ptr<float>(),
                 n_primitives,
                 active_sh_bases,
+                sh_layout_bases,
                 width,
                 height,
                 fx,
@@ -428,7 +431,7 @@ namespace lfs::training {
         ctx.w2c_ptr = w2c_ptr;
         ctx.cam_position_ptr = cam_position_ptr;
 
-        ctx.active_sh_bases = active_sh_bases;
+            ctx.active_sh_bases = active_sh_bases;
         ctx.width = width;
         ctx.height = height;
         ctx.focal_x = fx;
@@ -594,6 +597,7 @@ namespace lfs::training {
             nullptr,
             n_primitives,
             ctx.active_sh_bases,
+            ctx.forward_ctx.sh_layout_bases,
             ctx.width,
             ctx.height,
             ctx.focal_x,

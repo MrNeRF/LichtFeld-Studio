@@ -157,6 +157,7 @@ namespace lfs::training::kernels {
      * @param src Source canonical gradient buffer [N, K_src, 3]
      * @param N Number of Gaussians
      * @param K_src Active SH coefficients in source, including sh0
+     * @param shN_layout_rest Resident swizzled shN rest coefficient count
      * @param stream CUDA stream
      */
     void launch_grad_accumulate_sh_swizzled(
@@ -165,6 +166,7 @@ namespace lfs::training::kernels {
         const float* src,
         int64_t N,
         int64_t K_src,
+        uint32_t shN_layout_rest,
         cudaStream_t stream = nullptr);
 
     /**

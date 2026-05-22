@@ -422,9 +422,9 @@ namespace lfs::core {
         auto cropped_means = splat_data._means.index_select(0, indices).contiguous();
         auto cropped_sh0 = splat_data._sh0.index_select(0, indices).contiguous();
         Tensor cropped_shN;
-        const size_t active_rest = splat_data.active_sh_coeffs_rest();
-        if (splat_data._shN.is_valid() && splat_data._shN.numel() > 0 && active_rest > 0) {
-            cropped_shN = Tensor::empty({static_cast<size_t>(points_selected), active_rest, 3},
+        const size_t layout_rest = splat_data.max_sh_coeffs_rest();
+        if (splat_data._shN.is_valid() && splat_data._shN.numel() > 0 && layout_rest > 0) {
+            cropped_shN = Tensor::empty({static_cast<size_t>(points_selected), layout_rest, 3},
                                         splat_data._shN.device());
             if (indices.dtype() == DataType::Int64) {
                 shN_swizzled_gather_to_linear_i64(
@@ -432,7 +432,8 @@ namespace lfs::core {
                     indices.ptr<int64_t>(),
                     cropped_shN.ptr<float>(),
                     static_cast<size_t>(points_selected),
-                    static_cast<uint32_t>(active_rest));
+                    static_cast<uint32_t>(layout_rest),
+                    static_cast<uint32_t>(layout_rest));
             } else {
                 auto indices_i32 = indices.dtype() == DataType::Int32
                                        ? indices
@@ -442,7 +443,8 @@ namespace lfs::core {
                     indices_i32.ptr<int>(),
                     cropped_shN.ptr<float>(),
                     static_cast<size_t>(points_selected),
-                    static_cast<uint32_t>(active_rest));
+                    static_cast<uint32_t>(layout_rest),
+                    static_cast<uint32_t>(layout_rest));
             }
         }
         auto cropped_scaling = splat_data._scaling.index_select(0, indices).contiguous();
@@ -582,12 +584,12 @@ namespace lfs::core {
             splat_data._means.device());
 
         Tensor shN_selected_swizzled;
-        const auto active_rest = static_cast<uint32_t>(splat_data.active_sh_coeffs_rest());
+        const auto layout_rest = static_cast<uint32_t>(splat_data.max_sh_coeffs_rest());
         if (splat_data._shN.is_valid() && splat_data._shN.numel() > 0 &&
-            active_rest > 0) {
+            layout_rest > 0) {
             shN_selected_swizzled = Tensor::zeros_direct(
-                {sh_swizzled_float_count(static_cast<size_t>(num_required_splat), active_rest)},
-                sh_swizzled_float_count(static_cast<size_t>(num_required_splat), active_rest),
+                {sh_swizzled_float_count(static_cast<size_t>(num_required_splat), layout_rest)},
+                sh_swizzled_float_count(static_cast<size_t>(num_required_splat), layout_rest),
                 splat_data._shN.device());
             auto indices_i32 = indices_tensor.dtype() == DataType::Int32
                                    ? indices_tensor
@@ -598,7 +600,7 @@ namespace lfs::core {
                 indices_i32.ptr<int>(),
                 static_cast<size_t>(num_required_splat),
                 0,
-                active_rest);
+                layout_rest);
         }
 
         splat_data._means = splat_data._means.index_select(0, indices_tensor).contiguous();
@@ -724,9 +726,9 @@ namespace lfs::core {
         }
 
         Tensor shN_selected;
-        const size_t active_rest = splat_data.active_sh_coeffs_rest();
-        if (splat_data._shN.is_valid() && splat_data._shN.numel() > 0 && active_rest > 0) {
-            shN_selected = Tensor::empty({static_cast<size_t>(count), active_rest, 3},
+        const size_t layout_rest = splat_data.max_sh_coeffs_rest();
+        if (splat_data._shN.is_valid() && splat_data._shN.numel() > 0 && layout_rest > 0) {
+            shN_selected = Tensor::empty({static_cast<size_t>(count), layout_rest, 3},
                                          splat_data._shN.device());
             if (indices.dtype() == DataType::Int64) {
                 shN_swizzled_gather_to_linear_i64(
@@ -734,7 +736,8 @@ namespace lfs::core {
                     indices.ptr<int64_t>(),
                     shN_selected.ptr<float>(),
                     static_cast<size_t>(count),
-                    static_cast<uint32_t>(active_rest));
+                    static_cast<uint32_t>(layout_rest),
+                    static_cast<uint32_t>(layout_rest));
             } else {
                 auto indices_i32 = indices.dtype() == DataType::Int32
                                        ? indices
@@ -744,7 +747,8 @@ namespace lfs::core {
                     indices_i32.ptr<int>(),
                     shN_selected.ptr<float>(),
                     static_cast<size_t>(count),
-                    static_cast<uint32_t>(active_rest));
+                    static_cast<uint32_t>(layout_rest),
+                    static_cast<uint32_t>(layout_rest));
             }
         }
 

@@ -134,26 +134,28 @@ namespace lfs::core {
 
         // SH coefficients (degrees 1-3 only, shN excludes DC). Gather only selected
         // rows to linear form, apply signs, then scatter back into swizzled storage.
-        const size_t active_rest = splat_data.active_sh_coeffs_rest();
-        if (splat_data.shN().is_valid() && splat_data.shN().numel() > 0 && active_rest > 0) {
-            const int degree = static_cast<int>(std::sqrt(active_rest + 1)) - 1;
+        const size_t layout_rest = splat_data.max_sh_coeffs_rest();
+        if (splat_data.shN().is_valid() && splat_data.shN().numel() > 0 && layout_rest > 0) {
+            const int degree = static_cast<int>(std::sqrt(layout_rest + 1)) - 1;
             if (degree >= 1 && degree <= 3) {
-                const auto active_rest_u32 = static_cast<uint32_t>(active_rest);
+                const auto layout_rest_u32 = static_cast<uint32_t>(layout_rest);
                 Tensor selected_shN = Tensor::empty(
-                    {static_cast<size_t>(indices.numel()), active_rest, 3}, device);
+                    {static_cast<size_t>(indices.numel()), layout_rest, 3}, device);
                 shN_swizzled_gather_to_linear(
                     splat_data.shN().ptr<float>(),
                     indices.ptr<int>(),
                     selected_shN.ptr<float>(),
                     indices.numel(),
-                    active_rest_u32);
+                    layout_rest_u32,
+                    layout_rest_u32);
                 selected_shN = selected_shN * g_cache.sh_mult[a][degree - 1];
                 shN_swizzled_scatter_linear(
                     splat_data.shN().ptr<float>(),
                     indices.ptr<int>(),
                     selected_shN.ptr<float>(),
                     indices.numel(),
-                    active_rest_u32);
+                    layout_rest_u32,
+                    layout_rest_u32);
             }
         }
     }

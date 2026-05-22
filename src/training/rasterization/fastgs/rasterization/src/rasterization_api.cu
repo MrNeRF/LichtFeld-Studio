@@ -131,6 +131,7 @@ namespace fast_lfs::rasterization {
             const float* alpha_ptr,
             int n_primitives,
             int active_sh_bases,
+            int sh_layout_bases,
             int width,
             int height,
             int n_tiles) {
@@ -138,15 +139,24 @@ namespace fast_lfs::rasterization {
             checked_no_pending_cuda_error("FastGS forward preflight");
 
             if (n_primitives <= 0 || active_sh_bases <= 0 || active_sh_bases > 16 ||
+                sh_layout_bases <= 0 || sh_layout_bases > 16 ||
                 width <= 0 || height <= 0 || n_tiles <= 0) {
                 throw std::runtime_error(
                     "FastGS forward preflight: invalid dimensions"
                     " (n_primitives=" +
                     std::to_string(n_primitives) +
                     ", active_sh_bases=" + std::to_string(active_sh_bases) +
+                    ", sh_layout_bases=" + std::to_string(sh_layout_bases) +
                     ", width=" + std::to_string(width) +
-                    ", height=" + std::to_string(height) +
-                    ", n_tiles=" + std::to_string(n_tiles) + ")");
+                             ", height=" + std::to_string(height) +
+                             ", n_tiles=" + std::to_string(n_tiles) + ")");
+            }
+            if (sh_layout_bases < active_sh_bases) {
+                throw std::runtime_error(
+                    "FastGS forward preflight: SH layout is smaller than active SH degree"
+                    " (active_sh_bases=" +
+                    std::to_string(active_sh_bases) +
+                    ", sh_layout_bases=" + std::to_string(sh_layout_bases) + ")");
             }
 
             checked_device_pointer_on_current_device(means_ptr, "means_ptr", current_device);
@@ -177,6 +187,7 @@ namespace fast_lfs::rasterization {
         float* alpha_ptr,
         int n_primitives,
         int active_sh_bases,
+        int sh_layout_bases,
         int width,
         int height,
         float focal_x,
@@ -238,6 +249,7 @@ namespace fast_lfs::rasterization {
                 alpha_ptr,
                 n_primitives,
                 active_sh_bases,
+                sh_layout_bases,
                 width,
                 height,
                 n_tiles);
@@ -293,6 +305,7 @@ namespace fast_lfs::rasterization {
                                                    alpha_ptr,
                                                    n_primitives,
                                                    active_sh_bases,
+                                                   sh_layout_bases,
                                                    width,
                                                    height,
                                                    focal_x,
@@ -318,6 +331,7 @@ namespace fast_lfs::rasterization {
             ctx.per_instance_sort_scratch_size = forward_result.per_instance_sort_scratch_size;
             ctx.per_instance_sort_total_size = forward_result.per_instance_sort_total_size;
             ctx.n_instances = forward_result.n_instances;
+            ctx.sh_layout_bases = sh_layout_bases;
             ctx.frame_id = frame_id;
             ctx.grad_mean2d_helper = grad_mean2d_helper;
             ctx.grad_conic_helper = grad_conic_helper;
@@ -370,6 +384,7 @@ namespace fast_lfs::rasterization {
         float* grad_w2c_ptr,
         int n_primitives,
         int active_sh_bases,
+        int sh_layout_bases,
         int width,
         int height,
         float focal_x,
@@ -391,6 +406,17 @@ namespace fast_lfs::rasterization {
         if (n_primitives <= 0 || width <= 0 || height <= 0 || forward_ctx.n_instances < 0) {
             release_forward_context(forward_ctx);
             outputs.error_message = "Invalid dimensions in backward_raw";
+            return outputs;
+        }
+        if (active_sh_bases <= 0 || active_sh_bases > 16 ||
+            sh_layout_bases <= 0 || sh_layout_bases > 16 ||
+            sh_layout_bases < active_sh_bases) {
+            release_forward_context(forward_ctx);
+            last_backward_error =
+                "Invalid SH layout in backward_raw (active_sh_bases=" +
+                std::to_string(active_sh_bases) +
+                ", sh_layout_bases=" + std::to_string(sh_layout_bases) + ")";
+            outputs.error_message = last_backward_error.c_str();
             return outputs;
         }
 
@@ -501,6 +527,7 @@ namespace fast_lfs::rasterization {
                 n_primitives,
                 forward_ctx.n_instances,
                 active_sh_bases,
+                sh_layout_bases,
                 width,
                 height,
                 focal_x,
@@ -575,7 +602,7 @@ namespace fast_lfs::rasterization {
         const auto ctx = forward_raw(
             means, scales, rotations, opacities, sh0, nullptr,
             w2c, cam_pos, image, alpha,
-            NUM_GAUSSIANS, 1,
+            NUM_GAUSSIANS, 1, 1,
             IMG_WIDTH, IMG_HEIGHT,
             FOCAL, FOCAL, CENTER_X, CENTER_Y,
             0.01f, 100.0f);
@@ -622,7 +649,7 @@ namespace fast_lfs::rasterization {
                 nullptr, nullptr, grad_image, grad_alpha, image, alpha,
                 means, scales, rotations, opacities, nullptr, w2c, cam_pos, ctx,
                 nullptr,
-                NUM_GAUSSIANS, 1,
+                NUM_GAUSSIANS, 1, 1,
                 IMG_WIDTH, IMG_HEIGHT, FOCAL, FOCAL, CENTER_X, CENTER_Y, true,
                 DensificationType::None, &warmup_adam);
 

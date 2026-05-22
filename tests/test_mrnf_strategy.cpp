@@ -227,6 +227,70 @@ TEST(MRNFStrategyTest, SHDegree0KeepsShNEmptyAndFusedAdamUsableAfterGrowth) {
     });
 }
 
+TEST(MRNFStrategyTest, ShNReservationTracksMaxDegreeAndMaxCap) {
+    constexpr int n_gaussians = 10;
+    constexpr size_t max_cap = 70;
+
+    const auto make_params = [] {
+        auto opt_params = param::OptimizationParameters::mrnf_defaults();
+        opt_params.iterations = 10'000;
+        opt_params.sh_degree_interval = 10'000;
+        opt_params.max_cap = static_cast<int>(max_cap);
+        return opt_params;
+    };
+
+    const auto expect_shN_capacity = [](const SplatData& splat_data,
+                                        const AdamOptimizer& optimizer,
+                                        const int max_degree) {
+        const auto layout_rest = static_cast<uint32_t>(sh_rest_coefficients_for_degree(max_degree));
+        const size_t expected_logical =
+            sh_swizzled_float_count(static_cast<size_t>(n_gaussians), layout_rest);
+        const size_t expected_capacity = sh_swizzled_float_count(max_cap, layout_rest);
+
+        ASSERT_TRUE(splat_data.shN().is_valid());
+        EXPECT_EQ(splat_data.shN().numel(), expected_logical);
+        EXPECT_EQ(splat_data.shN().capacity(), expected_capacity);
+
+        const auto* state = optimizer.get_state(ParamType::ShN);
+        ASSERT_NE(state, nullptr);
+        EXPECT_EQ(state->size, expected_logical);
+        EXPECT_EQ(state->capacity, expected_capacity);
+        if (layout_rest == 0) {
+            EXPECT_FALSE(state->exp_avg.is_valid());
+            EXPECT_FALSE(state->exp_avg_sq.is_valid());
+        } else {
+            ASSERT_TRUE(state->exp_avg.is_valid());
+            ASSERT_TRUE(state->exp_avg_sq.is_valid());
+            EXPECT_EQ(state->exp_avg.numel(), expected_logical);
+            EXPECT_EQ(state->exp_avg.capacity(), expected_capacity);
+            EXPECT_EQ(state->exp_avg_sq.numel(), expected_logical);
+            EXPECT_EQ(state->exp_avg_sq.capacity(), expected_capacity);
+        }
+    };
+
+    for (const int sh_degree : {0, 1, 2, 3}) {
+        auto splat_data = create_mrnf_test_splat_data(n_gaussians, sh_degree);
+        MRNF strategy(splat_data);
+
+        strategy.initialize(make_params());
+
+        expect_shN_capacity(splat_data, strategy.get_optimizer(), sh_degree);
+    }
+
+    auto scheduled_splat = create_mrnf_test_splat_data(n_gaussians, 1);
+    scheduled_splat.set_active_sh_degree(0);
+    MRNF scheduled_strategy(scheduled_splat);
+
+    scheduled_strategy.initialize(make_params());
+    expect_shN_capacity(scheduled_splat, scheduled_strategy.get_optimizer(), 1);
+    EXPECT_FALSE(scheduled_strategy.get_optimizer().prepare_fastgs_fused_adam(1001).shN.enabled);
+
+    scheduled_splat.increment_sh_degree();
+    const auto fused = scheduled_strategy.get_optimizer().prepare_fastgs_fused_adam(1001);
+    EXPECT_TRUE(fused.shN.enabled);
+    expect_shN_capacity(scheduled_splat, scheduled_strategy.get_optimizer(), 1);
+}
+
 TEST(MRNFStrategyTest, GrowAndSplitUsesIgsPlusSplitRule) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);

@@ -312,24 +312,25 @@ namespace lfs::training {
             // shN slot of src primitive (sampled_idxs[i]). Use in-swizzled-domain copies
             // so _shN's reserved capacity is preserved (no realloc).
             if (_splat_data->shN().is_valid() && _splat_data->shN().numel() > 0 &&
-                _splat_data->active_sh_coeffs_rest() > 0 && dead_indices.numel() > 0) {
+                _splat_data->max_sh_coeffs_rest() > 0 && dead_indices.numel() > 0) {
                 using namespace lfs::core;
-                const auto active_rest = static_cast<uint32_t>(_splat_data->active_sh_coeffs_rest());
+                const auto layout_rest = static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
                 const size_t n_pairs = dead_indices.numel();
-                Tensor staged = Tensor::empty({n_pairs, static_cast<size_t>(active_rest), 3},
+                Tensor staged = Tensor::empty({n_pairs, static_cast<size_t>(layout_rest), 3},
                                               _splat_data->shN().device());
                 shN_swizzled_gather_to_linear_i64(
                     _splat_data->shN().ptr<float>(),
                     sampled_idxs.ptr<int64_t>(),
                     staged.ptr<float>(),
                     n_pairs,
-                    active_rest);
+                    layout_rest,
+                    layout_rest);
                 auto dead_i32 = dead_indices.dtype() == DataType::Int32
                                     ? dead_indices
                                     : dead_indices.to(DataType::Int32);
                 shN_swizzled_scatter_linear(
                     _splat_data->shN().ptr<float>(), dead_i32.ptr<int>(),
-                    staged.ptr<float>(), n_pairs, active_rest);
+                    staged.ptr<float>(), n_pairs, layout_rest, layout_rest);
             }
         }
 
@@ -793,9 +794,9 @@ namespace lfs::training {
                 };
 
                 // shN is 1D swizzled — its capacity must be in FLOATS, not row count.
-                const auto active_rest = static_cast<uint32_t>(_splat_data->active_sh_coeffs_rest());
-                auto ensure_shN_capacity_direct = [capacity, active_rest](Tensor& param) {
-                    const size_t cap_floats = lfs::core::sh_swizzled_float_count(capacity, active_rest);
+                const auto layout_rest = static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
+                auto ensure_shN_capacity_direct = [capacity, layout_rest](Tensor& param) {
+                    const size_t cap_floats = lfs::core::sh_swizzled_float_count(capacity, layout_rest);
                     if (param.capacity() >= cap_floats)
                         return;
                     auto new_param = Tensor::zeros_direct(param.shape(), cap_floats);
@@ -806,7 +807,7 @@ namespace lfs::training {
 
                 ensure_capacity_direct(_splat_data->means());
                 ensure_capacity_direct(_splat_data->sh0());
-                if (active_rest > 0 && _splat_data->shN().is_valid() && _splat_data->shN().numel() > 0) {
+                if (layout_rest > 0 && _splat_data->shN().is_valid() && _splat_data->shN().numel() > 0) {
                     ensure_shN_capacity_direct(_splat_data->shN());
                 }
                 ensure_capacity_direct(_splat_data->scaling_raw());

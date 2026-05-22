@@ -15,10 +15,10 @@ namespace lfs::core {
     // vksplat/vksplat/slang/spherical_harmonics.slang).
     //
     // Canonical layout (input/export):
-    //     [N, K, 3] row-major, K = active SH-rest coefficient count (0 / 3 / 8 / 15 for SH 0-3).
+    //     [N, K, 3] row-major, K = SH-rest coefficient count (0 / 3 / 8 / 15 for SH 0-3).
     //
     // Swizzled layout (resident GPU storage):
-    //     [ceil(N/R), slots_for_active_rest, R] of float4, where R = kShReorderSize.
+    //     [ceil(N/R), slots_for_layout_rest, R] of float4, where R = kShReorderSize.
     //     For a warp of R lanes the float4 reads/writes coalesce into a single 16-byte vector
     //     load per coefficient slot — fixing the stride-12 misaligned loads of the old float3
     //     layout.
@@ -35,11 +35,11 @@ namespace lfs::core {
     //
     // shAt(p, k) returns the float4 slot index (multiply by 4 to get the float offset).
     //
-    //     shAt(p, k, active_rest) = (p / R) * (slots_for_active_rest * R) + k * R + (p % R)
+    //     shAt(p, k, layout_rest) = (p / R) * (slots_for_layout_rest * R) + k * R + (p % R)
     //
-    // Storage is compact for the active SH degree:
+    // Storage is compact for the selected/max SH degree:
     //     degree 0 -> 0 slots, degree 1 -> 3 slots, degree 2 -> 6 slots, degree 3 -> 12 slots.
-    // Degree promotion must resize/repack the buffer before kernels read the new slots.
+    // Active degree controls which coefficients are used/updated, not how wide resident storage is.
 
     inline constexpr std::uint32_t kShReorderSize = 32u;
     inline constexpr std::uint32_t kShMaxCoeffsRest = 15u;          // canonical float3 coeff count (shN)
@@ -73,22 +73,22 @@ namespace lfs::core {
         return sh_swizzled_block_count(n) * kShReorderSize;
     }
 
-    [[nodiscard]] inline constexpr std::uint32_t sh_float4_slots_for_rest(std::uint32_t active_coeffs_rest) noexcept {
-        return active_coeffs_rest == 0u
+    [[nodiscard]] inline constexpr std::uint32_t sh_float4_slots_for_rest(std::uint32_t coeffs_rest) noexcept {
+        return coeffs_rest == 0u
                    ? 0u
                    : std::min<std::uint32_t>(
                          kShRestFloat4PerPrimitive,
-                         (std::min<std::uint32_t>(active_coeffs_rest, kShMaxCoeffsRest) * kShChannels + 3u) / 4u);
+                         (std::min<std::uint32_t>(coeffs_rest, kShMaxCoeffsRest) * kShChannels + 3u) / 4u);
     }
 
-    // Total float count in the compact swizzled SH buffer for n primitives and active rest coeffs.
-    // (ceil(n/R) * slots_for_active_rest * R * 4) — packed float4 layout.
+    // Total float count in the compact swizzled SH buffer for n primitives and layout rest coeffs.
+    // (ceil(n/R) * slots_for_layout_rest * R * 4) — packed float4 layout.
     // The DC term (sh0) is stored in a separate tensor; this buffer only holds shN-rest.
     [[nodiscard]] inline constexpr std::size_t sh_swizzled_float_count(
         std::size_t n,
-        std::uint32_t active_coeffs_rest) noexcept {
+        std::uint32_t coeffs_rest) noexcept {
         return sh_swizzled_block_count(n) *
-               static_cast<std::size_t>(sh_float4_slots_for_rest(active_coeffs_rest)) *
+               static_cast<std::size_t>(sh_float4_slots_for_rest(coeffs_rest)) *
                kShReorderSize * 4u;
     }
 
@@ -100,9 +100,9 @@ namespace lfs::core {
     // Total float4 slot count in the swizzled SH buffer for n primitives.
     [[nodiscard]] inline constexpr std::size_t sh_swizzled_float4_count(
         std::size_t n,
-        std::uint32_t active_coeffs_rest) noexcept {
+        std::uint32_t coeffs_rest) noexcept {
         return sh_swizzled_block_count(n) *
-               static_cast<std::size_t>(sh_float4_slots_for_rest(active_coeffs_rest)) *
+               static_cast<std::size_t>(sh_float4_slots_for_rest(coeffs_rest)) *
                kShReorderSize;
     }
 
@@ -112,8 +112,8 @@ namespace lfs::core {
 
     [[nodiscard]] inline constexpr std::size_t sh_swizzled_byte_count(
         std::size_t n,
-        std::uint32_t active_coeffs_rest) noexcept {
-        return sh_swizzled_float_count(n, active_coeffs_rest) * sizeof(float);
+        std::uint32_t coeffs_rest) noexcept {
+        return sh_swizzled_float_count(n, coeffs_rest) * sizeof(float);
     }
 
     [[nodiscard]] inline constexpr std::size_t sh_swizzled_byte_count(std::size_t n) noexcept {
@@ -124,10 +124,10 @@ namespace lfs::core {
     [[nodiscard]] inline std::uint32_t sh_swizzled_index(
         std::uint32_t primitive_idx,
         std::uint32_t float4_slot,
-        std::uint32_t active_coeffs_rest) noexcept {
+        std::uint32_t layout_coeffs_rest) noexcept {
         const std::uint32_t block = primitive_idx / kShReorderSize;
         const std::uint32_t lane = primitive_idx % kShReorderSize;
-        const std::uint32_t slots = sh_float4_slots_for_rest(active_coeffs_rest);
+        const std::uint32_t slots = sh_float4_slots_for_rest(layout_coeffs_rest);
         return block * (slots * kShReorderSize) + float4_slot * kShReorderSize + lane;
     }
 
@@ -145,6 +145,17 @@ namespace lfs::core {
         std::uint32_t active_coeffs_rest,
         cudaStream_t stream = nullptr);
 
+    // Variant where canonical rows contain `src_coeffs_rest` coefficients but the
+    // destination swizzled buffer has room for `layout_coeffs_rest`. Coefficients beyond
+    // src_coeffs_rest are zero-filled in the destination layout.
+    void reorder_sh_to_swizzled(
+        const float* src_canonical,
+        float* dst_swizzled,
+        std::size_t n_primitives,
+        std::uint32_t src_coeffs_rest,
+        std::uint32_t layout_coeffs_rest,
+        cudaStream_t stream = nullptr);
+
     // Inverse of reorder_sh_to_swizzled: copy the first `active_coeffs_rest` coefficients of
     // the first n primitives back into canonical [N, K, 3] layout. dst must be at least
     // n * active_coeffs_rest * 3 floats.
@@ -153,6 +164,16 @@ namespace lfs::core {
         float* dst_canonical,
         std::size_t n_primitives,
         std::uint32_t active_coeffs_rest,
+        cudaStream_t stream = nullptr);
+
+    // Variant where the source swizzled buffer uses `layout_coeffs_rest` slots while the
+    // output canonical rows contain only `dst_coeffs_rest` coefficients.
+    void undo_reorder_sh_from_swizzled(
+        const float* src_swizzled,
+        float* dst_canonical,
+        std::size_t n_primitives,
+        std::uint32_t dst_coeffs_rest,
+        std::uint32_t layout_coeffs_rest,
         cudaStream_t stream = nullptr);
 
     // Zero entire primitive rows in the swizzled buffer (all active float4 slots).
@@ -217,6 +238,15 @@ namespace lfs::core {
         std::uint32_t active_coeffs_rest,
         cudaStream_t stream = nullptr);
 
+    void shN_swizzled_gather_to_linear(
+        const float* src_swizzled,
+        const int* src_indices,
+        float* dst_linear,
+        std::size_t n_src,
+        std::uint32_t dst_coeffs_rest,
+        std::uint32_t layout_coeffs_rest,
+        cudaStream_t stream = nullptr);
+
     // int64 variant for callers holding Tensor nonzero/multinomial indices.
     void shN_swizzled_gather_to_linear_i64(
         const float* src_swizzled,
@@ -224,6 +254,15 @@ namespace lfs::core {
         float* dst_linear,
         std::size_t n_src,
         std::uint32_t active_coeffs_rest,
+        cudaStream_t stream = nullptr);
+
+    void shN_swizzled_gather_to_linear_i64(
+        const float* src_swizzled,
+        const std::int64_t* src_indices,
+        float* dst_linear,
+        std::size_t n_src,
+        std::uint32_t dst_coeffs_rest,
+        std::uint32_t layout_coeffs_rest,
         cudaStream_t stream = nullptr);
 
     // Append n_src linear rows (laid out as [n_src, active_coeffs_rest, 3]) into the
@@ -236,6 +275,15 @@ namespace lfs::core {
         std::uint32_t active_coeffs_rest,
         cudaStream_t stream = nullptr);
 
+    void shN_swizzled_gather_from_linear(
+        float* dst_swizzled,
+        std::size_t dst_offset,
+        const float* src_linear,
+        std::size_t n_src,
+        std::uint32_t src_coeffs_rest,
+        std::uint32_t layout_coeffs_rest,
+        cudaStream_t stream = nullptr);
+
     // Scatter linear rows ([n_src, active_coeffs_rest, 3]) into specific primitive indices
     // of the swizzled buffer (equivalent of index_put_ on dim 0).
     void shN_swizzled_scatter_linear(
@@ -244,6 +292,15 @@ namespace lfs::core {
         const float* src_linear,
         std::size_t n_src,
         std::uint32_t active_coeffs_rest,
+        cudaStream_t stream = nullptr);
+
+    void shN_swizzled_scatter_linear(
+        float* dst_swizzled,
+        const int* dst_indices,
+        const float* src_linear,
+        std::size_t n_src,
+        std::uint32_t src_coeffs_rest,
+        std::uint32_t layout_coeffs_rest,
         cudaStream_t stream = nullptr);
 
     // Pack split resident SH storage into VkSplat's full 16-coefficient packed layout:
