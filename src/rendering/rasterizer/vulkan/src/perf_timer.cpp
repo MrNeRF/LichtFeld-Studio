@@ -1,5 +1,7 @@
 #include "perf_timer.h"
 
+#include "diagnostics/vram_profiler.hpp"
+
 #include <stack>
 
 namespace PerfTimer {
@@ -14,6 +16,20 @@ namespace PerfTimer {
         size_t count = 0;
         double total_time = 0.0;
     } stages[TrainStage::END];
+
+    const char* diagnosticStageScope(const TrainStage stage) {
+        switch (stage) {
+        case ProjectionForward: return "vksplat.shaders.slang.spirv.projection_forward";
+        case GenerateKeys: return "vksplat.shaders.slang.spirv.generate_keys";
+        case ComputeTileRanges: return "vksplat.shaders.slang.spirv.compute_tile_ranges";
+        case RasterizeForward: return "vksplat.shaders.slang.spirv.rasterize_forward";
+        case _Cumsum: return "vksplat.shaders.slang.spirv.cumsum";
+        case CalculateIndexBufferOffset: return "vksplat.shaders.slang.spirv.index_buffer_offset";
+        case SortRTS: return "vksplat.shaders.glsl.spirv.radix_sort";
+        case END: break;
+        }
+        return nullptr;
+    }
 
     std::vector<std::pair<TrainStage, int>> marks;
     std::vector<TrainStage> pushedMarks;
@@ -121,6 +137,18 @@ namespace PerfTimer {
             }
         }
         marks.clear();
+        for (int stage = 0; stage < int(TrainStage::END); ++stage) {
+            const auto [count, elapsed_seconds] = results[stage];
+            const char* const scope = count > 0
+                                          ? diagnosticStageScope(static_cast<TrainStage>(stage))
+                                          : nullptr;
+            if (!scope) {
+                continue;
+            }
+            lfs::diagnostics::VramProfiler::instance().recordTimerSample(
+                scope,
+                elapsed_seconds * 1000.0);
+        }
         return results;
     }
 

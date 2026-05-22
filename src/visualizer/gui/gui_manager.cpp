@@ -11,6 +11,7 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include "core/tensor.hpp"
@@ -36,6 +37,7 @@
 #include "gui/vulkan_ui_texture.hpp"
 #include <implot.h>
 
+#include "gui/gpu_memory_query.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "input/frame_input_buffer.hpp"
 #include "input/input_controller.hpp"
@@ -4959,6 +4961,23 @@ namespace lfs::vis::gui {
             }
         }
         rml_viewport_overlay_.setGTMetricsOverlay(std::move(gt_metrics_overlay));
+        const auto publish_vram_hud_overlay = [&]() {
+            RmlViewportOverlay::VramHudOverlayState vram_hud_overlay;
+            if (auto& profiler = lfs::diagnostics::VramProfiler::instance();
+                show_vram_hud_ && profiler.enabled()) {
+                if (rml_viewport_overlay_.isDueForVramProcessSample(std::chrono::milliseconds(250))) {
+                    profiler.sampleCudaMemory();
+                    const auto memory = queryGpuMemory();
+                    profiler.updateProcessMemory(memory.process_used,
+                                                 memory.total_used,
+                                                 memory.total,
+                                                 memory.device_name);
+                }
+                vram_hud_overlay.visible = true;
+                vram_hud_overlay.snapshot = profiler.snapshot();
+            }
+            rml_viewport_overlay_.setVramHudOverlay(std::move(vram_hud_overlay));
+        };
         startup_overlay_.setInput(&panel_input);
         if (startup_overlay_.isVisible()) {
             auto& focus = guiFocusState();
@@ -5003,10 +5022,6 @@ namespace lfs::vis::gui {
         if (overlay_renderer) {
             overlay_renderer->endFrame();
         }
-
-        rml_viewport_overlay_.render();
-
-        applyFrameInputCapture();
 
         // Recompute viewport layout
         viewport_layout_ = panel_layout_.computeViewportLayout(
@@ -5070,6 +5085,14 @@ namespace lfs::vis::gui {
             LOG_TIMER("gui_render.imgui_EndFrame");
             ImGui::EndFrame();
         }
+
+        rml_viewport_overlay_.setViewportBounds(
+            viewport_layout_.pos, viewport_layout_.size,
+            {panel_input.screen_x, panel_input.screen_y});
+        publish_vram_hud_overlay();
+        rml_viewport_overlay_.render();
+
+        applyFrameInputCapture();
 
         if (vulkan_gui_) {
 #ifdef LFS_VULKAN_VIEWER_ENABLED
@@ -5707,6 +5730,10 @@ namespace lfs::vis::gui {
             ui_hidden_ = !ui_hidden_;
         });
 
+        ui::ToggleVramHud::when([this](const auto&) {
+            show_vram_hud_ = !show_vram_hud_;
+        });
+
         ui::ToggleFullscreen::when([this](const auto&) {
             if (auto* wm = viewer_->getWindowManager()) {
                 wm->toggleFullscreen();
@@ -5936,6 +5963,8 @@ namespace lfs::vis::gui {
         if (ui_layout_settle_frames_ > 0)
             return true;
         if (rml_right_panel_.needsAnimationFrame())
+            return true;
+        if (rml_viewport_overlay_.needsAnimationFrame())
             return true;
         if (PanelRegistry::instance().needsAnimationFrame())
             return true;

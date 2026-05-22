@@ -214,6 +214,7 @@ namespace lfs::vis {
             // UI state only
             std::unordered_map<std::string, bool> window_states_;
             bool show_main_panel_ = true;
+            bool show_vram_hud_ = true;
 
             // Panel layout and viewport
             PanelLayoutManager panel_layout_;

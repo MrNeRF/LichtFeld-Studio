@@ -4,6 +4,7 @@
 #pragma once
 
 #include "allocation_profiler.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "core/export.hpp"
 #include "core/logger.hpp"
 #include "deferred_free_queue.hpp"
@@ -109,6 +110,7 @@ namespace lfs::core {
                 if (err == cudaSuccess) {
                     stats_.async_allocs.fetch_add(1, std::memory_order_relaxed);
                     stats_.async_bytes.fetch_add(bytes, std::memory_order_relaxed);
+                    track_allocation(ptr, bytes, AllocMethod::Async);
                     if constexpr (ENABLE_ALLOCATION_PROFILING) {
                         AllocationProfiler::instance().record_allocation(bytes, 3);
                     }
@@ -380,11 +382,22 @@ namespace lfs::core {
         void track_allocation(void* ptr, size_t size, AllocMethod method) {
             std::lock_guard<std::mutex> lock(map_mutex_);
             allocation_map_[ptr] = {size, method};
+            try {
+                lfs::diagnostics::VramProfiler::instance().recordAllocation(
+                    ptr, size, to_vram_method(method));
+            } catch (...) {
+                // Diagnostics must never make CUDA allocation fail.
+            }
         }
 
         void untrack_allocation(void* ptr) {
             std::lock_guard<std::mutex> lock(map_mutex_);
             allocation_map_.erase(ptr);
+            try {
+                lfs::diagnostics::VramProfiler::instance().recordDeallocation(ptr);
+            } catch (...) {
+                // Diagnostics must never make CUDA deallocation fail.
+            }
         }
 
         bool lookup_allocation(void* ptr, AllocMethod& method, size_t& size) {
@@ -396,6 +409,16 @@ namespace lfs::core {
                 return true;
             }
             return false;
+        }
+
+        static lfs::diagnostics::VramAllocationMethod to_vram_method(AllocMethod method) {
+            switch (method) {
+            case AllocMethod::Slab: return lfs::diagnostics::VramAllocationMethod::Slab;
+            case AllocMethod::Bucketed: return lfs::diagnostics::VramAllocationMethod::Bucketed;
+            case AllocMethod::Async: return lfs::diagnostics::VramAllocationMethod::Async;
+            case AllocMethod::Direct: return lfs::diagnostics::VramAllocationMethod::Direct;
+            }
+            return lfs::diagnostics::VramAllocationMethod::Unknown;
         }
 
         void log_stats_periodically() {

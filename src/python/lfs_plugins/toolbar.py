@@ -408,6 +408,26 @@ class _UtilityToolbarController:
                 )
             )
 
+        vram_profiler_available = (
+            hasattr(lf, "get_vram_profiler_enabled") and
+            hasattr(lf, "set_vram_profiler_enabled")
+        )
+        if vram_profiler_available:
+            try:
+                vram_profiler_enabled = bool(lf.get_vram_profiler_enabled())
+            except Exception:
+                vram_profiler_enabled = False
+            utility_bottom_buttons.append(
+                _button_record(
+                    "util-vram-profiler",
+                    "toggle_vram_profiler",
+                    "",
+                    _icon_src("gpu"),
+                    tooltip_text="VRAM Diagnostics",
+                    selected=vram_profiler_enabled,
+                )
+            )
+
         if histogram_mode_available(lf.ui.context()):
             utility_bottom_buttons.append(
                 _button_record(
@@ -460,6 +480,10 @@ class _UtilityToolbarController:
             return
         if action == "toggle_sequencer":
             lf.ui.set_sequencer_visible(not lf.ui.is_sequencer_visible())
+            return
+        if action == "toggle_vram_profiler":
+            if hasattr(lf, "get_vram_profiler_enabled") and hasattr(lf, "set_vram_profiler_enabled"):
+                lf.set_vram_profiler_enabled(not bool(lf.get_vram_profiler_enabled()))
             return
         if action == "toggle_panel":
             if value == "lfs.histogram" and not histogram_mode_available(lf.ui.context()):

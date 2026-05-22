@@ -85,6 +85,7 @@ target_include_directories(lfs_core SYSTEM PRIVATE
 target_link_libraries(lfs_core
     PUBLIC
         lfs_logger
+        lfs_diagnostics
         lfs_event_bridge
         lfs_geometry
         TBB::tbb

@@ -15,6 +15,7 @@ target_include_directories(lfs_logger
 
 target_link_libraries(lfs_logger
     PRIVATE
+        lfs_diagnostics
         spdlog::spdlog
 )
 

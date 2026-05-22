@@ -47,6 +47,77 @@
     color: @{text};
 }
 
+.vram-hud-card {
+    background-color: @{viewport.metrics_bg};
+    border-color: @{viewport.metrics_border};
+}
+
+.vram-hud-title,
+.vram-hud-summary-value,
+.vram-hud-tree-row span {
+    color: @{text};
+}
+
+.vram-hud-iteration,
+.vram-hud-summary-label,
+.vram-hud-device,
+.vram-hud-row-header span,
+.vram-hud-tree-row em,
+.vram-hud-empty,
+.vram-hud-expand-toggle {
+    color: @{text_dim};
+}
+
+.vram-hud-tree-row.has-children:hover {
+    background-color: @{viewport.hover_bg};
+}
+
+.vram-hud-expand-toggle:hover {
+    color: @{text};
+}
+
+.vram-hud-tree-row.scope-delta .vram-hud-col-delta {
+    color: @{primary};
+}
+
+.vram-hud-tree-row.scope-timer .vram-hud-col-time {
+    color: @{primary};
+}
+
+.vram-hud-summary {
+    border-bottom-width: 1dp;
+    border-bottom-color: @{alpha(border,0.39)};
+}
+
+#vram-hud-filter {
+    background-color: @{viewport.metrics_bg};
+    border-color: @{alpha(border,0.39)};
+    color: @{text};
+}
+
+#vram-hud-filter:focus {
+    border-color: @{primary};
+}
+
+.vram-hud-filter-clear {
+    background-color: @{viewport.metrics_bg};
+    border-color: @{alpha(border,0.39)};
+    color: @{text_dim};
+}
+
+.vram-hud-filter-clear:hover {
+    background-color: @{viewport.hover_bg};
+    color: @{text};
+}
+
+.vram-hud-resize {
+    background-color: @{alpha(border,0.39)};
+}
+
+.vram-hud-resize:hover {
+    background-color: @{primary};
+}
+
 .viewport-status-backdrop {
     background-color: @{viewport.status_backdrop};
 }

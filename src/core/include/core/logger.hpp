@@ -185,6 +185,7 @@ namespace lfs::core {
         std::string name_;
         LogLevel level_;
         std::source_location loc_;
+        bool diagnostics_scope_active_ = false;
     };
 
 } // namespace lfs::core

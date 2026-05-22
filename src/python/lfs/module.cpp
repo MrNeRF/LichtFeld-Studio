@@ -48,6 +48,7 @@
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "gui/rmlui/elements/loss_graph_element.hpp"
 #include "internal/resource_paths.hpp"
 #include "io/filesystem_utils.hpp"
@@ -988,6 +989,21 @@ NB_MODULE(lichtfeld, m) {
         },
         "Get current loss");
 
+    m.def(
+        "set_vram_profiler_enabled",
+        [](const bool enabled) {
+            lfs::diagnostics::VramProfiler::instance().setEnabled(enabled);
+        },
+        nb::arg("enabled"),
+        "Enable or disable the live VRAM diagnostics profiler");
+
+    m.def(
+        "get_vram_profiler_enabled",
+        []() -> bool {
+            return lfs::diagnostics::VramProfiler::instance().enabled();
+        },
+        "Return whether the live VRAM diagnostics profiler is enabled");
+
     // Scene manipulation
     m.def(
         "set_node_visibility", [](const std::string& name, bool visible) {
@@ -1490,6 +1506,9 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "toggle_ui", []() { lfs::core::events::ui::ToggleUI{}.emit(); },
         "Toggle UI overlay visibility");
+    m.def(
+        "toggle_vram_hud", []() { lfs::core::events::ui::ToggleVramHud{}.emit(); },
+        "Toggle the VRAM diagnostics HUD overlay (requires vram profiler enabled)");
     m.def(
         "toggle_independent_split_view", []() {
             auto* controller = lfs::vis::InputController::instance();

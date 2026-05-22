@@ -19,11 +19,17 @@
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/Input.h>
+#include <algorithm>
 #include <cassert>
 #include <format>
 #include <vector>
 
 namespace lfs::vis::gui {
+
+    RmlViewportOverlay::RmlViewportOverlay()
+        : vram_hud_(std::make_unique<VramHudOverlay>()) {}
+
+    RmlViewportOverlay::~RmlViewportOverlay() = default;
 
     void RmlViewportOverlay::init(RmlUIManager* mgr) {
         assert(mgr);
@@ -45,6 +51,8 @@ namespace lfs::vis::gui {
             cacheBodyTemplate();
             document_->Show();
             applyGTMetricsOverlay();
+            if (vram_hud_)
+                vram_hud_->onDocumentLoaded(document_);
         } catch (const std::exception& e) {
             LOG_ERROR("RmlViewportOverlay: resource not found: {}", e.what());
             return;
@@ -59,6 +67,8 @@ namespace lfs::vis::gui {
             lfs::python::unregister_rml_document("viewport_overlay");
         doc_registered_ = false;
 
+        if (vram_hud_)
+            vram_hud_->onDocumentDestroyed();
         if (rml_context_ && rml_manager_)
             rml_manager_->destroyContext("viewport_overlay");
         rml_context_ = nullptr;
@@ -79,6 +89,8 @@ namespace lfs::vis::gui {
             rml_context_->Update();
         }
 
+        if (vram_hud_)
+            vram_hud_->onDocumentDestroyed();
         document_ = nullptr;
         base_rcss_.clear();
         has_theme_signature_ = false;
@@ -100,6 +112,8 @@ namespace lfs::vis::gui {
             cacheBodyTemplate();
             document_->Show();
             applyGTMetricsOverlay();
+            if (vram_hud_)
+                vram_hud_->onDocumentLoaded(document_);
             updateToolbarRoots();
         } catch (const std::exception& e) {
             LOG_ERROR("RmlViewportOverlay: resource not found during reload: {}", e.what());
@@ -196,6 +210,19 @@ namespace lfs::vis::gui {
         render_needed_ = true;
     }
 
+    void RmlViewportOverlay::setVramHudOverlay(VramHudOverlayState state) {
+        if (!vram_hud_)
+            return;
+        const bool was_visible = vram_hud_->isVisible();
+        vram_hud_->setState(std::move(state));
+        if (was_visible || vram_hud_->isVisible())
+            render_needed_ = true;
+    }
+
+    bool RmlViewportOverlay::isDueForVramProcessSample(std::chrono::milliseconds interval) {
+        return vram_hud_ ? vram_hud_->isDueForProcessSample(interval) : false;
+    }
+
     void RmlViewportOverlay::updateToolbarRoots() {
         if (!document_) {
             return;
@@ -255,19 +282,22 @@ namespace lfs::vis::gui {
 
         if (guiFocusState().want_capture_mouse)
             return;
+
         const float mx = input.mouse_x - vp_pos_.x;
         const float my = input.mouse_y - vp_pos_.y;
         const int mods = sdlModsToRml(input.key_ctrl, input.key_shift,
                                       input.key_alt, input.key_super);
         const int rml_mx = static_cast<int>(mx);
         const int rml_my = static_cast<int>(my);
+
         const bool was_inside = mouse_pos_valid_ &&
                                 last_mouse_x_ >= 0 && last_mouse_x_ < static_cast<int>(vp_size_.x) &&
                                 last_mouse_y_ >= 0 && last_mouse_y_ < static_cast<int>(vp_size_.y);
         const bool is_inside = rml_mx >= 0 && rml_mx < static_cast<int>(vp_size_.x) &&
                                rml_my >= 0 && rml_my < static_cast<int>(vp_size_.y);
+        const bool vram_drag_capture = vram_hud_ && vram_hud_->isCapturingPointer();
         if ((!mouse_pos_valid_ || rml_mx != last_mouse_x_ || rml_my != last_mouse_y_) &&
-            (was_inside || is_inside)) {
+            (was_inside || is_inside || vram_drag_capture)) {
             mouse_pos_valid_ = true;
             last_mouse_x_ = rml_mx;
             last_mouse_y_ = rml_my;
@@ -280,7 +310,7 @@ namespace lfs::vis::gui {
                                 hover->GetId() != "overlay-body" &&
                                 hover->GetId() != "dm-root";
 
-        if (over_interactive) {
+        if (over_interactive || vram_drag_capture) {
             wants_input_ = true;
             guiFocusState().want_capture_mouse = true;
 
@@ -305,7 +335,8 @@ namespace lfs::vis::gui {
                 rml_context_->ProcessMouseWheel(Rml::Vector2f(0.0f, -input.mouse_wheel), mods);
             }
 
-            tooltip_.setHover(resolveRmlTooltip(hover), hover);
+            if (hover)
+                tooltip_.setHover(resolveRmlTooltip(hover), hover);
         }
     }
 
@@ -372,6 +403,8 @@ namespace lfs::vis::gui {
             wrapper->AppendChild(body->RemoveChild(child));
 
         applyGTMetricsOverlay();
+        if (vram_hud_)
+            vram_hud_->onDocumentLoaded(document_);
     }
 
     bool RmlViewportOverlay::applyFrameTooltip() {

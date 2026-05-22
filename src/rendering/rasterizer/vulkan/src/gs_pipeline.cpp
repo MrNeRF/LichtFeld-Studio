@@ -1,7 +1,11 @@
 #include "gs_pipeline.h"
 #include "perf_timer.h"
 
+#include "diagnostics/vram_profiler.hpp"
+
+#include <filesystem>
 #include <fstream>
+#include <string_view>
 #include <vector>
 
 #ifdef max
@@ -14,6 +18,50 @@
 static const size_t MAX_UNIFORM_SIZE = 192;
 
 static const uint32_t MAX_TIMESTAMP_QUERY_COUNT = 48;
+
+namespace {
+    constexpr std::string_view kSlangShaderBytecodeScope = "vksplat.shaders.slang.spirv";
+    constexpr std::string_view kSlangShaderRootScope = "vksplat.shaders.slang";
+
+    [[nodiscard]] bool isGeneratedSlangSpirvPath(const std::string& spirv_path) {
+        return spirv_path.find("/generated/") != std::string::npos ||
+               spirv_path.find("\\generated\\") != std::string::npos;
+    }
+
+    [[nodiscard]] std::string spirvDiagnosticName(const std::string& spirv_path) {
+        auto name = std::filesystem::path(spirv_path).stem().string();
+        if (name.empty()) {
+            return "unnamed";
+        }
+        if (name == "projection_forward") {
+            return "projection_forward/standard";
+        }
+        if (name == "projection_forward_3dgut") {
+            return "projection_forward/3dgut";
+        }
+        if (name == "rasterize_forward") {
+            return "rasterize_forward/standard";
+        }
+        if (name == "rasterize_forward_3dgut") {
+            return "rasterize_forward/3dgut";
+        }
+        constexpr std::string_view cumsum_prefix = "cumsum_";
+        if (name.rfind(cumsum_prefix, 0) == 0) {
+            return "cumsum/" + name.substr(cumsum_prefix.size());
+        }
+        return name;
+    }
+
+    void recordSlangShaderBytecode(const std::string& spirv_path, const std::size_t bytes) {
+        if (!isGeneratedSlangSpirvPath(spirv_path) || bytes == 0) {
+            return;
+        }
+        lfs::diagnostics::VramProfiler::instance().recordStaticBytes(
+            kSlangShaderBytecodeScope,
+            spirvDiagnosticName(spirv_path),
+            bytes);
+    }
+}
 
 #if defined(__SSE2__) || defined(_MSC_VER)
 #define SSE2_AVAILABLE 1
@@ -152,6 +200,7 @@ void VulkanGSPipeline::cleanup() {
     // those are always passed in by the host visualizer via initializeExternal.
     // Clean up only what we created on top of them.
     HOST_GUARD;
+    lfs::diagnostics::VramProfiler::instance().clearStaticScope(kSlangShaderRootScope);
 
     if (stager.buffer != VK_NULL_HANDLE) {
         vmaDestroyBuffer(allocator, stager.buffer, stager.allocation);
@@ -555,7 +604,9 @@ void VulkanGSPipeline::createComputePipeline(_ComputePipeline& pipeline, const s
         return;
     }
 
-    createShaderModule(loadSpirv(spirv_path), &pipeline.shader);
+    const auto spirv_code = loadSpirv(spirv_path);
+    recordSlangShaderBytecode(spirv_path, spirv_code.size() * sizeof(uint32_t));
+    createShaderModule(spirv_code, &pipeline.shader);
     createComputeDescriptorSetLayout(pipeline);
 
     // Create push constant range for uniforms

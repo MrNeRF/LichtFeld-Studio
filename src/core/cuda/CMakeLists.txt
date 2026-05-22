@@ -40,6 +40,7 @@ target_link_libraries(lfs_core_cuda
         CUDA::cudart
         CUDA::cuda_driver
         CUDA::curand
+        lfs_diagnostics
         spdlog::spdlog
         glm::glm
         OpenMP::OpenMP_CXX

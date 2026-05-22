@@ -126,6 +126,207 @@ body {
     font-weight: bold;
 }
 
+.vram-hud-overlay {
+    position: absolute;
+    right: 16dp;
+    top: 16dp;
+    width: 620dp;
+    height: 72%;
+    pointer-events: auto;
+    z-index: 21;
+}
+
+.vram-hud-card {
+    position: relative;
+    height: 100%;
+    box-sizing: border-box;
+    padding: 10dp 12dp;
+    border-width: 1dp;
+    border-radius: 8dp;
+    display: flex;
+    flex-direction: column;
+    gap: 8dp;
+}
+
+.vram-hud-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    drag: drag;
+    cursor: move;
+}
+
+.vram-hud-filter-row {
+    display: flex;
+    align-items: center;
+    gap: 4dp;
+    padding-bottom: 4dp;
+}
+
+#vram-hud-filter {
+    flex: 1;
+    height: 22dp;
+    font-size: 11dp;
+    padding: 2dp 6dp;
+    border-width: 1dp;
+    border-radius: 4dp;
+}
+
+.vram-hud-filter-clear {
+    width: 22dp;
+    height: 22dp;
+    font-size: 10dp;
+    text-align: center;
+    border-width: 1dp;
+    border-radius: 4dp;
+    cursor: pointer;
+}
+
+.vram-hud-filter-clear.hidden {
+    display: none;
+}
+
+.vram-hud-resize {
+    position: absolute;
+    right: 0dp;
+    bottom: 0dp;
+    width: 14dp;
+    height: 14dp;
+    drag: drag;
+    cursor: nwse-resize;
+}
+
+.vram-hud-title {
+    font-size: 13dp;
+    font-weight: bold;
+}
+
+.vram-hud-iteration {
+    font-size: 11dp;
+}
+
+.vram-hud-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 3dp;
+    padding-bottom: 6dp;
+}
+
+.vram-hud-summary-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12dp;
+}
+
+.vram-hud-summary-label,
+.vram-hud-summary-value,
+.vram-hud-device,
+.vram-hud-empty {
+    font-size: 11dp;
+}
+
+.vram-hud-device {
+    margin-top: 2dp;
+}
+
+.vram-hud-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 2dp;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.vram-hud-tree-row {
+    display: flex;
+    gap: 8dp;
+    align-items: baseline;
+    height: 28dp;
+    min-height: 28dp;
+    max-height: 28dp;
+    padding: 2dp 3dp;
+    overflow: hidden;
+}
+
+.vram-hud-tree-row.has-children {
+    cursor: pointer;
+}
+
+.vram-hud-tree-row span {
+    font-size: 10dp;
+}
+
+.vram-hud-row-name,
+.vram-hud-col-source {
+    width: 250dp;
+}
+
+.vram-hud-row-name {
+    display: flex;
+    gap: 4dp;
+    align-items: baseline;
+    min-width: 0;
+}
+
+.vram-hud-col-live {
+    width: 78dp;
+}
+
+.vram-hud-col-peak {
+    width: 78dp;
+}
+
+.vram-hud-col-delta {
+    width: 82dp;
+}
+
+.vram-hud-col-time {
+    width: 64dp;
+}
+
+.vram-hud-node-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.vram-hud-row-header span {
+    font-size: 10dp;
+    font-weight: bold;
+}
+
+.vram-hud-row-header {
+    height: 18dp;
+    min-height: 18dp;
+    max-height: 18dp;
+}
+
+.vram-hud-tree-row em {
+    display: block;
+    font-style: normal;
+    font-size: 9dp;
+}
+
+.vram-hud-expand-toggle {
+    display: inline-block;
+    width: 12dp;
+    font-size: 12dp;
+    text-align: center;
+    cursor: pointer;
+}
+
+.vram-hud-row-badges {
+    display: inline;
+    font-size: 9dp;
+}
+
+.vram-hud-empty {
+    padding: 4dp 6dp;
+    font-size: 11dp;
+}
+
 .viewport-status-backdrop {
     position: absolute;
     left: 0;

@@ -20,6 +20,8 @@ target_link_libraries(lfs_vulkan_rasterizer
         PUBLIC
         Vulkan::Vulkan
         GPUOpen::VulkanMemoryAllocator
+        PRIVATE
+        lfs_diagnostics
 )
 
 target_compile_features(lfs_vulkan_rasterizer PUBLIC cxx_std_23)
