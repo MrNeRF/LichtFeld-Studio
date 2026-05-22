@@ -104,6 +104,13 @@ namespace lfs::diagnostics {
         std::size_t cuda_pool_reserved = 0;
         std::size_t cuda_pool_fragmentation = 0;
         std::size_t cuda_context_baseline = 0;
+        std::size_t cuda_warmup_bytes = 0;
+        std::size_t cuda_phase_primary_context = 0;
+        std::size_t cuda_phase_default_pool = 0;
+        std::size_t cuda_phase_printf_fifo = 0;
+        std::size_t cuda_phase_stack_reserve = 0;
+        std::size_t cuda_phase_malloc_heap = 0;
+        std::size_t cuda_phase_curand_load = 0;
         std::size_t pinned_host_used = 0;
         std::size_t vulkan_vma_used = 0;
         std::size_t process_used = 0;
@@ -228,6 +235,7 @@ namespace lfs::diagnostics {
                               VramAllocationMethod method,
                               std::string_view label = {});
         void recordDeallocation(void* ptr);
+        void relabelAllocation(void* ptr, std::string_view label);
         void recordBytes(std::string_view scope,
                          std::string_view label,
                          std::size_t bytes,
@@ -256,6 +264,9 @@ namespace lfs::diagnostics {
         void setPinnedHostUsed(std::size_t bytes);
         void setVulkanVmaUsed(std::size_t bytes);
         void captureCudaContextBaseline();
+        void captureCudaWarmupDelta();
+        void recordCudaPhaseBytes(std::string_view phase, std::size_t bytes);
+        void setCudaContextBaselineBytes(std::size_t bytes);
 
         void sampleCudaMemory();
         void updateProcessMemory(std::size_t process_used,

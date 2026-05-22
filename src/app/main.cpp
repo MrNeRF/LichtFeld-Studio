@@ -8,11 +8,15 @@
 #include "core/executable_path.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "git_version.h"
+#include "gui/gpu_memory_query.hpp"
 #include "python/plugin_runner.hpp"
 #include "python/runner.hpp"
 
 #include <cstdlib>
+#include <cuda_runtime.h>
+#include <curand.h>
 #include <filesystem>
 #include <print>
 
@@ -27,6 +31,83 @@
 #endif
 
 namespace {
+    // Per-process GPU memory query. NVML on Linux / DXGI on Windows. Returns 0 if the
+    // query fails or no GPU activity is yet attributed to this PID.
+    std::size_t process_used_now() {
+        return lfs::vis::gui::queryGpuMemory().process_used;
+    }
+
+    // Probe what the CUDA driver allocates during context creation, *attributed to this
+    // process* (NVML per-PID, not device-wide cudaMemGetInfo). Each phase is the delta
+    // against the previous probe so the sum reconstructs the total context cost.
+    void analyzeCudaContextDistribution() {
+        auto& p = lfs::diagnostics::VramProfiler::instance();
+
+        // Phase 0: pre-context. Should be 0 — no CUDA calls have run.
+        const std::size_t before_context = process_used_now();
+
+        // Phase 1: primary context creation. cudaFree(nullptr) is a documented idiom that
+        // forces the primary context to exist on device 0.
+        cudaFree(nullptr);
+        const std::size_t after_context = process_used_now();
+        const std::size_t primary_context =
+            after_context > before_context ? after_context - before_context : after_context;
+        p.recordCudaPhaseBytes("primary_context", primary_context);
+
+        // Phase 2: default cudaMallocAsync pool. Query its initial backing reservation.
+        std::size_t pool_reserved = 0;
+        int device = 0;
+        if (cudaGetDevice(&device) == cudaSuccess) {
+#if CUDART_VERSION >= 12080
+            cudaMemPool_t pool = nullptr;
+            if (cudaDeviceGetDefaultMemPool(&pool, device) == cudaSuccess) {
+                std::uint64_t reserved = 0;
+                if (cudaMemPoolGetAttribute(pool, cudaMemPoolAttrReservedMemCurrent, &reserved) ==
+                    cudaSuccess) {
+                    pool_reserved = static_cast<std::size_t>(reserved);
+                }
+            }
+#endif
+        }
+        p.recordCudaPhaseBytes("default_pool", pool_reserved);
+
+        // Phase 3: driver limits the user can query exactly.
+        std::size_t printf_fifo = 0;
+        std::size_t per_thread_stack = 0;
+        std::size_t malloc_heap = 0;
+        cudaDeviceGetLimit(&printf_fifo, cudaLimitPrintfFifoSize);
+        cudaDeviceGetLimit(&per_thread_stack, cudaLimitStackSize);
+        cudaDeviceGetLimit(&malloc_heap, cudaLimitMallocHeapSize);
+
+        // Stack is per-thread; total reservation = stack * max_threads_per_sm * num_sms.
+        cudaDeviceProp prop{};
+        std::size_t stack_total = 0;
+        if (cudaGetDeviceProperties(&prop, device) == cudaSuccess) {
+            stack_total = per_thread_stack *
+                          static_cast<std::size_t>(prop.multiProcessorCount) *
+                          static_cast<std::size_t>(prop.maxThreadsPerMultiProcessor);
+        }
+        p.recordCudaPhaseBytes("printf_fifo", printf_fifo);
+        p.recordCudaPhaseBytes("stack_reserve", stack_total);
+        p.recordCudaPhaseBytes("malloc_heap", malloc_heap);
+
+        // Phase 4: libcurand context. Create + destroy a generator so the library code
+        // is loaded into the process; the residual delta is the library overhead.
+        const std::size_t before_curand = process_used_now();
+        curandGenerator_t gen = nullptr;
+        if (curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_DEFAULT) == CURAND_STATUS_SUCCESS) {
+            curandDestroyGenerator(gen);
+        }
+        const std::size_t after_curand = process_used_now();
+        const std::size_t curand_load =
+            after_curand > before_curand ? after_curand - before_curand : 0;
+        p.recordCudaPhaseBytes("curand_load", curand_load);
+
+        // The per-PID baseline = current NVML reading. Used as the breakdown's anchor
+        // so cuda.context.residual = baseline − Σphases.
+        p.setCudaContextBaselineBytes(process_used_now());
+    }
+
     // Register OpenUSD plugin resources deployed beside the executable.
     // On Windows: <exe_dir>/usd/ — keeps relative LibraryPaths correct.
     // On Linux:   <exe_dir>/../lib/usd/ — conventional layout.
@@ -75,6 +156,10 @@ namespace {
 } // namespace
 
 int main(int argc, char* argv[]) {
+    // Probe and decompose the CUDA driver's context-creation cost before any other
+    // code touches the device. Surfaces per-phase byte values into the HUD breakdown.
+    analyzeCudaContextDistribution();
+
     configure_usd_plugins();
 
     auto result = lfs::core::args::parse_args(argc, argv);

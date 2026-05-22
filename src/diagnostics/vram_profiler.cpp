@@ -309,6 +309,8 @@ namespace lfs::diagnostics {
         std::size_t pinned_host_used = 0;
         std::size_t vulkan_vma_used = 0;
         std::size_t cuda_context_baseline = 0;
+        std::size_t cuda_warmup_bytes = 0;
+        std::unordered_map<std::string, std::size_t> cuda_phase_bytes;
         std::uint64_t allocation_events = 0;
         std::uint64_t free_events = 0;
         std::uint64_t iter_allocation_events_start = 0;
@@ -373,7 +375,8 @@ namespace lfs::diagnostics {
             impl_->accounted_history.clear();
             impl_->pinned_host_used = 0;
             impl_->vulkan_vma_used = 0;
-            impl_->cuda_context_baseline = 0;
+            // cuda_context_baseline intentionally preserved: it captures the irreducible
+            // runtime overhead once at process startup and is valid for the session.
             impl_->sequence.fetch_add(1, std::memory_order_relaxed);
         }
     }
@@ -633,6 +636,38 @@ namespace lfs::diagnostics {
         impl_->accounted_live_bytes += bytes;
         impl_->accounted_peak_bytes = std::max(impl_->accounted_peak_bytes, impl_->accounted_live_bytes);
         impl_->allocation_events += 1;
+        impl_->sequence.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    void VramProfiler::relabelAllocation(void* ptr, std::string_view label) {
+        if (!enabled() || !ptr || label.empty()) {
+            return;
+        }
+        std::lock_guard lock(impl_->mutex);
+        const auto alloc_it = impl_->allocations.find(ptr);
+        if (alloc_it == impl_->allocations.end()) {
+            return;
+        }
+        if (alloc_it->second.key.label == label) {
+            return;
+        }
+        const auto bytes = alloc_it->second.bytes;
+        const auto old_key = alloc_it->second.key;
+        const MetricKey new_key{old_key.scope, std::string(label)};
+
+        // Move live_bytes from old key to new key.
+        auto& old_metric = impl_->metrics[old_key];
+        old_metric.live_bytes = bytes > old_metric.live_bytes ? 0 : old_metric.live_bytes - bytes;
+
+        auto& new_metric = impl_->metrics[new_key];
+        new_metric.live_bytes += bytes;
+        new_metric.peak_bytes = std::max(new_metric.peak_bytes, new_metric.live_bytes);
+        new_metric.allocated_bytes = std::max(new_metric.allocated_bytes, new_metric.live_bytes);
+        if (new_metric.allocation_count == 0)
+            new_metric.allocation_count = 1;
+
+        alloc_it->second.key = new_key;
+        upsert_scope_node(impl_->scope_nodes, new_key.scope, false, false, false);
         impl_->sequence.fetch_add(1, std::memory_order_relaxed);
     }
 
@@ -931,6 +966,45 @@ namespace lfs::diagnostics {
         impl_->sequence.fetch_add(1, std::memory_order_relaxed);
     }
 
+    void VramProfiler::setCudaContextBaselineBytes(const std::size_t bytes) {
+        std::lock_guard lock(impl_->mutex);
+        impl_->cuda_context_baseline = bytes;
+        impl_->process.cuda_context_baseline = bytes;
+        impl_->sequence.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    void VramProfiler::recordCudaPhaseBytes(std::string_view phase, std::size_t bytes) {
+        std::lock_guard lock(impl_->mutex);
+        impl_->cuda_phase_bytes[std::string(phase)] = bytes;
+        if (phase == "primary_context")
+            impl_->process.cuda_phase_primary_context = bytes;
+        else if (phase == "default_pool")
+            impl_->process.cuda_phase_default_pool = bytes;
+        else if (phase == "printf_fifo")
+            impl_->process.cuda_phase_printf_fifo = bytes;
+        else if (phase == "stack_reserve")
+            impl_->process.cuda_phase_stack_reserve = bytes;
+        else if (phase == "malloc_heap")
+            impl_->process.cuda_phase_malloc_heap = bytes;
+        else if (phase == "curand_load")
+            impl_->process.cuda_phase_curand_load = bytes;
+        impl_->sequence.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    void VramProfiler::captureCudaWarmupDelta() {
+        std::size_t used = 0;
+        if (!sample_cuda_used_bytes(used))
+            return;
+        std::lock_guard lock(impl_->mutex);
+        if (impl_->cuda_warmup_bytes != 0)
+            return;
+        if (used > impl_->cuda_context_baseline) {
+            impl_->cuda_warmup_bytes = used - impl_->cuda_context_baseline;
+            impl_->process.cuda_warmup_bytes = impl_->cuda_warmup_bytes;
+        }
+        impl_->sequence.fetch_add(1, std::memory_order_relaxed);
+    }
+
     void VramProfiler::clearScope(std::string_view scope) {
         if (!enabled() || scope.empty()) {
             return;
@@ -1004,6 +1078,7 @@ namespace lfs::diagnostics {
             process.pinned_host_used = impl_->pinned_host_used;
             process.vulkan_vma_used = impl_->vulkan_vma_used;
             process.cuda_context_baseline = impl_->cuda_context_baseline;
+            process.cuda_warmup_bytes = impl_->cuda_warmup_bytes;
             impl_->process = std::move(process);
             impl_->sequence.fetch_add(1, std::memory_order_relaxed);
         }

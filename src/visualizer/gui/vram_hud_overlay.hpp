@@ -68,6 +68,14 @@ namespace lfs::vis::gui {
             VramHudOverlay* owner = nullptr;
             void ProcessEvent(Rml::Event& event) override;
         };
+        struct AnnoFilterListener final : Rml::EventListener {
+            VramHudOverlay* owner = nullptr;
+            void ProcessEvent(Rml::Event& event) override;
+        };
+        struct AnnoFilterClearListener final : Rml::EventListener {
+            VramHudOverlay* owner = nullptr;
+            void ProcessEvent(Rml::Event& event) override;
+        };
 
         void attachListeners();
         void apply();
@@ -75,9 +83,13 @@ namespace lfs::vis::gui {
         void applyBreakdown(std::size_t process_used);
         void applyCounters();
         void applyAllocations();
+        void applyAnnotations();
         void applyTree(std::size_t process_used);
         void setActiveTab(std::string_view tab);
         void refreshTabClasses();
+        void onAnnoFilterChange(Rml::Event& event);
+        void onAnnoFilterClear();
+        void updateAnnoFilterClearVisibility();
         void primeDefaultCollapse();
         void toggleNode(const std::string& path);
         void pruneCollapsedSet();
@@ -116,6 +128,11 @@ namespace lfs::vis::gui {
         Rml::Element* allocs_rows_root_ = nullptr;
         Rml::Element* allocs_summary_value_ = nullptr;
         Rml::Element* breakdown_root_ = nullptr;
+        Rml::Element* panel_annotations_ = nullptr;
+        Rml::Element* anno_rows_root_ = nullptr;
+        Rml::Element* anno_summary_value_ = nullptr;
+        Rml::Element* anno_filter_input_ = nullptr;
+        Rml::Element* anno_filter_clear_ = nullptr;
         Rml::Element* rows_root_ = nullptr;
         Rml::Element* empty_row_ = nullptr;
 
@@ -170,11 +187,33 @@ namespace lfs::vis::gui {
             std::string cached_classes;
         };
 
+        struct AnnotationRowElements {
+            Rml::Element* row = nullptr;
+            Rml::Element* cat = nullptr;
+            Rml::Element* name = nullptr;
+            Rml::Element* bytes = nullptr;
+            Rml::Element* peak = nullptr;
+            Rml::Element* wall = nullptr;
+            Rml::Element* gpu = nullptr;
+            Rml::Element* calls = nullptr;
+            std::string cached_cat;
+            std::string cached_name;
+            std::string cached_bytes;
+            std::string cached_peak;
+            std::string cached_wall;
+            std::string cached_gpu;
+            std::string cached_calls;
+        };
+
         std::unordered_map<std::string, RowElements> rows_by_path_;
         std::unordered_map<std::string, CounterRowElements> counter_rows_by_key_;
         std::vector<AllocRowElements> allocs_rows_;
         std::vector<BreakdownRowElements> breakdown_rows_;
+        std::vector<AnnotationRowElements> anno_rows_;
         std::string cached_allocs_summary_;
+        std::string cached_anno_summary_;
+        std::string anno_filter_text_;
+        std::string anno_filter_text_lower_;
         std::string active_tab_ = "overview";
         std::unordered_set<std::string> collapsed_paths_;
         std::unordered_set<std::string> visible_paths_;
@@ -199,6 +238,8 @@ namespace lfs::vis::gui {
         FilterListener filter_listener_;
         FilterClearListener filter_clear_listener_;
         TabListener tab_listener_;
+        AnnoFilterListener anno_filter_listener_;
+        AnnoFilterClearListener anno_filter_clear_listener_;
         bool listeners_attached_ = false;
 
         float pos_x_ = -1.0f;

@@ -241,9 +241,9 @@ namespace lfs::app {
                          prop.totalGlobalMem / (1024 * 1024));
             }
 
-            lfs::diagnostics::VramProfiler::instance().captureCudaContextBaseline();
             LOG_INFO("Initializing CUDA...");
             fast_lfs::rasterization::warmup_kernels();
+            lfs::diagnostics::VramProfiler::instance().captureCudaWarmupDelta();
         }
 
         void warmupCudaAsync() {
@@ -255,10 +255,10 @@ namespace lfs::app {
                          prop.totalGlobalMem / (1024 * 1024));
             }
 
-            lfs::diagnostics::VramProfiler::instance().captureCudaContextBaseline();
             LOG_INFO("Initializing CUDA (async)...");
             cudaWarmupFuture() = std::async(std::launch::async, [] {
                 fast_lfs::rasterization::warmup_kernels();
+                lfs::diagnostics::VramProfiler::instance().captureCudaWarmupDelta();
             });
         }
 

@@ -563,6 +563,37 @@ namespace lfs::core {
         return pool;
     }
 
+    namespace {
+        thread_local std::string g_pool_pending_label;
+    }
+
+    CudaMemoryPool::LabelGuard::LabelGuard(std::string_view label)
+        : previous_(std::move(g_pool_pending_label)),
+          active_(!label.empty()) {
+        if (active_) {
+            g_pool_pending_label.assign(label);
+        }
+    }
+
+    CudaMemoryPool::LabelGuard::~LabelGuard() {
+        g_pool_pending_label = std::move(previous_);
+    }
+
+    std::string_view CudaMemoryPool::current_label() noexcept {
+        return g_pool_pending_label;
+    }
+
+    void Tensor::relabel_allocation_for_profiler() {
+        if (device_ != Device::CUDA || data_ == nullptr || state_->name.empty()) {
+            return;
+        }
+        try {
+            lfs::diagnostics::VramProfiler::instance().relabelAllocation(data_, state_->name);
+        } catch (...) {
+            // Diagnostics must never throw out of tensor operations.
+        }
+    }
+
     void Tensor::trim_memory_pool() {
         CudaMemoryPool::instance().trim_cached_memory();
     }

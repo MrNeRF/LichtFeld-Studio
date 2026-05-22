@@ -338,6 +338,36 @@ namespace lfs::vis::gui {
             if (hover)
                 tooltip_.setHover(resolveRmlTooltip(hover), hover);
         }
+
+        // Forward keyboard + text input whenever an RmlUi element on this context owns focus
+        // (e.g. the Annotations / Drill-down filter <input>). This must run regardless of
+        // over_interactive, because a text input keeps focus even when the mouse roams away.
+        if (auto* focused = rml_context_->GetFocusElement()) {
+            const auto tag = focused->GetTagName();
+            const bool is_text_target = tag == "input" || tag == "textarea";
+            if (is_text_target) {
+                wants_input_ = true;
+                guiFocusState().want_capture_keyboard = true;
+                for (const int sc : input.keys_pressed) {
+                    const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
+                    if (rml_key != Rml::Input::KI_UNKNOWN) {
+                        render_needed_ = true;
+                        rml_context_->ProcessKeyDown(rml_key, mods);
+                    }
+                }
+                for (const int sc : input.keys_released) {
+                    const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
+                    if (rml_key != Rml::Input::KI_UNKNOWN) {
+                        render_needed_ = true;
+                        rml_context_->ProcessKeyUp(rml_key, mods);
+                    }
+                }
+                for (uint32_t cp : input.text_codepoints) {
+                    render_needed_ = true;
+                    rml_context_->ProcessTextInput(static_cast<Rml::Character>(cp));
+                }
+            }
+        }
     }
 
     bool RmlViewportOverlay::blocksPointer(const double screen_x, const double screen_y) const {

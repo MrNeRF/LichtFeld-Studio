@@ -4,10 +4,10 @@
 #pragma once
 
 #include "allocation_profiler.hpp"
-#include "diagnostics/vram_profiler.hpp"
 #include "core/export.hpp"
 #include "core/logger.hpp"
 #include "deferred_free_queue.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "gpu_slab_allocator.hpp"
 #include "size_bucketed_pool.hpp"
 #include <cuda_runtime.h>
@@ -31,6 +31,22 @@ namespace lfs::core {
     class LFS_CORE_API CudaMemoryPool {
     public:
         static CudaMemoryPool& instance();
+
+        class LabelGuard {
+        public:
+            explicit LabelGuard(std::string_view label);
+            ~LabelGuard();
+            LabelGuard(const LabelGuard&) = delete;
+            LabelGuard& operator=(const LabelGuard&) = delete;
+            LabelGuard(LabelGuard&&) = delete;
+            LabelGuard& operator=(LabelGuard&&) = delete;
+
+        private:
+            std::string previous_;
+            bool active_ = false;
+        };
+
+        static std::string_view current_label() noexcept;
 
         void shutdown() {
             bool expected = false;
@@ -384,7 +400,7 @@ namespace lfs::core {
             allocation_map_[ptr] = {size, method};
             try {
                 lfs::diagnostics::VramProfiler::instance().recordAllocation(
-                    ptr, size, to_vram_method(method));
+                    ptr, size, to_vram_method(method), current_label());
             } catch (...) {
                 // Diagnostics must never make CUDA allocation fail.
             }

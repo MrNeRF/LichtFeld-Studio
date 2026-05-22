@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "photometric_loss.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "lfs/kernels/l1_loss.cuh"
 #include "lfs/kernels/ssim.cuh"
 #include <cstdint>
@@ -54,8 +55,10 @@ namespace lfs::training::losses {
             lfs::core::Tensor grad_combined;
             lfs::core::Tensor loss_tensor_gpu;
 
+            LFS_TRACE("loss.photometric.forward");
             // Optimize: only compute what's needed based on lambda_dssim
             if (params.lambda_dssim == 0.0f) {
+                LFS_TRACE("loss.l1.forward");
                 // Pure L1 loss
                 size_t N = rendered_4d.numel();
                 size_t num_blocks = std::min((N + 255) / 256, size_t(1024));
@@ -78,6 +81,7 @@ namespace lfs::training::losses {
                 loss_tensor_gpu = loss_scalar_;
 
             } else if (params.lambda_dssim == 1.0f) {
+                LFS_TRACE("loss.ssim.forward");
                 // Pure SSIM loss
                 auto [ssim_value_tensor, ssim_ctx] = lfs::training::kernels::ssim_forward(
                     rendered_4d, gt_4d, ssim_workspace_, /*apply_valid_padding=*/true);
@@ -89,6 +93,7 @@ namespace lfs::training::losses {
                 grad_combined = lfs::training::kernels::ssim_backward(ssim_ctx, ssim_workspace_, -1.0f);
 
             } else {
+                LFS_TRACE("loss.fused_l1_ssim");
                 // Combined L1+SSIM loss (fused kernel)
                 auto [loss_tensor, fused_ctx] = lfs::training::kernels::fused_l1_ssim_forward(
                     rendered_4d, gt_4d, params.lambda_dssim, fused_workspace_, /*apply_valid_padding=*/true);

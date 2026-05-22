@@ -421,12 +421,18 @@ namespace lfs::core {
           _scaling(std::move(scaling_)),
           _rotation(std::move(rotation_)),
           _opacity(std::move(opacity_)) {
+        _means.set_name("splat.positions");
+        _sh0.set_name("splat.sh0");
+        _scaling.set_name("splat.scaling");
+        _rotation.set_name("splat.rotation");
+        _opacity.set_name("splat.opacity");
         const size_t n = _means.is_valid() ? static_cast<size_t>(_means.shape()[0]) : 0;
         const size_t capacity = _means.is_valid() ? std::max<size_t>(_means.capacity(), n) : n;
         uint32_t layout_coeffs_rest =
             static_cast<uint32_t>(sh_rest_coefficients_for_degree(_max_sh_degree));
         if (shN_layout == ShNLayout::Swizzled) {
             _shN = std::move(shN_);
+            _shN.set_name("splat.shN");
             if (_shN.is_valid() && _shN.ndim() == 1 && n > 0) {
                 const auto stored_rest = infer_swizzled_rest_coefficients(n, static_cast<size_t>(_shN.numel()));
                 const size_t expected_for_requested_degree = sh_swizzled_float_count(n, layout_coeffs_rest);
@@ -459,11 +465,13 @@ namespace lfs::core {
                 static_cast<size_t>(_shN.shape()[0]) != expected_floats) {
                 _shN = allocate_swizzled_shN(n, capacity, layout_coeffs_rest);
             }
+            _shN.set_name("splat.shN");
             return;
         }
 
         // Convert the canonical-layout shN argument into swizzled storage.
         _shN = allocate_swizzled_shN(n, capacity, layout_coeffs_rest);
+        _shN.set_name("splat.shN");
         const auto src_rest = std::min(canonical_rest_coefficients(shN_), layout_coeffs_rest);
         if (shN_.is_valid() && shN_.numel() > 0 && n > 0 && src_rest > 0 && layout_coeffs_rest > 0) {
             reorder_canonical_into_swizzled(shN_, _shN.ptr<float>(), n, src_rest, layout_coeffs_rest);
@@ -745,6 +753,7 @@ namespace lfs::core {
 
         if (!_deleted.is_valid()) {
             _deleted = Tensor::zeros({n}, _means.device(), DataType::Bool);
+            _deleted.set_name("splat.deleted_mask");
         }
 
         Tensor old_deleted = _deleted.clone();

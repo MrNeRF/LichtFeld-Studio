@@ -134,13 +134,16 @@ namespace lfs::training {
             info.ndim() != 2 ||
             info.shape()[0] < 2 ||
             info.shape()[1] != n) {
-            _splat_data->_densification_info = lfs::core::Tensor::zeros({2, n}, _splat_data->means().device());
+            _splat_data->_densification_info =
+                lfs::core::Tensor::zeros({2, n}, _splat_data->means().device());
+            _splat_data->_densification_info.set_name("splat.densification_info");
         }
 
         if (!_error_score_max.is_valid() ||
             _error_score_max.ndim() != 1 ||
             _error_score_max.numel() != n) {
             _error_score_max = lfs::core::Tensor::zeros({n}, _splat_data->means().device());
+            _error_score_max.set_name("mcmc.error_score_max");
             _error_score_windows = 0;
         }
     }
@@ -160,6 +163,7 @@ namespace lfs::training {
 
     int MCMC::relocate_gs() {
         LOG_TIMER("MCMC::relocate_gs");
+        LFS_TRACE("kernel.mcmc.relocate");
         using namespace lfs::core;
 
         // Get opacities (handle both [N] and [N, 1] shapes)
@@ -355,6 +359,7 @@ namespace lfs::training {
 
     int MCMC::add_new_gs() {
         LOG_TIMER("MCMC::add_new_gs");
+        LFS_TRACE("kernel.densify.duplicate");
         using namespace lfs::core;
 
         if (!_optimizer) {
@@ -597,6 +602,7 @@ namespace lfs::training {
 
     void MCMC::inject_noise() {
         LOG_TIMER("MCMC::inject_noise");
+        LFS_TRACE("kernel.mcmc.add_noise");
         using namespace lfs::core;
 
         // Get current learning rate from optimizer (after scheduler has updated it)
@@ -693,10 +699,13 @@ namespace lfs::training {
             ++_error_score_windows;
             if (_error_score_windows >= 2) {
                 _error_score_max = lfs::core::Tensor::zeros({n}, _splat_data->means().device());
+                _error_score_max.set_name("mcmc.error_score_max");
                 _error_score_windows = 0;
             }
 
-            _splat_data->_densification_info = lfs::core::Tensor::zeros({2, n}, _splat_data->means().device());
+            _splat_data->_densification_info =
+                lfs::core::Tensor::zeros({2, n}, _splat_data->means().device());
+            _splat_data->_densification_info.set_name("splat.densification_info");
         }
 
         // Inject noise to positions every iteration

@@ -2,6 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/tensor.hpp"
+#include "core/tensor_label.hpp"
 #include "diagnostics/vram_profiler.hpp"
 
 #include <gtest/gtest.h>
@@ -195,6 +197,27 @@ namespace {
         p.recordDeallocation(&dummy);
         p.popScope();
         p.popScope();
+    }
+
+    TEST_F(VramProfilerMetricsTest, TensorLabelFlowsToMetricRow) {
+        auto& p = VramProfiler::instance();
+        lfs::core::Tensor labeled;
+        {
+            LFS_LABEL_SCOPE("splat.positions.test");
+            labeled = lfs::core::Tensor::zeros({64, 3}, lfs::core::Device::CUDA,
+                                               lfs::core::DataType::Float32);
+        }
+        labeled.set_name("splat.positions.test");
+
+        const auto snap = p.snapshot();
+        bool found = false;
+        for (const auto& row : snap.rows) {
+            if (row.label == "splat.positions.test" && row.live_bytes > 0) {
+                found = true;
+                break;
+            }
+        }
+        EXPECT_TRUE(found);
     }
 
     TEST_F(VramProfilerMetricsTest, IterPerSecondGrowsAcrossIterations) {

@@ -1,4 +1,6 @@
+#include "diagnostics/vram_profiler.hpp"
 #include "gs_renderer.h"
+#include <string>
 
 void VulkanGSPipeline::allocStagingBuffer(size_t size) {
     if (stager.buffer != VK_NULL_HANDLE && stager.allocSize >= size)
@@ -59,6 +61,13 @@ void VulkanGSPipeline::createBuffer(size_t size, _VulkanBuffer& buffer) {
     current_vram += size;
     if (current_vram > peak_vram)
         peak_vram = current_vram;
+
+    // Publish per-buffer live bytes so the HUD can split the Vulkan footprint into
+    // named rows (xyz_ws / shN / sorting_keys / ...). nullptr label = no instrumentation.
+    if (buffer.label) {
+        lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+            std::string("vksplat.") + buffer.label, "device_buffer", size);
+    }
 }
 
 void VulkanGSPipeline::destroyBuffer(_VulkanBuffer& buffer) {
@@ -69,12 +78,17 @@ void VulkanGSPipeline::destroyBuffer(_VulkanBuffer& buffer) {
         if (current_vram < buffer.allocSize)
             _THROW_ERROR("Negative VRAM");
         current_vram -= buffer.allocSize;
+        if (buffer.label) {
+            lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                std::string("vksplat.") + buffer.label, "device_buffer", 0);
+        }
     }
     buffer.buffer = VK_NULL_HANDLE;
     buffer.allocation = VK_NULL_HANDLE;
     buffer.allocSize = 0;
     buffer.size = 0;
     buffer.offset = 0;
+    // Keep buffer.label intact so a subsequent resize re-establishes the recording.
 }
 
 void VulkanGSPipeline::resizeDeviceBuffer(_VulkanBuffer& deviceBuffer, size_t new_byte_size, bool no_shrink) {

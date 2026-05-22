@@ -470,6 +470,7 @@ namespace lfs::io {
                 img_data, lfs::core::TensorShape({H, W, C}),
                 lfs::core::Device::CPU, lfs::core::DataType::UInt8);
             auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::CUDA);
+            gpu_uint8.set_name("io.image.gpu_staging");
             if (used_stbi)
                 stbi_image_free(img_data);
             else
@@ -479,6 +480,7 @@ namespace lfs::io {
                 decoded = lfs::core::Tensor::empty(
                     lfs::core::TensorShape({C, H, W}),
                     lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                decoded.set_name("io.image.gpu_uint8");
                 cuda::launch_uint8_hwc_to_uint8_chw(
                     reinterpret_cast<const uint8_t*>(gpu_uint8.data_ptr()),
                     reinterpret_cast<uint8_t*>(decoded.data_ptr()),
@@ -487,6 +489,7 @@ namespace lfs::io {
                 decoded = lfs::core::Tensor::zeros(
                     lfs::core::TensorShape({C, H, W}),
                     lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+                decoded.set_name("io.image.gpu_float");
                 cuda::launch_uint8_hwc_to_float32_chw(
                     reinterpret_cast<const uint8_t*>(gpu_uint8.data_ptr()),
                     reinterpret_cast<float*>(decoded.data_ptr()),
@@ -541,6 +544,7 @@ namespace lfs::io {
                 decoded = lfs::core::Tensor::zeros(
                     lfs::core::TensorShape({C, H, W}),
                     lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+                decoded.set_name("io.image.gpu_float");
                 cuda::launch_uint8_hwc_to_float32_chw(
                     reinterpret_cast<const uint8_t*>(gpu_uint8.data_ptr()),
                     reinterpret_cast<float*>(decoded.data_ptr()),

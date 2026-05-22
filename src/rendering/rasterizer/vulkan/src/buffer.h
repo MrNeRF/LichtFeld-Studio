@@ -26,20 +26,23 @@ struct _VulkanBuffer {
     size_t allocSize;    // allocated size in bytes
     size_t size;         // actual size in bytes (within the [offset, offset+size) view)
     VkDeviceSize offset; // descriptor binding offset (0 for owned buffers; non-zero for views into a coalesced parent allocation)
+    const char* label;   // diagnostics label; nullptr = untracked
 
     _VulkanBuffer()
         : buffer(VK_NULL_HANDLE),
           allocation(VK_NULL_HANDLE),
           allocSize(0),
           size(0),
-          offset(0) {}
+          offset(0),
+          label(nullptr) {}
 
     _VulkanBuffer(const _VulkanBuffer& other)
         : buffer(other.buffer),
           allocation(other.allocation),
           allocSize(other.allocSize),
           size(other.size),
-          offset(other.offset) {}
+          offset(other.offset),
+          label(other.label) {}
 
     _VulkanBuffer& operator=(const _VulkanBuffer& other) {
         buffer = other.buffer;
@@ -47,6 +50,7 @@ struct _VulkanBuffer {
         allocSize = other.allocSize;
         size = other.size;
         offset = other.offset;
+        label = other.label;
         return *this;
     }
 

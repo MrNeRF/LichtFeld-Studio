@@ -34,6 +34,7 @@ public:
                             VmaAllocator external_allocator);
     void cleanup();
     void cleanupBuffers(VulkanGSPipelineBuffers& buffers);
+    void assignBufferLabels(VulkanGSPipelineBuffers& buffers);
 
     void createBuffer(size_t size, _VulkanBuffer& buffer);
     void destroyBuffer(_VulkanBuffer& buffer);

@@ -141,6 +141,15 @@
     color: @{text_dim};
 }
 
+.vram-hud-breakdown-row.total {
+    border-top-color: @{alpha(border,0.39)};
+}
+
+.vram-hud-breakdown-row.total .vram-hud-breakdown-name,
+.vram-hud-breakdown-row.total .vram-hud-breakdown-bytes {
+    color: @{text};
+}
+
 .vram-hud-allocs-summary-label,
 .vram-hud-allocs-summary-value,
 .vram-hud-allocs-pct {
@@ -153,6 +162,30 @@
 }
 
 .vram-hud-allocs-row {
+    background-color: @{viewport.metrics_bg};
+    border-radius: 3dp;
+}
+
+.vram-hud-anno-summary-label,
+.vram-hud-anno-cat,
+.vram-hud-anno-row-header span {
+    color: @{text_dim};
+}
+
+.vram-hud-anno-summary-value,
+.vram-hud-anno-name,
+.vram-hud-anno-bytes,
+.vram-hud-anno-peak {
+    color: @{text};
+}
+
+.vram-hud-anno-wall,
+.vram-hud-anno-gpu,
+.vram-hud-anno-calls {
+    color: @{text_dim};
+}
+
+.vram-hud-anno-row {
     background-color: @{viewport.metrics_bg};
     border-radius: 3dp;
 }

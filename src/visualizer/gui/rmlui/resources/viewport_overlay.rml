@@ -259,6 +259,7 @@
             <div id="vram-hud-tabs" class="vram-hud-tabs">
                 <button id="vram-hud-tab-overview" class="vram-hud-tab active" data-vram-tab="overview">Overview</button>
                 <button id="vram-hud-tab-allocations" class="vram-hud-tab" data-vram-tab="allocations">Allocations</button>
+                <button id="vram-hud-tab-annotations" class="vram-hud-tab" data-vram-tab="annotations">Annotations</button>
                 <button id="vram-hud-tab-tree" class="vram-hud-tab" data-vram-tab="tree">Drill-down</button>
             </div>
             <div id="vram-hud-panel-overview" class="vram-hud-panel">
@@ -276,6 +277,26 @@
                     <span id="vram-hud-allocs-summary-value" class="vram-hud-allocs-summary-value"></span>
                 </div>
                 <div id="vram-hud-allocs-rows" class="vram-hud-allocs-rows"></div>
+            </div>
+            <div id="vram-hud-panel-annotations" class="vram-hud-panel hidden">
+                <div class="vram-hud-filter-row">
+                    <input id="vram-hud-anno-filter" type="text" placeholder="Search annotations..." />
+                    <button id="vram-hud-anno-filter-clear" class="vram-hud-filter-clear hidden">X</button>
+                </div>
+                <div class="vram-hud-anno-summary">
+                    <span class="vram-hud-anno-summary-label">Annotated entities</span>
+                    <span id="vram-hud-anno-summary-value" class="vram-hud-anno-summary-value"></span>
+                </div>
+                <div class="vram-hud-anno-row vram-hud-anno-row-header">
+                    <span class="vram-hud-anno-cat">Cat</span>
+                    <span class="vram-hud-anno-name">Name</span>
+                    <span class="vram-hud-anno-bytes">Live</span>
+                    <span class="vram-hud-anno-peak">Peak</span>
+                    <span class="vram-hud-anno-wall">Wall ms</span>
+                    <span class="vram-hud-anno-gpu">GPU ms</span>
+                    <span class="vram-hud-anno-calls">Calls</span>
+                </div>
+                <div id="vram-hud-anno-rows" class="vram-hud-anno-rows"></div>
             </div>
             <div id="vram-hud-panel-tree" class="vram-hud-panel hidden">
                 <div class="vram-hud-filter-row">

@@ -61,7 +61,7 @@ namespace {
             spirvDiagnosticName(spirv_path),
             bytes);
     }
-}
+} // namespace
 
 #if defined(__SSE2__) || defined(_MSC_VER)
 #define SSE2_AVAILABLE 1
@@ -150,6 +150,46 @@ void VulkanGSPipeline::initializeExternal(VkInstance external_instance,
     createQueryPools();
 
     commandBatchInProgress = false;
+}
+
+void VulkanGSPipeline::assignBufferLabels(VulkanGSPipelineBuffers& buffers) {
+    // Assign a diagnostic label to every device-side buffer so the VRAM HUD can
+    // split the Vulkan footprint into per-buffer rows. Labels are stable string
+    // literals; the address is stored in _VulkanBuffer::label and lives forever.
+#define _(name) buffers.name.deviceBuffer.label = #name;
+    _(xyz_ws)
+    _(sh_coeffs)
+    _(rotations)
+    _(scales_opacs)
+    _(sh0)
+    _(shN)
+    _(scaling_raw)
+    _(opacity_raw)
+    _(tiles_touched)
+    _(rect_tile_space)
+    _(radii)
+    _(xy_vs)
+    _(depths)
+    _(inv_cov_vs_opacity)
+    _(rgb)
+    _(overlay_flags)
+    _(primitive_depth_keys)
+    _(primitive_sort_indices)
+    _(tiles_touched_depth_ordered)
+    _(index_buffer_offset)
+    _(sorting_keys_1)
+    _(sorting_keys_2)
+    _(sorting_gauss_idx_1)
+    _(sorting_gauss_idx_2)
+    _(tile_ranges)
+    _(pixel_state)
+    _(pixel_depth)
+    _(n_contributors)
+    _(_cumsum_blockSums)
+    _(_cumsum_blockSums2)
+    _(_sorting_histogram)
+    _(_sorting_histogram_cumsum)
+#undef _
 }
 
 void VulkanGSPipeline::cleanupBuffers(VulkanGSPipelineBuffers& buffers) {

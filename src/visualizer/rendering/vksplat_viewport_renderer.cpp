@@ -1189,6 +1189,7 @@ namespace lfs::vis {
                                          use_async_compute ? context.computeQueueFamily()
                                                            : context.graphicsQueueFamily(),
                                          context.allocator());
+            renderer_.assignBufferLabels(buffers_);
         } catch (const std::exception& e) {
             return std::unexpected(std::format("VkSplat initialization failed: {}", e.what()));
         }

@@ -205,6 +205,11 @@ body {
     padding: 1dp 3dp;
 }
 
+.vram-hud-breakdown-row.total {
+    padding-top: 4dp;
+    border-top-width: 1dp;
+}
+
 
 .vram-hud-breakdown-name {
     flex: 1;
@@ -275,6 +280,76 @@ body {
     font-size: 11dp;
     width: 52dp;
     text-align: right;
+}
+
+.vram-hud-anno-summary {
+    display: flex;
+    justify-content: space-between;
+    padding: 2dp 3dp;
+    font-size: 11dp;
+    font-weight: bold;
+}
+
+.vram-hud-anno-row {
+    display: flex;
+    gap: 6dp;
+    align-items: baseline;
+    padding: 1dp 3dp;
+}
+
+.vram-hud-anno-row-header {
+    height: 18dp;
+    min-height: 18dp;
+    max-height: 18dp;
+    font-weight: bold;
+}
+
+.vram-hud-anno-row-header span {
+    font-size: 10dp;
+}
+
+.vram-hud-anno-cat {
+    width: 32dp;
+    font-size: 10dp;
+    text-align: center;
+}
+
+.vram-hud-anno-name {
+    flex: 1;
+    font-size: 11dp;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.vram-hud-anno-bytes,
+.vram-hud-anno-peak {
+    width: 72dp;
+    font-size: 11dp;
+    font-weight: bold;
+    text-align: right;
+}
+
+.vram-hud-anno-wall,
+.vram-hud-anno-gpu {
+    width: 60dp;
+    font-size: 11dp;
+    text-align: right;
+}
+
+.vram-hud-anno-calls {
+    width: 56dp;
+    font-size: 11dp;
+    text-align: right;
+}
+
+.vram-hud-anno-rows {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1dp;
 }
 
 .vram-hud-filter-row {

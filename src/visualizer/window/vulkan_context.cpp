@@ -1317,7 +1317,8 @@ namespace lfs::vis {
         }
 
         VmaAllocatorCreateInfo create_info{};
-        create_info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+        create_info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT |
+                            VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
         create_info.physicalDevice = physical_device_;
         create_info.device = device_;
         create_info.instance = instance_;
@@ -1334,9 +1335,23 @@ namespace lfs::vis {
     std::size_t VulkanContext::queryVmaUsedBytes() const {
         if (allocator_ == VK_NULL_HANDLE)
             return 0;
-        VmaTotalStatistics stats{};
-        vmaCalculateStatistics(allocator_, &stats);
-        return static_cast<std::size_t>(stats.total.statistics.allocationBytes);
+        // VK_EXT_memory_budget reports the *full* per-heap memory the driver attributes
+        // to this process — swap-chain, framebuffer attachments, descriptor pools,
+        // internal command-buffer state — not just VMA-routed allocations. Sum the
+        // device-local heaps; host-visible heaps are reported but don't affect VRAM.
+        VkPhysicalDeviceMemoryProperties mem_props{};
+        vkGetPhysicalDeviceMemoryProperties(physical_device_, &mem_props);
+
+        std::array<VmaBudget, VK_MAX_MEMORY_HEAPS> budgets{};
+        vmaGetHeapBudgets(allocator_, budgets.data());
+
+        std::uint64_t total_usage = 0;
+        for (std::uint32_t i = 0; i < mem_props.memoryHeapCount; ++i) {
+            if (mem_props.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+                total_usage += budgets[i].usage;
+            }
+        }
+        return static_cast<std::size_t>(total_usage);
     }
 
     VkSurfaceFormatKHR VulkanContext::chooseSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& formats) const {

@@ -471,6 +471,7 @@ target_link_libraries(${PROJECT_NAME}
         ${LFS_APP_INTERNAL_LINK_LIBS}
 
         CUDA::cudart
+        CUDA::curand
         spdlog::spdlog
         taywee::args
         OpenImageIO::OpenImageIO

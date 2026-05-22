@@ -177,6 +177,8 @@ namespace lfs::vis::gui {
         filter_listener_.owner = this;
         filter_clear_listener_.owner = this;
         tab_listener_.owner = this;
+        anno_filter_listener_.owner = this;
+        anno_filter_clear_listener_.owner = this;
         loadPersistedState();
     }
 
@@ -190,7 +192,7 @@ namespace lfs::vis::gui {
         size_w_ = ls.vram_hud_width;
         size_h_ = ls.vram_hud_height;
         if (ls.vram_hud_active_tab == "overview" || ls.vram_hud_active_tab == "allocations" ||
-            ls.vram_hud_active_tab == "tree") {
+            ls.vram_hud_active_tab == "annotations" || ls.vram_hud_active_tab == "tree") {
             active_tab_ = ls.vram_hud_active_tab;
         }
         collapsed_paths_.clear();
@@ -224,7 +226,9 @@ namespace lfs::vis::gui {
         rows_by_path_.clear();
         counter_rows_by_key_.clear();
         allocs_rows_.clear();
+        anno_rows_.clear();
         cached_allocs_summary_.clear();
+        cached_anno_summary_.clear();
         summary_by_key_.clear();
         cached_iteration_text_.clear();
         cached_throughput_text_.clear();
@@ -247,6 +251,11 @@ namespace lfs::vis::gui {
         allocs_rows_root_ = nullptr;
         allocs_summary_value_ = nullptr;
         breakdown_root_ = nullptr;
+        panel_annotations_ = nullptr;
+        anno_rows_root_ = nullptr;
+        anno_summary_value_ = nullptr;
+        anno_filter_input_ = nullptr;
+        anno_filter_clear_ = nullptr;
         rows_root_ = nullptr;
         device_label_ = nullptr;
         empty_row_ = nullptr;
@@ -271,6 +280,11 @@ namespace lfs::vis::gui {
         allocs_rows_root_ = document_->GetElementById("vram-hud-allocs-rows");
         allocs_summary_value_ = document_->GetElementById("vram-hud-allocs-summary-value");
         breakdown_root_ = document_->GetElementById("vram-hud-breakdown");
+        panel_annotations_ = document_->GetElementById("vram-hud-panel-annotations");
+        anno_rows_root_ = document_->GetElementById("vram-hud-anno-rows");
+        anno_summary_value_ = document_->GetElementById("vram-hud-anno-summary-value");
+        anno_filter_input_ = document_->GetElementById("vram-hud-anno-filter");
+        anno_filter_clear_ = document_->GetElementById("vram-hud-anno-filter-clear");
         rows_root_ = document_->GetElementById("vram-hud-rows");
 
         if (counters_root_) {
@@ -285,6 +299,8 @@ namespace lfs::vis::gui {
             allocs_rows_root_->SetInnerRML("");
         if (breakdown_root_)
             breakdown_root_->SetInnerRML("");
+        if (anno_rows_root_)
+            anno_rows_root_->SetInnerRML("");
 
         if (summary_root_) {
             summary_root_->SetInnerRML("");
@@ -343,6 +359,11 @@ namespace lfs::vis::gui {
         allocs_rows_root_ = nullptr;
         allocs_summary_value_ = nullptr;
         breakdown_root_ = nullptr;
+        panel_annotations_ = nullptr;
+        anno_rows_root_ = nullptr;
+        anno_summary_value_ = nullptr;
+        anno_filter_input_ = nullptr;
+        anno_filter_clear_ = nullptr;
         rows_root_ = nullptr;
         device_label_ = nullptr;
         empty_row_ = nullptr;
@@ -378,7 +399,55 @@ namespace lfs::vis::gui {
             filter_clear_->AddEventListener(Rml::EventId::Click, &filter_clear_listener_);
         if (tabs_root_)
             tabs_root_->AddEventListener(Rml::EventId::Click, &tab_listener_);
+        if (anno_filter_input_)
+            anno_filter_input_->AddEventListener(Rml::EventId::Change, &anno_filter_listener_);
+        if (anno_filter_clear_)
+            anno_filter_clear_->AddEventListener(Rml::EventId::Click, &anno_filter_clear_listener_);
         listeners_attached_ = true;
+    }
+
+    void VramHudOverlay::updateAnnoFilterClearVisibility() {
+        if (anno_filter_clear_)
+            anno_filter_clear_->SetClass("hidden", anno_filter_text_.empty());
+    }
+
+    void VramHudOverlay::onAnnoFilterChange(Rml::Event& event) {
+        if (!anno_filter_input_)
+            return;
+        auto* input = dynamic_cast<Rml::ElementFormControlInput*>(anno_filter_input_);
+        if (!input)
+            return;
+        const std::string value = input->GetValue();
+        if (value == anno_filter_text_)
+            return;
+        anno_filter_text_ = value;
+        anno_filter_text_lower_ = toLowerAscii(anno_filter_text_);
+        updateAnnoFilterClearVisibility();
+        applyAnnotations();
+        event.StopPropagation();
+    }
+
+    void VramHudOverlay::onAnnoFilterClear() {
+        if (anno_filter_text_.empty())
+            return;
+        anno_filter_text_.clear();
+        anno_filter_text_lower_.clear();
+        if (anno_filter_input_) {
+            if (auto* input = dynamic_cast<Rml::ElementFormControlInput*>(anno_filter_input_))
+                input->SetValue("");
+        }
+        updateAnnoFilterClearVisibility();
+        applyAnnotations();
+    }
+
+    void VramHudOverlay::AnnoFilterListener::ProcessEvent(Rml::Event& event) {
+        if (owner)
+            owner->onAnnoFilterChange(event);
+    }
+
+    void VramHudOverlay::AnnoFilterClearListener::ProcessEvent(Rml::Event&) {
+        if (owner)
+            owner->onAnnoFilterClear();
     }
 
     void VramHudOverlay::TabListener::ProcessEvent(Rml::Event& event) {
@@ -398,7 +467,8 @@ namespace lfs::vis::gui {
 
     void VramHudOverlay::setActiveTab(std::string_view tab) {
         const std::string requested(tab);
-        if (requested != "overview" && requested != "allocations" && requested != "tree")
+        if (requested != "overview" && requested != "allocations" &&
+            requested != "annotations" && requested != "tree")
             return;
         if (active_tab_ == requested)
             return;
@@ -420,6 +490,8 @@ namespace lfs::vis::gui {
             panel_overview_->SetClass("hidden", active_tab_ != "overview");
         if (panel_allocations_)
             panel_allocations_->SetClass("hidden", active_tab_ != "allocations");
+        if (panel_annotations_)
+            panel_annotations_->SetClass("hidden", active_tab_ != "annotations");
         if (panel_tree_)
             panel_tree_->SetClass("hidden", active_tab_ != "tree");
     }
@@ -518,6 +590,7 @@ namespace lfs::vis::gui {
         applyBreakdown(process_used);
         applyCounters();
         applyAllocations();
+        applyAnnotations();
 
         if (!default_collapse_applied_ && !s.tree.empty()) {
             primeDefaultCollapse();
@@ -589,9 +662,10 @@ namespace lfs::vis::gui {
             std::string label;
             std::size_t bytes;
             bool unaccounted;
+            bool total = false;
         };
         std::vector<Entry> entries;
-        entries.reserve(groups.size() + 2);
+        entries.reserve(groups.size() + 4);
         std::size_t tracked_total = 0;
         for (auto& [k, v] : groups) {
             tracked_total += v;
@@ -606,24 +680,69 @@ namespace lfs::vis::gui {
             tracked_total += pool_overhead;
             entries.push_back({"cuda.pool.overhead", pool_overhead, false});
         }
-        if (proc.cuda_context_baseline > 0) {
-            tracked_total += proc.cuda_context_baseline;
-            entries.push_back({"cuda.context", proc.cuda_context_baseline, false});
+        // Per-phase CUDA decomposition. ONLY actually-measured allocation deltas go in
+        // the running sum. The cudaDeviceGetLimit values (stack/printf/malloc_heap) are
+        // driver *limits* — bytes the driver may use up to, already included inside
+        // primary_context — so summing them would double-count.
+        std::size_t phase_total = 0;
+        const auto add_phase = [&](const char* label, std::size_t bytes) {
+            if (bytes == 0)
+                return;
+            phase_total += bytes;
+            entries.push_back({label, bytes, false});
+        };
+        add_phase("cuda.primary_context", proc.cuda_phase_primary_context);
+        add_phase("cuda.default_pool", proc.cuda_phase_default_pool);
+        add_phase("cuda.curand_load", proc.cuda_phase_curand_load);
+        tracked_total += phase_total;
+
+        // Residual = (total context_baseline) − (sum of measured phases). Anything the
+        // driver allocates that no probe surfaces lands here, so the picture closes.
+        if (proc.cuda_context_baseline > phase_total) {
+            const std::size_t residual = proc.cuda_context_baseline - phase_total;
+            tracked_total += residual;
+            entries.push_back({"cuda.context.residual", residual, false});
+        }
+        if (proc.cuda_warmup_bytes > 0) {
+            tracked_total += proc.cuda_warmup_bytes;
+            entries.push_back({"cuda.warmup_kernels", proc.cuda_warmup_bytes, false});
         }
         if (proc.vulkan_vma_used > 0) {
-            tracked_total += proc.vulkan_vma_used;
-            entries.push_back({"vulkan.vma", proc.vulkan_vma_used, false});
+            // The Vulkan budget reports the *whole* process heap including buffers we
+            // already publish individually as vksplat.* rows. Subtract that group's
+            // already-counted bytes so the synthetic "vulkan" entry is residual only —
+            // swap-chain images, framebuffers, descriptor pools, command-buffer state.
+            const auto vksplat_it = groups.find("vksplat");
+            const std::size_t vksplat_labeled =
+                vksplat_it != groups.end() ? vksplat_it->second : 0;
+            const std::size_t vulkan_residual = proc.vulkan_vma_used > vksplat_labeled
+                                                    ? proc.vulkan_vma_used - vksplat_labeled
+                                                    : 0;
+            if (vulkan_residual > 0) {
+                tracked_total += vulkan_residual;
+                entries.push_back({"vulkan.driver", vulkan_residual, false});
+            }
         }
 
         std::sort(entries.begin(), entries.end(),
                   [](const Entry& a, const Entry& b) { return a.bytes > b.bytes; });
 
+        std::size_t row_sum = tracked_total;
         if (process_used > 0) {
             const std::size_t unacc =
                 process_used > tracked_total ? process_used - tracked_total : 0;
-            if (unacc > 0)
-                entries.push_back({"(unaccounted)", unacc, true});
+            if (unacc > 0) {
+                entries.push_back({"(unaccounted)", unacc, true, false});
+                row_sum += unacc;
+            }
         }
+
+        // Bottom-of-list totals so the user can eyeball that the breakdown closes.
+        // Sum is everything above (tracked groups + synthetic + unaccounted).
+        // Process is what NVML / DXGI reports for this PID. They should match.
+        entries.push_back({"\xE2\x80\x94 Sum", row_sum, false, true});
+        if (process_used > 0)
+            entries.push_back({"\xE2\x80\x94 Process VRAM", process_used, false, true});
 
         const std::size_t denom = process_used > 0 ? process_used : tracked_total;
 
@@ -645,16 +764,21 @@ namespace lfs::vis::gui {
 
         for (std::size_t i = 0; i < entries.size(); ++i) {
             auto& row = breakdown_rows_[i];
-            const std::string klass = entries[i].unaccounted
-                                          ? std::string("vram-hud-breakdown-row unaccounted")
-                                          : std::string("vram-hud-breakdown-row");
+            std::string klass = "vram-hud-breakdown-row";
+            if (entries[i].unaccounted)
+                klass += " unaccounted";
+            if (entries[i].total)
+                klass += " total";
             if (row.cached_classes != klass) {
                 row.cached_classes = klass;
                 row.row->SetAttribute("class", Rml::String(row.cached_classes));
             }
             setText(row.name, row.cached_name, std::string(entries[i].label));
             setText(row.bytes, row.cached_bytes, formatBytes(entries[i].bytes));
-            setText(row.pct, row.cached_pct, formatPercent(entries[i].bytes, denom));
+            // Hide the % column for totals (they are themselves the 100% reference).
+            const std::string pct = entries[i].total ? std::string("")
+                                                     : formatPercent(entries[i].bytes, denom);
+            setText(row.pct, row.cached_pct, std::string(pct));
         }
     }
 
@@ -723,6 +847,142 @@ namespace lfs::vis::gui {
             } else {
                 ++it;
             }
+        }
+    }
+
+    void VramHudOverlay::applyAnnotations() {
+        if (!anno_rows_root_)
+            return;
+
+        struct Entry {
+            std::string category;
+            std::string name;
+            std::size_t live_bytes = 0;
+            std::size_t peak_bytes = 0;
+            double total_ms = 0.0;
+            double last_ms = 0.0;
+            double gpu_total_ms = 0.0;
+            std::uint64_t calls = 0;
+        };
+
+        std::vector<Entry> entries;
+        entries.reserve(state_.snapshot.rows.size() + state_.snapshot.tree.size() +
+                        state_.snapshot.gauges.size() + state_.snapshot.iter_counters.size());
+
+        // Labeled allocator metric rows -> tensor entries.
+        for (const auto& r : state_.snapshot.rows) {
+            if (r.label.empty())
+                continue;
+            const bool method_only = r.label == "slab" || r.label == "bucketed" ||
+                                     r.label == "async" || r.label == "direct" ||
+                                     r.label == "external" || r.label == "arena" ||
+                                     r.label == "unknown";
+            if (method_only)
+                continue;
+            Entry e;
+            e.category = "T";
+            e.name = r.label;
+            e.live_bytes = r.live_bytes;
+            e.peak_bytes = r.peak_bytes;
+            entries.push_back(std::move(e));
+        }
+
+        // Leaf timer scopes -> kernel/function entries.
+        for (const auto& n : state_.snapshot.tree) {
+            if (n.timer_call_count == 0 || n.has_children)
+                continue;
+            Entry e;
+            const bool is_kernel = n.path.find("kernel.") != std::string::npos ||
+                                   n.path.find("shaders.") != std::string::npos;
+            e.category = is_kernel ? "K" : "F";
+            e.name = n.path;
+            e.live_bytes = n.live_bytes;
+            e.peak_bytes = n.peak_bytes;
+            e.total_ms = n.total_ms;
+            e.last_ms = n.last_ms;
+            e.gpu_total_ms = n.gpu_total_ms;
+            e.calls = n.timer_call_count;
+            entries.push_back(std::move(e));
+        }
+
+        // Gauges -> "G" entries.
+        for (const auto& g : state_.snapshot.gauges) {
+            Entry e;
+            e.category = "G";
+            e.name = g.key;
+            entries.push_back(std::move(e));
+        }
+
+        // Iteration counters -> "C" entries (skip zeros for noise reduction).
+        for (const auto& c : state_.snapshot.iter_counters) {
+            if (c.value == 0)
+                continue;
+            Entry e;
+            e.category = "C";
+            e.name = c.key;
+            e.calls = c.value;
+            entries.push_back(std::move(e));
+        }
+
+        // Filter.
+        if (!anno_filter_text_lower_.empty()) {
+            entries.erase(
+                std::remove_if(entries.begin(), entries.end(),
+                               [this](const Entry& e) {
+                                   return toLowerAscii(e.name).find(anno_filter_text_lower_) ==
+                                          std::string::npos;
+                               }),
+                entries.end());
+        }
+
+        // Stable alphabetical sort — values fluctuate every frame, so byte-sort would
+        // shuffle rows on every snapshot. Use the Allocations tab when you want
+        // largest-first; Annotations stays stable for searching.
+        std::sort(entries.begin(), entries.end(),
+                  [](const Entry& a, const Entry& b) { return a.name < b.name; });
+
+        if (anno_summary_value_) {
+            std::string text = std::format("{}", entries.size());
+            setText(anno_summary_value_, cached_anno_summary_, std::move(text));
+        }
+
+        while (anno_rows_.size() > entries.size()) {
+            anno_rows_root_->RemoveChild(anno_rows_.back().row);
+            anno_rows_.pop_back();
+        }
+        while (anno_rows_.size() < entries.size()) {
+            auto row_ptr = document_->CreateElement("div");
+            row_ptr->SetAttribute("class", "vram-hud-anno-row");
+            auto* row = anno_rows_root_->AppendChild(std::move(row_ptr));
+            AnnotationRowElements e{};
+            e.row = row;
+            e.cat = createSpan(document_, row, "vram-hud-anno-cat");
+            e.name = createSpan(document_, row, "vram-hud-anno-name");
+            e.bytes = createSpan(document_, row, "vram-hud-anno-bytes");
+            e.peak = createSpan(document_, row, "vram-hud-anno-peak");
+            e.wall = createSpan(document_, row, "vram-hud-anno-wall");
+            e.gpu = createSpan(document_, row, "vram-hud-anno-gpu");
+            e.calls = createSpan(document_, row, "vram-hud-anno-calls");
+            anno_rows_.push_back(std::move(e));
+        }
+
+        for (std::size_t i = 0; i < entries.size(); ++i) {
+            auto& row = anno_rows_[i];
+            setText(row.cat, row.cached_cat, std::string(entries[i].category));
+            setText(row.name, row.cached_name, std::string(entries[i].name));
+            setText(row.bytes, row.cached_bytes,
+                    entries[i].live_bytes > 0 ? formatBytes(entries[i].live_bytes) : std::string("--"));
+            setText(row.peak, row.cached_peak,
+                    entries[i].peak_bytes > 0 ? formatBytes(entries[i].peak_bytes) : std::string("--"));
+            setText(row.wall, row.cached_wall,
+                    entries[i].calls > 0 || entries[i].total_ms > 0.0
+                        ? formatTime(entries[i].last_ms > 0.0 ? entries[i].last_ms : entries[i].total_ms)
+                        : std::string("--"));
+            setText(row.gpu, row.cached_gpu,
+                    entries[i].gpu_total_ms > 0.0 ? formatTime(entries[i].gpu_total_ms)
+                                                  : std::string("--"));
+            setText(row.calls, row.cached_calls,
+                    entries[i].calls > 0 ? std::to_string(entries[i].calls) : std::string("--"));
         }
     }
 
