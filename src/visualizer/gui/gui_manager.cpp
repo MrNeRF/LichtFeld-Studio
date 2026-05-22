@@ -4972,6 +4972,11 @@ namespace lfs::vis::gui {
                                                  memory.total_used,
                                                  memory.total,
                                                  memory.device_name);
+                    if (auto* const wm = viewer_ ? viewer_->getWindowManager() : nullptr) {
+                        if (auto* const vk = wm->getVulkanContext()) {
+                            profiler.setVulkanVmaUsed(vk->queryVmaUsedBytes());
+                        }
+                    }
                 }
                 vram_hud_overlay.visible = true;
                 vram_hud_overlay.snapshot = profiler.snapshot();

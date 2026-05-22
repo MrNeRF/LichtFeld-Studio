@@ -98,6 +98,7 @@ namespace lfs::vis {
         [[nodiscard]] uint32_t graphicsQueueFamily() const { return graphics_queue_family_; }
         [[nodiscard]] uint32_t presentQueueFamily() const { return present_queue_family_; }
         [[nodiscard]] VmaAllocator allocator() const { return allocator_; }
+        [[nodiscard]] std::size_t queryVmaUsedBytes() const;
         [[nodiscard]] VkPipelineCache pipelineCache() const { return pipeline_cache_; }
         [[nodiscard]] VkFormat swapchainFormat() const { return swapchain_format_; }
         [[nodiscard]] VkColorSpaceKHR swapchainColorSpace() const { return swapchain_color_space_; }

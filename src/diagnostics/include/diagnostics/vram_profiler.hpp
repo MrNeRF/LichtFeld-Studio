@@ -103,7 +103,9 @@ namespace lfs::diagnostics {
         std::size_t cuda_pool_used = 0;
         std::size_t cuda_pool_reserved = 0;
         std::size_t cuda_pool_fragmentation = 0;
+        std::size_t cuda_context_baseline = 0;
         std::size_t pinned_host_used = 0;
+        std::size_t vulkan_vma_used = 0;
         std::size_t process_used = 0;
         std::size_t total_used = 0;
         std::size_t total = 0;
@@ -252,6 +254,8 @@ namespace lfs::diagnostics {
         void recordHistogram(std::string_view key, double value);
 
         void setPinnedHostUsed(std::size_t bytes);
+        void setVulkanVmaUsed(std::size_t bytes);
+        void captureCudaContextBaseline();
 
         void sampleCudaMemory();
         void updateProcessMemory(std::size_t process_used,

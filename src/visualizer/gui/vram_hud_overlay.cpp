@@ -591,12 +591,30 @@ namespace lfs::vis::gui {
             bool unaccounted;
         };
         std::vector<Entry> entries;
-        entries.reserve(groups.size() + 1);
+        entries.reserve(groups.size() + 2);
         std::size_t tracked_total = 0;
         for (auto& [k, v] : groups) {
             tracked_total += v;
             entries.push_back({k, v, false});
         }
+
+        // Synthetic entries: bytes we know about from system queries but that aren't
+        // covered by any allocator scope row.
+        const auto& proc = state_.snapshot.process;
+        if (proc.cuda_pool_valid && proc.cuda_pool_reserved > proc.cuda_pool_used) {
+            const std::size_t pool_overhead = proc.cuda_pool_reserved - proc.cuda_pool_used;
+            tracked_total += pool_overhead;
+            entries.push_back({"cuda.pool.overhead", pool_overhead, false});
+        }
+        if (proc.cuda_context_baseline > 0) {
+            tracked_total += proc.cuda_context_baseline;
+            entries.push_back({"cuda.context", proc.cuda_context_baseline, false});
+        }
+        if (proc.vulkan_vma_used > 0) {
+            tracked_total += proc.vulkan_vma_used;
+            entries.push_back({"vulkan.vma", proc.vulkan_vma_used, false});
+        }
+
         std::sort(entries.begin(), entries.end(),
                   [](const Entry& a, const Entry& b) { return a.bytes > b.bytes; });
 

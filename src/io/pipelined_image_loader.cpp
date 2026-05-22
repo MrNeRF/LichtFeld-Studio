@@ -8,6 +8,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "cuda/image_format_kernels.cuh"
+#include "diagnostics/vram_profiler.hpp"
 #include "io/nvcodec_image_loader.hpp"
 
 #include <cuda_runtime.h>
@@ -961,6 +962,7 @@ namespace lfs::io {
     }
 
     void PipelinedImageLoader::gpu_batch_decode_thread_func() {
+        LFS_VRAM_SCOPE("io.image_loader");
         std::vector<PrefetchedImage> batch;
         batch.reserve(config_.jpeg_batch_size);
 

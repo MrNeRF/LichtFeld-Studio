@@ -307,6 +307,8 @@ namespace lfs::diagnostics {
         std::unordered_map<std::string, ScopeNodeStats> scope_nodes;
         VramProcessSnapshot process;
         std::size_t pinned_host_used = 0;
+        std::size_t vulkan_vma_used = 0;
+        std::size_t cuda_context_baseline = 0;
         std::uint64_t allocation_events = 0;
         std::uint64_t free_events = 0;
         std::uint64_t iter_allocation_events_start = 0;
@@ -369,6 +371,9 @@ namespace lfs::diagnostics {
             impl_->iter_window_origin = std::chrono::steady_clock::time_point{};
             impl_->iter_window_count = 0;
             impl_->accounted_history.clear();
+            impl_->pinned_host_used = 0;
+            impl_->vulkan_vma_used = 0;
+            impl_->cuda_context_baseline = 0;
             impl_->sequence.fetch_add(1, std::memory_order_relaxed);
         }
     }
@@ -903,6 +908,26 @@ namespace lfs::diagnostics {
     void VramProfiler::setPinnedHostUsed(const std::size_t bytes) {
         std::lock_guard lock(impl_->mutex);
         impl_->pinned_host_used = bytes;
+        impl_->process.pinned_host_used = bytes;
+        impl_->sequence.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    void VramProfiler::setVulkanVmaUsed(const std::size_t bytes) {
+        std::lock_guard lock(impl_->mutex);
+        impl_->vulkan_vma_used = bytes;
+        impl_->process.vulkan_vma_used = bytes;
+        impl_->sequence.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    void VramProfiler::captureCudaContextBaseline() {
+        std::size_t used = 0;
+        if (!sample_cuda_used_bytes(used))
+            return;
+        std::lock_guard lock(impl_->mutex);
+        if (impl_->cuda_context_baseline == 0) {
+            impl_->cuda_context_baseline = used;
+            impl_->process.cuda_context_baseline = used;
+        }
         impl_->sequence.fetch_add(1, std::memory_order_relaxed);
     }
 
@@ -977,6 +1002,8 @@ namespace lfs::diagnostics {
                         : 0;
             }
             process.pinned_host_used = impl_->pinned_host_used;
+            process.vulkan_vma_used = impl_->vulkan_vma_used;
+            process.cuda_context_baseline = impl_->cuda_context_baseline;
             impl_->process = std::move(process);
             impl_->sequence.fetch_add(1, std::memory_order_relaxed);
         }

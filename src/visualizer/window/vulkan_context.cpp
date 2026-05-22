@@ -1331,6 +1331,14 @@ namespace lfs::vis {
         return true;
     }
 
+    std::size_t VulkanContext::queryVmaUsedBytes() const {
+        if (allocator_ == VK_NULL_HANDLE)
+            return 0;
+        VmaTotalStatistics stats{};
+        vmaCalculateStatistics(allocator_, &stats);
+        return static_cast<std::size_t>(stats.total.statistics.allocationBytes);
+    }
+
     VkSurfaceFormatKHR VulkanContext::chooseSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& formats) const {
         constexpr std::array preferred_formats{
             VK_FORMAT_B8G8R8A8_UNORM,
