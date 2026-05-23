@@ -60,6 +60,11 @@ namespace lfs::core {
         Tensor load_and_get_mask(int resize_factor = -1, int max_width = 0,
                                  bool invert_mask = false, float mask_threshold = 0.5f);
 
+        // Attach an in-memory mask (skips file load). Expected (H,W) or
+        // (1,H,W) at the image's on-disk resolution; dtype uint8 [0,255] or
+        // float32 [0,1]. Lazily processed on the next load_and_get_mask call.
+        void set_mask_tensor(Tensor mask);
+
         // Load image from disk just to populate _image_width/_image_height
         void load_image_size(int resize_factor = -1, int max_width = 0);
 
@@ -108,7 +113,11 @@ namespace lfs::core {
         const std::string& image_name() const noexcept { return _image_name; }
         const std::filesystem::path& image_path() const noexcept { return _image_path; }
         const std::filesystem::path& mask_path() const noexcept { return _mask_path; }
-        bool has_mask() const noexcept { return !_mask_path.empty() && std::filesystem::exists(_mask_path); }
+        bool has_in_memory_mask() const noexcept { return _in_memory_mask_raw.is_valid(); }
+        bool has_mask() const noexcept {
+            return has_in_memory_mask() ||
+                   (!_mask_path.empty() && std::filesystem::exists(_mask_path));
+        }
         bool has_alpha() const noexcept { return _has_alpha; }
         void set_has_alpha(bool v) noexcept { _has_alpha = v; }
         CameraSplit split() const noexcept { return _split; }
@@ -169,6 +178,9 @@ namespace lfs::core {
         // Mask caching (processed mask stored on GPU)
         Tensor _cached_mask;
         bool _mask_loaded = false;
+        // Raw, pre-supplied in-memory mask (used by direct-scene plugins) —
+        // takes precedence over _mask_path when set. Processed on first use.
+        Tensor _in_memory_mask_raw;
 
         // Undistortion state
         bool _undistort_precomputed = false;

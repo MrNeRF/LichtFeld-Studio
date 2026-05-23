@@ -149,6 +149,7 @@ namespace lfs::core {
           _cam_position(std::move(other._cam_position)),
           _cached_mask(std::move(other._cached_mask)),
           _mask_loaded(other._mask_loaded),
+          _in_memory_mask_raw(std::move(other._in_memory_mask_raw)),
           _undistort_precomputed(other._undistort_precomputed),
           _undistort_prepared(other._undistort_prepared),
           _undistort_params(other._undistort_params),
@@ -192,6 +193,7 @@ namespace lfs::core {
             _cam_position = std::move(other._cam_position);
             _cached_mask = std::move(other._cached_mask);
             _mask_loaded = other._mask_loaded;
+            _in_memory_mask_raw = std::move(other._in_memory_mask_raw);
             _undistort_precomputed = other._undistort_precomputed;
             _undistort_prepared = other._undistort_prepared;
             _undistort_params = other._undistort_params;
@@ -360,39 +362,69 @@ namespace lfs::core {
         return num_bytes;
     }
 
+    void Camera::set_mask_tensor(Tensor mask) {
+        _in_memory_mask_raw = std::move(mask);
+        // Force reprocessing on the next load_and_get_mask call.
+        _cached_mask = Tensor();
+        _mask_loaded = false;
+    }
+
     Tensor Camera::load_and_get_mask(const int resize_factor, const int max_width,
                                      const bool invert_mask, const float mask_threshold) {
         if (_mask_loaded && _cached_mask.is_valid()) {
             return _cached_mask;
         }
 
-        if (_mask_path.empty() || !std::filesystem::exists(_mask_path)) {
-            return Tensor();
-        }
-
-        const ImageLoadParams params{
-            .path = _mask_path,
-            .resize_factor = resize_factor,
-            .max_width = max_width,
-            .stream = _stream};
-
-        auto mask = load_image_cached(params);
-
-        if (mask.device() != Device::CUDA) {
-            mask = mask.to(Device::CUDA, _stream);
-            if (_stream) {
-                cudaStreamSynchronize(_stream);
+        Tensor mask;
+        if (_in_memory_mask_raw.is_valid()) {
+            // In-memory mask (set via set_mask_tensor). The plugin supplies it
+            // at the image's on-disk resolution; further resize_factor /
+            // max_width handling is the trainer's responsibility upstream.
+            mask = _in_memory_mask_raw;
+            if (mask.device() != Device::CUDA) {
+                mask = mask.to(Device::CUDA, _stream);
+                if (_stream) {
+                    cudaStreamSynchronize(_stream);
+                }
             }
-        }
+            if (mask.dtype() == DataType::UInt8) {
+                mask = mask.to(DataType::Float32).div(255.0f);
+            } else if (mask.dtype() != DataType::Float32) {
+                mask = mask.to(DataType::Float32);
+            }
+            // Allow (1, H, W) or (H, W, 1) shapes by squeezing the singleton.
+            if (mask.ndim() == 3 && mask.shape()[0] == 1) {
+                mask = mask.squeeze(0);
+            } else if (mask.ndim() == 3 && mask.shape()[2] == 1) {
+                mask = mask.squeeze(2);
+            }
+        } else if (!_mask_path.empty() && std::filesystem::exists(_mask_path)) {
+            const ImageLoadParams params{
+                .path = _mask_path,
+                .resize_factor = resize_factor,
+                .max_width = max_width,
+                .stream = _stream};
 
-        // Convert RGB [C,H,W] to grayscale [H,W]
-        if (mask.ndim() == 3 && mask.shape()[0] >= 3) {
-            const auto r = mask.slice(0, 0, 1).squeeze(0);
-            const auto g = mask.slice(0, 1, 2).squeeze(0);
-            const auto b = mask.slice(0, 2, 3).squeeze(0);
-            mask = (r + g + b) / 3.0f;
-        } else if (mask.ndim() == 3 && mask.shape()[0] == 1) {
-            mask = mask.squeeze(0);
+            mask = load_image_cached(params);
+
+            if (mask.device() != Device::CUDA) {
+                mask = mask.to(Device::CUDA, _stream);
+                if (_stream) {
+                    cudaStreamSynchronize(_stream);
+                }
+            }
+
+            // Convert RGB [C,H,W] to grayscale [H,W]
+            if (mask.ndim() == 3 && mask.shape()[0] >= 3) {
+                const auto r = mask.slice(0, 0, 1).squeeze(0);
+                const auto g = mask.slice(0, 1, 2).squeeze(0);
+                const auto b = mask.slice(0, 2, 3).squeeze(0);
+                mask = (r + g + b) / 3.0f;
+            } else if (mask.ndim() == 3 && mask.shape()[0] == 1) {
+                mask = mask.squeeze(0);
+            }
+        } else {
+            return Tensor();
         }
 
         if (invert_mask) {
