@@ -1028,10 +1028,18 @@ namespace lfs::core {
                           static_cast<void*>(positions.ptr<float>()),
                           positions.shape().str(), positions.numel());
 
-                // Normalize colors from uint8 [0,255] to float32 [0,1] to match old behavior
+                // Normalize colors from uint8 [0,255] to float32 [0,1]. When
+                // the caller already provided floats (e.g. in-memory plugins
+                // pushing scenes via PyScene::add_point_cloud), assume the
+                // values are already in [0,1] and skip the /255 step — that
+                // unconditional divide would otherwise crush them to near-zero.
                 LOG_DEBUG("  Converting pcd.colors (dtype={}) to float32...",
                           pcd.colors.dtype() == DataType::UInt8 ? "UInt8" : "Float32");
-                colors = pcd.colors.to(DataType::Float32).div(255.0f).cuda();
+                if (pcd.colors.dtype() == DataType::UInt8) {
+                    colors = pcd.colors.to(DataType::Float32).div(255.0f).cuda();
+                } else {
+                    colors = pcd.colors.to(DataType::Float32).cuda();
+                }
                 LOG_DEBUG("  colors after conversion: is_valid={}, device={}, shape={}, numel={}",
                           colors.is_valid(),
                           colors.device() == Device::CUDA ? "CUDA" : "CPU",
