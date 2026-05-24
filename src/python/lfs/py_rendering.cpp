@@ -33,7 +33,6 @@
 #include <cstring>
 #include <filesystem>
 #include <future>
-#include <limits>
 #include <numbers>
 #include <variant>
 
@@ -115,29 +114,6 @@ namespace lfs::python {
             return future.get();
         }
 
-        [[nodiscard]] std::pair<glm::vec3, glm::vec3> previewBoundsInVisualizerSpace(
-            const glm::vec3& data_min,
-            const glm::vec3& data_max) {
-            const std::array<glm::vec3, 8> corners{
-                glm::vec3{data_min.x, data_min.y, data_min.z},
-                glm::vec3{data_max.x, data_min.y, data_min.z},
-                glm::vec3{data_min.x, data_max.y, data_min.z},
-                glm::vec3{data_max.x, data_max.y, data_min.z},
-                glm::vec3{data_min.x, data_min.y, data_max.z},
-                glm::vec3{data_max.x, data_min.y, data_max.z},
-                glm::vec3{data_min.x, data_max.y, data_max.z},
-                glm::vec3{data_max.x, data_max.y, data_max.z},
-            };
-            glm::vec3 vis_min(std::numeric_limits<float>::max());
-            glm::vec3 vis_max(std::numeric_limits<float>::lowest());
-            for (const auto& corner : corners) {
-                const auto vis_corner = rendering::visualizerWorldPointFromDataWorld(corner);
-                vis_min = glm::min(vis_min, vis_corner);
-                vis_max = glm::max(vis_max, vis_corner);
-            }
-            return {vis_min, vis_max};
-        }
-
         [[nodiscard]] std::optional<core::Tensor> renderSplatAssetPreview(
             vis::RenderingManager& rendering_manager,
             core::SplatData& splat,
@@ -148,17 +124,10 @@ namespace lfs::python {
                 return std::nullopt;
             }
 
-            glm::vec3 data_min{};
-            glm::vec3 data_max{};
-            if (!core::compute_bounds(splat, data_min, data_max)) {
-                return std::nullopt;
-            }
-
-            const auto [vis_min, vis_max] = previewBoundsInVisualizerSpace(data_min, data_max);
             Viewport preview_viewport(
                 static_cast<std::size_t>(width),
                 static_cast<std::size_t>(height));
-            preview_viewport.camera.focusOnBounds(vis_min, vis_max, focal_length_mm);
+            preview_viewport.camera.resetToHome();
 
             vis::SceneRenderState scene_state;
             scene_state.combined_model = &splat;
@@ -219,17 +188,10 @@ namespace lfs::python {
                 return std::nullopt;
             }
 
-            glm::vec3 data_min{};
-            glm::vec3 data_max{};
-            if (!core::compute_bounds(point_cloud, data_min, data_max)) {
-                return std::nullopt;
-            }
-
-            const auto [vis_min, vis_max] = previewBoundsInVisualizerSpace(data_min, data_max);
             Viewport preview_viewport(
                 static_cast<std::size_t>(width),
                 static_cast<std::size_t>(height));
-            preview_viewport.camera.focusOnBounds(vis_min, vis_max, focal_length_mm);
+            preview_viewport.camera.resetToHome();
 
             std::vector<glm::mat4> model_transforms{
                 rendering::dataWorldTransformToVisualizerWorld(glm::mat4(1.0f)),
