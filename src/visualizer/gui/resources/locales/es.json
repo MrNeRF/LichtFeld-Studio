@@ -108,6 +108,7 @@
     "action.rename_project": "Renombrar proyecto",
     "action.create_new_project": "Crear nuevo Proyecto",
     "action.show_in_folder": "Mostrar en carpeta",
+    "action.update_thumbnail": "Establecer miniatura desde vista actual",
     "batch.export_selected": "Exportar Seleccionados",
     "batch.load_selected": "Cargar Seleccionados",
     "batch.remove_from_catalog": "Eliminar del Catálogo",

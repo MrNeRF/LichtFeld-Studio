@@ -301,6 +301,26 @@ def refresh_active_panel() -> None:
         _logger.debug("Failed to refresh active Asset Manager panel", exc_info=True)
 
 
+def update_thumbnail_from_current_camera(asset_id: str) -> bool:
+    """Update an asset's thumbnail using the current viewport camera pose.
+
+    Args:
+        asset_id: The ID of the asset to update.
+
+    Returns:
+        True if the thumbnail was updated successfully.
+    """
+    panel = get_asset_manager_panel()
+    if panel is None:
+        return False
+    try:
+        panel.on_update_thumbnail(None, None, [asset_id])
+        return True
+    except Exception:
+        _logger.debug("Failed to update thumbnail from camera", exc_info=True)
+        return False
+
+
 def select_asset_in_active_panel(
     asset_id: str,
     *,

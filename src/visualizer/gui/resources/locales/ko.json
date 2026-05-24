@@ -103,6 +103,7 @@
     "action.rename_project": "프로젝트 이름 바꾸기",
     "action.create_new_project": "새 프로젝트 만들기",
     "action.show_in_folder": "폴더에 표시",
+    "action.update_thumbnail": "현재 보기에서 썸네일 설정",
     "batch.export_selected": "선택 항목보내기",
     "batch.load_selected": "선택 항목 로드",
     "batch.remove_from_catalog": "카탈로그에서 제거",

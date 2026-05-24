@@ -103,6 +103,7 @@
     "action.rename_project": "プロジェクト名を変更",
     "action.create_new_project": "新規プロジェクトを作成",
     "action.show_in_folder": "フォルダに表示",
+    "action.update_thumbnail": "現在のビューからサムネイルを設定",
     "batch.export_selected": "選択項目をエクスポート",
     "batch.load_selected": "選択項目を読み込む",
     "batch.remove_from_catalog": "カタログから削除",

@@ -494,6 +494,7 @@ class AssetManagerPanel(Panel):
         model.bind_func("move_to_project_label", lambda: tr("asset_manager.action.move_to_project"))
         model.bind_func("new_project_label", lambda: tr("asset_manager.action.new_project"))
         model.bind_func("show_in_folder_label", lambda: tr("asset_manager.action.show_in_folder"))
+        model.bind_func("update_thumbnail_label", lambda: tr("asset_manager.action.update_thumbnail"))
         model.bind_func("remove_label", lambda: tr("asset_manager.action.remove"))
         model.bind_func("refresh_label", lambda: tr("asset_manager.action.refresh"))
         model.bind_func("clean_missing_label", lambda: tr("asset_manager.action.clean_missing"))
@@ -583,6 +584,7 @@ class AssetManagerPanel(Panel):
         model.bind_event("select_asset", self.select_asset_by_id)
         model.bind_event("on_load_asset", self.on_load_asset)
         model.bind_event("on_remove_asset", self.on_remove_asset)
+        model.bind_event("on_update_thumbnail", self.on_update_thumbnail)
         model.bind_event("on_pending_tag_change", self.on_pending_tag_change)
         model.bind_event("on_add_tag", self.on_add_tag)
         model.bind_event("on_remove_tag", self.on_remove_tag)
@@ -1786,12 +1788,7 @@ class AssetManagerPanel(Panel):
                 or str(thumbnail_path) == str(placeholder_path)
             )
 
-        get_rendered_thumbnail_path = getattr(
-            self._asset_thumbnails,
-            "get_rendered_thumbnail_path",
-            None,
-        )
-        if callable(get_rendered_thumbnail_path) and asset_type in {
+        if asset_type in {
             "checkpoint",
             "mesh",
             "ply_3dgs",
@@ -1801,10 +1798,14 @@ class AssetManagerPanel(Panel):
             "sog",
             "spz",
         }:
-            expected_path = get_rendered_thumbnail_path(asset_id)
+            has_rendered = getattr(
+                self._asset_thumbnails,
+                "has_rendered_thumbnail",
+                lambda _aid: False,
+            )(asset_id)
             return (
-                str(thumbnail_path) != str(expected_path)
-                or not expected_path.exists()
+                not has_rendered
+                or not thumbnail_exists
                 or not thumbnail_size_ok
             )
 
@@ -3009,6 +3010,69 @@ class AssetManagerPanel(Panel):
         except Exception as e:
             self._log_error("Failed to open file location: %s", e)
 
+    def on_update_thumbnail(self, _handle, _ev, args):
+        """Update asset thumbnail from current camera pose."""
+        asset_id = self._resolve_event_value(args, _ev, "data-asset-id")
+        if not asset_id:
+            return
+
+        if _ev:
+            try:
+                _ev.stop_propagation()
+            except Exception:
+                pass
+
+        if not self._asset_index or not hasattr(self._asset_index, "assets"):
+            return
+
+        asset = self._asset_index.assets.get(asset_id)
+        if not asset:
+            return
+
+        # Close the menu
+        self._open_menu_asset_id = None
+        self._dirty_model("assets")
+
+        asset_path = asset.get("absolute_path") or asset.get("path")
+        if not asset_path:
+            self._log_warn("Asset has no file path: %s", asset_id)
+            return
+
+        asset_type = asset.get("type", "")
+        if asset_type.lower() not in self.LOADABLE_TYPES:
+            self._log_warn("Asset type not renderable: %s", asset_type)
+            return
+
+        try:
+            import lichtfeld as lf
+
+            camera = lf.get_camera("main")
+            if camera is None:
+                self._log_warn("No camera available for thumbnail update")
+                return
+
+            if not self._asset_thumbnails or not hasattr(self._asset_thumbnails, "generate_rendered_preview_from_camera"):
+                self._log_warn("Thumbnail generator not available")
+                return
+
+            thumb_path = self._asset_thumbnails.generate_rendered_preview_from_camera(
+                asset_type,
+                asset_id,
+                asset_path,
+                eye=camera.eye,
+                target=camera.target,
+                up=camera.up,
+            )
+            if thumb_path is not None:
+                self._asset_index.update_asset(asset_id, thumbnail_path=str(thumb_path))
+                self._asset_index.save()
+                self._log_info("Updated thumbnail for %s from current camera", asset_id)
+                self.refresh_catalog()
+            else:
+                self._log_warn("Failed to render thumbnail from camera for %s", asset_id)
+        except Exception as e:
+            self._log_error("Failed to update thumbnail: %s", e)
+
     def on_move_to_project(self, _handle, _ev, args):
         """Move asset to a different project."""
         asset_id = self._resolve_event_value(args, _ev, "data-asset-id")
@@ -3571,6 +3635,10 @@ class AssetManagerPanel(Panel):
                 return
             elif action == "show_in_folder":
                 self.on_show_in_folder(None, event, [asset_id])
+                self._stop_event(event)
+                return
+            elif action == "update_thumbnail":
+                self.on_update_thumbnail(None, event, [asset_id])
                 self._stop_event(event)
                 return
             elif action == "move_to_project":

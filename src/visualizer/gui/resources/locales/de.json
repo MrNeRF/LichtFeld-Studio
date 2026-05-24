@@ -103,6 +103,7 @@
     "action.rename_project": "Projekt umbenennen",
     "action.create_new_project": "Neues Projekt erstellen",
     "action.show_in_folder": "Im Ordner anzeigen",
+    "action.update_thumbnail": "Vorschaubild aus aktueller Ansicht setzen",
     "batch.export_selected": "Ausgewählte exportieren",
     "batch.load_selected": "Ausgewählte laden",
     "batch.remove_from_catalog": "Aus Katalog entfernen",

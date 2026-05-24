@@ -1086,6 +1086,7 @@
     "action.rename_project": "重命名项目",
     "action.create_new_project": "创建新项目",
     "action.show_in_folder": "在文件夹中显示",
+    "action.update_thumbnail": "从当前视图设置缩略图",
     "batch.export_selected": "导出选中",
     "batch.load_selected": "加载选中",
     "batch.remove_from_catalog": "从目录移除",

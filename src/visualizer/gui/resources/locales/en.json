@@ -192,6 +192,7 @@
     "action.refresh": "Refresh",
     "action.clean_missing": "Clean",
     "action.show_in_folder": "Show in Folder",
+    "action.update_thumbnail": "Set Thumbnail From Current View",
     "action.move_to_project": "Move to Project",
     "action.new_project": "+ New project",
     "action.edit_watch_dirs": "Edit Watched Directories",

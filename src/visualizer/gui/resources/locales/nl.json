@@ -103,6 +103,7 @@
     "action.rename_project": "Project Hernoemen",
     "action.create_new_project": "Nieuw Project aanmaken",
     "action.show_in_folder": "Toon in Map",
+    "action.update_thumbnail": "Miniatuur instellen vanuit huidige weergave",
     "batch.export_selected": "Exporteer Geselecteerde",
     "batch.load_selected": "Laad Geselecteerde",
     "batch.remove_from_catalog": "Verwijderen uit Catalogus",

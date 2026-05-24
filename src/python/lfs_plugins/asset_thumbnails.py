@@ -7,6 +7,7 @@ from __future__ import annotations
 import io
 import logging
 import struct
+import time
 from pathlib import Path
 from typing import Any, Set
 
@@ -303,6 +304,27 @@ class AssetThumbnails:
         """Get the cached rendered-preview path for a splat asset."""
         return self._thumbnails_dir / f"{asset_id}.render.png"
 
+    def _get_timestamped_rendered_thumbnail_path(self, asset_id: str) -> Path:
+        """Get a unique rendered-preview path so RmlUI reloads the texture."""
+        timestamp = int(time.time())
+        return self._thumbnails_dir / f"{asset_id}.render.{timestamp}.png"
+
+    def _cleanup_old_rendered_thumbnails(self, asset_id: str, keep: Path | None = None) -> None:
+        """Remove stale rendered thumbnails for an asset, optionally keeping one."""
+        pattern = f"{asset_id}.render.*.png"
+        for old in self._thumbnails_dir.glob(pattern):
+            if keep is not None and old == keep:
+                continue
+            try:
+                old.unlink()
+            except Exception:
+                pass
+
+    def has_rendered_thumbnail(self, asset_id: str) -> bool:
+        """Return whether any rendered thumbnail exists for this asset."""
+        pattern = f"{asset_id}.render.*.png"
+        return any(self._thumbnails_dir.glob(pattern))
+
     def get_dataset_thumbnail_path(self, asset_id: str) -> Path:
         """Get the cached dataset-image thumbnail path for a dataset asset."""
         return self._thumbnails_dir / f"{asset_id}.dataset.png"
@@ -429,11 +451,52 @@ class AssetThumbnails:
             if image is None:
                 return None
 
-            thumb_path = self.get_rendered_thumbnail_path(asset_id)
+            thumb_path = self._get_timestamped_rendered_thumbnail_path(asset_id)
             save_image(str(thumb_path), image)
-            return thumb_path if thumb_path.exists() else None
+            if thumb_path.exists():
+                self._cleanup_old_rendered_thumbnails(asset_id, keep=thumb_path)
+                return thumb_path
+            return None
         except Exception as exc:
             _logger.debug("Failed to render thumbnail for %s: %s", asset_id, exc)
+            return None
+
+    def generate_rendered_preview_from_camera(
+        self,
+        asset_type: str,
+        asset_id: str,
+        asset_path: str | Path,
+        eye: tuple[float, float, float],
+        target: tuple[float, float, float],
+        up: tuple[float, float, float] = (0.0, 1.0, 0.0),
+    ) -> Path | None:
+        """Generate a rendered thumbnail from a custom camera pose."""
+        if asset_type.lower() not in RENDERABLE_PREVIEW_TYPES or not asset_path:
+            return None
+
+        try:
+            import lichtfeld as lf
+
+            render_preview = getattr(lf, "render_asset_preview_from_camera", None)
+            save_image = getattr(getattr(lf, "io", None), "save_image", None)
+            if not callable(render_preview) or not callable(save_image):
+                return None
+
+            image = render_preview(
+                str(asset_path), THUMB_WIDTH, THUMB_HEIGHT,
+                eye=eye, target=target, up=up,
+            )
+            if image is None:
+                return None
+
+            thumb_path = self._get_timestamped_rendered_thumbnail_path(asset_id)
+            save_image(str(thumb_path), image)
+            if thumb_path.exists():
+                self._cleanup_old_rendered_thumbnails(asset_id, keep=thumb_path)
+                return thumb_path
+            return None
+        except Exception as exc:
+            _logger.debug("Failed to render thumbnail from camera for %s: %s", asset_id, exc)
             return None
 
     def get_thumbnail_path(self, asset_id: str) -> Path:

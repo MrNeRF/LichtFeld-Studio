@@ -1229,6 +1229,11 @@ def render_asset_preview(path: str, width: int = 512, height: int = 224, focal_l
     Render an asset from the framed home camera into an offscreen thumbnail without mutating the live scene.
     """
 
+def render_asset_preview_from_camera(path: str, width: int = 512, height: int = 224, focal_length_mm: float = 50.0, eye: tuple[float, float, float] = (0.0, 0.0, 0.0), target: tuple[float, float, float] = (0.0, 0.0, 0.0), up: tuple[float, float, float] = (0.0, 1.0, 0.0)) -> Tensor | None:
+    """
+    Render an asset from a custom camera pose into an offscreen thumbnail without mutating the live scene.
+    """
+
 def compute_screen_positions(rotation: Tensor, translation: Tensor, width: int, height: int, fov: float = 60.0) -> Tensor | None:
     """
     Compute screen positions of all Gaussians for a given camera view.
