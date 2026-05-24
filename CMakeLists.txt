@@ -132,6 +132,7 @@ get_filename_component(PROJ_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}" ABSOLUTE)
 option(BUILD_TESTS "Build tests" OFF)
 option(BUILD_UNICODE_TEST_ONLY "Build only Unicode path test (no CUDA)" OFF)
 option(ENABLE_ALLOCATION_PROFILING "Enable tensor allocation profiling" OFF)
+option(LFS_FAST_COMPILE "Optimize measured slow C++ components for build speed instead of runtime speed" OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # Debug options
@@ -935,6 +936,33 @@ configure_build_type(lfs_visualizer)
 configure_build_type(lfs_io)
 configure_build_type(lfs_geometry)
 configure_build_type(${PROJECT_NAME})
+
+if(LFS_FAST_COMPILE AND MSVC)
+    function(lfs_enable_fast_cxx_compile target)
+        if(TARGET ${target})
+            target_compile_options(${target} PRIVATE
+                $<$<COMPILE_LANGUAGE:CXX>:/Od>
+                $<$<COMPILE_LANGUAGE:CXX>:/Ob0>
+            )
+        endif()
+    endfunction()
+
+    # Selected from build_time_comparison.md: only components with >20s summed
+    # edge-time improvement in build-fast are included. CUDA-heavy regressions
+    # stay on their target defaults.
+    foreach(_lfs_fast_target IN ITEMS
+        lfs_visualizer
+        lfs_py
+        lfs_core
+        lfs_training
+        lfs_io
+        lfs_mcp
+        Zep
+        OpenMeshCore
+    )
+        lfs_enable_fast_cxx_compile(${_lfs_fast_target})
+    endforeach()
+endif()
 
 # Set the default startup project in Visual Studio to LichtFeld-Studio
 # (without this, VS defaults to ALL_BUILD when opening the solution)
