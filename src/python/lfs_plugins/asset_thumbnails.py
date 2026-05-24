@@ -429,6 +429,32 @@ class AssetThumbnails:
             )
             return first_image if first_image.exists() else None
 
+    def _generate_rendered_preview(
+        self,
+        asset_type: str,
+        asset_id: str,
+        asset_path: str | Path,
+        render_preview: Any,
+        save_image: Any,
+        **render_kwargs: Any,
+    ) -> Path | None:
+        """Shared helper for rendered thumbnail generation."""
+        if asset_type.lower() not in RENDERABLE_PREVIEW_TYPES or not asset_path:
+            return None
+        if not callable(render_preview) or not callable(save_image):
+            return None
+
+        image = render_preview(str(asset_path), THUMB_WIDTH, THUMB_HEIGHT, **render_kwargs)
+        if image is None:
+            return None
+
+        thumb_path = self._get_timestamped_rendered_thumbnail_path(asset_id)
+        save_image(str(thumb_path), image)
+        if thumb_path.exists():
+            self._cleanup_old_rendered_thumbnails(asset_id, keep=thumb_path)
+            return thumb_path
+        return None
+
     def generate_rendered_preview(
         self,
         asset_type: str,
@@ -436,27 +462,13 @@ class AssetThumbnails:
         asset_path: str | Path,
     ) -> Path | None:
         """Generate a rendered thumbnail for a splat asset using the app renderer."""
-        if asset_type.lower() not in RENDERABLE_PREVIEW_TYPES or not asset_path:
-            return None
-
         try:
             import lichtfeld as lf
-
-            render_preview = getattr(lf, "render_asset_preview", None)
-            save_image = getattr(getattr(lf, "io", None), "save_image", None)
-            if not callable(render_preview) or not callable(save_image):
-                return None
-
-            image = render_preview(str(asset_path), THUMB_WIDTH, THUMB_HEIGHT)
-            if image is None:
-                return None
-
-            thumb_path = self._get_timestamped_rendered_thumbnail_path(asset_id)
-            save_image(str(thumb_path), image)
-            if thumb_path.exists():
-                self._cleanup_old_rendered_thumbnails(asset_id, keep=thumb_path)
-                return thumb_path
-            return None
+            return self._generate_rendered_preview(
+                asset_type, asset_id, asset_path,
+                getattr(lf, "render_asset_preview", None),
+                getattr(getattr(lf, "io", None), "save_image", None),
+            )
         except Exception as exc:
             _logger.debug("Failed to render thumbnail for %s: %s", asset_id, exc)
             return None
@@ -471,30 +483,14 @@ class AssetThumbnails:
         up: tuple[float, float, float] = (0.0, 1.0, 0.0),
     ) -> Path | None:
         """Generate a rendered thumbnail from a custom camera pose."""
-        if asset_type.lower() not in RENDERABLE_PREVIEW_TYPES or not asset_path:
-            return None
-
         try:
             import lichtfeld as lf
-
-            render_preview = getattr(lf, "render_asset_preview_from_camera", None)
-            save_image = getattr(getattr(lf, "io", None), "save_image", None)
-            if not callable(render_preview) or not callable(save_image):
-                return None
-
-            image = render_preview(
-                str(asset_path), THUMB_WIDTH, THUMB_HEIGHT,
+            return self._generate_rendered_preview(
+                asset_type, asset_id, asset_path,
+                getattr(lf, "render_asset_preview_from_camera", None),
+                getattr(getattr(lf, "io", None), "save_image", None),
                 eye=eye, target=target, up=up,
             )
-            if image is None:
-                return None
-
-            thumb_path = self._get_timestamped_rendered_thumbnail_path(asset_id)
-            save_image(str(thumb_path), image)
-            if thumb_path.exists():
-                self._cleanup_old_rendered_thumbnails(asset_id, keep=thumb_path)
-                return thumb_path
-            return None
         except Exception as exc:
             _logger.debug("Failed to render thumbnail from camera for %s: %s", asset_id, exc)
             return None
