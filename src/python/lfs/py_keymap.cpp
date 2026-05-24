@@ -113,6 +113,7 @@ namespace lfs::python {
             .value("CAMERA_MOVE_UP", Action::CAMERA_MOVE_UP)
             .value("CAMERA_MOVE_DOWN", Action::CAMERA_MOVE_DOWN)
             .value("CAMERA_RESET_HOME", Action::CAMERA_RESET_HOME)
+            .value("CAMERA_SET_HOME", Action::CAMERA_SET_HOME)
             .value("CAMERA_FOCUS_SELECTION", Action::CAMERA_FOCUS_SELECTION)
             .value("CAMERA_SET_PIVOT", Action::CAMERA_SET_PIVOT)
             .value("CAMERA_NEXT_VIEW", Action::CAMERA_NEXT_VIEW)

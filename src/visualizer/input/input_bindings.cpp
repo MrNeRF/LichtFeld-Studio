@@ -933,6 +933,7 @@ namespace lfs::vis::input {
             {KeyTrigger{KEY_A, MODIFIER_NONE, true}, Action::CAMERA_MOVE_LEFT, "Left"},
             {KeyTrigger{KEY_D, MODIFIER_NONE, true}, Action::CAMERA_MOVE_RIGHT, "Right"},
             {KeyTrigger{KEY_H, MODIFIER_NONE}, Action::CAMERA_RESET_HOME, "Home"},
+            {KeyTrigger{KEY_H, MODIFIER_SHIFT}, Action::CAMERA_SET_HOME, "Set home"},
             {KeyTrigger{KEY_F, MODIFIER_NONE}, Action::CAMERA_FOCUS_SELECTION, "Focus selection"},
             {KeyTrigger{KEY_RIGHT, MODIFIER_NONE, true}, Action::CAMERA_NEXT_VIEW, "Next view"},
             {KeyTrigger{KEY_LEFT, MODIFIER_NONE, true}, Action::CAMERA_PREV_VIEW, "Prev view"},
@@ -1076,6 +1077,7 @@ namespace lfs::vis::input {
         case Action::CAMERA_MOVE_UP: return "Move Up";
         case Action::CAMERA_MOVE_DOWN: return "Move Down";
         case Action::CAMERA_RESET_HOME: return "Go to Home";
+        case Action::CAMERA_SET_HOME: return "Set Home";
         case Action::CAMERA_FOCUS_SELECTION: return "Focus Selection";
         case Action::CAMERA_SET_PIVOT: return "Set Pivot";
         case Action::CAMERA_NEXT_VIEW: return "Next Camera View";
@@ -1642,6 +1644,7 @@ namespace lfs::vis::input {
             return d_movement;
 
         case Action::CAMERA_RESET_HOME:
+        case Action::CAMERA_SET_HOME:
         case Action::CAMERA_FOCUS_SELECTION:
         case Action::CAMERA_NEXT_VIEW:
         case Action::CAMERA_PREV_VIEW:
