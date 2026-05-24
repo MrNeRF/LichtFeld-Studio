@@ -84,6 +84,7 @@ namespace lfs::vis {
             std::vector<glm::vec2> polygon_vertices;
             bool gut = false;
             bool equirectangular = false;
+            bool synchronize_input_upload = false;
         };
 
         VksplatViewportRenderer();

@@ -44,7 +44,7 @@ namespace lfs::vis::input {
         CAMERA_MOVE_RIGHT,
         CAMERA_MOVE_UP,
         CAMERA_MOVE_DOWN,
-        CAMERA_RESET_HOME,
+        CAMERA_SET_HOME,
         CAMERA_FOCUS_SELECTION,
         CAMERA_SET_PIVOT,
         CAMERA_NEXT_VIEW,
@@ -114,6 +114,8 @@ namespace lfs::vis::input {
         // Pie menu
         PIE_MENU,
         DEPTH_ADJUST_NEAR, // Deprecated: migrated to DEPTH_ADJUST_FAR on load
+        CAMERA_RESET_HOME,
+
     };
 
     enum class ShortcutScope : uint8_t {

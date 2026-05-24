@@ -404,6 +404,7 @@ namespace lfs::vis {
         const VksplatSelectionMaskShape shape,
         const std::vector<glm::vec4>& primitives,
         const std::vector<glm::vec2>& polygon_vertices) {
+        LOG_TIMER("RenderingManager::buildVksplatSelectionMask");
         const auto settings = getSettings();
         if (!lfs::rendering::isVkSplatBackend(settings.raster_backend)) {
             return std::unexpected("VkSplat selection query is available only when a VkSplat backend is active");
@@ -449,6 +450,10 @@ namespace lfs::vis {
             return VksplatViewportRenderer::SelectionMaskShape::Brush;
         };
 
+        const bool is_training = scene_manager.hasDataset() &&
+                                 scene_manager.getTrainerManager() &&
+                                 scene_manager.getTrainerManager()->isRunning();
+
         VksplatViewportRenderer::SelectionMaskRequest request{
             .frame_view = frame_view,
             .scene =
@@ -460,6 +465,7 @@ namespace lfs::vis {
             .polygon_vertices = polygon_vertices,
             .gut = lfs::rendering::isGutBackend(settings.raster_backend),
             .equirectangular = equirectangular,
+            .synchronize_input_upload = is_training,
         };
 
         const bool force_input_upload =

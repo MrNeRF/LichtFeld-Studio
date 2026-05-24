@@ -4601,6 +4601,9 @@ namespace lfs::vis::gui {
             ImGui::NewFrame();
         }
 
+        std::optional<::lfs::core::ScopedTimer> panel_setup_timer;
+        panel_setup_timer.emplace("gui_render.panel_setup");
+
         {
             auto& focus = guiFocusState();
             focus.reset();
@@ -4900,6 +4903,7 @@ namespace lfs::vis::gui {
 
         PanelInputState floating_input = panel_input;
         floating_input.bg_draw_list = ImGui::GetForegroundDrawList(ImGui::GetMainViewport());
+        panel_setup_timer.reset();
         {
             LOG_TIMER("gui_render.draw_panels.Floating");
             reg.draw_panels(PanelSpace::Floating, draw_ctx, &floating_input);

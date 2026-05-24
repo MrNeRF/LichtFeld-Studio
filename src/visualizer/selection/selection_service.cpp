@@ -573,6 +573,7 @@ namespace lfs::vis {
 
     SelectionResult SelectionService::selectBrush(float x, float y, float radius, SelectionMode mode,
                                                   int camera_index) {
+        LOG_TIMER("SelectionService::selectBrush");
         if (!scene_manager_ || !rendering_manager_) {
             return {false, 0, "Missing managers"};
         }
@@ -594,6 +595,7 @@ namespace lfs::vis {
 
     SelectionResult SelectionService::selectRect(float x0, float y0, float x1, float y1, SelectionMode mode,
                                                  int camera_index) {
+        LOG_TIMER("SelectionService::selectRect");
         if (!scene_manager_ || !rendering_manager_) {
             return {false, 0, "Missing managers"};
         }
@@ -646,6 +648,7 @@ namespace lfs::vis {
 
     SelectionResult SelectionService::selectPolygon(const std::vector<glm::vec2>& vertices,
                                                     SelectionMode mode, int camera_index) {
+        LOG_TIMER("SelectionService::selectPolygon");
         if (!scene_manager_ || !rendering_manager_) {
             return {false, 0, "Missing managers"};
         }
@@ -670,6 +673,7 @@ namespace lfs::vis {
 
     SelectionResult SelectionService::selectLasso(const std::vector<glm::vec2>& vertices,
                                                   const SelectionMode mode, const int camera_index) {
+        LOG_TIMER("SelectionService::selectLasso");
         auto result = selectPolygon(vertices, mode, camera_index);
         if (result.success) {
             return result;
@@ -1342,30 +1346,43 @@ namespace lfs::vis {
                                                       const SelectionFilterState& filters,
                                                       const char* undo_name,
                                                       const bool push_undo) {
+        LOG_TIMER("SelectionService::commitSelection");
         if (!scene_manager_ || !rendering_manager_) {
             return {false, 0, "Missing managers"};
         }
 
-        auto selection_mask = ensureCudaBoolMask(selection);
+        auto selection_mask = [&] {
+            LOG_TIMER("commitSelection.ensureCudaBoolMask");
+            return ensureCudaBoolMask(selection);
+        }();
         if (!selection_mask.is_valid()) {
             return {false, 0, "Invalid selection mask"};
         }
 
-        applyFilters(selection_mask, filters, node_mask);
+        {
+            LOG_TIMER("commitSelection.applyFilters");
+            applyFilters(selection_mask, filters, node_mask);
+        }
 
         auto& scene = scene_manager_->getScene();
         const auto existing_mask = scene.getSelectionMask();
         const uint8_t group_id = scene.getActiveSelectionGroup();
-        auto scene_selection_mask = expandSelectionToSceneMask(
-            scene_manager_, selection_mask, mode, group_id,
-            existing_mask && existing_mask->is_valid() ? existing_mask.get() : nullptr,
-            node_mask);
+        auto scene_selection_mask = [&] {
+            LOG_TIMER("commitSelection.expandSelectionToSceneMask");
+            return expandSelectionToSceneMask(
+                scene_manager_, selection_mask, mode, group_id,
+                existing_mask && existing_mask->is_valid() ? existing_mask.get() : nullptr,
+                node_mask);
+        }();
         if (!scene_selection_mask.is_valid()) {
             return {false, 0, "Selection size mismatch"};
         }
         const size_t n = scene_selection_mask.numel();
 
-        auto locked_groups = selection::upload_locked_group_mask(scene, locked_groups_device_mask_);
+        auto locked_groups = [&] {
+            LOG_TIMER("commitSelection.upload_locked_group_mask");
+            return selection::upload_locked_group_mask(scene, locked_groups_device_mask_);
+        }();
         if (!locked_groups) {
             return {false, 0, locked_groups.error()};
         }
@@ -1377,27 +1394,47 @@ namespace lfs::vis {
         const bool replace_mode = (mode == SelectionMode::Replace);
         auto& output_mask = acquireSelectionOutputBuffer(selection_output_buffers_, selection_output_buffer_index_, n);
 
-        rendering::apply_selection_group_tensor_mask(
-            scene_selection_mask, existing_ref, output_mask, group_id, *locked_groups,
-            add_mode, nullptr, {}, replace_mode);
+        {
+            LOG_TIMER("commitSelection.apply_selection_group_tensor_mask");
+            rendering::apply_selection_group_tensor_mask(
+                scene_selection_mask, existing_ref, output_mask, group_id, *locked_groups,
+                add_mode, nullptr, {}, replace_mode);
+        }
 
         std::unique_ptr<op::SceneSnapshot> entry;
         if (push_undo) {
+            LOG_TIMER("commitSelection.snapshot_captureSelection");
             entry = std::make_unique<op::SceneSnapshot>(*scene_manager_, undo_name);
             entry->captureSelection();
         }
 
         // Snapshot the selection result before reusing the rotating output buffer.
-        auto new_selection = std::make_shared<core::Tensor>(output_mask.clone());
-        scene.setSelectionMask(new_selection);
+        auto new_selection = [&] {
+            LOG_TIMER("commitSelection.clone_output_mask");
+            return std::make_shared<core::Tensor>(output_mask.clone());
+        }();
+        {
+            LOG_TIMER("commitSelection.setSelectionMask");
+            scene.setSelectionMask(new_selection);
+        }
 
         if (entry) {
-            entry->captureAfter();
-            op::pushSceneSnapshotIfChanged(std::move(entry));
+            {
+                LOG_TIMER("commitSelection.snapshot_captureAfter");
+                entry->captureAfter();
+            }
+            {
+                LOG_TIMER("commitSelection.pushSceneSnapshot");
+                op::pushSceneSnapshotIfChanged(std::move(entry));
+            }
         }
 
         rendering_manager_->markDirty(DirtyFlag::SELECTION);
-        return {true, countSelected(*new_selection), {}};
+        const size_t count = [&] {
+            LOG_TIMER("commitSelection.countSelected");
+            return countSelected(*new_selection);
+        }();
+        return {true, count, {}};
     }
 
     std::shared_ptr<core::Tensor> SelectionService::resolveCommandScreenPositions(const int camera_index) const {
@@ -1610,6 +1647,7 @@ namespace lfs::vis {
 
     bool SelectionService::buildSelectionMaskForInteractiveSession(core::Tensor& selection_out,
                                                                    const bool include_polygon_cursor) {
+        LOG_TIMER("SelectionService::buildSelectionMaskForInteractiveSession");
         auto& session = interactive_selection_;
         if (!session.active || !scene_manager_ || !rendering_manager_) {
             return false;
@@ -1657,6 +1695,7 @@ namespace lfs::vis {
 
     bool SelectionService::buildBrushSelection(const std::vector<glm::vec2>& points, const float radius,
                                                core::Tensor& selection_out) const {
+        LOG_TIMER("SelectionService::buildBrushSelection");
         if (points.empty()) {
             return false;
         }
@@ -1690,6 +1729,7 @@ namespace lfs::vis {
 
     bool SelectionService::buildRectangleSelection(const glm::vec2 start, const glm::vec2 end,
                                                    core::Tensor& selection_out) const {
+        LOG_TIMER("SelectionService::buildRectangleSelection");
         const auto& session = interactive_selection_;
         if (!scene_manager_ || !rendering_manager_ || !session.viewport_context ||
             !session.viewport_context->info.valid() || !session.viewport_context->viewport) {
@@ -1723,6 +1763,7 @@ namespace lfs::vis {
 
     bool SelectionService::buildPolygonSelection(const std::vector<glm::vec2>& points,
                                                  core::Tensor& selection_out) const {
+        LOG_TIMER("SelectionService::buildPolygonSelection");
         if (points.size() < 3) {
             return false;
         }
@@ -1757,6 +1798,7 @@ namespace lfs::vis {
 
     bool SelectionService::buildWorldPolygonSelection(const std::vector<glm::vec3>& world_points,
                                                       core::Tensor& selection_out) const {
+        LOG_TIMER("SelectionService::buildWorldPolygonSelection");
         if (world_points.size() < 3) {
             return false;
         }
@@ -2010,11 +2052,13 @@ namespace lfs::vis {
 
     void SelectionService::applyFilters(core::Tensor& selection, const SelectionFilterState& filters,
                                         const std::vector<bool>& node_mask) const {
+        LOG_TIMER("SelectionService::applyFilters");
         if (!scene_manager_ || !rendering_manager_ || !selection.is_valid()) {
             return;
         }
 
         if (!node_mask.empty()) {
+            LOG_TIMER("applyFilters.filter_selection_by_node_mask");
             if (const auto transform_indices = scene_manager_->getScene().getTransformIndices();
                 transform_indices && transform_indices->is_valid()) {
                 rendering::filter_selection_by_node_mask(selection, *transform_indices, node_mask);
@@ -2030,11 +2074,15 @@ namespace lfs::vis {
     }
 
     void SelectionService::applyCropFilter(core::Tensor& selection) const {
+        LOG_TIMER("SelectionService::applyCropFilter");
         if (!scene_manager_ || !selection.is_valid()) {
             return;
         }
 
-        auto render_lock = acquireLiveModelRenderLock(scene_manager_);
+        auto render_lock = [&] {
+            LOG_TIMER("applyCropFilter.acquireLiveModelRenderLock");
+            return acquireLiveModelRenderLock(scene_manager_);
+        }();
         const auto* const model = scene_manager_->getModelForRendering();
         if (!model || model->size() == 0) {
             return;
@@ -2050,7 +2098,10 @@ namespace lfs::vis {
         core::Tensor crop_max;
         bool crop_inverse = false;
 
-        const auto render_state = scene_manager_->buildRenderState();
+        const auto render_state = [&] {
+            LOG_TIMER("applyCropFilter.buildRenderState");
+            return scene_manager_->buildRenderState();
+        }();
         if (const auto* const cb =
                 findRenderableByNodeId(render_state.cropboxes, scene_manager_->getActiveSelectionCropBoxId());
             cb && cb->data) {
@@ -2079,6 +2130,7 @@ namespace lfs::vis {
         core::Tensor model_transforms_cuda;
         const core::Tensor* model_transforms_ptr = nullptr;
         if (!render_state.model_transforms.empty()) {
+            LOG_TIMER("applyCropFilter.uploadModelTransformsToCuda");
             model_transforms_cuda = uploadModelTransformsToCuda(render_state.model_transforms);
             model_transforms_ptr = &model_transforms_cuda;
         }
@@ -2090,30 +2142,38 @@ namespace lfs::vis {
             if (render_state.transform_indices->device() == core::Device::CUDA) {
                 transform_indices_ptr = render_state.transform_indices.get();
             } else {
+                LOG_TIMER("applyCropFilter.transform_indices_to_cuda");
                 transform_indices_cuda = render_state.transform_indices->cuda();
                 transform_indices_ptr = &transform_indices_cuda;
             }
         }
 
-        rendering::filter_selection_by_crop(
-            selection, means,
-            crop_t.is_valid() ? &crop_t : nullptr,
-            crop_min.is_valid() ? &crop_min : nullptr,
-            crop_max.is_valid() ? &crop_max : nullptr,
-            crop_inverse,
-            ellip_t.is_valid() ? &ellip_t : nullptr,
-            ellip_radii.is_valid() ? &ellip_radii : nullptr,
-            ellipsoid_inverse,
-            model_transforms_ptr,
-            transform_indices_ptr);
+        {
+            LOG_TIMER("applyCropFilter.filter_selection_by_crop");
+            rendering::filter_selection_by_crop(
+                selection, means,
+                crop_t.is_valid() ? &crop_t : nullptr,
+                crop_min.is_valid() ? &crop_min : nullptr,
+                crop_max.is_valid() ? &crop_max : nullptr,
+                crop_inverse,
+                ellip_t.is_valid() ? &ellip_t : nullptr,
+                ellip_radii.is_valid() ? &ellip_radii : nullptr,
+                ellipsoid_inverse,
+                model_transforms_ptr,
+                transform_indices_ptr);
+        }
     }
 
     void SelectionService::applyDepthFilter(core::Tensor& selection) const {
+        LOG_TIMER("SelectionService::applyDepthFilter");
         if (!scene_manager_ || !rendering_manager_ || !selection.is_valid()) {
             return;
         }
 
-        auto render_lock = acquireLiveModelRenderLock(scene_manager_);
+        auto render_lock = [&] {
+            LOG_TIMER("applyDepthFilter.acquireLiveModelRenderLock");
+            return acquireLiveModelRenderLock(scene_manager_);
+        }();
         const auto* const model = scene_manager_->getModelForRendering();
         if (!model || model->size() == 0) {
             return;
@@ -2137,10 +2197,14 @@ namespace lfs::vis {
         const auto depth_max = core::Tensor::from_vector(
             {settings.depth_filter_max.x, settings.depth_filter_max.y, settings.depth_filter_max.z}, {3});
 
-        const auto render_state = scene_manager_->buildRenderState();
+        const auto render_state = [&] {
+            LOG_TIMER("applyDepthFilter.buildRenderState");
+            return scene_manager_->buildRenderState();
+        }();
         core::Tensor model_transforms_cuda;
         const core::Tensor* model_transforms_ptr = nullptr;
         if (!render_state.model_transforms.empty()) {
+            LOG_TIMER("applyDepthFilter.uploadModelTransformsToCuda");
             model_transforms_cuda = uploadModelTransformsToCuda(render_state.model_transforms);
             model_transforms_ptr = &model_transforms_cuda;
         }
@@ -2152,17 +2216,21 @@ namespace lfs::vis {
             if (render_state.transform_indices->device() == core::Device::CUDA) {
                 transform_indices_ptr = render_state.transform_indices.get();
             } else {
+                LOG_TIMER("applyDepthFilter.transform_indices_to_cuda");
                 transform_indices_cuda = render_state.transform_indices->cuda();
                 transform_indices_ptr = &transform_indices_cuda;
             }
         }
 
-        rendering::filter_selection_by_crop(
-            selection, means,
-            &depth_t, &depth_min, &depth_max, false,
-            nullptr, nullptr, false,
-            model_transforms_ptr,
-            transform_indices_ptr);
+        {
+            LOG_TIMER("applyDepthFilter.filter_selection_by_crop");
+            rendering::filter_selection_by_crop(
+                selection, means,
+                &depth_t, &depth_min, &depth_max, false,
+                nullptr, nullptr, false,
+                model_transforms_ptr,
+                transform_indices_ptr);
+        }
     }
 
     void SelectionService::clearInteractivePreviewState() {

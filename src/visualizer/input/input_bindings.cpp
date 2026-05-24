@@ -24,7 +24,7 @@ namespace lfs::vis::input {
 
     namespace {
 
-        constexpr int PROFILE_VERSION = 12; // Version 12 adds Shift+scroll as a second BRUSH_RESIZE trigger.
+        constexpr int PROFILE_VERSION = 13; // Version 13 adds CAMERA_SET_HOME action.
         constexpr std::array<ToolMode, 8> ALL_MODES = {
             ToolMode::GLOBAL,
             ToolMode::SELECTION,
@@ -483,7 +483,8 @@ namespace lfs::vis::input {
                 (version < 7 && def.action == Action::BRUSH_RESIZE && !brush_resize_shift_scroll) ||
                 (version < 9 && def.action == Action::CONFIRM_POLYGON) ||
                 (version < 10 && def.action == Action::UNDO_POLYGON_VERTEX) ||
-                (version < 12 && brush_resize_shift_scroll);
+                (version < 12 && brush_resize_shift_scroll) ||
+                (version < 13 && def.action == Action::CAMERA_SET_HOME);
             if (!should_add) {
                 continue;
             }
@@ -933,6 +934,7 @@ namespace lfs::vis::input {
             {KeyTrigger{KEY_A, MODIFIER_NONE, true}, Action::CAMERA_MOVE_LEFT, "Left"},
             {KeyTrigger{KEY_D, MODIFIER_NONE, true}, Action::CAMERA_MOVE_RIGHT, "Right"},
             {KeyTrigger{KEY_H, MODIFIER_NONE}, Action::CAMERA_RESET_HOME, "Home"},
+            {KeyTrigger{KEY_H, MODIFIER_SHIFT}, Action::CAMERA_SET_HOME, "Set home"},
             {KeyTrigger{KEY_F, MODIFIER_NONE}, Action::CAMERA_FOCUS_SELECTION, "Focus selection"},
             {KeyTrigger{KEY_RIGHT, MODIFIER_NONE, true}, Action::CAMERA_NEXT_VIEW, "Next view"},
             {KeyTrigger{KEY_LEFT, MODIFIER_NONE, true}, Action::CAMERA_PREV_VIEW, "Prev view"},
@@ -1076,6 +1078,7 @@ namespace lfs::vis::input {
         case Action::CAMERA_MOVE_UP: return "Move Up";
         case Action::CAMERA_MOVE_DOWN: return "Move Down";
         case Action::CAMERA_RESET_HOME: return "Go to Home";
+        case Action::CAMERA_SET_HOME: return "Set Home";
         case Action::CAMERA_FOCUS_SELECTION: return "Focus Selection";
         case Action::CAMERA_SET_PIVOT: return "Set Pivot";
         case Action::CAMERA_NEXT_VIEW: return "Next Camera View";
@@ -1642,6 +1645,7 @@ namespace lfs::vis::input {
             return d_movement;
 
         case Action::CAMERA_RESET_HOME:
+        case Action::CAMERA_SET_HOME:
         case Action::CAMERA_FOCUS_SELECTION:
         case Action::CAMERA_NEXT_VIEW:
         case Action::CAMERA_PREV_VIEW:
@@ -1777,6 +1781,7 @@ namespace lfs::vis::input {
         case Action::CAMERA_MOVE_UP:
         case Action::CAMERA_MOVE_DOWN:
         case Action::CAMERA_RESET_HOME:
+        case Action::CAMERA_SET_HOME:
         case Action::CAMERA_FOCUS_SELECTION:
         case Action::CAMERA_SET_PIVOT:
         case Action::CAMERA_NEXT_VIEW:

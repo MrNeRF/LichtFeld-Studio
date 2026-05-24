@@ -540,9 +540,7 @@ namespace lfs::core {
     ScopedTimer::~ScopedTimer() {
         const auto duration = std::chrono::high_resolution_clock::now() - start_;
         const auto ms = std::chrono::duration<double, std::milli>(duration).count();
-        char buf[64];
-        std::snprintf(buf, sizeof(buf), "%s took %.2fms", name_.c_str(), ms);
-        Logger::get().log(level_, loc_, buf);
+        Logger::get().log(level_, loc_, std::format("{} took {:.2f}ms", name_, ms));
     }
 
 } // namespace lfs::core

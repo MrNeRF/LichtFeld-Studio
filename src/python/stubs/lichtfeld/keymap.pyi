@@ -26,7 +26,9 @@ class Action(enum.Enum):
 
     CAMERA_MOVE_DOWN = 10
 
-    CAMERA_RESET_HOME = 11
+    CAMERA_RESET_HOME = 70
+
+    CAMERA_SET_HOME = 11
 
     CAMERA_FOCUS_SELECTION = 12
 
