@@ -679,6 +679,22 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMENT "Creating resource directory structure"
 )
 
+if(ENABLE_VULKAN_VIEWER AND TARGET lfs_vulkan_rasterizer)
+    get_target_property(_LFS_VULKAN_RASTERIZER_SPV_DIR
+        lfs_vulkan_rasterizer
+        LFS_VULKAN_RASTERIZER_SPV_DIR)
+    if(_LFS_VULKAN_RASTERIZER_SPV_DIR)
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "${RESOURCE_DIR}/shaders/vulkan_rasterizer"
+            COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+                "${_LFS_VULKAN_RASTERIZER_SPV_DIR}"
+                "${RESOURCE_DIR}/shaders/vulkan_rasterizer"
+            COMMENT "Copying Vulkan rasterizer shaders"
+        )
+    endif()
+endif()
+
 # Copy visualizer icons
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
@@ -1016,6 +1032,12 @@ install(TARGETS lfs_mcp
 install(FILES "${CMAKE_SOURCE_DIR}/LICENSE" DESTINATION ".")
 
 set(INSTALL_RESOURCE_DIR "${CMAKE_INSTALL_DATADIR}/LichtFeld-Studio")
+if(ENABLE_VULKAN_VIEWER AND _LFS_VULKAN_RASTERIZER_SPV_DIR)
+    install(DIRECTORY "${_LFS_VULKAN_RASTERIZER_SPV_DIR}/"
+            DESTINATION "${INSTALL_RESOURCE_DIR}/shaders/vulkan_rasterizer"
+            FILES_MATCHING
+            PATTERN "*.spv")
+endif()
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/icon" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/fonts" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
 install(FILES "${CMAKE_SOURCE_DIR}/src/rendering/resources/assets/JetBrainsMono-Regular.ttf" DESTINATION "${INSTALL_RESOURCE_DIR}/assets/fonts")

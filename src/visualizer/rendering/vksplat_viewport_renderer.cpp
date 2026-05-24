@@ -5,7 +5,9 @@
 #include "vksplat_viewport_renderer.hpp"
 
 #include "core/cuda/sh_layout.cuh"
+#include "core/executable_path.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "rendering/coordinate_conventions.hpp"
@@ -86,8 +88,37 @@ namespace lfs::vis {
                    (gut ? (kVkSplatProjectionModeGut << kVkSplatProjectionModeShift) : 0u);
         }
 
+        [[nodiscard]] std::filesystem::path resolveVkSplatSpirvRoot() {
+            constexpr std::string_view probe_file = "generated/projection_forward.spv";
+            std::vector<std::filesystem::path> search_paths;
+
+            search_paths.push_back(lfs::core::getResourceBaseDir() / "shaders" / "vulkan_rasterizer");
+
+#ifdef LFS_VULKAN_RASTERIZER_DEV_SPV_DIR
+            search_paths.push_back(lfs::core::utf8_to_path(LFS_VULKAN_RASTERIZER_DEV_SPV_DIR));
+#endif
+
+#ifdef PROJECT_ROOT_PATH
+            search_paths.push_back(lfs::core::utf8_to_path(PROJECT_ROOT_PATH) /
+                                   "src/rendering/rasterizer/vulkan/shader");
+#endif
+
+            for (const auto& path : search_paths) {
+                if (std::filesystem::exists(path / probe_file)) {
+                    return path;
+                }
+            }
+
+            std::string error = "Cannot find VkSplat SPIR-V shaders. Searched in:";
+            for (const auto& path : search_paths) {
+                error += "\n  - " + lfs::core::path_to_utf8(path);
+            }
+            error += "\nExecutable directory: " + lfs::core::path_to_utf8(lfs::core::getExecutableDir());
+            throw std::runtime_error(error);
+        }
+
         [[nodiscard]] std::map<std::string, std::string> makeVkSplatSpirvPaths() {
-            const std::filesystem::path root{LFS_VULKAN_RASTERIZER_SPV_DIR};
+            const std::filesystem::path root = resolveVkSplatSpirvRoot();
             return {
                 {"projection_forward", (root / "generated/projection_forward.spv").string()},
                 {"projection_forward_3dgut", (root / "generated/projection_forward_3dgut.spv").string()},

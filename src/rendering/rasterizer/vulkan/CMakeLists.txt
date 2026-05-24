@@ -31,9 +31,11 @@ target_compile_definitions(lfs_vulkan_rasterizer PRIVATE
         $<$<PLATFORM_ID:Windows>:NOMINMAX>
 )
 
-set(LFS_VULKAN_RASTERIZER_SPV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shader")
+set(LFS_VULKAN_RASTERIZER_SPV_DIR "${CMAKE_CURRENT_BINARY_DIR}/shader")
+set_property(TARGET lfs_vulkan_rasterizer PROPERTY
+        LFS_VULKAN_RASTERIZER_SPV_DIR "${LFS_VULKAN_RASTERIZER_SPV_DIR}")
 target_compile_definitions(lfs_vulkan_rasterizer PUBLIC
-        LFS_VULKAN_RASTERIZER_SPV_DIR="${LFS_VULKAN_RASTERIZER_SPV_DIR}/"
+        LFS_VULKAN_RASTERIZER_DEV_SPV_DIR="${LFS_VULKAN_RASTERIZER_SPV_DIR}/"
 )
 
 # ---------------------------------------------------------------------------
@@ -62,8 +64,8 @@ message(STATUS "vulkan: slangc=${SLANGC}")
 message(STATUS "vulkan: glslang=${GLSLANG}")
 
 set(_VULKAN_SHADER_SRC ${CMAKE_CURRENT_SOURCE_DIR}/shader/src)
-set(_VULKAN_GENERATED_OUT ${CMAKE_CURRENT_SOURCE_DIR}/shader/generated)
-set(_VULKAN_RADIX_OUT ${CMAKE_CURRENT_SOURCE_DIR}/shader/radix_sort)
+set(_VULKAN_GENERATED_OUT ${LFS_VULKAN_RASTERIZER_SPV_DIR}/generated)
+set(_VULKAN_RADIX_OUT ${LFS_VULKAN_RASTERIZER_SPV_DIR}/radix_sort)
 
 file(MAKE_DIRECTORY ${_VULKAN_GENERATED_OUT})
 file(MAKE_DIRECTORY ${_VULKAN_RADIX_OUT})
