@@ -24,7 +24,7 @@ namespace lfs::vis::input {
 
     namespace {
 
-        constexpr int PROFILE_VERSION = 12; // Version 12 adds Shift+scroll as a second BRUSH_RESIZE trigger.
+        constexpr int PROFILE_VERSION = 13; // Version 13 adds CAMERA_SET_HOME action.
         constexpr std::array<ToolMode, 8> ALL_MODES = {
             ToolMode::GLOBAL,
             ToolMode::SELECTION,
@@ -483,7 +483,8 @@ namespace lfs::vis::input {
                 (version < 7 && def.action == Action::BRUSH_RESIZE && !brush_resize_shift_scroll) ||
                 (version < 9 && def.action == Action::CONFIRM_POLYGON) ||
                 (version < 10 && def.action == Action::UNDO_POLYGON_VERTEX) ||
-                (version < 12 && brush_resize_shift_scroll);
+                (version < 12 && brush_resize_shift_scroll) ||
+                (version < 13 && def.action == Action::CAMERA_SET_HOME);
             if (!should_add) {
                 continue;
             }
