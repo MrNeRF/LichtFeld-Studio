@@ -2,22 +2,40 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "py_rendering.hpp"
+#include "core/checkpoint_format.hpp"
+#include "core/logger.hpp"
+#include "core/mesh_data.hpp"
+#include "core/path_utils.hpp"
+#include "core/point_cloud.hpp"
 #include "core/property_registry.hpp"
 #include "core/scene.hpp"
+#include "core/splat_data.hpp"
+#include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
+#include "io/loader.hpp"
 #include "py_scene.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/image_layout.hpp"
+#include "rendering/rendering.hpp"
+#include "rendering/render_constants.hpp"
+#include "scene/scene_render_state.hpp"
+#include "visualizer/internal/viewport.hpp"
 #include "visualizer/ipc/view_context.hpp"
+#include "visualizer/rendering/rendering_manager.hpp"
 #include "visualizer/visualizer.hpp"
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <cassert>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <future>
+#include <limits>
 #include <numbers>
+#include <variant>
 
 #include <glm/glm.hpp>
 
@@ -84,6 +102,289 @@ namespace lfs::python {
                 .run =
                     [invoke_capture, finish]() mutable {
                         finish(invoke_capture());
+                    },
+                .cancel =
+                    [finish]() mutable {
+                        finish(std::nullopt);
+                    }});
+            if (!posted) {
+                return std::nullopt;
+            }
+
+            nb::gil_scoped_release release;
+            return future.get();
+        }
+
+        [[nodiscard]] std::pair<glm::vec3, glm::vec3> previewBoundsInVisualizerSpace(
+            const glm::vec3& data_min,
+            const glm::vec3& data_max) {
+            const std::array<glm::vec3, 8> corners{
+                glm::vec3{data_min.x, data_min.y, data_min.z},
+                glm::vec3{data_max.x, data_min.y, data_min.z},
+                glm::vec3{data_min.x, data_max.y, data_min.z},
+                glm::vec3{data_max.x, data_max.y, data_min.z},
+                glm::vec3{data_min.x, data_min.y, data_max.z},
+                glm::vec3{data_max.x, data_min.y, data_max.z},
+                glm::vec3{data_min.x, data_max.y, data_max.z},
+                glm::vec3{data_max.x, data_max.y, data_max.z},
+            };
+            glm::vec3 vis_min(std::numeric_limits<float>::max());
+            glm::vec3 vis_max(std::numeric_limits<float>::lowest());
+            for (const auto& corner : corners) {
+                const auto vis_corner = rendering::visualizerWorldPointFromDataWorld(corner);
+                vis_min = glm::min(vis_min, vis_corner);
+                vis_max = glm::max(vis_max, vis_corner);
+            }
+            return {vis_min, vis_max};
+        }
+
+        [[nodiscard]] std::optional<core::Tensor> renderSplatAssetPreview(
+            vis::RenderingManager& rendering_manager,
+            core::SplatData& splat,
+            const int width,
+            const int height,
+            const float focal_length_mm) {
+            if (splat.size() == 0) {
+                return std::nullopt;
+            }
+
+            glm::vec3 data_min{};
+            glm::vec3 data_max{};
+            if (!core::compute_bounds(splat, data_min, data_max)) {
+                return std::nullopt;
+            }
+
+            const auto [vis_min, vis_max] = previewBoundsInVisualizerSpace(data_min, data_max);
+            Viewport preview_viewport(
+                static_cast<std::size_t>(width),
+                static_cast<std::size_t>(height));
+            preview_viewport.camera.focusOnBounds(vis_min, vis_max, focal_length_mm);
+
+            vis::SceneRenderState scene_state;
+            scene_state.combined_model = &splat;
+            scene_state.model_transforms = {
+                rendering::dataWorldTransformToVisualizerWorld(glm::mat4(1.0f)),
+            };
+            scene_state.transform_indices = std::make_shared<core::Tensor>(
+                core::Tensor::zeros(
+                    {static_cast<std::size_t>(splat.size())},
+                    core::Device::CUDA,
+                    core::DataType::Int32));
+            scene_state.node_visibility_mask = {true};
+            scene_state.selected_node_mask = {true};
+            scene_state.visible_splat_count = 1;
+
+            const auto image = rendering_manager.renderPreviewImage(
+                splat,
+                std::move(scene_state),
+                preview_viewport.getRotationMatrix(),
+                preview_viewport.getTranslation(),
+                focal_length_mm,
+                width,
+                height);
+            if (!image || !image->is_valid()) {
+                return std::nullopt;
+            }
+            return image->clone();
+        }
+
+        [[nodiscard]] core::PointCloud pointCloudFromMesh(const core::MeshData& mesh) {
+            core::Tensor colors;
+            const auto vertex_count = static_cast<std::size_t>(mesh.vertex_count());
+            if (mesh.colors.is_valid() && mesh.colors.ndim() == 2 &&
+                mesh.colors.size(0) == mesh.vertex_count() && mesh.colors.size(1) >= 3) {
+                colors = mesh.colors.slice(1, 0, 3).contiguous();
+            } else {
+                colors = core::Tensor::full(
+                    {vertex_count, static_cast<std::size_t>(3)},
+                    0.72f,
+                    mesh.vertices.device(),
+                    core::DataType::Float32);
+            }
+            return core::PointCloud(mesh.vertices, std::move(colors));
+        }
+
+        [[nodiscard]] std::optional<core::Tensor> renderPointCloudAssetPreview(
+            vis::RenderingManager& rendering_manager,
+            const core::PointCloud& point_cloud,
+            const int width,
+            const int height,
+            const float focal_length_mm) {
+            if (point_cloud.size() == 0) {
+                return std::nullopt;
+            }
+
+            auto* const engine = rendering_manager.getRenderingEngine();
+            if (!engine) {
+                return std::nullopt;
+            }
+
+            glm::vec3 data_min{};
+            glm::vec3 data_max{};
+            if (!core::compute_bounds(point_cloud, data_min, data_max)) {
+                return std::nullopt;
+            }
+
+            const auto [vis_min, vis_max] = previewBoundsInVisualizerSpace(data_min, data_max);
+            Viewport preview_viewport(
+                static_cast<std::size_t>(width),
+                static_cast<std::size_t>(height));
+            preview_viewport.camera.focusOnBounds(vis_min, vis_max, focal_length_mm);
+
+            std::vector<glm::mat4> model_transforms{
+                rendering::dataWorldTransformToVisualizerWorld(glm::mat4(1.0f)),
+            };
+            auto transform_indices = std::make_shared<core::Tensor>(
+                core::Tensor::zeros(
+                    {static_cast<std::size_t>(point_cloud.size())},
+                    core::Device::CUDA,
+                    core::DataType::Int32));
+
+            rendering::PointCloudRenderRequest request{};
+            request.frame_view.rotation = preview_viewport.getRotationMatrix();
+            request.frame_view.translation = preview_viewport.getTranslation();
+            request.frame_view.size = {width, height};
+            request.frame_view.focal_length_mm = focal_length_mm;
+            request.render.scaling_modifier = 1.0f;
+            request.render.voxel_size = 0.01f;
+            request.render.equirectangular = false;
+            request.scene.model_transforms = &model_transforms;
+            request.scene.transform_indices = std::move(transform_indices);
+            request.scene.node_visibility_mask = {true};
+            request.transparent_background = false;
+
+            auto render_result = engine->renderPointCloudImage(point_cloud, request);
+            if (!render_result || !render_result->image || !render_result->image->is_valid()) {
+                if (!render_result) {
+                    LOG_DEBUG("Point-cloud asset preview render failed: {}", render_result.error());
+                }
+                return std::nullopt;
+            }
+            return render_result->image->clone();
+        }
+
+        [[nodiscard]] std::optional<core::Tensor> renderAssetPreviewOnViewerThread(
+            const std::string& path,
+            const int width,
+            const int height,
+            const float focal_length_mm) {
+            if (width <= 0 || height <= 0) {
+                return std::nullopt;
+            }
+
+            auto* const viewer = get_visualizer();
+            auto* const rendering_manager = viewer ? viewer->getRenderingManager() : nullptr;
+            if (!rendering_manager) {
+                return std::nullopt;
+            }
+
+            try {
+                auto loader = io::Loader::create();
+                if (!loader) {
+                    return std::nullopt;
+                }
+
+                io::LoadOptions options;
+                options.resize_factor = -1;
+                options.max_width = 0;
+                options.images_folder = "images";
+                options.validate_only = false;
+
+                const auto asset_path = core::utf8_to_path(path);
+                auto ext = asset_path.extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                if (ext == ".ckpt" || ext == ".resume") {
+                    auto checkpoint_result = core::load_checkpoint_splat_data(asset_path);
+                    if (!checkpoint_result) {
+                        LOG_DEBUG(
+                            "Checkpoint asset preview load failed for '{}': {}",
+                            path,
+                            checkpoint_result.error());
+                        return std::nullopt;
+                    }
+                    return renderSplatAssetPreview(
+                        *rendering_manager,
+                        *checkpoint_result,
+                        width,
+                        height,
+                        focal_length_mm);
+                }
+
+                auto load_result = loader->load(asset_path, options);
+                if (!load_result) {
+                    LOG_DEBUG("Asset preview load failed for '{}': {}", path, load_result.error().format());
+                    return std::nullopt;
+                }
+
+                const auto* loaded_splat = std::get_if<std::shared_ptr<core::SplatData>>(&load_result->data);
+                if (loaded_splat && *loaded_splat) {
+                    return renderSplatAssetPreview(
+                        *rendering_manager,
+                        **loaded_splat,
+                        width,
+                        height,
+                        focal_length_mm);
+                }
+
+                const auto* loaded_scene = std::get_if<io::LoadedScene>(&load_result->data);
+                if (loaded_scene && loaded_scene->point_cloud) {
+                    return renderPointCloudAssetPreview(
+                        *rendering_manager,
+                        *loaded_scene->point_cloud,
+                        width,
+                        height,
+                        focal_length_mm);
+                }
+
+                const auto* loaded_mesh = std::get_if<std::shared_ptr<core::MeshData>>(&load_result->data);
+                if (loaded_mesh && *loaded_mesh && (*loaded_mesh)->vertex_count() > 0) {
+                    auto mesh_points = pointCloudFromMesh(**loaded_mesh);
+                    return renderPointCloudAssetPreview(
+                        *rendering_manager,
+                        mesh_points,
+                        width,
+                        height,
+                        focal_length_mm);
+                }
+            } catch (const std::exception& e) {
+                LOG_DEBUG("Asset preview render failed for '{}': {}", path, e.what());
+            } catch (...) {
+                LOG_DEBUG("Asset preview render failed for '{}': unknown error", path);
+            }
+            return std::nullopt;
+        }
+
+        [[nodiscard]] std::optional<core::Tensor> renderAssetPreviewThreadSafe(
+            const std::string& path,
+            const int width,
+            const int height,
+            const float focal_length_mm) {
+            auto invoke_render = [&]() -> std::optional<core::Tensor> {
+                return renderAssetPreviewOnViewerThread(path, width, height, focal_length_mm);
+            };
+
+            auto* const viewer = get_visualizer();
+            if (!viewer || viewer->isOnViewerThread()) {
+                return invoke_render();
+            }
+            if (!viewer->acceptsPostedWork()) {
+                return std::nullopt;
+            }
+
+            auto promise = std::make_shared<std::promise<std::optional<core::Tensor>>>();
+            auto future = promise->get_future();
+            auto completed = std::make_shared<std::atomic_bool>(false);
+
+            auto finish = [promise, completed](std::optional<core::Tensor> result) mutable {
+                if (!completed->exchange(true)) {
+                    promise->set_value(std::move(result));
+                }
+            };
+
+            const bool posted = viewer->postWork(vis::Visualizer::WorkItem{
+                .run =
+                    [path, width, height, focal_length_mm, finish]() mutable {
+                        finish(renderAssetPreviewOnViewerThread(path, width, height, focal_length_mm));
                     },
                 .cancel =
                     [finish]() mutable {
@@ -677,6 +978,18 @@ namespace lfs::python {
         return render_view(rotation, translation, width, height, fov_degrees, bg_color);
     }
 
+    std::optional<PyTensor> render_asset_preview(
+        const std::string& path,
+        const int width,
+        const int height,
+        const float focal_length_mm) {
+        auto image = renderAssetPreviewThreadSafe(path, width, height, focal_length_mm);
+        if (!image) {
+            return std::nullopt;
+        }
+        return PyTensor(std::move(*image), true);
+    }
+
     void register_rendering(nb::module_& m) {
         nb::class_<PyViewInfo>(m, "ViewInfo")
             .def_ro("rotation", &PyViewInfo::rotation)
@@ -794,6 +1107,11 @@ Args:
               nb::arg("fov") = DEFAULT_FOV, nb::arg("up") = std::make_tuple(0.0f, 1.0f, 0.0f),
               nb::arg("bg_color") = nb::none(),
               "Render scene from eye looking at target. Returns [H,W,3] RGB tensor or None.");
+
+        m.def("render_asset_preview", &render_asset_preview,
+              nb::arg("path"), nb::arg("width") = 512, nb::arg("height") = 224,
+              nb::arg("focal_length_mm") = lfs::rendering::DEFAULT_FOCAL_LENGTH_MM,
+              "Render an asset from the framed home camera into an offscreen thumbnail without mutating the live scene.");
 
         m.def(
             "get_render_scene", []() -> std::optional<PyScene> {

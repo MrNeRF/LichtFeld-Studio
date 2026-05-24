@@ -7,6 +7,7 @@
 #include "rendering/viewport_request_builder.hpp"
 #include "rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "scene/scene_render_state.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
 #include "vksplat_viewport_renderer.hpp"
@@ -304,6 +305,95 @@ namespace lfs::vis {
         auto render_result = vksplat_viewport_renderer_->render(
             *last_vulkan_context_,
             *model,
+            request,
+            false,
+            VksplatViewportRenderer::OutputSlot::Preview,
+            false);
+        if (!render_result) {
+            LOG_TRACE("Gaussian preview image render failed: {}", render_result.error());
+            return {};
+        }
+
+        auto image = vksplat_viewport_renderer_->readOutputImage(
+            *last_vulkan_context_,
+            VksplatViewportRenderer::OutputSlot::Preview);
+        if (!image) {
+            LOG_TRACE("Gaussian preview image readback failed: {}", image.error());
+            return {};
+        }
+        return std::move(*image);
+    }
+
+    std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImage(const lfs::core::SplatData& model,
+                                                                            SceneRenderState scene_state,
+                                                                            const glm::mat3& rotation,
+                                                                            const glm::vec3& position,
+                                                                            const float focal_length_mm,
+                                                                            const int width,
+                                                                            const int height) {
+        if (width <= 0 || height <= 0) {
+            return {};
+        }
+        if (!last_vulkan_context_) {
+            LOG_TRACE("Gaussian preview image skipped: no Vulkan context is available");
+            return {};
+        }
+        if (!hasRenderableGaussians(&model)) {
+            return {};
+        }
+        if (!scene_state.combined_model) {
+            scene_state.combined_model = &model;
+        }
+
+        RenderSettings preview_settings = getSettings();
+        preview_settings.focal_length_mm = std::clamp(
+            focal_length_mm,
+            lfs::rendering::MIN_FOCAL_LENGTH_MM,
+            lfs::rendering::MAX_FOCAL_LENGTH_MM);
+        preview_settings.split_view_mode = SplitViewMode::Disabled;
+        preview_settings.equirectangular = false;
+        preview_settings.use_crop_box = false;
+        preview_settings.show_crop_box = false;
+        preview_settings.use_ellipsoid = false;
+        preview_settings.show_ellipsoid = false;
+        preview_settings.depth_filter_enabled = false;
+
+        Viewport preview_viewport(
+            static_cast<std::size_t>(width),
+            static_cast<std::size_t>(height));
+        preview_viewport.setViewMatrix(rotation, position);
+
+        FrameContext frame_ctx{
+            .viewport = preview_viewport,
+            .render_lock_held = false,
+            .scene_manager = nullptr,
+            .model = &model,
+            .scene_state = std::move(scene_state),
+            .settings = preview_settings,
+            .render_size = {width, height},
+            .viewport_pos = {0, 0},
+            .cursor_preview = {},
+            .gizmo = {},
+            .view_panels = {},
+        };
+
+        auto request = buildViewportRenderRequest(frame_ctx, frame_ctx.render_size);
+        request.raster_backend =
+            lfs::rendering::normalizeViewerRasterBackend(request.raster_backend, request.gut);
+        request.gut = lfs::rendering::isGutBackend(request.raster_backend);
+        if (!lfs::rendering::isVkSplatBackend(request.raster_backend)) {
+            LOG_TRACE("Gaussian preview image skipped: unsupported raster backend '{}'",
+                      lfs::rendering::gaussianRasterBackendId(request.raster_backend));
+            return {};
+        }
+
+        if (!vksplat_viewport_renderer_) {
+            vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
+        }
+
+        auto render_result = vksplat_viewport_renderer_->render(
+            *last_vulkan_context_,
+            model,
             request,
             false,
             VksplatViewportRenderer::OutputSlot::Preview,

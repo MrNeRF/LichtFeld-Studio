@@ -1224,6 +1224,11 @@ def render_view(rotation: Tensor, translation: Tensor, width: int, height: int, 
         Tensor [H, W, 3] RGB image on CUDA, or None if scene not available
     """
 
+def render_asset_preview(path: str, width: int = 512, height: int = 224, focal_length_mm: float = 50.0) -> Tensor | None:
+    """
+    Render an asset from the framed home camera into an offscreen thumbnail without mutating the live scene.
+    """
+
 def compute_screen_positions(rotation: Tensor, translation: Tensor, width: int, height: int, fov: float = 60.0) -> Tensor | None:
     """
     Compute screen positions of all Gaussians for a given camera view.

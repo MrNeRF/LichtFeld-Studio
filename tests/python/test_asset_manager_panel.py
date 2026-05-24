@@ -5,10 +5,14 @@
 from importlib import import_module
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from urllib.parse import quote
 import json
 import sys
 
 import pytest
+
+
+RML_PATH_SAFE_CHARS = "/:._-~"
 
 
 def _install_lf_stub(monkeypatch):
@@ -166,6 +170,20 @@ def test_asset_rows_expose_scalar_tag_label(asset_manager_panel_module):
     assert "tags" not in row
 
 
+def test_asset_rows_expose_thumbnail_decorator(asset_manager_panel_module, tmp_path):
+    panel = asset_manager_panel_module.AssetManagerPanel()
+    thumb_path = tmp_path / "asset preview.png"
+    thumb_path.write_bytes(b"not a real png")
+    asset = _make_asset()
+    asset["thumbnail_path"] = str(thumb_path)
+
+    row = panel._format_asset_for_ui(asset)
+
+    assert row["thumbnail_decorator"] == (
+        f"image({quote(str(thumb_path), safe=RML_PATH_SAFE_CHARS)})"
+    )
+
+
 def test_asset_card_title_uses_asset_path_leaf(asset_manager_panel_module):
     panel = asset_manager_panel_module.AssetManagerPanel()
     asset = _make_asset()
@@ -204,6 +222,155 @@ def test_asset_manager_rml_uses_text_interpolation_for_display_values():
     assert "{{asset.display_name}}" in rml
     assert "{{selected_asset_name}}" in rml
     assert "{{selected_asset_dataset_image_count}}" in rml
+    assert 'data-style-decorator="asset.thumbnail_decorator"' in rml
+
+
+def test_asset_manager_card_thumbs_do_not_use_gradient_placeholders():
+    project_root = Path(__file__).parent.parent.parent
+    rcss_path = (
+        project_root
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "resources"
+        / "asset_manager.rcss"
+    )
+    rcss = rcss_path.read_text(encoding="utf-8")
+
+    assert "vertical-gradient" not in rcss
+
+
+def test_dataset_thumbnail_uses_first_dataset_image(asset_manager_panel_module, tmp_path):
+    dataset_dir = tmp_path / "dataset"
+    image_dir = dataset_dir / "images"
+    mask_dir = image_dir / "masks"
+    image_dir.mkdir(parents=True)
+    mask_dir.mkdir()
+    first = image_dir / "0001.jpg"
+    second = image_dir / "0002.jpg"
+    ignored_mask = mask_dir / "0000.jpg"
+    first.write_bytes(b"not a real jpeg")
+    second.write_bytes(b"not a real jpeg")
+    ignored_mask.write_bytes(b"not a real jpeg")
+
+    thumbnails = asset_manager_panel_module.AssetThumbnails(tmp_path / "thumbs")
+    thumb_path = thumbnails.generate_dataset_preview(
+        "dataset",
+        "dataset_asset",
+        dataset_dir,
+        {"image_root": "images"},
+    )
+
+    assert thumb_path is not None
+    assert thumb_path.exists()
+    assert thumb_path in {
+        first,
+        thumbnails.get_dataset_thumbnail_path("dataset_asset"),
+    }
+
+
+def test_dataset_thumbnail_cache_uses_gallery_aspect(
+    asset_manager_panel_module,
+    tmp_path,
+):
+    pytest.importorskip("PIL")
+    from PIL import Image
+
+    dataset_dir = tmp_path / "dataset"
+    image_dir = dataset_dir / "images"
+    image_dir.mkdir(parents=True)
+    first = image_dir / "0001.png"
+    Image.new("RGB", (320, 240), "#cc3333").save(first)
+
+    thumbnails = asset_manager_panel_module.AssetThumbnails(tmp_path / "thumbs")
+    thumb_path = thumbnails.generate_dataset_preview(
+        "dataset",
+        "dataset_asset",
+        dataset_dir,
+        {"image_root": "images"},
+    )
+
+    assert thumb_path == thumbnails.get_dataset_thumbnail_path("dataset_asset")
+    with Image.open(thumb_path) as img:
+        assert img.size[0] > img.size[1]
+    assert thumbnails.thumbnail_matches_expected_size(thumb_path)
+
+
+def test_stale_managed_thumbnail_requests_refresh(
+    asset_manager_panel_module,
+    tmp_path,
+):
+    thumb_path = tmp_path / "dataset_asset.dataset.png"
+    thumb_path.write_bytes(b"not a current thumbnail")
+
+    class _Thumbnails:
+        thumbnails_dir = tmp_path
+
+        def get_dataset_thumbnail_path(self, asset_id):
+            return tmp_path / f"{asset_id}.dataset.png"
+
+        def get_thumbnail_path(self, asset_id):
+            return tmp_path / f"{asset_id}.png"
+
+        def thumbnail_matches_expected_size(self, path):
+            return False
+
+    panel = asset_manager_panel_module.AssetManagerPanel()
+    panel._asset_thumbnails = _Thumbnails()
+
+    asset = _make_asset()
+    asset["id"] = "dataset_asset"
+    asset["thumbnail_path"] = str(thumb_path)
+
+    assert panel._asset_needs_thumbnail_refresh(asset) is True
+
+
+def test_rendered_thumbnails_cover_geometry_and_checkpoints(
+    asset_manager_panel_module,
+    tmp_path,
+):
+    calls = []
+
+    def render_asset_preview(path, width, height):
+        calls.append((path, width, height))
+        return object()
+
+    def save_image(path, image):
+        Path(path).write_bytes(b"preview")
+
+    asset_manager_panel_module.lf.render_asset_preview = render_asset_preview
+    asset_manager_panel_module.lf.io = SimpleNamespace(save_image=save_image)
+
+    thumbnails = asset_manager_panel_module.AssetThumbnails(tmp_path / "thumbs")
+    for asset_type in ("checkpoint", "mesh", "ply_pcl"):
+        asset_path = tmp_path / f"asset.{asset_type}"
+        asset_path.write_bytes(b"asset")
+        thumb_path = thumbnails.generate_rendered_preview(
+            asset_type,
+            f"{asset_type}_asset",
+            asset_path,
+        )
+
+        assert thumb_path == thumbnails.get_rendered_thumbnail_path(
+            f"{asset_type}_asset"
+        )
+        assert thumb_path.exists()
+
+    assert [Path(call[0]).name for call in calls] == [
+        "asset.checkpoint",
+        "asset.mesh",
+        "asset.ply_pcl",
+    ]
+
+
+def test_mesh_extension_detects_as_mesh(asset_manager_panel_module, tmp_path):
+    mesh_path = tmp_path / "scan.mesh"
+    mesh_path.write_bytes(b"mesh")
+
+    scanner = asset_manager_panel_module.AssetScanner()
+
+    assert scanner.detect_type(str(mesh_path)) == "mesh"
 
 
 def test_asset_manager_load_context_actions_are_localized():
@@ -270,6 +437,66 @@ def test_asset_selection_resolves_asset_id_from_clicked_element(asset_manager_pa
 
     assert panel.get_selected_asset_name() == "bicycle"
     assert panel.get_selected_count() == 1
+
+
+def test_generate_asset_thumbnail_prefers_dataset_preview(asset_manager_panel_module):
+    class _Thumbnails:
+        def __init__(self):
+            self.placeholder_calls = []
+
+        def generate_dataset_preview(
+            self,
+            asset_type,
+            asset_id,
+            asset_path,
+            dataset_metadata,
+        ):
+            assert asset_type == "dataset"
+            assert asset_id == "a1"
+            assert asset_path == "/tmp/bicycle"
+            assert dataset_metadata == {"image_root": "images"}
+            return Path("/tmp/rendered-dataset.png")
+
+        def generate_placeholder(self, asset_type, asset_id):
+            self.placeholder_calls.append((asset_type, asset_id))
+            return Path("/tmp/placeholder.png")
+
+    updates = []
+    panel = asset_manager_panel_module.AssetManagerPanel()
+    panel._asset_thumbnails = _Thumbnails()
+    panel._asset_index = SimpleNamespace(
+        update_asset=lambda asset_id, **kwargs: updates.append((asset_id, kwargs))
+    )
+
+    panel._generate_asset_thumbnail_for_values(
+        "a1",
+        "dataset",
+        "/tmp/bicycle",
+        {"image_root": "images"},
+    )
+
+    assert panel._asset_thumbnails.placeholder_calls == []
+    assert updates == [("a1", {"thumbnail_path": "/tmp/rendered-dataset.png"})]
+
+
+def test_generate_asset_thumbnail_falls_back_to_placeholder(asset_manager_panel_module):
+    class _Thumbnails:
+        def generate_rendered_preview(self, asset_type, asset_id, asset_path):
+            return None
+
+        def generate_placeholder(self, asset_type, asset_id):
+            return Path("/tmp/placeholder.png")
+
+    updates = []
+    panel = asset_manager_panel_module.AssetManagerPanel()
+    panel._asset_thumbnails = _Thumbnails()
+    panel._asset_index = SimpleNamespace(
+        update_asset=lambda asset_id, **kwargs: updates.append((asset_id, kwargs))
+    )
+
+    panel._generate_asset_thumbnail_for_values("a1", "ply", "/tmp/model.ply", {})
+
+    assert updates == [("a1", {"thumbnail_path": "/tmp/placeholder.png"})]
 
 
 def test_dom_card_click_selects_asset_from_stable_parent(asset_manager_panel_module):

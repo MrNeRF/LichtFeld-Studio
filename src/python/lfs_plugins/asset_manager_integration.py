@@ -100,7 +100,23 @@ def _generate_thumbnail(
     if thumbnails is None or asset is None:
         return
     try:
-        thumb_path = thumbnails.generate_placeholder(asset.type, asset.id)
+        thumb_path = None
+        asset_path = getattr(asset, "absolute_path", "") or getattr(asset, "path", "")
+        if asset.type == "dataset" and hasattr(thumbnails, "generate_dataset_preview"):
+            thumb_path = thumbnails.generate_dataset_preview(
+                asset.type,
+                asset.id,
+                asset_path,
+                getattr(asset, "dataset_metadata", {}) or {},
+            )
+        elif hasattr(thumbnails, "generate_rendered_preview"):
+            thumb_path = thumbnails.generate_rendered_preview(
+                asset.type,
+                asset.id,
+                asset_path,
+            )
+        if thumb_path is None:
+            thumb_path = thumbnails.generate_placeholder(asset.type, asset.id)
         index.update_asset(asset.id, thumbnail_path=str(thumb_path))
     except Exception as exc:
         _logger.debug("Failed to generate thumbnail for %s: %s", asset.id, exc)

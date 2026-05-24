@@ -112,7 +112,7 @@
           <div class="asset-card-grid" data-if="is_gallery_view">
             <div data-for="asset : assets">
               <div class="asset-card" data-class-is-selected="asset.is_selected" data-class-is-missing="!asset.exists" data-attr-data-asset-id="asset.id" data-asset-action="select">
-                <div data-attr-class="'asset-card-thumb ' + asset.thumb_class">
+                <div data-attr-class="'asset-card-thumb ' + asset.thumb_class" data-style-decorator="asset.thumbnail_decorator">
                   <div class="asset-card-overlay">
                     <span data-attr-class="'asset-pill ' + asset.pill_class">{{asset.type_label}}</span>
                   </div>

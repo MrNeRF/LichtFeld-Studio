@@ -5,9 +5,12 @@
 from __future__ import annotations
 
 import io
+import logging
 import struct
 from pathlib import Path
-from typing import Set
+from typing import Any, Set
+
+_logger = logging.getLogger(__name__)
 
 # Color mapping for different asset types
 ASSET_TYPE_COLORS: dict[str, str] = {
@@ -34,9 +37,43 @@ ASSET_TYPE_COLORS: dict[str, str] = {
 # Default color for unknown types
 DEFAULT_COLOR = "#999999"
 
-# Thumbnail dimensions
-THUMB_WIDTH = 256
-THUMB_HEIGHT = 256
+# Thumbnail dimensions. Keep this ratio aligned with .asset-card-thumb so RmlUI
+# image decorators fill the gallery slot without visibly stretching the source.
+THUMB_WIDTH = 512
+THUMB_HEIGHT = 224
+
+RENDERABLE_PREVIEW_TYPES = {
+    "checkpoint",
+    "mesh",
+    "ply_3dgs",
+    "ply_pcl",
+    "ply",
+    "rad",
+    "sog",
+    "spz",
+}
+DATASET_IMAGE_EXTENSIONS = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".tiff",
+    ".tif",
+    ".bmp",
+    ".webp",
+    ".exr",
+}
+DATASET_EXCLUDED_DIRS = {
+    "masks",
+    "mask",
+    "sparse",
+    "dense",
+    "stereo",
+    "depth",
+    "depths",
+    "images_reconstruction",
+    "reconstruction",
+    "__pycache__",
+}
 
 
 class AssetThumbnails:
@@ -262,6 +299,143 @@ class AssetThumbnails:
 
         return thumb_path
 
+    def get_rendered_thumbnail_path(self, asset_id: str) -> Path:
+        """Get the cached rendered-preview path for a splat asset."""
+        return self._thumbnails_dir / f"{asset_id}.render.png"
+
+    def get_dataset_thumbnail_path(self, asset_id: str) -> Path:
+        """Get the cached dataset-image thumbnail path for a dataset asset."""
+        return self._thumbnails_dir / f"{asset_id}.dataset.png"
+
+    def thumbnail_matches_expected_size(self, path: str | Path) -> bool:
+        """Return whether a cached thumbnail matches the current gallery size."""
+        try:
+            from PIL import Image
+        except ImportError:
+            return True
+
+        try:
+            with Image.open(Path(path).expanduser()) as img:
+                return img.size == (THUMB_WIDTH, THUMB_HEIGHT)
+        except Exception:
+            return False
+
+    def _find_first_dataset_image(
+        self,
+        dataset_path: Path,
+        dataset_metadata: dict[str, Any] | None = None,
+    ) -> Path | None:
+        """Find the first real image in a dataset using AssetScanner-compatible rules."""
+        if not dataset_path.is_dir():
+            return None
+
+        image_root_value = (dataset_metadata or {}).get("image_root", "")
+        image_root = None
+        if image_root_value:
+            candidate = Path(str(image_root_value)).expanduser()
+            image_root = candidate if candidate.is_absolute() else dataset_path / candidate
+        if image_root is None or not image_root.is_dir():
+            images_dir = dataset_path / "images"
+            image_root = images_dir if images_dir.is_dir() else dataset_path
+
+        image_paths: dict[str, Path] = {}
+        try:
+            for item in image_root.rglob("*"):
+                if not item.is_file() or item.suffix.lower() not in DATASET_IMAGE_EXTENSIONS:
+                    continue
+                try:
+                    rel_parent_parts = item.relative_to(image_root).parts[:-1]
+                except ValueError:
+                    rel_parent_parts = item.parts[:-1]
+                if any(part.lower() in DATASET_EXCLUDED_DIRS for part in rel_parent_parts):
+                    continue
+                image_paths[str(item.resolve())] = item
+        except (OSError, PermissionError):
+            return None
+
+        if not image_paths:
+            return None
+        return sorted(image_paths.values(), key=lambda item: str(item))[0]
+
+    def generate_dataset_preview(
+        self,
+        asset_type: str,
+        asset_id: str,
+        dataset_path: str | Path,
+        dataset_metadata: dict[str, Any] | None = None,
+    ) -> Path | None:
+        """Generate a thumbnail from the first dataset image.
+
+        If Pillow is unavailable or cannot decode the source image, returns the
+        source image path directly so the UI can still show a real dataset image.
+        """
+        if asset_type.lower() != "dataset" or not dataset_path:
+            return None
+
+        first_image = self._find_first_dataset_image(
+            Path(dataset_path).expanduser(),
+            dataset_metadata,
+        )
+        if first_image is None:
+            return None
+
+        thumb_path = self.get_dataset_thumbnail_path(asset_id)
+        try:
+            from PIL import Image, ImageOps
+
+            with Image.open(first_image) as img:
+                img = ImageOps.exif_transpose(img).convert("RGB")
+                try:
+                    resample = Image.Resampling.LANCZOS
+                except AttributeError:
+                    resample = Image.LANCZOS
+                img = ImageOps.fit(
+                    img,
+                    (THUMB_WIDTH, THUMB_HEIGHT),
+                    method=resample,
+                    centering=(0.5, 0.5),
+                )
+                img.save(thumb_path, format="PNG")
+            return thumb_path
+        except ImportError:
+            return first_image
+        except Exception as exc:
+            _logger.debug(
+                "Failed to generate dataset thumbnail for %s: %s",
+                asset_id,
+                exc,
+            )
+            return first_image if first_image.exists() else None
+
+    def generate_rendered_preview(
+        self,
+        asset_type: str,
+        asset_id: str,
+        asset_path: str | Path,
+    ) -> Path | None:
+        """Generate a rendered thumbnail for a splat asset using the app renderer."""
+        if asset_type.lower() not in RENDERABLE_PREVIEW_TYPES or not asset_path:
+            return None
+
+        try:
+            import lichtfeld as lf
+
+            render_preview = getattr(lf, "render_asset_preview", None)
+            save_image = getattr(getattr(lf, "io", None), "save_image", None)
+            if not callable(render_preview) or not callable(save_image):
+                return None
+
+            image = render_preview(str(asset_path), THUMB_WIDTH, THUMB_HEIGHT)
+            if image is None:
+                return None
+
+            thumb_path = self.get_rendered_thumbnail_path(asset_id)
+            save_image(str(thumb_path), image)
+            return thumb_path if thumb_path.exists() else None
+        except Exception as exc:
+            _logger.debug("Failed to render thumbnail for %s: %s", asset_id, exc)
+            return None
+
     def get_thumbnail_path(self, asset_id: str) -> Path:
         """Get the path to a thumbnail for the given asset.
 
@@ -335,6 +509,8 @@ class AssetThumbnails:
 
             # Extract asset ID from filename
             asset_id = thumb_file.stem
+            if asset_id.endswith(".render") or asset_id.endswith(".dataset"):
+                asset_id = asset_id.rsplit(".", 1)[0]
 
             if asset_id not in known_asset_ids:
                 thumb_file.unlink()

@@ -40,6 +40,7 @@
 #include <vulkan/vulkan.h>
 
 namespace lfs::core {
+    class SplatData;
     class Tensor;
 }
 
@@ -59,6 +60,7 @@ namespace lfs::vis {
     class PointCloudVulkanRenderer;
 
     class SceneManager;
+    struct SceneRenderState;
     class TrainerManager;
 
     class LFS_VIS_API RenderingManager {
@@ -119,6 +121,12 @@ namespace lfs::vis {
 
         // Render preview image without touching the shared viewport presentation textures.
         std::shared_ptr<lfs::core::Tensor> renderPreviewImage(SceneManager* scene_manager,
+                                                              const glm::mat3& camera_rotation,
+                                                              const glm::vec3& camera_position,
+                                                              float focal_length_mm,
+                                                              int width, int height);
+        std::shared_ptr<lfs::core::Tensor> renderPreviewImage(const lfs::core::SplatData& model,
+                                                              SceneRenderState scene_state,
                                                               const glm::mat3& camera_rotation,
                                                               const glm::vec3& camera_position,
                                                               float focal_length_mm,

@@ -73,6 +73,12 @@ namespace lfs::python {
         int height, float fov_degrees = 60.0f, const std::tuple<float, float, float>& up = {0.0f, 1.0f, 0.0f},
         const PyTensor* bg_color = nullptr);
 
+    [[nodiscard]] std::optional<PyTensor> render_asset_preview(
+        const std::string& path,
+        int width = 512,
+        int height = 224,
+        float focal_length_mm = 50.0f);
+
     class PyRenderSettings {
     public:
         explicit PyRenderSettings(vis::RenderSettingsProxy settings);
