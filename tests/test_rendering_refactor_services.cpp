@@ -1024,4 +1024,24 @@ namespace lfs::vis {
         EXPECT_EQ(manager.getSettings().grid_plane, 2);
     }
 
+    TEST_F(RenderingManagerEventsTest, RenderSettingsChangedEquirectangularForcesGutBackend) {
+        using Backend = lfs::rendering::GaussianRasterBackend;
+
+        RenderingManager manager;
+        auto settings = manager.getSettings();
+        settings.raster_backend = Backend::ThreeDgs;
+        settings.gut = false;
+        settings.equirectangular = false;
+        manager.updateSettings(settings);
+
+        auto event = lfs::core::events::ui::RenderSettingsChanged{};
+        event.equirectangular = true;
+        event.emit();
+
+        settings = manager.getSettings();
+        EXPECT_TRUE(settings.equirectangular);
+        EXPECT_EQ(settings.raster_backend, Backend::ThreeDgut);
+        EXPECT_TRUE(settings.gut);
+    }
+
 } // namespace lfs::vis

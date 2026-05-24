@@ -6,7 +6,7 @@
 
 #include "core/splat_data.hpp"
 #include "rendering/cuda_vulkan_interop.hpp"
-#include "rendering/rasterizer/vksplat_fwd/src/gs_renderer.h"
+#include "rendering/rasterizer/vulkan/src/gs_renderer.h"
 #include "rendering/rendering.hpp"
 #include "window/vulkan_context.hpp"
 
@@ -45,12 +45,18 @@ namespace lfs::vis {
             const void* opacity = nullptr;
             const void* sh0 = nullptr;
             const void* shn = nullptr;
+            // Tracking the deleted mask pointer + byte count is enough to invalidate
+            // the resident-input cache when the user soft-deletes (or undoes a
+            // delete). The renderer then re-runs the copy path so the opacity
+            // upload applies the latest mask.
+            const void* deleted = nullptr;
             std::size_t means_bytes = 0;
             std::size_t scaling_bytes = 0;
             std::size_t rotation_bytes = 0;
             std::size_t opacity_bytes = 0;
             std::size_t sh0_bytes = 0;
             std::size_t shn_bytes = 0;
+            std::size_t deleted_bytes = 0;
 
             [[nodiscard]] bool valid() const { return model != nullptr && count > 0; }
             [[nodiscard]] friend bool operator==(const ModelInputSnapshot& a,
@@ -66,6 +72,7 @@ namespace lfs::vis {
             Main = 0,
             SplitLeft = 1,
             SplitRight = 2,
+            Preview = 3,
         };
 
         struct SelectionMaskRequest {
@@ -88,9 +95,15 @@ namespace lfs::vis {
             const lfs::core::SplatData& splat_data,
             const lfs::rendering::ViewportRenderRequest& request,
             bool force_input_upload,
-            OutputSlot output_slot = OutputSlot::Main);
+            OutputSlot output_slot = OutputSlot::Main,
+            bool synchronize_input_upload = false);
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
             VulkanContext& context,
+            OutputSlot output_slot = OutputSlot::Main) const;
+        [[nodiscard]] std::expected<float, std::string> sampleDepthAtPixel(
+            VulkanContext& context,
+            int x,
+            int y,
             OutputSlot output_slot = OutputSlot::Main) const;
         [[nodiscard]] std::expected<lfs::core::Tensor, std::string> buildSelectionMask(
             VulkanContext& context,
@@ -102,12 +115,16 @@ namespace lfs::vis {
 
     private:
         struct ComposePipeline;
+        struct InputBindingResult {
+            bool uses_temporary_upload_slot = false;
+        };
 
         [[nodiscard]] std::expected<void, std::string> ensureInitialized(VulkanContext& context);
-        [[nodiscard]] std::expected<void, std::string> uploadInputs(
+        [[nodiscard]] std::expected<InputBindingResult, std::string> prepareInputs(
             VulkanContext& context,
             const lfs::core::SplatData& splat_data,
             std::size_t ring_slot,
+            bool force_upload,
             bool synchronize_upload = false);
         struct OverlayBindingViews {
             _VulkanBuffer selection_mask{};
@@ -136,15 +153,15 @@ namespace lfs::vis {
             const VulkanGSRendererUniforms& uniforms,
             const glm::vec3& background,
             OutputSlot output_slot,
-            bool transparent_background);
+            bool transparent_background,
+            bool depth_view,
+            float depth_min,
+            float depth_max);
 
-        // One coalesced CUDA-imported VkBuffer per ring slot, holding all four
-        // input regions (xyz | rotations | scales+opacs | sh) packed back-to-back
-        // with 256-byte alignment. Replaces the prior 4-buffers-per-ring scheme,
-        // collapsing 4× cudaImportExternalMemory + 4× cudaExternalMemoryGetMappedBuffer
-        // setup costs into 1×, and surfacing the regions to the rasterizer through
-        // _VulkanBuffer offset views (no descriptor-side cost).
-        static constexpr std::size_t kInputRegionCount = 4;
+        // Fallback coalesced CUDA-imported VkBuffer per ring slot, holding raw
+        // SplatData input regions back-to-back. Training tensors created as
+        // Vulkan-external buffers bypass this allocation and are bound directly.
+        static constexpr std::size_t kInputRegionCount = 6;
         static constexpr std::size_t kOverlayRegionCount = 7;
         static constexpr std::size_t kSelectionQueryRegionCount = 5;
         static constexpr std::size_t kRegionAlignment = 256; // VK minStorageBufferOffsetAlignment upper bound on common HW
@@ -181,6 +198,8 @@ namespace lfs::vis {
 
         void detachManagedBuffers();
         void plugRingInputs(std::size_t ring_slot, std::size_t num_splats);
+        void aliasSortScratchToInputSlot(std::size_t ring_slot);
+        void releaseInputSlot(VulkanContext& context, std::size_t ring_slot);
 
         VulkanContext* context_ = nullptr;
         bool initialized_ = false;
@@ -195,23 +214,20 @@ namespace lfs::vis {
             VkImageLayout depth_layout = VK_IMAGE_LAYOUT_UNDEFINED;
             std::uint64_t generation = 0;
         };
-        static constexpr std::size_t kOutputSlotCount = 3;
+        static constexpr std::size_t kOutputSlotCount = 4;
         std::array<OutputImageSlot, kOutputSlotCount> output_slots_{};
 
-        // CUDA-backed input buffers (xyz_ws, rotations, scales_opacs, sh_coeffs),
-        // ring-buffered per frame-in-flight. Each ring slot owns its own set of
-        // CUDA-imported VkBuffers so frame N's CUDA upload cannot race frame
-        // N-1's Vulkan compute reads. Ring index = currentFrameSlot %
-        // framesInFlight; size matches VulkanContext::framesInFlight() (asserted
-        // at runtime).
-        static constexpr std::size_t kInputRingSize = 2; // matches VulkanContext::kFramesInFlight
+        // Fallback CUDA-backed input buffers for models that are not already
+        // backed by Vulkan-external tensor storage. Direct Vulkan-external
+        // training tensors bypass this ring and bind their VkBuffers directly.
+        static constexpr std::size_t kInputRingSize = 1;
         std::array<CudaInputSlot, kInputRingSize> cuda_inputs_{};
         std::array<CudaOverlaySlot, kInputRingSize> cuda_overlays_{};
         CudaSelectionQuerySlot cuda_selection_query_{};
         std::array<ModelInputSnapshot, kInputRingSize> ring_uploaded_{};
 
         // Per-ring-slot timeline semaphore used to gate Vulkan compute on the
-        // CUDA upload completing — eliminates the per-frame
+        // CUDA upload completing; eliminates the per-frame
         // cudaStreamSynchronize that previously blocked the CPU after every
         // upload (P15). Values are monotonic; on each upload we bump the slot's
         // counter, signal CUDA-side, and queue a Vulkan-side wait.

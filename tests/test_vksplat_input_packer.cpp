@@ -13,8 +13,8 @@
 
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
-#include "rendering/rasterizer/vksplat_fwd/src/buffer.h"
-#include "rendering/rasterizer/vksplat_fwd/src/config.h"
+#include "rendering/rasterizer/vulkan/src/buffer.h"
+#include "rendering/rasterizer/vulkan/src/config.h"
 #include "visualizer/rendering/vksplat_input_packer.hpp"
 
 #include <gtest/gtest.h>
@@ -31,9 +31,11 @@ using lfs::core::Device;
 using lfs::core::SplatData;
 using lfs::core::Tensor;
 using lfs::vis::vksplat::buildPaddedShReference;
+using lfs::vis::vksplat::deviceInputLayout;
 using lfs::vis::vksplat::DevicePackedInputs;
 using lfs::vis::vksplat::packDeviceInputs;
 using lfs::vis::vksplat::packHostInputs;
+using lfs::vis::vksplat::rawDeviceInputLayout;
 
 namespace {
 
@@ -364,4 +366,41 @@ TEST(VksplatInputPackerTest, ScalesOpacsByteLayout) {
         EXPECT_LE(scales_opacs[i * 4 + 3], 1.0f);
         EXPECT_NEAR(scales_opacs[i * 4 + 3], sigmoidf(in.opacity[i]), 1e-5f);
     }
+}
+
+TEST(VksplatInputPackerTest, RawDeviceLayoutUsesCompactMaxShRest) {
+    constexpr std::size_t n = SH_REORDER_SIZE + 5;
+
+    for (const int max_sh_degree : {0, 1, 2, 3}) {
+        SyntheticInputs in = makeInputs(n, max_sh_degree, /*seed=*/0x5A17u + static_cast<std::uint32_t>(max_sh_degree));
+        auto splat = buildSplatData(in);
+
+        auto raw_layout = rawDeviceInputLayout(*splat);
+        ASSERT_TRUE(raw_layout.has_value()) << raw_layout.error();
+        const std::size_t layout_rest =
+            lfs::core::sh_rest_coefficients_for_degree(max_sh_degree);
+        const std::size_t expected_raw_shN_bytes =
+            layout_rest == 0
+                ? 4 * sizeof(float)
+                : lfs::core::sh_swizzled_float_count(n, static_cast<std::uint32_t>(layout_rest)) * sizeof(float);
+        EXPECT_EQ(raw_layout->shN_bytes, expected_raw_shN_bytes)
+            << "max_sh_degree=" << max_sh_degree;
+
+        auto packed_layout = deviceInputLayout(*splat);
+        ASSERT_TRUE(packed_layout.has_value()) << packed_layout.error();
+        EXPECT_EQ(packed_layout->sh_coeffs_bytes,
+                  lfs::core::sh_swizzled_float_count(n) * sizeof(float))
+            << "max_sh_degree=" << max_sh_degree;
+    }
+
+    SyntheticInputs in = makeInputs(n, /*max_sh_degree=*/2, /*seed=*/0xA110u);
+    auto splat = buildSplatData(in);
+    splat->set_active_sh_degree(0);
+    auto raw_layout = rawDeviceInputLayout(*splat);
+    ASSERT_TRUE(raw_layout.has_value()) << raw_layout.error();
+    EXPECT_EQ(raw_layout->shN_bytes,
+              lfs::core::sh_swizzled_float_count(
+                  n,
+                  static_cast<std::uint32_t>(lfs::core::sh_rest_coefficients_for_degree(2))) *
+                  sizeof(float));
 }

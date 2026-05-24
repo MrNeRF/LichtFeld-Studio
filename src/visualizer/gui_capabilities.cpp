@@ -355,6 +355,11 @@ namespace lfs::vis::cap {
                 scene_manager.addToSelection(name);
             return {};
         }
+        if (mode == "remove") {
+            for (const auto& name : names)
+                scene_manager.removeFromSelection(name);
+            return {};
+        }
         if (mode != "replace")
             return std::unexpected("Unsupported node selection mode: " + std::string(mode));
 
@@ -566,8 +571,8 @@ namespace lfs::vis::cap {
         core::Tensor* field = nullptr;
         if (is_shN) {
             if (!node->model->shN_raw().is_valid() || node->model->shN_raw().numel() == 0 ||
-                node->model->active_sh_coeffs_rest() == 0) {
-                return std::unexpected("shN is not active (sh-degree 0)");
+                node->model->max_sh_coeffs_rest() == 0) {
+                return std::unexpected("shN storage is not allocated (max sh-degree 0)");
             }
             shN_canon = node->model->shN_canonical();
             field = &shN_canon;

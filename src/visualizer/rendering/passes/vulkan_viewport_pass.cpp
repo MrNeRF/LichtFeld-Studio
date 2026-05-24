@@ -31,6 +31,7 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <span>
 #include <vector>
@@ -84,6 +85,18 @@ namespace lfs::vis {
         struct TexturedOverlayPush {
             glm::vec4 tint_opacity{1.0f, 1.0f, 1.0f, 0.8f};
             glm::vec4 effects{0.0f};
+            // x,y: viewport origin (framebuffer px). z,w: viewport size (framebuffer px).
+            glm::vec4 viewport_rect{0.0f, 0.0f, 0.0f, 0.0f};
+            // x: depth_available, y: flip-y, z/w unused.
+            glm::vec4 depth_params{0.0f, 0.0f, 0.0f, 0.0f};
+        };
+
+        struct ShapeOverlayPush {
+            // x,y: viewport origin (framebuffer px). z,w: viewport size (framebuffer px).
+            glm::vec4 viewport_rect{0.0f, 0.0f, 0.0f, 0.0f};
+            // x: depth_available (1.0 = sample splat depth, 0.0 = skip fade),
+            // y: flip-y when sampling depth UV. z,w unused.
+            glm::vec4 params{0.0f, 0.0f, 0.0f, 0.0f};
         };
 
         [[nodiscard]] VkDescriptorSet descriptorSetFromId(const std::uintptr_t texture_id) {
@@ -167,6 +180,8 @@ namespace lfs::vis {
             DynamicBuffer grid_uniform;
             VkDescriptorSet scene_descriptor_set = VK_NULL_HANDLE;
             VkDescriptorSet grid_descriptor_set = VK_NULL_HANDLE;
+            VkDescriptorSet shape_overlay_descriptor_set = VK_NULL_HANDLE;
+            VkImageView bound_shape_overlay_depth_view = VK_NULL_HANDLE;
         };
         std::vector<FrameResources> frame_resources;
 
@@ -181,6 +196,13 @@ namespace lfs::vis {
 
         VkDescriptorSetLayout grid_descriptor_layout = VK_NULL_HANDLE;
         VkDescriptorPool grid_descriptor_pool = VK_NULL_HANDLE;
+
+        VkSampler shape_overlay_depth_sampler = VK_NULL_HANDLE;
+        VkImage shape_overlay_dummy_depth_image = VK_NULL_HANDLE;
+        VmaAllocation shape_overlay_dummy_depth_alloc = VK_NULL_HANDLE;
+        VkImageView shape_overlay_dummy_depth_view = VK_NULL_HANDLE;
+        VkDescriptorSetLayout shape_overlay_descriptor_layout = VK_NULL_HANDLE;
+        VkDescriptorPool shape_overlay_descriptor_pool = VK_NULL_HANDLE;
 
         VkPipelineLayout scene_pipeline_layout = VK_NULL_HANDLE;
         VkPipeline scene_pipeline = VK_NULL_HANDLE;
@@ -221,6 +243,7 @@ namespace lfs::vis {
 
             if (!createSampler() || !scene_image_uploader.init(ctx, scene_sampler) ||
                 !createSceneDescriptors() || !createGridResources() ||
+                !createShapeOverlayDescriptors() ||
                 !createQuadBuffer() || !createPipelines()) {
                 reset();
                 return false;
@@ -426,6 +449,183 @@ namespace lfs::vis {
             return true;
         }
 
+        // Submit a single command buffer to the graphics queue and wait for it.
+        // Mirrors depth_blit_pass's pattern: lets init() do GPU-side setup even
+        // when called during an active frame (host-side
+        // transitionImageLayoutImmediate refuses in that case).
+        [[nodiscard]] bool runOneShotGraphics(const std::function<void(VkCommandBuffer)>& record) {
+            VkCommandPoolCreateInfo pool_info{};
+            pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+            pool_info.queueFamilyIndex = graphics_queue_family;
+            pool_info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+            VkCommandPool pool = VK_NULL_HANDLE;
+            if (vkCreateCommandPool(device, &pool_info, nullptr, &pool) != VK_SUCCESS) {
+                return false;
+            }
+            VkCommandBufferAllocateInfo cb_alloc{};
+            cb_alloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            cb_alloc.commandPool = pool;
+            cb_alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            cb_alloc.commandBufferCount = 1;
+            VkCommandBuffer cb = VK_NULL_HANDLE;
+            if (vkAllocateCommandBuffers(device, &cb_alloc, &cb) != VK_SUCCESS) {
+                vkDestroyCommandPool(device, pool, nullptr);
+                return false;
+            }
+            VkCommandBufferBeginInfo begin{};
+            begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+            begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            vkBeginCommandBuffer(cb, &begin);
+            record(cb);
+            vkEndCommandBuffer(cb);
+            VkSubmitInfo submit{};
+            submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+            submit.commandBufferCount = 1;
+            submit.pCommandBuffers = &cb;
+            VkFenceCreateInfo fence_info{};
+            fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+            VkFence fence = VK_NULL_HANDLE;
+            const bool ok =
+                vkCreateFence(device, &fence_info, nullptr, &fence) == VK_SUCCESS &&
+                vkQueueSubmit(graphics_queue, 1, &submit, fence) == VK_SUCCESS &&
+                vkWaitForFences(device, 1, &fence, VK_TRUE,
+                                std::numeric_limits<std::uint64_t>::max()) == VK_SUCCESS;
+            if (fence != VK_NULL_HANDLE) {
+                vkDestroyFence(device, fence, nullptr);
+            }
+            vkFreeCommandBuffers(device, pool, 1, &cb);
+            vkDestroyCommandPool(device, pool, nullptr);
+            return ok;
+        }
+
+        [[nodiscard]] bool createShapeOverlayDescriptors() {
+            VkSamplerCreateInfo sampler_info{};
+            sampler_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+            sampler_info.magFilter = VK_FILTER_NEAREST;
+            sampler_info.minFilter = VK_FILTER_NEAREST;
+            sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+            sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            if (vkCreateSampler(device, &sampler_info, nullptr, &shape_overlay_depth_sampler) != VK_SUCCESS) {
+                return false;
+            }
+
+            // 1x1 dummy depth image bound while the real splat depth view is not
+            // available. The depth_available push flag is 0 in that case so the
+            // frag never samples it, but the descriptor still needs a valid view
+            // in SHADER_READ_ONLY layout.
+            VkImageCreateInfo img_info{};
+            img_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            img_info.imageType = VK_IMAGE_TYPE_2D;
+            img_info.format = VK_FORMAT_R32_SFLOAT;
+            img_info.extent = {1, 1, 1};
+            img_info.mipLevels = 1;
+            img_info.arrayLayers = 1;
+            img_info.samples = VK_SAMPLE_COUNT_1_BIT;
+            img_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+            img_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+            img_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            img_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            VmaAllocationCreateInfo alloc{};
+            alloc.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+            if (vmaCreateImage(allocator, &img_info, &alloc,
+                               &shape_overlay_dummy_depth_image, &shape_overlay_dummy_depth_alloc,
+                               nullptr) != VK_SUCCESS) {
+                return false;
+            }
+            VkImageViewCreateInfo view_info{};
+            view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            view_info.image = shape_overlay_dummy_depth_image;
+            view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            view_info.format = VK_FORMAT_R32_SFLOAT;
+            view_info.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            if (vkCreateImageView(device, &view_info, nullptr, &shape_overlay_dummy_depth_view) != VK_SUCCESS) {
+                return false;
+            }
+            const bool transitioned = runOneShotGraphics([this](VkCommandBuffer cb) {
+                VkImageMemoryBarrier barrier{};
+                barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                barrier.image = shape_overlay_dummy_depth_image;
+                barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                barrier.srcAccessMask = 0;
+                barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                vkCmdPipelineBarrier(cb,
+                                     VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                     0, 0, nullptr, 0, nullptr, 1, &barrier);
+            });
+            if (!transitioned) {
+                return false;
+            }
+
+            VkDescriptorSetLayoutBinding binding{};
+            binding.binding = 0;
+            binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            binding.descriptorCount = 1;
+            binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+            VkDescriptorSetLayoutCreateInfo layout_info{};
+            layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            layout_info.bindingCount = 1;
+            layout_info.pBindings = &binding;
+            if (vkCreateDescriptorSetLayout(device, &layout_info, nullptr, &shape_overlay_descriptor_layout) != VK_SUCCESS) {
+                return false;
+            }
+
+            const auto descriptor_count = static_cast<std::uint32_t>(frame_resources.size());
+            VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, descriptor_count};
+            VkDescriptorPoolCreateInfo desc_pool_info{};
+            desc_pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+            desc_pool_info.maxSets = descriptor_count;
+            desc_pool_info.poolSizeCount = 1;
+            desc_pool_info.pPoolSizes = &pool_size;
+            if (vkCreateDescriptorPool(device, &desc_pool_info, nullptr, &shape_overlay_descriptor_pool) != VK_SUCCESS) {
+                return false;
+            }
+
+            std::vector<VkDescriptorSetLayout> layouts(frame_resources.size(), shape_overlay_descriptor_layout);
+            std::vector<VkDescriptorSet> sets(frame_resources.size(), VK_NULL_HANDLE);
+            VkDescriptorSetAllocateInfo alloc_info{};
+            alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            alloc_info.descriptorPool = shape_overlay_descriptor_pool;
+            alloc_info.descriptorSetCount = descriptor_count;
+            alloc_info.pSetLayouts = layouts.data();
+            if (vkAllocateDescriptorSets(device, &alloc_info, sets.data()) != VK_SUCCESS) {
+                return false;
+            }
+            for (std::size_t i = 0; i < frame_resources.size(); ++i) {
+                frame_resources[i].shape_overlay_descriptor_set = sets[i];
+                bindShapeOverlayDepth(frame_resources[i], shape_overlay_dummy_depth_view);
+            }
+            return true;
+        }
+
+        void bindShapeOverlayDepth(FrameResources& frame, VkImageView view) {
+            if (view == VK_NULL_HANDLE) {
+                view = shape_overlay_dummy_depth_view;
+            }
+            if (frame.bound_shape_overlay_depth_view == view) {
+                return;
+            }
+            VkDescriptorImageInfo di{};
+            di.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            di.imageView = view;
+            di.sampler = shape_overlay_depth_sampler;
+            VkWriteDescriptorSet w{};
+            w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w.dstSet = frame.shape_overlay_descriptor_set;
+            w.dstBinding = 0;
+            w.descriptorCount = 1;
+            w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w.pImageInfo = &di;
+            vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
+            frame.bound_shape_overlay_depth_view = view;
+        }
+
         [[nodiscard]] bool createQuadBuffer() {
             return createBuffer(sizeof(Vertex) * 6,
                                 VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
@@ -460,7 +660,8 @@ namespace lfs::vis {
                                           bool enable_blend,
                                           PipelineVertexLayout vertex_layout,
                                           VkPipelineLayout& pipeline_layout,
-                                          VkPipeline& pipeline) {
+                                          VkPipeline& pipeline,
+                                          VkDescriptorSetLayout extra_descriptor_layout = VK_NULL_HANDLE) {
             VkShaderModule vertex_module = createShaderModule(vertex_spv);
             VkShaderModule fragment_module = createShaderModule(fragment_spv);
             if (vertex_module == VK_NULL_HANDLE || fragment_module == VK_NULL_HANDLE) {
@@ -493,7 +694,7 @@ namespace lfs::vis {
                 binding.stride = sizeof(VulkanViewportShapeOverlayVertex);
             }
             binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-            std::array<VkVertexInputAttributeDescription, 6> attributes{};
+            std::array<VkVertexInputAttributeDescription, 7> attributes{};
             attributes[0].location = 0;
             attributes[0].binding = 0;
             attributes[0].format = VK_FORMAT_R32G32_SFLOAT;
@@ -537,6 +738,15 @@ namespace lfs::vis {
                 attributes[5].binding = 0;
                 attributes[5].format = VK_FORMAT_R32G32B32A32_SFLOAT;
                 attributes[5].offset = offsetof(VulkanViewportShapeOverlayVertex, params);
+                attributes[6].location = 6;
+                attributes[6].binding = 0;
+                attributes[6].format = VK_FORMAT_R32_SFLOAT;
+                attributes[6].offset = offsetof(VulkanViewportShapeOverlayVertex, view_depth);
+            } else if (vertex_layout == PipelineVertexLayout::TexturedOverlay) {
+                attributes[2].location = 2;
+                attributes[2].binding = 0;
+                attributes[2].format = VK_FORMAT_R32_SFLOAT;
+                attributes[2].offset = offsetof(VulkanViewportTexturedOverlayVertex, view_depth);
             }
 
             VkPipelineVertexInputStateCreateInfo vertex_input{};
@@ -544,7 +754,9 @@ namespace lfs::vis {
             vertex_input.vertexBindingDescriptionCount = 1;
             vertex_input.pVertexBindingDescriptions = &binding;
             vertex_input.vertexAttributeDescriptionCount =
-                vertex_layout == PipelineVertexLayout::ShapeOverlay ? 6u : 2u;
+                vertex_layout == PipelineVertexLayout::ShapeOverlay      ? 7u
+                : vertex_layout == PipelineVertexLayout::TexturedOverlay ? 3u
+                                                                         : 2u;
             vertex_input.pVertexAttributeDescriptions = attributes.data();
 
             VkPipelineInputAssemblyStateCreateInfo input_assembly{};
@@ -598,7 +810,11 @@ namespace lfs::vis {
 
             VkPipelineLayoutCreateInfo layout_info{};
             layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-            if (descriptor_layout != VK_NULL_HANDLE) {
+            std::array<VkDescriptorSetLayout, 2> set_layouts{descriptor_layout, extra_descriptor_layout};
+            if (descriptor_layout != VK_NULL_HANDLE && extra_descriptor_layout != VK_NULL_HANDLE) {
+                layout_info.setLayoutCount = 2;
+                layout_info.pSetLayouts = set_layouts.data();
+            } else if (descriptor_layout != VK_NULL_HANDLE) {
                 layout_info.setLayoutCount = 1;
                 layout_info.pSetLayouts = &descriptor_layout;
             }
@@ -660,6 +876,10 @@ namespace lfs::vis {
             textured_overlay_push.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
             textured_overlay_push.offset = 0;
             textured_overlay_push.size = sizeof(TexturedOverlayPush);
+            VkPushConstantRange shape_overlay_push{};
+            shape_overlay_push.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+            shape_overlay_push.offset = 0;
+            shape_overlay_push.size = sizeof(ShapeOverlayPush);
             using namespace viewport_shaders;
 
             return createPipeline(kScreenQuadVertSpv, kSceneFragSpv, "scene",
@@ -675,12 +895,14 @@ namespace lfs::vis {
                                   VK_NULL_HANDLE, nullptr, true, PipelineVertexLayout::ColorOverlay,
                                   overlay_pipeline_layout, overlay_pipeline) &&
                    createPipeline(kShapeOverlayVertSpv, kShapeOverlayFragSpv, "shape_overlay",
-                                  VK_NULL_HANDLE, nullptr, true, PipelineVertexLayout::ShapeOverlay,
+                                  shape_overlay_descriptor_layout, &shape_overlay_push, true,
+                                  PipelineVertexLayout::ShapeOverlay,
                                   shape_overlay_pipeline_layout, shape_overlay_pipeline) &&
                    createPipeline(kTexturedOverlayVertSpv, kTexturedOverlayFragSpv, "textured_overlay",
                                   scene_descriptor_layout, &textured_overlay_push, true,
                                   PipelineVertexLayout::TexturedOverlay,
-                                  textured_overlay_pipeline_layout, textured_overlay_pipeline) &&
+                                  textured_overlay_pipeline_layout, textured_overlay_pipeline,
+                                  shape_overlay_descriptor_layout) &&
                    createPipeline(kPivotVertSpv, kPivotFragSpv, "pivot",
                                   VK_NULL_HANDLE, &pivot_push, true, PipelineVertexLayout::ScreenQuad,
                                   pivot_pipeline_layout, pivot_pipeline);
@@ -1047,7 +1269,9 @@ namespace lfs::vis {
         }
 
         void recordShapeOverlays(VkCommandBuffer command_buffer,
-                                 const DynamicBuffer& resource) const {
+                                 const DynamicBuffer& resource,
+                                 const FrameResources& frame,
+                                 const ShapeOverlayPush& push) const {
             if (resource.count == 0 ||
                 resource.buffer == VK_NULL_HANDLE ||
                 shape_overlay_pipeline == VK_NULL_HANDLE) {
@@ -1055,6 +1279,22 @@ namespace lfs::vis {
             }
             const VkDeviceSize offset = 0;
             vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, shape_overlay_pipeline);
+            if (frame.shape_overlay_descriptor_set != VK_NULL_HANDLE) {
+                vkCmdBindDescriptorSets(command_buffer,
+                                        VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        shape_overlay_pipeline_layout,
+                                        0,
+                                        1,
+                                        &frame.shape_overlay_descriptor_set,
+                                        0,
+                                        nullptr);
+            }
+            vkCmdPushConstants(command_buffer,
+                               shape_overlay_pipeline_layout,
+                               VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0,
+                               sizeof(ShapeOverlayPush),
+                               &push);
             vkCmdBindVertexBuffers(command_buffer, 0, 1, &resource.buffer, &offset);
             vkCmdDraw(command_buffer, resource.count, 1, 0, 0);
             bindQuad(command_buffer);
@@ -1063,11 +1303,23 @@ namespace lfs::vis {
         void record(VkCommandBuffer command_buffer,
                     const VkExtent2D extent,
                     const VulkanViewportPassParams& params) {
-            const auto& frame = resourcesForFrame(params.frame_slot);
+            auto& frame = resourcesForFrame(params.frame_slot);
             const FramebufferRect rect = toFramebufferRect(params, extent);
             if (rect.width == 0 || rect.height == 0 || quad_buffer == VK_NULL_HANDLE) {
                 return;
             }
+            const glm::vec4 viewport_rect_push{
+                static_cast<float>(rect.x),
+                static_cast<float>(rect.y),
+                static_cast<float>(rect.width),
+                static_cast<float>(rect.height)};
+            const bool depth_available = depth_blit_pass.hasDepth();
+            const glm::vec4 world_depth_params_push{
+                depth_available ? 1.0f : 0.0f,
+                params.depth_blit.flip_y ? 1.0f : 0.0f,
+                0.0f, 0.0f};
+            bindShapeOverlayDepth(frame, depth_available ? depth_blit_pass.depthView() : VK_NULL_HANDLE);
+
             bindViewport(command_buffer, rect);
             bindQuad(command_buffer);
             clearViewport(command_buffer, rect, params.background_color);
@@ -1176,6 +1428,16 @@ namespace lfs::vis {
                 const VkDeviceSize offset = 0;
                 vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, textured_overlay_pipeline);
                 vkCmdBindVertexBuffers(command_buffer, 0, 1, &frame.textured_overlay.buffer, &offset);
+                if (frame.shape_overlay_descriptor_set != VK_NULL_HANDLE) {
+                    vkCmdBindDescriptorSets(command_buffer,
+                                            VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                            textured_overlay_pipeline_layout,
+                                            1,
+                                            1,
+                                            &frame.shape_overlay_descriptor_set,
+                                            0,
+                                            nullptr);
+                }
                 std::uint32_t first_vertex = 0;
                 for (const auto& overlay : params.textured_overlays) {
                     if (overlay.texture_id == 0 || first_vertex + 6u > frame.textured_overlay.count) {
@@ -1190,6 +1452,8 @@ namespace lfs::vis {
                     TexturedOverlayPush push{};
                     push.tint_opacity = overlay.tint_opacity;
                     push.effects = overlay.effects;
+                    push.viewport_rect = viewport_rect_push;
+                    push.depth_params = world_depth_params_push;
                     vkCmdBindDescriptorSets(command_buffer,
                                             VK_PIPELINE_BIND_POINT_GRAPHICS,
                                             textured_overlay_pipeline_layout,
@@ -1225,7 +1489,10 @@ namespace lfs::vis {
                 bindQuad(command_buffer);
             }
 
-            recordShapeOverlays(command_buffer, frame.shape_overlay);
+            const ShapeOverlayPush world_shape_overlay_push{
+                .viewport_rect = viewport_rect_push,
+                .params = world_depth_params_push};
+            recordShapeOverlays(command_buffer, frame.shape_overlay, frame, world_shape_overlay_push);
 
             if (!params.pivot_overlays.empty() && pivot_pipeline != VK_NULL_HANDLE) {
                 bindQuad(command_buffer);
@@ -1275,7 +1542,9 @@ namespace lfs::vis {
                 vkCmdDraw(command_buffer, 6, 1, 0, 0);
             }
 
-            recordShapeOverlays(command_buffer, frame.ui_shape_overlay);
+            // depth_available = 0 → UI shapes (gizmos, pivot) always render in front.
+            const ShapeOverlayPush ui_shape_overlay_push{.viewport_rect = viewport_rect_push};
+            recordShapeOverlays(command_buffer, frame.ui_shape_overlay, frame, ui_shape_overlay_push);
 
             if (post_ui_overlay_vertices > 0 && overlay_pipeline != VK_NULL_HANDLE &&
                 frame.overlay.buffer != VK_NULL_HANDLE) {
@@ -1345,6 +1614,16 @@ namespace lfs::vis {
                     vkDestroyDescriptorPool(device, grid_descriptor_pool, nullptr);
                 if (grid_descriptor_layout != VK_NULL_HANDLE)
                     vkDestroyDescriptorSetLayout(device, grid_descriptor_layout, nullptr);
+                if (shape_overlay_descriptor_pool != VK_NULL_HANDLE)
+                    vkDestroyDescriptorPool(device, shape_overlay_descriptor_pool, nullptr);
+                if (shape_overlay_descriptor_layout != VK_NULL_HANDLE)
+                    vkDestroyDescriptorSetLayout(device, shape_overlay_descriptor_layout, nullptr);
+                if (shape_overlay_dummy_depth_view != VK_NULL_HANDLE)
+                    vkDestroyImageView(device, shape_overlay_dummy_depth_view, nullptr);
+                if (shape_overlay_dummy_depth_image != VK_NULL_HANDLE)
+                    vmaDestroyImage(allocator, shape_overlay_dummy_depth_image, shape_overlay_dummy_depth_alloc);
+                if (shape_overlay_depth_sampler != VK_NULL_HANDLE)
+                    vkDestroySampler(device, shape_overlay_depth_sampler, nullptr);
             }
             *this = {};
         }

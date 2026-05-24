@@ -689,6 +689,7 @@
     "fov_info": "Champ de Vision",
     "sh_degree": "SH Degree",
     "equirectangular": "Équirectangulaire",
+    "raster_backend": "Backend de rasterisation",
     "gut_mode": "GUT (3DGUT)",
     "mip_filter": "Filtre Mip",
     "camera_metrics": "Metriques camera",
@@ -766,7 +767,8 @@
     "orthographic": "Orthographique",
     "sequencer": "Séquenceur",
     "ellipsoid": "Ellipsoid",
-    "histogram": "Histogram"
+    "histogram": "Histogram",
+    "depth_map": "Carte de profondeur"
   },
   "transform": {
     "node": "Nœud : %s",
@@ -825,6 +827,7 @@
     "color_blue_prefix": "B:"
   },
   "tooltip": {
+    "raster_backend": "Rasteriseur gaussien : 3DGS ou 3DGUT",
     "gut_mode": "Pour caméras fisheye/déformées/équirectangulaires",
     "mip_filter": "Réduire l'aliasing pour Gaussiens sub-pixel",
     "appearance_correction": "PPISP Correction",

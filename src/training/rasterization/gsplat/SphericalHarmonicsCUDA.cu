@@ -18,13 +18,26 @@ namespace gsplat_lfs {
     constexpr float SH_C1 = 0.48860251190292f;
     constexpr float SH_DC_OFFSET = 0.5f; // 3DGS stores colors as (color - 0.5) / C0
     constexpr uint32_t kShReorderSize = 32u;
-    constexpr uint32_t kShRestFloat4PerPrimitive = 12u;
     constexpr uint32_t kShMaxCoeffs = 16u;
 
-    __device__ __forceinline__ uint32_t shAt(const uint32_t primitive_idx, const uint32_t float4_slot) {
+    __device__ __forceinline__ uint32_t shSlotsForDegree(const uint32_t degree) {
+        const uint32_t d = degree > 3u ? 3u : degree;
+        const uint32_t rest_coeffs = d == 0u ? 0u : (d + 1u) * (d + 1u) - 1u;
+        return (rest_coeffs * 3u + 3u) / 4u;
+    }
+
+    __device__ __forceinline__ uint32_t shBasisCountForDegree(const uint32_t degree) {
+        const uint32_t d = degree > 3u ? 3u : degree;
+        return (d + 1u) * (d + 1u);
+    }
+
+    __device__ __forceinline__ uint32_t shAt(
+        const uint32_t primitive_idx,
+        const uint32_t float4_slot,
+        const uint32_t slots_per_primitive) {
         const uint32_t block = primitive_idx / kShReorderSize;
         const uint32_t lane = primitive_idx % kShReorderSize;
-        return block * (kShRestFloat4PerPrimitive * kShReorderSize) + float4_slot * kShReorderSize + lane;
+        return block * (slots_per_primitive * kShReorderSize) + float4_slot * kShReorderSize + lane;
     }
 
     __device__ __forceinline__ float float4_component(const float4 v, const uint32_t component) {
@@ -44,14 +57,15 @@ namespace gsplat_lfs {
         const float4* __restrict__ sh_rest,
         const uint32_t primitive_idx,
         const uint32_t rest_coeff_idx,
-        const uint32_t channel) {
+        const uint32_t channel,
+        const uint32_t slots_per_primitive) {
         if (sh_rest == nullptr) {
             return 0.0f;
         }
         const uint32_t offset = rest_coeff_idx * 3u + channel;
         const uint32_t slot = offset / 4u;
         const uint32_t component = offset % 4u;
-        return float4_component(sh_rest[shAt(primitive_idx, slot)], component);
+        return float4_component(sh_rest[shAt(primitive_idx, slot, slots_per_primitive)], component);
     }
 
     template <typename scalar_t>
@@ -339,9 +353,10 @@ namespace gsplat_lfs {
             const float x = dir.x * inorm;
             const float y = dir.y * inorm;
             const float z = dir.z * inorm;
+            const uint32_t slots_per_primitive = shSlotsForDegree(effective_degree);
 
             const auto coeff = [&](const uint32_t rest_idx) -> float {
-                return swizzled_rest_coeff_channel(sh_rest, elem_id, rest_idx, c);
+                return swizzled_rest_coeff_channel(sh_rest, elem_id, rest_idx, c, slots_per_primitive);
             };
 
             result += SH_C1 * (-y * coeff(0) + z * coeff(1) - x * coeff(2));
@@ -437,7 +452,10 @@ namespace gsplat_lfs {
 
         const vec3 dir = (degrees_to_use > 0 && dirs != nullptr) ? dirs[elem_id] : vec3{0.f, 0.f, 1.f};
         const uint32_t effective_degree = dirs != nullptr ? degrees_to_use : 0u;
-        const uint32_t coeff_count = K < kShMaxCoeffs ? K : kShMaxCoeffs;
+        const uint32_t stored_coeff_count = K < kShMaxCoeffs ? K : kShMaxCoeffs;
+        const uint32_t active_coeff_count = shBasisCountForDegree(effective_degree);
+        const uint32_t coeff_count = stored_coeff_count < active_coeff_count ? stored_coeff_count : active_coeff_count;
+        const uint32_t slots_per_primitive = shSlotsForDegree(effective_degree);
 
         scalar_t coeffs[kShMaxCoeffs * 3u];
         scalar_t v_coeffs_local[kShMaxCoeffs * 3u];
@@ -455,7 +473,7 @@ namespace gsplat_lfs {
 #pragma unroll
             for (uint32_t channel = 0; channel < 3u; ++channel) {
                 coeffs[k * 3u + channel] =
-                    swizzled_rest_coeff_channel(sh_rest, elem_id, k - 1u, channel);
+                    swizzled_rest_coeff_channel(sh_rest, elem_id, k - 1u, channel, slots_per_primitive);
             }
         }
 

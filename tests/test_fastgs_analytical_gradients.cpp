@@ -50,7 +50,9 @@ namespace {
         if (k > 1) {
             auto sh_rest = sh_coeffs.slice(1, 1, static_cast<int64_t>(k)).contiguous();
             result.shN = torch::empty(
-                {static_cast<int64_t>(lfs::core::sh_swizzled_float_count(n))},
+                {static_cast<int64_t>(lfs::core::sh_swizzled_float_count(
+                    n,
+                    static_cast<std::uint32_t>(k - 1)))},
                 sh_coeffs.options());
             lfs::core::reorder_sh_to_swizzled(
                 sh_rest.data_ptr<float>(),

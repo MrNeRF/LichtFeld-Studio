@@ -198,7 +198,8 @@ namespace lfs::vis::gui {
                                         const glm::vec2& p0,
                                         const glm::vec2& p1,
                                         const glm::vec4& color,
-                                        const glm::vec4& shape_params) {
+                                        const glm::vec4& shape_params,
+                                        const float view_depth = 0.0f) {
             out.push_back({
                 .position = screenToViewportNdc(point, viewport_pos, viewport_size),
                 .screen_position = point,
@@ -206,6 +207,7 @@ namespace lfs::vis::gui {
                 .p1 = p1,
                 .color = color,
                 .params = shape_params,
+                .view_depth = view_depth,
             });
         }
 
@@ -219,16 +221,20 @@ namespace lfs::vis::gui {
                                     const glm::vec2& p0,
                                     const glm::vec2& p1,
                                     const glm::vec4& color,
-                                    const glm::vec4& shape_params) {
+                                    const glm::vec4& shape_params,
+                                    const float depth_a = 0.0f,
+                                    const float depth_b = 0.0f,
+                                    const float depth_c = 0.0f,
+                                    const float depth_d = 0.0f) {
             if (color.a <= 0.0f || viewport_size.x <= 0.0f || viewport_size.y <= 0.0f) {
                 return;
             }
-            appendShapeOverlayTriangle(out, viewport_pos, viewport_size, a, p0, p1, color, shape_params);
-            appendShapeOverlayTriangle(out, viewport_pos, viewport_size, b, p0, p1, color, shape_params);
-            appendShapeOverlayTriangle(out, viewport_pos, viewport_size, c, p0, p1, color, shape_params);
-            appendShapeOverlayTriangle(out, viewport_pos, viewport_size, a, p0, p1, color, shape_params);
-            appendShapeOverlayTriangle(out, viewport_pos, viewport_size, c, p0, p1, color, shape_params);
-            appendShapeOverlayTriangle(out, viewport_pos, viewport_size, d, p0, p1, color, shape_params);
+            appendShapeOverlayTriangle(out, viewport_pos, viewport_size, a, p0, p1, color, shape_params, depth_a);
+            appendShapeOverlayTriangle(out, viewport_pos, viewport_size, b, p0, p1, color, shape_params, depth_b);
+            appendShapeOverlayTriangle(out, viewport_pos, viewport_size, c, p0, p1, color, shape_params, depth_c);
+            appendShapeOverlayTriangle(out, viewport_pos, viewport_size, a, p0, p1, color, shape_params, depth_a);
+            appendShapeOverlayTriangle(out, viewport_pos, viewport_size, c, p0, p1, color, shape_params, depth_c);
+            appendShapeOverlayTriangle(out, viewport_pos, viewport_size, d, p0, p1, color, shape_params, depth_d);
         }
 
         void appendShapeOverlayLine(std::vector<VulkanViewportShapeOverlayVertex>& out,
@@ -236,7 +242,9 @@ namespace lfs::vis::gui {
                                     const glm::vec2& p0,
                                     const glm::vec2& p1,
                                     const glm::vec4& color,
-                                    const float thickness) {
+                                    const float thickness,
+                                    const float view_depth_p0 = 0.0f,
+                                    const float view_depth_p1 = 0.0f) {
             if (color.a <= 0.0f) {
                 return;
             }
@@ -258,7 +266,11 @@ namespace lfs::vis::gui {
                                    p0,
                                    p1,
                                    color,
-                                   {0.0f, std::max(thickness, 1.0f), 0.0f, 1.0f});
+                                   {0.0f, std::max(thickness, 1.0f), 0.0f, 1.0f},
+                                   view_depth_p0,
+                                   view_depth_p1,
+                                   view_depth_p1,
+                                   view_depth_p0);
         }
 
         void appendShapeOverlayCircle(std::vector<VulkanViewportShapeOverlayVertex>& out,
@@ -384,7 +396,8 @@ namespace lfs::vis::gui {
                                        const glm::vec2& uv_min,
                                        const glm::vec2& uv_max,
                                        const glm::vec4& tint_opacity,
-                                       const glm::vec4& effects);
+                                       const glm::vec4& effects,
+                                       const std::array<float, 4>& view_depths = {0.0f, 0.0f, 0.0f, 0.0f});
 
         // FreeType-baked overlay font atlas. Independent of ImGui's font system — the user
         // wants the vulkan branch to stop reaching into ImFont/io.Fonts. Atlas covers ASCII
@@ -558,11 +571,7 @@ namespace lfs::vis::gui {
         }
 
         void appendScreenOverlayCommandOverlays(VulkanViewportPassParams& params,
-                                                lfs::rendering::RenderingEngine* engine) {
-            if (!engine) {
-                return;
-            }
-            auto* const overlay = engine->getScreenOverlayRenderer();
+                                                lfs::rendering::ScreenOverlayRenderer* overlay) {
             if (!overlay) {
                 return;
             }
@@ -663,7 +672,14 @@ namespace lfs::vis::gui {
             return glm::vec2(panel.pos.x + projected.x * sx, panel.pos.y + projected.y * sy);
         }
 
-        [[nodiscard]] std::optional<std::pair<glm::vec2, glm::vec2>> projectSegmentToScreenClipped(
+        struct ProjectedSegment {
+            glm::vec2 a{0.0f};
+            glm::vec2 b{0.0f};
+            float depth_a = 0.0f;
+            float depth_b = 0.0f;
+        };
+
+        [[nodiscard]] std::optional<ProjectedSegment> projectSegmentToScreenClipped(
             const VulkanGuidePanelTarget& panel,
             const RenderSettings& settings,
             const glm::vec3& world_a,
@@ -672,7 +688,11 @@ namespace lfs::vis::gui {
                 const glm::mat3 rotation = panel.viewport->getRotationMatrix();
                 const glm::vec3 translation = panel.viewport->getTranslation();
 
-                const auto project_equirect = [&](const glm::vec3& world) -> std::optional<glm::vec2> {
+                struct EquirectProjected {
+                    glm::vec2 screen;
+                    float depth;
+                };
+                const auto project_equirect = [&](const glm::vec3& world) -> std::optional<EquirectProjected> {
                     const glm::vec3 view = glm::transpose(rotation) * (world - translation);
                     const float len = glm::length(view);
                     if (!std::isfinite(len) || len <= 1e-6f) {
@@ -685,16 +705,19 @@ namespace lfs::vis::gui {
                     if (!std::isfinite(ndc_x) || !std::isfinite(ndc_y)) {
                         return std::nullopt;
                     }
-                    return panel.pos + glm::vec2((ndc_x * 0.5f + 0.5f) * panel.size.x,
-                                                 (ndc_y * 0.5f + 0.5f) * panel.size.y);
+                    return EquirectProjected{
+                        .screen = panel.pos + glm::vec2((ndc_x * 0.5f + 0.5f) * panel.size.x,
+                                                        (ndc_y * 0.5f + 0.5f) * panel.size.y),
+                        .depth = len,
+                    };
                 };
 
                 const auto pa = project_equirect(world_a);
                 const auto pb = project_equirect(world_b);
-                if (!pa || !pb || std::abs((pa->x - panel.pos.x) / panel.size.x - (pb->x - panel.pos.x) / panel.size.x) > 0.5f) {
+                if (!pa || !pb || std::abs((pa->screen.x - panel.pos.x) / panel.size.x - (pb->screen.x - panel.pos.x) / panel.size.x) > 0.5f) {
                     return std::nullopt;
                 }
-                return std::pair(*pa, *pb);
+                return ProjectedSegment{.a = pa->screen, .b = pb->screen, .depth_a = pa->depth, .depth_b = pb->depth};
             }
 
             constexpr float kMinViewZ = -1e-4f;
@@ -750,7 +773,12 @@ namespace lfs::vis::gui {
             if (!pa || !pb) {
                 return std::nullopt;
             }
-            return std::pair(renderToPanelScreen(panel, *pa), renderToPanelScreen(panel, *pb));
+            return ProjectedSegment{
+                .a = renderToPanelScreen(panel, *pa),
+                .b = renderToPanelScreen(panel, *pb),
+                .depth_a = -view_a.z,
+                .depth_b = -view_b.z,
+            };
         }
 
         [[nodiscard]] std::optional<glm::vec2> projectPointToPanelScreen(
@@ -840,7 +868,8 @@ namespace lfs::vis::gui {
                                        const glm::vec2& uv_min,
                                        const glm::vec2& uv_max,
                                        const glm::vec4& tint_opacity,
-                                       const glm::vec4& effects) {
+                                       const glm::vec4& effects,
+                                       const std::array<float, 4>& view_depths) {
             if (texture_id == 0 || tint_opacity.a <= 0.0f ||
                 params.viewport_size.x <= 0.0f || params.viewport_size.y <= 0.0f) {
                 return;
@@ -855,12 +884,12 @@ namespace lfs::vis::gui {
             overlay.tint_opacity = tint_opacity;
             overlay.effects = effects;
             overlay.vertices = {{
-                {.position = ndc(screen_points[0]), .uv = {uv_min.x, uv_min.y}},
-                {.position = ndc(screen_points[1]), .uv = {uv_max.x, uv_min.y}},
-                {.position = ndc(screen_points[2]), .uv = {uv_max.x, uv_max.y}},
-                {.position = ndc(screen_points[0]), .uv = {uv_min.x, uv_min.y}},
-                {.position = ndc(screen_points[2]), .uv = {uv_max.x, uv_max.y}},
-                {.position = ndc(screen_points[3]), .uv = {uv_min.x, uv_max.y}},
+                {.position = ndc(screen_points[0]), .uv = {uv_min.x, uv_min.y}, .view_depth = view_depths[0]},
+                {.position = ndc(screen_points[1]), .uv = {uv_max.x, uv_min.y}, .view_depth = view_depths[1]},
+                {.position = ndc(screen_points[2]), .uv = {uv_max.x, uv_max.y}, .view_depth = view_depths[2]},
+                {.position = ndc(screen_points[0]), .uv = {uv_min.x, uv_min.y}, .view_depth = view_depths[0]},
+                {.position = ndc(screen_points[2]), .uv = {uv_max.x, uv_max.y}, .view_depth = view_depths[2]},
+                {.position = ndc(screen_points[3]), .uv = {uv_min.x, uv_max.y}, .view_depth = view_depths[3]},
             }};
             params.textured_overlays.push_back(overlay);
         }
@@ -1125,15 +1154,18 @@ namespace lfs::vis::gui {
                                      const glm::vec3& a,
                                      const glm::vec3& b,
                                      const glm::vec4& color,
-                                     const float thickness) {
+                                     const float thickness,
+                                     const bool depth_aware = false) {
             (void)out;
             if (const auto projected = projectSegmentToScreenClipped(panel, settings, a, b)) {
                 appendShapeOverlayLine(params.shape_overlay_triangles,
                                        params,
-                                       projected->first,
-                                       projected->second,
+                                       projected->a,
+                                       projected->b,
                                        color,
-                                       thickness);
+                                       thickness,
+                                       depth_aware ? projected->depth_a : 0.0f,
+                                       depth_aware ? projected->depth_b : 0.0f);
             }
         }
 
@@ -1879,7 +1911,8 @@ namespace lfs::vis::gui {
                                         world_points[static_cast<size_t>(a)],
                                         world_points[static_cast<size_t>(b)],
                                         color,
-                                        1.5f);
+                                        1.5f,
+                                        true);
             }
         }
 
@@ -1910,7 +1943,7 @@ namespace lfs::vis::gui {
                 for (int lon = 1; lon <= kLonSegments; ++lon) {
                     const glm::vec3 current = point(lat, lon);
                     addProjectedOverlayLine(params.overlay_triangles, params, panel, settings,
-                                            previous, current, color, 1.5f);
+                                            previous, current, color, 1.5f, true);
                     previous = current;
                 }
             }
@@ -1919,7 +1952,7 @@ namespace lfs::vis::gui {
                 for (int lat = 1; lat <= kLatSegments; ++lat) {
                     const glm::vec3 current = point(lat, lon);
                     addProjectedOverlayLine(params.overlay_triangles, params, panel, settings,
-                                            previous, current, color, 1.5f);
+                                            previous, current, color, 1.5f, true);
                     previous = current;
                 }
             }
@@ -1933,7 +1966,8 @@ namespace lfs::vis::gui {
                                         apex,
                                         point(kLatSegments / 2, lon),
                                         color,
-                                        1.5f);
+                                        1.5f,
+                                        true);
             }
         }
 
@@ -2046,7 +2080,10 @@ namespace lfs::vis::gui {
                         glm::vec3(-0.5f, 0.5f, -1.0f),
                     };
                     std::array<glm::vec2, image_corners.size()> screen_points{};
+                    std::array<float, image_corners.size()> corner_depths{};
                     bool quad_visible = true;
+                    const glm::mat3 panel_rotation = panel.viewport->getRotationMatrix();
+                    const glm::vec3 panel_translation = panel.viewport->getTranslation();
                     for (size_t corner = 0; corner < image_corners.size(); ++corner) {
                         const glm::vec3 world_point =
                             glm::vec3((*model) * glm::vec4(image_corners[corner], 1.0f));
@@ -2056,6 +2093,8 @@ namespace lfs::vis::gui {
                             break;
                         }
                         screen_points[corner] = *projected;
+                        const glm::vec3 view = glm::transpose(panel_rotation) * (world_point - panel_translation);
+                        corner_depths[corner] = settings.equirectangular ? glm::length(view) : -view.z;
                     }
                     quad_visible = quad_visible && projectedQuadVisible(screen_points, panel);
                     if (quad_visible) {
@@ -2076,7 +2115,8 @@ namespace lfs::vis::gui {
                                                   placement->uv_min,
                                                   placement->uv_max,
                                                   {color.r, color.g, color.b, opacity},
-                                                  {emphasis_mix, disabled_mix, 0.0f, 0.0f});
+                                                  {emphasis_mix, disabled_mix, 0.0f, 0.0f},
+                                                  corner_depths);
                     }
                     appendPerspectiveCameraFrustum(params, panel, settings, *model, color);
                 }
@@ -4443,11 +4483,11 @@ namespace lfs::vis::gui {
         appendLineRendererCommandOverlays(params);
 
         if (auto* const rendering_manager = viewer_ ? viewer_->getRenderingManager() : nullptr) {
-            appendScreenOverlayCommandOverlays(params, rendering_manager->getRenderingEngineIfInitialized());
+            appendScreenOverlayCommandOverlays(params, rendering_manager->getScreenOverlayRenderer());
 
-            // Pull GPU mesh / environment frame populated by renderVulkanFrame. The
-            // vulkan_viewport_pass rasterizes these on the GPU instead of the legacy
-            // CPU rasterizer / env-sample paths.
+            // Pull GPU mesh / environment frame populated by renderVulkanFrame.
+            // vulkan_viewport_pass rasterizes these on the GPU instead of the
+            // auxiliary CPU mesh / environment paths.
             auto mesh_frame = rendering_manager->getVulkanMeshFrame();
             params.mesh_view_projection = mesh_frame.view_projection;
             params.mesh_camera_position = mesh_frame.camera_position;
@@ -4993,9 +5033,7 @@ namespace lfs::vis::gui {
 
         lfs::rendering::ScreenOverlayRenderer* overlay_renderer = nullptr;
         if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr) {
-            if (auto* const engine = rendering->getRenderingEngineIfInitialized()) {
-                overlay_renderer = engine->getScreenOverlayRenderer();
-            }
+            overlay_renderer = rendering->getScreenOverlayRenderer();
         }
         if (overlay_renderer) {
             overlay_renderer->beginFrame();
@@ -5166,14 +5204,35 @@ namespace lfs::vis::gui {
             tool->renderUI(ctx, nullptr);
         }
 
+        // Node rectangle-drag outline. Uses the same ScreenOverlayRenderer path
+        // as the cursor preview / align tool so it stays consistent with the
+        // other native viewport overlays.
+        if (auto* const ic = ctx.viewer->getInputController();
+            !ui_hidden_ && ic && ic->isNodeRectDragging()) {
+            if (auto* const rm = ctx.viewer->getRenderingManager()) {
+                if (auto* const overlay = rm->getScreenOverlayRenderer();
+                    overlay && overlay->isFrameActive()) {
+                    const glm::vec2 s = ic->getNodeRectStart();
+                    const glm::vec2 e = ic->getNodeRectEnd();
+                    const glm::vec2 tl{std::min(s.x, e.x), std::min(s.y, e.y)};
+                    const glm::vec2 br{std::max(s.x, e.x), std::max(s.y, e.y)};
+                    if (br.x - tl.x > 0.5f && br.y - tl.y > 0.5f) {
+                        const auto& warn = theme().palette.warning;
+                        const lfs::rendering::OverlayColor fill{warn.x, warn.y, warn.z, warn.w * 0.15f};
+                        const lfs::rendering::OverlayColor stroke{warn.x, warn.y, warn.z, warn.w * 0.85f};
+                        overlay->addRectFilled(tl, br, fill);
+                        overlay->addRect(tl, br, stroke, 2.0f);
+                    }
+                }
+            }
+        }
+
         const bool mouse_over_ui = guiFocusState().want_capture_mouse;
         if (!ui_hidden_ && !mouse_over_ui && viewport_layout_.size.x > 0 && viewport_layout_.size.y > 0) {
             auto* rm = ctx.viewer->getRenderingManager();
             lfs::rendering::ScreenOverlayRenderer* overlay = nullptr;
             if (rm) {
-                if (auto* const engine = rm->getRenderingEngineIfInitialized()) {
-                    overlay = engine->getScreenOverlayRenderer();
-                }
+                overlay = rm->getScreenOverlayRenderer();
             }
             if (!overlay || !overlay->isFrameActive()) {
                 return;
@@ -5482,16 +5541,6 @@ namespace lfs::vis::gui {
         auto* align_tool = ctx.viewer->getAlignTool();
         if (align_tool && align_tool->isEnabled() && !ui_hidden_) {
             align_tool->renderUI(ctx, nullptr);
-        }
-
-        if (auto* const ic = ctx.viewer->getInputController();
-            !ui_hidden_ && ic && ic->isNodeRectDragging()) {
-            const auto start = ic->getNodeRectStart();
-            const auto end = ic->getNodeRectEnd();
-            const auto& t = theme();
-            auto* const draw_list = ImGui::GetForegroundDrawList();
-            draw_list->AddRectFilled({start.x, start.y}, {end.x, end.y}, toU32WithAlpha(t.palette.warning, 0.15f));
-            draw_list->AddRect({start.x, start.y}, {end.x, end.y}, toU32WithAlpha(t.palette.warning, 0.85f), 0.0f, 0, 2.0f);
         }
     }
 

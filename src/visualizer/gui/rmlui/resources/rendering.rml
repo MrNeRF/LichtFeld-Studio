@@ -265,10 +265,8 @@
       <span class="setting-row__label-col">{{label_raster_backend}}</span>
       <div class="setting-row__control-col setting-row__control-col--fill">
         <select data-value="raster_backend">
-          <option value="fast_gs">fast_gs</option>
-          <option value="3dgut">3dgut</option>
-          <option value="vksplat" data-if="vksplat_available">vksplat (experimental)</option>
-          <option value="vksplat_3dgut" data-if="vksplat_available">vksplat 3dgut (experimental)</option>
+          <option value="3dgs">3DGS</option>
+          <option value="3dgut">3DGUT</option>
         </select>
       </div>
     </div>

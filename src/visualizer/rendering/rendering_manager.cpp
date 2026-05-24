@@ -7,9 +7,8 @@
 #include "core/logger.hpp"
 #include "point_cloud_vulkan_renderer.hpp"
 #include "rendering/ppisp_overrides_utils.hpp"
-#include "rendering/rasterizer/rasterization/include/rasterization_api_tensor.h"
-#include "rendering/rasterizer/rasterization/include/rasterization_config.h"
 #include "rendering/rendering.hpp"
+#include "rendering/selection_ops.hpp"
 #include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
 #include "training/trainer.hpp"
@@ -86,21 +85,23 @@ namespace lfs::vis {
     }
 
     void RenderingManager::initialize() {
-        if (initialized_)
+        // Gate on engine_ rather than initialized_: the Vulkan path flips
+        // initialized_ on first frame without building the auxiliary engine,
+        // and getRenderingEngine() relies on this to lazy-create it on demand.
+        if (engine_)
             return;
 
         LOG_TIMER("RenderingEngine initialization");
 
-        engine_ = lfs::rendering::RenderingEngine::createRasterOnly();
-        auto init_result = engine_->initializeRasterOnly();
+        engine_ = lfs::rendering::RenderingEngine::create();
+        auto init_result = engine_->initialize();
         if (!init_result) {
             LOG_ERROR("Failed to initialize rendering engine: {}", init_result.error());
             throw std::runtime_error("Failed to initialize rendering engine: " + init_result.error());
         }
 
         initialized_ = true;
-        raster_initialized_ = true;
-        LOG_INFO("Raster rendering engine initialized successfully");
+        LOG_INFO("Auxiliary rendering engine initialized successfully");
     }
 
     void RenderingManager::markDirty() {
@@ -146,15 +147,17 @@ namespace lfs::vis {
                 clear_metrics = true;
             }
 
+            const auto previous_backend = settings_.raster_backend;
+            const bool previous_gut = settings_.gut;
             settings_ = new_settings;
-            if (settings_.gut &&
-                settings_.raster_backend == lfs::rendering::GaussianRasterBackend::FastGs) {
-                settings_.raster_backend = lfs::rendering::GaussianRasterBackend::Gut;
-            } else if (settings_.gut &&
-                       settings_.raster_backend == lfs::rendering::GaussianRasterBackend::VkSplat) {
-                settings_.raster_backend = lfs::rendering::GaussianRasterBackend::VkSplatGut;
-            }
+            const bool gut_toggle_only =
+                settings_.raster_backend == previous_backend && settings_.gut != previous_gut;
+            settings_.raster_backend = gut_toggle_only
+                                           ? lfs::rendering::viewerRasterBackendForGutMode(settings_.gut)
+                                           : lfs::rendering::normalizeViewerRasterBackend(
+                                                 settings_.raster_backend, settings_.gut);
             settings_.gut = lfs::rendering::isGutBackend(settings_.raster_backend);
+            enforceProjectionBackend(settings_);
             settings_.grid_plane = clampGridPlane(settings_.grid_plane);
             if (split_view_service_.isIndependentDualActive(settings_)) {
                 if (grid_plane_changed) {

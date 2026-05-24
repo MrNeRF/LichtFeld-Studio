@@ -5,6 +5,55 @@
 
 namespace lfs::core {
 
+    Tensor Tensor::from_external_owner(void* data,
+                                       TensorShape shape,
+                                       Device device,
+                                       DataType dtype,
+                                       std::shared_ptr<void> owner,
+                                       size_t capacity,
+                                       cudaStream_t stream,
+                                       std::string external_kind) {
+        if (!owner) {
+            throw TensorError("from_external_owner requires a valid owner");
+        }
+        if (data == nullptr && shape.elements() > 0) {
+            throw TensorError("from_external_owner received null data for a non-empty tensor");
+        }
+
+        const size_t effective_capacity = capacity == 0 && shape.rank() > 0 ? shape[0] : capacity;
+        const size_t allocation_bytes = storage_allocation_bytes(shape, effective_capacity, dtype);
+        auto external_owner = owner;
+        auto owner_box = std::make_shared<std::shared_ptr<void>>(std::move(owner));
+        record_storage_allocation(StorageAccountingKind::VulkanExternal, allocation_bytes);
+
+        Tensor t;
+        t.data_ = data;
+        t.data_owner_ = std::shared_ptr<void>(
+            data,
+            [owner_box = std::move(owner_box), allocation_bytes](void*) mutable {
+                owner_box->reset();
+                Tensor::record_storage_deallocation(
+                    StorageAccountingKind::VulkanExternal,
+                    allocation_bytes);
+            });
+        t.shape_ = std::move(shape);
+        t.strides_ = t.shape_.strides();
+        t.storage_offset_ = 0;
+        t.is_contiguous_ = true;
+        t.device_ = device;
+        t.dtype_ = dtype;
+        t.is_view_ = false;
+        t.state_->capacity = effective_capacity;
+        t.state_->logical_size = t.shape_.rank() > 0 ? t.shape_[0] : 0;
+        t.state_->stream = stream;
+        t.id_ = next_id_++;
+        t.compute_alignment();
+        t.init_storage_meta();
+        t.storage_meta_->external_kind = std::move(external_kind);
+        t.storage_meta_->external_owner = std::move(external_owner);
+        return t;
+    }
+
     Tensor Tensor::empty(TensorShape shape, Device device, DataType dtype, bool use_pinned) {
         LoadArgs args;
         args.shape = shape;

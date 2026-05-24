@@ -680,6 +680,7 @@ namespace lfs::core {
         struct ModelStats {
             size_t total_gaussians = 0;
             int max_sh_degree = 0;
+            int max_active_sh_degree = 0;
             float total_scene_scale = 0.0f;
             bool has_shN = false;
         };
@@ -694,32 +695,31 @@ namespace lfs::core {
             cached_sizes.push_back(node_size);
             stats.total_gaussians += node_size;
 
-            // shN is swizzled — derive coefficient count from the active SH degree rather
-            // than .size(1).
             const auto& shN_tensor = model->shN_raw();
-            const int model_active_rest = static_cast<int>(
-                model->get_active_sh_degree() > 0
-                    ? (model->get_active_sh_degree() + 1) * (model->get_active_sh_degree() + 1) - 1
-                    : 0);
-            if (shN_tensor.is_valid() && shN_tensor.numel() > 0 && model_active_rest > 0) {
-                stats.max_sh_degree = std::max(stats.max_sh_degree, model->get_active_sh_degree());
+            const auto model_layout_rest = model->max_sh_coeffs_rest();
+            if (shN_tensor.is_valid() && shN_tensor.numel() > 0 && model_layout_rest > 0) {
+                stats.max_sh_degree = std::max(stats.max_sh_degree, model->get_max_sh_degree());
             }
+            stats.max_active_sh_degree = std::max(stats.max_active_sh_degree, model->get_active_sh_degree());
 
             stats.total_scene_scale += model->get_scene_scale();
-            stats.has_shN = stats.has_shN || (shN_tensor.numel() > 0 && model_active_rest > 0);
+            stats.has_shN = stats.has_shN || (shN_tensor.numel() > 0 && model_layout_rest > 0);
         }
 
         const lfs::core::Device device = visible_nodes[0]->model->means_raw().device();
         constexpr int SH0_COEFFS = 1;
-        const size_t shN_swizzled_floats = lfs::core::sh_swizzled_float_count(stats.total_gaussians);
+        const auto dst_layout_rest = sh_rest_coefficients_for_degree(stats.max_sh_degree);
+        const size_t shN_swizzled_floats = lfs::core::sh_swizzled_float_count(stats.total_gaussians, dst_layout_rest);
 
         using lfs::core::Tensor;
         Tensor means = Tensor::empty({static_cast<size_t>(stats.total_gaussians), 3}, device);
         Tensor sh0 = Tensor::empty({static_cast<size_t>(stats.total_gaussians), static_cast<size_t>(SH0_COEFFS), 3}, device);
-        Tensor shN = Tensor::zeros_direct(
-            TensorShape({shN_swizzled_floats}),
-            shN_swizzled_floats,
-            lfs::core::Device::CUDA);
+        Tensor shN = shN_swizzled_floats > 0
+                         ? Tensor::zeros_direct(
+                               TensorShape({shN_swizzled_floats}),
+                               shN_swizzled_floats,
+                               lfs::core::Device::CUDA)
+                         : Tensor::zeros({0}, lfs::core::Device::CUDA);
         Tensor opacity = Tensor::empty({static_cast<size_t>(stats.total_gaussians), 1}, device);
         Tensor scaling = Tensor::empty({static_cast<size_t>(stats.total_gaussians), 3}, device);
         Tensor rotation = Tensor::empty({static_cast<size_t>(stats.total_gaussians), 4}, device);
@@ -749,16 +749,15 @@ namespace lfs::core {
             opacity.slice(0, offset, offset + size) = model->opacity_raw();
 
             if (stats.max_sh_degree > 0 && model->shN_raw().is_valid() && model->shN_raw().numel() > 0) {
-                const int model_active_rest_local =
-                    model->get_active_sh_degree() > 0
-                        ? (model->get_active_sh_degree() + 1) * (model->get_active_sh_degree() + 1) - 1
-                        : 0;
-                if (model_active_rest_local > 0) {
+                const auto model_layout_rest = static_cast<std::uint32_t>(model->max_sh_coeffs_rest());
+                if (model_layout_rest > 0) {
                     lfs::core::shN_swizzled_copy_contiguous(
                         model->shN_raw().ptr<float>(),
                         shN.ptr<float>(),
                         size,
                         offset,
+                        model_layout_rest,
+                        dst_layout_rest,
                         shN.stream());
                 }
             }
@@ -799,6 +798,7 @@ namespace lfs::core {
             std::move(opacity),
             stats.total_scene_scale / visible_nodes.size(),
             lfs::core::SplatData::ShNLayout::Swizzled);
+        cached_combined_->set_active_sh_degree(stats.max_active_sh_degree);
 
         if (has_any_deleted) {
             cached_combined_->deleted() = std::move(deleted);
@@ -1908,8 +1908,10 @@ namespace lfs::core {
         }
 
         int max_sh = 0;
+        int max_active_sh = 0;
         for (const auto& [model, _] : splats) {
             max_sh = std::max(max_sh, model->get_max_sh_degree());
+            max_active_sh = std::max(max_active_sh, model->get_active_sh_degree());
         }
 
         static const glm::mat4 IDENTITY{1.0f};
@@ -1920,6 +1922,7 @@ namespace lfs::core {
         const auto clone_filtered_swizzled = [](const lfs::core::SplatData& src)
             -> std::unique_ptr<lfs::core::SplatData> {
             if (!src.has_deleted_mask()) {
+                const int active_sh = src.get_active_sh_degree();
                 auto result = std::make_unique<lfs::core::SplatData>(
                     src.get_max_sh_degree(),
                     src.means_raw().clone(),
@@ -1930,7 +1933,7 @@ namespace lfs::core {
                     src.opacity_raw().clone(),
                     src.get_scene_scale(),
                     lfs::core::SplatData::ShNLayout::Swizzled);
-                result->set_active_sh_degree(src.get_active_sh_degree());
+                result->set_active_sh_degree(active_sh);
                 return result;
             }
 
@@ -1941,15 +1944,17 @@ namespace lfs::core {
             }
 
             lfs::core::Tensor shN;
-            if (src.shN_raw().is_valid() && src.shN_raw().numel() > 0) {
+            const int active_sh = src.get_active_sh_degree();
+            const auto layout_rest = static_cast<std::uint32_t>(src.max_sh_coeffs_rest());
+            if (layout_rest > 0 && src.shN_raw().is_valid() && src.shN_raw().numel() > 0) {
                 auto kept_indices = keep_mask.nonzero();
                 if (kept_indices.ndim() == 2) {
                     kept_indices = kept_indices.squeeze(1);
                 }
                 kept_indices = kept_indices.to(lfs::core::DataType::Int32);
                 shN = lfs::core::Tensor::zeros_direct(
-                    lfs::core::TensorShape({lfs::core::sh_swizzled_float_count(visible)}),
-                    lfs::core::sh_swizzled_float_count(visible),
+                    lfs::core::TensorShape({lfs::core::sh_swizzled_float_count(visible, layout_rest)}),
+                    lfs::core::sh_swizzled_float_count(visible, layout_rest),
                     lfs::core::Device::CUDA);
                 lfs::core::shN_swizzled_gather_self(
                     src.shN_raw().ptr<float>(),
@@ -1957,6 +1962,7 @@ namespace lfs::core {
                     kept_indices.ptr<int>(),
                     visible,
                     0,
+                    layout_rest,
                     shN.stream());
             }
 
@@ -1970,7 +1976,7 @@ namespace lfs::core {
                 src.opacity_raw().index_select(0, keep_mask).contiguous(),
                 src.get_scene_scale(),
                 lfs::core::SplatData::ShNLayout::Swizzled);
-            result->set_active_sh_degree(src.get_active_sh_degree());
+            result->set_active_sh_degree(active_sh);
             return result;
         };
 
@@ -1979,6 +1985,7 @@ namespace lfs::core {
                 const auto* const src = splats[0].first;
 
                 if (storage_mode == MergeStorageMode::BorrowSingleIdentity && !src->has_deleted_mask()) {
+                    const int active_sh = src->get_active_sh_degree();
                     auto result = std::make_unique<lfs::core::SplatData>(
                         src->get_max_sh_degree(),
                         src->means_raw(),
@@ -1989,7 +1996,7 @@ namespace lfs::core {
                         src->opacity_raw(),
                         src->get_scene_scale(),
                         lfs::core::SplatData::ShNLayout::Swizzled);
-                    result->set_active_sh_degree(src->get_active_sh_degree());
+                    result->set_active_sh_degree(active_sh);
                     return result;
                 }
 
@@ -1997,6 +2004,8 @@ namespace lfs::core {
             }
 
             size_t total_visible = 0;
+            int max_active_sh_identity = 0;
+            int max_storage_sh = 0;
             bool has_shN = false;
             float total_scale = 0.0f;
             const auto device = splats.front().first->means_raw().device();
@@ -2007,13 +2016,17 @@ namespace lfs::core {
                                            : static_cast<size_t>(model->size());
                 total_visible += visible;
                 total_scale += model->get_scene_scale();
-                has_shN = has_shN || (model->shN_raw().is_valid() && model->shN_raw().numel() > 0);
+                max_active_sh_identity = std::max(max_active_sh_identity, model->get_active_sh_degree());
+                max_storage_sh = std::max(max_storage_sh, model->get_max_sh_degree());
+                has_shN = has_shN || (model->max_sh_coeffs_rest() > 0 &&
+                                      model->shN_raw().is_valid() && model->shN_raw().numel() > 0);
             }
 
             if (total_visible == 0) {
                 return nullptr;
             }
 
+            const auto dst_layout_rest = sh_rest_coefficients_for_degree(max_storage_sh);
             lfs::core::Tensor means = lfs::core::Tensor::empty({total_visible, 3}, device);
             lfs::core::Tensor sh0 = lfs::core::Tensor::empty({total_visible, 1, 3}, device);
             lfs::core::Tensor scaling = lfs::core::Tensor::empty({total_visible, 3}, device);
@@ -2021,8 +2034,8 @@ namespace lfs::core {
             lfs::core::Tensor opacity = lfs::core::Tensor::empty({total_visible, 1}, device);
             lfs::core::Tensor shN = has_shN
                                         ? lfs::core::Tensor::zeros_direct(
-                                              lfs::core::TensorShape({lfs::core::sh_swizzled_float_count(total_visible)}),
-                                              lfs::core::sh_swizzled_float_count(total_visible),
+                                              lfs::core::TensorShape({lfs::core::sh_swizzled_float_count(total_visible, dst_layout_rest)}),
+                                              lfs::core::sh_swizzled_float_count(total_visible, dst_layout_rest),
                                               lfs::core::Device::CUDA)
                                         : lfs::core::Tensor{};
 
@@ -2051,7 +2064,8 @@ namespace lfs::core {
                     opacity.slice(0, offset, offset + visible) = model->opacity_raw();
                 }
 
-                if (shN.is_valid() && model->shN_raw().is_valid() && model->shN_raw().numel() > 0) {
+                const auto src_layout_rest = static_cast<std::uint32_t>(model->max_sh_coeffs_rest());
+                if (shN.is_valid() && src_layout_rest > 0 && model->shN_raw().is_valid() && model->shN_raw().numel() > 0) {
                     if (has_deleted) {
                         auto kept_indices = keep_mask.nonzero();
                         if (kept_indices.ndim() == 2) {
@@ -2059,8 +2073,8 @@ namespace lfs::core {
                         }
                         kept_indices = kept_indices.to(lfs::core::DataType::Int32);
                         auto compact_shN = lfs::core::Tensor::zeros_direct(
-                            lfs::core::TensorShape({lfs::core::sh_swizzled_float_count(visible)}),
-                            lfs::core::sh_swizzled_float_count(visible),
+                            lfs::core::TensorShape({lfs::core::sh_swizzled_float_count(visible, src_layout_rest)}),
+                            lfs::core::sh_swizzled_float_count(visible, src_layout_rest),
                             lfs::core::Device::CUDA);
                         lfs::core::shN_swizzled_gather_self(
                             model->shN_raw().ptr<float>(),
@@ -2068,12 +2082,15 @@ namespace lfs::core {
                             kept_indices.ptr<int>(),
                             visible,
                             0,
+                            src_layout_rest,
                             compact_shN.stream());
                         lfs::core::shN_swizzled_copy_contiguous(
                             compact_shN.ptr<float>(),
                             shN.ptr<float>(),
                             visible,
                             offset,
+                            src_layout_rest,
+                            dst_layout_rest,
                             shN.stream());
                     } else {
                         lfs::core::shN_swizzled_copy_contiguous(
@@ -2081,6 +2098,8 @@ namespace lfs::core {
                             shN.ptr<float>(),
                             visible,
                             offset,
+                            src_layout_rest,
+                            dst_layout_rest,
                             shN.stream());
                     }
                 }
@@ -2089,7 +2108,7 @@ namespace lfs::core {
             }
 
             auto result = std::make_unique<lfs::core::SplatData>(
-                max_sh,
+                max_storage_sh,
                 std::move(means),
                 std::move(sh0),
                 std::move(shN),
@@ -2098,11 +2117,11 @@ namespace lfs::core {
                 std::move(opacity),
                 total_scale / static_cast<float>(splats.size()),
                 lfs::core::SplatData::ShNLayout::Swizzled);
-            result->set_active_sh_degree(max_sh);
+            result->set_active_sh_degree(max_active_sh_identity);
             return result;
         }
 
-        const int shN_coeffs = (max_sh > 0) ? ((max_sh + 1) * (max_sh + 1) - 1) : 0;
+        const int shN_coeffs = static_cast<int>(sh_rest_coefficients_for_degree(max_sh));
         std::vector<lfs::core::Tensor> means_list, sh0_list, shN_list, scaling_list, rotation_list, opacity_list;
         means_list.reserve(splats.size());
         sh0_list.reserve(splats.size());
@@ -2114,6 +2133,9 @@ namespace lfs::core {
         std::vector<size_t> shN_sizes;
         if (shN_coeffs > 0)
             shN_sizes.reserve(splats.size());
+        std::vector<std::uint32_t> shN_layout_rests;
+        if (shN_coeffs > 0)
+            shN_layout_rests.reserve(splats.size());
 
         float total_scale = 0.0f;
         size_t total_count = 0;
@@ -2140,6 +2162,7 @@ namespace lfs::core {
 
             if (shN_coeffs > 0) {
                 shN_sizes.push_back(static_cast<size_t>(transformed->size()));
+                shN_layout_rests.push_back(static_cast<std::uint32_t>(transformed->max_sh_coeffs_rest()));
                 shN_list.push_back(transformed->shN_raw().is_valid()
                                        ? transformed->shN_raw().clone()
                                        : lfs::core::Tensor{});
@@ -2156,19 +2179,22 @@ namespace lfs::core {
         lfs::core::Tensor merged_shN;
         if (shN_coeffs > 0) {
             merged_shN = lfs::core::Tensor::zeros_direct(
-                lfs::core::TensorShape({lfs::core::sh_swizzled_float_count(total_count)}),
-                lfs::core::sh_swizzled_float_count(total_count),
+                lfs::core::TensorShape({lfs::core::sh_swizzled_float_count(total_count, shN_coeffs)}),
+                lfs::core::sh_swizzled_float_count(total_count, shN_coeffs),
                 lfs::core::Device::CUDA);
 
             size_t offset = 0;
             for (size_t i = 0; i < shN_list.size(); ++i) {
                 const size_t count = shN_sizes[i];
-                if (shN_list[i].is_valid() && shN_list[i].numel() > 0) {
+                const auto src_layout_rest = shN_layout_rests[i];
+                if (src_layout_rest > 0 && shN_list[i].is_valid() && shN_list[i].numel() > 0) {
                     lfs::core::shN_swizzled_copy_contiguous(
                         shN_list[i].ptr<float>(),
                         merged_shN.ptr<float>(),
                         count,
                         offset,
+                        src_layout_rest,
+                        static_cast<std::uint32_t>(shN_coeffs),
                         merged_shN.stream());
                 }
                 offset += count;
@@ -2185,7 +2211,7 @@ namespace lfs::core {
             lfs::core::Tensor::cat(opacity_list, 0),
             total_scale / static_cast<float>(splats.size()),
             lfs::core::SplatData::ShNLayout::Swizzled);
-        result->set_active_sh_degree(max_sh);
+        result->set_active_sh_degree(max_active_sh);
 
         return result;
     }

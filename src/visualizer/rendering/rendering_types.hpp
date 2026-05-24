@@ -221,11 +221,12 @@ namespace lfs::vis {
         float split_position = 0.5f;
         size_t split_view_offset = 0;
 
-        lfs::rendering::GaussianRasterBackend raster_backend = lfs::rendering::GaussianRasterBackend::FastGs;
+        lfs::rendering::GaussianRasterBackend raster_backend = lfs::rendering::GaussianRasterBackend::ThreeDgs;
         bool gut = false;
         bool equirectangular = false;
         bool orthographic = false;
         float ortho_scale = 100.0f; // Pixels per world unit (larger = more zoomed in)
+        bool depth_view = false;
 
         // Selection colors (RGB: committed=219,83,83 preview=0,222,76 center=0,154,187)
         glm::vec3 selection_color_committed{0.859f, 0.325f, 0.325f};
@@ -252,6 +253,14 @@ namespace lfs::vis {
         glm::vec3 depth_filter_max = glm::vec3(50.0f, 10000.0f, 100.0f);
         lfs::geometry::EuclideanTransform depth_filter_transform;
     };
+
+    inline void enforceProjectionBackend(RenderSettings& settings) {
+        if (!settings.equirectangular) {
+            return;
+        }
+        settings.raster_backend = lfs::rendering::GaussianRasterBackend::ThreeDgut;
+        settings.gut = true;
+    }
 
     [[nodiscard]] inline bool environmentBackgroundEnabled(const RenderSettings& settings) {
         return settings.environment_mode == EnvironmentBackgroundMode::Equirectangular &&

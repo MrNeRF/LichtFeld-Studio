@@ -14,8 +14,8 @@
 
 namespace lfs::core {
 
-    // GPU slab allocator for small allocations (≤256KB). Pre-allocates slabs and
-    // divides them into fixed-size blocks. O(1) alloc/free, ~50ns per operation.
+    // GPU slab allocator for small allocations (≤256KB). Slabs are committed on
+    // first use per size class and divided into fixed-size blocks.
     class GPUSlabAllocator {
     public:
         static constexpr size_t MIN_BLOCK_SIZE = 256;
@@ -166,27 +166,12 @@ namespace lfs::core {
                 free_stacks_[i].stack.reserve(MAX_BLOCKS_PER_CLASS);
             }
 
-            if (!initialize_slabs()) {
-                LOG_DEBUG("GPUSlabAllocator: Initialization failed or skipped");
-                enabled_.store(false, std::memory_order_release);
-            } else {
-                enabled_.store(true, std::memory_order_release);
-                LOG_INFO("GPUSlabAllocator: {:.2f} MB allocated",
-                         stats_.total_slab_memory / (1024.0 * 1024.0));
-            }
+            enabled_.store(true, std::memory_order_release);
+            LOG_DEBUG("GPUSlabAllocator: lazy initialization enabled");
         }
 
         ~GPUSlabAllocator() {
             shutdown();
-        }
-
-        bool initialize_slabs() {
-            for (size_t size_class = 2; size_class < NUM_SIZE_CLASSES; ++size_class) {
-                if (!allocate_slab(size_class)) {
-                    LOG_DEBUG("Skipping slab for class {}", size_class);
-                }
-            }
-            return stats_.total_slab_memory > 0;
         }
 
         bool allocate_slab(size_t size_class) {

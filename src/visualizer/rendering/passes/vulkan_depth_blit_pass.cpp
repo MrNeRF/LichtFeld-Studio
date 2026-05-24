@@ -687,4 +687,8 @@ namespace lfs::vis {
         return impl_ && impl_->bound_view != VK_NULL_HANDLE;
     }
 
+    VkImageView VulkanDepthBlitPass::depthView() const {
+        return impl_ ? impl_->bound_view : VK_NULL_HANDLE;
+    }
+
 } // namespace lfs::vis

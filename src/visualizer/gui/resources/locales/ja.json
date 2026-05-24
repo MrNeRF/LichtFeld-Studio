@@ -689,6 +689,7 @@
     "fov_info": "視野角",
     "sh_degree": "SH Degree",
     "equirectangular": "正距円筒図法",
+    "raster_backend": "ラスターバックエンド",
     "gut_mode": "GUT (3DGUT)",
     "mip_filter": "ミップフィルター",
     "camera_metrics": "カメラ指標",
@@ -766,7 +767,8 @@
     "orthographic": "平行投影",
     "sequencer": "シーケンサー",
     "ellipsoid": "Ellipsoid",
-    "histogram": "Histogram"
+    "histogram": "Histogram",
+    "depth_map": "深度マップ"
   },
   "transform": {
     "node": "ノード: %s",
@@ -825,6 +827,7 @@
     "color_blue_prefix": "B:"
   },
   "tooltip": {
+    "raster_backend": "Gaussian rasterizer: 3DGS または 3DGUT",
     "gut_mode": "魚眼/歪み/エクイレクタンギュラーカメラ用",
     "mip_filter": "サブピクセルガウシアンのエイリアシング軽減",
     "appearance_correction": "PPISP Correction",

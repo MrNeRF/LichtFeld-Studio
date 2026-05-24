@@ -393,7 +393,7 @@ target_link_libraries(lichtfeld_tests PRIVATE
 )
 
 if(ENABLE_VULKAN_VIEWER)
-    target_link_libraries(lichtfeld_tests PRIVATE lfs_vksplat_fwd Vulkan::Vulkan)
+    target_link_libraries(lichtfeld_tests PRIVATE lfs_vulkan_rasterizer Vulkan::Vulkan)
 endif()
 
 # Compiler options for CUDA debugging

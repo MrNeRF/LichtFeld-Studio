@@ -519,6 +519,7 @@
     "fov_info": "视场角",
     "sh_degree": "SH Degree",
     "equirectangular": "等距柱状投影",
+    "raster_backend": "光栅化后端",
     "gut_mode": "GUT（3DGUT）",
     "mip_filter": "Mip滤波器",
     "camera_metrics": "相机指标",
@@ -596,7 +597,8 @@
     "orthographic": "正交",
     "sequencer": "序列器",
     "ellipsoid": "Ellipsoid",
-    "histogram": "Histogram"
+    "histogram": "Histogram",
+    "depth_map": "深度图"
   },
   "transform": {
     "node": "节点：%s",
@@ -655,6 +657,7 @@
     "color_blue_prefix": "B:"
   },
   "tooltip": {
+    "raster_backend": "高斯光栅化器：3DGS 或 3DGUT",
     "gut_mode": "用于鱼眼/畸变/等距柱状相机",
     "mip_filter": "减少亚像素高斯的锯齿",
     "appearance_correction": "PPISP Correction",

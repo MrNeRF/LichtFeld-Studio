@@ -8,7 +8,6 @@
 #include "model_renderability.hpp"
 #include "point_cloud_vulkan_renderer.hpp"
 #include "rendering/image_layout.hpp"
-#include "rendering/rasterizer/rasterization/include/rasterization_config.h"
 #include "rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "training/trainer.hpp"
@@ -322,11 +321,9 @@ namespace lfs::vis {
             return metadata;
         }
 
-        // Per-frame mesh-pass payload (without depth blit). Both the FastGs/Gut path
-        // and the VkSplat path must publish this every frame so the viewport pass
-        // sees the current camera; otherwise the mesh stays anchored to whichever
-        // frame last set it. Depth blit (splat→mesh z-test) is path-specific and
-        // attached by the caller.
+        // Per-frame mesh-pass payload (without depth blit). The Vulkan splat path
+        // publishes this every frame so the viewport pass sees the current camera;
+        // otherwise the mesh stays anchored to whichever frame last set it.
         [[nodiscard]] RenderingManager::VulkanMeshFrame populateMeshFrame(
             const FrameContext& frame_ctx,
             const RenderSettings& settings,
@@ -410,9 +407,6 @@ namespace lfs::vis {
         if (!lfs::rendering::isVkSplatBackend(settings.raster_backend)) {
             return std::unexpected("VkSplat selection query is available only when a VkSplat backend is active");
         }
-        if (!scene_manager.hasSplatFiles()) {
-            return std::unexpected("VkSplat selection query is available only for loaded splat files");
-        }
         if (!last_vulkan_context_) {
             return std::unexpected("VkSplat selection query requires an active Vulkan context");
         }
@@ -472,27 +466,6 @@ namespace lfs::vis {
             last_vulkan_context_ = context.vulkan_context;
         }
 
-        if (!engine_) {
-            engine_ = lfs::rendering::RenderingEngine::createRasterOnly();
-        }
-        if (!raster_initialized_) {
-            if (auto init_result = engine_->initializeRasterOnly(); !init_result) {
-                LOG_ERROR("Failed to initialize Vulkan raster path: {}", init_result.error());
-                return {.image = vulkan_viewport_image_,
-                        .size = vulkan_viewport_image_size_,
-                        .flip_y = vulkan_viewport_image_flip_y_};
-            }
-            raster_initialized_ = true;
-            initialized_ = true;
-        }
-
-        if (scene_manager && (dirty_mask_.load(std::memory_order_relaxed) & DirtyFlag::SELECTION)) {
-            for (const auto& group : scene_manager->getScene().getSelectionGroups()) {
-                lfs::rendering::config::setSelectionGroupColor(
-                    group.id, make_float3(group.color.x, group.color.y, group.color.z));
-            }
-        }
-
         const auto framebuffer_region =
             resolveFramebufferViewportRegion(context.viewport, context.logical_screen_size, context.viewport_region);
         glm::ivec2 current_size = context.viewport.frameBufferSize;
@@ -504,6 +477,20 @@ namespace lfs::vis {
                     .size = vulkan_viewport_image_size_,
                     .flip_y = vulkan_viewport_image_flip_y_};
         }
+        initialized_ = true;
+
+        const auto ensure_auxiliary_rendering_engine =
+            [this]() -> std::expected<lfs::rendering::RenderingEngine*, std::string> {
+            if (!engine_) {
+                engine_ = lfs::rendering::RenderingEngine::create();
+            }
+            if (!engine_->isInitialized()) {
+                if (auto init_result = engine_->initialize(); !init_result) {
+                    return std::unexpected(init_result.error());
+                }
+            }
+            return engine_.get();
+        };
 
         glm::vec2 screen_viewport_pos(0.0f, 0.0f);
         glm::vec2 screen_viewport_size(
@@ -563,6 +550,7 @@ namespace lfs::vis {
         const bool is_training = scene_manager && scene_manager->hasDataset() &&
                                  scene_manager->getTrainerManager() &&
                                  scene_manager->getTrainerManager()->isRunning();
+        const bool synchronize_vksplat_input_upload = is_training;
         if (const DirtyMask training_dirty = frame_lifecycle_service_.handleTrainingRefresh(
                 is_training,
                 framerate_controller_.getSettings().training_frame_refresh_time_sec);
@@ -767,7 +755,11 @@ namespace lfs::vis {
                          .node_visibility_mask = {}},
                     .filters = state.filters,
                     .transparent_background = environmentBackgroundUsesTransparentViewerCompositing(settings_)};
-                auto result = engine_->renderPointCloudImage(*frame_ctx.scene_state.point_cloud, request);
+                auto auxiliary_engine = ensure_auxiliary_rendering_engine();
+                if (!auxiliary_engine) {
+                    return std::unexpected(auxiliary_engine.error());
+                }
+                auto result = (*auxiliary_engine)->renderPointCloudImage(*frame_ctx.scene_state.point_cloud, request);
                 if (!result || !result->image) {
                     return std::unexpected(result ? "Raw point-cloud panel render returned no image"
                                                   : result.error());
@@ -801,7 +793,11 @@ namespace lfs::vis {
                     .scene = scene,
                     .filters = state.filters,
                     .transparent_background = environmentBackgroundUsesTransparentViewerCompositing(settings_)};
-                auto result = engine_->renderPointCloudImage(*panel_model, request);
+                auto auxiliary_engine = ensure_auxiliary_rendering_engine();
+                if (!auxiliary_engine) {
+                    return std::unexpected(auxiliary_engine.error());
+                }
+                auto result = (*auxiliary_engine)->renderPointCloudImage(*panel_model, request);
                 if (!result || !result->image) {
                     return std::unexpected(result ? "Point-cloud panel render returned no image"
                                                   : result.error());
@@ -825,15 +821,14 @@ namespace lfs::vis {
             if (node_visibility_override) {
                 request.scene.node_visibility_mask = *node_visibility_override;
             }
+            request.raster_backend =
+                lfs::rendering::normalizeViewerRasterBackend(request.raster_backend, request.gut);
+            request.gut = lfs::rendering::isGutBackend(request.raster_backend);
 
             const bool vksplat_panel_supported =
                 vksplat_output_slot.has_value() &&
                 context.vulkan_context != nullptr &&
-                scene_manager != nullptr &&
-                scene_manager->hasSplatFiles() &&
-                lfs::rendering::isVkSplatBackend(request.raster_backend) &&
-                !request.frame_view.orthographic &&
-                !request.equirectangular;
+                lfs::rendering::isVkSplatBackend(request.raster_backend);
             if (vksplat_panel_supported) {
                 if (!vksplat_viewport_renderer_) {
                     vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
@@ -842,7 +837,12 @@ namespace lfs::vis {
                     (frame_dirty & DirtyFlag::SPLATS) != 0 && !vksplat_inputs_forced_this_frame;
                 LOG_TIMER("vksplat.split_panel.render");
                 auto result = vksplat_viewport_renderer_->render(
-                    *context.vulkan_context, *panel_model, request, force_input_upload, *vksplat_output_slot);
+                    *context.vulkan_context,
+                    *panel_model,
+                    request,
+                    force_input_upload,
+                    *vksplat_output_slot,
+                    synchronize_vksplat_input_upload);
                 if (result) {
                     if (force_input_upload) {
                         vksplat_inputs_forced_this_frame = true;
@@ -859,15 +859,10 @@ namespace lfs::vis {
                 return std::unexpected(result.error());
             }
 
-            auto result = engine_->renderGaussiansImage(*panel_model, request);
-            if (!result || !result->image) {
-                return std::unexpected(result ? "Gaussian panel render returned no image"
-                                              : result.error());
+            if (!context.vulkan_context) {
+                return std::unexpected("VkSplat split-view panel requires an active Vulkan context");
             }
-            const bool flip_y = !result->metadata.flip_y;
-            return RenderedPanel{.image = std::move(result->image),
-                                 .metadata = std::move(result->metadata),
-                                 .flip_y = flip_y};
+            return std::unexpected("VkSplat split-view panel did not receive an output slot");
         };
 
         const auto make_split_panel =
@@ -941,15 +936,19 @@ namespace lfs::vis {
                                 auto point_request = buildPointCloudRenderRequest(
                                     frame_ctx, gt_size, frame_ctx.scene_state.model_transforms);
                                 point_request.frame_view = request.frame_view;
-                                auto rendered = engine_->renderPointCloudImage(*model, point_request);
-                                if (rendered && rendered->image) {
-                                    const bool flip_y = !rendered->metadata.flip_y;
-                                    compare_panel = RenderedPanel{.image = std::move(rendered->image),
-                                                                  .metadata = std::move(rendered->metadata),
-                                                                  .flip_y = flip_y};
+                                if (auto auxiliary_engine = ensure_auxiliary_rendering_engine(); auxiliary_engine) {
+                                    auto rendered = (*auxiliary_engine)->renderPointCloudImage(*model, point_request);
+                                    if (rendered && rendered->image) {
+                                        const bool flip_y = !rendered->metadata.flip_y;
+                                        compare_panel = RenderedPanel{.image = std::move(rendered->image),
+                                                                      .metadata = std::move(rendered->metadata),
+                                                                      .flip_y = flip_y};
+                                    } else {
+                                        compare_error = rendered ? "Point-cloud GT comparison render returned no image"
+                                                                 : rendered.error();
+                                    }
                                 } else {
-                                    compare_error = rendered ? "Point-cloud GT comparison render returned no image"
-                                                             : rendered.error();
+                                    compare_error = auxiliary_engine.error();
                                 }
                             } else if (use_point_cloud_compare && has_point_cloud) {
                                 const std::vector<glm::mat4> point_cloud_transforms = {
@@ -957,16 +956,19 @@ namespace lfs::vis {
                                 auto point_request = buildPointCloudRenderRequest(
                                     frame_ctx, gt_size, point_cloud_transforms);
                                 point_request.frame_view = request.frame_view;
-                                auto rendered = engine_->renderPointCloudImage(
-                                    *frame_ctx.scene_state.point_cloud, point_request);
-                                if (rendered && rendered->image) {
-                                    const bool flip_y = !rendered->metadata.flip_y;
-                                    compare_panel = RenderedPanel{.image = std::move(rendered->image),
-                                                                  .metadata = std::move(rendered->metadata),
-                                                                  .flip_y = flip_y};
+                                if (auto auxiliary_engine = ensure_auxiliary_rendering_engine(); auxiliary_engine) {
+                                    auto rendered = (*auxiliary_engine)->renderPointCloudImage(*frame_ctx.scene_state.point_cloud, point_request);
+                                    if (rendered && rendered->image) {
+                                        const bool flip_y = !rendered->metadata.flip_y;
+                                        compare_panel = RenderedPanel{.image = std::move(rendered->image),
+                                                                      .metadata = std::move(rendered->metadata),
+                                                                      .flip_y = flip_y};
+                                    } else {
+                                        compare_error = rendered ? "Raw point-cloud GT comparison render returned no image"
+                                                                 : rendered.error();
+                                    }
                                 } else {
-                                    compare_error = rendered ? "Raw point-cloud GT comparison render returned no image"
-                                                             : rendered.error();
+                                    compare_error = auxiliary_engine.error();
                                 }
                             } else if (has_renderable_model) {
                                 auto rendered = render_panel_image(
@@ -1287,33 +1289,16 @@ namespace lfs::vis {
                 return *vk_result;
             }
 
-            // CUDA fallback (no Vulkan context, or render failed)
-            LOG_TIMER("renderVulkanFrame.renderPointCloudImage");
-            auto render_result = has_renderable_model
-                                     ? engine_->renderPointCloudImage(*model, pc_request)
-                                     : engine_->renderPointCloudImage(*frame_ctx.scene_state.point_cloud, pc_request);
-            if (render_result) {
-                rendered_image = std::move(render_result->image);
-                rendered_metadata = std::move(render_result->metadata);
+            if (!context.vulkan_context) {
+                render_error = "Point-cloud viewer rendering requires an active Vulkan context";
             } else {
-                render_error = render_result.error();
+                render_error = "Point-cloud Vulkan render failed";
             }
         } else if (has_renderable_model) {
             auto request = buildViewportRenderRequest(frame_ctx, render_size);
-            // VkSplat is editing/viewing only — splat files loaded with no
-            // trainer attached. As soon as a dataset is present (ready, paused,
-            // or running), its persistent Vulkan-side sort buffers can be
-            // pinned to densification peaks, so we fall back to the matching
-            // CUDA backend.
-            const bool viewing_only =
-                scene_manager && scene_manager->hasSplatFiles();
-            if (lfs::rendering::isVkSplatBackend(request.raster_backend) && !viewing_only) {
-                request.raster_backend =
-                    request.raster_backend == lfs::rendering::GaussianRasterBackend::VkSplatGut
-                        ? lfs::rendering::GaussianRasterBackend::Gut
-                        : lfs::rendering::GaussianRasterBackend::FastGs;
-                request.gut = lfs::rendering::isGutBackend(request.raster_backend);
-            }
+            request.raster_backend =
+                lfs::rendering::normalizeViewerRasterBackend(request.raster_backend, request.gut);
+            request.gut = lfs::rendering::isGutBackend(request.raster_backend);
             if (lfs::rendering::isVkSplatBackend(request.raster_backend)) {
                 if (!context.vulkan_context) {
                     render_error = "VkSplat backend requires an active Vulkan context";
@@ -1324,7 +1309,12 @@ namespace lfs::vis {
                     const bool force_input_upload = (frame_dirty & DirtyFlag::SPLATS) != 0;
                     LOG_TIMER("vksplat.render");
                     auto render_result = vksplat_viewport_renderer_->render(
-                        *context.vulkan_context, *model, request, force_input_upload);
+                        *context.vulkan_context,
+                        *model,
+                        request,
+                        force_input_upload,
+                        VksplatViewportRenderer::OutputSlot::Main,
+                        synchronize_vksplat_input_upload);
                     if (render_result) {
                         render_lock.reset();
                         vulkan_viewport_image_.reset();
@@ -1363,12 +1353,17 @@ namespace lfs::vis {
                         viewport_interaction_context_.scene_manager = scene_manager;
                         split_view_service_.updateInfo(FrameResources{});
 
-                        // VkSplat returns early before the shared mesh-frame setup
-                        // below. Republish it here so the viewport pass sees the
-                        // current camera and can depth-test meshes against the
-                        // GPU-native VkSplat depth image.
-                        if (!frame_ctx.scene_state.meshes.empty() ||
-                            environmentBackgroundEnabled(settings_)) {
+                        // VkSplat returns early before the shared mesh-frame
+                        // setup below. Republish here so the viewport pass sees
+                        // the current camera; also forwards the splat depth view
+                        // used by shape_overlay / textured_overlay for world-
+                        // space overlay depth fading, so publish whenever depth
+                        // is available even without meshes or environment bg.
+                        const bool publish_mesh_frame =
+                            !frame_ctx.scene_state.meshes.empty() ||
+                            environmentBackgroundEnabled(settings_) ||
+                            render_result->depth_image_view != VK_NULL_HANDLE;
+                        if (publish_mesh_frame) {
                             auto mesh_frame = populateMeshFrame(frame_ctx, settings_, pending_split_view);
                             populate_independent_split_mesh_panels(mesh_frame);
                             if (render_result->depth_image_view != VK_NULL_HANDLE) {
@@ -1399,13 +1394,7 @@ namespace lfs::vis {
                     render_error = render_result.error();
                 }
             } else {
-                auto render_result = engine_->renderGaussiansImage(*model, request);
-                if (render_result) {
-                    rendered_image = std::move(render_result->image);
-                    rendered_metadata = std::move(render_result->metadata);
-                } else {
-                    render_error = render_result.error();
-                }
+                render_error = "Gaussian viewer rendering requires a VkSplat backend";
             }
         }
 
@@ -1427,8 +1416,8 @@ namespace lfs::vis {
             VulkanMeshFrame gpu_mesh_frame = populateMeshFrame(frame_ctx, settings_, pending_split_view);
             populate_independent_split_mesh_panels(gpu_mesh_frame);
 
-            // Splat depth → mesh-pass z-test source. Only meaningful when the splat
-            // produced a depth tensor (CUDA rasterizer path; vksplat doesn't yet).
+            // Splat depth -> mesh-pass z-test source. Only meaningful when the
+            // active render path produced a tensor-backed depth output.
             if (rendered_image && rendered_metadata.depth_panel_count > 0 &&
                 rendered_metadata.depth_panels[0].depth &&
                 rendered_metadata.depth_panels[0].depth->is_valid()) {

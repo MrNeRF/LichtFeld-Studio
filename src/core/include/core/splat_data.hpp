@@ -10,8 +10,10 @@
 
 #include <expected>
 #include <filesystem>
+#include <functional>
 #include <glm/fwd.hpp>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace lfs::geometry {
@@ -95,14 +97,12 @@ namespace lfs::core {
         inline const Tensor& sh0_raw() const { return _sh0; }
 
         // shN is stored in vksplat-style float4-packed swizzled layout: 1D float tensor of
-        // sh_swizzled_float_count(N) = ceil(N / SH_REORDER_SIZE)
-        //                              * SH_REST_FLOAT4_PER_PRIMITIVE
-        //                              * SH_REORDER_SIZE * 4 floats
-        // (with SH_REORDER_SIZE = 32 and SH_REST_FLOAT4_PER_PRIMITIVE = 12 → 12 float4 slots
-        // per primitive, see core/cuda/sh_layout.cuh for the slot→coefficient shuffle).
-        // All 12 float4 slots are always allocated regardless of active SH degree; unused
-        // slots are zero. sh_swizzled_index(p, k) / shAt(p, k) returns a float4-slot index
-        // (multiply by 4 for the float offset).
+        // sh_swizzled_float_count(N, max_rest) = ceil(N / SH_REORDER_SIZE)
+        //                                        * slots_for_max_rest
+        //                                        * SH_REORDER_SIZE * 4 floats.
+        // SH0 allocates no shN rest storage; SH1/SH2/SH3 allocate 3/6/12 float4 slots per
+        // primitive. sh_swizzled_index(p, k, max_rest) / shAt(p, k, slots) returns a
+        // float4-slot index (multiply by 4 for the float offset).
         // shN() / shN_raw() return the swizzled tensor directly. Use shN_canonical() to
         // materialise a deswizzled [N, K, 3] view for I/O / transforms / scene merge.
         inline Tensor& shN() { return _shN; }
@@ -110,8 +110,8 @@ namespace lfs::core {
         inline Tensor& shN_raw() { return _shN; }
         inline const Tensor& shN_raw() const { return _shN; }
 
-        // Materialise a deswizzled [N, K, 3] copy of shN where K = sh_rest_coeffs of the
-        // currently active SH degree. Always allocates a new tensor — not a view.
+        // Materialise a deswizzled [N, K, 3] copy of resident shN storage where
+        // K = sh_rest_coeffs of the max SH degree. Always allocates a new tensor — not a view.
         Tensor shN_canonical() const;
 
         // Host-side variant for export/checkpoint paths. Copies the resident swizzled buffer
@@ -126,6 +126,9 @@ namespace lfs::core {
         // Number of "rest" SH coefficients implied by the current active SH degree
         // (0 / 3 / 8 / 15 for degree 0 / 1 / 2 / 3).
         size_t active_sh_coeffs_rest() const;
+
+        // Number of resident "rest" SH coefficients implied by the current max SH degree.
+        size_t max_sh_coeffs_rest() const;
 
         // ========== Soft deletion (for undo/redo crop support) ==========
         Tensor& deleted() { return _deleted; }
@@ -149,7 +152,7 @@ namespace lfs::core {
         // ========== SH degree management ==========
         void increment_sh_degree();
         void set_active_sh_degree(int sh_degree);
-        void set_max_sh_degree(int sh_degree) { _max_sh_degree = sh_degree; }
+        void set_max_sh_degree(int sh_degree);
         bool set_sh_degree(int sh_degree);
 
         // ========== Serialization ==========
@@ -183,6 +186,11 @@ namespace lfs::core {
         friend LFS_CORE_API void random_choose(SplatData&, int, int);
     };
 
+    using SplatTensorAllocator = std::function<Tensor(TensorShape shape,
+                                                      size_t capacity,
+                                                      DataType dtype,
+                                                      std::string_view name)>;
+
     // ========== Free function: Factory ==========
 
     /**
@@ -197,6 +205,7 @@ namespace lfs::core {
         const param::TrainingParameters& params,
         Tensor scene_center,
         const PointCloud& point_cloud,
-        int capacity = 0);
+        int capacity = 0,
+        SplatTensorAllocator tensor_allocator = {});
 
 } // namespace lfs::core

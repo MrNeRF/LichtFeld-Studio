@@ -25,7 +25,7 @@ void main() {
     float d = texture(u_depth, uv).r;
     float ndc;
     if (pc.params.z > 0.5) {
-        // view-space depth (CUDA rasterizer default): convert to NDC
+        // View-space depth from tensor-backed render outputs: convert to NDC.
         if (d <= 0.0 || d >= 1e9) {
             // sentinel: leave depth at far (no occlusion contribution)
             discard;

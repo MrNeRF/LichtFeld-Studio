@@ -6,8 +6,12 @@ layout(push_constant) uniform PushConstants {
     uint width;
     uint height;
     uint transparent_background;
-    uint pad0;
+    uint depth_view;
     vec4 background;
+    float depth_min;
+    float depth_max;
+    float pad1;
+    float pad2;
 } pc;
 
 layout(set = 0, binding = 0) readonly buffer PixelStateBuffer {
@@ -21,6 +25,46 @@ layout(set = 0, binding = 1) readonly buffer PixelDepthBuffer {
 layout(set = 0, binding = 2, rgba8) uniform writeonly image2D out_image;
 layout(set = 0, binding = 3, r32f) uniform writeonly image2D out_depth;
 
+float normalizedDepth(float depth, float lo, float hi) {
+    lo = max(lo, 1.0e-4);
+    hi = max(hi, lo + 1.0e-4);
+    depth = clamp(depth, lo, hi);
+
+    const float linear_t = clamp((depth - lo) / max(hi - lo, 1.0e-5), 0.0, 1.0);
+    const float log_lo = lo;
+    const float log_hi = hi;
+    const float log_depth = depth;
+    const float log_span = max(log2(log_hi / log_lo), 1.0e-4);
+    const float log_t = clamp(log2(log_depth / log_lo) / log_span, 0.0, 1.0);
+    const float log_weight = smoothstep(1.75, 24.0, log_hi / log_lo);
+
+    return smoothstep(0.0, 1.0, mix(linear_t, log_t, log_weight));
+}
+
+vec3 depthPalette(float near_t) {
+    near_t = clamp(near_t, 0.0, 1.0);
+    const vec3 far_0 = vec3(0.050, 0.040, 0.150);
+    const vec3 far_1 = vec3(0.060, 0.195, 0.500);
+    const vec3 mid_0 = vec3(0.000, 0.500, 0.650);
+    const vec3 mid_1 = vec3(0.360, 0.735, 0.410);
+    const vec3 near_0 = vec3(0.965, 0.820, 0.300);
+    const vec3 near_1 = vec3(0.985, 0.430, 0.125);
+
+    if (near_t < 0.20) {
+        return mix(far_0, far_1, smoothstep(0.00, 0.20, near_t));
+    }
+    if (near_t < 0.43) {
+        return mix(far_1, mid_0, smoothstep(0.20, 0.43, near_t));
+    }
+    if (near_t < 0.67) {
+        return mix(mid_0, mid_1, smoothstep(0.43, 0.67, near_t));
+    }
+    if (near_t < 0.86) {
+        return mix(mid_1, near_0, smoothstep(0.67, 0.86, near_t));
+    }
+    return mix(near_0, near_1, smoothstep(0.86, 1.00, near_t));
+}
+
 void main() {
     const uvec2 gid = gl_GlobalInvocationID.xy;
     if (gid.x >= pc.width || gid.y >= pc.height) {
@@ -29,10 +73,37 @@ void main() {
 
     const uint idx = gid.y * pc.width + gid.x;
     const vec4 state = pixel_state[idx];
-    imageStore(out_depth, ivec2(gid), vec4(pixel_depth[idx], 0.0, 0.0, 0.0));
+    const float depth = pixel_depth[idx];
+    imageStore(out_depth, ivec2(gid), vec4(depth, 0.0, 0.0, 0.0));
 
     const float transmittance = clamp(state.a, 0.0, 1.0);
     const float alpha = 1.0 - transmittance;
+
+    if (pc.depth_view != 0u) {
+        float lo = pc.depth_min;
+        float hi = pc.depth_max;
+        if (hi <= lo + 1.0e-5) {
+            hi = lo + 1.0;
+        }
+
+        const bool empty = alpha < 0.02 || depth >= 1.0e9 || depth <= 0.0;
+        const float depth_t = empty ? 1.0 : normalizedDepth(depth, lo, hi);
+        const float near_t = 1.0 - depth_t;
+        vec3 depth_color = depthPalette(near_t);
+
+        const float band = abs(fract(depth_t * 24.0) - 0.5);
+        const float contour = smoothstep(0.475, 0.5, band);
+        depth_color *= 1.0 - contour * 0.07;
+
+        const float coverage = empty ? 0.0 : smoothstep(0.02, 0.72, alpha);
+        if (pc.transparent_background != 0u) {
+            imageStore(out_image, ivec2(gid), vec4(depth_color, coverage));
+        } else {
+            imageStore(out_image, ivec2(gid), vec4(mix(pc.background.rgb, depth_color, coverage), 1.0));
+        }
+        return;
+    }
+
     if (pc.transparent_background != 0u) {
         const vec3 straight_rgb = alpha > 1e-6 ? state.rgb / alpha : vec3(0.0);
         imageStore(out_image, ivec2(gid), vec4(clamp(straight_rgb, vec3(0.0), vec3(1.0)), alpha));

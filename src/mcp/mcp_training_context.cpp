@@ -4,7 +4,6 @@
 #include "mcp_training_context.hpp"
 #include "llm_client.hpp"
 #include "mcp_tools.hpp"
-#include "render_capture_utils.hpp"
 #include "shared_scene_tools.hpp"
 
 #include "core/checkpoint_format.hpp"
@@ -13,9 +12,7 @@
 #include "io/exporter.hpp"
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
-#include "rendering/gs_rasterizer_tensor.hpp"
-#include "rendering/rasterizer/rasterization/include/forward.h"
-#include "rendering/rasterizer/rasterization/include/rasterization_api_tensor.h"
+#include "rendering/selection_ops.hpp"
 #include "training/checkpoint.hpp"
 #include "training/dataset.hpp"
 #include "training/training_setup.hpp"
@@ -23,8 +20,6 @@
 
 #include <algorithm>
 #include <cassert>
-#include <cuda_runtime.h>
-#include <limits>
 #include <sstream>
 
 namespace lfs::mcp {
@@ -169,95 +164,12 @@ namespace lfs::mcp {
             const core::SplatData& model,
             const float x,
             const float y) {
-
-            core::Tensor bg = core::Tensor::zeros({3}, core::Device::CUDA);
-            unsigned long long* hovered_depth_id_device = nullptr;
-            unsigned long long* hovered_depth_id_host = nullptr;
-
-            const auto cleanup = [&]() {
-                if (hovered_depth_id_device) {
-                    cudaFree(hovered_depth_id_device);
-                    hovered_depth_id_device = nullptr;
-                }
-                if (hovered_depth_id_host) {
-                    cudaFreeHost(hovered_depth_id_host);
-                    hovered_depth_id_host = nullptr;
-                }
-            };
-
-            if (cudaMalloc(&hovered_depth_id_device, sizeof(unsigned long long)) != cudaSuccess) {
-                return std::unexpected("Failed to allocate ring hover buffer");
-            }
-            if (cudaMallocHost(&hovered_depth_id_host, sizeof(unsigned long long)) != cudaSuccess) {
-                cleanup();
-                return std::unexpected("Failed to allocate ring hover readback buffer");
-            }
-            if (cudaMemset(hovered_depth_id_device, 0xFF, sizeof(unsigned long long)) != cudaSuccess) {
-                cleanup();
-                return std::unexpected("Failed to reset ring hover buffer");
-            }
-
-            try {
-                auto [image, alpha] = rendering::rasterize_tensor(
-                    camera,
-                    model,
-                    bg,
-                    -1,      // sh_degree_override
-                    false,   // show_rings
-                    0.01f,   // ring_width
-                    nullptr, // model_transforms
-                    nullptr, // transform_indices
-                    nullptr, // selection_mask
-                    nullptr, // screen_positions_out
-                    true,    // cursor_active
-                    x,
-                    y,
-                    0.0f,    // cursor_radius
-                    true,    // preview_selection_add_mode
-                    nullptr, // preview_selection_out
-                    false,   // cursor_saturation_preview
-                    0.0f,    // cursor_saturation_amount
-                    false,   // show_center_markers
-                    nullptr, // crop_box_transform
-                    nullptr, // crop_box_min
-                    nullptr, // crop_box_max
-                    false,   // crop_inverse
-                    false,   // crop_desaturate
-                    -1,      // crop_parent_node_index
-                    nullptr, // ellipsoid_transform
-                    nullptr, // ellipsoid_radii
-                    false,   // ellipsoid_inverse
-                    false,   // ellipsoid_desaturate
-                    -1,      // ellipsoid_parent_node_index
-                    nullptr, // depth_filter_transform
-                    nullptr, // depth_filter_min
-                    nullptr, // depth_filter_max
-                    false,   // view_volume_cull
-                    nullptr, // deleted_mask
-                    hovered_depth_id_device,
-                    -1); // highlight_gaussian_id
-                (void)image;
-                (void)alpha;
-            } catch (const std::exception& e) {
-                cleanup();
-                return std::unexpected(std::string("Ring pick render failed: ") + e.what());
-            }
-
-            if (cudaMemcpy(hovered_depth_id_host, hovered_depth_id_device,
-                           sizeof(unsigned long long), cudaMemcpyDeviceToHost) != cudaSuccess) {
-                cleanup();
-                return std::unexpected("Failed to read back ring hover result");
-            }
-
-            constexpr auto NO_HOVERED_RESULT = std::numeric_limits<unsigned long long>::max();
-            const unsigned long long packed = *hovered_depth_id_host;
-            cleanup();
-
-            if (packed == NO_HOVERED_RESULT) {
-                return std::unexpected("No hovered gaussian");
-            }
-
-            return static_cast<int>(packed & 0xFFFFFFFFu);
+            (void)camera;
+            (void)model;
+            (void)x;
+            (void)y;
+            return std::unexpected(
+                "Headless CUDA ring-pick rendering has been removed; use the live Vulkan selection path");
         }
 
         std::expected<std::pair<core::SplatData*, std::shared_ptr<core::Camera>>, std::string>
@@ -296,30 +208,8 @@ namespace lfs::mcp {
             if (!resolved) {
                 return std::unexpected(resolved.error());
             }
-
-            const auto [model, camera] = *resolved;
-            core::Tensor bg = core::Tensor::zeros({3}, core::Device::CUDA);
-            core::Tensor screen_positions;
-
-            try {
-                auto [image, alpha] = rendering::rasterize_tensor(
-                    *camera,
-                    *model,
-                    bg,
-                    -1,      // sh_degree_override
-                    false,   // show_rings
-                    0.01f,   // ring_width
-                    nullptr, // model_transforms
-                    nullptr, // transform_indices
-                    nullptr, // selection_mask
-                    &screen_positions);
-                (void)image;
-                (void)alpha;
-
-                return screen_positions;
-            } catch (const std::exception& e) {
-                return std::unexpected(std::string("Screen position computation failed: ") + e.what());
-            }
+            return std::unexpected(
+                "Headless CUDA screen-position rendering has been removed; use the live Vulkan selection path");
         }
 
         std::expected<std::string, std::string> render_to_base64_for_scene(
@@ -331,17 +221,10 @@ namespace lfs::mcp {
             if (!resolved) {
                 return std::unexpected(resolved.error());
             }
-
-            const auto [model, camera] = *resolved;
-            core::Tensor bg = core::Tensor::zeros({3}, core::Device::CUDA);
-
-            try {
-                auto [image, alpha] = rendering::rasterize_tensor(*camera, *model, bg);
-                (void)alpha;
-                return encode_render_tensor_to_base64(std::move(image), width, height);
-            } catch (const std::exception& e) {
-                return std::unexpected(std::string("Render failed: ") + e.what());
-            }
+            (void)width;
+            (void)height;
+            return std::unexpected(
+                "Headless CUDA scene rendering has been removed; use live Vulkan viewport capture");
         }
 
         std::expected<int64_t, std::string> apply_headless_selection(

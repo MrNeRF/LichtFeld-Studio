@@ -127,14 +127,16 @@ namespace lfs::vis {
         s.show_pivot = p.show_pivot;
         s.split_view_mode = static_cast<SplitViewMode>(p.split_view_mode);
         s.split_position = p.split_position;
-        s.raster_backend = static_cast<lfs::rendering::GaussianRasterBackend>(p.raster_backend);
-        if (p.gut && s.raster_backend == lfs::rendering::GaussianRasterBackend::FastGs) {
-            s.raster_backend = lfs::rendering::GaussianRasterBackend::Gut;
-        } else if (p.gut && s.raster_backend == lfs::rendering::GaussianRasterBackend::VkSplat) {
-            s.raster_backend = lfs::rendering::GaussianRasterBackend::VkSplatGut;
-        }
+        const auto previous_backend = s.raster_backend;
+        const bool previous_gut = s.gut;
+        const auto requested_backend = static_cast<lfs::rendering::GaussianRasterBackend>(p.raster_backend);
+        const bool gut_toggle_only = requested_backend == previous_backend && p.gut != previous_gut;
+        s.raster_backend = gut_toggle_only
+                               ? lfs::rendering::viewerRasterBackendForGutMode(p.gut)
+                               : lfs::rendering::normalizeViewerRasterBackend(requested_backend, p.gut);
         s.gut = lfs::rendering::isGutBackend(s.raster_backend);
         s.equirectangular = p.equirectangular;
+        enforceProjectionBackend(s);
         s.orthographic = p.orthographic;
         s.ortho_scale = p.ortho_scale;
         s.selection_color_committed = detail::to_vec3(p.selection_color_committed);

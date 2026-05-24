@@ -29,15 +29,16 @@ vec3 aces_tonemap(vec3 x) {
 }
 
 vec3 ray_direction_local() {
+    vec2 viewport_uv = vec2(TexCoord.x, 1.0 - TexCoord.y);
     bool equirect = push.flags.x > 0.5;
     if (equirect) {
-        float lon = (TexCoord.x - 0.5) * (2.0 * PI);
-        float lat = (TexCoord.y - 0.5) * PI;
+        float lon = (viewport_uv.x - 0.5) * (2.0 * PI);
+        float lat = (viewport_uv.y - 0.5) * PI;
         float cos_lat = cos(lat);
         return normalize(vec3(sin(lon) * cos_lat, sin(lat), -cos(lon) * cos_lat));
     }
     vec2 viewport = push.viewport_exposure.xy;
-    vec2 pixel = TexCoord * viewport;
+    vec2 pixel = viewport_uv * viewport;
     vec2 centered = vec2(
         (pixel.x - push.intrinsics.z) / max(push.intrinsics.x, 1e-6),
         (pixel.y - push.intrinsics.w) / max(push.intrinsics.y, 1e-6));

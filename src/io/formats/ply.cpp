@@ -1367,10 +1367,10 @@ namespace lfs::io {
 
         if (splat_data.sh0().is_valid())
             add_indexed_attrs("f_dc_", get_feature_count(splat_data.sh0()));
-        // shN is stored swizzled; compute attribute count from active SH degree directly.
-        const size_t active_rest = splat_data.active_sh_coeffs_rest();
-        if (active_rest > 0)
-            add_indexed_attrs("f_rest_", active_rest * 3);
+        // shN is stored swizzled at max SH degree; export all resident coefficients.
+        const size_t layout_rest = splat_data.max_sh_coeffs_rest();
+        if (layout_rest > 0)
+            add_indexed_attrs("f_rest_", layout_rest * 3);
 
         attrs.emplace_back("opacity");
 

@@ -689,6 +689,7 @@
     "fov_info": "시야각",
     "sh_degree": "SH Degree",
     "equirectangular": "정거원통도법",
+    "raster_backend": "래스터 백엔드",
     "gut_mode": "GUT (3DGUT)",
     "mip_filter": "밉 필터",
     "camera_metrics": "카메라 지표",
@@ -766,7 +767,8 @@
     "orthographic": "직교 투영",
     "sequencer": "시퀀서",
     "ellipsoid": "Ellipsoid",
-    "histogram": "Histogram"
+    "histogram": "Histogram",
+    "depth_map": "깊이 맵"
   },
   "transform": {
     "node": "노드: %s",
@@ -825,6 +827,7 @@
     "color_blue_prefix": "B:"
   },
   "tooltip": {
+    "raster_backend": "가우시안 래스터라이저: 3DGS 또는 3DGUT",
     "gut_mode": "어안/왜곡/정거원통 카메라용",
     "mip_filter": "서브픽셀 가우시안 앨리어싱 감소",
     "appearance_correction": "PPISP Correction",

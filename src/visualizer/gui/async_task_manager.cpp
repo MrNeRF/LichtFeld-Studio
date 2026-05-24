@@ -310,51 +310,6 @@ namespace lfs::vis::gui {
         return lfs::rendering::flipImageVertical(image, layout);
     }
 
-    void applyVideoExportGaussianFilters(rendering::GaussianFilterState& filters,
-                                         const VideoExportSceneSnapshot& snapshot,
-                                         const RenderSettings& render_settings) {
-        if ((render_settings.use_crop_box || render_settings.show_crop_box) && !snapshot.cropboxes.empty()) {
-            const size_t idx = (snapshot.selected_cropbox_index >= 0)
-                                   ? static_cast<size_t>(snapshot.selected_cropbox_index)
-                                   : 0;
-            if (idx < snapshot.cropboxes.size() && snapshot.cropboxes[idx].has_data) {
-                const auto& cb = snapshot.cropboxes[idx];
-                filters.crop_region = rendering::GaussianScopedBoxFilter{
-                    .bounds =
-                        {.min = cb.data.min,
-                         .max = cb.data.max,
-                         .transform = glm::inverse(cb.world_transform)},
-                    .inverse = cb.data.inverse,
-                    .desaturate = render_settings.show_crop_box &&
-                                  !render_settings.use_crop_box &&
-                                  render_settings.desaturate_cropping,
-                    .parent_node_index = cb.parent_node_index};
-            }
-        }
-
-        if ((render_settings.use_ellipsoid || render_settings.show_ellipsoid) &&
-            snapshot.active_ellipsoid.has_value()) {
-            const auto& ellipsoid = *snapshot.active_ellipsoid;
-            filters.ellipsoid_region = rendering::GaussianScopedEllipsoidFilter{
-                .bounds =
-                    {.radii = ellipsoid.data.radii,
-                     .transform = glm::inverse(ellipsoid.world_transform)},
-                .inverse = ellipsoid.data.inverse,
-                .desaturate = render_settings.show_ellipsoid &&
-                              !render_settings.use_ellipsoid &&
-                              render_settings.desaturate_cropping,
-                .parent_node_index = ellipsoid.parent_node_index};
-        }
-
-        if (render_settings.depth_filter_enabled) {
-            filters.view_volume = rendering::BoundingBox{
-                .min = render_settings.depth_filter_min,
-                .max = render_settings.depth_filter_max,
-                .transform = render_settings.depth_filter_transform.inv().toMat4()};
-            filters.cull_outside_view_volume = render_settings.hide_outside_depth_box;
-        }
-    }
-
     void applyVideoExportPointCloudFilters(rendering::PointCloudFilterState& filters,
                                            const VideoExportSceneSnapshot& snapshot,
                                            const RenderSettings& render_settings) {
@@ -447,54 +402,8 @@ namespace lfs::vis::gui {
                 }
                 primary_frame = std::move(*render_result);
             } else {
-                rendering::ViewportRenderRequest request{
-                    .frame_view = frame_view,
-                    .scaling_modifier = render_settings.scaling_modifier,
-                    .antialiasing = render_settings.antialiasing,
-                    .mip_filter = render_settings.mip_filter,
-                    .sh_degree = render_settings.sh_degree,
-                    .raster_backend = render_settings.raster_backend,
-                    .gut = render_settings.gut ||
-                           lfs::rendering::isGutBackend(render_settings.raster_backend),
-                    .equirectangular = render_settings.equirectangular,
-                    .scene =
-                        {.model_transforms = &snapshot.model_transforms,
-                         .transform_indices = snapshot.transform_indices,
-                         .node_visibility_mask = snapshot.node_visibility_mask},
-                    .filters = {},
-                    .overlay =
-                        {.markers =
-                             {.show_rings = render_settings.show_rings,
-                              .ring_width = render_settings.ring_width,
-                              .show_center_markers = render_settings.show_center_markers},
-                         .cursor = {},
-                         .emphasis =
-                             {.mask = snapshot.selection_mask,
-                              .transient_mask = {},
-                              .emphasized_node_mask = render_settings.desaturate_unselected
-                                                          ? snapshot.selected_node_mask
-                                                          : std::vector<bool>{},
-                              .dim_non_emphasized = render_settings.desaturate_unselected,
-                              .flash_intensity = 0.0f,
-                              .focused_gaussian_id = -1}},
-                    .transparent_background = render_environment};
-                applyVideoExportGaussianFilters(request.filters, snapshot, render_settings);
-
-                if (!requires_composite_pass) {
-                    auto render_result = engine.renderGaussiansImage(*snapshot.combined_model, request);
-                    if (!render_result || !render_result->image) {
-                        return std::unexpected(render_result ? "Rendered frame is invalid"
-                                                             : render_result.error());
-                    }
-                    return *render_result->image;
-                }
-
-                auto render_result = engine.renderGaussiansGpuFrame(*snapshot.combined_model, request);
-                if (!render_result || !render_result->frame.valid()) {
-                    return std::unexpected(render_result ? "Rendered frame is invalid"
-                                                         : render_result.error());
-                }
-                primary_frame = std::move(render_result->frame);
+                return std::unexpected(
+                    "Gaussian video export needs a Vulkan offscreen export path");
             }
         } else if (snapshot.point_cloud && snapshot.point_cloud->size() > 0) {
             const std::vector<glm::mat4> point_cloud_transforms = {snapshot.point_cloud_transform};

@@ -732,7 +732,9 @@ namespace lfs::vis::gui {
             snapshot.visible = static_cast<bool>(node->visible);
             snapshot.has_children = !node->children.empty();
             snapshot.training_enabled = node->training_enabled;
-            snapshot.has_mask = node->type == core::NodeType::CAMERA && !node->mask_path.empty();
+            snapshot.has_mask = node->type == core::NodeType::CAMERA &&
+                                (!node->mask_path.empty() ||
+                                 (node->camera && node->camera->has_in_memory_mask()));
 
             switch (node->type) {
             case core::NodeType::SPLAT:

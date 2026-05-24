@@ -64,9 +64,9 @@ namespace lfs::vis::gui {
 
         const auto image = rm->renderPreviewImage(sm, cam_rot, state.position, state.focal_length_mm,
                                                   THUMB_WIDTH, THUMB_HEIGHT);
-        // Rasterizer output uses OpenGL (bottom-left) origin; RmlUi samples top-left, so flip on upload.
+        // Vulkan preview readback is already in the orientation RmlUi samples.
         const bool ok = image &&
-                        slots_[slot_idx].texture.upload(*image, THUMB_WIDTH, THUMB_HEIGHT, /*flip_y=*/true);
+                        slots_[slot_idx].texture.upload(*image, THUMB_WIDTH, THUMB_HEIGHT, /*flip_y=*/false);
 
         if (ok) {
             slots_[slot_idx].time = time;

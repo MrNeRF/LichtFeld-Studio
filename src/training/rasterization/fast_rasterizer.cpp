@@ -240,8 +240,8 @@ namespace lfs::training {
                 for (size_t i = 1; i < shN.ndim(); ++i)
                     params_file << ", " << shN.shape()[i];
                 params_file << "],\n";
-                // shN is stored in vksplat float4-packed swizzled layout (ceil(N/32) * 12 * 32 * 4
-                // floats, 1D flat — see core/cuda/sh_layout.cuh). Crash-dump consumers should
+                // shN is stored in compact vksplat float4-packed swizzled layout
+                // (ceil(N/32) * active_slots * 32 * 4 floats). Crash-dump consumers should
                 // deswizzle via shAt(p, k) (returns a float4-slot index; multiply by 4 for the
                 // float offset) before interpreting as canonical [N, K, 3].
                 params_file << "  \"shN_layout\": \"swizzled-sh-reorder-32\"\n";
@@ -289,6 +289,8 @@ namespace lfs::training {
 
         const int sh_degree = gaussian_model.get_active_sh_degree();
         const int active_sh_bases = (sh_degree + 1) * (sh_degree + 1);
+        const int max_sh_degree = gaussian_model.get_max_sh_degree();
+        const int sh_layout_bases = (max_sh_degree + 1) * (max_sh_degree + 1);
 
         constexpr float near_plane = 0.01f;
         constexpr float far_plane = 1e10f;
@@ -333,6 +335,7 @@ namespace lfs::training {
                 alpha.ptr<float>(),
                 n_primitives,
                 active_sh_bases,
+                sh_layout_bases,
                 width,
                 height,
                 fx,
@@ -594,6 +597,7 @@ namespace lfs::training {
             nullptr,
             n_primitives,
             ctx.active_sh_bases,
+            ctx.forward_ctx.sh_layout_bases,
             ctx.width,
             ctx.height,
             ctx.focal_x,

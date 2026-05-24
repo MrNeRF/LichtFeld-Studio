@@ -13,6 +13,7 @@
 #include <cmath>
 #include <glm/gtx/norm.hpp>
 #include <iostream>
+#include <optional>
 
 class Viewport {
     class CameraMotion {
@@ -492,6 +493,7 @@ public:
     glm::ivec2 windowSize;
     glm::ivec2 frameBufferSize;
     CameraMotion camera;
+    std::optional<float> ortho_scale_override;
 
     Viewport(size_t width = 1280, size_t height = 720) {
         windowSize = glm::ivec2(width, height);
@@ -524,17 +526,23 @@ public:
     }
 
     [[nodiscard]] static bool isValidWorldPosition(const glm::vec3& world_pos) {
-        return world_pos.x != INVALID_WORLD_POS ||
-               world_pos.y != INVALID_WORLD_POS ||
-               world_pos.z != INVALID_WORLD_POS;
+        return std::isfinite(world_pos.x) &&
+               std::isfinite(world_pos.y) &&
+               std::isfinite(world_pos.z) &&
+               (world_pos.x != INVALID_WORLD_POS ||
+                world_pos.y != INVALID_WORLD_POS ||
+                world_pos.z != INVALID_WORLD_POS);
     }
 
     // Unproject screen pixel to world position (returns INVALID_WORLD_POS if invalid)
     [[nodiscard]] glm::vec3 unprojectPixel(float screen_x, float screen_y, float depth,
-                                           float focal_length_mm = lfs::rendering::DEFAULT_FOCAL_LENGTH_MM) const {
+                                           float focal_length_mm = lfs::rendering::DEFAULT_FOCAL_LENGTH_MM,
+                                           bool orthographic = false,
+                                           float ortho_scale = lfs::rendering::DEFAULT_ORTHO_SCALE) const {
         constexpr float MAX_DEPTH = 1e9f;
 
-        if (depth <= 0.0f || depth > MAX_DEPTH) {
+        if (depth <= 0.0f || depth > MAX_DEPTH ||
+            (orthographic && (!std::isfinite(ortho_scale) || ortho_scale <= 0.0f))) {
             return glm::vec3(INVALID_WORLD_POS);
         }
 
@@ -545,6 +553,8 @@ public:
             screen_x,
             screen_y,
             depth,
-            focal_length_mm);
+            focal_length_mm,
+            orthographic,
+            ortho_scale);
     }
 };

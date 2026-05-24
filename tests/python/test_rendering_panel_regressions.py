@@ -9,10 +9,12 @@ import sys
 
 import pytest
 
+
 class _BindingModelStub:
     def __init__(self):
         self.bindings = {}
         self.func_bindings = {}
+        self.handle = _HandleStub()
 
     def bind(self, name, getter, setter):
         self.bindings[name] = (getter, setter)
@@ -24,7 +26,7 @@ class _BindingModelStub:
         pass
 
     def get_handle(self):
-        return object()
+        return self.handle
 
 
 class _BindingContextStub:
@@ -162,9 +164,9 @@ def test_rendering_panel_binds_theme_vignette_controls(rendering_panel_module):
     assert set_calls["intensity"] == [0.4]
 
 
-def test_rendering_panel_raster_backend_updates_gut_mirror(rendering_panel_module):
+def test_rendering_panel_raster_backend_uses_3dgs_ids(rendering_panel_module):
     module = rendering_panel_module
-    settings = SimpleNamespace(raster_backend="3dgut", gut=True)
+    settings = SimpleNamespace(raster_backend="3dgut")
     module.lf.get_render_settings = lambda: settings
 
     model = _BindingModelStub()
@@ -176,21 +178,52 @@ def test_rendering_panel_raster_backend_updates_gut_mirror(rendering_panel_modul
 
     assert backend_getter() == "3dgut"
 
-    backend_setter("fast_gs")
-    assert settings.raster_backend == "fast_gs"
-    assert settings.gut is False
+    backend_setter("3dgs")
+    assert settings.raster_backend == "3dgs"
 
     backend_setter("3dgut")
     assert settings.raster_backend == "3dgut"
-    assert settings.gut is True
 
-    backend_setter("vksplat")
-    assert settings.raster_backend == "vksplat"
-    assert settings.gut is False
 
-    backend_setter("vksplat_3dgut")
-    assert settings.raster_backend == "vksplat_3dgut"
-    assert settings.gut is True
+def test_rendering_panel_equirectangular_enables_3dgut(rendering_panel_module):
+    module = rendering_panel_module
+    settings = SimpleNamespace(raster_backend="3dgs", equirectangular=False)
+    module.lf.get_render_settings = lambda: settings
+
+    model = _BindingModelStub()
+    panel = module.RenderingPanel()
+
+    panel.on_bind_model(_BindingContextStub(model))
+
+    _, equirectangular_setter = model.bindings["equirectangular"]
+
+    equirectangular_setter(True)
+    assert settings.equirectangular is True
+    assert settings.raster_backend == "3dgut"
+    assert "raster_backend" in model.handle.dirty_fields
+
+    equirectangular_setter(False)
+    assert settings.equirectangular is False
+    assert settings.raster_backend == "3dgut"
+
+
+def test_rendering_panel_projection_sync_updates_backend_dropdown(rendering_panel_module):
+    module = rendering_panel_module
+    settings = SimpleNamespace(raster_backend="3dgs", equirectangular=False)
+    module.lf.get_render_settings = lambda: settings
+
+    model = _BindingModelStub()
+    panel = module.RenderingPanel()
+
+    panel.on_bind_model(_BindingContextStub(model))
+    assert panel._sync_projection_state() is True
+    model.handle.dirty_fields.clear()
+
+    settings.raster_backend = "3dgut"
+    settings.equirectangular = True
+
+    assert panel._sync_projection_state() is True
+    assert model.handle.dirty_fields == ["raster_backend", "equirectangular"]
 
 
 def test_rendering_panel_custom_environment_map_appears_in_dropdown(rendering_panel_module):
@@ -254,3 +287,12 @@ def test_rendering_rml_exposes_simplify_tooltips_and_locale_labels():
     assert "{{label_simplify_output}}" in content
     assert "{{label_simplify_apply}}" in content
     assert "{{label_simplify_cancel}}" in content
+
+
+def test_rendering_rml_only_exposes_3dgs_backends():
+    project_root = Path(__file__).parent.parent.parent
+    rendering_rml = project_root / "src" / "visualizer" / "gui" / "rmlui" / "resources" / "rendering.rml"
+    content = rendering_rml.read_text()
+
+    assert '<option value="3dgs">3DGS</option>' in content
+    assert '<option value="3dgut">3DGUT</option>' in content

@@ -8,24 +8,52 @@
 #include <cmath>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <string_view>
 
 namespace lfs::rendering {
 
     enum class GaussianRasterBackend : int {
-        FastGs = 0,
-        Gut = 1,
-        VkSplat = 2,
-        VkSplatGut = 3,
+        ThreeDgs = 2,
+        ThreeDgut = 3,
     };
 
     inline bool isGutBackend(const GaussianRasterBackend backend) {
-        return backend == GaussianRasterBackend::Gut ||
-               backend == GaussianRasterBackend::VkSplatGut;
+        return backend == GaussianRasterBackend::ThreeDgut;
     }
 
     inline bool isVkSplatBackend(const GaussianRasterBackend backend) {
-        return backend == GaussianRasterBackend::VkSplat ||
-               backend == GaussianRasterBackend::VkSplatGut;
+        return backend == GaussianRasterBackend::ThreeDgs ||
+               backend == GaussianRasterBackend::ThreeDgut;
+    }
+
+    inline GaussianRasterBackend normalizeViewerRasterBackend(const GaussianRasterBackend backend,
+                                                              const bool gut = false) {
+        switch (backend) {
+        case GaussianRasterBackend::ThreeDgs:
+        case GaussianRasterBackend::ThreeDgut:
+            return backend;
+        }
+        return gut ? GaussianRasterBackend::ThreeDgut : GaussianRasterBackend::ThreeDgs;
+    }
+
+    inline GaussianRasterBackend viewerRasterBackendForGutMode(const bool gut) {
+        return gut ? GaussianRasterBackend::ThreeDgut : GaussianRasterBackend::ThreeDgs;
+    }
+
+    inline constexpr std::string_view THREE_DGS_BACKEND_ID = "3dgs";
+    inline constexpr std::string_view THREE_DGUT_BACKEND_ID = "3dgut";
+
+    inline bool isGaussianRasterBackendId(const std::string_view id) {
+        return id == THREE_DGS_BACKEND_ID || id == THREE_DGUT_BACKEND_ID;
+    }
+
+    inline std::string_view gaussianRasterBackendId(const GaussianRasterBackend backend) {
+        return isGutBackend(backend) ? THREE_DGUT_BACKEND_ID : THREE_DGS_BACKEND_ID;
+    }
+
+    inline GaussianRasterBackend gaussianRasterBackendFromId(const std::string_view id) {
+        return id == THREE_DGUT_BACKEND_ID ? GaussianRasterBackend::ThreeDgut
+                                           : GaussianRasterBackend::ThreeDgs;
     }
 
     constexpr float DEFAULT_NEAR_PLANE = 0.1f;

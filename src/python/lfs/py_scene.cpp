@@ -516,7 +516,8 @@ namespace lfs::python {
                                 int width,
                                 int height,
                                 const std::string& image_path,
-                                int uid) {
+                                int uid,
+                                std::optional<PyTensor> mask) {
         std::optional<vis::op::SceneGraphStateSnapshot> history_before;
         if (auto* const scene_manager = get_scene_manager()) {
             history_before = vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {name});
@@ -542,6 +543,12 @@ namespace lfs::python {
             std::filesystem::path{},
             width, height,
             uid);
+
+        // Attach an in-memory mask if the caller passed one (direct-scene
+        // plugins use this to bypass the on-disk masks/ workflow).
+        if (mask.has_value() && mask->tensor().is_valid()) {
+            camera->set_mask_tensor(mask->tensor().clone());
+        }
 
         const int32_t node_id = scene_->addCamera(name, parent, std::move(camera));
         if (auto* const scene_manager = get_scene_manager()) {
@@ -1222,6 +1229,7 @@ Returns:
                  nb::arg("height"),
                  nb::arg("image_path") = "",
                  nb::arg("uid") = -1,
+                 nb::arg("mask") = nb::none(),
                  R"doc(Add a camera node with intrinsic and extrinsic parameters.
 
 Args:
@@ -1235,6 +1243,11 @@ Args:
     height: Image height in pixels
     image_path: Optional path to camera image
     uid: Optional unique identifier (-1 for auto-assigned)
+    mask: Optional in-memory mask tensor (H, W) or (1, H, W) at the image
+        resolution. Bypasses the on-disk masks/ workflow — useful for
+        direct-scene plugins that want to attach per-frame masks without
+        writing files. Set the session's ``mask_mode`` to ``Ignore`` or
+        ``Segment`` for it to take effect during training.
 
 Returns:
     Node ID of created camera

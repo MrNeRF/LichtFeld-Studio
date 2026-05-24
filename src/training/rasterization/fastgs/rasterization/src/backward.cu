@@ -35,6 +35,7 @@ void fast_lfs::rasterization::backward(
     const int n_primitives,
     const int n_instances,
     const int active_sh_bases,
+    const int sh_layout_bases,
     const int width,
     const int height,
     const float fx,
@@ -47,10 +48,12 @@ void fast_lfs::rasterization::backward(
     const dim3 grid(div_round_up(width, config::tile_width), div_round_up(height, config::tile_height), 1);
     const uint64_t n_tiles_u64 = static_cast<uint64_t>(grid.x) * static_cast<uint64_t>(grid.y);
     const int n_tiles = checked_to_int(n_tiles_u64, "n_tiles exceeds int range");
+    const uint sh_layout_slots = kernels::shSlotsForBases(static_cast<uint>(sh_layout_bases));
 
     // These blobs are from the arena and are guaranteed to be valid
     PerPrimitiveBuffers per_primitive_buffers = PerPrimitiveBuffers::from_blob(per_primitive_buffers_blob, n_primitives);
     PerTileBuffers per_tile_buffers = PerTileBuffers::from_blob(per_tile_buffers_blob, n_tiles);
+    auto* fastgs_status = per_primitive_buffers.forward_status;
 
     if (n_instances > 0) {
         // Backward blend (template dispatch eliminates densification branch from inner loop)
@@ -73,6 +76,8 @@ void fast_lfs::rasterization::backward(
                 grad_color_helper,
                 densification_info,
                 densification_error_map,
+                fastgs_status,
+                static_cast<uint>(n_instances),
                 n_primitives,
                 width,
                 height,
@@ -85,7 +90,13 @@ void fast_lfs::rasterization::backward(
         } else {
             launch_blend_backward.template operator()<DensificationType::None>();
         }
-        CHECK_CUDA(config::debug, "blend_backward");
+        check_cuda_with_fastgs_status(cudaGetLastError(), "blend_backward", fastgs_status, "blend_backward", static_cast<uint64_t>(n_primitives), n_tiles_u64);
+        if constexpr (config::debug) {
+            check_cuda_with_fastgs_status(cudaDeviceSynchronize(), "blend_backward", fastgs_status, "blend_backward", static_cast<uint64_t>(n_primitives), n_tiles_u64);
+            throw_if_fastgs_forward_status(fastgs_status, "blend_backward", static_cast<uint64_t>(n_primitives), n_tiles_u64);
+        } else {
+            sync_fastgs_phase_if_requested("blend_backward", fastgs_status, "blend_backward", static_cast<uint64_t>(n_primitives), n_tiles_u64);
+        }
     }
 
     // Backward preprocess — runs UNCONDITIONALLY now (handles both visible primitives'
@@ -115,6 +126,7 @@ void fast_lfs::rasterization::backward(
                 fy,
                 cx,
                 cy,
+                sh_layout_slots,
                 fused_adam);
         };
         auto launch_preprocess_backward_for_mip = [&]<int ACTIVE_SH_BASES>() {
@@ -133,6 +145,12 @@ void fast_lfs::rasterization::backward(
         } else {
             launch_preprocess_backward_for_mip.template operator()<16>();
         }
-        CHECK_CUDA(config::debug, "preprocess_backward");
+        check_cuda_with_fastgs_status(cudaGetLastError(), "preprocess_backward", fastgs_status, "preprocess_backward", static_cast<uint64_t>(n_primitives), n_tiles_u64);
+        if constexpr (config::debug) {
+            check_cuda_with_fastgs_status(cudaDeviceSynchronize(), "preprocess_backward", fastgs_status, "preprocess_backward", static_cast<uint64_t>(n_primitives), n_tiles_u64);
+            throw_if_fastgs_forward_status(fastgs_status, "preprocess_backward", static_cast<uint64_t>(n_primitives), n_tiles_u64);
+        } else {
+            sync_fastgs_phase_if_requested("preprocess_backward", fastgs_status, "preprocess_backward", static_cast<uint64_t>(n_primitives), n_tiles_u64);
+        }
     }
 }

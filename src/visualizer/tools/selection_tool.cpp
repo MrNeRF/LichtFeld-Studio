@@ -31,12 +31,7 @@ namespace lfs::vis::tools {
 
         [[nodiscard]] lfs::rendering::ScreenOverlayRenderer* getOverlayRenderer(const ToolContext& ctx) {
             auto* const rm = ctx.getRenderingManager();
-            if (!rm)
-                return nullptr;
-            auto* const engine = rm->getRenderingEngineIfInitialized();
-            if (!engine)
-                return nullptr;
-            return engine->getScreenOverlayRenderer();
+            return rm ? rm->getScreenOverlayRenderer() : nullptr;
         }
 
         [[nodiscard]] float depthBoxHalfHeight(const ToolContext& ctx, const float half_width) {

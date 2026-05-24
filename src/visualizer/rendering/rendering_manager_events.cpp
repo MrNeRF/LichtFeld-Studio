@@ -154,6 +154,7 @@ namespace lfs::vis {
         }
         if (event.equirectangular) {
             settings_.equirectangular = *event.equirectangular;
+            enforceProjectionBackend(settings_);
             LOG_TRACE("Equirectangular rendering: {}", settings_.equirectangular ? "enabled" : "disabled");
         }
         markDirty(DirtyFlag::SPLATS | DirtyFlag::CAMERA | DirtyFlag::BACKGROUND);

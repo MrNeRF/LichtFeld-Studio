@@ -123,7 +123,7 @@ TEST_F(FastGSFuzzTest, SingleGaussian_Visible) {
     auto opacity = Tensor::full({1}, 2.0f, Device::CUDA); // sigmoid(2) ~ 0.88
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
-    auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
+    auto splat = std::make_unique<SplatData>(3, means, sh0, shN, scaling, rotation, opacity, 1.0f);
 
     auto result = fast_rasterize_forward(camera, *splat, bg_, 0, 0, 0, 0, false);
     ASSERT_TRUE(result.has_value());
@@ -796,7 +796,7 @@ TEST_F(FastGSFuzzTest, HigherOrderSH) {
     auto opacity = Tensor::full({n}, 2.0f, Device::CUDA);
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
-    auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
+    auto splat = std::make_unique<SplatData>(3, means, sh0, shN, scaling, rotation, opacity, 1.0f);
 
     auto result = fast_rasterize_forward(camera, *splat, bg_, 0, 0, 0, 0, false);
     ASSERT_TRUE(result.has_value());

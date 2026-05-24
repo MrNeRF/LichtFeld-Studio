@@ -182,8 +182,10 @@ namespace lfs::vis {
             if (primary_viewport) {
                 secondary_viewport_ = *primary_viewport;
             }
+            secondary_viewport_.ortho_scale_override = settings.ortho_scale;
             focused_panel_ = SplitViewPanelId::Left;
         } else if (previous_mode == SplitViewMode::IndependentDual) {
+            secondary_viewport_.ortho_scale_override.reset();
             focused_panel_ = SplitViewPanelId::Left;
         }
 

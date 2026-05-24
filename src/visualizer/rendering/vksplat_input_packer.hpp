@@ -8,12 +8,13 @@
 #include "core/splat_data.hpp"
 
 #include <cstddef>
+#include <cuda_runtime_api.h>
 #include <expected>
 #include <map>
 #include <string>
 #include <vector>
 
-#include "rendering/rasterizer/vksplat_fwd/src/buffer.h"
+#include "rendering/rasterizer/vulkan/src/buffer.h"
 
 #include "visualizer/visualizer.hpp"
 
@@ -65,5 +66,55 @@ namespace lfs::vis::vksplat {
     // raw byte layout matches packHostInputs's host buffers exactly.
     LFS_VIS_API [[nodiscard]] std::expected<DevicePackedInputs, std::string> packDeviceInputs(
         const lfs::core::SplatData& splat_data);
+
+    struct LFS_VIS_API DeviceInputLayout {
+        std::size_t num_splats = 0;
+        std::size_t xyz_bytes = 0;
+        std::size_t rotations_bytes = 0;
+        std::size_t scales_opacs_bytes = 0;
+        std::size_t sh_coeffs_bytes = 0;
+        std::size_t sh_padded_floats = 0;
+    };
+
+    // Zero-intermediate GPU packer for the live Vulkan viewer path. The caller
+    // supplies CUDA pointers to a Vulkan-imported buffer; this copies means and
+    // writes activated rotation/scale/opacity/SH directly into those regions.
+    LFS_VIS_API [[nodiscard]] std::expected<DeviceInputLayout, std::string> deviceInputLayout(
+        const lfs::core::SplatData& splat_data);
+
+    LFS_VIS_API [[nodiscard]] std::expected<void, std::string> packDeviceInputsToBuffer(
+        const lfs::core::SplatData& splat_data,
+        void* xyz_dst,
+        void* rotations_dst,
+        void* scales_opacs_dst,
+        void* sh_coeffs_dst,
+        cudaStream_t stream);
+
+    struct LFS_VIS_API RawDeviceInputLayout {
+        std::size_t num_splats = 0;
+        std::size_t xyz_bytes = 0;
+        std::size_t sh0_bytes = 0;
+        std::size_t shN_bytes = 0;
+        std::size_t rotations_bytes = 0;
+        std::size_t scaling_bytes = 0;
+        std::size_t opacity_bytes = 0;
+    };
+
+    // Raw split SplatData layout for the live Vulkan viewer. Unlike the packed
+    // path above, this keeps log-scale/logit opacity and split SH untouched so
+    // shaders can consume the training tensors directly when they are Vulkan
+    // external buffers.
+    LFS_VIS_API [[nodiscard]] std::expected<RawDeviceInputLayout, std::string> rawDeviceInputLayout(
+        const lfs::core::SplatData& splat_data);
+
+    LFS_VIS_API [[nodiscard]] std::expected<void, std::string> copyRawDeviceInputsToBuffer(
+        const lfs::core::SplatData& splat_data,
+        void* xyz_dst,
+        void* sh0_dst,
+        void* shN_dst,
+        void* rotations_dst,
+        void* scaling_dst,
+        void* opacity_dst,
+        cudaStream_t stream);
 
 } // namespace lfs::vis::vksplat

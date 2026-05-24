@@ -5,12 +5,15 @@
 #include "vksplat_input_packer.hpp"
 
 #include "core/tensor.hpp"
-#include "rendering/rasterizer/vksplat_fwd/src/config.h"
+#include "core/tensor/internal/cuda_stream_context.hpp"
+#include "rendering/rasterizer/vulkan/src/config.h"
+#include "vksplat_input_packer_cuda.hpp"
 
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <cuda_runtime.h>
 #include <format>
 #include <string_view>
 #include <vector>
@@ -63,14 +66,16 @@ namespace lfs::vis::vksplat {
             const std::vector<float>& shN,
             const std::size_t primitive_idx,
             const std::size_t rest_coeff_idx,
-            const std::size_t channel) {
+            const std::size_t channel,
+            const std::uint32_t layout_rest) {
             const std::size_t packed_offset = rest_coeff_idx * 3 + channel;
             const std::size_t slot = packed_offset / 4;
             const std::size_t component = packed_offset % 4;
             const std::size_t float4_index =
                 lfs::core::sh_swizzled_index(
                     static_cast<std::uint32_t>(primitive_idx),
-                    static_cast<std::uint32_t>(slot));
+                    static_cast<std::uint32_t>(slot),
+                    layout_rest);
             return shN[float4_index * 4 + component];
         }
 
@@ -80,9 +85,9 @@ namespace lfs::vis::vksplat {
             const std::size_t n,
             PackedSh& packed_sh,
             const std::string_view label) {
-            const std::size_t active_rest = splat_data.active_sh_coeffs_rest();
+            const std::size_t layout_rest = splat_data.max_sh_coeffs_rest();
             const Tensor& shN_tensor = splat_data.shN();
-            if (active_rest == 0 || !shN_tensor.is_valid() || shN_tensor.numel() == 0) {
+            if (layout_rest == 0 || !shN_tensor.is_valid() || shN_tensor.numel() == 0) {
                 return {};
             }
             if (shN_tensor.ndim() != 1) {
@@ -93,17 +98,19 @@ namespace lfs::vis::vksplat {
             if (!shN) {
                 return std::unexpected(shN.error());
             }
-            const std::size_t expected_floats = lfs::core::sh_swizzled_float_count(n);
+            const std::size_t expected_floats =
+                lfs::core::sh_swizzled_float_count(n, static_cast<std::uint32_t>(layout_rest));
             if (shN->size() < expected_floats) {
                 return std::unexpected("VkSplat staged swizzled SH rest tensor is smaller than expected");
             }
 
-            const std::size_t rest = std::min<std::size_t>(15, active_rest);
+            const std::size_t rest = std::min<std::size_t>(15, layout_rest);
+            const auto layout_rest_u32 = static_cast<std::uint32_t>(rest);
             for (std::size_t i = 0; i < n; ++i) {
                 for (std::size_t k = 0; k < rest; ++k) {
                     for (std::size_t c = 0; c < 3; ++c) {
                         packed_sh[((i * 16) + (k + 1)) * 3 + c] =
-                            readSwizzledRestCoeff(*shN, i, k, c);
+                            readSwizzledRestCoeff(*shN, i, k, c, layout_rest_u32);
                     }
                 }
             }
@@ -243,11 +250,429 @@ namespace lfs::vis::vksplat {
                 sh0.ptr<float>(),
                 shN_ptr,
                 packed.ptr<float>(),
-                n);
+                n,
+                static_cast<std::uint32_t>(splat_data.max_sh_coeffs_rest()));
             return packed;
         }
 
+        [[nodiscard]] bool validOpacityShape(const Tensor& opacity, const std::size_t n) {
+            return opacity.ndim() != 0 &&
+                   ((opacity.ndim() == 1 && opacity.size(0) == n) ||
+                    (opacity.ndim() == 2 && opacity.size(0) == n && opacity.size(1) == 1));
+        }
+
+        [[nodiscard]] bool validSh0Shape(const Tensor& sh0, const std::size_t n) {
+            if (!sh0.is_valid() || sh0.numel() == 0) {
+                return false;
+            }
+            const std::size_t dims = sh0.ndim();
+            if (dims != 2 && dims != 3) {
+                return false;
+            }
+            return sh0.size(0) == n &&
+                   sh0.size(dims - 1) == 3 &&
+                   (dims == 2 || sh0.size(1) == 1);
+        }
+
+        [[nodiscard]] std::expected<void, std::string> requireCudaFloat32Contiguous(
+            const Tensor& tensor,
+            const std::string_view label) {
+            if (!tensor.is_valid() || tensor.data_ptr() == nullptr) {
+                return std::unexpected(std::format("VkSplat {} tensor is invalid", label));
+            }
+            if (tensor.dtype() != DataType::Float32) {
+                return std::unexpected(std::format("VkSplat {} tensor must be Float32", label));
+            }
+            if (tensor.device() != Device::CUDA) {
+                return std::unexpected(std::format("VkSplat {} tensor must be CUDA-resident", label));
+            }
+            if (!tensor.is_contiguous()) {
+                return std::unexpected(std::format("VkSplat {} tensor must be contiguous", label));
+            }
+            return {};
+        }
+
+        [[nodiscard]] std::expected<void, std::string> waitForInputStream(
+            const cudaStream_t stream,
+            const Tensor& tensor,
+            const std::string_view label) {
+            try {
+                lfs::core::waitForCUDAStream(stream, tensor.stream());
+                return {};
+            } catch (const std::exception& e) {
+                return std::unexpected(std::format(
+                    "VkSplat failed to order {} stream before direct input pack: {}",
+                    label,
+                    e.what()));
+            }
+        }
+
+        [[nodiscard]] std::string cudaErrorMessage(
+            const char* const operation,
+            const cudaError_t status) {
+            return std::format("{} failed: {} ({})",
+                               operation,
+                               cudaGetErrorName(status),
+                               cudaGetErrorString(status));
+        }
+
     } // namespace
+
+    std::expected<DeviceInputLayout, std::string> deviceInputLayout(
+        const lfs::core::SplatData& splat_data) {
+        const std::size_t n = static_cast<std::size_t>(splat_data.size());
+        if (n == 0) {
+            return std::unexpected("VkSplat cannot render an empty model");
+        }
+
+        const Tensor& means_raw = splat_data.means_raw();
+        const Tensor& rotation_raw = splat_data.rotation_raw();
+        const Tensor& scaling_raw = splat_data.scaling_raw();
+        const Tensor& opacity_raw = splat_data.opacity_raw();
+        if (means_raw.ndim() != 2 || means_raw.size(0) != n || means_raw.size(1) != 3 ||
+            rotation_raw.ndim() != 2 || rotation_raw.size(0) != n || rotation_raw.size(1) != 4 ||
+            scaling_raw.ndim() != 2 || scaling_raw.size(0) != n || scaling_raw.size(1) != 3) {
+            return std::unexpected("VkSplat input tensor shapes do not match [N,3]/[N,4]/[N,3]");
+        }
+        if (!validOpacityShape(opacity_raw, n)) {
+            return std::unexpected("VkSplat opacity tensor must be [N] or [N, 1]");
+        }
+        if (!validSh0Shape(splat_data.sh0(), n)) {
+            return std::unexpected("VkSplat expected SH DC coefficients shaped [N, 1, 3] or [N, 3]");
+        }
+        const Tensor& shN = splat_data.shN();
+        if (splat_data.max_sh_coeffs_rest() > 0 && (!shN.is_valid() || shN.numel() == 0)) {
+            return std::unexpected("VkSplat expected swizzled SH rest coefficients for max SH degree");
+        }
+        if (shN.is_valid() && shN.numel() > 0 && shN.ndim() != 1) {
+            return std::unexpected("VkSplat expected swizzled SH rest coefficients as a 1D tensor");
+        }
+
+        const auto layout_rest = static_cast<std::uint32_t>(splat_data.max_sh_coeffs_rest());
+        const std::size_t sh_padded_floats = lfs::core::sh_swizzled_float_count(n);
+        const std::size_t expected_shN_floats = lfs::core::sh_swizzled_float_count(n, layout_rest);
+        if (shN.is_valid() && shN.numel() > 0 &&
+            static_cast<std::size_t>(shN.numel()) < expected_shN_floats) {
+            return std::unexpected("VkSplat swizzled SH rest tensor is smaller than expected");
+        }
+
+        return DeviceInputLayout{
+            .num_splats = n,
+            .xyz_bytes = n * 3 * sizeof(float),
+            .rotations_bytes = n * 4 * sizeof(float),
+            .scales_opacs_bytes = n * 4 * sizeof(float),
+            .sh_coeffs_bytes = sh_padded_floats * sizeof(float),
+            .sh_padded_floats = sh_padded_floats,
+        };
+    }
+
+    std::expected<RawDeviceInputLayout, std::string> rawDeviceInputLayout(
+        const lfs::core::SplatData& splat_data) {
+        const std::size_t n = static_cast<std::size_t>(splat_data.size());
+        if (n == 0) {
+            return std::unexpected("VkSplat cannot render an empty model");
+        }
+
+        const Tensor& means_raw = splat_data.means_raw();
+        const Tensor& rotation_raw = splat_data.rotation_raw();
+        const Tensor& scaling_raw = splat_data.scaling_raw();
+        const Tensor& opacity_raw = splat_data.opacity_raw();
+        const Tensor& sh0_raw = splat_data.sh0_raw();
+        const Tensor& shN_raw = splat_data.shN_raw();
+        if (means_raw.ndim() != 2 || means_raw.size(0) != n || means_raw.size(1) != 3 ||
+            rotation_raw.ndim() != 2 || rotation_raw.size(0) != n || rotation_raw.size(1) != 4 ||
+            scaling_raw.ndim() != 2 || scaling_raw.size(0) != n || scaling_raw.size(1) != 3) {
+            return std::unexpected("VkSplat raw input tensor shapes do not match [N,3]/[N,4]/[N,3]");
+        }
+        if (!validOpacityShape(opacity_raw, n)) {
+            return std::unexpected("VkSplat opacity tensor must be [N] or [N, 1]");
+        }
+        if (!validSh0Shape(sh0_raw, n)) {
+            return std::unexpected("VkSplat expected SH DC coefficients shaped [N, 1, 3] or [N, 3]");
+        }
+        const auto layout_rest = static_cast<std::uint32_t>(splat_data.max_sh_coeffs_rest());
+        const std::size_t layout_shN_bytes =
+            lfs::core::sh_swizzled_float_count(n, layout_rest) * sizeof(float);
+        const std::size_t shN_bytes = layout_rest == 0 ? sizeof(float4) : layout_shN_bytes;
+        if (shN_raw.is_valid() && shN_raw.numel() > 0) {
+            if (shN_raw.ndim() != 1) {
+                return std::unexpected("VkSplat expected swizzled SH rest coefficients as a 1D tensor");
+            }
+            if (static_cast<std::size_t>(shN_raw.numel()) * sizeof(float) < layout_shN_bytes) {
+                return std::unexpected("VkSplat swizzled SH rest tensor is smaller than expected");
+            }
+        } else if (splat_data.max_sh_coeffs_rest() > 0) {
+            return std::unexpected("VkSplat expected swizzled SH rest coefficients for max SH degree");
+        }
+
+        return RawDeviceInputLayout{
+            .num_splats = n,
+            .xyz_bytes = n * 3 * sizeof(float),
+            .sh0_bytes = n * 3 * sizeof(float),
+            .shN_bytes = shN_bytes,
+            .rotations_bytes = n * 4 * sizeof(float),
+            .scaling_bytes = n * 3 * sizeof(float),
+            .opacity_bytes = n * sizeof(float),
+        };
+    }
+
+    std::expected<void, std::string> copyRawDeviceInputsToBuffer(
+        const lfs::core::SplatData& splat_data,
+        void* const xyz_dst,
+        void* const sh0_dst,
+        void* const shN_dst,
+        void* const rotations_dst,
+        void* const scaling_dst,
+        void* const opacity_dst,
+        const cudaStream_t stream) {
+        auto layout = rawDeviceInputLayout(splat_data);
+        if (!layout) {
+            return std::unexpected(layout.error());
+        }
+        if (xyz_dst == nullptr || sh0_dst == nullptr || shN_dst == nullptr ||
+            rotations_dst == nullptr || scaling_dst == nullptr || opacity_dst == nullptr) {
+            return std::unexpected("VkSplat raw input copy received a null destination region");
+        }
+
+        const Tensor& means_raw = splat_data.means_raw();
+        const Tensor& rotation_raw = splat_data.rotation_raw();
+        const Tensor& scaling_raw = splat_data.scaling_raw();
+        const Tensor& opacity_raw = splat_data.opacity_raw();
+        const Tensor& sh0_raw = splat_data.sh0_raw();
+        const Tensor& shN_raw = splat_data.shN_raw();
+
+        if (auto ok = requireCudaFloat32Contiguous(means_raw, "means"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (auto ok = requireCudaFloat32Contiguous(rotation_raw, "rotation"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (auto ok = requireCudaFloat32Contiguous(scaling_raw, "scaling"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (auto ok = requireCudaFloat32Contiguous(opacity_raw, "opacity"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (auto ok = requireCudaFloat32Contiguous(sh0_raw, "sh0"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        const bool has_shN = shN_raw.is_valid() && shN_raw.numel() > 0;
+        if (has_shN) {
+            if (auto ok = requireCudaFloat32Contiguous(shN_raw, "shN"); !ok) {
+                return std::unexpected(ok.error());
+            }
+        }
+
+        if (auto ok = waitForInputStream(stream, means_raw, "means"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (auto ok = waitForInputStream(stream, rotation_raw, "rotation"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (auto ok = waitForInputStream(stream, scaling_raw, "scaling"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (auto ok = waitForInputStream(stream, opacity_raw, "opacity"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (auto ok = waitForInputStream(stream, sh0_raw, "sh0"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (has_shN) {
+            if (auto ok = waitForInputStream(stream, shN_raw, "shN"); !ok) {
+                return std::unexpected(ok.error());
+            }
+        }
+
+        const auto copy = [&](void* dst,
+                              const Tensor& src,
+                              const std::size_t bytes,
+                              const char* const label) -> std::expected<void, std::string> {
+            const cudaError_t status = cudaMemcpyAsync(
+                dst, src.data_ptr(), bytes, cudaMemcpyDeviceToDevice, stream);
+            if (status != cudaSuccess) {
+                return std::unexpected(cudaErrorMessage(label, status));
+            }
+            return {};
+        };
+
+        if (auto ok = copy(xyz_dst, means_raw, layout->xyz_bytes,
+                           "cudaMemcpyAsync(VkSplat raw means -> Vulkan input)");
+            !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (auto ok = copy(sh0_dst, sh0_raw, layout->sh0_bytes,
+                           "cudaMemcpyAsync(VkSplat raw sh0 -> Vulkan input)");
+            !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (has_shN) {
+            if (auto ok = copy(shN_dst, shN_raw, layout->shN_bytes,
+                               "cudaMemcpyAsync(VkSplat raw shN -> Vulkan input)");
+                !ok) {
+                return std::unexpected(ok.error());
+            }
+        } else {
+            const cudaError_t status = cudaMemsetAsync(shN_dst, 0, layout->shN_bytes, stream);
+            if (status != cudaSuccess) {
+                return std::unexpected(cudaErrorMessage("cudaMemsetAsync(VkSplat raw shN fallback)", status));
+            }
+        }
+        if (auto ok = copy(rotations_dst, rotation_raw, layout->rotations_bytes,
+                           "cudaMemcpyAsync(VkSplat raw rotation -> Vulkan input)");
+            !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (auto ok = copy(scaling_dst, scaling_raw, layout->scaling_bytes,
+                           "cudaMemcpyAsync(VkSplat raw scaling -> Vulkan input)");
+            !ok) {
+            return std::unexpected(ok.error());
+        }
+        // Honor SplatData::deleted() in the rasterizer: where the legacy CUDA
+        // rasterizer skipped tombstoned gaussians inside the kernel, the
+        // VkSplat shader has no equivalent skip flag, so bake the mask into the
+        // uploaded opacity by writing a strongly-negative raw value (sigmoid →
+        // ~0) for deleted entries. Re-uploading whenever the mask changes is
+        // handled by ModelInputSnapshot tracking deleted().
+        if (splat_data.has_deleted_mask()) {
+            const Tensor& deleted = splat_data.deleted();
+            const auto n = static_cast<std::size_t>(splat_data.size());
+            if (deleted.dtype() != DataType::Bool ||
+                deleted.device() != Device::CUDA ||
+                !deleted.is_contiguous() ||
+                static_cast<std::size_t>(deleted.numel()) != n) {
+                return std::unexpected(
+                    "VkSplat deleted mask must be a contiguous CUDA bool tensor of size N");
+            }
+            if (auto ok = waitForInputStream(stream, deleted, "deleted"); !ok) {
+                return std::unexpected(ok.error());
+            }
+            const cudaError_t status = detail::launchPackOpacityMaskingDeleted(
+                opacity_raw.ptr<float>(),
+                deleted.ptr<bool>(),
+                static_cast<float*>(opacity_dst),
+                n,
+                stream);
+            if (status != cudaSuccess) {
+                return std::unexpected(cudaErrorMessage("launchPackOpacityMaskingDeleted", status));
+            }
+        } else if (auto ok = copy(opacity_dst, opacity_raw, layout->opacity_bytes,
+                                  "cudaMemcpyAsync(VkSplat raw opacity -> Vulkan input)");
+                   !ok) {
+            return std::unexpected(ok.error());
+        }
+
+        return {};
+    }
+
+    std::expected<void, std::string> packDeviceInputsToBuffer(
+        const lfs::core::SplatData& splat_data,
+        void* const xyz_dst,
+        void* const rotations_dst,
+        void* const scales_opacs_dst,
+        void* const sh_coeffs_dst,
+        const cudaStream_t stream) {
+        auto layout = deviceInputLayout(splat_data);
+        if (!layout) {
+            return std::unexpected(layout.error());
+        }
+        if (xyz_dst == nullptr || rotations_dst == nullptr || scales_opacs_dst == nullptr || sh_coeffs_dst == nullptr) {
+            return std::unexpected("VkSplat direct input pack received a null destination region");
+        }
+
+        const Tensor& means_raw = splat_data.means_raw();
+        const Tensor& rotation_raw = splat_data.rotation_raw();
+        const Tensor& scaling_raw = splat_data.scaling_raw();
+        const Tensor& opacity_raw = splat_data.opacity_raw();
+        const Tensor& sh0_raw = splat_data.sh0();
+        const Tensor& shN_raw = splat_data.shN();
+
+        if (auto ok = requireCudaFloat32Contiguous(means_raw, "means"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (auto ok = requireCudaFloat32Contiguous(rotation_raw, "rotation"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (auto ok = requireCudaFloat32Contiguous(scaling_raw, "scaling"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (auto ok = requireCudaFloat32Contiguous(opacity_raw, "opacity"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (auto ok = requireCudaFloat32Contiguous(sh0_raw, "sh0"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        const bool has_shN = shN_raw.is_valid() && shN_raw.numel() > 0;
+        if (has_shN) {
+            if (auto ok = requireCudaFloat32Contiguous(shN_raw, "shN"); !ok) {
+                return std::unexpected(ok.error());
+            }
+        }
+
+        if (auto ok = waitForInputStream(stream, means_raw, "means"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (auto ok = waitForInputStream(stream, rotation_raw, "rotation"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (auto ok = waitForInputStream(stream, scaling_raw, "scaling"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (auto ok = waitForInputStream(stream, opacity_raw, "opacity"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (auto ok = waitForInputStream(stream, sh0_raw, "sh0"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (has_shN) {
+            if (auto ok = waitForInputStream(stream, shN_raw, "shN"); !ok) {
+                return std::unexpected(ok.error());
+            }
+        }
+
+        cudaError_t status = cudaMemcpyAsync(
+            xyz_dst,
+            means_raw.data_ptr(),
+            layout->xyz_bytes,
+            cudaMemcpyDeviceToDevice,
+            stream);
+        if (status != cudaSuccess) {
+            return std::unexpected(cudaErrorMessage("cudaMemcpyAsync(VkSplat means -> Vulkan input)", status));
+        }
+
+        status = detail::launchPackActivatedRotations(
+            rotation_raw.ptr<float>(),
+            static_cast<float*>(rotations_dst),
+            layout->num_splats,
+            stream);
+        if (status != cudaSuccess) {
+            return std::unexpected(cudaErrorMessage("VkSplat rotation direct pack", status));
+        }
+
+        status = detail::launchPackScalesOpacs(
+            scaling_raw.ptr<float>(),
+            opacity_raw.ptr<float>(),
+            static_cast<float*>(scales_opacs_dst),
+            layout->num_splats,
+            stream);
+        if (status != cudaSuccess) {
+            return std::unexpected(cudaErrorMessage("VkSplat scale/opacity direct pack", status));
+        }
+
+        lfs::core::sh_swizzled_pack_full_from_split(
+            sh0_raw.ptr<float>(),
+            has_shN ? shN_raw.ptr<float>() : nullptr,
+            static_cast<float*>(sh_coeffs_dst),
+            layout->num_splats,
+            static_cast<std::uint32_t>(splat_data.max_sh_coeffs_rest()),
+            stream);
+        status = cudaGetLastError();
+        if (status != cudaSuccess) {
+            return std::unexpected(cudaErrorMessage("VkSplat SH direct pack", status));
+        }
+
+        return {};
+    }
 
     std::expected<DevicePackedInputs, std::string> packDeviceInputs(
         const lfs::core::SplatData& splat_data) {
@@ -293,11 +718,9 @@ namespace lfs::vis::vksplat {
 
             const Tensor scaling_in = to_cuda_f32(scaling_raw);
             const Tensor scales_exp = scaling_in.exp().contiguous();
-            Tensor opacity_in = to_cuda_f32(opacity_raw);
-            if (opacity_in.ndim() == 1) {
-                opacity_in = opacity_in.unsqueeze(1);
-            }
-            const Tensor opacity_sig = opacity_in.sigmoid().contiguous();
+            const Tensor opacity_in = to_cuda_f32(opacity_raw);
+            const Tensor opacity_2d = opacity_in.ndim() == 1 ? opacity_in.unsqueeze(1) : opacity_in;
+            const Tensor opacity_sig = opacity_2d.sigmoid().contiguous();
             // Cat through a 3D shape so the tensor library's last-dim path
             // (which hardcodes alpha=1.0f for [N,3]+[N,1] floats) is bypassed.
             const Tensor scales_3d = scales_exp.unsqueeze(2);

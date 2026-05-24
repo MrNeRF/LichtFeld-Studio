@@ -5,14 +5,14 @@
 #include "core/camera.hpp"
 #include "core/logger.hpp"
 #include "core/services.hpp"
+#include "core/splat_data.hpp"
 #include "gui/gui_manager.hpp"
 #include "internal/viewport.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "rendering/coordinate_conventions.hpp"
-#include "rendering/rasterizer/rasterization/include/forward.h"
-#include "rendering/rasterizer/rasterization/include/rasterization_api_tensor.h"
 #include "rendering/rendering_manager.hpp"
+#include "rendering/selection_ops.hpp"
 #include "scene/scene_manager.hpp"
 #include "selection_group_mask.hpp"
 #include "training/training_manager.hpp"
@@ -21,10 +21,12 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <glm/geometric.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/trigonometric.hpp>
+#include <limits>
 #include <optional>
 #include <shared_mutex>
 
@@ -35,6 +37,8 @@ namespace lfs::vis {
         constexpr float POLYGON_CURSOR_APPEND_EPSILON_PX = 0.5f;
         constexpr float POLYGON_VERTEX_HIT_RADIUS_PX = 8.0f;
         constexpr float POLYGON_EDGE_HIT_RADIUS_PX = 10.0f;
+        constexpr float INVALID_SCREEN_POSITION = -1.0e8f;
+        constexpr float HOVER_PICK_RADIUS_PX = 12.0f;
 
         [[nodiscard]] glm::vec2 screenToRender(const glm::vec2& screen, const SelectionService::ViewportInfo& info) {
             const float scale_x = static_cast<float>(info.render_width) / info.width;
@@ -454,6 +458,141 @@ namespace lfs::vis {
             }
 
             return primitives;
+        }
+
+        [[nodiscard]] std::shared_ptr<core::Tensor> projectGaussianScreenPositions(
+            const core::SplatData& model,
+            const rendering::ViewportData& viewport,
+            const bool equirectangular,
+            const rendering::GaussianSceneState& scene) {
+            if (equirectangular || viewport.size.x <= 0 || viewport.size.y <= 0 ||
+                (viewport.orthographic && viewport.ortho_scale <= 0.0f)) {
+                return nullptr;
+            }
+
+            const size_t count = static_cast<size_t>(model.size());
+            if (count == 0) {
+                return nullptr;
+            }
+
+            try {
+                auto means = model.get_means();
+                if (!means.is_valid() || means.ndim() != 2 || means.size(0) != count || means.size(1) != 3) {
+                    return nullptr;
+                }
+                if (means.dtype() != core::DataType::Float32) {
+                    means = means.to(core::DataType::Float32);
+                }
+                means = means.cpu().contiguous();
+                const float* const means_ptr = means.ptr<float>();
+                if (!means_ptr) {
+                    return nullptr;
+                }
+
+                core::Tensor transform_indices_cpu;
+                const std::int32_t* transform_indices = nullptr;
+                if (scene.transform_indices && scene.transform_indices->is_valid() &&
+                    scene.transform_indices->numel() >= count) {
+                    transform_indices_cpu = *scene.transform_indices;
+                    if (transform_indices_cpu.dtype() != core::DataType::Int32) {
+                        transform_indices_cpu = transform_indices_cpu.to(core::DataType::Int32);
+                    }
+                    transform_indices_cpu = transform_indices_cpu.cpu().contiguous();
+                    transform_indices = transform_indices_cpu.ptr<std::int32_t>();
+                }
+
+                static const std::vector<glm::mat4> empty_transforms;
+                const std::vector<glm::mat4>* const transforms_ptr = scene.model_transforms;
+                const std::vector<glm::mat4>& transforms = transforms_ptr ? *transforms_ptr : empty_transforms;
+
+                std::vector<float> positions(count * 2, INVALID_SCREEN_POSITION);
+                for (size_t i = 0; i < count; ++i) {
+                    const int transform_index = transform_indices ? transform_indices[i] : 0;
+                    if (!scene.node_visibility_mask.empty() && transform_indices) {
+                        if (transform_index < 0 ||
+                            static_cast<size_t>(transform_index) >= scene.node_visibility_mask.size() ||
+                            !scene.node_visibility_mask[static_cast<size_t>(transform_index)]) {
+                            continue;
+                        }
+                    }
+
+                    glm::vec3 world_point(
+                        means_ptr[i * 3 + 0],
+                        means_ptr[i * 3 + 1],
+                        means_ptr[i * 3 + 2]);
+                    if (!transforms.empty()) {
+                        const int clamped_index =
+                            std::clamp(transform_index, 0, static_cast<int>(transforms.size()) - 1);
+                        world_point = glm::vec3(
+                            transforms[static_cast<size_t>(clamped_index)] * glm::vec4(world_point, 1.0f));
+                    }
+
+                    const auto projected = rendering::projectWorldPoint(
+                        viewport.rotation,
+                        viewport.translation,
+                        viewport.size,
+                        world_point,
+                        viewport.focal_length_mm,
+                        viewport.orthographic,
+                        viewport.ortho_scale);
+                    if (!projected || !std::isfinite(projected->x) || !std::isfinite(projected->y)) {
+                        continue;
+                    }
+                    positions[i * 2] = projected->x;
+                    positions[i * 2 + 1] = projected->y;
+                }
+
+                return std::make_shared<core::Tensor>(
+                    core::Tensor::from_vector(
+                        positions,
+                        {count, size_t{2}},
+                        core::Device::CPU)
+                        .cuda()
+                        .contiguous());
+            } catch (const std::exception& e) {
+                LOG_WARN("SelectionService: failed to project Gaussian screen positions: {}", e.what());
+                return nullptr;
+            }
+        }
+
+        [[nodiscard]] std::optional<int> pickProjectedGaussian(
+            const core::Tensor& screen_positions,
+            const glm::vec2 cursor_pos,
+            const float radius_px = HOVER_PICK_RADIUS_PX) {
+            if (!screen_positions.is_valid() || screen_positions.ndim() != 2 ||
+                screen_positions.size(1) != 2) {
+                return std::nullopt;
+            }
+
+            auto cpu = screen_positions;
+            if (cpu.dtype() != core::DataType::Float32) {
+                cpu = cpu.to(core::DataType::Float32);
+            }
+            cpu = cpu.cpu().contiguous();
+            const float* const data = cpu.ptr<float>();
+            if (!data) {
+                return std::nullopt;
+            }
+
+            const float max_dist_sq = radius_px * radius_px;
+            float best_dist_sq = max_dist_sq;
+            int best_index = -1;
+            const size_t count = cpu.size(0);
+            for (size_t i = 0; i < count; ++i) {
+                const glm::vec2 pos(data[i * 2], data[i * 2 + 1]);
+                if (pos.x < INVALID_SCREEN_POSITION * 0.5f ||
+                    pos.y < INVALID_SCREEN_POSITION * 0.5f ||
+                    !std::isfinite(pos.x) || !std::isfinite(pos.y)) {
+                    continue;
+                }
+                const glm::vec2 delta = pos - cursor_pos;
+                const float dist_sq = glm::dot(delta, delta);
+                if (dist_sq <= best_dist_sq) {
+                    best_dist_sq = dist_sq;
+                    best_index = static_cast<int>(i);
+                }
+            }
+            return best_index >= 0 ? std::optional<int>{best_index} : std::nullopt;
         }
 
     } // namespace
@@ -1390,11 +1529,6 @@ namespace lfs::vis {
             return nullptr;
         }
 
-        auto* const engine = rendering_manager_->getRenderingEngineIfInitialized();
-        if (!engine || !engine->isRasterInitialized()) {
-            return nullptr;
-        }
-
         auto scene_state = scene_manager_->buildRenderState();
         if (!scene_state.combined_model || scene_state.combined_model->size() == 0) {
             return nullptr;
@@ -1402,23 +1536,13 @@ namespace lfs::vis {
 
         const auto settings = rendering_manager_->getSettings();
         const auto viewport = viewportDataFromCamera(*cameras[camera_index]);
-        rendering::ScreenPositionRenderRequest request{
-            .frame_view = frameViewFromViewport(viewport, settings.background_color),
-            .equirectangular = settings.equirectangular,
-            .scene =
-                {.model_transforms = &scene_state.model_transforms,
-                 .transform_indices = scene_state.transform_indices,
-                 .node_visibility_mask = scene_state.node_visibility_mask},
-        };
-
-        auto screen_positions = engine->renderGaussianScreenPositions(*scene_state.combined_model, request);
-        if (!screen_positions) {
-            LOG_WARN("SelectionService: failed to render screen positions for camera {}: {}",
-                     camera_index, screen_positions.error());
-            return nullptr;
-        }
-
-        return *screen_positions;
+        return projectGaussianScreenPositions(
+            *scene_state.combined_model,
+            viewport,
+            settings.equirectangular,
+            {.model_transforms = &scene_state.model_transforms,
+             .transform_indices = scene_state.transform_indices,
+             .node_visibility_mask = scene_state.node_visibility_mask});
     }
 
     std::shared_ptr<core::Tensor> SelectionService::renderScreenPositionsForViewerContext(
@@ -1428,11 +1552,6 @@ namespace lfs::vis {
         }
 
         auto render_lock = acquireLiveModelRenderLock(scene_manager_);
-        auto* const engine = rendering_manager_->getRenderingEngineIfInitialized();
-        if (!engine || !engine->isRasterInitialized()) {
-            return nullptr;
-        }
-
         auto scene_state = scene_manager_->buildRenderState();
         if (!scene_state.combined_model || scene_state.combined_model->size() == 0) {
             return nullptr;
@@ -1441,26 +1560,13 @@ namespace lfs::vis {
         const auto settings = rendering_manager_->getSettings();
         Viewport projection_viewport = *context.viewport;
         projection_viewport.windowSize = {context.info.render_width, context.info.render_height};
-        rendering::ScreenPositionRenderRequest request{
-            .frame_view = frameViewFromViewport(
-                viewportDataFromViewer(projection_viewport, context.info, settings),
-                settings.background_color,
-                settings.depth_clip_enabled ? settings.depth_clip_far : lfs::rendering::DEFAULT_FAR_PLANE),
-            .equirectangular = settings.equirectangular,
-            .scene =
-                {.model_transforms = &scene_state.model_transforms,
-                 .transform_indices = scene_state.transform_indices,
-                 .node_visibility_mask = scene_state.node_visibility_mask},
-        };
-
-        auto screen_positions = engine->renderGaussianScreenPositions(*scene_state.combined_model, request);
-        if (!screen_positions) {
-            LOG_WARN("SelectionService: failed to render screen positions for current viewport: {}",
-                     screen_positions.error());
-            return nullptr;
-        }
-
-        return *screen_positions;
+        return projectGaussianScreenPositions(
+            *scene_state.combined_model,
+            viewportDataFromViewer(projection_viewport, context.info, settings),
+            settings.equirectangular,
+            {.model_transforms = &scene_state.model_transforms,
+             .transform_indices = scene_state.transform_indices,
+             .node_visibility_mask = scene_state.node_visibility_mask});
     }
 
     std::shared_ptr<core::Tensor> SelectionService::renderScreenPositionsForCurrentViewport() const {
@@ -1537,85 +1643,48 @@ namespace lfs::vis {
         }
 
         auto render_lock = acquireLiveModelRenderLock(scene_manager_);
-        auto* const engine = rendering_manager_->getRenderingEngine();
-        if (!engine || !engine->isRasterInitialized()) {
-            return std::nullopt;
-        }
-
         auto scene_state = scene_manager_->buildRenderState();
         if (!scene_state.combined_model || scene_state.combined_model->size() == 0) {
             return std::nullopt;
         }
 
         const auto settings = rendering_manager_->getSettings();
-        rendering::HoveredGaussianQueryRequest request{
-            .frame_view = frameViewFromViewport(
-                viewport,
-                settings.background_color,
-                settings.depth_clip_enabled ? settings.depth_clip_far : lfs::rendering::DEFAULT_FAR_PLANE),
-            .scaling_modifier = settings.scaling_modifier,
-            .mip_filter = settings.mip_filter,
-            .sh_degree = scene_state.combined_model->get_active_sh_degree(),
-            .raster_backend = settings.raster_backend,
-            .gut = settings.gut ||
-                   lfs::rendering::isGutBackend(settings.raster_backend),
-            .equirectangular = settings.equirectangular,
-            .scene =
-                {.model_transforms = &scene_state.model_transforms,
-                 .transform_indices = scene_state.transform_indices,
-                 .node_visibility_mask = scene_state.node_visibility_mask},
-            .filters = {},
-            .cursor = cursor_pos,
-        };
-
-        if (filters.crop_filter) {
-            const auto& scene = scene_manager_->getScene();
-            if (const auto* const cb =
-                    findRenderableByNodeId(scene_state.cropboxes, scene_manager_->getActiveSelectionCropBoxId());
-                cb && cb->data) {
-                request.filters.crop_region = rendering::GaussianScopedBoxFilter{
-                    .bounds =
-                        {.min = cb->data->min,
-                         .max = cb->data->max,
-                         .transform = glm::inverse(cb->world_transform)},
-                    .inverse = cb->data->inverse,
-                    .parent_node_index = scene.getVisibleNodeIndex(cb->parent_splat_id)};
-            }
-
-            if (const auto* const el =
-                    findRenderableByNodeId(scene_state.ellipsoids, scene_manager_->getActiveSelectionEllipsoidId());
-                el && el->data) {
-                request.filters.ellipsoid_region = rendering::GaussianScopedEllipsoidFilter{
-                    .bounds =
-                        {.radii = el->data->radii,
-                         .transform = glm::inverse(el->world_transform)},
-                    .inverse = el->data->inverse,
-                    .parent_node_index = scene.getVisibleNodeIndex(el->parent_splat_id)};
-            }
+        auto screen_positions = projectGaussianScreenPositions(
+            *scene_state.combined_model,
+            viewport,
+            settings.equirectangular,
+            {.model_transforms = &scene_state.model_transforms,
+             .transform_indices = scene_state.transform_indices,
+             .node_visibility_mask = scene_state.node_visibility_mask});
+        render_lock.reset();
+        if (!screen_positions || !screen_positions->is_valid()) {
+            return std::nullopt;
         }
 
-        if (filters.depth_filter && settings.depth_filter_enabled) {
-            request.filters.view_volume = rendering::BoundingBox{
-                .min = settings.depth_filter_min,
-                .max = settings.depth_filter_max,
-                .transform = settings.depth_filter_transform.inv().toMat4(),
-            };
-        }
-
-        auto hovered_result = engine->queryHoveredGaussianId(*scene_state.combined_model, request);
+        const auto hovered_result = pickProjectedGaussian(*screen_positions, cursor_pos);
         if (!hovered_result) {
-            LOG_WARN("SelectionService: failed to render hovered gaussian id: {}", hovered_result.error());
-            return std::nullopt;
-        }
-        if (!*hovered_result) {
             return std::nullopt;
         }
 
-        const int hovered_id = **hovered_result;
+        const int hovered_id = *hovered_result;
         if (hovered_id < 0 ||
             static_cast<size_t>(hovered_id) >= activeSelectionGaussianCount(scene_manager_)) {
             return std::nullopt;
         }
+
+        if (filters.crop_filter || filters.depth_filter || filters.restrict_to_selected_nodes) {
+            auto candidate = core::Tensor::zeros(
+                {activeSelectionGaussianCount(scene_manager_)},
+                core::Device::CUDA,
+                core::DataType::Bool);
+            rendering::set_selection_element(candidate.ptr<bool>(), hovered_id, true);
+            applyFilters(candidate, filters, effectiveNodeMask(filters.restrict_to_selected_nodes));
+            const auto candidate_cpu = candidate.cpu().contiguous();
+            if (!candidate_cpu.ptr<bool>()[hovered_id]) {
+                return std::nullopt;
+            }
+        }
+
         return hovered_id;
     }
 

@@ -7,8 +7,11 @@
 #include "core/path_utils.hpp"
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <fstream>
 #include <nlohmann/json.hpp>
+#include <optional>
+#include <unordered_map>
 
 #ifdef _WIN32
 #include <shlobj.h>
@@ -21,7 +24,7 @@ namespace lfs::vis::input {
 
     namespace {
 
-        constexpr int PROFILE_VERSION = 10; // Version 10 routes polygon secondary click through key bindings.
+        constexpr int PROFILE_VERSION = 12; // Version 12 adds Shift+scroll as a second BRUSH_RESIZE trigger.
         constexpr std::array<ToolMode, 8> ALL_MODES = {
             ToolMode::GLOBAL,
             ToolMode::SELECTION,
@@ -50,6 +53,34 @@ namespace lfs::vis::input {
             ToolMode::ALIGN,
             ToolMode::CROP_BOX,
         };
+
+        [[nodiscard]] std::string toLowerCopy(std::string_view s) {
+            std::string out(s);
+            std::transform(out.begin(), out.end(), out.begin(),
+                           [](unsigned char c) { return std::tolower(c); });
+            return out;
+        }
+
+        // Look up an Action by case-insensitive description match. Used to
+        // migrate stored profiles whose integer action IDs no longer line up
+        // with the current enum (when entries were inserted/removed between
+        // versions, the IDs shift but the descriptions stay stable).
+        [[nodiscard]] std::optional<Action> findActionByDescription(std::string_view description) {
+            static const auto* const table = [] {
+                auto* const m = new std::unordered_map<std::string, Action>();
+                constexpr int kActionCount = static_cast<int>(Action::DEPTH_ADJUST_NEAR) + 1;
+                for (int i = 0; i < kActionCount; ++i) {
+                    const auto a = static_cast<Action>(i);
+                    m->emplace(toLowerCopy(getActionName(a)), a);
+                }
+                return m;
+            }();
+            const auto it = table->find(toLowerCopy(description));
+            if (it == table->end()) {
+                return std::nullopt;
+            }
+            return it->second;
+        }
 
         [[nodiscard]] bool isSelectionDepthAction(const Action action) {
             switch (action) {
@@ -336,6 +367,24 @@ namespace lfs::vis::input {
                 binding.action = static_cast<Action>(b["action"].get<int>());
                 binding.description = b.value("description", getActionName(binding.action));
 
+                // Cross-version safeguard: if the stored description doesn't
+                // match the current name for that integer action, the enum was
+                // reshuffled between profile saves — re-resolve by description
+                // so the binding still drives the intended action.
+                if (b.contains("description")) {
+                    const auto stored_desc = b["description"].get<std::string>();
+                    const auto current_name = getActionName(binding.action);
+                    if (toLowerCopy(stored_desc) != toLowerCopy(current_name)) {
+                        if (const auto remapped = findActionByDescription(stored_desc)) {
+                            LOG_INFO("Profile binding remap: '{}' was action {} ({}), now {} ({})",
+                                     stored_desc, static_cast<int>(binding.action), current_name,
+                                     static_cast<int>(*remapped), getActionName(*remapped));
+                            binding.action = *remapped;
+                            binding.description = getActionName(*remapped);
+                        }
+                    }
+                }
+
                 const std::string trigger_type = b["trigger_type"];
                 if (trigger_type == "key") {
                     KeyTrigger trigger;
@@ -368,8 +417,13 @@ namespace lfs::vis::input {
 
                 binding = normalizeLoadedBinding(std::move(binding));
 
+                // Dedup by trigger, not action: the same action can legitimately
+                // be bound to multiple triggers (e.g. BRUSH_RESIZE on both
+                // Ctrl+scroll and Shift+scroll). A trigger-based dedup keeps
+                // them both; an action-based one would silently drop the first.
                 if (auto existing = std::find_if(bindings_.begin(), bindings_.end(), [&](const Binding& current) {
-                        return current.mode == binding.mode && current.action == binding.action;
+                        return current.mode == binding.mode &&
+                               triggersOverlap(current.trigger, binding.trigger);
                     });
                     existing != bindings_.end()) {
                     *existing = binding;
@@ -415,20 +469,32 @@ namespace lfs::vis::input {
         const Profile defaults = createDefaultProfile();
         size_t added = 0;
         for (const auto& def : defaults.bindings) {
+            // Version 12 adds Shift+scroll as a *parallel* trigger for
+            // BRUSH_RESIZE — the existing Ctrl+scroll binding stays, so the
+            // usual "skip if the action is already mapped" guard doesn't
+            // apply here and we only need to ensure the Shift+scroll trigger
+            // itself is free.
+            const bool brush_resize_shift_scroll =
+                def.action == Action::BRUSH_RESIZE &&
+                std::holds_alternative<MouseScrollTrigger>(def.trigger) &&
+                std::get<MouseScrollTrigger>(def.trigger).modifiers == MODIFIER_SHIFT;
             const bool should_add =
                 (version < 6 && def.action == Action::CAMERA_ROLL) ||
-                (version < 7 && def.action == Action::BRUSH_RESIZE) ||
+                (version < 7 && def.action == Action::BRUSH_RESIZE && !brush_resize_shift_scroll) ||
                 (version < 9 && def.action == Action::CONFIRM_POLYGON) ||
-                (version < 10 && def.action == Action::UNDO_POLYGON_VERTEX);
+                (version < 10 && def.action == Action::UNDO_POLYGON_VERTEX) ||
+                (version < 12 && brush_resize_shift_scroll);
             if (!should_add) {
                 continue;
             }
-            const bool present = std::ranges::any_of(
-                bindings_, [&](const Binding& current) {
-                    return current.mode == def.mode && current.action == def.action;
-                });
-            if (present) {
-                continue;
+            if (!brush_resize_shift_scroll) {
+                const bool action_already_bound = std::ranges::any_of(
+                    bindings_, [&](const Binding& current) {
+                        return current.mode == def.mode && current.action == def.action;
+                    });
+                if (action_already_bound) {
+                    continue;
+                }
             }
             const bool trigger_in_use = std::ranges::any_of(
                 bindings_, [&](const Binding& current) {
@@ -954,11 +1020,19 @@ namespace lfs::vis::input {
                                     Action::BRUSH_RESIZE,
                                     "Brush size"});
         profile.bindings.push_back({ToolMode::SELECTION,
+                                    MouseScrollTrigger{MODIFIER_SHIFT},
+                                    Action::BRUSH_RESIZE,
+                                    "Brush size"});
+        profile.bindings.push_back({ToolMode::SELECTION,
                                     KeyTrigger{KEY_C, MODIFIER_CTRL | MODIFIER_ALT},
                                     Action::TOGGLE_SELECTION_CROP_FILTER,
                                     "Crop filter"});
         profile.bindings.push_back({ToolMode::BRUSH,
                                     MouseScrollTrigger{MODIFIER_CTRL},
+                                    Action::BRUSH_RESIZE,
+                                    "Brush size"});
+        profile.bindings.push_back({ToolMode::BRUSH,
+                                    MouseScrollTrigger{MODIFIER_SHIFT},
                                     Action::BRUSH_RESIZE,
                                     "Brush size"});
         profile.bindings.push_back({ToolMode::BRUSH,
@@ -1537,10 +1611,12 @@ namespace lfs::vis::input {
 
         static constexpr ActionDescriptor d_node_pick{
             .allowed_kinds = K::TRIGGER_KIND_MOUSE_BUTTON,
+            .allows_extra_modifiers = true,
             .ui_section = ActionSection::NodePicking,
         };
         static constexpr ActionDescriptor d_node_rect{
             .allowed_kinds = K::TRIGGER_KIND_MOUSE_DRAG,
+            .allows_extra_modifiers = true,
             .ui_section = ActionSection::NodePicking,
         };
 

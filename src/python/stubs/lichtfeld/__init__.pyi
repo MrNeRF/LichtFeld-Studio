@@ -449,6 +449,12 @@ def set_render_mode(mode: RenderMode) -> None:
 def is_orthographic() -> bool:
     """Check if orthographic projection is active"""
 
+def get_depth_view() -> bool:
+    """Check if depth-map view is active"""
+
+def set_depth_view(enabled: bool) -> None:
+    """Enable or disable depth-map view"""
+
 def set_orthographic(ortho: bool) -> None:
     """Enable or disable orthographic projection"""
 

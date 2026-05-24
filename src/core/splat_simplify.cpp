@@ -136,21 +136,22 @@ namespace lfs::core {
             const auto sh0 = select_or_clone(input.sh0_raw()).to(device).contiguous();
             Tensor shN;
             if (input.shN_raw().is_valid() && input.shN_raw().numel() > 0 &&
-                input.active_sh_coeffs_rest() > 0) {
+                input.max_sh_coeffs_rest() > 0) {
                 if (has_deleted) {
                     auto keep_indices = keep_mask.nonzero();
                     if (keep_indices.ndim() == 2)
                         keep_indices = keep_indices.squeeze(1);
                     const size_t keep_count = static_cast<size_t>(keep_indices.numel());
-                    const size_t active_rest = input.active_sh_coeffs_rest();
-                    shN = Tensor::empty({keep_count, active_rest, 3}, input.shN_raw().device());
+                    const size_t layout_rest = input.max_sh_coeffs_rest();
+                    shN = Tensor::empty({keep_count, layout_rest, 3}, input.shN_raw().device());
                     if (keep_indices.dtype() == DataType::Int64) {
                         shN_swizzled_gather_to_linear_i64(
                             input.shN_raw().ptr<float>(),
                             keep_indices.ptr<int64_t>(),
                             shN.ptr<float>(),
                             keep_count,
-                            static_cast<uint32_t>(active_rest));
+                            static_cast<uint32_t>(layout_rest),
+                            static_cast<uint32_t>(layout_rest));
                     } else {
                         auto keep_i32 = keep_indices.dtype() == DataType::Int32
                                             ? keep_indices
@@ -160,7 +161,8 @@ namespace lfs::core {
                             keep_i32.ptr<int>(),
                             shN.ptr<float>(),
                             keep_count,
-                            static_cast<uint32_t>(active_rest));
+                            static_cast<uint32_t>(layout_rest),
+                            static_cast<uint32_t>(layout_rest));
                     }
                     shN = shN.to(device).contiguous();
                 } else {

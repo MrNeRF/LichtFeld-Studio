@@ -105,10 +105,10 @@ Rip out every ImGui touchpoint. RmlUi is the GUI; `rml_im_mode_panel_adapter` is
 
 Three orthogonal wins, all enabled by the timeline-semaphore plumbing that's already in place.
 
-### 2.1 Indirect dispatch in `vksplat_fwd`
+### 2.1 Indirect dispatch in `vulkan`
 **Biggest single win.** Removes the synchronous GPU→CPU readback at `gs_renderer.cpp:376`.
 
-- `src/rendering/rasterizer/vksplat_fwd/src/gs_renderer.cpp`
+- `src/rendering/rasterizer/vulkan/src/gs_renderer.cpp`
 - Replace `int num_indices = readElement<int32_t>(...)` + scalar dispatch with `vkCmdDispatchIndirect(cmd, count_buffer, offset)`. The cumsum tail already lives in `index_buffer_offset.deviceBuffer` — point the indirect dispatch at the last 12 bytes (groupCountX/Y/Z).
 - Where the count drives multiple subsequent dispatches with different group counts, add a tiny "indirect setup" compute shader that writes a small `VkDispatchIndirectCommand` array from the cumsum tail.
 - Rewire `executeGenerateKeys`, `executeComputeTileRanges`, `executeRasterizeForward` to consume it.
@@ -197,11 +197,11 @@ Lean on Vulkan 1.3+ features that are probed but unused.
 
 ## Phase 5 — Slang convergence (4 weeks, high-leverage)
 
-**Strategic move.** Today the math (camera, SH, covariance, quaternion rotation) lives twice: once in CUDA `gsplat_fwd/`, once in `vksplat_fwd/shader/src/slang/`. Lift it to a single Slang module that compiles to both targets.
+**Strategic move.** Today the math (camera, SH, covariance, quaternion rotation) lives twice: once in CUDA `gsplat_fwd/`, once in `vulkan/shader/src/slang/`. Lift it to a single Slang module that compiles to both targets.
 
 ### 5.1 Extract math kernels to shared Slang modules
 - New: `src/rendering/rasterizer/shared_slang/`
-- Move `spherical_harmonics`, `camera_projection`, `cov2d`, `quaternion`, `mip_aa` from `vksplat_fwd/shader/src/slang/` into here.
+- Move `spherical_harmonics`, `camera_projection`, `cov2d`, `quaternion`, `mip_aa` from `vulkan/shader/src/slang/` into here.
 - Compile to:
   - SPIR-V (existing path) — `slangc -target spirv`
   - CUDA — `slangc -target cuda` produces `.cu` you `#include`.
@@ -209,10 +209,10 @@ Lean on Vulkan 1.3+ features that are probed but unused.
 ### 5.2 Switch `gsplat_fwd` CUDA kernels to Slang-generated math
 - Replace handwritten CUDA implementations of SH eval, covariance, projection in `src/rendering/rasterizer/gsplat_fwd/` with the Slang-generated equivalents.
 - Run training regression: PSNR delta vs main on `bicycle` 7k iters must be < 0.05 dB.
-- **Accept**: gtest comparing `gsplat_fwd` and `vksplat_fwd` forward outputs on a fixed scene shows pixel diff < 1/255 (within float rounding).
+- **Accept**: gtest comparing `gsplat_fwd` and `vulkan` forward outputs on a fixed scene shows pixel diff < 1/255 (within float rounding).
 
-### 5.3 Retire `vksplat_fwd`'s standalone math
-- After 5.1/5.2, the duplicated `.slang` files in `vksplat_fwd/shader/src/slang/` shrink to just the kernel skeletons.
+### 5.3 Retire `vulkan`'s standalone math
+- After 5.1/5.2, the duplicated `.slang` files in `vulkan/shader/src/slang/` shrink to just the kernel skeletons.
 
 **Phase 5 exit**: One source of truth for splat math. Composite 9.5 → 9.7.
 
@@ -223,7 +223,7 @@ Lean on Vulkan 1.3+ features that are probed but unused.
 This is the strategic bet. With it, **training works on AMD, Intel Arc, headless cloud GPUs without CUDA**, and on macOS via MoltenVK.
 
 ### 6.1 Wire the existing backward Slang shaders
-- `vksplat_fwd/CMakeLists.txt:138` — enable `EXPORT_MODE=1` compilation.
+- `vulkan/CMakeLists.txt:138` — enable `EXPORT_MODE=1` compilation.
 - Files already exist: `alphablend_shader.slang` backward path, `vertex_shader.slang` backward path, Slang `bwd_diff()` infrastructure.
 - Build + load + bind in `gs_pipeline.cpp`.
 
@@ -285,7 +285,7 @@ Pick at most one based on user demand.
 - 1.3 Stale `<imgui.h>` include removed from `rml_sequencer_panel.cpp`. The 8 other audited files (`align_tool.cpp`, `brush_tool.cpp`, `selection_tool.cpp`, `input_controller.cpp`, `windows_console_utils.cpp`, `video_extractor_dialog.cpp`, `rml_python_panel_adapter.cpp`, `window_manager.cpp`) still use ImGui; full removal is a separate later project per scope.
 
 **Phase 2 — fully landed**
-- 2.1 **Indirect dispatch + deferred readback in `vksplat_fwd`**. New tiny Slang shader `setup_dispatch_indirect.slang` reads `index_buffer_offset[num_splats-1]` on the GPU and writes a `VkDispatchIndirectCommand` for `compute_tile_ranges`. `compute_tile_ranges` now reads `num_isects` from `index_buffer_offset` directly via a new binding 2 (no more `uniforms.active_sh` dependency). The synchronous mid-frame `readElement` is gone; `executeCalculateIndexBufferOffset` records an async `vkCmdCopyBuffer` of the cumsum tail into a host-visible coherent + persistently-mapped buffer for the next frame to consume. `executeGenerateKeys` pre-fills `unsorted_keys` with the `0xFFFFFFFF` sentinel so the radix sort's tail (when capacity > actual num_indices) sorts to the end harmlessly. CPU-side high-water-mark + 2× safety factor sizes the sort buffers; first frame uses an `8 × num_splats` heuristic seed; `resetNumIndicesEstimate()` is called on model-identity change so a fresh model can't under-size the buffers. New `executeComputeIndirect` helper + new `INDIRECT_DISPATCH_READ` barrier mask. Net effect: the per-frame `vkQueueWaitIdle` previously baked into `readElement` → `HOST_GUARD` is gone.
+- 2.1 **Indirect dispatch + deferred readback in `vulkan`**. New tiny Slang shader `setup_dispatch_indirect.slang` reads `index_buffer_offset[num_splats-1]` on the GPU and writes a `VkDispatchIndirectCommand` for `compute_tile_ranges`. `compute_tile_ranges` now reads `num_isects` from `index_buffer_offset` directly via a new binding 2 (no more `uniforms.active_sh` dependency). The synchronous mid-frame `readElement` is gone; `executeCalculateIndexBufferOffset` records an async `vkCmdCopyBuffer` of the cumsum tail into a host-visible coherent + persistently-mapped buffer for the next frame to consume. `executeGenerateKeys` pre-fills `unsorted_keys` with the `0xFFFFFFFF` sentinel so the radix sort's tail (when capacity > actual num_indices) sorts to the end harmlessly. CPU-side high-water-mark + 2× safety factor sizes the sort buffers; first frame uses an `8 × num_splats` heuristic seed; `resetNumIndicesEstimate()` is called on model-identity change so a fresh model can't under-size the buffers. New `executeComputeIndirect` helper + new `INDIRECT_DISPATCH_READ` barrier mask. Net effect: the per-frame `vkQueueWaitIdle` previously baked into `readElement` → `HOST_GUARD` is gone.
 - 2.2 **Async compute queue**. `findQueueFamilies` now probes for a compute-only family (NVIDIA family 2, AMD family 1, etc.). When present, `VulkanContext` exposes `computeQueue() / computeQueueFamily() / hasDedicatedComputeQueue()`; `vksplat_viewport_renderer` initializes the rasterizer on that queue so the splat dispatch chain overlaps graphics-queue work (RmlUi, viewport overlays). External images and external buffers switch to `VK_SHARING_MODE_CONCURRENT` listing both families when distinct, eliminating the need for ownership-transfer barriers; the existing per-frame timeline-semaphore wait already provides cross-queue ordering between the rasterizer's output and the swapchain pass that samples it. When no dedicated family exists the compute queue aliases graphics so call sites stay unconditional.
 - 2.3 **Coalesced CUDA→Vulkan upload**. `_VulkanBuffer` gains a `VkDeviceSize offset` field (default 0). `executeCompute` / `executeComputeIndirect` use it for descriptor binding so a single `VkBuffer` can be bound as multiple sub-regions. `CudaInputSlot` collapses from 4 buffers per ring slot to **1**: a single CUDA-imported `VkBuffer` holds `xyz | rotations | scales+opacs | sh` packed back-to-back with 256-byte alignment. Setup cost drops from 4× `cudaImportExternalMemory` + 4× `cudaExternalMemoryGetMappedBuffer` to 1× of each per ring slot. `cuda_inputs_` shape changes from `array<array<CudaInputSlot, 4>, kInputRingSize>` to `array<CudaInputSlot, kInputRingSize>`. New offset-aware `CudaVulkanBufferInterop::copyFromTensor` overload writes each tensor to its sub-region.
 - 2.4 Grow-only ring buffer policy — **already in place**. `gs_pipeline.h` declares `resizeDeviceBuffer` with `no_shrink=true` default; no per-frame realloc churn.
@@ -309,7 +309,7 @@ The async-compute queue probe correctly picked NVIDIA family 2 (graphics on fami
 Reproduce locally:
 ```
 ./build/LichtFeld-Studio -v <splat>.ply --log-level debug --no-splash
-# in the rendering panel, switch raster_backend to "vksplat",
+# in the rendering panel, switch raster_backend to "3dgs",
 # then in stderr: grep -E "vksplat\.render took"
 ```
 
@@ -318,7 +318,7 @@ The `LOG_TIMER("vksplat.render")` in `rendering_manager_vulkan.cpp` wraps the ra
 **What's still on the table for staff-level (next sprint)**
 1. Phase 3 — debug-utils labels everywhere + `VK_KHR_present_wait` + `VK_NV_low_latency2`.
 2. Phase 4 — descriptor buffer (`VK_EXT_descriptor_buffer`) + graphics pipeline library + push descriptor + mutable descriptor type.
-3. Phase 5 — Slang convergence (single math source for CUDA `gsplat_fwd` and Vulkan `vksplat_fwd`).
+3. Phase 5 — Slang convergence (single math source for CUDA `gsplat_fwd` and Vulkan `vulkan`).
 4. Phase 6 — Vulkan-native backward; Vulkan-backend training (the moat).
 5. Full ImGui exorcism (`py_ui.cpp` → `rml_im_mode_panel_adapter`, theme `ImVec4` → `Color`, ui_widgets/panel_registry migration, ImPlot retirement). Estimated 6–10 weeks; out of scope this sprint per explicit decision.
 

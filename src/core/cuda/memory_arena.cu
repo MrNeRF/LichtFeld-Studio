@@ -152,7 +152,13 @@ namespace lfs::core {
 
         // Synchronize to ensure previous frame's GPU work is complete
         // before we reset the arena offset and start overwriting memory
-        cudaDeviceSynchronize();
+        const cudaError_t sync_err = cudaDeviceSynchronize();
+        if (sync_err != cudaSuccess) {
+            end_frame(frame_id, from_rendering);
+            throw std::runtime_error("RasterizerMemoryArena::begin_frame failed while synchronizing prior GPU work: " +
+                                     std::string(cudaGetErrorName(sync_err)) + ": " +
+                                     cudaGetErrorString(sync_err));
+        }
 
         // CRITICAL FIX: Reset arena offset at the beginning of each frame!
         int device;

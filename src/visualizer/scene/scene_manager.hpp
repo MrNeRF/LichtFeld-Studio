@@ -124,6 +124,7 @@ namespace lfs::vis {
         void selectNode(const std::string& name);
         void selectNodes(const std::vector<std::string>& names);
         void addToSelection(const std::string& name);
+        void removeFromSelection(const std::string& name);
         void clearSelection();
         [[nodiscard]] std::string getSelectedNodeName() const;
         [[nodiscard]] std::vector<std::string> getSelectedNodeNames() const;

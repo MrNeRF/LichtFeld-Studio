@@ -208,8 +208,10 @@ namespace lfs::vis::op {
             }
         }
 
-        if (event->type == ModalEvent::Type::MOUSE_SCROLL &&
-            shape_ == lfs::vis::SelectionShape::Polygon) {
+        // Always let scroll events through so the user can resize the selection
+        // ring mid-stroke (BRUSH_RESIZE is bound to Ctrl/Shift+scroll). The
+        // shape doesn't matter — the operator never uses scroll input itself.
+        if (event->type == ModalEvent::Type::MOUSE_SCROLL) {
             return OperatorResult::PASS_THROUGH;
         }
 

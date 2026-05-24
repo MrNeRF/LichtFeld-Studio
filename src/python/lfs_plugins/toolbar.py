@@ -384,6 +384,17 @@ class _UtilityToolbarController:
                     selected=lf.ui.get_split_view_mode() == "independent_dual",
                 )
             )
+            depth_view_active = bool(lf.get_depth_view()) if hasattr(lf, "get_depth_view") else False
+            projection_buttons.append(
+                _button_record(
+                    "util-depth-view",
+                    "toggle_depth_view",
+                    "",
+                    _icon_src("depth-map"),
+                    tooltip_key="toolbar.depth_map",
+                    selected=depth_view_active,
+                )
+            )
 
             seq_visible = lf.ui.is_sequencer_visible()
             utility_extra_buttons.append(
@@ -442,6 +453,10 @@ class _UtilityToolbarController:
             return
         if action == "toggle_independent_split_view":
             lf.toggle_independent_split_view()
+            return
+        if action == "toggle_depth_view":
+            if hasattr(lf, "set_depth_view") and hasattr(lf, "get_depth_view"):
+                lf.set_depth_view(not lf.get_depth_view())
             return
         if action == "toggle_sequencer":
             lf.ui.set_sequencer_visible(not lf.ui.is_sequencer_visible())

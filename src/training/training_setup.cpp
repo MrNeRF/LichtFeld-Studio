@@ -40,6 +40,12 @@ namespace lfs::training {
             if (splat.set_sh_degree(target_degree)) {
                 LOG_INFO("Adjusted training model SH degree: {} -> {}", before, splat.get_max_sh_degree());
             }
+            if (splat.get_max_sh_degree() > 0 && splat.get_active_sh_degree() != 0) {
+                const int active_before = splat.get_active_sh_degree();
+                splat.set_active_sh_degree(0);
+                LOG_INFO("Training SH schedule active degree: {} -> 0 (max {})",
+                         active_before, splat.get_max_sh_degree());
+            }
         }
 
         std::expected<std::unique_ptr<lfs::core::SplatData>, std::string> loadAddedSplat(
@@ -322,7 +328,8 @@ namespace lfs::training {
 
     std::expected<void, std::string> initializeTrainingModel(
         const lfs::core::param::TrainingParameters& params,
-        lfs::core::Scene& scene) {
+        lfs::core::Scene& scene,
+        lfs::core::SplatTensorAllocator tensor_allocator) {
 
         if (auto* model = scene.getTrainingModel()) {
             applyTrainingSHDegree(*model, params.optimization.sh_degree);
@@ -442,7 +449,7 @@ namespace lfs::training {
         }
 
         auto splat_result = lfs::core::init_model_from_pointcloud(
-            params, scene_center, point_cloud_to_use, max_cap);
+            params, scene_center, point_cloud_to_use, max_cap, std::move(tensor_allocator));
 
         if (!splat_result) {
             return std::unexpected(std::format("Failed to initialize model: {}", splat_result.error()));
@@ -461,6 +468,7 @@ namespace lfs::training {
         }
 
         auto model = std::make_unique<lfs::core::SplatData>(std::move(*splat_result));
+        applyTrainingSHDegree(*model, params.optimization.sh_degree);
         if (auto result = appendAddedSplats(params, *model); !result) {
             return result;
         }
