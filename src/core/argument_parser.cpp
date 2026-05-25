@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <args.hxx>
 #include <array>
+#include <charconv>
 #include <cmath>
 #include <cstdlib>
 #include <expected>
@@ -17,6 +18,7 @@
 #include <optional>
 #include <print>
 #include <set>
+#include <sstream>
 #include <string_view>
 #include <unordered_map>
 #ifdef _WIN32
@@ -31,6 +33,84 @@ namespace {
     };
 
     const std::set<std::string> VALID_STRATEGIES = {"mcmc", "mrnf", "mnrf", "lfs", "igs+"};
+
+    std::optional<lfs::core::param::BackgroundMode> parse_bg_mode(const std::string& mode) {
+        using lfs::core::param::BackgroundMode;
+        if (mode == "solidcolor")
+            return BackgroundMode::SolidColor;
+        if (mode == "modulation")
+            return BackgroundMode::Modulation;
+        if (mode == "image")
+            return BackgroundMode::Image;
+        if (mode == "random")
+            return BackgroundMode::Random;
+        return std::nullopt;
+    }
+
+    std::string_view trim_view(std::string_view value) {
+        constexpr std::string_view whitespace = " \t\n\r\v\f";
+        const auto first = value.find_first_not_of(whitespace);
+        if (first == std::string_view::npos)
+            return {};
+        const auto last = value.find_last_not_of(whitespace);
+        return value.substr(first, (last - first + 1));
+    }
+
+    std::optional<std::array<float, 3>> parse_bg_hex_color(std::string_view color) {
+        if (color.size() != 7 || color[0] != '#')
+            return std::nullopt;
+
+        std::array<float, 3> values{};
+        for (size_t i = 0; i < values.size(); ++i) {
+            int channel = 0;
+            auto [ptr, ec] = std::from_chars(color.data() + 1 + i * 2, color.data() + 1 + i * 2 + 2, channel, 16);
+            if (ec != std::errc() || ptr != color.data() + 1 + i * 2 + 2)
+                return std::nullopt;
+            values[i] = static_cast<float>(channel) / 255.0f;
+        }
+
+        return values;
+    }
+
+    std::optional<std::array<float, 3>> parse_bg_rgb_color(std::string_view color) {
+        if (color.size() < 7 || color.front() != '(' || color.back() != ')')
+            return std::nullopt;
+
+        std::array<float, 3> values{};
+        std::string_view inner = color.substr(1, color.size() - 2);
+
+        for (size_t i = 0; i < values.size(); ++i) {
+            auto comma_pos = inner.find(',');
+            if (i < 2 && comma_pos == std::string_view::npos)
+                return std::nullopt;
+            if (i == 2 && comma_pos != std::string_view::npos)
+                return std::nullopt;
+
+            std::string_view token = inner.substr(0, comma_pos);
+            token = trim_view(token);
+
+            int channel = 0;
+            auto [ptr, ec] = std::from_chars(token.data(), token.data() + token.size(), channel);
+            if (ec != std::errc() || ptr != token.data() + token.size() || channel < 0 || channel > 255)
+                return std::nullopt;
+            
+            values[i] = static_cast<float>(channel) / 255.0f;
+            if (i < 2) {
+                inner.remove_prefix(comma_pos + 1);
+            }
+        }
+
+        return values;
+    }
+
+    std::optional<std::array<float, 3>> parse_bg_color(const std::string& color) {
+        const auto trimmed = trim_view(color);
+        if (auto value = parse_bg_hex_color(trimmed))
+            return value;
+        if (auto value = parse_bg_rgb_color(trimmed))
+            return value;
+        return std::nullopt;
+    }
 
     // Parse log level from string
     lfs::core::LogLevel parse_log_level(const std::string& level_str) {
@@ -118,6 +198,9 @@ namespace {
             ::args::ValueFlag<int> tile_mode(training_group, "tile_mode", "Tile mode for 3DGUT memory-efficient training: 1=1 tile, 2=2 tiles, 4=4 tiles (default: 1; ignored for 3DGS/FastGS)", {"tile-mode"});
             ::args::Flag use_error_map(training_group, "use_error_map", "Weight MRNF refine signal by per-pixel SSIM error map", {"use-error-map"});
             ::args::Flag use_edge_map(training_group, "use_edge_map", "Weight MRNF refine signal by Sobel edge map on GT images", {"use-edge-map"});
+            ::args::ValueFlag<std::string> bg_mode(training_group, "mode", "Background mode: solidcolor, modulation, image, random (default: solidcolor)", {"bg-mode"});
+            ::args::ValueFlag<std::string> bg_color(training_group, "color", "solidcolor background color as #RRGGBB or (R,G,B) with 0-255 channels (default: #000000)", {"bg-color"});
+            ::args::ValueFlag<std::string> bg_image_path(training_group, "path", "Background image path (required when --bg-mode image)", {"bg-image-path"});
 
             // =============================================================================
             // INITIALIZATION
@@ -193,7 +276,6 @@ namespace {
             ::args::Flag ppisp_controller(rendering_group, "ppisp_controller", "Enable PPISP controller for novel views", {"ppisp-controller"});
             ::args::Flag ppisp_freeze_from_sidecar(rendering_group, "ppisp_freeze", "Freeze PPISP learning and load PPISP weights from a sidecar file", {"ppisp-freeze"});
             ::args::ValueFlag<std::string> ppisp_sidecar_path(rendering_group, "path", "Path to PPISP sidecar (.ppisp) used for frozen PPISP training", {"ppisp-sidecar"});
-            ::args::Flag bg_modulation(rendering_group, "bg_modulation", "Enable sinusoidal background modulation", {"bg-modulation"});
             ::args::Flag gut(rendering_group, "gut", "Enable GUT mode", {"gut"});
 
             // =============================================================================
@@ -512,6 +594,27 @@ namespace {
                 }
             }
 
+            std::optional<lfs::core::param::BackgroundMode> parsed_bg_mode;
+            if (bg_mode) {
+                parsed_bg_mode = parse_bg_mode(::args::get(bg_mode));
+                if (!parsed_bg_mode) {
+                    return std::unexpected("ERROR: --bg-mode must be one of solidcolor, modulation, image, or random");
+                }
+            }
+
+            std::optional<std::array<float, 3>> parsed_bg_color;
+            if (bg_color) {
+                parsed_bg_color = parse_bg_color(::args::get(bg_color));
+                if (!parsed_bg_color) {
+                    return std::unexpected("ERROR: --bg-color must be #RRGGBB or (R,G,B) with 0-255 channels");
+                }
+            }
+
+            if (parsed_bg_mode == lfs::core::param::BackgroundMode::Image &&
+                (!bg_image_path || ::args::get(bg_image_path).empty())) {
+                return std::unexpected("ERROR: --bg-image-path is required when --bg-mode image");
+            }
+
             const auto cli_option_present = [&args](const std::initializer_list<std::string_view> names) {
                 for (size_t i = 1; i < args.size(); ++i) {
                     const std::string_view arg = args[i];
@@ -579,7 +682,9 @@ namespace {
                                         debug_python_flag = bool(debug_python),
                                         debug_python_port_val = cli_option_present({"--debug-python-port"}) ? std::optional<int>(::args::get(debug_python_port)) : std::optional<int>(),
                                         enable_save_eval_images_flag = bool(enable_save_eval_images),
-                                        bg_modulation_flag = bool(bg_modulation),
+                                        bg_mode_val = parsed_bg_mode,
+                                        bg_color_val = parsed_bg_color,
+                                        bg_image_path_val = cli_option_present({"--bg-image-path"}) ? std::optional<std::string>(::args::get(bg_image_path)) : std::optional<std::string>(),
                                         random_flag = bool(random),
                                         gut_flag = bool(gut),
                                         undistort_flag = bool(undistort),
@@ -650,7 +755,17 @@ namespace {
                 setFlag(debug_python_flag, opt.debug_python);
                 setVal(debug_python_port_val, opt.debug_python_port);
                 setFlag(enable_save_eval_images_flag, opt.enable_save_eval_images);
-                setFlag(bg_modulation_flag, opt.bg_modulation);
+                if (bg_mode_val) {
+                    opt.bg_mode = *bg_mode_val;
+                    opt.bg_modulation = *bg_mode_val == lfs::core::param::BackgroundMode::Modulation;
+                }
+                setVal(bg_color_val, opt.bg_color);
+                if (bg_color_val) {
+                    params.cli_bg_color_set = true;
+                }
+                if (bg_image_path_val) {
+                    opt.bg_image_path = lfs::core::utf8_to_path(*bg_image_path_val);
+                }
                 setFlag(random_flag, opt.random);
                 setFlag(gut_flag, opt.gut);
                 setFlag(undistort_flag, opt.undistort);

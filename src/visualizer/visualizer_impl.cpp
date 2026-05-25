@@ -1348,6 +1348,13 @@ namespace lfs::vis {
         pending_auto_train_ = params.optimization.auto_train;
         pending_view_paths_ = params.view_paths;
         pending_dataset_path_ = params.dataset.data_path;
+
+        if (params.cli_bg_color_set && rendering_manager_) {
+            auto render_settings = rendering_manager_->getSettings();
+            const auto& color = params.optimization.bg_color;
+            render_settings.background_color = glm::vec3(color[0], color[1], color[2]);
+            rendering_manager_->updateSettings(render_settings);
+        }
     }
 
     std::expected<void, std::string> VisualizerImpl::loadPLY(const std::filesystem::path& path) {

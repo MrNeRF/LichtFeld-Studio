@@ -267,6 +267,9 @@ namespace lfs::core {
             // Python scripts to execute for custom training callbacks
             std::vector<std::filesystem::path> python_scripts;
 
+            // True when --bg-color was provided on the command line.
+            bool cli_bg_color_set = false;
+
             [[nodiscard]] std::string validate() const;
         };
 

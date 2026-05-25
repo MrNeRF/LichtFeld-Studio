@@ -37,6 +37,7 @@ TEST(ArgumentParserTest, TrainingDefaultsApplyMaxWidthCap) {
     auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
     ASSERT_TRUE(parsed.has_value()) << parsed.error();
 
+    EXPECT_FALSE((*parsed)->cli_bg_color_set);
     EXPECT_EQ((*parsed)->dataset.max_width, 3840);
     EXPECT_EQ((*parsed)->dataset.resize_factor, 1);
 }
@@ -175,4 +176,238 @@ TEST(ArgumentParserTest, TrainingParsesAddSplats) {
     ASSERT_EQ((*parsed)->add_splat_paths.size(), 2u);
     EXPECT_EQ((*parsed)->add_splat_paths[0], splat_a);
     EXPECT_EQ((*parsed)->add_splat_paths[1], splat_b);
+}
+
+TEST(ArgumentParserTest, TrainingParsesBackgroundModeModulation) {
+    const auto data_path = make_test_path("lfs_arg_parser_bg_mode_modulation_data");
+    const auto output_path = make_test_path("lfs_arg_parser_bg_mode_modulation_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--bg-mode",
+        "modulation"};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+
+    EXPECT_EQ((*parsed)->optimization.bg_mode, lfs::core::param::BackgroundMode::Modulation);
+    EXPECT_TRUE((*parsed)->optimization.bg_modulation);
+}
+
+TEST(ArgumentParserTest, TrainingRejectsFloatBackgroundColor) {
+    const auto data_path = make_test_path("lfs_arg_parser_bg_color_data");
+    const auto output_path = make_test_path("lfs_arg_parser_bg_color_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--bg-mode",
+        "solidcolor",
+        "--bg-color",
+        "0.1,0.2,0.3"};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_NE(parsed.error().find("--bg-color must be #RRGGBB"), std::string::npos);
+}
+
+TEST(ArgumentParserTest, TrainingParsesHexBackgroundColor) {
+    const auto data_path = make_test_path("lfs_arg_parser_bg_hex_color_data");
+    const auto output_path = make_test_path("lfs_arg_parser_bg_hex_color_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--bg-mode",
+        "solidcolor",
+        "--bg-color",
+        "#FF8040"};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+
+    EXPECT_TRUE((*parsed)->cli_bg_color_set);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.bg_color[0], 1.0f);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.bg_color[1], 128.0f / 255.0f);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.bg_color[2], 64.0f / 255.0f);
+}
+
+TEST(ArgumentParserTest, TrainingParsesLowercaseHexBackgroundColor) {
+    const auto data_path = make_test_path("lfs_arg_parser_bg_lower_hex_color_data");
+    const auto output_path = make_test_path("lfs_arg_parser_bg_lower_hex_color_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--bg-mode",
+        "solidcolor",
+        "--bg-color",
+        "#ff8040"};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+
+    EXPECT_TRUE((*parsed)->cli_bg_color_set);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.bg_color[0], 1.0f);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.bg_color[1], 128.0f / 255.0f);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.bg_color[2], 64.0f / 255.0f);
+}
+
+TEST(ArgumentParserTest, TrainingParsesIntegerRgbBackgroundColorWithSpaces) {
+    const auto data_path = make_test_path("lfs_arg_parser_bg_rgb_color_data");
+    const auto output_path = make_test_path("lfs_arg_parser_bg_rgb_color_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--bg-mode",
+        "solidcolor",
+        "--bg-color",
+        "(255, 64, 32)"};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+
+    EXPECT_TRUE((*parsed)->cli_bg_color_set);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.bg_color[0], 1.0f);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.bg_color[1], 64.0f / 255.0f);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.bg_color[2], 32.0f / 255.0f);
+}
+
+TEST(ArgumentParserTest, TrainingParsesIntegerRgbBackgroundColorWithoutSpaces) {
+    const auto data_path = make_test_path("lfs_arg_parser_bg_rgb_compact_color_data");
+    const auto output_path = make_test_path("lfs_arg_parser_bg_rgb_compact_color_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--bg-mode",
+        "solidcolor",
+        "--bg-color",
+        "(255,64,32)"};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+
+    EXPECT_TRUE((*parsed)->cli_bg_color_set);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.bg_color[0], 1.0f);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.bg_color[1], 64.0f / 255.0f);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.bg_color[2], 32.0f / 255.0f);
+}
+
+TEST(ArgumentParserTest, TrainingRejectsHexBackgroundColorWithoutHash) {
+    const auto data_path = make_test_path("lfs_arg_parser_bg_hex_no_hash_data");
+    const auto output_path = make_test_path("lfs_arg_parser_bg_hex_no_hash_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--bg-mode",
+        "solidcolor",
+        "--bg-color",
+        "FF8040"};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_NE(parsed.error().find("--bg-color must be #RRGGBB"), std::string::npos);
+}
+
+TEST(ArgumentParserTest, TrainingRejectsRgbBackgroundColorOutOfRange) {
+    const auto data_path = make_test_path("lfs_arg_parser_bg_rgb_out_of_range_data");
+    const auto output_path = make_test_path("lfs_arg_parser_bg_rgb_out_of_range_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--bg-mode",
+        "solidcolor",
+        "--bg-color",
+        "(256,64,32)"};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_NE(parsed.error().find("--bg-color must be #RRGGBB"), std::string::npos);
+}
+
+TEST(ArgumentParserTest, TrainingParsesImageBackgroundPath) {
+    const auto dir = make_test_path("lfs_arg_parser_bg_image");
+    const auto data_path = std::filesystem::path(dir) / "data";
+    const auto output_path = std::filesystem::path(dir) / "output";
+    const auto image_path = std::filesystem::path(dir) / "bg.png";
+    std::filesystem::create_directories(data_path);
+    std::filesystem::create_directories(output_path);
+    std::ofstream(image_path).put('\n');
+
+    const std::string data_str = data_path.string();
+    const std::string output_str = output_path.string();
+    const std::string image_str = image_path.string();
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_str.c_str(),
+        "--output-path",
+        output_str.c_str(),
+        "--bg-mode",
+        "image",
+        "--bg-image-path",
+        image_str.c_str()};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+
+    EXPECT_EQ((*parsed)->optimization.bg_mode, lfs::core::param::BackgroundMode::Image);
+    EXPECT_EQ((*parsed)->optimization.bg_image_path, image_path);
+}
+
+TEST(ArgumentParserTest, TrainingRejectsImageBackgroundWithoutPath) {
+    const auto data_path = make_test_path("lfs_arg_parser_bg_image_missing_data");
+    const auto output_path = make_test_path("lfs_arg_parser_bg_image_missing_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--bg-mode",
+        "image"};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_NE(parsed.error().find("--bg-image-path is required"), std::string::npos);
 }

@@ -381,9 +381,9 @@ TEST_F(BackgroundImageTest, Checkpoint_OldCheckpointLoadsWithDefaults) {
 }
 
 TEST_F(BackgroundImageTest, Checkpoint_AllBackgroundModesSerialize) {
-    static constexpr const char* EXPECTED_NAMES[] = {"solid_color", "modulation", "image"};
+    static constexpr const char* EXPECTED_NAMES[] = {"solid_color", "modulation", "image", "random"};
 
-    for (int mode_int = 0; mode_int < 3; ++mode_int) {
+    for (int mode_int = 0; mode_int < 4; ++mode_int) {
         OptimizationParameters params;
         params.bg_mode = static_cast<BackgroundMode>(mode_int);
 
