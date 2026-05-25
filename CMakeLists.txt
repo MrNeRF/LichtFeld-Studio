@@ -132,7 +132,7 @@ get_filename_component(PROJ_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}" ABSOLUTE)
 option(BUILD_TESTS "Build tests" OFF)
 option(BUILD_UNICODE_TEST_ONLY "Build only Unicode path test (no CUDA)" OFF)
 option(ENABLE_ALLOCATION_PROFILING "Enable tensor allocation profiling" OFF)
-option(LFS_FAST_COMPILE "Optimize measured slow C++ components for build speed instead of runtime speed" OFF)
+option(LFS_FAST_COMPILE "Optimize measured slow C++ components for build speed instead of runtime speed (WIN32 only)" OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # Debug options
@@ -947,9 +947,8 @@ if(LFS_FAST_COMPILE AND MSVC)
         endif()
     endfunction()
 
-    # Selected from build_time_comparison.md: only components with >20s summed
-    # edge-time improvement in build-fast are included. CUDA-heavy regressions
-    # stay on their target defaults.
+    # curated list of components to optimize for fast compilation (WIN32 only)
+    # CUDA-heavy regressions stay on their target defaults.
     foreach(_lfs_fast_target IN ITEMS
         lfs_visualizer
         lfs_py
