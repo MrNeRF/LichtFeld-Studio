@@ -22,7 +22,7 @@ namespace lfs::app {
     namespace {
 
         constexpr const char* CONVERT_EXTENSIONS[] = {".ply", ".sog", ".spz", ".usd", ".usda", ".usdc", ".usdz", ".resume", ".rad"};
-        constexpr const char* MESH_EXTENSIONS[] = {".obj", ".fbx", ".gltf", ".glb", ".stl", ".dae", ".3ds", ".ply"};
+        constexpr const char* MESH_EXTENSIONS[] = {".obj", ".fbx", ".gltf", ".glb", ".stl", ".dae", ".3ds", ".mesh", ".ply"};
 
         enum class OverwriteChoice { YES,
                                      NO,
@@ -303,7 +303,7 @@ namespace lfs::app {
         const auto files = getInputFiles(params.input_path, MESH_EXTENSIONS);
         if (files.empty()) {
             LOG_ERROR("No mesh files in: {}", path_to_utf8(params.input_path));
-            std::println(stderr, "Error: No .obj, .fbx, .gltf, .glb, .stl, .dae, .3ds, or mesh .ply files found");
+            std::println(stderr, "Error: No .obj, .fbx, .gltf, .glb, .stl, .dae, .3ds, .mesh, or mesh .ply files found");
             return 1;
         }
 

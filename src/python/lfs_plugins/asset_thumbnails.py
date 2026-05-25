@@ -6,10 +6,14 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 import struct
 import time
 from pathlib import Path
 from typing import Any, Set
+
+_RENDERED_STEM_RE = re.compile(r"^(?P<asset_id>.+)\.render(?:\.\d+)?$")
+_DATASET_STEM_RE = re.compile(r"^(?P<asset_id>.+)\.dataset$")
 
 _logger = logging.getLogger(__name__)
 
@@ -317,8 +321,8 @@ class AssetThumbnails:
                 continue
             try:
                 old.unlink()
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.debug("Failed to remove stale thumbnail %s: %s", old, exc)
 
     def has_rendered_thumbnail(self, asset_id: str) -> bool:
         """Return whether any rendered thumbnail exists for this asset."""
@@ -444,7 +448,12 @@ class AssetThumbnails:
         if not callable(render_preview) or not callable(save_image):
             return None
 
-        image = render_preview(str(asset_path), THUMB_WIDTH, THUMB_HEIGHT, **render_kwargs)
+        image = render_preview(
+            str(asset_path),
+            width=THUMB_WIDTH,
+            height=THUMB_HEIGHT,
+            **render_kwargs,
+        )
         if image is None:
             return None
 
@@ -566,10 +575,15 @@ class AssetThumbnails:
             if thumb_file.name.startswith("_"):
                 continue
 
-            # Extract asset ID from filename
-            asset_id = thumb_file.stem
-            if asset_id.endswith(".render") or asset_id.endswith(".dataset"):
-                asset_id = asset_id.rsplit(".", 1)[0]
+            stem = thumb_file.stem
+            rendered_match = _RENDERED_STEM_RE.match(stem)
+            dataset_match = _DATASET_STEM_RE.match(stem)
+            if rendered_match:
+                asset_id = rendered_match.group("asset_id")
+            elif dataset_match:
+                asset_id = dataset_match.group("asset_id")
+            else:
+                asset_id = stem
 
             if asset_id not in known_asset_ids:
                 thumb_file.unlink()

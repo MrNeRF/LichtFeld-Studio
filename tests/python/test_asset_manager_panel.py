@@ -7,6 +7,7 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from urllib.parse import quote
 import json
+import re
 import sys
 
 import pytest
@@ -352,8 +353,9 @@ def test_rendered_thumbnails_cover_geometry_and_checkpoints(
             asset_path,
         )
 
-        assert thumb_path == thumbnails.get_rendered_thumbnail_path(
-            f"{asset_type}_asset"
+        assert re.fullmatch(
+            rf"{asset_type}_asset\.render\.\d+\.png",
+            thumb_path.name,
         )
         assert thumb_path.exists()
 
@@ -361,6 +363,86 @@ def test_rendered_thumbnails_cover_geometry_and_checkpoints(
         "asset.checkpoint",
         "asset.mesh",
         "asset.ply_pcl",
+    ]
+
+
+def test_cleanup_orphans_preserves_timestamped_rendered_thumbnails(
+    asset_manager_panel_module,
+    tmp_path,
+):
+    thumbnails = asset_manager_panel_module.AssetThumbnails(tmp_path / "thumbs")
+    thumbs_dir = thumbnails.thumbnails_dir
+
+    keep_rendered = thumbs_dir / "alive.render.1700000000.png"
+    keep_dataset = thumbs_dir / "alive.dataset.png"
+    keep_placeholder = thumbs_dir / "alive.png"
+    orphan_rendered = thumbs_dir / "gone.render.1700000001.png"
+    orphan_dataset = thumbs_dir / "gone.dataset.png"
+    for path in (keep_rendered, keep_dataset, keep_placeholder, orphan_rendered, orphan_dataset):
+        path.write_bytes(b"thumb")
+
+    removed = thumbnails.cleanup_orphans({"alive"})
+
+    assert keep_rendered.exists()
+    assert keep_dataset.exists()
+    assert keep_placeholder.exists()
+    assert not orphan_rendered.exists()
+    assert not orphan_dataset.exists()
+    assert set(removed) == {orphan_rendered, orphan_dataset}
+
+
+def test_rendered_thumbnail_from_camera_passes_dimensions_by_keyword(
+    asset_manager_panel_module,
+    tmp_path,
+):
+    calls = []
+
+    def render_asset_preview_from_camera(
+        path,
+        eye,
+        target,
+        width,
+        height,
+        focal_length_mm=35.0,
+        up=(0.0, 1.0, 0.0),
+    ):
+        calls.append((path, eye, target, width, height, focal_length_mm, up))
+        return object()
+
+    def save_image(path, image):
+        Path(path).write_bytes(b"preview")
+
+    asset_manager_panel_module.lf.render_asset_preview_from_camera = (
+        render_asset_preview_from_camera
+    )
+    asset_manager_panel_module.lf.io = SimpleNamespace(save_image=save_image)
+
+    asset_path = tmp_path / "asset.mesh"
+    asset_path.write_bytes(b"asset")
+
+    thumbnails = asset_manager_panel_module.AssetThumbnails(tmp_path / "thumbs")
+    thumb_path = thumbnails.generate_rendered_preview_from_camera(
+        "mesh",
+        "mesh_asset",
+        asset_path,
+        eye=(1.0, 2.0, 3.0),
+        target=(4.0, 5.0, 6.0),
+        up=(0.0, 0.0, 1.0),
+    )
+
+    assert thumb_path is not None
+    assert re.fullmatch(r"mesh_asset\.render\.\d+\.png", thumb_path.name)
+    assert thumb_path.exists()
+    assert calls == [
+        (
+            str(asset_path),
+            (1.0, 2.0, 3.0),
+            (4.0, 5.0, 6.0),
+            512,
+            224,
+            35.0,
+            (0.0, 0.0, 1.0),
+        )
     ]
 
 

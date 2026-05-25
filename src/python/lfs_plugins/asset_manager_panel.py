@@ -3044,8 +3044,6 @@ class AssetManagerPanel(Panel):
             return
 
         try:
-            import lichtfeld as lf
-
             camera = lf.get_camera("main")
             if camera is None:
                 self._log_warn("No camera available for thumbnail update")

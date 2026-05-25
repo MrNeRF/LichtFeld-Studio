@@ -5,6 +5,7 @@
 
 #include "py_prop.hpp"
 #include "py_tensor.hpp"
+#include "rendering/render_constants.hpp"
 #include "visualizer/ipc/view_context.hpp"
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
@@ -77,7 +78,7 @@ namespace lfs::python {
         const std::string& path,
         int width = 512,
         int height = 224,
-        float focal_length_mm = 50.0f);
+        float focal_length_mm = lfs::rendering::DEFAULT_FOCAL_LENGTH_MM);
 
     class PyRenderSettings {
     public:
