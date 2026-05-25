@@ -17,8 +17,8 @@
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/image_layout.hpp"
-#include "rendering/rendering.hpp"
 #include "rendering/render_constants.hpp"
+#include "rendering/rendering.hpp"
 #include "scene/scene_render_state.hpp"
 #include "visualizer/internal/viewport.hpp"
 #include "visualizer/ipc/view_context.hpp"
@@ -978,11 +978,11 @@ namespace lfs::python {
 
     std::optional<PyTensor> render_asset_preview_from_camera(
         const std::string& path,
+        const std::tuple<float, float, float>& eye,
+        const std::tuple<float, float, float>& target,
         const int width,
         const int height,
         const float focal_length_mm,
-        const std::tuple<float, float, float>& eye,
-        const std::tuple<float, float, float>& target,
         const std::tuple<float, float, float>& up) {
         const glm::vec3 eye_vec{
             std::get<0>(eye), std::get<1>(eye), std::get<2>(eye)};
@@ -1017,7 +1017,8 @@ namespace lfs::python {
                     return static_cast<float>(self.height) / self.ortho_scale;
                 },
                 "Vertical view extent in world units (Blender-compatible orthographic scale). Larger when zoomed out, smaller when zoomed in.")
-            .def_prop_ro("position", [](const PyViewInfo& self) -> std::tuple<float, float, float> {
+            .def_prop_ro(
+                "position", [](const PyViewInfo& self) -> std::tuple<float, float, float> {
                     auto t = self.translation.tensor().cpu();
                     auto acc = t.accessor<float, 1>();
                     return {acc(0), acc(1), acc(2)}; }, "Camera position as (x, y, z) tuple");
@@ -1124,9 +1125,9 @@ Args:
               "Render an asset from the framed home camera into an offscreen thumbnail without mutating the live scene.");
 
         m.def("render_asset_preview_from_camera", &render_asset_preview_from_camera,
-              nb::arg("path"), nb::arg("width") = 512, nb::arg("height") = 224,
+              nb::arg("path"), nb::arg("eye"), nb::arg("target"),
+              nb::arg("width") = 512, nb::arg("height") = 224,
               nb::arg("focal_length_mm") = lfs::rendering::DEFAULT_FOCAL_LENGTH_MM,
-              nb::arg("eye"), nb::arg("target"),
               nb::arg("up") = std::make_tuple(0.0f, 1.0f, 0.0f),
               "Render an asset from a custom camera pose into an offscreen thumbnail without mutating the live scene.");
 

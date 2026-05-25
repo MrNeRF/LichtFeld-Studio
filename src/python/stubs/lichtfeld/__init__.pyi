@@ -1224,16 +1224,6 @@ def render_view(rotation: Tensor, translation: Tensor, width: int, height: int, 
         Tensor [H, W, 3] RGB image on CUDA, or None if scene not available
     """
 
-def render_asset_preview(path: str, width: int = 512, height: int = 224, focal_length_mm: float = 50.0) -> Tensor | None:
-    """
-    Render an asset from the framed home camera into an offscreen thumbnail without mutating the live scene.
-    """
-
-def render_asset_preview_from_camera(path: str, width: int = 512, height: int = 224, focal_length_mm: float = 50.0, eye: tuple[float, float, float] = (0.0, 0.0, 0.0), target: tuple[float, float, float] = (0.0, 0.0, 0.0), up: tuple[float, float, float] = (0.0, 1.0, 0.0)) -> Tensor | None:
-    """
-    Render an asset from a custom camera pose into an offscreen thumbnail without mutating the live scene.
-    """
-
 def compute_screen_positions(rotation: Tensor, translation: Tensor, width: int, height: int, fov: float = 60.0) -> Tensor | None:
     """
     Compute screen positions of all Gaussians for a given camera view.
@@ -1304,6 +1294,16 @@ def look_at(eye: tuple[float, float, float], target: tuple[float, float, float],
 def render_at(eye: tuple[float, float, float], target: tuple[float, float, float], width: int, height: int, fov: float = 60.0, up: tuple[float, float, float] = (0.0, 1.0, 0.0), bg_color: Tensor | None = None) -> Tensor | None:
     """
     Render scene from eye looking at target. Returns [H,W,3] RGB tensor or None.
+    """
+
+def render_asset_preview(path: str, width: int = 512, height: int = 224, focal_length_mm: float = 35.0) -> Tensor | None:
+    """
+    Render an asset from the framed home camera into an offscreen thumbnail without mutating the live scene.
+    """
+
+def render_asset_preview_from_camera(path: str, eye: tuple[float, float, float], target: tuple[float, float, float], width: int = 512, height: int = 224, focal_length_mm: float = 35.0, up: tuple[float, float, float] = (0.0, 1.0, 0.0)) -> Tensor | None:
+    """
+    Render an asset from a custom camera pose into an offscreen thumbnail without mutating the live scene.
     """
 
 def get_render_scene() -> scene.Scene | None:
