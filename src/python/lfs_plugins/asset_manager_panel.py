@@ -1019,7 +1019,7 @@ class AssetManagerPanel(Panel):
             path = Path(str(thumbnail_path)).expanduser()
             if not path.exists():
                 return "none"
-            return f"image({_encode_rml_image_path(str(path))})"
+            return f"image({_encode_rml_image_path(path.as_posix())})"
         except Exception:
             return "none"
 

@@ -3,7 +3,7 @@
 """Regression tests for Asset Manager panel record formatting and selection."""
 
 from importlib import import_module
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from types import ModuleType, SimpleNamespace
 from urllib.parse import quote
 import json
@@ -181,8 +181,38 @@ def test_asset_rows_expose_thumbnail_decorator(asset_manager_panel_module, tmp_p
     row = panel._format_asset_for_ui(asset)
 
     assert row["thumbnail_decorator"] == (
-        f"image({quote(str(thumb_path), safe=RML_PATH_SAFE_CHARS)})"
+        f"image({quote(thumb_path.as_posix(), safe=RML_PATH_SAFE_CHARS)})"
     )
+
+
+def test_thumbnail_decorator_normalizes_windows_path_separators(
+    asset_manager_panel_module, monkeypatch
+):
+    panel = asset_manager_panel_module.AssetManagerPanel()
+    windows_path = PureWindowsPath("C:/Users/paja/asset preview.png")
+
+    class _ExistingWindowsPath:
+        def __init__(self, raw_path):
+            self.raw_path = raw_path
+
+        def expanduser(self):
+            return self
+
+        def exists(self):
+            return True
+
+        def as_posix(self):
+            return windows_path.as_posix()
+
+        def __str__(self):
+            return str(windows_path)
+
+    monkeypatch.setattr(asset_manager_panel_module, "Path", _ExistingWindowsPath)
+
+    decorator = panel._thumbnail_decorator({"thumbnail_path": str(windows_path)})
+
+    assert decorator == "image(C:/Users/paja/asset%20preview.png)"
+    assert "%5C" not in decorator
 
 
 def test_asset_card_title_uses_asset_path_leaf(asset_manager_panel_module):
