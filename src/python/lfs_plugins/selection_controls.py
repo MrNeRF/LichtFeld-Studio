@@ -117,6 +117,7 @@ class SelectionControlsController:
         self._depth_far = _DEFAULT_DEPTH_FAR
         self._frustum_half_width = _DEFAULT_FRUSTUM_HALF_WIDTH
         self._last_state_key = None
+        self._last_state_items = None
 
     def bind_model(self, model):
         model.bind_func("selection_tool_label", lambda: "Select")
@@ -169,6 +170,7 @@ class SelectionControlsController:
     def mount(self, doc):
         self._visible = False
         self._last_state_key = None
+        self._last_state_items = None
 
         wrap = doc.get_element_by_id("selection-block")
         if wrap:
@@ -179,34 +181,40 @@ class SelectionControlsController:
 
     def update(self, doc):
         dirty = False
+        dirty_reasons = []
         self._active_tool = self._get_active_tool()
         visible = self._active_tool == _SELECTION_TOOL_ID
 
-        wrap = doc.get_element_by_id("selection-block")
         if visible != self._visible:
             self._visible = visible
+            wrap = doc.get_element_by_id("selection-block")
             if wrap:
                 wrap.set_class("hidden", not visible)
             dirty = True
+            dirty_reasons.append("visibility")
 
         if not visible:
-            if wrap:
-                wrap.set_class("hidden", True)
             self._last_state_key = None
-            return dirty
+            self._last_state_items = None
+            return ",".join(dirty_reasons) if dirty else None
 
         self._refresh_state()
-        state_key = self._state_key()
+        state_items = self._state_items()
+        state_key = self._state_key(state_items)
         if state_key != self._last_state_key:
+            changed_fields = self._changed_state_fields(state_items)
             self._last_state_key = state_key
-            self._dirty_all()
+            self._last_state_items = state_items
+            self._dirty_changed_fields(changed_fields)
             dirty = True
-        return dirty
+            dirty_reasons.append(f"state:{'+'.join(changed_fields)}")
+        return ",".join(dirty_reasons) if dirty else None
 
     def unmount(self):
         self._handle = None
         self._visible = False
         self._last_state_key = None
+        self._last_state_items = None
 
     def _mode_label(self):
         return _MODE_LABELS.get(self._active_mode, "Selection")
@@ -255,19 +263,31 @@ class SelectionControlsController:
         )
         self._frustum_half_width = max(_parse_float(width, _DEFAULT_FRUSTUM_HALF_WIDTH), 0.05)
 
-    def _state_key(self):
+    def _state_items(self):
         return (
-            self._active_tool,
-            self._active_mode,
-            self._has_scene,
-            self._has_selection,
-            self._can_undo,
-            self._can_redo,
-            self._depth_enabled,
-            round(self._depth_near, 3),
-            round(self._depth_far, 3),
-            round(self._frustum_half_width, 3),
+            ("active_tool", self._active_tool),
+            ("active_mode", self._active_mode),
+            ("has_scene", self._has_scene),
+            ("has_selection", self._has_selection),
+            ("can_undo", self._can_undo),
+            ("can_redo", self._can_redo),
+            ("depth_enabled", self._depth_enabled),
+            ("depth_near", round(self._depth_near, 3)),
+            ("depth_far", round(self._depth_far, 3)),
+            ("frustum_half_width", round(self._frustum_half_width, 3)),
         )
+
+    def _state_key(self, state_items=None):
+        if state_items is None:
+            state_items = self._state_items()
+        return tuple(value for _name, value in state_items)
+
+    def _changed_state_fields(self, state_items):
+        if self._last_state_items is None:
+            return ["initial"]
+        previous = dict(self._last_state_items)
+        changed = [name for name, value in state_items if previous.get(name) != value]
+        return changed or ["unknown"]
 
     def _near_slider_bounds(self):
         return _slider_bounds(self._depth_near, _DEPTH_MIN, self._depth_far - _DEPTH_GAP)
@@ -401,4 +421,62 @@ class SelectionControlsController:
         if not self._handle:
             return
         for field in self._DIRTY_FIELDS:
+            self._handle.dirty(field)
+
+    def _dirty_changed_fields(self, changed_fields):
+        if not self._handle:
+            return
+
+        field_map = {
+            "active_mode": ("selection_mode_label",),
+            "has_scene": (
+                "selection_has_scene",
+                "selection_depth_near_str",
+                "selection_depth_near_value",
+                "selection_depth_near_slider_min",
+                "selection_depth_near_slider_max",
+                "selection_depth_far_str",
+                "selection_depth_far_value",
+                "selection_depth_far_slider_min",
+                "selection_depth_far_slider_max",
+            ),
+            "has_selection": (
+                "selection_has_selection",
+                "selection_can_delete",
+            ),
+            "can_undo": ("selection_can_undo",),
+            "can_redo": ("selection_can_redo",),
+            "depth_enabled": (
+                "selection_depth_mode_active",
+                "selection_depth_toggle_label",
+            ),
+            "depth_near": (
+                "selection_depth_near_str",
+                "selection_depth_near_value",
+                "selection_depth_near_slider_min",
+                "selection_depth_near_slider_max",
+                "selection_depth_far_slider_min",
+            ),
+            "depth_far": (
+                "selection_depth_far_str",
+                "selection_depth_far_value",
+                "selection_depth_far_slider_min",
+                "selection_depth_far_slider_max",
+                "selection_depth_near_slider_max",
+            ),
+            "frustum_half_width": (),
+        }
+
+        if not changed_fields or "initial" in changed_fields or "unknown" in changed_fields:
+            self._dirty_all()
+            return
+
+        dirty_fields = []
+        for changed in changed_fields:
+            if changed == "active_tool":
+                self._dirty_all()
+                return
+            dirty_fields.extend(field_map.get(changed, ()))
+
+        for field in dict.fromkeys(dirty_fields):
             self._handle.dirty(field)

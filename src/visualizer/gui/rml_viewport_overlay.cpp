@@ -73,6 +73,7 @@ namespace lfs::vis::gui {
         body_el_ = nullptr;
         body_template_rml_.clear();
         hovered_interactive_ = false;
+        last_hover_element_ = nullptr;
         mouse_pos_valid_ = false;
     }
 
@@ -99,6 +100,7 @@ namespace lfs::vis::gui {
         toolbar_roots_dirty_ = true;
         animation_active_ = true;
         hovered_interactive_ = false;
+        last_hover_element_ = nullptr;
         mouse_pos_valid_ = false;
         last_render_w_ = 0;
         last_render_h_ = 0;
@@ -165,6 +167,8 @@ namespace lfs::vis::gui {
                                                glm::vec2 screen_origin) {
         if (vp_pos_ != pos || screen_origin_ != screen_origin)
             mouse_pos_valid_ = false;
+        if (vp_pos_ != pos || screen_origin_ != screen_origin || vp_size_ != size)
+            last_hover_element_ = nullptr;
         if (vp_size_ != size)
             render_needed_ = true;
         vp_pos_ = pos;
@@ -307,15 +311,20 @@ namespace lfs::vis::gui {
             input.mouse_clicked[0] || input.mouse_released[0] ||
             input.mouse_clicked[1] || input.mouse_released[1] ||
             input.mouse_wheel != 0.0f;
+        const bool pointer_drag =
+            input.mouse_down[0] || input.mouse_down[1] || input.mouse_down[2];
         auto* const point_element = is_inside
                                         ? rml_context_->GetElementAtPoint(Rml::Vector2f(
                                               static_cast<float>(rml_mx),
                                               static_cast<float>(rml_my)))
                                         : nullptr;
         const bool point_interactive = isInteractiveViewportOverlayElement(point_element);
+        const bool hover_target_changed = point_element != last_hover_element_;
         const bool should_process_mouse_move =
             (mouse_moved || pointer_event) &&
             (was_inside || is_inside) &&
+            (pointer_event || pointer_drag || hover_target_changed ||
+             hovered_interactive_ || was_inside != is_inside) &&
             (point_interactive || hovered_interactive_ || was_inside != is_inside);
         if (should_process_mouse_move) {
             mouse_pos_valid_ = true;
@@ -328,6 +337,7 @@ namespace lfs::vis::gui {
             last_mouse_x_ = rml_mx;
             last_mouse_y_ = rml_my;
         }
+        last_hover_element_ = point_element;
 
         auto* const hover = should_process_mouse_move ? rml_context_->GetHoverElement()
                                                       : point_element;
@@ -563,15 +573,27 @@ namespace lfs::vis::gui {
                  had_data_model_binding_dirty);
         {
             LOG_TIMER("gui_render.rml_viewport_overlay.render.update");
-            rml_manager_->trackContextFrame(rml_context_,
-                                            static_cast<int>(vp_pos_.x - screen_origin_.x),
-                                            static_cast<int>(vp_pos_.y - screen_origin_.y));
-            rml_context_->SetDimensions(Rml::Vector2i(w, h));
-            rml_context_->Update();
+            {
+                LOG_TIMER("gui_render.rml_viewport_overlay.render.update.track_context");
+                rml_manager_->trackContextFrame(rml_context_,
+                                                static_cast<int>(vp_pos_.x - screen_origin_.x),
+                                                static_cast<int>(vp_pos_.y - screen_origin_.y));
+            }
+            {
+                LOG_TIMER("gui_render.rml_viewport_overlay.render.update.set_dimensions");
+                rml_context_->SetDimensions(Rml::Vector2i(w, h));
+            }
+            {
+                LOG_TIMER("gui_render.rml_viewport_overlay.render.update.context_update");
+                rml_context_->Update();
+            }
         }
 
         queueVulkanContext();
-        animation_active_ = (rml_context_->GetNextUpdateDelay() == 0);
+        {
+            LOG_TIMER("gui_render.rml_viewport_overlay.render.update.next_delay");
+            animation_active_ = (rml_context_->GetNextUpdateDelay() == 0);
+        }
         render_needed_ = false;
         last_render_w_ = w;
         last_render_h_ = h;

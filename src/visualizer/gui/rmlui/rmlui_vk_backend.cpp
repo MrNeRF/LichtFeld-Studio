@@ -689,15 +689,17 @@ Rml::TextureHandle RenderInterface_VK::SaveLayerAsTexture() {
     render_layer_t* source_layer = GetRenderLayer(static_cast<Rml::LayerHandle>(m_render_layer_stack_size));
     if (!source_layer)
         return {};
+    if (source_layer->width <= 0 || source_layer->height <= 0)
+        return {};
 
     VkRect2D bounds = m_is_use_scissor_specified ? m_scissor : ContextClipScissor();
     bounds = IntersectContextClip(bounds);
-    bounds.offset.x = Rml::Math::Clamp(bounds.offset.x, 0, m_width);
-    bounds.offset.y = Rml::Math::Clamp(bounds.offset.y, 0, m_height);
-    if (bounds.offset.x + static_cast<int>(bounds.extent.width) > m_width)
-        bounds.extent.width = static_cast<uint32_t>(m_width - bounds.offset.x);
-    if (bounds.offset.y + static_cast<int>(bounds.extent.height) > m_height)
-        bounds.extent.height = static_cast<uint32_t>(m_height - bounds.offset.y);
+    bounds.offset.x = Rml::Math::Clamp(bounds.offset.x, 0, source_layer->width);
+    bounds.offset.y = Rml::Math::Clamp(bounds.offset.y, 0, source_layer->height);
+    if (bounds.offset.x + static_cast<int>(bounds.extent.width) > source_layer->width)
+        bounds.extent.width = static_cast<uint32_t>(source_layer->width - bounds.offset.x);
+    if (bounds.offset.y + static_cast<int>(bounds.extent.height) > source_layer->height)
+        bounds.extent.height = static_cast<uint32_t>(source_layer->height - bounds.offset.y);
     if (bounds.extent.width == 0 || bounds.extent.height == 0)
         return {};
 
@@ -1346,6 +1348,36 @@ void RenderInterface_VK::SetContextClipRect(float x1, float y1, float x2, float 
 
 void RenderInterface_VK::ApplyTransformState() {
     m_user_data_for_vertex_shader.m_transform = m_projection * m_context_transform * m_rml_transform;
+}
+
+void RenderInterface_VK::RenderTextureQuad(Rml::TextureHandle texture, const float x, const float y,
+                                           const float w, const float h) {
+    if (m_p_current_command_buffer == nullptr || texture == 0 || w <= 0.0f || h <= 0.0f)
+        return;
+
+    Rml::Vertex vertices[4];
+    vertices[0].position = {x, y};
+    vertices[0].tex_coord = {0.0f, 0.0f};
+    vertices[1].position = {x + w, y};
+    vertices[1].tex_coord = {1.0f, 0.0f};
+    vertices[2].position = {x + w, y + h};
+    vertices[2].tex_coord = {1.0f, 1.0f};
+    vertices[3].position = {x, y + h};
+    vertices[3].tex_coord = {0.0f, 1.0f};
+    for (Rml::Vertex& vertex : vertices)
+        vertex.colour = Rml::ColourbPremultiplied(255, 255, 255, 255);
+
+    int indices[6] = {0, 1, 2, 0, 2, 3};
+
+    const bool transform_enabled = m_is_transform_enabled;
+    const Rml::Matrix4f transform = m_user_data_for_vertex_shader.m_transform;
+    SetTransform(nullptr);
+    if (Rml::CompiledGeometryHandle handle = CompileGeometry({vertices, 4}, {indices, 6})) {
+        RenderGeometry(handle, {}, texture);
+        ReleaseGeometry(handle);
+    }
+    m_is_transform_enabled = transform_enabled;
+    m_user_data_for_vertex_shader.m_transform = transform;
 }
 
 VkRect2D RenderInterface_VK::ContextClipScissor() const noexcept {
@@ -3218,12 +3250,20 @@ VkImageAspectFlags RenderInterface_VK::DepthStencilAspectMask() const noexcept {
 void RenderInterface_VK::EnsureRenderLayer(Rml::LayerHandle layer_handle) {
     if (layer_handle == 0)
         return;
+    if (m_width <= 0 || m_height <= 0)
+        return;
 
     const size_t index = static_cast<size_t>(layer_handle - 1);
     if (index >= m_render_layers.size())
         m_render_layers.resize(index + 1);
 
     render_layer_t& layer = m_render_layers[index];
+    const bool has_color = layer.m_color.m_p_vk_image_view != VK_NULL_HANDLE;
+    const bool has_depth_stencil = layer.m_depth_stencil.m_p_vk_image_view != VK_NULL_HANDLE;
+    if ((has_color || has_depth_stencil) &&
+        (!has_color || !has_depth_stencil || layer.width != m_width || layer.height != m_height))
+        DestroyRenderLayer(layer);
+
     if (layer.m_color.m_p_vk_image_view && layer.m_depth_stencil.m_p_vk_image_view)
         return;
 
@@ -3296,6 +3336,8 @@ void RenderInterface_VK::EnsureRenderLayer(Rml::LayerHandle layer_handle) {
     status = vkCreateImageView(m_p_device, &depth_view_info, nullptr, &layer.m_depth_stencil.m_p_vk_image_view);
     RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to create RmlUi Vulkan layer depth/stencil image view");
     layer.m_depth_stencil_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    layer.width = m_width;
+    layer.height = m_height;
 }
 
 RenderInterface_VK::render_layer_t* RenderInterface_VK::GetRenderLayer(Rml::LayerHandle layer_handle) {
@@ -3331,8 +3373,12 @@ void RenderInterface_VK::ResetDynamicRenderState() {
 }
 
 void RenderInterface_VK::BeginLayerRendering(Rml::LayerHandle layer_handle, bool clear) {
+    EnsureRenderLayer(layer_handle);
+
     render_layer_t* layer = GetRenderLayer(layer_handle);
     if (!layer || !layer->m_color.m_p_vk_image_view || !layer->m_depth_stencil.m_p_vk_image_view)
+        return;
+    if (layer->width <= 0 || layer->height <= 0)
         return;
 
     TransitionImageLayout(layer->m_color.m_p_vk_image, VK_IMAGE_ASPECT_COLOR_BIT, layer->m_color_layout,
@@ -3366,7 +3412,8 @@ void RenderInterface_VK::BeginLayerRendering(Rml::LayerHandle layer_handle, bool
     VkRenderingInfo rendering_info{};
     rendering_info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
     rendering_info.renderArea.offset = {0, 0};
-    rendering_info.renderArea.extent = {static_cast<uint32_t>(m_width), static_cast<uint32_t>(m_height)};
+    rendering_info.renderArea.extent = {static_cast<uint32_t>(layer->width),
+                                        static_cast<uint32_t>(layer->height)};
     rendering_info.layerCount = 1;
     rendering_info.colorAttachmentCount = 1;
     rendering_info.pColorAttachments = &color_attachment;
@@ -3466,8 +3513,12 @@ bool RenderInterface_VK::CopySwapchainToLayer(Rml::LayerHandle destination) {
     if (!m_external_context || !m_external_swapchain_image || destination == 0)
         return false;
 
+    EnsureRenderLayer(destination);
+
     render_layer_t* destination_layer = GetRenderLayer(destination);
     if (!destination_layer || !destination_layer->m_color.m_p_vk_image)
+        return false;
+    if (destination_layer->width <= 0 || destination_layer->height <= 0)
         return false;
 
     EndActiveRendering();
@@ -3485,7 +3536,9 @@ bool RenderInterface_VK::CopySwapchainToLayer(Rml::LayerHandle destination) {
     copy_region.srcSubresource.baseArrayLayer = 0;
     copy_region.srcSubresource.layerCount = 1;
     copy_region.dstSubresource = copy_region.srcSubresource;
-    copy_region.extent = {static_cast<uint32_t>(m_width), static_cast<uint32_t>(m_height), 1};
+    copy_region.extent = {static_cast<uint32_t>(destination_layer->width),
+                          static_cast<uint32_t>(destination_layer->height),
+                          1};
 
     vkCmdCopyImage(m_p_current_command_buffer, m_external_swapchain_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                    destination_layer->m_color.m_p_vk_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy_region);

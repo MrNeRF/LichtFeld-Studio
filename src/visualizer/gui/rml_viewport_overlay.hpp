@@ -91,6 +91,7 @@ namespace lfs::vis::gui {
         bool data_model_binding_dirty_ = true;
         bool animation_active_ = false;
         bool hovered_interactive_ = false;
+        Rml::Element* last_hover_element_ = nullptr;
         bool mouse_pos_valid_ = false;
         int last_mouse_x_ = 0;
         int last_mouse_y_ = 0;

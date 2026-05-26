@@ -361,25 +361,32 @@ namespace lfs::vis::gui {
             assert(isMounted());
             const lfs::python::GilAcquire gil;
             auto py_doc = lfs::python::PyRmlDocument(doc);
+            bool run_update = pending_dirty || update_due;
 
             if (scene_changed) {
                 try {
-                    panel_instance_.attr("on_scene_changed")(py_doc);
-                    pending_dirty = true;
+                    nb::object result = panel_instance_.attr("on_scene_changed")(py_doc);
+                    const bool scene_dirty = result.is_none() || nb::cast<bool>(result);
+                    pending_dirty |= scene_dirty;
+                    run_update |= scene_dirty;
                 } catch (const std::exception& e) {
                     LOG_ERROR("Panel on_scene_changed error: {}", e.what());
                 }
+                pending_dirty |= lfs::python::consume_document_dirty(doc);
+                run_update |= pending_dirty;
                 last_scene_gen_ = ctx->scene_generation;
             }
 
-            try {
-                nb::object result = panel_instance_.attr("on_update")(py_doc);
-                pending_dirty |= !result.is_none() && nb::cast<bool>(result);
-            } catch (const std::exception& e) {
-                LOG_ERROR("Panel on_update error: {}", e.what());
+            if (run_update) {
+                try {
+                    nb::object result = panel_instance_.attr("on_update")(py_doc);
+                    pending_dirty |= !result.is_none() && nb::cast<bool>(result);
+                } catch (const std::exception& e) {
+                    LOG_ERROR("Panel on_update error: {}", e.what());
+                }
             }
             pending_dirty |= lfs::python::consume_document_dirty(doc);
-            if (!dirty_driven_updates_)
+            if (!dirty_driven_updates_ && run_update)
                 next_update_at_ = now + updateInterval();
         }
 

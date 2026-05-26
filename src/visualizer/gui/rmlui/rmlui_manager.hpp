@@ -6,6 +6,8 @@
 
 #include "config.h"
 
+#include <RmlUi/Core/Types.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -32,6 +34,12 @@ namespace lfs::vis::gui {
     class RmlSystemInterface;
     class RmlTextInputHandler;
     enum class RmlCursorRequest : uint8_t;
+
+    struct CachedVulkanContextRender {
+        Rml::TextureHandle texture = {};
+        int width = 0;
+        int height = 0;
+    };
 
     class RmlUIManager {
     public:
@@ -70,6 +78,22 @@ namespace lfs::vis::gui {
                                 float clip_y1 = 0.0f,
                                 float clip_x2 = 0.0f,
                                 float clip_y2 = 0.0f);
+        void queueCachedVulkanContext(Rml::Context* context,
+                                      CachedVulkanContextRender* cache,
+                                      int cache_width,
+                                      int cache_height,
+                                      float offset_x,
+                                      float offset_y,
+                                      float draw_width,
+                                      float draw_height,
+                                      bool refresh,
+                                      bool foreground = false,
+                                      bool clip_enabled = false,
+                                      float clip_x1 = 0.0f,
+                                      float clip_y1 = 0.0f,
+                                      float clip_x2 = 0.0f,
+                                      float clip_y2 = 0.0f);
+        void releaseCachedVulkanContext(CachedVulkanContextRender& cache);
         void clearVulkanQueue();
         [[nodiscard]] bool beginVulkanFrame(VkCommandBuffer command_buffer,
                                             VkExtent2D extent,
@@ -105,6 +129,12 @@ namespace lfs::vis::gui {
             float clip_y1 = 0.0f;
             float clip_x2 = 0.0f;
             float clip_y2 = 0.0f;
+            CachedVulkanContextRender* cache = nullptr;
+            int cache_width = 0;
+            int cache_height = 0;
+            float draw_width = 0.0f;
+            float draw_height = 0.0f;
+            bool refresh_cache = false;
         };
 
         struct TrackedContextFrame {

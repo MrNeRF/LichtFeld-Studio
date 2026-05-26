@@ -114,6 +114,8 @@ class TransformControlsController:
 
         self._focus_active = False
         self._escape_revert = w.EscapeRevertController()
+        self._last_state_key = None
+        self._force_dirty = False
 
     def bind_model(self, model):
         model.bind_func("transform_tool_label", self._tool_label)
@@ -173,6 +175,8 @@ class TransformControlsController:
     def mount(self, doc):
         self._doc = doc
         self._visible = False
+        self._last_state_key = None
+        self._force_dirty = False
         self._escape_revert.clear()
 
         wrap = doc.get_element_by_id("transform-block")
@@ -213,6 +217,14 @@ class TransformControlsController:
         prev_selected = tuple(self._selected)
 
         self._active_tool = lf.ui.get_active_tool() or ""
+        active_transform_tool = self._active_tool in _TRANSFORM_OVERLAY_TOOL_IDS
+        if not active_transform_tool and not self._visible:
+            self._selected = []
+            self._step_repeat_prop = None
+            self._last_state_key = None
+            self._force_dirty = False
+            return False
+
         self._selected = lf.get_selected_node_names() or []
         self._transform_space = self._current_transform_space()
         self._pivot_mode = self._current_pivot_mode()
@@ -220,18 +232,19 @@ class TransformControlsController:
         if self._active_tool != prev_tool or self._transform_space != prev_space:
             self._commit_active_edit()
 
-        visible = self._active_tool in _TRANSFORM_OVERLAY_TOOL_IDS and len(self._selected) > 0
-        wrap = doc.get_element_by_id("transform-block")
+        visible = active_transform_tool and len(self._selected) > 0
         if visible != self._visible:
             self._visible = visible
+            self._last_state_key = None
+            wrap = doc.get_element_by_id("transform-block")
             if wrap:
                 wrap.set_class("hidden", not visible)
             dirty = True
 
         if not visible:
-            if wrap:
-                wrap.set_class("hidden", True)
             self._commit_active_edit()
+            self._last_state_key = None
+            self._force_dirty = False
             return dirty
 
         if tuple(self._selected) != prev_selected:
@@ -239,19 +252,21 @@ class TransformControlsController:
 
         if self._active_tool == _MIRROR_TOOL_ID:
             self._step_repeat_prop = None
-            self._dirty_all()
-            return True
+            return self._dirty_if_display_state_changed(dirty)
 
         if len(self._selected) == 1:
             self._update_single_node()
         else:
             self._update_multi_selection()
 
-        self._process_step_repeat()
-        self._dirty_all()
-        return True
+        if self._process_step_repeat():
+            dirty = True
+            self._force_dirty = True
+        return self._dirty_if_display_state_changed(dirty)
 
     def scene_changed(self):
+        self._last_state_key = None
+        self._force_dirty = True
         self._dirty_all()
 
     def unmount(self):
@@ -265,6 +280,8 @@ class TransformControlsController:
         self._state.reset_multi_edit()
         self._step_repeat_prop = None
         self._focus_active = False
+        self._last_state_key = None
+        self._force_dirty = False
 
     def _tool_label(self):
         labels = {
@@ -377,6 +394,33 @@ class TransformControlsController:
             self._euler = self._state.display_euler
             self._scale = self._state.display_scale
 
+    def _display_state_key(self):
+        return (
+            self._active_tool,
+            tuple(self._selected),
+            self._transform_space,
+            self._pivot_mode,
+            f"{self._trans[0]:.3f}",
+            f"{self._trans[1]:.3f}",
+            f"{self._trans[2]:.3f}",
+            f"{self._euler[0]:.1f}",
+            f"{self._euler[1]:.1f}",
+            f"{self._euler[2]:.1f}",
+            f"{self._scale[0]:.3f}",
+            f"{self._scale[1]:.3f}",
+            f"{self._scale[2]:.3f}",
+            f"{sum(self._scale) / 3.0:.3f}",
+        )
+
+    def _dirty_if_display_state_changed(self, dirty=False):
+        state_key = self._display_state_key()
+        if self._force_dirty or state_key != self._last_state_key:
+            self._last_state_key = state_key
+            self._force_dirty = False
+            self._dirty_all()
+            return True
+        return dirty
+
     def _dirty_all(self):
         if not self._handle:
             return
@@ -453,6 +497,7 @@ class TransformControlsController:
             self._state.display_euler = self._euler
             self._state.display_scale = self._scale
             self._apply_multi_transform(self._active_tool)
+        self._force_dirty = True
 
     def _set_uniform_scale(self, value_str):
         try:
@@ -471,6 +516,7 @@ class TransformControlsController:
         else:
             self._state.display_scale = self._scale
             self._apply_multi_transform(self._active_tool)
+        self._force_dirty = True
 
     def _apply_single_transform(self):
         if not self._selected:
@@ -569,13 +615,15 @@ class TransformControlsController:
 
     def _process_step_repeat(self):
         if not self._step_repeat_prop:
-            return
+            return False
         now = time.monotonic()
         if now - self._step_repeat_start < STEP_REPEAT_DELAY:
-            return
+            return False
         if now - self._step_repeat_last >= STEP_REPEAT_INTERVAL:
             self._apply_step(self._step_repeat_prop, self._step_repeat_dir)
             self._step_repeat_last = now
+            return True
+        return False
 
     def _apply_step(self, prop, direction):
         cfg = _STEP_CONFIG.get(prop)
@@ -616,6 +664,7 @@ class TransformControlsController:
             self._state.display_euler = self._euler
             self._state.display_scale = self._scale
             self._apply_multi_transform(self._active_tool)
+        self._force_dirty = True
 
     def _on_action(self, handle, event, args):
         del handle, event
@@ -627,6 +676,7 @@ class TransformControlsController:
                 self._reset_single_transform()
             else:
                 self._reset_multi_transforms()
+            self._force_dirty = True
         elif action == "bake":
             self._commit_active_edit()
 
@@ -655,6 +705,7 @@ class TransformControlsController:
             lf.set_node_transform(node_name, self._state.transforms_before_edit[0])
             self._state.reset_single_edit()
             self._update_single_node()
+            self._force_dirty = True
             return
 
         if self._state.multi_editing_active and self._state.multi_node_names and self._state.multi_transforms_before:
@@ -662,6 +713,7 @@ class TransformControlsController:
                 lf.set_node_transform(name, transform)
             self._state.reset_multi_edit()
             self._update_multi_selection()
+            self._force_dirty = True
 
     def _commit_active_edit(self):
         if self._state.editing_active:

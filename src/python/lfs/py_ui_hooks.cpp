@@ -7,6 +7,7 @@
 #include "py_ui.hpp"
 
 #include <algorithm>
+#include <string>
 
 namespace lfs::python {
 
@@ -15,6 +16,63 @@ namespace lfs::python {
             return (position == "prepend" || position == "PREPEND")
                        ? PyHookPosition::Prepend
                        : PyHookPosition::Append;
+        }
+
+        const char* position_name(const PyHookPosition position) {
+            return position == PyHookPosition::Prepend ? "prepend" : "append";
+        }
+
+        std::string python_string_attr(PyObject* obj, const char* attr) {
+            if (!obj)
+                return {};
+            PyObject* value = PyObject_GetAttrString(obj, attr);
+            if (!value) {
+                PyErr_Clear();
+                return {};
+            }
+
+            const char* text = PyUnicode_Check(value) ? PyUnicode_AsUTF8(value) : nullptr;
+            if (!text) {
+                PyErr_Clear();
+                Py_DECREF(value);
+                return {};
+            }
+
+            std::string result = text;
+            Py_DECREF(value);
+            return result;
+        }
+
+        std::string callback_name(const nb::object& callback) {
+            PyObject* obj = callback.ptr();
+            std::string qualname = python_string_attr(obj, "__qualname__");
+            if (qualname.empty())
+                qualname = python_string_attr(obj, "__name__");
+            if (qualname.empty())
+                qualname = "<callable>";
+
+            std::string module = python_string_attr(obj, "__module__");
+            if (!module.empty() && qualname != "<callable>")
+                return module + "." + qualname;
+            return qualname;
+        }
+
+        bool consume_document_dirty_with_attribution(Rml::ElementDocument* document,
+                                                     const std::string& panel,
+                                                     const std::string& section,
+                                                     const PyHookPosition position,
+                                                     const std::string& callback,
+                                                     const char* source) {
+            if (!document || !consume_document_dirty(document))
+                return false;
+
+            LOG_PERF("python_document_hook_dirty panel={} section={} position={} callback={} source={}",
+                     panel,
+                     section,
+                     position_name(position),
+                     callback,
+                     source);
+            return true;
         }
     } // namespace
 
@@ -78,7 +136,8 @@ namespace lfs::python {
             const std::string key = panel + ":" + section;
             auto it = hooks_.find(key);
             if (it == hooks_.end()) {
-                return document && consume_document_dirty(document);
+                return consume_document_dirty_with_attribution(
+                    document, panel, section, position, "<none>", "no_hooks");
             }
             for (const auto& entry : it->second) {
                 if (entry.position == position) {
@@ -88,10 +147,14 @@ namespace lfs::python {
         }
 
         if (callbacks.empty()) {
-            return document && consume_document_dirty(document);
+            return consume_document_dirty_with_attribution(
+                document, panel, section, position, "<none>", "no_callbacks");
         }
 
+        bool dirty = consume_document_dirty_with_attribution(
+            document, panel, section, position, "<pending>", "before_callbacks");
         for (const auto& cb : callbacks) {
+            const std::string name = callback_name(cb);
             try {
                 if (document) {
                     cb(PyRmlDocument(document));
@@ -102,8 +165,10 @@ namespace lfs::python {
             } catch (const std::exception& e) {
                 LOG_ERROR("Hook {}:{} error: {}", panel, section, e.what());
             }
+            dirty |= consume_document_dirty_with_attribution(
+                document, panel, section, position, name, "after_callback");
         }
-        return document && consume_document_dirty(document);
+        return dirty;
     }
 
     bool PyUIHookRegistry::has_hooks(const std::string& panel, const std::string& section) const {

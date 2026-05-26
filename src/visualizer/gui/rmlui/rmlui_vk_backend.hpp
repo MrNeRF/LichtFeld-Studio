@@ -85,6 +85,7 @@ public:
     void ResetContextRenderState();
     void SetContextOffset(float offset_x, float offset_y);
     void SetContextClipRect(float x1, float y1, float x2, float y2);
+    void RenderTextureQuad(Rml::TextureHandle texture, float x, float y, float w, float h);
 
     void BeginFrame();
     void EndFrame();
@@ -197,6 +198,8 @@ private:
         texture_data_t m_depth_stencil{};
         VkImageLayout m_color_layout = VK_IMAGE_LAYOUT_UNDEFINED;
         VkImageLayout m_depth_stencil_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        int width = 0;
+        int height = 0;
     };
 
     enum class active_render_target_t { None,

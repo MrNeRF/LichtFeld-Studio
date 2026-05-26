@@ -269,7 +269,9 @@ namespace lfs::core {
                              color, level_str, ANSI_RESET,
                              static_cast<int>(filename.size()), filename.data(), msg.source.line,
                              output_msg.c_str());
-                std::fflush(target_);
+                if (!is_perf) {
+                    std::fflush(target_);
+                }
             }
 
             void flush_() override { std::fflush(target_); }

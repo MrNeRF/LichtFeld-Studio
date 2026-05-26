@@ -135,6 +135,8 @@ namespace lfs::vis::gui {
 
     RmlPanelHost::~RmlPanelHost() {
         if (manager_ && manager_->isInitialized())
+            manager_->releaseCachedVulkanContext(direct_cache_);
+        if (manager_ && manager_->isInitialized())
             manager_->destroyContext(context_name_);
         rml_context_ = nullptr;
         document_ = nullptr;
@@ -190,6 +192,7 @@ namespace lfs::vis::gui {
 
         rml_theme::applyTheme(document_, base_rcss_, panel_theme);
         content_dirty_ = true;
+        direct_cache_dirty_ = true;
         return true;
     }
 
@@ -226,6 +229,9 @@ namespace lfs::vis::gui {
         has_theme_signature_ = false;
         render_needed_ = true;
         content_dirty_ = true;
+        direct_cache_dirty_ = true;
+        if (manager_ && manager_->isInitialized())
+            manager_->releaseCachedVulkanContext(direct_cache_);
         last_forwarded_mx_ = -1;
         last_forwarded_my_ = -1;
         last_hovered_ = false;
@@ -399,6 +405,7 @@ namespace lfs::vis::gui {
                            size_dirty || animation_active_;
         if (!dirty)
             return;
+        direct_cache_dirty_ = true;
 
         const bool need_content_measure =
             height_mode_ == PanelHeightMode::Content &&
@@ -483,6 +490,7 @@ namespace lfs::vis::gui {
 
             if (std::abs(actual_content_h - prev_content_h) > 2.0f) {
                 content_dirty_ = true;
+                direct_cache_dirty_ = true;
                 last_measure_w_ = 0;
             }
         }
@@ -757,10 +765,22 @@ namespace lfs::vis::gui {
         const float screen_clip_y1 = clip_y1 - input_->screen_y;
         const float screen_clip_x2 = clip_x2 - input_->screen_x;
         const float screen_clip_y2 = clip_y2 - input_->screen_y;
-        manager_->queueVulkanContext(rml_context_, screen_x, screen_y, foreground_,
-                                     true,
-                                     screen_clip_x1, screen_clip_y1,
-                                     screen_clip_x2, screen_clip_y2);
+        manager_->queueCachedVulkanContext(rml_context_,
+                                           &direct_cache_,
+                                           last_fbo_w_,
+                                           last_fbo_h_,
+                                           screen_x,
+                                           screen_y,
+                                           w,
+                                           last_fbo_h_ > 0 ? static_cast<float>(last_fbo_h_) : h,
+                                           direct_cache_dirty_,
+                                           foreground_,
+                                           true,
+                                           screen_clip_x1,
+                                           screen_clip_y1,
+                                           screen_clip_x2,
+                                           screen_clip_y2);
+        direct_cache_dirty_ = false;
 
         if (const auto popover_shadow = collectVisibleColorPickerPopupShadow(screen_x, screen_y)) {
             const auto& shadow = *popover_shadow;
