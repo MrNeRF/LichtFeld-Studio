@@ -1990,7 +1990,7 @@ namespace lfs::vis {
             session.working_selection.copy_from(delta_selection);
         } else {
             LOG_TIMER("SelectionService::buildInteractiveBrushPreviewIncremental.merge");
-            session.working_selection = session.working_selection | delta_selection;
+            rendering::merge_selection_mask_or(session.working_selection, delta_selection);
         }
 
         session.preview_brush_point_count = session.points.size();

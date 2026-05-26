@@ -369,6 +369,16 @@ namespace lfs::rendering {
             }
         }
 
+        __global__ void mergeSelectionMaskOrKernel(
+            bool* __restrict__ accumulated,
+            const bool* __restrict__ delta,
+            const int n) {
+            const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+            if (idx < n) {
+                accumulated[idx] = accumulated[idx] || delta[idx];
+            }
+        }
+
         __global__ void filterSelectionByNodeKernel(
             bool* __restrict__ selection,
             const int* __restrict__ node_indices,
@@ -813,6 +823,31 @@ namespace lfs::rendering {
 
     std::array<size_t, 256> read_selection_group_counts(const Tensor& counts_scratch) {
         return read_selection_group_count_result(counts_scratch).group_counts;
+    }
+
+    void merge_selection_mask_or(Tensor& accumulated_mask, const Tensor& delta_mask) {
+        if (!accumulated_mask.is_valid() || !delta_mask.is_valid() ||
+            accumulated_mask.numel() == 0 ||
+            accumulated_mask.numel() != delta_mask.numel()) {
+            return;
+        }
+        if (accumulated_mask.device() != lfs::core::Device::CUDA ||
+            delta_mask.device() != lfs::core::Device::CUDA ||
+            accumulated_mask.dtype() != lfs::core::DataType::Bool ||
+            delta_mask.dtype() != lfs::core::DataType::Bool) {
+            accumulated_mask = accumulated_mask | delta_mask;
+            return;
+        }
+
+        const int n = checkedToInt(accumulated_mask.numel(), "selection mask size exceeds int range");
+        const int grid_size = (n + kBlockSize - 1) / kBlockSize;
+        mergeSelectionMaskOrKernel<<<grid_size, kBlockSize>>>(
+            accumulated_mask.ptr<bool>(),
+            delta_mask.ptr<bool>(),
+            n);
+        if (const cudaError_t status = cudaGetLastError(); status != cudaSuccess) {
+            throw std::runtime_error(cudaGetErrorString(status));
+        }
     }
 
     void filter_selection_by_node(

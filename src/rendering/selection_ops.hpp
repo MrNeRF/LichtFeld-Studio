@@ -117,6 +117,8 @@ namespace lfs::rendering {
     [[nodiscard]] std::array<size_t, 256> read_selection_group_counts(
         const Tensor& counts_scratch);
 
+    void merge_selection_mask_or(Tensor& accumulated_mask, const Tensor& delta_mask);
+
     void filter_selection_by_node(
         Tensor& selection,
         const Tensor& transform_indices,
