@@ -23,6 +23,8 @@ def _install_stub_modules(monkeypatch):
         remove_hook=lambda panel, section, callback: remove_calls.append(
             (panel, section, callback)
         ),
+        get_active_tool=lambda: "",
+        get_active_submode=lambda: "",
         rml=SimpleNamespace(get_document=lambda _name: None),
     )
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
@@ -214,6 +216,7 @@ def test_selection_tool_uses_flyout_modes(toolbar_module, monkeypatch):
     lf_stub.keymap = SimpleNamespace(
         Action=SimpleNamespace(TOOL_SELECT="tool-select", SELECT_MODE_CENTERS="select-mode-centers"),
         ToolMode=SimpleNamespace(GLOBAL="global"),
+        is_bound=lambda action, mode: True,
         get_trigger_description=lambda action, mode: {
             ("tool-select", "global"): "Alt+8",
             ("select-mode-centers", "global"): "Ctrl+9",

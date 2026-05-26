@@ -359,6 +359,10 @@ namespace lfs::vis::gui {
                 LOG_DEBUG("SetToolbarTool: SCALE");
                 break;
             case ToolType::Selection:
+                // Plain select activation returns to brush selection; explicit
+                // flyout submode picks immediately override this event.
+                setSelectionSubMode(SelectionSubMode::Centers);
+                registry.setActiveSubmode("centers");
                 break;
             default:
                 LOG_DEBUG("SetToolbarTool: tool_mode={}", e.tool_mode);

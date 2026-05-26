@@ -7,6 +7,7 @@
 #include "core/tensor.hpp"
 
 #include <array>
+#include <cassert>
 #include <cstdint>
 #include <expected>
 #include <string>
@@ -16,13 +17,18 @@
 namespace lfs::vis::selection {
 
     inline constexpr size_t LOCKED_GROUPS_WORDS = 8;
+    inline constexpr size_t kSelectionGroupCount = LOCKED_GROUPS_WORDS * 32;
     using LockedGroupMaskWords = std::array<uint32_t, LOCKED_GROUPS_WORDS>;
 
     [[nodiscard]] inline LockedGroupMaskWords build_locked_group_mask(const core::Scene& scene) {
         LockedGroupMaskWords locked_bitmask{};
         for (const auto& group : scene.getSelectionGroups()) {
             if (group.locked) {
-                locked_bitmask[group.id / 32] |= (1u << (group.id % 32));
+                const size_t group_id = static_cast<size_t>(group.id);
+                assert(group_id < kSelectionGroupCount && "selection group id exceeds locked-group mask capacity");
+                if (group_id >= kSelectionGroupCount)
+                    continue;
+                locked_bitmask[group_id / 32] |= (1u << (group_id % 32));
             }
         }
         return locked_bitmask;

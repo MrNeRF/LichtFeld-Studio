@@ -26,7 +26,11 @@ void main(
     if (tiles_touched[primitive_idx] <= 0)
         return;
 
-    uint32_t compact_idx = uint32_t(visible_prefix[primitive_idx] - 1);
+    int32_t prefix = visible_prefix[primitive_idx];
+    if (prefix <= 0)
+        return;
+
+    uint32_t compact_idx = uint32_t(prefix - 1);
     out_compact_depth_keys[compact_idx] = sortingKey_t(primitive_depth_keys[primitive_idx]);
     out_compact_indices[compact_idx] = int32_t(primitive_idx);
 }

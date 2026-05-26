@@ -154,6 +154,10 @@ namespace lfs::vis::gui {
         return true;
     }
 
+    // Python document hooks are allowed to mutate the Rml document, so a due
+    // hook must break the cached-render path even if all native overlay state is
+    // unchanged. Plugins that register passive hooks therefore opt into this
+    // polling cadence; hooks that dirty every poll intentionally repaint.
     bool RmlViewportOverlay::shouldRunDocumentHooks(const bool force) const {
         if (!lfs::python::has_python_hooks("viewport_overlay", "document"))
             return false;
