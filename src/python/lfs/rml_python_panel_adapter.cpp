@@ -12,8 +12,8 @@
 
 #include <algorithm>
 #include <cassert>
-#include <imgui.h>
 #include <nanobind/stl/string.h>
+#include <imgui.h>
 
 namespace lfs::vis::gui {
 

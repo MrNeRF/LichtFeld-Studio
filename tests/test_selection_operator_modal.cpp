@@ -7,12 +7,15 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "input/key_codes.hpp"
+#include "internal/viewport.hpp"
 #include "operation/undo_history.hpp"
 #include "operator/operator_context.hpp"
 #include "operator/operator_properties.hpp"
 #include "operator/ops/selection_ops.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "tools/selection_tool.hpp"
+#include "tools/tool_base.hpp"
 
 #include <algorithm>
 #include <gtest/gtest.h>
@@ -277,6 +280,58 @@ TEST_F(SelectionOperatorModalTest, PolygonOperatorUsesConfiguredRightButtonForVe
 
     op.cancel(*context_);
     EXPECT_FALSE(service().isInteractiveSelectionActive());
+}
+
+TEST_F(SelectionOperatorModalTest, ColorSelectionAppliesDepthFilterToSimilarityMask) {
+    auto settings = rendering_manager_->getSettings();
+    settings.depth_filter_enabled = true;
+    settings.depth_filter_min = {-0.25f, -0.25f, -0.25f};
+    settings.depth_filter_max = {0.25f, 0.25f, 0.25f};
+    rendering_manager_->updateSettings(settings);
+
+    service().setTestingHoveredGaussianId(0);
+
+    SelectionStrokeOperator op;
+    OperatorProperties props;
+    props.set("mode", 5);
+    props.set("op", 0);
+    props.set("x", 0.0);
+    props.set("y", 0.0);
+    props.set("use_depth_filter", true);
+
+    EXPECT_EQ(op.invoke(*context_, props), OperatorResult::FINISHED);
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
+}
+
+TEST_F(SelectionOperatorModalTest, DepthFilterDoesNotOverrideGaussianRenderMode) {
+    auto settings = rendering_manager_->getSettings();
+    settings.point_cloud_mode = true;
+    settings.show_rings = true;
+    settings.show_center_markers = false;
+    rendering_manager_->updateSettings(settings);
+
+    Viewport viewport(100, 100);
+    lfs::vis::ToolContext tool_context(rendering_manager_.get(), scene_manager_.get(), &viewport, nullptr);
+    tool_context.updateViewportBounds(0.0f, 0.0f, 100.0f, 100.0f);
+
+    lfs::vis::tools::SelectionTool tool;
+    ASSERT_TRUE(tool.initialize(tool_context));
+    tool.setEnabled(true);
+    tool.setDepthFilterRange(true, 0.0f, 5.3f, 1.35f);
+
+    auto enabled_settings = rendering_manager_->getSettings();
+    EXPECT_TRUE(enabled_settings.depth_filter_enabled);
+    EXPECT_TRUE(enabled_settings.point_cloud_mode);
+    EXPECT_TRUE(enabled_settings.show_rings);
+    EXPECT_FALSE(enabled_settings.show_center_markers);
+
+    tool.setDepthFilterEnabled(false);
+
+    auto disabled_settings = rendering_manager_->getSettings();
+    EXPECT_FALSE(disabled_settings.depth_filter_enabled);
+    EXPECT_TRUE(disabled_settings.point_cloud_mode);
+    EXPECT_TRUE(disabled_settings.show_rings);
+    EXPECT_FALSE(disabled_settings.show_center_markers);
 }
 
 TEST_F(SelectionOperatorModalTest, ClosedPolygonVertexDragConsumesMouseMoveUntilRelease) {

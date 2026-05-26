@@ -103,6 +103,24 @@ namespace lfs::vis {
             filters.cull_outside_view_volume = ctx.settings.hide_outside_depth_box;
         }
 
+        void populateSelectionColors(
+            std::array<glm::vec4, lfs::rendering::kSelectionColorTableCount>& colors,
+            const FrameContext& ctx) {
+            colors[0] = glm::vec4(ctx.settings.selection_color_center_marker, 1.0f);
+            colors[lfs::rendering::kSelectionPreviewColorIndex] =
+                glm::vec4(ctx.settings.selection_color_preview, 1.0f);
+            if (ctx.scene_manager) {
+                for (const auto& group : ctx.scene_manager->getScene().getSelectionGroups()) {
+                    const auto index = static_cast<std::size_t>(group.id);
+                    if (index < lfs::rendering::kSelectionGroupColorCount) {
+                        colors[index] = glm::vec4(group.color, 1.0f);
+                    }
+                }
+            } else {
+                colors[1] = glm::vec4(ctx.settings.selection_color_committed, 1.0f);
+            }
+        }
+
     } // namespace
 
     lfs::rendering::ViewportRenderRequest buildViewportRenderRequest(const FrameContext& ctx,
@@ -163,19 +181,7 @@ namespace lfs::vis {
             .depth_view_min = frame_view.near_plane,
             .depth_view_max = depth_view_max};
 
-        request.overlay.selection_colors[0] = glm::vec4(ctx.settings.selection_color_center_marker, 1.0f);
-        request.overlay.selection_colors[lfs::rendering::kSelectionPreviewColorIndex] =
-            glm::vec4(ctx.settings.selection_color_preview, 1.0f);
-        if (ctx.scene_manager) {
-            for (const auto& group : ctx.scene_manager->getScene().getSelectionGroups()) {
-                const auto index = static_cast<std::size_t>(group.id);
-                if (index < lfs::rendering::kSelectionGroupColorCount) {
-                    request.overlay.selection_colors[index] = glm::vec4(group.color, 1.0f);
-                }
-            }
-        } else {
-            request.overlay.selection_colors[1] = glm::vec4(ctx.settings.selection_color_committed, 1.0f);
-        }
+        populateSelectionColors(request.overlay.selection_colors, ctx);
 
         applyGaussianCropBox(request.filters, ctx);
         applyGaussianEllipsoid(request.filters, ctx);
@@ -217,7 +223,14 @@ namespace lfs::vis {
                 {.model_transforms = &ctx.scene_state.model_transforms,
                  .transform_indices = ctx.scene_state.transform_indices,
                  .node_visibility_mask = ctx.scene_state.node_visibility_mask},
-            .filters = {}};
+            .filters = {},
+            .overlay = {}};
+        state.overlay.selection_mask = ctx.scene_state.selection_mask;
+        state.overlay.transient_mask.mask = ctx.cursor_preview.preview_selection
+                                                ? ctx.cursor_preview.preview_selection
+                                                : ctx.cursor_preview.selection_tensor;
+        state.overlay.transient_mask.additive = ctx.cursor_preview.add_mode;
+        populateSelectionColors(state.overlay.selection_colors, ctx);
         applyPointCloudCropBox(state.filters, ctx);
         return state;
     }
@@ -238,7 +251,15 @@ namespace lfs::vis {
                  .transform_indices = ctx.scene_state.transform_indices,
                  .node_visibility_mask = ctx.scene_state.node_visibility_mask},
             .filters = {},
+            .overlay = {},
             .transparent_background = environmentBackgroundUsesTransparentViewerCompositing(ctx.settings)};
+
+        request.overlay.selection_mask = ctx.scene_state.selection_mask;
+        request.overlay.transient_mask.mask = ctx.cursor_preview.preview_selection
+                                                  ? ctx.cursor_preview.preview_selection
+                                                  : ctx.cursor_preview.selection_tensor;
+        request.overlay.transient_mask.additive = ctx.cursor_preview.add_mode;
+        populateSelectionColors(request.overlay.selection_colors, ctx);
 
         applyPointCloudCropBox(request.filters, ctx);
         return request;

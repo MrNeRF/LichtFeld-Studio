@@ -12,6 +12,7 @@
 
 namespace lfs::rendering {
     namespace {
+        constexpr float kInvalidScreenPositionThreshold = -1000.0f;
         constexpr int kBlockSize = 256;
 
         [[nodiscard]] int checkedToInt(const std::size_t value, const char* const message) {
@@ -57,6 +58,92 @@ namespace lfs::rendering {
 
         [[nodiscard]] bool nodeMaskRestrictsSelection(const std::vector<bool>& mask) {
             return std::any_of(mask.begin(), mask.end(), [](const bool enabled) { return !enabled; });
+        }
+
+        __device__ __forceinline__ bool pointInPolygon(
+            const float px,
+            const float py,
+            const float2* __restrict__ poly,
+            const int n) {
+            bool inside = false;
+            for (int i = 0, j = n - 1; i < n; j = i++) {
+                const float yi = poly[i].y;
+                const float yj = poly[j].y;
+                if ((yi > py) != (yj > py)) {
+                    const float xi = poly[i].x;
+                    const float xj = poly[j].x;
+                    if (px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
+                        inside = !inside;
+                    }
+                }
+            }
+            return inside;
+        }
+
+        __global__ void brushSelectKernel(
+            const float2* __restrict__ screen_positions,
+            const float mouse_x,
+            const float mouse_y,
+            const float radius_sq,
+            uint8_t* __restrict__ selection_out,
+            const int n_primitives) {
+            const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+            if (idx >= n_primitives) {
+                return;
+            }
+
+            const float2 pos = screen_positions[idx];
+            if (pos.x < kInvalidScreenPositionThreshold || pos.y < kInvalidScreenPositionThreshold) {
+                return;
+            }
+
+            const float dx = pos.x - mouse_x;
+            const float dy = pos.y - mouse_y;
+            if (dx * dx + dy * dy <= radius_sq) {
+                selection_out[idx] = 1;
+            }
+        }
+
+        __global__ void rectSelectKernel(
+            const float2* __restrict__ positions,
+            const float x0,
+            const float y0,
+            const float x1,
+            const float y1,
+            bool* __restrict__ selection,
+            const int n) {
+            const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+            if (idx >= n) {
+                return;
+            }
+
+            const float2 pos = positions[idx];
+            if (pos.x < kInvalidScreenPositionThreshold || pos.y < kInvalidScreenPositionThreshold) {
+                return;
+            }
+            if (pos.x >= x0 && pos.x <= x1 && pos.y >= y0 && pos.y <= y1) {
+                selection[idx] = true;
+            }
+        }
+
+        __global__ void polygonSelectKernel(
+            const float2* __restrict__ positions,
+            const float2* __restrict__ polygon,
+            const int num_verts,
+            bool* __restrict__ selection,
+            const int n) {
+            const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+            if (idx >= n) {
+                return;
+            }
+
+            const float2 pos = positions[idx];
+            if (pos.x < kInvalidScreenPositionThreshold || pos.y < kInvalidScreenPositionThreshold) {
+                return;
+            }
+            if (pointInPolygon(pos.x, pos.y, polygon, num_verts)) {
+                selection[idx] = true;
+            }
         }
 
         __global__ void applySelectionGroupKernel(
@@ -298,8 +385,108 @@ namespace lfs::rendering {
         }
     } // namespace
 
+    void brush_select(
+        const float2* const screen_positions,
+        const float mouse_x,
+        const float mouse_y,
+        const float radius,
+        uint8_t* const selection_out,
+        const int n_primitives) {
+        if (n_primitives <= 0) {
+            return;
+        }
+        const int grid_size = (n_primitives + kBlockSize - 1) / kBlockSize;
+        brushSelectKernel<<<grid_size, kBlockSize>>>(
+            screen_positions, mouse_x, mouse_y, radius * radius, selection_out, n_primitives);
+    }
+
+    void rect_select(
+        const float2* const positions,
+        const float x0,
+        const float y0,
+        const float x1,
+        const float y1,
+        bool* const selection,
+        const int n_primitives) {
+        if (n_primitives <= 0) {
+            return;
+        }
+        const int grid_size = (n_primitives + kBlockSize - 1) / kBlockSize;
+        rectSelectKernel<<<grid_size, kBlockSize>>>(positions, x0, y0, x1, y1, selection, n_primitives);
+    }
+
+    void polygon_select(
+        const float2* const positions,
+        const float2* const polygon,
+        const int num_vertices,
+        bool* const selection,
+        const int n_primitives) {
+        if (n_primitives <= 0 || num_vertices < 3) {
+            return;
+        }
+        const int grid_size = (n_primitives + kBlockSize - 1) / kBlockSize;
+        polygonSelectKernel<<<grid_size, kBlockSize>>>(positions, polygon, num_vertices, selection, n_primitives);
+    }
+
     void set_selection_element(bool* const selection, const int index, const bool value) {
         cudaMemcpy(selection + index, &value, sizeof(bool), cudaMemcpyHostToDevice);
+    }
+
+    void brush_select_tensor(
+        const Tensor& screen_positions,
+        const float mouse_x,
+        const float mouse_y,
+        const float radius,
+        Tensor& selection_out) {
+        if (!screen_positions.is_valid() || screen_positions.size(0) == 0) {
+            return;
+        }
+        const int n = checkedToInt(screen_positions.size(0), "n_primitives exceeds int range");
+        brush_select(reinterpret_cast<const float2*>(screen_positions.ptr<float>()),
+                     mouse_x,
+                     mouse_y,
+                     radius,
+                     reinterpret_cast<uint8_t*>(selection_out.ptr<bool>()),
+                     n);
+    }
+
+    void rect_select_tensor(
+        const Tensor& screen_positions,
+        const float x0,
+        const float y0,
+        const float x1,
+        const float y1,
+        Tensor& selection_out) {
+        if (!screen_positions.is_valid() || screen_positions.size(0) == 0) {
+            return;
+        }
+        const int n = checkedToInt(screen_positions.size(0), "n_primitives exceeds int range");
+        rect_select(reinterpret_cast<const float2*>(screen_positions.ptr<float>()),
+                    x0,
+                    y0,
+                    x1,
+                    y1,
+                    selection_out.ptr<bool>(),
+                    n);
+    }
+
+    void polygon_select_tensor(
+        const Tensor& screen_positions,
+        const Tensor& polygon_vertices,
+        Tensor& selection_out) {
+        if (!screen_positions.is_valid() || screen_positions.size(0) == 0) {
+            return;
+        }
+        if (!polygon_vertices.is_valid() || polygon_vertices.size(0) < 3) {
+            return;
+        }
+        const int num_vertices = checkedToInt(polygon_vertices.size(0), "polygon vertex count exceeds int range");
+        const int n = checkedToInt(screen_positions.size(0), "n_primitives exceeds int range");
+        polygon_select(reinterpret_cast<const float2*>(screen_positions.ptr<float>()),
+                       reinterpret_cast<const float2*>(polygon_vertices.ptr<float>()),
+                       num_vertices,
+                       selection_out.ptr<bool>(),
+                       n);
     }
 
     void apply_selection_group_tensor(

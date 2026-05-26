@@ -437,9 +437,26 @@ namespace lfs::vis::gui {
         const int h = static_cast<int>(vp_size_.y);
         const bool theme_current =
             has_theme_signature_ && rml_theme::currentThemeSignature() == last_theme_signature_;
+        const bool tooltip_changed = tooltip_.hasActiveState() && applyFrameTooltip();
+        if (rml_manager_)
+            rml_manager_->setContextNeedsPassiveMouseMoveFrames(rml_context_, tooltip_.needsFrame());
+        const bool can_update_tooltip_only =
+            rml_manager_ && tooltip_changed && theme_current && !render_needed_ && !animation_active_ &&
+            !data_model_binding_dirty_ && !toolbar_roots_dirty_ &&
+            w == last_render_w_ && h == last_render_h_;
+        if (can_update_tooltip_only) {
+            rml_manager_->trackContextFrame(rml_context_,
+                                            static_cast<int>(vp_pos_.x - screen_origin_.x),
+                                            static_cast<int>(vp_pos_.y - screen_origin_.y));
+            rml_context_->SetDimensions(Rml::Vector2i(w, h));
+            rml_context_->Update();
+            queueVulkanContext();
+            animation_active_ = (rml_context_->GetNextUpdateDelay() == 0);
+            return;
+        }
         const bool can_reuse = theme_current && !render_needed_ && !animation_active_ &&
                                !data_model_binding_dirty_ && !toolbar_roots_dirty_ &&
-                               w == last_render_w_ && h == last_render_h_;
+                               !tooltip_changed && w == last_render_w_ && h == last_render_h_;
         if (!can_reuse) {
             render();
             return;
@@ -483,6 +500,8 @@ namespace lfs::vis::gui {
             data_model_binding_dirty_ = false;
         }
         const bool tooltip_changed = tooltip_.hasActiveState() && applyFrameTooltip();
+        if (rml_manager_)
+            rml_manager_->setContextNeedsPassiveMouseMoveFrames(rml_context_, tooltip_.needsFrame());
 
         const bool needs_render = render_needed_ || animation_active_ || run_document_hooks ||
                                   theme_changed || size_changed || toolbar_changed || tooltip_changed;

@@ -771,6 +771,7 @@ namespace lfs::vis {
                          .transform_indices = nullptr,
                          .node_visibility_mask = {}},
                     .filters = state.filters,
+                    .overlay = state.overlay,
                     .transparent_background = environmentBackgroundUsesTransparentViewerCompositing(settings_)};
                 auto auxiliary_engine = ensure_auxiliary_rendering_engine();
                 if (!auxiliary_engine) {
@@ -809,6 +810,7 @@ namespace lfs::vis {
                     .render = state.render,
                     .scene = scene,
                     .filters = state.filters,
+                    .overlay = state.overlay,
                     .transparent_background = environmentBackgroundUsesTransparentViewerCompositing(settings_)};
                 auto auxiliary_engine = ensure_auxiliary_rendering_engine();
                 if (!auxiliary_engine) {
@@ -1156,6 +1158,9 @@ namespace lfs::vis {
             }
             auto pc_request = buildPointCloudRenderRequest(
                 frame_ctx, render_size, *transforms_for_request);
+            if ((frame_dirty & DirtyFlag::SELECTION) != 0) {
+                ++point_cloud_preview_selection_revision_;
+            }
 
             // Vulkan-native path: skip CUDA staging, drive an external VkImage
             // straight through the same plumbing the VkSplat backend uses.
@@ -1223,6 +1228,11 @@ namespace lfs::vis {
                 vk_req.model_transforms = pc_request.scene.model_transforms;
                 vk_req.transform_indices = pc_request.scene.transform_indices.get();
                 vk_req.node_visibility_mask = &pc_request.scene.node_visibility_mask;
+                vk_req.selection_mask = pc_request.overlay.selection_mask.get();
+                vk_req.preview_selection_mask = pc_request.overlay.transient_mask.mask;
+                vk_req.selection_colors = &pc_request.overlay.selection_colors;
+                vk_req.preview_selection_additive = pc_request.overlay.transient_mask.additive;
+                vk_req.preview_selection_revision = point_cloud_preview_selection_revision_;
                 if (pc_request.filters.crop_box.has_value()) {
                     PointCloudVulkanRenderer::CropBox crop{};
                     crop.to_local = pc_request.filters.crop_box->transform;

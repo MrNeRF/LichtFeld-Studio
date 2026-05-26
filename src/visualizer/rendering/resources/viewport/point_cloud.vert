@@ -19,6 +19,18 @@ layout(set = 0, binding = 2) readonly buffer Visibility {
     uint visibility_mask[];
 };
 
+layout(set = 0, binding = 3) readonly buffer SelectionMask {
+    uint selection_mask[];
+};
+
+layout(set = 0, binding = 4) readonly buffer PreviewSelectionMask {
+    uint preview_selection_mask[];
+};
+
+layout(set = 0, binding = 5) readonly buffer SelectionColors {
+    vec4 selection_colors[];
+};
+
 layout(push_constant) uniform PushConstants {
     mat4 view_proj;
     mat4 view;
@@ -34,6 +46,13 @@ const int FLAG_CROP_INVERSE    = 1 << 1;
 const int FLAG_CROP_DESATURATE = 1 << 2;
 const int FLAG_ORTHOGRAPHIC    = 1 << 3;
 const int FLAG_HAS_INDICES     = 1 << 4;
+const int FLAG_HAS_SELECTION   = 1 << 5;
+const int FLAG_HAS_PREVIEW     = 1 << 6;
+const int FLAG_PREVIEW_ADD     = 1 << 7;
+const uint SELECTION_GROUP_MAX = 255u;
+const uint SELECTION_PREVIEW_COLOR_INDEX = 256u;
+const float SELECTION_COMMITTED_BLEND = 0.75;
+const float SELECTION_PREVIEW_BLEND = 0.9;
 
 #define PC_N_TRANSFORMS    pc.counts.x
 #define PC_N_VISIBILITY    pc.counts.y
@@ -126,6 +145,26 @@ void main() {
     if (desaturate) {
         float gray = dot(color, vec3(0.299, 0.587, 0.114));
         color = mix(color, vec3(gray), 0.75);
+    }
+
+    uint selection_group = 0u;
+    if ((PC_FLAGS & FLAG_HAS_SELECTION) != 0) {
+        selection_group = min(selection_mask[gl_VertexIndex], SELECTION_GROUP_MAX);
+    }
+    bool is_committed = selection_group > 0u;
+    bool is_preview = false;
+    if ((PC_FLAGS & FLAG_HAS_PREVIEW) != 0) {
+        bool in_preview = preview_selection_mask[gl_VertexIndex] != 0u;
+        bool add_preview = (PC_FLAGS & FLAG_PREVIEW_ADD) != 0;
+        is_preview = (in_preview && !is_committed && add_preview) ||
+                     (in_preview && is_committed && !add_preview);
+    }
+    if (is_preview) {
+        color = mix(color, selection_colors[SELECTION_PREVIEW_COLOR_INDEX].xyz, SELECTION_PREVIEW_BLEND);
+        diameter_px = clamp(max(diameter_px + 2.0, diameter_px * 1.6), 1.0, max_size);
+    } else if (is_committed) {
+        color = mix(color, selection_colors[selection_group].xyz, SELECTION_COMMITTED_BLEND);
+        diameter_px = clamp(max(diameter_px + 2.0, diameter_px * 1.35), 1.0, max_size);
     }
 
     gl_Position = clip;

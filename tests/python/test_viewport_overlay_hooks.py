@@ -28,10 +28,14 @@ class _DataModelHandleStub:
 
 class _DataModelStub:
     def __init__(self):
+        self.bound_binds = {}
         self.bound_funcs = {}
         self.bound_events = {}
         self.bound_record_lists = []
         self.handle = _DataModelHandleStub()
+
+    def bind(self, name, getter, setter):
+        self.bound_binds[name] = (getter, setter)
 
     def bind_func(self, name, getter):
         self.bound_funcs[name] = getter
@@ -49,6 +53,10 @@ class _DataModelStub:
 class _ElementStub:
     def __init__(self):
         self.attrs = {}
+        self.listeners = []
+
+    def add_event_listener(self, name, callback):
+        self.listeners.append((name, callback))
 
     def get_attribute(self, name, default_val=""):
         return self.attrs.get(name, default_val)
@@ -100,6 +108,8 @@ def _install_stub_modules(monkeypatch):
         rml=SimpleNamespace(get_document=lambda _name: document),
         context=lambda: SimpleNamespace(),
         get_active_tool=lambda: "",
+        get_transform_space=lambda: 1,
+        get_pivot_mode=lambda: 0,
         UILayout=SimpleNamespace(WindowFlags=SimpleNamespace(
             NoTitleBar=1,
             NoResize=2,
@@ -125,6 +135,7 @@ def _install_stub_modules(monkeypatch):
 
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = ui_stub
+    lf_stub.get_selected_node_names = lambda: []
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
 
     return hook_calls, remove_calls, dismiss_calls, cancel_calls, import_state, video_state, document
@@ -140,6 +151,8 @@ def overlays_module(monkeypatch):
 
     sys.modules.pop("lfs_plugins", None)
     sys.modules.pop("lfs_plugins.overlays", None)
+    sys.modules.pop("lfs_plugins.toolbar", None)
+    sys.modules.pop("lfs_plugins.transform_controls", None)
     fixture = _install_stub_modules(monkeypatch)
     module = import_module("lfs_plugins.overlays")
     return (module, *fixture)

@@ -83,7 +83,9 @@ namespace lfs::vis {
         [[nodiscard]] SelectionResult selectLasso(const std::vector<glm::vec2>& vertices, SelectionMode mode,
                                                   int camera_index = 0);
         [[nodiscard]] SelectionResult selectRing(float x, float y, SelectionMode mode, int camera_index = 0);
-        [[nodiscard]] std::optional<int> pickGaussianAt(float x, float y);
+        [[nodiscard]] SelectionResult selectByColorAt(float x, float y, SelectionMode mode,
+                                                      SelectionFilterState filters = {},
+                                                      int camera_index = -1);
         [[nodiscard]] SelectionResult selectAllFiltered();
         [[nodiscard]] SelectionResult invertFiltered();
 
@@ -230,6 +232,8 @@ namespace lfs::vis {
         std::optional<int> testing_hovered_gaussian_id_;
         mutable std::array<std::shared_ptr<core::Tensor>, 2> viewport_screen_positions_;
         mutable std::array<uint64_t, 2> viewport_screen_positions_generation_{0, 0};
+        mutable std::vector<float> polygon_vertex_host_buffer_;
+        mutable core::Tensor polygon_vertex_device_buffer_;
 
         InteractiveSelectionState interactive_selection_;
     };

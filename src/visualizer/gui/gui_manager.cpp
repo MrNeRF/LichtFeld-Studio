@@ -5908,6 +5908,10 @@ namespace lfs::vis::gui {
             return {.blocks_pointer = true, .takes_keyboard_focus = true};
         }
 
+        if (!ui_hidden_ && rml_menu_bar_.isOpen()) {
+            return {.blocks_pointer = true, .takes_keyboard_focus = true};
+        }
+
         if (isViewportExportLocked() && isPositionInViewport(x, y)) {
             return {.blocks_pointer = true, .takes_keyboard_focus = true};
         }
@@ -6135,6 +6139,9 @@ namespace lfs::vis::gui {
     bool GuiManager::passiveMouseMoveNeedsRender(const float mouse_x, const float mouse_y) const {
         if (ui_hidden_)
             return false;
+        if (rml_menu_bar_.isOpen())
+            return true;
+
         const bool imgui_popup_open =
             ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
         if (isCapturingInput() || imgui_popup_open || startup_overlay_.isVisible() || drag_drop_hovering_) {
@@ -6221,6 +6228,8 @@ namespace lfs::vis::gui {
         if (video_widget_ && video_widget_->isVideoPlaying())
             return true;
         if (ui_layout_settle_frames_ > 0)
+            return true;
+        if (rml_viewport_overlay_.needsAnimationFrame())
             return true;
         if (rml_right_panel_.needsAnimationFrame())
             return true;

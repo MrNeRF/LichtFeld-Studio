@@ -8,6 +8,7 @@
 #include "py_tensor.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/selection_ops.hpp"
+#include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/internal/viewport.hpp"
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/operation/undo_entry.hpp"
@@ -15,6 +16,8 @@
 #include "visualizer/rendering/rendering_manager.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/selection/selection_service.hpp"
+#include "visualizer/tools/selection_tool.hpp"
+#include "visualizer_impl.hpp"
 
 #include <algorithm>
 #include <glm/glm.hpp>
@@ -38,6 +41,12 @@ namespace lfs::python {
         vis::SceneManager* get_sm() { return get_scene_manager(); }
 
         vis::SelectionService* get_ss() { return get_selection_service(); }
+
+        auto* get_selection_tool() {
+            auto* const gm = get_gui_manager();
+            auto* const viewer = gm ? gm->getViewer() : nullptr;
+            return viewer ? viewer->getSelectionTool() : nullptr;
+        }
 
         template <typename Mutator>
         void apply_selection_state_with_undo(vis::SceneManager& scene_manager,
@@ -280,6 +289,10 @@ namespace lfs::python {
 
         sel.def(
             "set_depth_filter", [](bool enabled, float depth_far, float frustum_half_width, float depth_near) {
+                if (auto* const tool = get_selection_tool()) {
+                    tool->setDepthFilterRange(enabled, depth_near, depth_far, frustum_half_width);
+                    return;
+                }
                 auto* rm = get_rm();
                 if (!rm)
                     return;
@@ -291,6 +304,10 @@ namespace lfs::python {
 
         sel.def(
             "set_depth_filter_range", [](bool enabled, float depth_near, float depth_far, float frustum_half_width) {
+                if (auto* const tool = get_selection_tool()) {
+                    tool->setDepthFilterRange(enabled, depth_near, depth_far, frustum_half_width);
+                    return;
+                }
                 auto* rm = get_rm();
                 if (!rm)
                     return;
@@ -302,6 +319,11 @@ namespace lfs::python {
 
         sel.def(
             "get_depth_filter", []() -> std::tuple<bool, float, float> {
+                if (const auto* const tool = get_selection_tool()) {
+                    return {tool->isDepthFilterEnabled(),
+                            tool->getDepthFar(),
+                            tool->getDepthFrustumHalfWidth()};
+                }
                 auto* rm = get_rm();
                 if (!rm)
                     return {false, 100.0f, 50.0f};
@@ -313,6 +335,12 @@ namespace lfs::python {
 
         sel.def(
             "get_depth_filter_range", []() -> std::tuple<bool, float, float, float> {
+                if (const auto* const tool = get_selection_tool()) {
+                    return {tool->isDepthFilterEnabled(),
+                            tool->getDepthNear(),
+                            tool->getDepthFar(),
+                            tool->getDepthFrustumHalfWidth()};
+                }
                 auto* rm = get_rm();
                 if (!rm)
                     return {false, 0.0f, 100.0f, 50.0f};

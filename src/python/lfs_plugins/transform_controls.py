@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Transform controls controller embedded into the Rendering panel."""
+"""Transform controls controller for the viewport numeric transform overlay."""
 
 import math
 import time
@@ -36,7 +36,9 @@ _STEP_CONFIG = {
 }
 
 _AXIS_INDEX = {"x": 0, "y": 1, "z": 2}
-_TRANSFORM_TOOL_IDS = ("builtin.translate", "builtin.rotate", "builtin.scale")
+_NUMERIC_TRANSFORM_TOOL_IDS = ("builtin.translate", "builtin.rotate", "builtin.scale")
+_MIRROR_TOOL_ID = "builtin.mirror"
+_TRANSFORM_OVERLAY_TOOL_IDS = (*_NUMERIC_TRANSFORM_TOOL_IDS, _MIRROR_TOOL_ID)
 _SPACE_LOCAL = 0
 _SPACE_WORLD = 1
 _PIVOT_ORIGIN = 0
@@ -127,11 +129,15 @@ class TransformControlsController:
             "transform_reset_label",
             lambda: "Reset All" if len(self._selected) > 1 else "Reset Transform",
         )
+        model.bind_func("transform_bake_label", lambda: "Bake Transform")
         model.bind_func("transform_is_single", lambda: len(self._selected) == 1)
         model.bind_func("transform_is_multi", lambda: len(self._selected) > 1)
         model.bind_func("transform_show_translate", lambda: self._active_tool == "builtin.translate")
         model.bind_func("transform_show_rotate", lambda: self._active_tool == "builtin.rotate")
         model.bind_func("transform_show_scale", lambda: self._active_tool == "builtin.scale")
+        model.bind_func("transform_show_actions", lambda: self._active_tool in _NUMERIC_TRANSFORM_TOOL_IDS)
+        model.bind_func("transform_submode_label", self._submode_label)
+        model.bind_func("transform_submode_tooltip_key", self._submode_tooltip_key)
         model.bind_func("transform_space_label", self._space_label)
         model.bind_func("transform_pivot_label", self._pivot_label)
 
@@ -166,9 +172,14 @@ class TransformControlsController:
 
     def mount(self, doc):
         self._doc = doc
+        self._visible = False
         self._escape_revert.clear()
 
-        body = doc.get_element_by_id("body")
+        wrap = doc.get_element_by_id("transform-block")
+        if wrap:
+            wrap.set_class("hidden", True)
+
+        body = doc.get_element_by_id("body") or doc.get_element_by_id("overlay-body")
         if body:
             body.add_event_listener("mouseup", self._on_step_mouseup)
 
@@ -209,20 +220,27 @@ class TransformControlsController:
         if self._active_tool != prev_tool or self._transform_space != prev_space:
             self._commit_active_edit()
 
-        visible = self._active_tool in _TRANSFORM_TOOL_IDS and len(self._selected) > 0
+        visible = self._active_tool in _TRANSFORM_OVERLAY_TOOL_IDS and len(self._selected) > 0
+        wrap = doc.get_element_by_id("transform-block")
         if visible != self._visible:
             self._visible = visible
-            wrap = doc.get_element_by_id("transform-block")
             if wrap:
                 wrap.set_class("hidden", not visible)
             dirty = True
 
         if not visible:
+            if wrap:
+                wrap.set_class("hidden", True)
             self._commit_active_edit()
             return dirty
 
         if tuple(self._selected) != prev_selected:
             self._commit_active_edit()
+
+        if self._active_tool == _MIRROR_TOOL_ID:
+            self._step_repeat_prop = None
+            self._dirty_all()
+            return True
 
         if len(self._selected) == 1:
             self._update_single_node()
@@ -253,6 +271,7 @@ class TransformControlsController:
             "builtin.translate": _ui_label("toolbar.translate", "Move"),
             "builtin.rotate": _ui_label("toolbar.rotate", "Rotate"),
             "builtin.scale": _ui_label("toolbar.scale", "Scale"),
+            _MIRROR_TOOL_ID: _ui_label("toolbar.mirror", "Mirror"),
         }
         return labels.get(self._active_tool, "Transform")
 
@@ -260,6 +279,16 @@ class TransformControlsController:
         if self._transform_space == _SPACE_LOCAL:
             return _ui_label("toolbar.local_space", "Local")
         return _ui_label("toolbar.world_space", "World")
+
+    def _submode_label(self):
+        if self._active_tool == _MIRROR_TOOL_ID:
+            return "Axis"
+        return "Space"
+
+    def _submode_tooltip_key(self):
+        if self._active_tool == _MIRROR_TOOL_ID:
+            return "tooltip.transform_axis"
+        return "tooltip.transform_space"
 
     def _pivot_label(self):
         if self._pivot_mode == _PIVOT_BOUNDS:
@@ -360,11 +389,15 @@ class TransformControlsController:
         self._handle.dirty("transform_node_name")
         self._handle.dirty("transform_multi_label")
         self._handle.dirty("transform_reset_label")
+        self._handle.dirty("transform_bake_label")
         self._handle.dirty("transform_is_single")
         self._handle.dirty("transform_is_multi")
         self._handle.dirty("transform_show_translate")
         self._handle.dirty("transform_show_rotate")
         self._handle.dirty("transform_show_scale")
+        self._handle.dirty("transform_show_actions")
+        self._handle.dirty("transform_submode_label")
+        self._handle.dirty("transform_submode_tooltip_key")
         self._handle.dirty("transform_space_label")
         self._handle.dirty("transform_pivot_label")
 
@@ -594,6 +627,8 @@ class TransformControlsController:
                 self._reset_single_transform()
             else:
                 self._reset_multi_transforms()
+        elif action == "bake":
+            self._commit_active_edit()
 
     def _on_input_focus(self, event):
         if self._focus_active:

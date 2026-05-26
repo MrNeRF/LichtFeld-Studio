@@ -49,6 +49,7 @@ namespace lfs::vis::gui {
         void renderCached();
         void processInput(const PanelInputState& input);
         bool wantsInput() const { return wants_input_; }
+        bool needsAnimationFrame() const { return render_needed_ || animation_active_ || tooltip_.needsFrame(); }
         [[nodiscard]] bool blocksPointer(double screen_x, double screen_y) const;
 
     private:

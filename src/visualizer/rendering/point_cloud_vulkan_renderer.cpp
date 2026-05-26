@@ -6,6 +6,7 @@
 
 #include "core/logger.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <format>
@@ -35,6 +36,9 @@ namespace lfs::vis {
             kFlagCropDesaturate = 1 << 2,
             kFlagOrthographic = 1 << 3,
             kFlagHasIndices = 1 << 4,
+            kFlagHasSelection = 1 << 5,
+            kFlagHasPreviewSelection = 1 << 6,
+            kFlagPreviewSelectionAdditive = 1 << 7,
         };
         struct PushConstants {
             float view_proj[16];        // 64
@@ -133,7 +137,8 @@ namespace lfs::vis {
 
         void writePushConstants(PushConstants& pc, const PointCloudVulkanRenderer::RenderRequest& req,
                                 int max_point_size, int n_transforms, int n_visibility,
-                                bool has_transform_indices) {
+                                bool has_transform_indices, bool has_selection,
+                                bool has_preview_selection) {
             std::memcpy(pc.view_proj, glm::value_ptr(req.view_projection), sizeof(pc.view_proj));
             std::memcpy(pc.view, glm::value_ptr(req.view), sizeof(pc.view));
 
@@ -174,6 +179,15 @@ namespace lfs::vis {
             if (has_transform_indices) {
                 flags |= kFlagHasIndices;
             }
+            if (has_selection) {
+                flags |= kFlagHasSelection;
+            }
+            if (has_preview_selection) {
+                flags |= kFlagHasPreviewSelection;
+                if (req.preview_selection_additive) {
+                    flags |= kFlagPreviewSelectionAdditive;
+                }
+            }
             pc.counts[0] = n_transforms;
             pc.counts[1] = n_visibility;
             pc.counts[2] = flags;
@@ -192,6 +206,24 @@ namespace lfs::vis {
             return true;
         }
 
+        [[nodiscard]] bool hasPointMask(const lfs::core::Tensor* const mask,
+                                        const std::size_t n_points) {
+            return mask != nullptr && mask->is_valid() && mask->numel() == n_points;
+        }
+
+        [[nodiscard]] std::vector<std::uint32_t> maskTensorToUint32Host(
+            const lfs::core::Tensor& mask) {
+            const auto host = mask.to(lfs::core::DataType::UInt8)
+                                  .to(lfs::core::Device::CPU)
+                                  .contiguous();
+            const auto* const src = host.ptr<std::uint8_t>();
+            std::vector<std::uint32_t> out(static_cast<std::size_t>(host.numel()));
+            for (std::size_t i = 0; i < out.size(); ++i) {
+                out[i] = static_cast<std::uint32_t>(src[i]);
+            }
+            return out;
+        }
+
     } // namespace
 
     struct PointCloudVulkanRenderer::Impl {
@@ -204,7 +236,7 @@ namespace lfs::vis {
         VkDescriptorSetLayout descriptor_set_layout = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
 
-        // Descriptor pool / set (transforms + indices + visibility)
+        // Descriptor pool / set (transforms + indices + visibility + overlays)
         VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
         VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
 
@@ -216,6 +248,9 @@ namespace lfs::vis {
             ManagedBuffer transforms;
             ManagedBuffer transform_indices;
             ManagedBuffer visibility;
+            ManagedBuffer selection_mask;
+            ManagedBuffer preview_selection_mask;
+            ManagedBuffer selection_colors;
 
             const void* cached_positions_ptr = nullptr;
             std::size_t cached_positions_count = 0;
@@ -227,6 +262,16 @@ namespace lfs::vis {
             std::size_t cached_transform_indices_count = 0;
             std::vector<glm::mat4> cached_transforms;
             std::vector<std::uint32_t> cached_visibility;
+
+            const void* cached_selection_mask_ptr = nullptr;
+            std::size_t cached_selection_mask_id = 0;
+            std::size_t cached_selection_mask_count = 0;
+            const void* cached_preview_selection_mask_ptr = nullptr;
+            std::size_t cached_preview_selection_mask_id = 0;
+            std::size_t cached_preview_selection_mask_count = 0;
+            std::uint64_t cached_preview_selection_revision = 0;
+            std::array<glm::vec4, lfs::rendering::kSelectionColorTableCount> cached_selection_colors{};
+            bool cached_selection_colors_valid = false;
         };
         InputCache cache;
 
@@ -330,7 +375,7 @@ namespace lfs::vis {
                 return std::unexpected<std::string>("vkCreateShaderModule(point_cloud) failed");
             }
 
-            std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
+            std::array<VkDescriptorSetLayoutBinding, 6> bindings{};
             for (std::uint32_t i = 0; i < bindings.size(); ++i) {
                 bindings[i].binding = i;
                 bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -474,7 +519,7 @@ namespace lfs::vis {
         std::expected<void, std::string> createDescriptorPool() {
             VkDescriptorPoolSize ps{};
             ps.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            ps.descriptorCount = 3;
+            ps.descriptorCount = 6;
             VkDescriptorPoolCreateInfo pi{};
             pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
             pi.maxSets = 1;
@@ -646,6 +691,9 @@ namespace lfs::vis {
             destroyBuffer(allocator, cache.transforms);
             destroyBuffer(allocator, cache.transform_indices);
             destroyBuffer(allocator, cache.visibility);
+            destroyBuffer(allocator, cache.selection_mask);
+            destroyBuffer(allocator, cache.preview_selection_mask);
+            destroyBuffer(allocator, cache.selection_colors);
             destroyBuffer(allocator, placeholder);
             for (auto& s : pending_stagings) {
                 destroyBuffer(allocator, s);
@@ -821,6 +869,100 @@ namespace lfs::vis {
                 cache.cached_n_visibility = cache.cached_visibility.size();
             }
 
+            const auto upload_mask_if_changed =
+                [&](const lfs::core::Tensor* const mask,
+                    ManagedBuffer& buffer,
+                    const char* const what,
+                    const void*& cached_ptr,
+                    std::size_t& cached_id,
+                    std::size_t& cached_count,
+                    std::uint64_t* cached_revision,
+                    const std::uint64_t revision = 0) -> std::expected<std::size_t, std::string> {
+                if (!hasPointMask(mask, n_points)) {
+                    cached_ptr = nullptr;
+                    cached_id = 0;
+                    cached_count = 0;
+                    if (cached_revision) {
+                        *cached_revision = 0;
+                    }
+                    return std::size_t{0};
+                }
+
+                const void* const mask_ptr = mask;
+                const std::size_t mask_id = mask->debug_id();
+                const bool changed =
+                    buffer.buffer == VK_NULL_HANDLE ||
+                    cached_ptr != mask_ptr ||
+                    cached_id != mask_id ||
+                    cached_count != n_points ||
+                    (cached_revision && *cached_revision != revision);
+                if (changed) {
+                    auto host = maskTensorToUint32Host(*mask);
+                    if (host.size() != n_points) {
+                        return std::unexpected<std::string>(
+                            std::format("{} mask size mismatch", what));
+                    }
+                    if (auto r = uploadInto(cb, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                            host.data(), host.size() * sizeof(std::uint32_t),
+                                            buffer, what);
+                        !r) {
+                        return std::unexpected(r.error());
+                    }
+                    cached_ptr = mask_ptr;
+                    cached_id = mask_id;
+                    cached_count = n_points;
+                    if (cached_revision) {
+                        *cached_revision = revision;
+                    }
+                }
+                return n_points;
+            };
+
+            auto selection_count = upload_mask_if_changed(
+                req.selection_mask,
+                cache.selection_mask,
+                "selection mask",
+                cache.cached_selection_mask_ptr,
+                cache.cached_selection_mask_id,
+                cache.cached_selection_mask_count,
+                nullptr);
+            if (!selection_count) {
+                return std::unexpected(selection_count.error());
+            }
+            auto preview_count = upload_mask_if_changed(
+                req.preview_selection_mask,
+                cache.preview_selection_mask,
+                "preview selection mask",
+                cache.cached_preview_selection_mask_ptr,
+                cache.cached_preview_selection_mask_id,
+                cache.cached_preview_selection_mask_count,
+                &cache.cached_preview_selection_revision,
+                req.preview_selection_revision);
+            if (!preview_count) {
+                return std::unexpected(preview_count.error());
+            }
+
+            const bool overlay_active = *selection_count > 0 || *preview_count > 0;
+            if (overlay_active) {
+                const auto default_colors = lfs::rendering::defaultSelectionColorTable();
+                const auto& colors = req.selection_colors ? *req.selection_colors : default_colors;
+                const bool colors_changed =
+                    !cache.cached_selection_colors_valid ||
+                    cache.selection_colors.buffer == VK_NULL_HANDLE ||
+                    cache.cached_selection_colors != colors;
+                if (colors_changed) {
+                    static_assert(sizeof(glm::vec4) == sizeof(float) * 4);
+                    if (auto r = uploadInto(cb, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                            colors.data(), colors.size() * sizeof(glm::vec4),
+                                            cache.selection_colors, "selection colors");
+                        !r) {
+                        return r;
+                    }
+                    cache.cached_selection_colors = colors;
+                    cache.cached_selection_colors_valid = true;
+                }
+            }
+
             return {};
         }
 
@@ -834,16 +976,34 @@ namespace lfs::vis {
             VkBuffer visibility_buf = (cache.cached_n_visibility > 0)
                                           ? cache.visibility.buffer
                                           : placeholder.buffer;
+            VkBuffer selection_buf = (cache.cached_selection_mask_count > 0)
+                                         ? cache.selection_mask.buffer
+                                         : placeholder.buffer;
+            VkBuffer preview_selection_buf = (cache.cached_preview_selection_mask_count > 0)
+                                                 ? cache.preview_selection_mask.buffer
+                                                 : placeholder.buffer;
+            const bool has_selection_colors =
+                cache.cached_selection_colors_valid &&
+                cache.selection_colors.buffer != VK_NULL_HANDLE;
+            VkBuffer selection_colors_buf = has_selection_colors
+                                                ? cache.selection_colors.buffer
+                                                : placeholder.buffer;
 
-            std::array<VkDescriptorBufferInfo, 3> infos{};
+            std::array<VkDescriptorBufferInfo, 6> infos{};
             infos[0].buffer = transforms_buf;
             infos[0].range = VK_WHOLE_SIZE;
             infos[1].buffer = indices_buf;
             infos[1].range = VK_WHOLE_SIZE;
             infos[2].buffer = visibility_buf;
             infos[2].range = VK_WHOLE_SIZE;
+            infos[3].buffer = selection_buf;
+            infos[3].range = VK_WHOLE_SIZE;
+            infos[4].buffer = preview_selection_buf;
+            infos[4].range = VK_WHOLE_SIZE;
+            infos[5].buffer = selection_colors_buf;
+            infos[5].range = VK_WHOLE_SIZE;
 
-            std::array<VkWriteDescriptorSet, 3> writes{};
+            std::array<VkWriteDescriptorSet, 6> writes{};
             for (std::uint32_t i = 0; i < writes.size(); ++i) {
                 writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                 writes[i].dstSet = descriptor_set;
@@ -993,7 +1153,9 @@ namespace lfs::vis {
                                kMaxPointSize,
                                static_cast<int>(cache.cached_n_transforms),
                                static_cast<int>(cache.cached_n_visibility),
-                               cache.cached_transform_indices_count > 0);
+                               cache.cached_transform_indices_count > 0,
+                               cache.cached_selection_mask_count > 0,
+                               cache.cached_preview_selection_mask_count > 0);
             vkCmdPushConstants(command_buffer, pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT,
                                0, sizeof(push), &push);
 

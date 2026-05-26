@@ -64,6 +64,14 @@ namespace lfs::vis {
             // Optional per-transform visibility (size matches model_transforms).
             const std::vector<bool>* node_visibility_mask = nullptr;
 
+            // Optional selection overlays. Masks are per-point UInt8/Bool tensors
+            // where 0 means unselected and nonzero means selection group/preview.
+            const lfs::core::Tensor* selection_mask = nullptr;
+            const lfs::core::Tensor* preview_selection_mask = nullptr;
+            const std::array<glm::vec4, lfs::rendering::kSelectionColorTableCount>* selection_colors = nullptr;
+            bool preview_selection_additive = true;
+            std::uint64_t preview_selection_revision = 0;
+
             // Optional crop. When set, points outside the local box are either
             // dropped (default) or rendered desaturated (crop.desaturate).
             std::optional<CropBox> crop;

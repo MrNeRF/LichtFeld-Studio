@@ -14,7 +14,51 @@ namespace lfs::rendering {
 
     using lfs::core::Tensor;
 
+    void brush_select(
+        const float2* screen_positions,
+        float mouse_x,
+        float mouse_y,
+        float radius,
+        uint8_t* selection_out,
+        int n_primitives);
+
+    void rect_select(
+        const float2* positions,
+        float x0,
+        float y0,
+        float x1,
+        float y1,
+        bool* selection,
+        int n_primitives);
+
+    void polygon_select(
+        const float2* positions,
+        const float2* polygon,
+        int num_vertices,
+        bool* selection,
+        int n_primitives);
+
     void set_selection_element(bool* selection, int index, bool value);
+
+    void brush_select_tensor(
+        const Tensor& screen_positions,
+        float mouse_x,
+        float mouse_y,
+        float radius,
+        Tensor& selection_out);
+
+    void rect_select_tensor(
+        const Tensor& screen_positions,
+        float x0,
+        float y0,
+        float x1,
+        float y1,
+        Tensor& selection_out);
+
+    void polygon_select_tensor(
+        const Tensor& screen_positions,
+        const Tensor& polygon_vertices,
+        Tensor& selection_out);
 
     void apply_selection_group_tensor(
         const Tensor& cumulative_selection,

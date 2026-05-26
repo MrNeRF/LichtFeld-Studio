@@ -56,6 +56,9 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool hasActiveState() const {
             return seen_this_frame_ || visible_ || pending_target_ != nullptr || !pending_text_.empty();
         }
+        [[nodiscard]] bool needsFrame() const {
+            return pending_target_ != nullptr && !pending_text_.empty() && !visible_;
+        }
 
     private:
         std::string pending_text_;

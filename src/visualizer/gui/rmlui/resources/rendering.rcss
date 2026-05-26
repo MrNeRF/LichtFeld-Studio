@@ -45,47 +45,6 @@ body {
     margin-top: 4dp;
 }
 
-.rendering-transform-meta {
-    display: flex;
-    align-items: center;
-    gap: 8dp;
-    min-width: 0;
-    margin-bottom: 6dp;
-    padding: 2dp 0 4dp;
-}
-
-.rendering-transform-meta__primary {
-    font-size: 12dp;
-    min-width: 0;
-    flex-grow: 1;
-}
-
-.rendering-transform-meta__secondary {
-    font-size: 12dp;
-    white-space: nowrap;
-    flex-shrink: 0;
-}
-
-.rendering-transform-group-label {
-    font-size: 12dp;
-    padding: 2dp 0 0;
-}
-
-.rendering-transform-axis-label {
-    width: 16dp;
-    min-width: 16dp;
-    font-size: 12dp;
-    display: flex;
-    align-items: center;
-    justify-content: flex-start;
-}
-
-.rendering-transform-scale-separator {
-    margin-top: 4dp;
-    padding-top: 4dp;
-    border-top-width: 1dp;
-}
-
 .rendering-subsection {
     margin-top: 0;
 }

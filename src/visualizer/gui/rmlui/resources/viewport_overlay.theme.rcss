@@ -14,11 +14,6 @@
     border-radius: 0;
 }
 
-.subtoolbar-container {
-    background-color: @{toolbar.sub_background};
-    border-radius: @{num(size.window_rounding)}dp;
-}
-
 .toolbar-flyout {
     background-color: @{toolbar.background};
     border-color: @{overlay.border};
@@ -34,6 +29,26 @@
 
 .toolbar-separator {
     background-color: @{alpha(border,0.39)};
+}
+
+.viewport-transform-panel {
+    background-color: @{toolbar.background};
+    border-color: @{overlay.border};
+}
+
+.viewport-transform-meta__tool,
+.viewport-transform-axis-label {
+    color: @{text};
+}
+
+.viewport-transform-meta__target,
+.viewport-transform-group-label,
+.viewport-transform-toggle-label {
+    color: @{text_dim};
+}
+
+.viewport-transform-axis--split {
+    border-color: @{alpha(border,0.30)};
 }
 
 .icon-btn img {

@@ -65,7 +65,7 @@ namespace lfs::vis::gui {
             clip_y_max_ = y_max;
         }
         bool needsAnimationFrame() const {
-            return render_needed_ || content_dirty_ || animation_active_;
+            return render_needed_ || content_dirty_ || animation_active_ || tooltip_.needsFrame();
         }
 
         Rml::ElementDocument* getDocument() { return document_; }

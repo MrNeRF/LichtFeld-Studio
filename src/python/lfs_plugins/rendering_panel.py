@@ -9,7 +9,6 @@ import lichtfeld as lf
 
 from . import rml_widgets as w
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
-from .transform_controls import TransformControlsController
 from .types import Panel
 from .ui.state import AppState
 
@@ -129,7 +128,6 @@ COLOR_PROPS = [
 ]
 
 SECTION_NAMES = (
-    "transform",
     "viewport",
     "camera",
     "simplify",
@@ -237,7 +235,6 @@ class RenderingPanel(Panel):
 
     def __init__(self):
         self._handle = None
-        self._transform_controls = TransformControlsController()
         self._color_edit_prop = None
         self._collapsed = {"selection", "mesh", "post_process", "ppisp_crf"}
         self._popup_el = None
@@ -297,7 +294,6 @@ class RenderingPanel(Panel):
                 )
         self._refresh_simplify_source(force=True)
         self._scrub_fields.mount(doc)
-        self._transform_controls.mount(doc)
         self._sync_section_states()
         self._subscribe_reactive_state()
 
@@ -335,8 +331,6 @@ class RenderingPanel(Panel):
             return
 
         s = lf.get_render_settings
-
-        self._transform_controls.bind_model(model)
 
         for prop_id in BOOL_PROPS:
             if prop_id == "equirectangular":
@@ -535,7 +529,6 @@ class RenderingPanel(Panel):
             return False
 
         dirty = False
-        dirty |= self._transform_controls.update(doc)
         dirty |= self._sync_environment_state()
         dirty |= self._sync_projection_state()
         for prop_id in COLOR_PROPS:
@@ -744,7 +737,6 @@ class RenderingPanel(Panel):
 
     def on_scene_changed(self, doc):
         del doc
-        self._transform_controls.scene_changed()
         if self._handle:
             self._handle.dirty_all()
 
@@ -752,7 +744,6 @@ class RenderingPanel(Panel):
         self._unsubscribe_reactive_state()
         doc.remove_data_model("rendering")
         self._handle = None
-        self._transform_controls.unmount()
         self._popup_el = None
         self._doc = None
         self._escape_revert.clear()

@@ -46,6 +46,12 @@
     "preferences": "Preferencias",
     "histogram": "Histogram"
   },
+  "toolbar": {
+    "local_space": "Espacio local",
+    "world_space": "Espacio mundial",
+    "origin_pivot": "Origen",
+    "bounds_center_pivot": "Centro de límites"
+  },
   "getting_started": {
     "title": "Primeros Pasos",
     "description": "Aprenda a preparar datasets y comenzar con LichtFeld Studio:",
@@ -61,6 +67,36 @@
   "input_settings": {
     "conflict_message": "{trigger} ya está asignado a {action} en {mode}. ¿Reemplazar esta asignación?",
     "conflict_inline": "{binding}  ⚠ también: {action}"
+  },
+  "tooltip": {
+    "transform_position_axis": "Trasladar la selección a lo largo de este eje",
+    "transform_rotation_axis": "Rotar la selección alrededor de este eje (grados)",
+    "transform_scale_axis": "Escalar la selección a lo largo de este eje",
+    "transform_scale_uniform": "Escala uniforme en todos los ejes",
+    "transform_reset": "Restablecer la transformación a identidad",
+    "transform_bake": "Aplicar la transformación actual",
+    "transform_panel": "Transformar objetos seleccionados de la escena",
+    "transform_tool": "Herramienta de transformación activa",
+    "transform_target": "Objetivo de transformación seleccionado",
+    "transform_space": "Elegir espacio de transformación local o mundial",
+    "transform_axis": "Elegir eje de espejo",
+    "transform_pivot": "Elegir el pivote usado para las transformaciones",
+    "transform_position": "Valores de posición para el objetivo seleccionado",
+    "transform_rotation": "Valores de rotación para el objetivo seleccionado",
+    "transform_scale": "Valores de escala para el objetivo seleccionado",
+    "selection_panel": "Herramientas de selección",
+    "selection_tool": "Herramienta de selección activa",
+    "selection_mode": "Modo de selección activo",
+    "selection_depth_range": "Rango de profundidad de selección",
+    "selection_depth_near": "Borde cercano de la caja de profundidad",
+    "selection_depth_far": "Borde lejano de la caja de profundidad",
+    "selection_depth_mode": "Alternar modo de profundidad de selección",
+    "selection_delete": "Eliminar gaussianas seleccionadas",
+    "selection_undo": "Deshacer el último cambio de selección",
+    "selection_redo": "Rehacer el último cambio de selección",
+    "selection_invert": "Invertir la selección de gaussianas",
+    "selection_select_all": "Seleccionar todas las gaussianas",
+    "selection_unselect": "Borrar la selección de gaussianas"
   },
   "about": {
     "title": "LICHTFELD STUDIO",
