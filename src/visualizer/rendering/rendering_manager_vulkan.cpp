@@ -742,6 +742,8 @@ namespace lfs::vis {
             bool flip_y = false;
         };
 
+        VkSemaphore latest_vksplat_completion_semaphore = VK_NULL_HANDLE;
+        std::uint64_t latest_vksplat_completion_value = 0;
         bool vksplat_inputs_forced_this_frame = false;
         const auto render_panel_image =
             [&](const Viewport& source_viewport,
@@ -862,6 +864,8 @@ namespace lfs::vis {
                     if (force_input_upload) {
                         vksplat_inputs_forced_this_frame = true;
                     }
+                    latest_vksplat_completion_semaphore = result->completion_semaphore;
+                    latest_vksplat_completion_value = result->completion_value;
                     lfs::rendering::FrameMetadata metadata{};
                     metadata.valid = true;
                     metadata.flip_y = result->flip_y;
@@ -1394,6 +1398,8 @@ namespace lfs::vis {
                                 .external_image_view = vulkan_external_viewport_image_view_,
                                 .external_image_layout = vulkan_external_viewport_image_layout_,
                                 .external_image_generation = vulkan_external_viewport_image_generation_,
+                                .completion_semaphore = render_result.completion_semaphore,
+                                .completion_value = render_result.completion_value,
                                 .size = vulkan_viewport_image_size_,
                                 .flip_y = vulkan_viewport_image_flip_y_};
                     };
@@ -1548,6 +1554,8 @@ namespace lfs::vis {
             if (result.image_generation == 0) {
                 result.image_generation = ++split_view_image_generation_;
             }
+            result.completion_semaphore = latest_vksplat_completion_semaphore;
+            result.completion_value = latest_vksplat_completion_value;
             result.size = vulkan_viewport_image_size_;
             result.flip_y = vulkan_viewport_image_flip_y_;
 

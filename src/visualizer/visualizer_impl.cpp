@@ -1147,14 +1147,22 @@ namespace lfs::vis {
         if (input.mouse_down[0] || input.mouse_down[1] || input.mouse_down[2])
             return true;
 
+        if (selection_tool_ && selection_tool_->isEnabled() && gui_manager_ &&
+            gui_manager_->isPositionInViewport(input.mouse_x, input.mouse_y)) {
+            return true;
+        }
+
+        if (gui_manager_ && gui_manager_->passiveMouseMoveNeedsRender(input.mouse_x, input.mouse_y)) {
+            return true;
+        }
+
         const auto targets = window_manager_->inputRouter().pointerTargets(input.mouse_x, input.mouse_y);
         const bool targets_gui = targets.hover_target == input::InputTarget::Gui ||
                                  targets.pointer_target == input::InputTarget::Gui;
         if (!targets_gui)
             return false;
 
-        return !gui_manager_ ||
-               gui_manager_->passiveMouseMoveNeedsRender(input.mouse_x, input.mouse_y);
+        return !gui_manager_;
     }
 
     VisualizerImpl::FrameDemand VisualizerImpl::collectFrameDemand(const bool viewport_export_locked) {
@@ -1286,13 +1294,17 @@ namespace lfs::vis {
                                                               vulkan_frame.external_image_layout,
                                                               vulkan_frame.size,
                                                               vulkan_frame.flip_y,
-                                                              vulkan_frame.external_image_generation);
+                                                              vulkan_frame.external_image_generation,
+                                                              vulkan_frame.completion_semaphore,
+                                                              vulkan_frame.completion_value);
                 } else {
                     gui_manager_->setVulkanSceneImage(
                         vulkan_frame.image,
                         vulkan_frame.size,
                         vulkan_frame.flip_y,
-                        vulkan_frame.image_generation);
+                        vulkan_frame.image_generation,
+                        vulkan_frame.completion_semaphore,
+                        vulkan_frame.completion_value);
                 }
                 if (vulkan_frame.split_right_image) {
                     gui_manager_->setVulkanSplitRightImage(

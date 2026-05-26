@@ -18,6 +18,7 @@
 #include <glm/glm.hpp>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace lfs::vis {
@@ -35,6 +36,8 @@ namespace lfs::vis {
             std::uint64_t depth_generation = 0;
             glm::ivec2 size{0, 0};
             bool flip_y = false;
+            VkSemaphore completion_semaphore = VK_NULL_HANDLE;
+            std::uint64_t completion_value = 0;
         };
 
         struct ModelInputSnapshot {
@@ -155,7 +158,8 @@ namespace lfs::vis {
         [[nodiscard]] std::expected<void, std::string> ensureOutputImages(
             VulkanContext& context,
             glm::ivec2 size,
-            OutputSlot output_slot);
+            OutputSlot output_slot,
+            std::size_t ring_slot);
         [[nodiscard]] std::expected<void, std::string> ensureComposePipeline(VulkanContext& context);
         [[nodiscard]] std::expected<void, std::string> composePixelState(
             VulkanContext& context,
@@ -163,10 +167,16 @@ namespace lfs::vis {
             const VulkanGSRendererUniforms& uniforms,
             const glm::vec3& background,
             OutputSlot output_slot,
+            std::size_t output_ring_slot,
             bool transparent_background,
             bool depth_view,
             float depth_min,
             float depth_max);
+        [[nodiscard]] std::expected<void, std::string> waitForRingSlot(
+            std::size_t ring_slot,
+            std::string_view reason);
+        [[nodiscard]] std::size_t acquireRingSlot();
+        [[nodiscard]] std::size_t latestOutputRingSlot(OutputSlot output_slot) const;
 
         // Fallback coalesced CUDA-imported VkBuffer per ring slot, holding raw
         // SplatData input regions back-to-back. Training tensors created as
@@ -188,42 +198,48 @@ namespace lfs::vis {
             std::array<std::size_t, kOverlayRegionCount> region_bytes{};
             lfs::core::Tensor selection_source;
             lfs::core::Tensor preview_source;
-            lfs::core::Tensor color_table_source;
-            // Fingerprint of the palette currently staged in color_table_source.
-            // Hits on lasso-drag frames where the theme/palette is unchanged,
-            // letting us skip the ~5 ms CPU-tensor build + H2D transfer.
-            // Validity gate is color_table_source.is_valid().
+            std::vector<float> color_table_upload_cpu;
+            // Fingerprint of the palette currently staged in the interop buffer.
+            // Hits on drag frames where the theme/palette is unchanged.
             std::array<glm::vec4, lfs::rendering::kSelectionColorTableCount> cached_color_palette{};
+            bool color_table_uploaded = false;
             lfs::core::Tensor transform_indices_source;
-            lfs::core::Tensor node_mask_source;
-            // Fingerprint of emphasized_node_mask currently staged in
-            // node_mask_source. Skips the CPU-tensor build + H2D when the user
-            // hasn't changed the selected node set (common during lasso drag).
+            std::vector<std::uint8_t> node_mask_upload_cpu;
+            // Fingerprint of emphasized_node_mask currently staged in the
+            // interop buffer.
             std::vector<bool> cached_emphasized_node_mask;
-            lfs::core::Tensor overlay_params_source;
-            // Mirror of the CPU bytes currently staged in overlay_params_source.
-            // The full overlay-params table is built on CPU each frame (cheap),
-            // then memcmp'd against this to decide whether the ~6 ms H2D is
-            // needed. Output-byte fingerprint is robust: any input change that
-            // matters is reflected in the bytes, no field-by-field hashing.
-            lfs::core::Tensor cached_overlay_params_cpu;
-            lfs::core::Tensor model_transforms_source;
-            // Same output-bytes fingerprint cache as overlay_params: skips the
-            // ~5 ms NULL-stream H2D when the transforms haven't changed (the
-            // common case during a lasso drag on a static scene).
-            lfs::core::Tensor cached_model_transforms_cpu;
+            bool node_mask_uploaded = false;
+            std::vector<float> overlay_params_upload_cpu;
+            // Output-byte fingerprint of the overlay-params table currently
+            // staged in the interop buffer.
+            std::vector<float> cached_overlay_params_cpu;
+            bool overlay_params_uploaded = false;
+            std::vector<float> model_transforms_upload_cpu;
+            // Same output-byte fingerprint cache as overlay_params.
+            std::vector<float> cached_model_transforms_cpu;
+            bool model_transforms_uploaded = false;
         };
         struct CudaSelectionQuerySlot {
             VulkanContext::ExternalBuffer buffer{};
             lfs::rendering::CudaVulkanBufferInterop interop{};
             std::array<std::size_t, kSelectionQueryRegionCount> region_offset{};
             std::array<std::size_t, kSelectionQueryRegionCount> region_bytes{};
+            std::array<std::size_t, kSelectionQueryRegionCount> region_capacity_bytes{};
             lfs::core::Tensor transform_indices_source;
-            lfs::core::Tensor node_mask_source;
-            lfs::core::Tensor primitive_source;
-            lfs::core::Tensor model_transforms_source;
-            lfs::core::Tensor polygon_vertices_source;
+            std::vector<std::uint8_t> node_mask_upload_cpu;
+            std::vector<float> model_transforms_upload_cpu;
+            std::vector<float> primitive_upload_cpu;
+            std::vector<float> polygon_vertices_upload_cpu;
             lfs::core::Tensor output_tensor;
+            const void* cached_transform_indices_ptr = nullptr;
+            std::size_t cached_transform_indices_bytes = 0;
+            bool transform_indices_uploaded = false;
+            std::vector<bool> cached_node_visibility_mask;
+            bool node_mask_uploaded = false;
+            std::vector<float> cached_model_transforms_cpu;
+            bool model_transforms_uploaded = false;
+            std::vector<glm::vec2> cached_polygon_vertices;
+            bool polygon_vertices_uploaded = false;
         };
 
         void detachManagedBuffers();
@@ -253,16 +269,24 @@ namespace lfs::vis {
             std::uint64_t generation = 0;
         };
         static constexpr std::size_t kOutputSlotCount = 4;
-        std::array<OutputImageSlot, kOutputSlotCount> output_slots_{};
+        static constexpr std::size_t kFrameRingSize = 3;
+        std::array<std::array<OutputImageSlot, kFrameRingSize>, kOutputSlotCount> output_slots_{};
+        std::array<std::size_t, kOutputSlotCount> latest_output_ring_slot_{};
+        std::array<std::uint64_t, kOutputSlotCount> output_generations_{};
+        VkSemaphore render_complete_timeline_ = VK_NULL_HANDLE;
+        std::uint64_t render_complete_value_ = 0;
+        std::array<std::uint64_t, kFrameRingSize> ring_completion_values_{};
+        std::size_t next_ring_slot_ = 0;
 
         // Fallback CUDA-backed input buffers for models that are not already
         // backed by Vulkan-external tensor storage. Direct Vulkan-external
         // training tensors bypass this ring and bind their VkBuffers directly.
-        static constexpr std::size_t kInputRingSize = 1;
+        static constexpr std::size_t kInputRingSize = kFrameRingSize;
         std::array<CudaInputSlot, kInputRingSize> cuda_inputs_{};
         std::array<CudaOverlaySlot, kInputRingSize> cuda_overlays_{};
         CudaSelectionQuerySlot cuda_selection_query_{};
         std::array<ModelInputSnapshot, kInputRingSize> ring_uploaded_{};
+        std::array<ModelInputSnapshot, kInputRingSize> ring_model_snapshot_{};
 
         // Per-ring-slot timeline semaphore used to gate Vulkan compute on the
         // CUDA upload completing; eliminates the per-frame
@@ -276,6 +300,7 @@ namespace lfs::vis {
         };
         std::array<UploadTimeline, kInputRingSize> upload_timelines_{};
         std::array<UploadTimeline, kInputRingSize> overlay_upload_timelines_{};
+        UploadTimeline selection_query_timeline_{};
     };
 
 } // namespace lfs::vis

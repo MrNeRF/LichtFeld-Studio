@@ -108,14 +108,19 @@ struct VulkanGSPipelineBuffers {
     Buffer<float> rgb;                // (N, 3)
     Buffer<int32_t> overlay_flags;    // (N, 1), selection/filter classification
 
-    // Two-stage sort (Splatshop): N primitives are first sorted by radial
-    // distance (depth), then tile instances are emitted in depth order and
+    // Two-stage sort (Splatshop): visible primitives are compacted and sorted by
+    // radial distance (depth), then tile instances are emitted in depth order and
     // sorted by tile id with a stable radix. Matches the gsplat_fwd CUDA
     // reference (kernels_forward.cuh: primitive_depth_keys → SortPairs →
-    // apply_depth_ordering → create_instances → SortPairs).
+    // apply_depth_ordering → create_instances → SortPairs) without sorting
+    // projection rejects.
     Buffer<uint32_t> primitive_depth_keys;       // (N,) float-as-uint of ‖mean − cam‖²
     Buffer<int32_t> primitive_sort_indices;      // (N,) depth-ranked primitive idx
     Buffer<int32_t> tiles_touched_depth_ordered; // (N,) reordered tiles_touched
+    Buffer<int32_t> visible_flags;               // (N,) projection-visible primitive flag
+    Buffer<int32_t> visible_prefix;              // (N,) inclusive scan of visible_flags
+    Buffer<uint32_t> visible_count;              // (1,) visible primitive count
+    Buffer<uint32_t> visible_sort_dispatch_args; // VkDispatchIndirectCommand for visible primitive radix sort
 
     // tiles
     Buffer<int32_t> index_buffer_offset; // N
@@ -123,6 +128,8 @@ struct VulkanGSPipelineBuffers {
     Buffer<sortingKey_t> sorting_keys_2; // NInt [no_shrink]
     Buffer<int32_t> sorting_gauss_idx_1; // NInt [no_shrink]
     Buffer<int32_t> sorting_gauss_idx_2; // NInt [no_shrink]
+    Buffer<uint32_t> tile_sort_count;    // (1,) actual tile instance count
+    Buffer<uint32_t> tile_sort_dispatch_args; // VkDispatchIndirectCommand for tile-instance radix sort
     Buffer<int32_t> tile_ranges;         // (Gh*Gw, 2)
     bool is_unsorted_1 = true;
     Buffer<sortingKey_t>& unsorted_keys() { return is_unsorted_1 ? sorting_keys_1 : sorting_keys_2; }

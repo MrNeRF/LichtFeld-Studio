@@ -8,6 +8,7 @@ void VulkanGSPipeline::allocStagingBuffer(size_t size) {
 
     if (stager.allocSize < size) {
         HOST_GUARD;
+        waitForPendingBatch();
         if (stager.buffer != VK_NULL_HANDLE) {
             vmaDestroyBuffer(allocator, stager.buffer, stager.allocation);
         }
@@ -64,6 +65,7 @@ void VulkanGSPipeline::createBuffer(size_t size, _VulkanBuffer& buffer) {
 void VulkanGSPipeline::destroyBuffer(_VulkanBuffer& buffer) {
     if (commandBatchInProgress)
         _THROW_ERROR("destroyBuffer called when command batch in progress");
+    waitForPendingBatch();
     if (buffer.buffer != VK_NULL_HANDLE && buffer.allocation != VK_NULL_HANDLE) {
         vmaDestroyBuffer(allocator, buffer.buffer, buffer.allocation);
         if (current_vram < buffer.allocSize)
@@ -101,10 +103,17 @@ _VulkanBuffer& VulkanGSPipeline::resizeDeviceBuffer(Buffer<T>& buffer, size_t ne
 template <typename T>
 _VulkanBuffer& VulkanGSPipeline::clearDeviceBuffer(Buffer<T>& buffer, size_t new_size) {
     auto& deviceBuffer = buffer.deviceBuffer;
-    if (deviceBuffer.size != new_size * sizeof(T)) {
-        HOST_GUARD;
-        resizeDeviceBuffer(buffer, new_size);
+    const size_t new_byte_size = new_size * sizeof(T);
+    // Clearing is a GPU operation; changing the active view size must not force a
+    // host-side submit/wait when the existing allocation is already large enough.
+    if (deviceBuffer.allocSize < new_byte_size) {
+        resizeDeviceBuffer(buffer, new_size, true);
+    } else {
+        deviceBuffer.size = new_byte_size;
     }
+
+    if (deviceBuffer.size == 0)
+        return deviceBuffer;
 
     {
         DEVICE_GUARD;
