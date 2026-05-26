@@ -190,6 +190,35 @@ TEST_F(SelectionServiceInteractionsTest, ClosedPolygonInsertAndRemoveVertexUpdat
     EXPECT_FLOAT_EQ(reduced_points[2].second, 30.0f);
 }
 
+TEST_F(SelectionServiceInteractionsTest, InteractiveRectAndLassoPreviewTrackFrameCursor) {
+    rendering_manager_->setRectPreview(0.0f, 0.0f, 10.0f, 10.0f);
+    rendering_manager_->setLassoPreview({{0.0f, 0.0f}, {10.0f, 10.0f}});
+    EXPECT_FALSE(rendering_manager_->rectPreviewTracksCursor());
+    EXPECT_FALSE(rendering_manager_->lassoPreviewTracksCursor());
+    rendering_manager_->clearSelectionPreviews();
+
+    ASSERT_TRUE(service_->beginInteractiveSelection(
+        lfs::vis::SelectionShape::Rectangle,
+        lfs::vis::SelectionMode::Replace,
+        {0.0f, 0.0f},
+        0.0f));
+    service_->updateInteractiveSelection({40.0f, 50.0f});
+    service_->refreshInteractivePreview();
+    EXPECT_TRUE(rendering_manager_->isRectPreviewActive());
+    EXPECT_TRUE(rendering_manager_->rectPreviewTracksCursor());
+    service_->cancelInteractiveSelection();
+
+    ASSERT_TRUE(service_->beginInteractiveSelection(
+        lfs::vis::SelectionShape::Lasso,
+        lfs::vis::SelectionMode::Replace,
+        {0.0f, 0.0f},
+        0.0f));
+    service_->updateInteractiveSelection({40.0f, 50.0f});
+    service_->refreshInteractivePreview();
+    EXPECT_TRUE(rendering_manager_->isLassoPreviewActive());
+    EXPECT_TRUE(rendering_manager_->lassoPreviewTracksCursor());
+}
+
 TEST_F(SelectionServiceInteractionsTest, CancelInteractiveSelectionLeavesSelectionAndUndoUntouched) {
     set_initial_selection({1, 0});
     service_->setTestingScreenPositions(make_screen_positions({

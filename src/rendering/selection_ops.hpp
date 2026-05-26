@@ -37,6 +37,18 @@ namespace lfs::rendering {
         const std::vector<bool>& valid_nodes,
         bool replace_mode = false);
 
+    void apply_selection_group_indexed_tensor_mask(
+        const Tensor& visible_selection,
+        const Tensor& visible_indices,
+        const Tensor& existing_mask,
+        Tensor& output_mask,
+        uint8_t group_id,
+        const uint32_t* locked_groups,
+        bool add_mode,
+        const Tensor* transform_indices,
+        const std::vector<bool>& valid_nodes,
+        bool replace_mode = false);
+
     void filter_selection_by_node(
         Tensor& selection,
         const Tensor& transform_indices,

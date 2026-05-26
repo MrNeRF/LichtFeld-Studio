@@ -55,6 +55,10 @@ namespace lfs::rendering {
             return tensor.cuda();
         }
 
+        [[nodiscard]] bool nodeMaskRestrictsSelection(const std::vector<bool>& mask) {
+            return std::any_of(mask.begin(), mask.end(), [](const bool enabled) { return !enabled; });
+        }
+
         __global__ void applySelectionGroupKernel(
             const bool* __restrict__ cumulative,
             const uint8_t* __restrict__ existing,
@@ -139,6 +143,61 @@ namespace lfs::rendering {
                 output[idx] = (selected && !is_other_locked) ? group_id : existing_group;
             } else {
                 output[idx] = (selected && existing_group == group_id) ? 0 : existing_group;
+            }
+        }
+
+        __global__ void applySelectionGroupIndexedMaskKernel(
+            const bool* __restrict__ cumulative,
+            const int* __restrict__ visible_indices,
+            const uint8_t* __restrict__ existing,
+            uint8_t* __restrict__ output,
+            const int visible_n,
+            const int output_n,
+            const uint8_t group_id,
+            const uint32_t* __restrict__ locked_groups,
+            const bool add_mode,
+            const int* __restrict__ node_indices,
+            const bool* __restrict__ valid_nodes,
+            const int num_nodes,
+            const bool replace_mode) {
+            const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+            if (idx >= visible_n) {
+                return;
+            }
+
+            const int output_idx = visible_indices[idx];
+            if (output_idx < 0 || output_idx >= output_n) {
+                return;
+            }
+
+            const uint8_t existing_group = existing ? existing[output_idx] : 0;
+            if (node_indices && valid_nodes) {
+                const int node_idx = node_indices[idx];
+                if (node_idx < 0 || node_idx >= num_nodes || !valid_nodes[node_idx]) {
+                    output[output_idx] = existing_group;
+                    return;
+                }
+            }
+
+            const bool selected = cumulative[idx];
+            const bool is_other_locked = existing_group != 0 &&
+                                         existing_group != group_id &&
+                                         locked_groups &&
+                                         (locked_groups[existing_group / 32] &
+                                          (1u << (existing_group % 32)));
+
+            if (replace_mode) {
+                if (selected) {
+                    output[output_idx] = is_other_locked ? existing_group : group_id;
+                } else if (existing_group == group_id) {
+                    output[output_idx] = 0;
+                } else {
+                    output[output_idx] = existing_group;
+                }
+            } else if (add_mode) {
+                output[output_idx] = (selected && !is_other_locked) ? group_id : existing_group;
+            } else {
+                output[output_idx] = (selected && existing_group == group_id) ? 0 : existing_group;
             }
         }
 
@@ -294,25 +353,25 @@ namespace lfs::rendering {
         }
 
         const int n = checkedToInt(cumulative_selection.size(0), "selection size exceeds int range");
-        std::vector<bool> default_valid_nodes;
-        const std::vector<bool>* effective_valid_nodes = &valid_nodes;
-        if (effective_valid_nodes->empty()) {
-            default_valid_nodes.push_back(true);
-            effective_valid_nodes = &default_valid_nodes;
-        }
-
-        const int num_nodes = checkedToInt(effective_valid_nodes->size(), "node count exceeds int range");
+        const bool restricts_nodes = nodeMaskRestrictsSelection(valid_nodes);
+        const int num_nodes = restricts_nodes
+                                  ? checkedToInt(valid_nodes.size(), "node count exceeds int range")
+                                  : 0;
         const uint8_t* const existing_ptr =
             (existing_mask.is_valid() && existing_mask.numel() == static_cast<std::size_t>(n))
                 ? existing_mask.ptr<uint8_t>()
                 : nullptr;
         const int* const node_indices_ptr =
-            (transform_indices && transform_indices->is_valid() &&
+            (restricts_nodes &&
+             transform_indices && transform_indices->is_valid() &&
              transform_indices->numel() == static_cast<std::size_t>(n))
                 ? transform_indices->ptr<int>()
                 : nullptr;
+        const Tensor valid_nodes_gpu = node_indices_ptr ? uploadBoolMask(valid_nodes) : Tensor{};
+        const bool* const valid_nodes_ptr = valid_nodes_gpu.is_valid()
+                                                ? reinterpret_cast<const bool*>(valid_nodes_gpu.ptr<uint8_t>())
+                                                : nullptr;
 
-        const Tensor valid_nodes_gpu = uploadBoolMask(*effective_valid_nodes);
         const int grid_size = (n + kBlockSize - 1) / kBlockSize;
         applySelectionGroupMaskKernel<<<grid_size, kBlockSize>>>(
             cumulative_selection.ptr<bool>(),
@@ -323,7 +382,71 @@ namespace lfs::rendering {
             locked_groups,
             add_mode,
             node_indices_ptr,
-            reinterpret_cast<const bool*>(valid_nodes_gpu.ptr<uint8_t>()),
+            valid_nodes_ptr,
+            num_nodes,
+            replace_mode);
+    }
+
+    void apply_selection_group_indexed_tensor_mask(
+        const Tensor& visible_selection,
+        const Tensor& visible_indices,
+        const Tensor& existing_mask,
+        Tensor& output_mask,
+        const uint8_t group_id,
+        const uint32_t* const locked_groups,
+        const bool add_mode,
+        const Tensor* const transform_indices,
+        const std::vector<bool>& valid_nodes,
+        const bool replace_mode) {
+        if (!visible_selection.is_valid() || !visible_indices.is_valid() ||
+            !output_mask.is_valid() || visible_selection.size(0) == 0) {
+            return;
+        }
+
+        const int visible_n = checkedToInt(visible_selection.size(0), "selection size exceeds int range");
+        const int output_n = checkedToInt(output_mask.size(0), "selection output size exceeds int range");
+        if (visible_indices.numel() != static_cast<std::size_t>(visible_n)) {
+            return;
+        }
+
+        if (existing_mask.is_valid() && existing_mask.numel() == static_cast<std::size_t>(output_n)) {
+            output_mask.copy_from(existing_mask);
+        } else {
+            output_mask.zero_();
+        }
+
+        const bool restricts_nodes = nodeMaskRestrictsSelection(valid_nodes);
+        const int num_nodes = restricts_nodes
+                                  ? checkedToInt(valid_nodes.size(), "node count exceeds int range")
+                                  : 0;
+        const int* const node_indices_ptr =
+            (restricts_nodes &&
+             transform_indices && transform_indices->is_valid() &&
+             transform_indices->numel() == static_cast<std::size_t>(visible_n))
+                ? transform_indices->ptr<int>()
+                : nullptr;
+        const Tensor valid_nodes_gpu = node_indices_ptr ? uploadBoolMask(valid_nodes) : Tensor{};
+        const bool* const valid_nodes_ptr = valid_nodes_gpu.is_valid()
+                                                ? reinterpret_cast<const bool*>(valid_nodes_gpu.ptr<uint8_t>())
+                                                : nullptr;
+        const uint8_t* const existing_ptr =
+            (existing_mask.is_valid() && existing_mask.numel() == static_cast<std::size_t>(output_n))
+                ? existing_mask.ptr<uint8_t>()
+                : nullptr;
+
+        const int grid_size = (visible_n + kBlockSize - 1) / kBlockSize;
+        applySelectionGroupIndexedMaskKernel<<<grid_size, kBlockSize>>>(
+            visible_selection.ptr<bool>(),
+            visible_indices.ptr<int>(),
+            existing_ptr,
+            output_mask.ptr<uint8_t>(),
+            visible_n,
+            output_n,
+            group_id,
+            locked_groups,
+            add_mode,
+            node_indices_ptr,
+            valid_nodes_ptr,
             num_nodes,
             replace_mode);
     }
@@ -352,6 +475,9 @@ namespace lfs::rendering {
         const Tensor& transform_indices,
         const std::vector<bool>& valid_nodes) {
         if (!selection.is_valid() || !transform_indices.is_valid() || valid_nodes.empty()) {
+            return;
+        }
+        if (!nodeMaskRestrictsSelection(valid_nodes)) {
             return;
         }
         const int n = checkedToInt(selection.size(0), "selection size exceeds int range");

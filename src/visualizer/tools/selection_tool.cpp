@@ -269,13 +269,9 @@ namespace lfs::vis::tools {
         const ImVec2 mouse_imv = ImGui::GetMousePos();
         const glm::vec2 mp{mouse_imv.x, mouse_imv.y};
         const auto& t = theme();
-        const auto sel_border = toOverlay(t.palette.primary, 0.85f);
 
-        // Cursor circle / cross is drawn by GuiManager in a late-stage pass so the
-        // sample-to-present path is as short as possible and the ring tracks the mouse
-        // without a visible frame trail. Labels stay here; their offset from the cursor
-        // makes any small drift much less perceptible than the ring itself.
-        (void)sel_border;
+        // Cursor outlines are drawn by GuiManager in a late-stage Vulkan overlay pass so
+        // their sample-to-present path stays as short as possible.
 
         const SDL_Keymod kmods = SDL_GetModState();
         const char* op_suffix = "";

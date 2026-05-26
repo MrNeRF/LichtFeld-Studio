@@ -151,6 +151,9 @@ namespace lfs::vis {
             int dragged_polygon_vertex = -1;
             bool preview_dirty = false;
             core::Tensor working_selection;
+            core::Tensor live_delta_selection;
+            std::vector<bool> live_preview_node_mask;
+            size_t preview_brush_point_count = 0;
         };
 
         [[nodiscard]] SelectionResult commitSelection(const core::Tensor& selection, SelectionMode mode,
@@ -186,6 +189,7 @@ namespace lfs::vis {
                                                                                    const SelectionFilterState& filters);
         [[nodiscard]] bool buildSelectionMaskForInteractiveSession(core::Tensor& selection_out,
                                                                    bool include_polygon_cursor = false);
+        [[nodiscard]] bool buildInteractiveBrushPreviewIncremental();
         [[nodiscard]] bool buildBrushSelection(const std::vector<glm::vec2>& points, float radius,
                                                core::Tensor& selection_out) const;
         [[nodiscard]] bool buildRectangleSelection(glm::vec2 start, glm::vec2 end,

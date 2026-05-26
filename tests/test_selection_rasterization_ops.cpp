@@ -93,6 +93,67 @@ namespace {
         return output.cpu().to_vector_uint8();
     }
 
+    std::vector<uint8_t> run_indexed_group_apply(const std::vector<uint8_t>& selection_values,
+                                                 const std::vector<int>& visible_indices,
+                                                 const std::vector<uint8_t>& existing_values,
+                                                 const uint8_t group_id,
+                                                 const std::vector<uint8_t>& locked_groups = {},
+                                                 const bool add_mode = true,
+                                                 const bool replace_mode = false,
+                                                 const std::vector<int>* transform_indices = nullptr,
+                                                 const std::vector<bool>& valid_nodes = {}) {
+        if (selection_values.size() != visible_indices.size()) {
+            ADD_FAILURE() << "Selection and visible index sizes differ";
+            return {};
+        }
+
+        const auto selection = make_bool_mask(selection_values);
+        const auto indices = make_int32_values(visible_indices);
+        const auto existing = make_uint8_mask(existing_values);
+        auto output = Tensor::empty({existing_values.size()}, Device::CUDA, DataType::UInt8);
+
+        std::array<uint32_t, LOCKED_GROUPS_SIZE> locked_bitmask{};
+        for (const auto locked_group : locked_groups) {
+            locked_bitmask[locked_group / 32] |= (1u << (locked_group % 32));
+        }
+
+        uint32_t* d_locked = nullptr;
+        if (cudaMalloc(&d_locked, sizeof(locked_bitmask)) != cudaSuccess) {
+            ADD_FAILURE() << "cudaMalloc failed for locked group mask";
+            return {};
+        }
+        if (cudaMemcpy(d_locked, locked_bitmask.data(), sizeof(locked_bitmask), cudaMemcpyHostToDevice) != cudaSuccess) {
+            cudaFree(d_locked);
+            ADD_FAILURE() << "cudaMemcpy failed for locked group mask";
+            return {};
+        }
+
+        Tensor transform_indices_tensor;
+        const Tensor* transform_indices_ptr = nullptr;
+        if (transform_indices) {
+            transform_indices_tensor = make_int32_values(*transform_indices);
+            transform_indices_ptr = &transform_indices_tensor;
+        }
+
+        lfs::rendering::apply_selection_group_indexed_tensor_mask(
+            selection,
+            indices,
+            existing,
+            output,
+            group_id,
+            d_locked,
+            add_mode,
+            transform_indices_ptr,
+            valid_nodes,
+            replace_mode);
+        if (cudaFree(d_locked) != cudaSuccess) {
+            ADD_FAILURE() << "cudaFree failed for locked group mask";
+            return {};
+        }
+
+        return output.cpu().to_vector_uint8();
+    }
+
 } // namespace
 
 class SelectionRasterizationOpsTest : public ::testing::Test {
@@ -146,6 +207,37 @@ TEST_F(SelectionRasterizationOpsTest, RemoveRespectsNodeMask) {
         valid_nodes);
 
     EXPECT_EQ(result, (std::vector<uint8_t>{0, 1, 0, 1}));
+}
+
+TEST_F(SelectionRasterizationOpsTest, IndexedReplacePreservesNonVisibleActiveGroup) {
+    const auto result = run_indexed_group_apply(
+        {0, 1, 0},
+        {1, 3, 5},
+        {1, 1, 2, 0, 1, 1},
+        1,
+        {},
+        true,
+        true);
+
+    EXPECT_EQ(result, (std::vector<uint8_t>{1, 0, 2, 1, 1, 0}));
+}
+
+TEST_F(SelectionRasterizationOpsTest, IndexedReplaceRespectsNodeMask) {
+    const std::vector<int> transform_indices = {0, 1, 0, 1};
+    const std::vector<bool> valid_nodes = {true, false};
+
+    const auto result = run_indexed_group_apply(
+        {0, 0, 1, 0},
+        {0, 1, 2, 3},
+        {1, 1, 1, 2},
+        1,
+        {},
+        true,
+        true,
+        &transform_indices,
+        valid_nodes);
+
+    EXPECT_EQ(result, (std::vector<uint8_t>{0, 1, 1, 2}));
 }
 
 TEST_F(SelectionRasterizationOpsTest, CropFilterKeepsOnlyPointsInsideCropBox) {
