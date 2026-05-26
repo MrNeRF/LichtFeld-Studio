@@ -154,7 +154,6 @@ def _make_asset():
             "image_root": "images",
         },
         "geometry_metadata": {},
-        "video_metadata": {},
         "project_id": "p1",
         "scene_id": "s1",
         "created_at": "2026-02-15T21:52:45.881056",

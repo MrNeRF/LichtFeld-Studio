@@ -1305,7 +1305,6 @@
     "type.asset": "资产",
     "type.project": "项目",
     "type.scene": "场景",
-    "type.video": "视频",
     "training.iterations": "迭代",
     "training.provenance": "训练来源",
     "training.sh_degree": "SH阶数",

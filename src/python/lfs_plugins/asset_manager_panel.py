@@ -69,7 +69,7 @@ __lfs_panel_ids__ = ["lfs.asset_manager"]
 
 
 class AssetManagerPanel(Panel):
-    """Floating Asset Manager window for browsing splats, videos, and exports."""
+    """Floating Asset Manager window for browsing splats and exports."""
 
     SORT_MODES = ("name", "size", "type")
     LOADABLE_TYPES = {"ply_3dgs", "ply_pcl", "rad", "sog", "spz", "checkpoint", "dataset", "mesh", "usd"}
@@ -1068,8 +1068,6 @@ class AssetManagerPanel(Panel):
             "sog": "asset-thumb-splat",
             "spz": "asset-thumb-splat",
             "checkpoint": "asset-thumb-checkpoint",
-            "mp4": "asset-thumb-video",
-            "mov": "asset-thumb-video",
             "dataset": "asset-thumb-dataset",
         }
         thumb_class = thumb_classes.get(asset_type, "asset-thumb-default")
@@ -1091,8 +1089,6 @@ class AssetManagerPanel(Panel):
             "dataset": tr("asset_manager.type.dataset"),
             "mesh": tr("asset_manager.type.mesh"),
             "usd": tr("asset_manager.type.usd"),
-            "mp4": tr("asset_manager.type.video"),
-            "mov": tr("asset_manager.type.video"),
         }
         type_label = type_labels.get(asset_type, asset_type.upper() if asset_type else "")
 
@@ -1524,8 +1520,6 @@ class AssetManagerPanel(Panel):
             "dataset": tr("asset_manager.type.dataset"),
             "mesh": tr("asset_manager.type.mesh"),
             "usd": tr("asset_manager.type.usd"),
-            "mp4": tr("asset_manager.type.video"),
-            "mov": tr("asset_manager.type.video"),
         }
         return type_labels.get(asset_type, asset_type.upper() if asset_type else "")
 

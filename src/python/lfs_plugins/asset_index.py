@@ -223,13 +223,13 @@ class Scene:
 
 @dataclass
 class Asset:
-    """An asset file (dataset, checkpoint, video, etc.)."""
+    """An asset file (dataset, checkpoint, etc.)."""
 
     id: str
     project_id: Optional[str] = None
     scene_id: Optional[str] = None
     name: str = ""
-    type: str = ""  # dataset, checkpoint, video, image, mesh, etc.
+    type: str = ""  # dataset, checkpoint, image, mesh, etc.
     role: str = ""  # source, output, intermediate, thumbnail, etc.
     path: str = ""  # Relative path within project
     absolute_path: str = ""  # Absolute path on filesystem
@@ -749,7 +749,7 @@ class AssetIndex:
         Args:
             project_id: Parent project ID
             name: Asset name
-            type: Asset type (dataset, checkpoint, video, etc.)
+            type: Asset type (dataset, checkpoint, etc.)
             path: Relative path within project
             absolute_path: Absolute path on filesystem
             scene_id: Optional parent scene ID

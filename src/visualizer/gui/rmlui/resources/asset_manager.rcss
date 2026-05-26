@@ -477,10 +477,6 @@
     background-color: #30443b;
 }
 
-.asset-thumb-video {
-    background-color: #37384a;
-}
-
 .asset-thumb-checkpoint {
     background-color: #3d4430;
 }

@@ -28,10 +28,6 @@ ASSET_TYPE_COLORS: dict[str, str] = {
     "checkpoint": "#5CB85C",
     # Datasets - Orange
     "dataset": "#F0AD4E",
-    # Videos - Purple
-    "video": "#9B59B6",
-    "mp4": "#9B59B6",
-    "mov": "#9B59B6",
     # USD files - Red
     "usd": "#D9534F",
     "usdz": "#D9534F",
@@ -282,7 +278,7 @@ class AssetThumbnails:
         The image is saved to the thumbnails directory.
 
         Args:
-            asset_type: Type of asset (e.g., "ply", "checkpoint", "mp4")
+            asset_type: Type of asset (e.g., "ply", "checkpoint")
             asset_id: Unique identifier for the asset
 
         Returns:
@@ -598,7 +594,7 @@ class AssetThumbnails:
         rather than a specific asset.
 
         Args:
-            asset_type: Type of asset (e.g., "ply", "checkpoint", "mp4")
+            asset_type: Type of asset (e.g., "ply", "checkpoint")
 
         Returns:
             Path to the type thumbnail file
