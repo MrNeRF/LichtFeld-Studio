@@ -228,15 +228,15 @@ namespace lfs::vis {
             if (current >= required) {
                 return current;
             }
-            std::size_t capacity = std::max({current, minimum, std::size_t{4}});
-            while (capacity < required) {
-                const std::size_t next = capacity + capacity / 2;
-                if (next <= capacity) {
-                    return required;
-                }
-                capacity = next;
+            const std::size_t target = std::max({required, minimum, std::size_t{4}});
+            const std::size_t slack =
+                target >= (1u << 20)
+                    ? std::max(target / 4, static_cast<std::size_t>(8u << 20))
+                    : std::max(target / 2, static_cast<std::size_t>(16u << 10));
+            if (target > std::numeric_limits<std::size_t>::max() - slack) {
+                return alignUp(target, 4);
             }
-            return alignUp(capacity, 4);
+            return alignUp(target + slack, 4);
         }
 
         [[nodiscard]] _VulkanBuffer makeRegionView(const VulkanContext::ExternalBuffer& buffer,
@@ -2732,9 +2732,7 @@ namespace lfs::vis {
         grow_fixed(SelectionQueryModelTransforms);
         grow_dynamic(SelectionQueryPolygonVertices, 8192u * 2u * sizeof(float));
         const std::size_t viewport_polygon_mask_bytes =
-            polygon_mode
-                ? alignUp(static_cast<std::size_t>(size.x) * static_cast<std::size_t>(size.y), 4u)
-                : polygon_mask_region_bytes;
+            alignUp(static_cast<std::size_t>(size.x) * static_cast<std::size_t>(size.y), 4u);
         grow_dynamic(SelectionQueryPolygonMask, viewport_polygon_mask_bytes);
         std::array<std::size_t, kSelectionQueryRegionCount> region_offset{};
         const std::size_t total_bytes = layoutRegions(region_capacity_bytes, region_offset, kRegionAlignment);
@@ -2810,9 +2808,9 @@ namespace lfs::vis {
             return std::unexpected("VkSplat selection output tensor is not Vulkan external storage");
         }
         const auto output_view = makeBorrowedBufferView(output_storage->vkBuffer(),
-                                                       output_storage->bytes(),
-                                                       output_tensor_region_bytes,
-                                                       output_storage->vkOffset());
+                                                        output_storage->bytes(),
+                                                        output_tensor_region_bytes,
+                                                        output_storage->vkOffset());
 
         {
             LOG_TIMER("VksplatViewportRenderer::buildSelectionMask.staging");
