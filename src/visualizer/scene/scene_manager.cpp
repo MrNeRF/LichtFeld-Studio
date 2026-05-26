@@ -23,6 +23,7 @@
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "rendering/vulkan_external_tensor.hpp"
 #include "training/checkpoint.hpp"
 #include "training/components/ppisp.hpp"
 #include "training/components/ppisp_controller.hpp"
@@ -84,6 +85,37 @@ namespace lfs::vis {
                 }
             }
             return nodes;
+        }
+
+        [[nodiscard]] lfs::io::SplatTensorAllocator makeViewerSplatTensorAllocator() {
+            auto* const window_manager = services().windowOrNull();
+            auto* const context = window_manager ? window_manager->getVulkanContext() : nullptr;
+            if (!context || !context->externalMemoryInteropEnabled()) {
+                return {};
+            }
+
+            return [context](lfs::core::TensorShape shape,
+                             const size_t capacity,
+                             const lfs::core::DataType dtype,
+                             const std::string_view name) -> lfs::core::Tensor {
+                const std::string debug_name{name};
+                auto tensor = makeVulkanExternalTensor(
+                    *context,
+                    std::move(shape),
+                    dtype,
+                    capacity,
+                    debug_name.c_str(),
+                    nullptr,
+                    false);
+                if (!tensor) {
+                    throw lfs::core::TensorError(std::format(
+                        "Vulkan-external loaded splat tensor allocation failed for '{}': {}",
+                        debug_name,
+                        tensor.error()));
+                }
+                tensor->set_name(debug_name);
+                return std::move(*tensor);
+            };
         }
 
         [[nodiscard]] bool hasActiveSelectionFilter(const RenderingManager* const rendering_manager) {
@@ -470,7 +502,8 @@ namespace lfs::vis {
                 .resize_factor = -1,
                 .max_width = 0,
                 .images_folder = "images",
-                .validate_only = false};
+                .validate_only = false,
+                .splat_tensor_allocator = makeViewerSplatTensorAllocator()};
 
             LOG_TRACE("Loading splat file with loader");
             auto load_result = loader->load(path, options);
@@ -675,7 +708,8 @@ namespace lfs::vis {
                 .resize_factor = -1,
                 .max_width = 0,
                 .images_folder = "images",
-                .validate_only = false};
+                .validate_only = false,
+                .splat_tensor_allocator = makeViewerSplatTensorAllocator()};
 
             auto load_result = loader->load(path, options);
             if (!load_result) {

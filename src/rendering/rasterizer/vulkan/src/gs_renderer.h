@@ -90,6 +90,11 @@ public:
     void tagDeferredReadbacks(VkSemaphore semaphore, std::uint64_t value);
     [[nodiscard]] std::optional<PrimitiveVisibilityStats> pollDeferredPrimitiveVisibilityStats();
     [[nodiscard]] size_t lastObservedNumIndices() const { return last_observed_num_indices_; }
+    [[nodiscard]] size_t updateNumIndicesEstimate(uint32_t grid_width,
+                                                  uint32_t grid_height,
+                                                  size_t num_splats);
+    [[nodiscard]] bool shrinkSortBuffersForCapacity(VulkanGSPipelineBuffers& buffers,
+                                                    size_t target_capacity);
 
     void executeProjectionForward(const VulkanGSRendererUniforms& uniforms,
                                   VulkanGSPipelineBuffers& buffers,

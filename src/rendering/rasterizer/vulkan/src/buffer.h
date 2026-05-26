@@ -123,14 +123,14 @@ struct VulkanGSPipelineBuffers {
     Buffer<uint32_t> visible_sort_dispatch_args; // VkDispatchIndirectCommand for visible primitive radix sort
 
     // tiles
-    Buffer<int32_t> index_buffer_offset; // N
-    Buffer<sortingKey_t> sorting_keys_1; // NInt [no_shrink]
-    Buffer<sortingKey_t> sorting_keys_2; // NInt [no_shrink]
-    Buffer<int32_t> sorting_gauss_idx_1; // NInt [no_shrink]
-    Buffer<int32_t> sorting_gauss_idx_2; // NInt [no_shrink]
-    Buffer<uint32_t> tile_sort_count;    // (1,) actual tile instance count
+    Buffer<int32_t> index_buffer_offset;      // N
+    Buffer<sortingKey_t> sorting_keys_1;      // NInt [no_shrink]
+    Buffer<sortingKey_t> sorting_keys_2;      // NInt [no_shrink]
+    Buffer<int32_t> sorting_gauss_idx_1;      // NInt [no_shrink]
+    Buffer<int32_t> sorting_gauss_idx_2;      // NInt [no_shrink]
+    Buffer<uint32_t> tile_sort_count;         // (1,) actual tile instance count
     Buffer<uint32_t> tile_sort_dispatch_args; // VkDispatchIndirectCommand for tile-instance radix sort
-    Buffer<int32_t> tile_ranges;         // (Gh*Gw, 2)
+    Buffer<int32_t> tile_ranges;              // (Gh*Gw, 2)
     bool is_unsorted_1 = true;
     Buffer<sortingKey_t>& unsorted_keys() { return is_unsorted_1 ? sorting_keys_1 : sorting_keys_2; }
     Buffer<sortingKey_t>& sorted_keys() { return is_unsorted_1 ? sorting_keys_2 : sorting_keys_1; }
@@ -152,6 +152,9 @@ struct VulkanGSPipelineBuffers {
     // Driven by the deferred (1-frame-stale) num_indices readback so generate_keys
     // can size buffers without a synchronous cumsum readback.
     size_t num_indices_high_water = 0;
+
+    [[nodiscard]] size_t getTotalOwnedAllocSize() const;
+    [[nodiscard]] std::map<std::string, size_t> getOwnedVramBreakdown() const;
 
     template <typename T>
     static void reorderSH(Buffer<T>& coeffs);

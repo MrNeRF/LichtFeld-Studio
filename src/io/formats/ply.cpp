@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "ply.hpp"
+#include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/tensor.hpp"
@@ -30,6 +31,8 @@
 // TBB includes
 #include <tbb/parallel_for.h>
 
+#include <cuda_runtime.h>
+
 // Platform-specific includes
 #ifdef _WIN32
 #include <io.h>
@@ -53,6 +56,7 @@ namespace lfs::io {
     using lfs::core::Device;
     using lfs::core::SplatData;
     using lfs::core::Tensor;
+    using lfs::core::TensorShape;
 
     namespace ply_constants {
         constexpr int MAX_DC_COMPONENTS = 48;
@@ -412,10 +416,10 @@ namespace lfs::io {
             __cpuid(cpuInfo, 7);
             has_avx2 = (cpuInfo[1] & (1 << 5)) != 0;
 #elif defined(__GNUC__) || defined(__clang__)
-            __builtin_cpu_init();
-            has_avx2 = __builtin_cpu_supports("avx2");
+                __builtin_cpu_init();
+                has_avx2 = __builtin_cpu_supports("avx2");
 #else
-            has_avx2 = false;
+                has_avx2 = false;
 #endif
         });
 
@@ -537,6 +541,101 @@ namespace lfs::io {
                           });
     }
 
+    void extract_sh_coefficients_to_swizzled_host(const char* __restrict__ vertex_data,
+                                                  const FastPropertyLayout& layout,
+                                                  const size_t* __restrict__ coeff_offsets,
+                                                  const int coeff_count,
+                                                  const int channels,
+                                                  const std::uint32_t layout_coeffs_rest,
+                                                  float* __restrict__ output) {
+        if (coeff_count == 0 || layout_coeffs_rest == 0)
+            return;
+
+        const size_t count = layout.vertex_count;
+        const size_t stride = layout.vertex_stride;
+        const int B = coeff_count / channels;
+        const auto max_component_count =
+            static_cast<std::uint32_t>(layout_coeffs_rest * static_cast<std::uint32_t>(channels));
+
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, count, ply_constants::BLOCK_SIZE_SMALL),
+                          [=](const tbb::blocked_range<size_t>& range) {
+                              for (size_t i = range.begin(); i < range.end(); ++i) {
+                                  const size_t base = i * stride;
+                                  for (int j = 0; j < coeff_count; ++j) {
+                                      const size_t offset = coeff_offsets[j];
+                                      if (offset == SIZE_MAX) {
+                                          continue;
+                                      }
+
+                                      const int channel = j / B;
+                                      const int b = j % B;
+                                      const auto canonical_component =
+                                          static_cast<std::uint32_t>(b * channels + channel);
+                                      if (canonical_component >= max_component_count) {
+                                          continue;
+                                      }
+
+                                      const auto slot = canonical_component / 4u;
+                                      const auto component = canonical_component % 4u;
+                                      const size_t dst_offset =
+                                          static_cast<size_t>(lfs::core::sh_swizzled_index(
+                                              static_cast<std::uint32_t>(i),
+                                              slot,
+                                              layout_coeffs_rest)) *
+                                              4u +
+                                          component;
+                                      output[dst_offset] =
+                                          *reinterpret_cast<const float*>(vertex_data + base + offset);
+                                  }
+                              }
+                          });
+    }
+
+    [[nodiscard]] Tensor tensor_from_host_floats(std::span<const float> data,
+                                                 TensorShape shape,
+                                                 const LoadOptions& options,
+                                                 std::string_view name,
+                                                 size_t capacity = 0) {
+        if (shape.elements() != data.size()) {
+            return {};
+        }
+
+        Tensor tensor;
+        if (data.empty()) {
+            tensor = Tensor::zeros(std::move(shape), Device::CUDA, DataType::Float32);
+        } else if (options.splat_tensor_allocator) {
+            const size_t row_capacity = capacity != 0
+                                            ? capacity
+                                            : (shape.rank() > 0 ? shape[0] : 0);
+            tensor = options.splat_tensor_allocator(shape, row_capacity, DataType::Float32, name);
+        } else {
+            tensor = Tensor::empty(shape, Device::CUDA, DataType::Float32);
+        }
+        tensor.set_name(std::string{name});
+
+        if (!tensor.is_valid() || data.empty()) {
+            return tensor;
+        }
+
+        if (tensor.device() == Device::CUDA) {
+            const cudaError_t status = cudaMemcpy(
+                tensor.data_ptr(),
+                data.data(),
+                data.size_bytes(),
+                cudaMemcpyHostToDevice);
+            if (status != cudaSuccess) {
+                throw std::runtime_error(std::format(
+                    "CUDA upload failed for '{}': {} ({})",
+                    name,
+                    cudaGetErrorName(status),
+                    cudaGetErrorString(status)));
+            }
+        } else {
+            std::memcpy(tensor.data_ptr(), data.data(), data.size_bytes());
+        }
+        return tensor;
+    }
+
     // Single property extraction to host memory
     void extract_property_to_host(const char* vertex_data, const FastPropertyLayout& layout,
                                   size_t property_offset, float* output) {
@@ -556,7 +655,7 @@ namespace lfs::io {
 
     // Main function - returns SplatData
     [[nodiscard]] std::expected<SplatData, std::string>
-    load_ply(const std::filesystem::path& filepath) {
+    load_ply(const std::filesystem::path& filepath, const LoadOptions& options) {
         try {
             LOG_TIMER("PLY File Loading");
             auto start_time = std::chrono::high_resolution_clock::now();
@@ -618,11 +717,11 @@ namespace lfs::io {
 
             // Determine SH dimensions
             int sh0_dim1 = 1, sh0_dim2 = ply_constants::COLOR_CHANNELS;
-            int shN_dim1 = 0, shN_dim2 = ply_constants::COLOR_CHANNELS;
+            int shN_dim1 = 0;
 
             // Extract SH coefficients
             std::vector<float> host_sh0;
-            std::vector<float> host_shN;
+            std::vector<float> host_shN_swizzled;
 
             if (layout.dc_count > 0 && layout.dc_count % ply_constants::COLOR_CHANNELS == 0) {
                 int B0 = layout.dc_count / ply_constants::COLOR_CHANNELS;
@@ -637,9 +736,18 @@ namespace lfs::io {
             if (layout.rest_count > 0 && layout.rest_count % ply_constants::COLOR_CHANNELS == 0) {
                 int Bn = layout.rest_count / ply_constants::COLOR_CHANNELS;
                 shN_dim1 = Bn;
-                host_shN.resize(N * Bn * ply_constants::COLOR_CHANNELS);
-                extract_sh_coefficients_to_host(vertex_data, layout, layout.rest_offsets,
-                                                layout.rest_count, ply_constants::COLOR_CHANNELS, host_shN.data());
+                const auto layout_rest =
+                    lfs::core::sh_rest_coefficients_for_degree(
+                        static_cast<int>(std::sqrt(Bn + ply_constants::SH_DEGREE_OFFSET)) -
+                        ply_constants::SH_DEGREE_OFFSET);
+                host_shN_swizzled.resize(lfs::core::sh_swizzled_float_count(N, layout_rest), 0.0f);
+                extract_sh_coefficients_to_swizzled_host(vertex_data,
+                                                         layout,
+                                                         layout.rest_offsets,
+                                                         layout.rest_count,
+                                                         ply_constants::COLOR_CHANNELS,
+                                                         layout_rest,
+                                                         host_shN_swizzled.data());
             }
 
             // Extract other properties
@@ -693,13 +801,21 @@ namespace lfs::io {
 
             LOG_DEBUG("Creating Tensor objects and uploading to CUDA");
 
-            // Create Tensors directly from vectors (uploads to CUDA)
-            Tensor means = Tensor::from_vector(host_means, {N, 3}, Device::CUDA);
-            Tensor sh0 = Tensor::from_vector(host_sh0, {N, static_cast<size_t>(sh0_dim1), static_cast<size_t>(sh0_dim2)}, Device::CUDA);
-            Tensor shN = Tensor::from_vector(host_shN, {N, static_cast<size_t>(shN_dim1), static_cast<size_t>(shN_dim2)}, Device::CUDA);
-            Tensor scaling = Tensor::from_vector(host_scaling, {N, 3}, Device::CUDA);
-            Tensor rotation = Tensor::from_vector(host_rotation, {N, 4}, Device::CUDA);
-            Tensor opacity = Tensor::from_vector(host_opacity, {N, 1}, Device::CUDA);
+            Tensor means = tensor_from_host_floats(host_means, {N, 3}, options, "SplatData.means");
+            Tensor sh0 = tensor_from_host_floats(
+                host_sh0,
+                {N, static_cast<size_t>(sh0_dim1), static_cast<size_t>(sh0_dim2)},
+                options,
+                "SplatData.sh0");
+            Tensor shN = tensor_from_host_floats(
+                host_shN_swizzled,
+                {host_shN_swizzled.size()},
+                options,
+                "SplatData.shN",
+                host_shN_swizzled.size());
+            Tensor scaling = tensor_from_host_floats(host_scaling, {N, 3}, options, "SplatData.scaling");
+            Tensor rotation = tensor_from_host_floats(host_rotation, {N, 4}, options, "SplatData.rotation");
+            Tensor opacity = tensor_from_host_floats(host_opacity, {N, 1}, options, "SplatData.opacity");
 
             // Calculate SH degree
             int sh_degree = static_cast<int>(std::sqrt(shN_dim1 + ply_constants::SH_DEGREE_OFFSET)) - ply_constants::SH_DEGREE_OFFSET;
@@ -713,7 +829,8 @@ namespace lfs::io {
                 std::move(scaling),
                 std::move(rotation),
                 std::move(opacity),
-                ply_constants::SCENE_SCALE_FACTOR);
+                ply_constants::SCENE_SCALE_FACTOR,
+                SplatData::ShNLayout::Swizzled);
 
             auto end_time = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);

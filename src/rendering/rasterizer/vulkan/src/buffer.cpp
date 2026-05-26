@@ -1,5 +1,107 @@
 #include "gs_renderer.h"
 
+size_t VulkanGSPipelineBuffers::getTotalOwnedAllocSize() const {
+    size_t total = 0;
+#define ADD_OWNED(name)                                           \
+    do {                                                          \
+        if (this->name.deviceBuffer.allocation != VK_NULL_HANDLE) \
+            total += this->name.deviceBuffer.allocSize;           \
+    } while (false)
+
+    ADD_OWNED(xyz_ws);
+    ADD_OWNED(sh_coeffs);
+    ADD_OWNED(rotations);
+    ADD_OWNED(scales_opacs);
+    ADD_OWNED(sh0);
+    ADD_OWNED(shN);
+    ADD_OWNED(scaling_raw);
+    ADD_OWNED(opacity_raw);
+    ADD_OWNED(tiles_touched);
+    ADD_OWNED(rect_tile_space);
+    ADD_OWNED(radii);
+    ADD_OWNED(xy_vs);
+    ADD_OWNED(depths);
+    ADD_OWNED(inv_cov_vs_opacity);
+    ADD_OWNED(rgb);
+    ADD_OWNED(overlay_flags);
+    ADD_OWNED(primitive_depth_keys);
+    ADD_OWNED(primitive_sort_indices);
+    ADD_OWNED(tiles_touched_depth_ordered);
+    ADD_OWNED(visible_flags);
+    ADD_OWNED(visible_prefix);
+    ADD_OWNED(visible_count);
+    ADD_OWNED(visible_sort_dispatch_args);
+    ADD_OWNED(index_buffer_offset);
+    ADD_OWNED(sorting_keys_1);
+    ADD_OWNED(sorting_keys_2);
+    ADD_OWNED(sorting_gauss_idx_1);
+    ADD_OWNED(sorting_gauss_idx_2);
+    ADD_OWNED(tile_sort_count);
+    ADD_OWNED(tile_sort_dispatch_args);
+    ADD_OWNED(tile_ranges);
+    ADD_OWNED(pixel_state);
+    ADD_OWNED(pixel_depth);
+    ADD_OWNED(n_contributors);
+    ADD_OWNED(_cumsum_blockSums);
+    ADD_OWNED(_cumsum_blockSums2);
+    ADD_OWNED(_sorting_histogram);
+    ADD_OWNED(_sorting_histogram_cumsum);
+
+#undef ADD_OWNED
+    return total;
+}
+
+std::map<std::string, size_t> VulkanGSPipelineBuffers::getOwnedVramBreakdown() const {
+    std::map<std::string, size_t> breakdown;
+#define ADD_OWNED(name)                                            \
+    do {                                                           \
+        if (this->name.deviceBuffer.allocation != VK_NULL_HANDLE)  \
+            breakdown[#name] += this->name.deviceBuffer.allocSize; \
+    } while (false)
+
+    ADD_OWNED(xyz_ws);
+    ADD_OWNED(sh_coeffs);
+    ADD_OWNED(rotations);
+    ADD_OWNED(scales_opacs);
+    ADD_OWNED(sh0);
+    ADD_OWNED(shN);
+    ADD_OWNED(scaling_raw);
+    ADD_OWNED(opacity_raw);
+    ADD_OWNED(tiles_touched);
+    ADD_OWNED(rect_tile_space);
+    ADD_OWNED(radii);
+    ADD_OWNED(xy_vs);
+    ADD_OWNED(depths);
+    ADD_OWNED(inv_cov_vs_opacity);
+    ADD_OWNED(rgb);
+    ADD_OWNED(overlay_flags);
+    ADD_OWNED(primitive_depth_keys);
+    ADD_OWNED(primitive_sort_indices);
+    ADD_OWNED(tiles_touched_depth_ordered);
+    ADD_OWNED(visible_flags);
+    ADD_OWNED(visible_prefix);
+    ADD_OWNED(visible_count);
+    ADD_OWNED(visible_sort_dispatch_args);
+    ADD_OWNED(index_buffer_offset);
+    ADD_OWNED(sorting_keys_1);
+    ADD_OWNED(sorting_keys_2);
+    ADD_OWNED(sorting_gauss_idx_1);
+    ADD_OWNED(sorting_gauss_idx_2);
+    ADD_OWNED(tile_sort_count);
+    ADD_OWNED(tile_sort_dispatch_args);
+    ADD_OWNED(tile_ranges);
+    ADD_OWNED(pixel_state);
+    ADD_OWNED(pixel_depth);
+    ADD_OWNED(n_contributors);
+    ADD_OWNED(_cumsum_blockSums);
+    ADD_OWNED(_cumsum_blockSums2);
+    ADD_OWNED(_sorting_histogram);
+    ADD_OWNED(_sorting_histogram_cumsum);
+
+#undef ADD_OWNED
+    return breakdown;
+}
+
 void VulkanGSPipeline::allocStagingBuffer(size_t size) {
     if (stager.buffer != VK_NULL_HANDLE && stager.allocSize >= size)
         return;

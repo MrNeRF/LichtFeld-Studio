@@ -45,6 +45,7 @@ namespace lfs::vis {
         lfs::core::DataType dtype,
         std::size_t capacity,
         const char* debug_name,
-        cudaStream_t stream = nullptr);
+        cudaStream_t stream = nullptr,
+        bool zero_fill = true);
 
 } // namespace lfs::vis

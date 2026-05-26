@@ -138,6 +138,7 @@ namespace lfs::vis {
             const lfs::core::SplatData& splat_data,
             std::size_t ring_slot,
             bool force_upload,
+            int upload_sh_degree,
             bool synchronize_upload = false);
         struct OverlayBindingViews {
             _VulkanBuffer selection_mask{};
@@ -246,6 +247,7 @@ namespace lfs::vis {
         void plugRingInputs(std::size_t ring_slot, std::size_t num_splats, bool reset_cached_raster_state);
         void aliasSortScratchToInputSlot(std::size_t ring_slot);
         void releaseInputSlot(VulkanContext& context, std::size_t ring_slot);
+        void logVramBreakdownIfChanged(std::string_view reason);
 
         VulkanContext* context_ = nullptr;
         bool initialized_ = false;
@@ -287,6 +289,8 @@ namespace lfs::vis {
         CudaSelectionQuerySlot cuda_selection_query_{};
         std::array<ModelInputSnapshot, kInputRingSize> ring_uploaded_{};
         std::array<ModelInputSnapshot, kInputRingSize> ring_model_snapshot_{};
+        int current_input_sh_degree_ = -1;
+        std::size_t last_vram_report_signature_ = 0;
 
         // Per-ring-slot timeline semaphore used to gate Vulkan compute on the
         // CUDA upload completing; eliminates the per-frame

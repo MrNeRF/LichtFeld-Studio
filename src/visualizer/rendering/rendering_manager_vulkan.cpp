@@ -21,6 +21,7 @@
 #include <expected>
 #include <format>
 #include <shared_mutex>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -1421,11 +1422,19 @@ namespace lfs::vis {
                         !split_view_service_.isActive(settings_);
                     if (can_rerender_selection_overlay) {
                         LOG_TIMER("vksplat.selection_overlay");
-                        auto overlay_result = vksplat_viewport_renderer_->rerenderSelectionOverlay(
-                            *context.vulkan_context,
-                            *model,
-                            request,
-                            VksplatViewportRenderer::OutputSlot::Main);
+                        std::expected<VksplatViewportRenderer::RenderResult, std::string> overlay_result =
+                            std::unexpected("VkSplat selection overlay was not executed");
+                        try {
+                            overlay_result = vksplat_viewport_renderer_->rerenderSelectionOverlay(
+                                *context.vulkan_context,
+                                *model,
+                                request,
+                                VksplatViewportRenderer::OutputSlot::Main);
+                        } catch (const std::exception& e) {
+                            overlay_result = std::unexpected(
+                                std::format("VkSplat selection overlay threw: {}", e.what()));
+                            lfs::core::Tensor::trim_memory_pool();
+                        }
                         if (overlay_result) {
                             return publish_vksplat_result(*overlay_result);
                         }
@@ -1435,13 +1444,20 @@ namespace lfs::vis {
 
                     const bool force_input_upload = (frame_dirty & DirtyFlag::SPLATS) != 0;
                     LOG_TIMER("vksplat.render");
-                    auto render_result = vksplat_viewport_renderer_->render(
-                        *context.vulkan_context,
-                        *model,
-                        request,
-                        force_input_upload,
-                        VksplatViewportRenderer::OutputSlot::Main,
-                        synchronize_vksplat_input_upload);
+                    std::expected<VksplatViewportRenderer::RenderResult, std::string> render_result =
+                        std::unexpected("VkSplat render was not executed");
+                    try {
+                        render_result = vksplat_viewport_renderer_->render(
+                            *context.vulkan_context,
+                            *model,
+                            request,
+                            force_input_upload,
+                            VksplatViewportRenderer::OutputSlot::Main,
+                            synchronize_vksplat_input_upload);
+                    } catch (const std::exception& e) {
+                        render_result = std::unexpected(std::format("VkSplat render threw: {}", e.what()));
+                        lfs::core::Tensor::trim_memory_pool();
+                    }
                     if (render_result) {
                         return publish_vksplat_result(*render_result);
                     }

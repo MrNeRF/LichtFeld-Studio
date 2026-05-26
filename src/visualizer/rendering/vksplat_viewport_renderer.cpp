@@ -88,6 +88,23 @@ namespace lfs::vis {
                    (gut ? (kVkSplatProjectionModeGut << kVkSplatProjectionModeShift) : 0u);
         }
 
+        [[nodiscard]] std::uint32_t shLayoutSlotsForDegree(const int layout_sh_degree) {
+            if (layout_sh_degree <= 0) {
+                return 0;
+            }
+            return lfs::core::sh_float4_slots_for_rest(
+                lfs::core::sh_rest_coefficients_for_degree(layout_sh_degree));
+        }
+
+        [[nodiscard]] std::uint32_t renderShNLayoutSlots(
+            const int active_sh_degree,
+            const int input_layout_sh_degree) {
+            if (active_sh_degree <= 0) {
+                return 0;
+            }
+            return shLayoutSlotsForDegree(input_layout_sh_degree);
+        }
+
         [[nodiscard]] std::filesystem::path resolveVkSplatSpirvRoot() {
             constexpr std::string_view probe_file = "generated/projection_forward.spv";
             std::vector<std::filesystem::path> search_paths;
@@ -173,6 +190,34 @@ namespace lfs::vis {
         template <typename T>
         [[nodiscard]] bool hasDeviceBuffer(const Buffer<T>& buffer) {
             return hasDeviceBuffer(buffer.deviceBuffer);
+        }
+
+        template <typename T>
+        void releaseHostStorage(Buffer<T>& buffer) {
+            auto& host = static_cast<std::vector<T>&>(buffer);
+            if (!host.empty() || host.capacity() != 0) {
+                std::vector<T>{}.swap(host);
+            }
+        }
+
+        void releaseInputHostStorage(VulkanGSPipelineBuffers& buffers) {
+            releaseHostStorage(buffers.xyz_ws);
+            releaseHostStorage(buffers.sh0);
+            releaseHostStorage(buffers.shN);
+            releaseHostStorage(buffers.rotations);
+            releaseHostStorage(buffers.scaling_raw);
+            releaseHostStorage(buffers.opacity_raw);
+            releaseHostStorage(buffers.scales_opacs);
+            releaseHostStorage(buffers.sh_coeffs);
+        }
+
+        [[nodiscard]] double gib(const std::size_t bytes) {
+            return static_cast<double>(bytes) / (1024.0 * 1024.0 * 1024.0);
+        }
+
+        template <typename T>
+        [[nodiscard]] std::size_t viewBytes(const Buffer<T>& buffer) {
+            return buffer.deviceBuffer.size;
         }
 
         struct ScopedStagingBuffer {
@@ -1030,6 +1075,7 @@ namespace lfs::vis {
         output_generations_ = {};
         ring_completion_values_ = {};
         next_ring_slot_ = 0;
+        current_input_sh_degree_ = -1;
         compose_.reset();
         buffers_ = {};
         if (overlay_upload_stream_ != nullptr) {
@@ -1079,18 +1125,7 @@ namespace lfs::vis {
         buffers_.scales_opacs.deviceBuffer = {};
         buffers_.sh_coeffs.deviceBuffer = {};
 
-        // Resize host-shadow vectors so the rasterizer's bookkeeping (which
-        // calls byteLength()) keeps matching the device-side payload. The host
-        // vectors are not read by the rasterizer; only their size() matters
-        // when the renderer cross-checks element counts.
-        buffers_.xyz_ws.resize(slot.region_bytes[InputXyzWs] / sizeof(float));
-        buffers_.sh0.resize(slot.region_bytes[InputSh0] / sizeof(float));
-        buffers_.shN.resize(slot.region_bytes[InputShN] / sizeof(float));
-        buffers_.rotations.resize(slot.region_bytes[InputRotations] / sizeof(float));
-        buffers_.scaling_raw.resize(slot.region_bytes[InputScalingRaw] / sizeof(float));
-        buffers_.opacity_raw.resize(slot.region_bytes[InputOpacityRaw] / sizeof(float));
-        buffers_.scales_opacs.clear();
-        buffers_.sh_coeffs.clear();
+        releaseInputHostStorage(buffers_);
 
         buffers_.num_splats = num_splats;
         if (reset_cached_raster_state) {
@@ -1709,6 +1744,7 @@ namespace lfs::vis {
         const lfs::core::SplatData& splat_data,
         const std::size_t ring_slot,
         const bool force_upload,
+        const int upload_sh_degree,
         const bool synchronize_upload) {
         const std::size_t n = static_cast<std::size_t>(splat_data.size());
         if (n == 0) {
@@ -1721,9 +1757,17 @@ namespace lfs::vis {
         assert(ring_slot < cuda_inputs_.size());
         auto& slot = cuda_inputs_[ring_slot];
 
-        auto layout = vksplat::rawDeviceInputLayout(splat_data);
-        if (!layout) {
-            return std::unexpected(layout.error());
+        const int effective_upload_sh_degree =
+            upload_sh_degree < 0
+                ? splat_data.get_max_sh_degree()
+                : std::clamp(upload_sh_degree, 0, splat_data.get_max_sh_degree());
+        auto upload_layout = vksplat::rawDeviceInputLayout(splat_data, effective_upload_sh_degree);
+        if (!upload_layout) {
+            return std::unexpected(upload_layout.error());
+        }
+        auto external_layout = vksplat::rawDeviceInputLayout(splat_data, splat_data.get_max_sh_degree());
+        if (!external_layout) {
+            return std::unexpected(external_layout.error());
         }
         const bool input_snapshot_changed = force_upload || !inputsResident(splat_data, ring_slot);
 
@@ -1743,19 +1787,15 @@ namespace lfs::vis {
         // copy path runs a kernel that bakes the mask into the uploaded opacity
         // (sigmoid-bound to ~0 for deleted entries). Borrow only when nothing
         // is marked deleted, otherwise undo/redo of deletes wouldn't take.
+        const bool base_inputs_external =
+            means_storage && sh0_storage && rotations_storage && scaling_storage && opacity_storage &&
+            !splat_data.has_deleted_mask();
         const bool can_bind_external =
-            means_storage && sh0_storage && shN_storage && rotations_storage &&
-            scaling_storage && opacity_storage && !splat_data.has_deleted_mask();
+            base_inputs_external && (upload_layout->omits_shN || shN_storage);
+        const auto& layout = can_bind_external && shN_storage ? external_layout : upload_layout;
 
-        const auto resize_host_shadows = [&](const bool reset_cached_raster_state) {
-            buffers_.xyz_ws.resize(layout->xyz_bytes / sizeof(float));
-            buffers_.sh0.resize(layout->sh0_bytes / sizeof(float));
-            buffers_.shN.resize(layout->shN_bytes / sizeof(float));
-            buffers_.rotations.resize(layout->rotations_bytes / sizeof(float));
-            buffers_.scaling_raw.resize(layout->scaling_bytes / sizeof(float));
-            buffers_.opacity_raw.resize(layout->opacity_bytes / sizeof(float));
-            buffers_.scales_opacs.clear();
-            buffers_.sh_coeffs.clear();
+        const auto update_input_metadata = [&](const bool reset_cached_raster_state) {
+            releaseInputHostStorage(buffers_);
             buffers_.num_splats = n;
             if (reset_cached_raster_state) {
                 buffers_.num_indices = 0;
@@ -1790,8 +1830,10 @@ namespace lfs::vis {
                 if (auto ok = require_capacity(sh0_storage, layout->sh0_bytes, "sh0"); !ok) {
                     return std::unexpected(ok.error());
                 }
-                if (auto ok = require_capacity(shN_storage, layout->shN_bytes, "shN"); !ok) {
-                    return std::unexpected(ok.error());
+                if (!layout->omits_shN) {
+                    if (auto ok = require_capacity(shN_storage, layout->shN_bytes, "shN"); !ok) {
+                        return std::unexpected(ok.error());
+                    }
                 }
                 if (auto ok = require_capacity(rotations_storage, layout->rotations_bytes, "rotation"); !ok) {
                     return std::unexpected(ok.error());
@@ -1810,8 +1852,17 @@ namespace lfs::vis {
                     means_storage->vkBuffer(), means_storage->bytes(), layout->xyz_bytes, means_storage->vkOffset());
                 buffers_.sh0.deviceBuffer = makeBorrowedBufferView(
                     sh0_storage->vkBuffer(), sh0_storage->bytes(), layout->sh0_bytes, sh0_storage->vkOffset());
-                buffers_.shN.deviceBuffer = makeBorrowedBufferView(
-                    shN_storage->vkBuffer(), shN_storage->bytes(), layout->shN_bytes, shN_storage->vkOffset());
+                buffers_.shN.deviceBuffer = layout->omits_shN
+                                                ? makeBorrowedBufferView(
+                                                      rotations_storage->vkBuffer(),
+                                                      rotations_storage->bytes(),
+                                                      layout->shN_bytes,
+                                                      rotations_storage->vkOffset())
+                                                : makeBorrowedBufferView(
+                                                      shN_storage->vkBuffer(),
+                                                      shN_storage->bytes(),
+                                                      layout->shN_bytes,
+                                                      shN_storage->vkOffset());
                 buffers_.rotations.deviceBuffer = makeBorrowedBufferView(
                     rotations_storage->vkBuffer(), rotations_storage->bytes(), layout->rotations_bytes, rotations_storage->vkOffset());
                 buffers_.scaling_raw.deviceBuffer = makeBorrowedBufferView(
@@ -1820,7 +1871,7 @@ namespace lfs::vis {
                     opacity_storage->vkBuffer(), opacity_storage->bytes(), layout->opacity_bytes, opacity_storage->vkOffset());
                 buffers_.scales_opacs.deviceBuffer = {};
                 buffers_.sh_coeffs.deviceBuffer = {};
-                resize_host_shadows(input_snapshot_changed);
+                update_input_metadata(input_snapshot_changed);
             }
 
             const cudaStream_t stream = splat_data.means_raw().stream();
@@ -1856,6 +1907,8 @@ namespace lfs::vis {
                 LOG_TIMER("prepareInputs.snapshot");
                 ring_uploaded_[ring_slot] = makeModelInputSnapshot(splat_data);
             }
+            current_input_sh_degree_ = shN_storage ? splat_data.get_max_sh_degree()
+                                                   : effective_upload_sh_degree;
             return InputBindingResult{.uses_temporary_upload_slot = false};
         }
 
@@ -1874,7 +1927,9 @@ namespace lfs::vis {
         std::array<std::size_t, kInputRegionCount> region_offset{};
         const std::size_t total_bytes = layoutRegions(region_bytes, region_offset, kRegionAlignment);
 
-        const bool slot_had_buffer = slot.buffer.buffer != VK_NULL_HANDLE;
+        const VkBuffer previous_input_buffer = slot.buffer.buffer;
+        const auto previous_region_bytes = slot.region_bytes;
+        const bool slot_had_buffer = previous_input_buffer != VK_NULL_HANDLE;
         {
             LOG_TIMER("prepareInputs.copy.ensure_buffer");
             if (auto ok = ensureCudaInteropBuffer(context,
@@ -1891,15 +1946,18 @@ namespace lfs::vis {
         slot.region_offset = region_offset;
         slot.region_bytes = region_bytes;
 
+        const bool buffer_reallocated = !slot_had_buffer || slot.buffer.buffer != previous_input_buffer;
+        const bool layout_changed = previous_region_bytes != region_bytes;
         bool upload_needed;
         {
             LOG_TIMER("prepareInputs.copy.inputs_resident_check");
-            upload_needed = input_snapshot_changed || !slot_had_buffer;
+            upload_needed = input_snapshot_changed || buffer_reallocated || layout_changed;
         }
 
         if (!upload_needed) {
             LOG_TIMER("prepareInputs.copy.plug_only");
             plugRingInputs(ring_slot, n, false);
+            current_input_sh_degree_ = effective_upload_sh_degree;
             return InputBindingResult{.uses_temporary_upload_slot = true};
         }
 
@@ -1920,7 +1978,8 @@ namespace lfs::vis {
                     base + region_offset[InputRotations],
                     base + region_offset[InputScalingRaw],
                     base + region_offset[InputOpacityRaw],
-                    stream);
+                    stream,
+                    effective_upload_sh_degree);
                 !ok) {
                 return std::unexpected(ok.error());
             }
@@ -1955,7 +2014,93 @@ namespace lfs::vis {
             ring_uploaded_[ring_slot] = makeModelInputSnapshot(splat_data);
         }
         plugRingInputs(ring_slot, n, true);
+        current_input_sh_degree_ = effective_upload_sh_degree;
         return InputBindingResult{.uses_temporary_upload_slot = true};
+    }
+
+    void VksplatViewportRenderer::logVramBreakdownIfChanged(const std::string_view reason) {
+        const std::size_t owned_total = buffers_.getTotalOwnedAllocSize();
+        const std::size_t pipeline_current = renderer_.getCurrentAllocSize();
+        const std::size_t pipeline_peak = renderer_.getPeakAllocSize();
+        const std::size_t input_view_bytes =
+            viewBytes(buffers_.xyz_ws) +
+            viewBytes(buffers_.sh0) +
+            viewBytes(buffers_.shN) +
+            viewBytes(buffers_.rotations) +
+            viewBytes(buffers_.scaling_raw) +
+            viewBytes(buffers_.opacity_raw);
+        const std::size_t sort_buffer_bytes =
+            buffers_.sorting_keys_1.deviceBuffer.allocSize +
+            buffers_.sorting_keys_2.deviceBuffer.allocSize +
+            buffers_.sorting_gauss_idx_1.deviceBuffer.allocSize +
+            buffers_.sorting_gauss_idx_2.deviceBuffer.allocSize;
+
+        std::size_t fallback_input_bytes = 0;
+        for (const auto& slot : cuda_inputs_) {
+            fallback_input_bytes += static_cast<std::size_t>(slot.buffer.allocation_size);
+        }
+        std::size_t overlay_bytes = 0;
+        for (const auto& slot : cuda_overlays_) {
+            overlay_bytes += static_cast<std::size_t>(slot.buffer.allocation_size);
+        }
+        overlay_bytes += static_cast<std::size_t>(cuda_selection_query_.buffer.allocation_size);
+
+        std::size_t output_image_bytes = 0;
+        for (const auto& output_slots : output_slots_) {
+            for (const auto& slot : output_slots) {
+                output_image_bytes += static_cast<std::size_t>(slot.image.allocation_size);
+                output_image_bytes += static_cast<std::size_t>(slot.depth_image.allocation_size);
+            }
+        }
+
+        const auto mix = [](const std::size_t seed, const std::size_t value) {
+            return seed ^ (value + 0x9e3779b97f4a7c15ull + (seed << 6u) + (seed >> 2u));
+        };
+        std::size_t signature = 0;
+        signature = mix(signature, owned_total);
+        signature = mix(signature, pipeline_current);
+        signature = mix(signature, pipeline_peak);
+        signature = mix(signature, input_view_bytes);
+        signature = mix(signature, fallback_input_bytes);
+        signature = mix(signature, overlay_bytes);
+        signature = mix(signature, output_image_bytes);
+        signature = mix(signature, sort_buffer_bytes);
+        if (signature == last_vram_report_signature_) {
+            return;
+        }
+        last_vram_report_signature_ = signature;
+
+        std::vector<std::pair<std::string, std::size_t>> entries;
+        for (const auto& [name, bytes] : buffers_.getOwnedVramBreakdown()) {
+            if (bytes != 0) {
+                entries.emplace_back(name, bytes);
+            }
+        }
+        std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
+            return a.second > b.second;
+        });
+
+        std::string top;
+        const std::size_t top_count = std::min<std::size_t>(entries.size(), 10);
+        for (std::size_t i = 0; i < top_count; ++i) {
+            if (!top.empty()) {
+                top += ", ";
+            }
+            top += std::format("{}={:.2f}GiB", entries[i].first, gib(entries[i].second));
+        }
+
+        LOG_PERF("vksplat.memory reason={} renderer_owned={:.2f}GiB pipeline_current={:.2f}GiB pipeline_peak={:.2f}GiB input_views={:.2f}GiB fallback_inputs={:.2f}GiB overlays={:.2f}GiB outputs={:.2f}GiB sort_buffers={:.2f}GiB sort_capacity={} top=[{}]",
+                 reason,
+                 gib(owned_total),
+                 gib(pipeline_current),
+                 gib(pipeline_peak),
+                 gib(input_view_bytes),
+                 gib(fallback_input_bytes),
+                 gib(overlay_bytes),
+                 gib(output_image_bytes),
+                 gib(sort_buffer_bytes),
+                 buffers_.num_indices,
+                 top);
     }
 
     std::expected<void, std::string> VksplatViewportRenderer::ensureOutputImages(
@@ -2667,6 +2812,7 @@ namespace lfs::vis {
         auto input_binding = [&] {
             LOG_TIMER("VksplatViewportRenderer::buildSelectionMask.prepareInputs");
             return prepareInputs(context, splat_data, ring_slot, force_input_upload,
+                                 0,
                                  request.synchronize_input_upload);
         }();
         if (!input_binding) {
@@ -3138,12 +3284,15 @@ namespace lfs::vis {
             LOG_TIMER("vksplat.selection_overlay.populateUniforms");
             const int active_sh_degree =
                 std::clamp(request.sh_degree, 0, std::min(3, splat_data.get_max_sh_degree()));
+            const int resident_sh_degree =
+                current_input_sh_degree_ >= 0
+                    ? std::min(active_sh_degree, current_input_sh_degree_)
+                    : active_sh_degree;
             populateVksplatCameraUniforms(uniforms,
                                           request.frame_view,
                                           request.scene,
-                                          active_sh_degree,
-                                          lfs::core::sh_float4_slots_for_rest(
-                                              static_cast<std::uint32_t>(splat_data.max_sh_coeffs_rest())),
+                                          resident_sh_degree,
+                                          renderShNLayoutSlots(resident_sh_degree, current_input_sh_degree_),
                                           buffers_.num_splats,
                                           request.equirectangular,
                                           request.gut);
@@ -3260,6 +3409,7 @@ namespace lfs::vis {
                                            splat_data,
                                            ring_slot,
                                            force_input_upload,
+                                           active_sh_degree,
                                            synchronize_input_upload);
         if (!input_binding) {
             return std::unexpected(input_binding.error());
@@ -3300,12 +3450,21 @@ namespace lfs::vis {
                                           request.frame_view,
                                           request.scene,
                                           active_sh_degree,
-                                          lfs::core::sh_float4_slots_for_rest(
-                                              static_cast<std::uint32_t>(splat_data.max_sh_coeffs_rest())),
+                                          renderShNLayoutSlots(active_sh_degree, current_input_sh_degree_),
                                           buffers_.num_splats,
                                           request.equirectangular,
                                           request.gut);
             uniforms.step = static_cast<std::uint32_t>(modelTransformCount(request.scene.model_transforms));
+        }
+
+        const std::size_t target_sort_capacity =
+            renderer_.updateNumIndicesEstimate(uniforms.grid_width,
+                                               uniforms.grid_height,
+                                               buffers_.num_splats);
+        if (renderer_.shrinkSortBuffersForCapacity(buffers_, target_sort_capacity)) {
+            LOG_PERF("vksplat.memory.shrink_sort_buffers target_capacity={} splats={}",
+                     target_sort_capacity,
+                     buffers_.num_splats);
         }
 
         const bool selection_overlay_may_rerender =
@@ -3454,6 +3613,7 @@ namespace lfs::vis {
         } catch (const std::exception& e) {
             return std::unexpected(std::format("VkSplat forward pass failed: {}", e.what()));
         }
+        logVramBreakdownIfChanged("render");
         if (!compose_status) {
             return std::unexpected(compose_status.error());
         }

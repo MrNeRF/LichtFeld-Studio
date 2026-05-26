@@ -126,6 +126,99 @@ size_t VulkanGSRenderer::pollDeferredNumIndices() {
     return last_observed_num_indices_;
 }
 
+size_t VulkanGSRenderer::updateNumIndicesEstimate(const uint32_t grid_width,
+                                                  const uint32_t grid_height,
+                                                  const size_t num_splats) {
+    if (num_splats == 0)
+        return 0;
+
+    const size_t observed = pollDeferredNumIndices();
+    if (observed > num_indices_estimate_) {
+        num_indices_estimate_ = observed;
+        num_indices_estimate_grid_width_ = num_indices_readback_grid_width_;
+        num_indices_estimate_grid_height_ = num_indices_readback_grid_height_;
+    } else if (observed > 0 && num_indices_estimate_grid_width_ == 0) {
+        num_indices_estimate_grid_width_ = num_indices_readback_grid_width_;
+        num_indices_estimate_grid_height_ = num_indices_readback_grid_height_;
+    }
+
+    // CPU-side high-water-mark estimate for sort-buffer sizing this frame.
+    // It is scaled by tile-grid growth so double-click maximize/restore does not
+    // keep using a small-window estimate for a large-window frame. The first
+    // frame still needs slack before the deferred readback exists, but 8x N made
+    // large SH3 scenes pay gigabytes of persistent scratch. 4x N keeps the first
+    // frame conservative while cutting that transient reserve in half.
+    constexpr size_t kSafetyFactor = 2;
+    constexpr size_t kInitialIndicesPerSplat = 4;
+    constexpr size_t kMaxSortCapacity =
+        static_cast<size_t>(std::numeric_limits<int32_t>::max());
+    const size_t current_tiles =
+        std::max<size_t>(1, static_cast<size_t>(grid_width) * grid_height);
+    const size_t estimate_tiles =
+        std::max<size_t>(1,
+                         static_cast<size_t>(num_indices_estimate_grid_width_) *
+                             num_indices_estimate_grid_height_);
+    const auto scale_ceil = [kMaxSortCapacity](const size_t value, const size_t numerator, const size_t denominator) {
+        if (value == 0)
+            return size_t{0};
+        const long double scaled =
+            static_cast<long double>(value) * static_cast<long double>(numerator) /
+            static_cast<long double>(std::max<size_t>(1, denominator));
+        const long double capped =
+            std::min<long double>(scaled, static_cast<long double>(kMaxSortCapacity));
+        return static_cast<size_t>(std::ceil(capped));
+    };
+    const auto multiply_cap = [kMaxSortCapacity](const size_t value, const size_t factor) {
+        if (factor != 0 && value > kMaxSortCapacity / factor)
+            return kMaxSortCapacity;
+        return std::min(kMaxSortCapacity, value * factor);
+    };
+
+    size_t estimate = scale_ceil(num_indices_estimate_, current_tiles, estimate_tiles);
+    estimate = multiply_cap(estimate, kSafetyFactor);
+    if (estimate == 0)
+        estimate = multiply_cap(num_splats, kInitialIndicesPerSplat);
+    if (estimate < num_splats)
+        estimate = num_splats;
+    return std::min(estimate, kMaxSortCapacity);
+}
+
+bool VulkanGSRenderer::shrinkSortBuffersForCapacity(VulkanGSPipelineBuffers& buffers,
+                                                    size_t target_capacity) {
+    if (commandBatchInProgress)
+        _THROW_ERROR("shrinkSortBuffersForCapacity called while command batch is active");
+    if (buffers.num_splats == 0)
+        return false;
+
+    target_capacity = std::max(target_capacity, buffers.num_splats);
+    if (target_capacity == 0)
+        return false;
+
+    bool changed = false;
+    const auto shrink_i32 = [&](Buffer<int32_t>& buffer) {
+        const size_t target_bytes = target_capacity * sizeof(int32_t);
+        if (buffer.deviceBuffer.allocSize > target_bytes * 2) {
+            resizeDeviceBuffer(buffer, target_capacity, false);
+            changed = true;
+        }
+    };
+    const auto shrink_sort_key = [&](Buffer<sortingKey_t>& buffer) {
+        const size_t target_bytes = target_capacity * sizeof(sortingKey_t);
+        if (buffer.deviceBuffer.allocSize > target_bytes * 2) {
+            resizeDeviceBuffer(buffer, target_capacity, false);
+            changed = true;
+        }
+    };
+
+    shrink_sort_key(buffers.sorting_keys_1);
+    shrink_sort_key(buffers.sorting_keys_2);
+    shrink_i32(buffers.sorting_gauss_idx_1);
+    shrink_i32(buffers.sorting_gauss_idx_2);
+    if (changed)
+        buffers.num_indices_high_water = std::min(buffers.num_indices_high_water, target_capacity);
+    return changed;
+}
+
 void VulkanGSRenderer::ensureVisibleCountReadback() {
     if (visible_count_readback_initialized_)
         return;
@@ -751,18 +844,6 @@ void VulkanGSRenderer::executeCalculateIndexBufferOffset(
 
     ensureNumIndicesReadback();
 
-    // Read the previous frame's deferred num_indices. beginCommandBatch()
-    // drained pending timeline completion before this frame started recording.
-    const size_t observed = pollDeferredNumIndices();
-    if (observed > num_indices_estimate_) {
-        num_indices_estimate_ = observed;
-        num_indices_estimate_grid_width_ = num_indices_readback_grid_width_;
-        num_indices_estimate_grid_height_ = num_indices_readback_grid_height_;
-    } else if (observed > 0 && num_indices_estimate_grid_width_ == 0) {
-        num_indices_estimate_grid_width_ = num_indices_readback_grid_width_;
-        num_indices_estimate_grid_height_ = num_indices_readback_grid_height_;
-    }
-
     // Cumsum on tiles_touched_depth_ordered (output of executeApplyDepthOrdering)
     // so index_buffer_offset[depth_rank] gives the contiguous offset interval
     // for the primitive at depth rank `depth_rank`. Matches the gsplat_fwd CUDA
@@ -797,42 +878,9 @@ void VulkanGSRenderer::executeCalculateIndexBufferOffset(
         num_indices_readback_grid_height_ = uniforms.grid_height;
     }
 
-    // CPU-side high-water-mark estimate for sort-buffer sizing this frame.
-    // It is scaled by tile-grid growth so double-click maximize/restore does not
-    // keep using a small-window estimate for a large-window frame.
-    constexpr size_t kSafetyFactor = 2;
-    constexpr size_t kInitialIndicesPerSplat = 8; // first-frame heuristic
-    constexpr size_t kMaxSortCapacity =
-        static_cast<size_t>(std::numeric_limits<int32_t>::max());
-    const size_t current_tiles =
-        std::max<size_t>(1, static_cast<size_t>(uniforms.grid_width) * uniforms.grid_height);
-    const size_t estimate_tiles =
-        std::max<size_t>(1,
-                         static_cast<size_t>(num_indices_estimate_grid_width_) *
-                             num_indices_estimate_grid_height_);
-    const auto scale_ceil = [kMaxSortCapacity](const size_t value, const size_t numerator, const size_t denominator) {
-        if (value == 0)
-            return size_t{0};
-        const long double scaled =
-            static_cast<long double>(value) * static_cast<long double>(numerator) /
-            static_cast<long double>(std::max<size_t>(1, denominator));
-        const long double capped =
-            std::min<long double>(scaled, static_cast<long double>(kMaxSortCapacity));
-        return static_cast<size_t>(std::ceil(capped));
-    };
-    const auto multiply_cap = [kMaxSortCapacity](const size_t value, const size_t factor) {
-        if (factor != 0 && value > kMaxSortCapacity / factor)
-            return kMaxSortCapacity;
-        return std::min(kMaxSortCapacity, value * factor);
-    };
-
-    size_t estimate = scale_ceil(num_indices_estimate_, current_tiles, estimate_tiles);
-    estimate = multiply_cap(estimate, kSafetyFactor);
-    if (estimate == 0)
-        estimate = multiply_cap(num_elements, kInitialIndicesPerSplat);
-    if (estimate < num_elements)
-        estimate = num_elements;
-    estimate = std::min(estimate, kMaxSortCapacity);
+    const size_t estimate = updateNumIndicesEstimate(uniforms.grid_width,
+                                                     uniforms.grid_height,
+                                                     num_elements);
     buffers.num_indices = estimate;
     buffers.num_indices_high_water = std::max(buffers.num_indices_high_water, estimate);
 

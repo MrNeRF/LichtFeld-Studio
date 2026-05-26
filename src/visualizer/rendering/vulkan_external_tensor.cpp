@@ -46,7 +46,8 @@ namespace lfs::vis {
         const lfs::core::DataType dtype,
         const std::size_t capacity,
         const char* const debug_name,
-        const cudaStream_t stream) {
+        const cudaStream_t stream,
+        const bool zero_fill) {
         if (!context.externalMemoryInteropEnabled()) {
             return std::unexpected("Vulkan external tensor allocation requires CUDA/Vulkan external-memory interop");
         }
@@ -102,14 +103,16 @@ namespace lfs::vis {
                                                debug_name ? debug_name : "<unnamed>"));
         }
 
-        if (const cudaError_t status = cudaMemsetAsync(cuda_ptr, 0, bytes, stream);
-            status != cudaSuccess) {
-            interop.reset();
-            context.destroyExternalBuffer(buffer);
-            return std::unexpected(std::format("Vulkan external tensor '{}' zero-fill failed: {} ({})",
-                                               debug_name ? debug_name : "<unnamed>",
-                                               cudaGetErrorName(status),
-                                               cudaGetErrorString(status)));
+        if (zero_fill) {
+            if (const cudaError_t status = cudaMemsetAsync(cuda_ptr, 0, bytes, stream);
+                status != cudaSuccess) {
+                interop.reset();
+                context.destroyExternalBuffer(buffer);
+                return std::unexpected(std::format("Vulkan external tensor '{}' zero-fill failed: {} ({})",
+                                                   debug_name ? debug_name : "<unnamed>",
+                                                   cudaGetErrorName(status),
+                                                   cudaGetErrorString(status)));
+            }
         }
 
         auto owner = std::make_shared<VulkanExternalTensorStorage>(

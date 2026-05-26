@@ -46,6 +46,7 @@ DEFAULT_COLOR = "#999999"
 # image decorators fill the gallery slot without visibly stretching the source.
 THUMB_WIDTH = 512
 THUMB_HEIGHT = 224
+MAX_RENDERED_PREVIEW_FILE_BYTES = 2 * 1024 * 1024 * 1024
 
 RENDERABLE_PREVIEW_TYPES = {
     "checkpoint",
@@ -448,8 +449,20 @@ class AssetThumbnails:
         if not callable(render_preview) or not callable(save_image):
             return None
 
+        path = Path(asset_path).expanduser()
+        try:
+            if path.is_file() and path.stat().st_size > MAX_RENDERED_PREVIEW_FILE_BYTES:
+                _logger.debug(
+                    "Skipping rendered thumbnail for %s: file exceeds %d MiB budget",
+                    asset_id,
+                    MAX_RENDERED_PREVIEW_FILE_BYTES // (1024 * 1024),
+                )
+                return None
+        except OSError:
+            pass
+
         image = render_preview(
-            str(asset_path),
+            str(path),
             width=THUMB_WIDTH,
             height=THUMB_HEIGHT,
             **render_kwargs,

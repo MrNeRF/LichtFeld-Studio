@@ -30,6 +30,7 @@
 #include <atomic>
 #include <cassert>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <future>
@@ -43,6 +44,9 @@ namespace nb = nanobind;
 namespace lfs::python {
 
     namespace {
+        constexpr std::uintmax_t MAX_RENDERED_ASSET_PREVIEW_BYTES =
+            2ull * 1024ull * 1024ull * 1024ull;
+
         [[nodiscard]] std::optional<PyViewportRender> toPyViewportRender(
             const std::optional<vis::ViewportRender>& render,
             const bool clone_for_async) {
@@ -267,6 +271,17 @@ namespace lfs::python {
                 options.validate_only = false;
 
                 const auto asset_path = core::utf8_to_path(path);
+                std::error_code file_size_error;
+                if (std::filesystem::is_regular_file(asset_path, file_size_error)) {
+                    const auto file_size = std::filesystem::file_size(asset_path, file_size_error);
+                    if (!file_size_error && file_size > MAX_RENDERED_ASSET_PREVIEW_BYTES) {
+                        LOG_DEBUG("Skipping rendered asset preview for '{}' ({} MB exceeds {} MB budget)",
+                                  path,
+                                  file_size / (1024 * 1024),
+                                  MAX_RENDERED_ASSET_PREVIEW_BYTES / (1024 * 1024));
+                        return std::nullopt;
+                    }
+                }
                 auto ext = asset_path.extension().string();
                 std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
                 if (ext == ".ckpt" || ext == ".resume") {
@@ -1017,7 +1032,8 @@ namespace lfs::python {
                     return static_cast<float>(self.height) / self.ortho_scale;
                 },
                 "Vertical view extent in world units (Blender-compatible orthographic scale). Larger when zoomed out, smaller when zoomed in.")
-            .def_prop_ro("position", [](const PyViewInfo& self) -> std::tuple<float, float, float> {
+            .def_prop_ro(
+                "position", [](const PyViewInfo& self) -> std::tuple<float, float, float> {
                     auto t = self.translation.tensor().cpu();
                     auto acc = t.accessor<float, 1>();
                     return {acc(0), acc(1), acc(2)}; }, "Camera position as (x, y, z) tuple");
