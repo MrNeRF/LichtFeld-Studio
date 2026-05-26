@@ -168,6 +168,30 @@ namespace {
         EXPECT_TRUE(snap.histograms.empty());
     }
 
+    TEST_F(VramProfilerMetricsTest, StaticBytesContributeToSampledLiveBytes) {
+        auto& p = VramProfiler::instance();
+        p.clearStaticScope("io.nvimagecodec");
+        p.recordStaticBytes("io.nvimagecodec", "decoder_encoder_pool", 4096);
+
+        auto snap = p.snapshot();
+        bool found = false;
+        for (const auto& row : snap.rows) {
+            if (row.scope == "io.nvimagecodec" && row.label == "decoder_encoder_pool") {
+                found = true;
+                EXPECT_EQ(row.live_bytes, 4096u);
+            }
+        }
+
+        EXPECT_TRUE(found);
+        EXPECT_GE(snap.sampled_live_bytes, 4096u);
+
+        p.clearStaticScope("io.nvimagecodec");
+        snap = p.snapshot();
+        for (const auto& row : snap.rows) {
+            EXPECT_NE(row.scope, "io.nvimagecodec");
+        }
+    }
+
     TEST_F(VramProfilerMetricsTest, LiveBytesDoesNotAccumulateAcrossIterations) {
         // Regression: when allocations live under a deeply-nested scope path
         // ("Training execution/train.step/..."), beginIteration() previously

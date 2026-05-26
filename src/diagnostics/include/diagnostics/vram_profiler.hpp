@@ -34,6 +34,7 @@ namespace lfs::diagnostics {
         std::size_t freed_bytes = 0;
         std::uint64_t allocation_count = 0;
         std::uint64_t free_count = 0;
+        VramAllocationMethod method = VramAllocationMethod::Unknown;
     };
 
     struct VramTreeNodeSnapshot {
@@ -113,6 +114,12 @@ namespace lfs::diagnostics {
         std::size_t cuda_phase_curand_load = 0;
         std::size_t pinned_host_used = 0;
         std::size_t vulkan_vma_used = 0;
+        // CUDA-allocated exportable VMM block backing the splat tensors (shared
+        // with Vulkan via VK_EXT_external_memory). The same physical bytes are
+        // visible through both VK_EXT_memory_budget (vulkan_vma_used) and the
+        // per-tensor model.* rows; the HUD subtracts this from the Vulkan
+        // residual to avoid double-counting.
+        std::size_t exportable_splat_bytes = 0;
         std::size_t process_used = 0;
         std::size_t total_used = 0;
         std::size_t total = 0;
@@ -134,6 +141,7 @@ namespace lfs::diagnostics {
         double iter_ms_p95 = 0.0;
         double iter_ms_last = 0.0;
         std::size_t accounted_live_bytes = 0;
+        std::size_t accounted_cuda_pool_live_bytes = 0;
         std::size_t accounted_peak_bytes = 0;
         std::size_t sampled_live_bytes = 0;
         std::vector<std::size_t> accounted_live_history;
@@ -263,6 +271,7 @@ namespace lfs::diagnostics {
 
         void setPinnedHostUsed(std::size_t bytes);
         void setVulkanVmaUsed(std::size_t bytes);
+        void setExportableSplatBytes(std::size_t bytes);
         void captureCudaContextBaseline();
         void captureCudaWarmupDelta();
         void recordCudaPhaseBytes(std::string_view phase, std::size_t bytes);

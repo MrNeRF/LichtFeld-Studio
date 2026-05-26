@@ -516,8 +516,11 @@ namespace lfs::training {
             return lfs::diagnostics::VramProfiler::instance().enabled();
         }
 
-        void record_vram_current(std::string_view scope, std::string_view label, const size_t bytes) {
-            if (bytes == 0) {
+        void record_vram_current(std::string_view scope,
+                                 std::string_view label,
+                                 const size_t bytes,
+                                 const bool publish_zero = false) {
+            if (bytes == 0 && !publish_zero) {
                 return;
             }
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(scope, label, bytes);
@@ -534,6 +537,22 @@ namespace lfs::training {
             for (const auto& [name, bytes] : entries) {
                 record_vram_current(scope, name, bytes);
             }
+        }
+
+        void record_pipeline_vram_breakdown(const std::shared_ptr<lfs::io::PipelinedImageLoader>& loader) {
+            if (!loader) {
+                record_vram_current("io.pipeline", "output_queue.images", 0, true);
+                record_vram_current("io.pipeline", "output_queue.masks", 0, true);
+                record_vram_current("io.pipeline", "pending.images", 0, true);
+                record_vram_current("io.pipeline", "pending.masks", 0, true);
+                return;
+            }
+
+            const auto stats = loader->get_gpu_memory_stats();
+            record_vram_current("io.pipeline", "output_queue.images", stats.output_image_bytes, true);
+            record_vram_current("io.pipeline", "output_queue.masks", stats.output_mask_bytes, true);
+            record_vram_current("io.pipeline", "pending.images", stats.pending_image_bytes, true);
+            record_vram_current("io.pipeline", "pending.masks", stats.pending_mask_bytes, true);
         }
 
         void record_splat_vram_breakdown(const lfs::core::SplatData& splat) {
@@ -728,6 +747,27 @@ namespace lfs::training {
             if (cudaMemGetInfo(&free_bytes, &total_bytes) != cudaSuccess || free_bytes == 0 || total_bytes == 0) {
                 config.decoder_pool_size = std::min(config.decoder_pool_size, config.jpeg_batch_size);
                 return config;
+            }
+
+            constexpr float NON_JPEG_THRESHOLD = 0.1f;
+            constexpr size_t JPEG_HOT_OUTPUT_QUEUE_SIZE = 2;
+            constexpr size_t JPEG_HOT_DECODER_POOL_SIZE = 2;
+            const float non_jpeg_ratio = dataset ? dataset->get_non_jpeg_ratio() : 0.0f;
+            if (non_jpeg_ratio <= NON_JPEG_THRESHOLD) {
+                if (config.output_queue_size > JPEG_HOT_OUTPUT_QUEUE_SIZE) {
+                    LOG_INFO(
+                        "Reducing JPEG image ready queue {} -> {} (hot path keeps compressed prefetch)",
+                        config.output_queue_size,
+                        JPEG_HOT_OUTPUT_QUEUE_SIZE);
+                    config.output_queue_size = JPEG_HOT_OUTPUT_QUEUE_SIZE;
+                }
+                if (config.decoder_pool_size > JPEG_HOT_DECODER_POOL_SIZE) {
+                    LOG_INFO(
+                        "Reducing nvImageCodec decoder pool {} -> {} for JPEG hot path",
+                        config.decoder_pool_size,
+                        JPEG_HOT_DECODER_POOL_SIZE);
+                    config.decoder_pool_size = JPEG_HOT_DECODER_POOL_SIZE;
+                }
             }
 
             const size_t per_ready_image_bytes = estimate.max_image_bytes +
@@ -2763,6 +2803,7 @@ namespace lfs::training {
                 record_vram_tensor("train.persistent", "background_mix_buffer", bg_mix_buffer_);
                 record_vram_tensor("train.persistent", "background_image_base", bg_image_base_);
                 record_vram_current("train.persistent", "background_image_cache", bg_image_cache_bytes(bg_image_cache_));
+                record_pipeline_vram_breakdown(getActiveImageLoader());
             }
             auto& loss_tensor_gpu = loss_accumulator_;
             RenderOutput r_output;

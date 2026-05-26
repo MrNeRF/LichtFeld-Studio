@@ -82,6 +82,17 @@ namespace lfs::io {
 
     class LFS_IO_API PipelinedImageLoader {
     public:
+        struct GpuMemoryStats {
+            size_t output_image_bytes = 0;
+            size_t output_mask_bytes = 0;
+            size_t pending_image_bytes = 0;
+            size_t pending_mask_bytes = 0;
+
+            [[nodiscard]] size_t total_bytes() const {
+                return output_image_bytes + output_mask_bytes + pending_image_bytes + pending_mask_bytes;
+            }
+        };
+
         struct CacheStats {
             size_t jpeg_cache_entries = 0;
             size_t jpeg_cache_bytes = 0;
@@ -106,6 +117,10 @@ namespace lfs::io {
             size_t hot_queue_size = 0;
             size_t cold_queue_size = 0;
             size_t output_queue_size = 0;
+            size_t output_image_bytes = 0;
+            size_t output_mask_bytes = 0;
+            size_t pending_image_bytes = 0;
+            size_t pending_mask_bytes = 0;
         };
 
         explicit PipelinedImageLoader(PipelinedLoaderConfig config = {});
@@ -130,6 +145,7 @@ namespace lfs::io {
         void shutdown();
         bool is_running() const { return running_.load(); }
         CacheStats get_stats() const;
+        GpuMemoryStats get_gpu_memory_stats() const;
 
     private:
         struct PrefetchedImage {
@@ -161,17 +177,28 @@ namespace lfs::io {
             std::optional<lfs::core::Tensor> mask;
             cudaStream_t stream = nullptr;
             bool mask_expected = false; // True if a mask was requested for this sequence_id
+            size_t image_bytes = 0;
+            size_t mask_bytes = 0;
         };
 
         template <typename T>
         class ThreadSafeQueue {
         public:
-            void push(T value) {
+            explicit ThreadSafeQueue(size_t capacity = 0)
+                : capacity_(capacity) {}
+
+            bool push(T value) {
                 {
-                    std::lock_guard<std::mutex> lock(mutex_);
+                    std::unique_lock<std::mutex> lock(mutex_);
+                    not_full_cv_.wait(lock, [this] {
+                        return shutdown_ || capacity_ == 0 || queue_.size() < capacity_;
+                    });
+                    if (shutdown_)
+                        return false;
                     queue_.push(std::move(value));
                 }
                 cv_.notify_one();
+                return true;
             }
 
             T pop() {
@@ -181,6 +208,7 @@ namespace lfs::io {
                     throw std::runtime_error("Queue shutdown");
                 T value = std::move(queue_.front());
                 queue_.pop();
+                not_full_cv_.notify_one();
                 return value;
             }
 
@@ -190,6 +218,7 @@ namespace lfs::io {
                     return std::nullopt;
                 T value = std::move(queue_.front());
                 queue_.pop();
+                not_full_cv_.notify_one();
                 return value;
             }
 
@@ -202,6 +231,7 @@ namespace lfs::io {
                     return std::nullopt;
                 T value = std::move(queue_.front());
                 queue_.pop();
+                not_full_cv_.notify_one();
                 return value;
             }
 
@@ -214,6 +244,7 @@ namespace lfs::io {
                 std::lock_guard<std::mutex> lock(mutex_);
                 while (!queue_.empty())
                     queue_.pop();
+                not_full_cv_.notify_all();
             }
 
             void signal_shutdown() {
@@ -222,12 +253,15 @@ namespace lfs::io {
                     shutdown_ = true;
                 }
                 cv_.notify_all();
+                not_full_cv_.notify_all();
             }
 
         private:
             mutable std::mutex mutex_;
             std::condition_variable cv_;
+            std::condition_variable not_full_cv_;
             std::queue<T> queue_;
+            size_t capacity_ = 0;
             bool shutdown_ = false;
         };
 
@@ -258,6 +292,11 @@ namespace lfs::io {
             std::optional<lfs::core::Tensor> image,
             std::optional<lfs::core::Tensor> mask,
             cudaStream_t stream);
+        void add_output_ready_bytes(const ReadyImage& ready);
+        void release_output_ready_bytes(const ReadyImage& ready);
+        void push_output_ready(ReadyImage ready);
+        void erase_pending_pair_locked(std::unordered_map<size_t, PendingPair>::iterator it);
+        void reset_pipeline_gpu_bytes();
 
         PipelinedLoaderConfig config_;
         std::atomic<bool> running_{false};
@@ -286,6 +325,10 @@ namespace lfs::io {
         mutable std::mutex stats_mutex_;
         CacheStats stats_;
         std::atomic<size_t> in_flight_{0};
+        std::atomic<size_t> output_image_bytes_{0};
+        std::atomic<size_t> output_mask_bytes_{0};
+        std::atomic<size_t> pending_image_bytes_{0};
+        std::atomic<size_t> pending_mask_bytes_{0};
 
         // Pairing buffer for image+mask delivery
         std::unordered_map<size_t, PendingPair> pending_pairs_;

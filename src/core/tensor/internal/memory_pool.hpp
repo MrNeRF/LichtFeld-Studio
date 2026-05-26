@@ -254,7 +254,11 @@ namespace lfs::core {
                 return;
             }
 
-            uint64_t threshold = UINT64_MAX;
+            // 64 MiB headroom: keep typical reuse fast (per-iter scratch buffers stay
+            // pool-resident) while letting the driver reclaim memory beyond peak
+            // densification spikes. UINT64_MAX hoards indefinitely and inflates
+            // cuda.pool.overhead at higher gaussian counts.
+            uint64_t threshold = std::uint64_t(64) << 20;
             cudaMemPoolSetAttribute(pool, cudaMemPoolAttrReleaseThreshold, &threshold);
 
             LOG_DEBUG("CUDA memory pool configured for device " + std::to_string(device) + " (CUDA " + std::to_string(CUDART_VERSION) + ")");

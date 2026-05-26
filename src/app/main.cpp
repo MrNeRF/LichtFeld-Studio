@@ -37,6 +37,18 @@ namespace {
         return lfs::vis::gui::queryGpuMemory().process_used;
     }
 
+    // Apply CUDA driver-level VRAM-reduction knobs BEFORE the primary context exists.
+    // Setting these after cudaFree(nullptr) is too late — the driver has already
+    // committed defaults (1 KiB/thread stack reserve × SMs × max-threads = ~192 MiB on
+    // a 4090; eager module loading uploads all kernel cubins on first ctx-init).
+    void applyCudaContextTuning() {
+#ifdef _WIN32
+        _putenv_s("CUDA_MODULE_LOADING", "LAZY");
+#else
+        setenv("CUDA_MODULE_LOADING", "LAZY", /*overwrite=*/0);
+#endif
+    }
+
     // Probe what the CUDA driver allocates during context creation, *attributed to this
     // process* (NVML per-PID, not device-wide cudaMemGetInfo). Each phase is the delta
     // against the previous probe so the sum reconstructs the total context cost.
@@ -49,6 +61,13 @@ namespace {
         // Phase 1: primary context creation. cudaFree(nullptr) is a documented idiom that
         // forces the primary context to exist on device 0.
         cudaFree(nullptr);
+
+        // Shrink the per-thread stack reserve from the 1 KiB default. Our kernels do not
+        // recurse and have small frames; 256 B is comfortable. Default reservation is
+        // per_thread_stack × num_SMs × max_threads_per_SM = ~192 MiB on a 4090. Driver
+        // accepts the request post-context but applies it on the *next* launch — well
+        // before any real kernel runs.
+        cudaDeviceSetLimit(cudaLimitStackSize, 256);
         const std::size_t after_context = process_used_now();
         const std::size_t primary_context =
             after_context > before_context ? after_context - before_context : after_context;
@@ -156,6 +175,11 @@ namespace {
 } // namespace
 
 int main(int argc, char* argv[]) {
+    // Driver-level tuning must precede *any* CUDA call, including the cudaFree(nullptr)
+    // inside analyzeCudaContextDistribution. Lazy module loading defers kernel cubin
+    // upload until first use, dropping the eager-load slice of cuda.primary_context.
+    applyCudaContextTuning();
+
     // Probe and decompose the CUDA driver's context-creation cost before any other
     // code touches the device. Surfaces per-phase byte values into the HUD breakdown.
     analyzeCudaContextDistribution();

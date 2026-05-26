@@ -163,6 +163,15 @@ namespace lfs::vis {
                                                 ExternalBuffer& out);
         void destroyExternalBuffer(ExternalBuffer& buffer);
         [[nodiscard]] ExternalNativeHandle releaseExternalBufferNativeHandle(ExternalBuffer& buffer) const;
+        // Import a foreign-allocated external memory handle (e.g. from CUDA's
+        // cuMemExportToShareableHandle) into Vulkan. The exporter retains ownership
+        // of the handle; this method dup()'s on Linux and the imported VkDeviceMemory
+        // is released by destroyExternalBuffer. The returned ExternalBuffer's
+        // native_handle stays kInvalidExternalNativeHandle (we are not the owner).
+        [[nodiscard]] bool importExternalBuffer(ExternalNativeHandle handle,
+                                                VkDeviceSize size,
+                                                VkBufferUsageFlags usage,
+                                                ExternalBuffer& out);
         [[nodiscard]] bool createExternalTimelineSemaphore(std::uint64_t initial_value, ExternalSemaphore& out);
         void destroyExternalSemaphore(ExternalSemaphore& semaphore);
         [[nodiscard]] ExternalNativeHandle releaseExternalSemaphoreNativeHandle(ExternalSemaphore& semaphore) const;

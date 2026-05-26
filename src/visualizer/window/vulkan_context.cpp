@@ -1792,6 +1792,119 @@ namespace lfs::vis {
         return true;
     }
 
+    bool VulkanContext::importExternalBuffer(ExternalNativeHandle handle,
+                                             const VkDeviceSize size,
+                                             const VkBufferUsageFlags usage,
+                                             ExternalBuffer& out) {
+        out = {};
+
+        if (!device_ || !physical_device_) {
+            return fail("Cannot import external Vulkan buffer before device initialization");
+        }
+        if (size == 0) {
+            return fail("Imported external Vulkan buffer requires a non-zero size");
+        }
+        if (!externalNativeHandleValid(handle)) {
+            return fail("Imported external Vulkan buffer requires a valid native handle");
+        }
+
+        VkExternalMemoryBufferCreateInfo external_buffer_info{};
+        external_buffer_info.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO;
+        external_buffer_info.handleTypes = kExternalMemoryHandleType;
+
+        VkBufferCreateInfo buffer_info{};
+        buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        buffer_info.pNext = &external_buffer_info;
+        buffer_info.size = size;
+        buffer_info.usage = usage |
+                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                            VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                            VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        // Same concurrent-queue rationale as createExternalBuffer.
+        std::array<uint32_t, 2> external_buffer_families{
+            graphics_queue_family_,
+            has_dedicated_compute_queue_ ? compute_queue_family_ : graphics_queue_family_};
+        if (has_dedicated_compute_queue_) {
+            buffer_info.sharingMode = VK_SHARING_MODE_CONCURRENT;
+            buffer_info.queueFamilyIndexCount = static_cast<uint32_t>(external_buffer_families.size());
+            buffer_info.pQueueFamilyIndices = external_buffer_families.data();
+        } else {
+            buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        }
+
+        VkResult result = vkCreateBuffer(device_, &buffer_info, nullptr, &out.buffer);
+        if (result != VK_SUCCESS) {
+            out = {};
+            return fail(std::format("vkCreateBuffer(imported) failed: {}", vkResultToString(result)));
+        }
+        setDebugObjectName(VK_OBJECT_TYPE_BUFFER, out.buffer,
+                           std::format("Imported external buffer {} bytes", size));
+
+        VkMemoryRequirements memory_requirements{};
+        vkGetBufferMemoryRequirements(device_, out.buffer, &memory_requirements);
+        out.size = size;
+        out.allocation_size = memory_requirements.size;
+
+#ifdef _WIN32
+        VkImportMemoryWin32HandleInfoKHR import_info{};
+        import_info.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR;
+        import_info.handleType = kExternalMemoryHandleType;
+        import_info.handle = handle;
+#else
+        // NVIDIA's driver takes ownership of the fd we pass to vkAllocateMemory and
+        // will close it on vkFreeMemory. Dup so the original exporter (CUDA) can
+        // still own its copy; both close their fd independently on teardown.
+        const int dup_fd = ::dup(handle);
+        if (dup_fd < 0) {
+            destroyExternalBuffer(out);
+            return fail("dup() of external memory fd failed for Vulkan import");
+        }
+        VkImportMemoryFdInfoKHR import_info{};
+        import_info.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR;
+        import_info.handleType = kExternalMemoryHandleType;
+        import_info.fd = dup_fd;
+#endif
+
+        VkMemoryAllocateInfo allocate_info{};
+        allocate_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocate_info.pNext = &import_info;
+        // The exporter created exactly `size` bytes; the importer must allocate the
+        // SAME size, not memory_requirements.size which can be larger (e.g. when
+        // Vulkan would round up for its own alignment). vkAllocateMemory with import
+        // requires the original allocation size.
+        allocate_info.allocationSize = size;
+        allocate_info.memoryTypeIndex =
+            findMemoryType(memory_requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (allocate_info.memoryTypeIndex == std::numeric_limits<uint32_t>::max()) {
+#ifndef _WIN32
+            ::close(dup_fd);
+#endif
+            destroyExternalBuffer(out);
+            return fail("Could not find Vulkan device-local memory type for imported buffer");
+        }
+
+        result = vkAllocateMemory(device_, &allocate_info, nullptr, &out.memory);
+        if (result != VK_SUCCESS) {
+#ifndef _WIN32
+            // On failure the driver did NOT take the fd; close it ourselves.
+            ::close(dup_fd);
+#endif
+            destroyExternalBuffer(out);
+            return fail(std::format("vkAllocateMemory(import) failed: {}", vkResultToString(result)));
+        }
+        setDebugObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, out.memory, "Imported external buffer memory");
+
+        result = vkBindBufferMemory(device_, out.buffer, out.memory, 0);
+        if (result != VK_SUCCESS) {
+            destroyExternalBuffer(out);
+            return fail(std::format("vkBindBufferMemory(import) failed: {}", vkResultToString(result)));
+        }
+
+        // We do NOT own the handle; the exporter retains it. Leave native_handle invalid.
+        out.native_handle = kInvalidExternalNativeHandle;
+        return true;
+    }
+
     void VulkanContext::destroyExternalBuffer(ExternalBuffer& buffer) {
         if (device_) {
             if (buffer.buffer != VK_NULL_HANDLE) {

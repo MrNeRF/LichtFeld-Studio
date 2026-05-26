@@ -44,7 +44,7 @@ namespace lfs::vis::gui {
             {"pinned_host", "Pinned host"},
             {"sampled", "Sampled subtotal"},
             {"allocator_live", "Allocator live"},
-            {"process_gap", "Process gap"},
+            {"process_gap", "Unsampled gap"},
             {"allocator_peak", "Allocator peak"},
             {"events", "Events"},
             {"iter_events", "Events (iter)"},
@@ -650,12 +650,33 @@ namespace lfs::vis::gui {
             const auto end = scope.find_first_of("/.");
             return std::string(end == std::string_view::npos ? scope : scope.substr(0, end));
         };
+        const auto first_dot_segments = [](std::string_view scope, const std::size_t count) -> std::string {
+            std::size_t pos = 0;
+            for (std::size_t i = 0; i < count; ++i) {
+                pos = scope.find('.', pos);
+                if (pos == std::string_view::npos)
+                    return std::string(scope);
+                ++pos;
+            }
+            return std::string(scope.substr(0, pos - 1));
+        };
+        const auto breakdown_label = [&](const auto& row) -> std::string {
+            const std::string_view scope = row.scope;
+            if (scope.rfind("io.", 0) == 0) {
+                const auto io_group = first_dot_segments(scope, 2);
+                if (io_group == "io.pipeline" && !row.label.empty()) {
+                    return io_group + "." + row.label;
+                }
+                return io_group;
+            }
+            return top_segment(scope);
+        };
 
         std::unordered_map<std::string, std::size_t> groups;
         for (const auto& r : state_.snapshot.rows) {
             if (r.live_bytes == 0)
                 continue;
-            groups[top_segment(r.scope)] += r.live_bytes;
+            groups[breakdown_label(r)] += r.live_bytes;
         }
 
         struct Entry {
@@ -665,7 +686,7 @@ namespace lfs::vis::gui {
             bool total = false;
         };
         std::vector<Entry> entries;
-        entries.reserve(groups.size() + 4);
+        entries.reserve(groups.size() + 12);
         std::size_t tracked_total = 0;
         for (auto& [k, v] : groups) {
             tracked_total += v;
@@ -679,6 +700,17 @@ namespace lfs::vis::gui {
             const std::size_t pool_overhead = proc.cuda_pool_reserved - proc.cuda_pool_used;
             tracked_total += pool_overhead;
             entries.push_back({"cuda.pool.overhead", pool_overhead, false});
+        }
+        if (proc.cuda_pool_valid &&
+            proc.cuda_pool_used > state_.snapshot.accounted_cuda_pool_live_bytes) {
+            // CUDA's default pool has bytes actively checked out that our tensor
+            // allocation map does not own. This can come from CUDA/nvImageCodec/CUB
+            // internals using cudaMallocAsync, so keep it separate from opaque
+            // process.residual.
+            const std::size_t pool_untracked =
+                proc.cuda_pool_used - state_.snapshot.accounted_cuda_pool_live_bytes;
+            tracked_total += pool_untracked;
+            entries.push_back({"cuda.pool.untracked_used", pool_untracked, false});
         }
         // Per-phase CUDA decomposition. ONLY actually-measured allocation deltas go in
         // the running sum. The cudaDeviceGetLimit values (stack/printf/malloc_heap) are
@@ -708,20 +740,35 @@ namespace lfs::vis::gui {
             entries.push_back({"cuda.warmup_kernels", proc.cuda_warmup_bytes, false});
         }
         if (proc.vulkan_vma_used > 0) {
-            // The Vulkan budget reports the *whole* process heap including buffers we
-            // already publish individually as vksplat.* rows. Subtract that group's
-            // already-counted bytes so the synthetic "vulkan" entry is residual only —
+            // The Vulkan budget reports the *whole* process heap including:
+            //   1) buffers we already publish as vksplat.* rows
+            //   2) the CUDA-exportable splat block imported as a VkDeviceMemory —
+            //      same physical bytes accounted under the model.* rows via
+            //      record_splat_vram_breakdown.
+            // Subtract both so the synthetic "vulkan.driver" entry is residual only:
             // swap-chain images, framebuffers, descriptor pools, command-buffer state.
             const auto vksplat_it = groups.find("vksplat");
             const std::size_t vksplat_labeled =
                 vksplat_it != groups.end() ? vksplat_it->second : 0;
-            const std::size_t vulkan_residual = proc.vulkan_vma_used > vksplat_labeled
-                                                    ? proc.vulkan_vma_used - vksplat_labeled
-                                                    : 0;
+            const std::size_t deductions = vksplat_labeled + proc.exportable_splat_bytes;
+            const std::size_t vulkan_residual =
+                proc.vulkan_vma_used > deductions ? proc.vulkan_vma_used - deductions : 0;
             if (vulkan_residual > 0) {
                 tracked_total += vulkan_residual;
                 entries.push_back({"vulkan.driver", vulkan_residual, false});
             }
+        }
+
+        const bool cuda_runtime_active =
+            proc.cuda_context_baseline > 0 || proc.cuda_pool_valid || proc.cuda_warmup_bytes > 0;
+        if (cuda_runtime_active && process_used > tracked_total) {
+            // This is measured only by subtraction from the per-PID process total. In
+            // practice it is usually CUDA module/JIT/runtime or third-party library
+            // backing memory, but no API tells us the exact owner, so keep the HUD
+            // label explicit instead of pretending it is a proven CUDA phase.
+            const std::size_t residual = process_used - tracked_total;
+            tracked_total += residual;
+            entries.push_back({"process.residual", residual, true});
         }
 
         std::sort(entries.begin(), entries.end(),
@@ -738,7 +785,7 @@ namespace lfs::vis::gui {
         }
 
         // Bottom-of-list totals so the user can eyeball that the breakdown closes.
-        // Sum is everything above (tracked groups + synthetic + unaccounted).
+        // Sum is everything above (tracked groups + synthetic + any unaccounted fallback).
         // Process is what NVML / DXGI reports for this PID. They should match.
         entries.push_back({"\xE2\x80\x94 Sum", row_sum, false, true});
         if (process_used > 0)

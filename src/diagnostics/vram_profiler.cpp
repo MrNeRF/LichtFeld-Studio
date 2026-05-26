@@ -45,6 +45,7 @@ namespace lfs::diagnostics {
             std::size_t freed_bytes = 0;
             std::uint64_t allocation_count = 0;
             std::uint64_t free_count = 0;
+            VramAllocationMethod method = VramAllocationMethod::Unknown;
             bool current_sample = false;
         };
 
@@ -308,6 +309,7 @@ namespace lfs::diagnostics {
         VramProcessSnapshot process;
         std::size_t pinned_host_used = 0;
         std::size_t vulkan_vma_used = 0;
+        std::size_t exportable_splat_bytes = 0;
         std::size_t cuda_context_baseline = 0;
         std::size_t cuda_warmup_bytes = 0;
         std::unordered_map<std::string, std::size_t> cuda_phase_bytes;
@@ -375,6 +377,7 @@ namespace lfs::diagnostics {
             impl_->accounted_history.clear();
             impl_->pinned_host_used = 0;
             impl_->vulkan_vma_used = 0;
+            impl_->exportable_splat_bytes = 0;
             // cuda_context_baseline intentionally preserved: it captures the irreducible
             // runtime overhead once at process startup and is valid for the session.
             impl_->sequence.fetch_add(1, std::memory_order_relaxed);
@@ -626,6 +629,7 @@ namespace lfs::diagnostics {
         metric.allocated_bytes += bytes;
         metric.peak_bytes = std::max(metric.peak_bytes, metric.live_bytes);
         metric.allocation_count += 1;
+        metric.method = method;
         upsert_scope_node(impl_->scope_nodes, key.scope, false, false, false);
 
         impl_->allocations[ptr] = AllocationRecord{
@@ -665,6 +669,7 @@ namespace lfs::diagnostics {
         new_metric.allocated_bytes = std::max(new_metric.allocated_bytes, new_metric.live_bytes);
         if (new_metric.allocation_count == 0)
             new_metric.allocation_count = 1;
+        new_metric.method = alloc_it->second.method;
 
         alloc_it->second.key = new_key;
         upsert_scope_node(impl_->scope_nodes, new_key.scope, false, false, false);
@@ -700,7 +705,7 @@ namespace lfs::diagnostics {
     void VramProfiler::recordBytes(std::string_view scope,
                                    std::string_view label,
                                    const std::size_t bytes,
-                                   VramAllocationMethod) {
+                                   const VramAllocationMethod method) {
         if (!enabled() || bytes == 0 || scope.empty() || label.empty()) {
             return;
         }
@@ -710,6 +715,7 @@ namespace lfs::diagnostics {
         metric.allocated_bytes += bytes;
         metric.peak_bytes = std::max(metric.peak_bytes, bytes);
         metric.allocation_count += 1;
+        metric.method = method;
         upsert_scope_node(impl_->scope_nodes, scope, false, false, false);
         impl_->sequence.fetch_add(1, std::memory_order_relaxed);
     }
@@ -717,7 +723,7 @@ namespace lfs::diagnostics {
     void VramProfiler::recordCurrentBytes(std::string_view scope,
                                           std::string_view label,
                                           const std::size_t bytes,
-                                          VramAllocationMethod) {
+                                          const VramAllocationMethod method) {
         if (!enabled() || scope.empty() || label.empty()) {
             return;
         }
@@ -728,6 +734,7 @@ namespace lfs::diagnostics {
         metric.peak_bytes = std::max(metric.peak_bytes, bytes);
         metric.allocated_bytes = std::max(metric.allocated_bytes, bytes);
         metric.allocation_count = std::max<std::uint64_t>(metric.allocation_count, bytes > 0 ? 1 : 0);
+        metric.method = method;
         metric.current_sample = true;
         upsert_scope_node(impl_->scope_nodes, scope, false, false, false);
         impl_->sequence.fetch_add(1, std::memory_order_relaxed);
@@ -736,7 +743,7 @@ namespace lfs::diagnostics {
     void VramProfiler::recordStaticBytes(std::string_view scope,
                                          std::string_view label,
                                          const std::size_t bytes,
-                                         VramAllocationMethod) {
+                                         const VramAllocationMethod method) {
         if (bytes == 0 || scope.empty() || label.empty()) {
             return;
         }
@@ -747,6 +754,7 @@ namespace lfs::diagnostics {
         metric.peak_bytes = std::max(metric.peak_bytes, bytes);
         metric.allocated_bytes = std::max(metric.allocated_bytes, bytes);
         metric.allocation_count = 1;
+        metric.method = method;
         metric.current_sample = false;
         impl_->sequence.fetch_add(1, std::memory_order_relaxed);
     }
@@ -954,6 +962,13 @@ namespace lfs::diagnostics {
         impl_->sequence.fetch_add(1, std::memory_order_relaxed);
     }
 
+    void VramProfiler::setExportableSplatBytes(const std::size_t bytes) {
+        std::lock_guard lock(impl_->mutex);
+        impl_->exportable_splat_bytes = bytes;
+        impl_->process.exportable_splat_bytes = bytes;
+        impl_->sequence.fetch_add(1, std::memory_order_relaxed);
+    }
+
     void VramProfiler::captureCudaContextBaseline() {
         std::size_t used = 0;
         if (!sample_cuda_used_bytes(used))
@@ -1077,6 +1092,7 @@ namespace lfs::diagnostics {
             }
             process.pinned_host_used = impl_->pinned_host_used;
             process.vulkan_vma_used = impl_->vulkan_vma_used;
+            process.exportable_splat_bytes = impl_->exportable_splat_bytes;
             process.cuda_context_baseline = impl_->cuda_context_baseline;
             process.cuda_warmup_bytes = impl_->cuda_warmup_bytes;
             impl_->process = std::move(process);
@@ -1126,6 +1142,25 @@ namespace lfs::diagnostics {
         out.iter_ms_p95 = ring_percentile(impl_->iter_ms_ring, 0.95);
         out.iter_ms_last = impl_->iter_ms_last;
         out.accounted_live_bytes = impl_->accounted_live_bytes;
+        for (const auto& [_, allocation] : impl_->allocations) {
+            switch (allocation.method) {
+            case VramAllocationMethod::Slab:
+            case VramAllocationMethod::Bucketed:
+            case VramAllocationMethod::Async:
+                out.accounted_cuda_pool_live_bytes += allocation.bytes;
+                break;
+            case VramAllocationMethod::Direct:
+            case VramAllocationMethod::Arena:
+            case VramAllocationMethod::External:
+            case VramAllocationMethod::Unknown:
+                break;
+            }
+        }
+        for (const auto& [_, metric] : impl_->static_metrics) {
+            if (metric.method == VramAllocationMethod::Async) {
+                out.accounted_cuda_pool_live_bytes += metric.live_bytes;
+            }
+        }
         out.accounted_peak_bytes = impl_->accounted_peak_bytes;
         out.accounted_live_history.assign(impl_->accounted_history.begin(),
                                           impl_->accounted_history.end());
@@ -1199,12 +1234,12 @@ namespace lfs::diagnostics {
                                                     stats.max_vram_decrease_bytes);
         };
 
-        const auto append_metric = [&](const MetricKey& key, const Metric& metric) {
+        const auto append_metric = [&](const MetricKey& key, const Metric& metric, const bool include_live_sample) {
             if (metric.live_bytes == 0 && metric.peak_bytes == 0 &&
                 metric.allocated_bytes == 0 && metric.freed_bytes == 0) {
                 return;
             }
-            if (metric.current_sample) {
+            if (metric.current_sample || include_live_sample) {
                 out.sampled_live_bytes += metric.live_bytes;
             }
             out.rows.push_back({
@@ -1216,15 +1251,16 @@ namespace lfs::diagnostics {
                 .freed_bytes = metric.freed_bytes,
                 .allocation_count = metric.allocation_count,
                 .free_count = metric.free_count,
+                .method = metric.method,
             });
             add_metric_to_tree(key, metric);
         };
 
         for (const auto& [key, metric] : impl_->metrics) {
-            append_metric(key, metric);
+            append_metric(key, metric, false);
         }
         for (const auto& [key, metric] : impl_->static_metrics) {
-            append_metric(key, metric);
+            append_metric(key, metric, true);
         }
         for (const auto& [_, stats] : impl_->scope_nodes) {
             if (stats.path.empty()) {
