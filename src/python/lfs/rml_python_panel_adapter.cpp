@@ -16,6 +16,30 @@
 #include <imgui.h>
 
 namespace lfs::vis::gui {
+    namespace {
+        bool panelHookDirtyResult(const nb::object& result,
+                                  const bool none_is_dirty,
+                                  bool& warned_non_bool,
+                                  const char* const hook_name) {
+            if (result.is_none()) {
+                return none_is_dirty;
+            }
+            if (nb::isinstance<nb::bool_>(result)) {
+                return nb::cast<bool>(result);
+            }
+            if (!warned_non_bool) {
+                LOG_WARN("Panel {} returned a non-bool value; treating it with Python truthiness. "
+                         "Return None for compatibility or bool for explicit dirty state.",
+                         hook_name);
+                warned_non_bool = true;
+            }
+            const int truthy = PyObject_IsTrue(result.ptr());
+            if (truthy < 0) {
+                throw nb::python_error();
+            }
+            return truthy != 0;
+        }
+    }
 
     bool RmlPythonPanelAdapter::isModelBound() const {
         return lifecycle_state_ == LifecycleState::ModelBound ||
@@ -366,7 +390,8 @@ namespace lfs::vis::gui {
             if (scene_changed) {
                 try {
                     nb::object result = panel_instance_.attr("on_scene_changed")(py_doc);
-                    const bool scene_dirty = result.is_none() || nb::cast<bool>(result);
+                    const bool scene_dirty = panelHookDirtyResult(
+                        result, true, warned_non_bool_scene_changed_, "on_scene_changed");
                     pending_dirty |= scene_dirty;
                     run_update |= scene_dirty;
                 } catch (const std::exception& e) {
@@ -380,7 +405,8 @@ namespace lfs::vis::gui {
             if (run_update) {
                 try {
                     nb::object result = panel_instance_.attr("on_update")(py_doc);
-                    pending_dirty |= !result.is_none() && nb::cast<bool>(result);
+                    pending_dirty |= panelHookDirtyResult(
+                        result, false, warned_non_bool_update_, "on_update");
                 } catch (const std::exception& e) {
                     LOG_ERROR("Panel on_update error: {}", e.what());
                 }

@@ -13,6 +13,8 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
+#include <cstdint>
+
 namespace nb = nanobind;
 
 namespace lfs::python {
@@ -530,6 +532,15 @@ namespace lfs::python {
                 return get_keymap_bindings()->getCurrentProfileName();
             },
             "Get name of active keymap profile");
+
+        keymap.def(
+            "bindings_revision",
+            []() -> std::uint64_t {
+                if (!get_keymap_bindings())
+                    return 0;
+                return get_keymap_bindings()->getBindingsRevision();
+            },
+            "Get a monotonic revision for key binding changes");
 
         keymap.def(
             "load_profile",

@@ -9,6 +9,7 @@ from .histogram_support import histogram_mode_available
 from .selection_controls import SelectionControlsController
 from .tools import ToolRegistry
 from .transform_controls import TransformControlsController
+from .ui.state import AppState
 
 
 _TOOLBAR_HIDDEN_STATES = ("running", "paused", "stopping", "completed")
@@ -16,6 +17,7 @@ _RML_PATH_SAFE_CHARS = "/:._-~"
 _OVERLAY_DOC_KEY_ATTR = "data-viewport-toolbar-doc-key"
 
 _toolbar_controller = None
+_shortcut_cache = {}
 
 
 def __lfs_after_reload__(runtime):
@@ -64,12 +66,29 @@ def _keymap_shortcut(lf, action_name, mode_name="GLOBAL"):
         keymap = lf.keymap
         action = getattr(keymap.Action, action_name)
         mode = getattr(keymap.ToolMode, mode_name)
+        revision_fn = getattr(keymap, "bindings_revision", None)
+        revision = revision_fn() if callable(revision_fn) else 0
+        language_fn = getattr(lf.ui, "get_current_language", None)
+        language = language_fn() if callable(language_fn) else ""
+        cache_key = (revision, language, action_name, mode_name)
+        cached = _shortcut_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        if not keymap.is_bound(action, mode):
+            _shortcut_cache[cache_key] = ""
+            return ""
         shortcut = keymap.get_trigger_description(action, mode)
-    except Exception:
+    except (AttributeError, RuntimeError, TypeError):
         return ""
-    if not shortcut or shortcut == "Unbound":
+    if not shortcut:
+        _shortcut_cache[cache_key] = ""
         return ""
-    return str(shortcut)
+    text = str(shortcut)
+    _shortcut_cache[cache_key] = text
+    if len(_shortcut_cache) > 256:
+        for key in list(_shortcut_cache)[:128]:
+            _shortcut_cache.pop(key, None)
+    return text
 
 
 def _button_record(button_id, action, value, icon_src, *,
@@ -154,7 +173,6 @@ class _GizmoToolbarController:
     def snapshot(self):
         import lichtfeld as lf
         from .op_context import get_context
-        from .ui.state import AppState
 
         hidden = AppState.trainer_state.value in _TOOLBAR_HIDDEN_STATES
         if hidden:
@@ -411,8 +429,6 @@ class _GizmoToolbarController:
                 if transform_space >= 0:
                     lf.ui.set_transform_space(transform_space)
                     try:
-                        from .ui.state import AppState
-
                         AppState.transform_space.value = transform_space
                     except Exception:
                         pass
@@ -425,8 +441,6 @@ class _GizmoToolbarController:
             if pivot_mode >= 0:
                 lf.ui.set_pivot_mode(pivot_mode)
                 try:
-                    from .ui.state import AppState
-
                     AppState.pivot_mode.value = pivot_mode
                 except Exception:
                     pass
@@ -891,7 +905,6 @@ class _ViewportToolbarController:
         import lichtfeld as lf
 
         try:
-            from .ui.state import AppState
             trainer_state = AppState.trainer_state.value
         except Exception:
             trainer_state = ""

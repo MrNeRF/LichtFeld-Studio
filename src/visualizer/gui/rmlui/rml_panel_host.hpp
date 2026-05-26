@@ -100,7 +100,7 @@ namespace lfs::vis::gui {
         void resolveDirectRenderHeight(float requested_h, int& ph, float& display_h) const;
         bool updateContextLayout(int pw, int ph);
         void renderIfDirty(int pw, int ph, float& display_h);
-        void compositeDirectToScreen(float x, float y, float w, float h) const;
+        void compositeDirectToScreen(float x, float y, float w, float h);
 
         RmlUIManager* manager_;
         std::string context_name_;
@@ -134,8 +134,8 @@ namespace lfs::vis::gui {
 
         bool render_needed_ = true;
         bool animation_active_ = false;
-        mutable bool direct_cache_dirty_ = true;
-        mutable CachedVulkanContextRender direct_cache_;
+        bool direct_cache_dirty_ = true;
+        CachedVulkanContextRender direct_cache_;
         int last_fbo_w_ = 0;
         int last_fbo_h_ = 0;
         int last_layout_w_ = 0;

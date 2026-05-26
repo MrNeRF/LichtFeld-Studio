@@ -20,13 +20,20 @@ _DEFAULT_DEPTH_FAR = 5.3
 _DEFAULT_FRUSTUM_HALF_WIDTH = 1.35
 
 _MODE_LABELS = {
-    "centers": "Brush",
-    "rectangle": "Rectangle",
-    "polygon": "Polygon",
-    "lasso": "Lasso",
-    "rings": "Rings",
-    "color": "Color",
+    "centers": ("toolbar.brush_selection", "Brush"),
+    "rectangle": ("toolbar.rect_selection", "Rectangle"),
+    "polygon": ("toolbar.polygon_selection", "Polygon"),
+    "lasso": ("toolbar.lasso_selection", "Lasso"),
+    "rings": ("toolbar.ring_selection", "Rings"),
+    "color": ("toolbar.color_selection", "Color"),
 }
+
+
+def _ui_label(key: str, fallback: str) -> str:
+    value = lf.ui.tr(key)
+    if value and value != key:
+        return value
+    return fallback
 
 
 def _parse_float(value, fallback):
@@ -120,7 +127,7 @@ class SelectionControlsController:
         self._last_state_items = None
 
     def bind_model(self, model):
-        model.bind_func("selection_tool_label", lambda: "Select")
+        model.bind_func("selection_tool_label", lambda: _ui_label("toolbar.selection", "Select"))
         model.bind_func("selection_mode_label", self._mode_label)
         model.bind_func("selection_depth_mode_active", lambda: self._depth_enabled)
         model.bind_func("selection_has_scene", lambda: self._has_scene)
@@ -130,14 +137,16 @@ class SelectionControlsController:
         model.bind_func("selection_can_redo", lambda: self._can_redo)
         model.bind_func(
             "selection_depth_toggle_label",
-            lambda: "Disable Depth Mode" if self._depth_enabled else "Enable Depth Mode",
+            lambda: _ui_label("toolbar.depth_mode_disable", "Disable Depth Mode")
+            if self._depth_enabled
+            else _ui_label("toolbar.depth_mode_enable", "Enable Depth Mode"),
         )
-        model.bind_func("selection_delete_label", lambda: "Delete Selection")
-        model.bind_func("selection_undo_label", lambda: "Undo")
-        model.bind_func("selection_redo_label", lambda: "Redo")
-        model.bind_func("selection_invert_label", lambda: "Invert Selection")
-        model.bind_func("selection_select_all_label", lambda: "Select All")
-        model.bind_func("selection_unselect_label", lambda: "Unselect")
+        model.bind_func("selection_delete_label", lambda: _ui_label("toolbar.delete_selection", "Delete Selection"))
+        model.bind_func("selection_undo_label", lambda: _ui_label("toolbar.undo", "Undo"))
+        model.bind_func("selection_redo_label", lambda: _ui_label("toolbar.redo", "Redo"))
+        model.bind_func("selection_invert_label", lambda: _ui_label("toolbar.invert_selection", "Invert Selection"))
+        model.bind_func("selection_select_all_label", lambda: _ui_label("toolbar.select_all", "Select All"))
+        model.bind_func("selection_unselect_label", lambda: _ui_label("toolbar.unselect", "Unselect"))
 
         model.bind(
             "selection_depth_near_str",
@@ -217,7 +226,8 @@ class SelectionControlsController:
         self._last_state_items = None
 
     def _mode_label(self):
-        return _MODE_LABELS.get(self._active_mode, "Selection")
+        key, fallback = _MODE_LABELS.get(self._active_mode, ("toolbar.selection", "Selection"))
+        return _ui_label(key, fallback)
 
     def _get_active_tool(self):
         getter = getattr(lf.ui, "get_active_tool", None)
@@ -274,7 +284,6 @@ class SelectionControlsController:
             ("depth_enabled", self._depth_enabled),
             ("depth_near", round(self._depth_near, 3)),
             ("depth_far", round(self._depth_far, 3)),
-            ("frustum_half_width", round(self._frustum_half_width, 3)),
         )
 
     def _state_key(self, state_items=None):
@@ -286,8 +295,7 @@ class SelectionControlsController:
         if self._last_state_items is None:
             return ["initial"]
         previous = dict(self._last_state_items)
-        changed = [name for name, value in state_items if previous.get(name) != value]
-        return changed or ["unknown"]
+        return [name for name, value in state_items if previous.get(name) != value]
 
     def _near_slider_bounds(self):
         return _slider_bounds(self._depth_near, _DEPTH_MIN, self._depth_far - _DEPTH_GAP)
@@ -364,7 +372,10 @@ class SelectionControlsController:
                 self._frustum_half_width,
             )
         except Exception as exc:
-            self._report_error(str(exc).strip() or "Could not update selection depth filter.")
+            self._report_error(
+                str(exc).strip()
+                or _ui_label("selection.update_depth_failed", "Could not update selection depth filter.")
+            )
 
         self._dirty_all()
 
@@ -388,13 +399,13 @@ class SelectionControlsController:
                 if lf.undo.can_undo():
                     lf.undo.undo()
             except Exception as exc:
-                self._report_error(str(exc).strip() or "Undo failed.")
+                self._report_error(str(exc).strip() or _ui_label("selection.undo_failed", "Undo failed."))
         elif action == "redo":
             try:
                 if lf.undo.can_redo():
                     lf.undo.redo()
             except Exception as exc:
-                self._report_error(str(exc).strip() or "Redo failed.")
+                self._report_error(str(exc).strip() or _ui_label("selection.redo_failed", "Redo failed."))
         elif action == "invert":
             self._execute_selection_stage(lambda: lf.pipeline.select.invert())
 
@@ -405,7 +416,7 @@ class SelectionControlsController:
         try:
             error = _execute_stage(factory())
         except Exception as exc:
-            error = str(exc).strip() or "Operation failed."
+            error = str(exc).strip() or _ui_label("selection.operation_failed_generic", "Operation failed.")
         if error:
             self._report_error(error)
 
@@ -413,7 +424,7 @@ class SelectionControlsController:
         dialog = getattr(lf.ui, "message_dialog", None)
         if callable(dialog):
             try:
-                dialog("Selection Operation Failed", message, style="error")
+                dialog(_ui_label("selection.operation_failed", "Selection Operation Failed"), message, style="error")
             except Exception:
                 pass
 
@@ -464,11 +475,12 @@ class SelectionControlsController:
                 "selection_depth_far_slider_max",
                 "selection_depth_near_slider_max",
             ),
-            "frustum_half_width": (),
         }
 
-        if not changed_fields or "initial" in changed_fields or "unknown" in changed_fields:
+        if "initial" in changed_fields:
             self._dirty_all()
+            return
+        if not changed_fields:
             return
 
         dirty_fields = []

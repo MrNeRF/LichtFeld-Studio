@@ -47,14 +47,16 @@ namespace lfs::vis::selection {
             device_recreated || !cached_host_mask_valid || locked_bitmask != cached_host_mask;
 
         if (needs_upload) {
-            if (const auto err = cudaMemcpy(device_mask.ptr<uint32_t>(),
-                                            locked_bitmask.data(),
-                                            sizeof(locked_bitmask),
-                                            cudaMemcpyHostToDevice);
+            cached_host_mask = locked_bitmask;
+            if (const auto err = cudaMemcpyAsync(device_mask.ptr<uint32_t>(),
+                                                 cached_host_mask.data(),
+                                                 sizeof(cached_host_mask),
+                                                 cudaMemcpyHostToDevice,
+                                                 device_mask.stream());
                 err != cudaSuccess) {
+                cached_host_mask_valid = false;
                 return std::unexpected(cudaGetErrorString(err));
             }
-            cached_host_mask = locked_bitmask;
             cached_host_mask_valid = true;
         }
 

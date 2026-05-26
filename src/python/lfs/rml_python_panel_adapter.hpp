@@ -93,6 +93,8 @@ namespace lfs::vis::gui {
         bool content_dirty_ = false;
         bool has_update_interval_ = false;
         bool dirty_driven_updates_ = false;
+        bool warned_non_bool_scene_changed_ = false;
+        bool warned_non_bool_update_ = false;
         int update_interval_ms_ = 100;
         std::chrono::steady_clock::time_point next_update_at_{};
         std::string last_language_;

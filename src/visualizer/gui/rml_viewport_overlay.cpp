@@ -528,7 +528,7 @@ namespace lfs::vis::gui {
         const int h = static_cast<int>(vp_size_.y);
         const bool size_changed = (w != last_render_w_ || h != last_render_h_);
         const bool toolbar_changed = updateToolbarRoots();
-        const bool hook_force = theme_changed || size_changed || toolbar_changed || render_needed_;
+        const bool hook_force = theme_changed || size_changed || toolbar_changed || render_needed_ || animation_active_;
         const bool run_document_hooks = shouldRunDocumentHooks(hook_force);
         bool document_dirty = false;
         if (run_document_hooks) {

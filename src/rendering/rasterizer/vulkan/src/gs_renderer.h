@@ -209,9 +209,8 @@ protected:
 
     // Deferred (1-frame-stale) num_indices readback, replacing the synchronous
     // mid-frame readElement that used to drain the queue every frame. The mapped
-    // pointer is read at the start of the next frame's executeCalculateIndexBufferOffset
-    // (after the prior frame's submit fence has signaled, guaranteeing the host
-    // copy is observable).
+    // pointer is invalidated/read at the start of the next frame's
+    // executeCalculateIndexBufferOffset after the tagged timeline has signaled.
     _VulkanBuffer num_indices_readback_buffer_{};
     int32_t* num_indices_readback_mapped_ = nullptr;
     bool num_indices_readback_initialized_ = false;
@@ -228,6 +227,7 @@ protected:
     void ensureNumIndicesReadback();
     void destroyNumIndicesReadback();
     size_t pollDeferredNumIndices();
+    bool invalidateReadbackBuffer(_VulkanBuffer& buffer, VkDeviceSize size);
 
     // Deferred visible-count readback for diagnostics. The copy is recorded after
     // prepare_visible_sort writes buffers.visible_count and consumed on the next

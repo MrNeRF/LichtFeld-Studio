@@ -66,7 +66,36 @@
     "local_space": "Espacio local",
     "world_space": "Espacio mundial",
     "origin_pivot": "Origen",
-    "bounds_center_pivot": "Centro de límites"
+    "bounds_center_pivot": "Centro de límites",
+    "depth_mode_disable": "Desactivar modo de profundidad",
+    "depth_mode_enable": "Activar modo de profundidad",
+    "delete_selection": "Eliminar selección",
+    "undo": "Deshacer",
+    "redo": "Rehacer",
+    "invert_selection": "Invertir selección",
+    "select_all": "Seleccionar todo",
+    "unselect": "Deseleccionar"
+  },
+  "transform": {
+    "node": "Nodo: %s",
+    "space": "Espacio: %s",
+    "world": "Mundo",
+    "local": "Local",
+    "reset_all": "Restablecer todas las transformaciones",
+    "reset_all_short": "Restablecer todo",
+    "reset_transform": "Restablecer transformación",
+    "nodes_selected": "%zu nodos seleccionados",
+    "bake_transform": "Aplicar transformación",
+    "tool": "Transformación",
+    "axis": "Eje",
+    "space_plain": "Espacio"
+  },
+  "selection": {
+    "operation_failed": "Error en la operación de selección",
+    "operation_failed_generic": "Error en la operación.",
+    "update_depth_failed": "No se pudo actualizar el filtro de profundidad de selección.",
+    "undo_failed": "No se pudo deshacer.",
+    "redo_failed": "No se pudo rehacer."
   },
   "getting_started": {
     "title": "Primeros Pasos",

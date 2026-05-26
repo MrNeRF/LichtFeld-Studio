@@ -769,7 +769,15 @@
     "sequencer": "Sekwencer",
     "ellipsoid": "Ellipsoid",
     "histogram": "Histogram",
-    "depth_map": "Mapa glebokosci"
+    "depth_map": "Mapa glebokosci",
+    "depth_mode_disable": "Wyłącz tryb głębi",
+    "depth_mode_enable": "Włącz tryb głębi",
+    "delete_selection": "Usuń zaznaczenie",
+    "undo": "Cofnij",
+    "redo": "Ponów",
+    "invert_selection": "Odwróć zaznaczenie",
+    "select_all": "Zaznacz wszystko",
+    "unselect": "Odznacz"
   },
   "transform": {
     "node": "Węzeł: %s",
@@ -783,8 +791,20 @@
     "uniform_scale": "Jednolita Skala",
     "use_gizmo": "Użyj gizmo do transformacji",
     "reset_all": "Resetuj Wszystkie Transformacje",
+    "reset_all_short": "Resetuj wszystko",
     "reset_transform": "Resetuj Transformację",
-    "nodes_selected": "%zu węzłów zaznaczonych"
+    "nodes_selected": "%zu węzłów zaznaczonych",
+    "bake_transform": "Zastosuj transformację",
+    "tool": "Transformacja",
+    "axis": "Oś",
+    "space_plain": "Przestrzeń"
+  },
+  "selection": {
+    "operation_failed": "Operacja zaznaczenia nie powiodła się",
+    "operation_failed_generic": "Operacja nie powiodła się.",
+    "update_depth_failed": "Nie można zaktualizować filtra głębi zaznaczenia.",
+    "undo_failed": "Cofnięcie nie powiodło się.",
+    "redo_failed": "Ponowienie nie powiodło się."
   },
   "cropbox": {
     "title": "Pole Przycinania",

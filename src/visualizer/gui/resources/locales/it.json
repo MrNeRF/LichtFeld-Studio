@@ -769,7 +769,15 @@
     "sequencer": "Sequencer",
     "ellipsoid": "Ellipsoid",
     "histogram": "Histogram",
-    "depth_map": "Mappa di profondita"
+    "depth_map": "Mappa di profondita",
+    "depth_mode_disable": "Disattiva modalità profondità",
+    "depth_mode_enable": "Attiva modalità profondità",
+    "delete_selection": "Elimina selezione",
+    "undo": "Annulla",
+    "redo": "Ripeti",
+    "invert_selection": "Inverti selezione",
+    "select_all": "Seleziona tutto",
+    "unselect": "Deseleziona"
   },
   "transform": {
     "node": "Nodo: %s",
@@ -783,8 +791,20 @@
     "uniform_scale": "Scala Uniforme",
     "use_gizmo": "Usa gizmo per trasformare",
     "reset_all": "Resetta Tutte le Trasformazioni",
+    "reset_all_short": "Resetta tutto",
     "reset_transform": "Resetta Trasformazione",
-    "nodes_selected": "%zu nodi selezionati"
+    "nodes_selected": "%zu nodi selezionati",
+    "bake_transform": "Applica trasformazione",
+    "tool": "Trasformazione",
+    "axis": "Asse",
+    "space_plain": "Spazio"
+  },
+  "selection": {
+    "operation_failed": "Operazione di selezione non riuscita",
+    "operation_failed_generic": "Operazione non riuscita.",
+    "update_depth_failed": "Impossibile aggiornare il filtro di profondità della selezione.",
+    "undo_failed": "Annullamento non riuscito.",
+    "redo_failed": "Ripetizione non riuscita."
   },
   "cropbox": {
     "title": "Scatola di Ritaglio",

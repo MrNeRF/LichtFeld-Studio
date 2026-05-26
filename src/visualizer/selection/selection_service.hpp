@@ -116,7 +116,6 @@ namespace lfs::vis {
         [[nodiscard]] SelectionResult finishInteractiveSelection();
         void cancelInteractiveSelection();
         void refreshInteractivePreview();
-        void prewarmInteractiveSelectionResources(SelectionShape shape);
         [[nodiscard]] bool isInteractiveSelectionActive() const { return interactive_selection_.active; }
         [[nodiscard]] SelectionShape getInteractiveSelectionShape() const { return interactive_selection_.shape; }
         [[nodiscard]] bool isInteractiveSelectionClosed() const { return interactive_selection_.polygon_closed; }
@@ -164,8 +163,6 @@ namespace lfs::vis {
                                                       const SelectionFilterState& filters,
                                                       const char* undo_name,
                                                       bool push_undo = true);
-        void prewarmSelectionCommitResources(size_t size);
-        void prewarmInteractiveBrushPreviewResources(size_t size);
         [[nodiscard]] core::Tensor& resetBoolScratchBuffer(core::Tensor& buffer, size_t size);
         [[nodiscard]] std::optional<ViewerViewportContext> resolveViewerViewportContext(
             std::optional<glm::vec2> screen_point = std::nullopt,
@@ -230,11 +227,8 @@ namespace lfs::vis {
         std::array<uint32_t, 8> locked_groups_host_mask_{};
         bool locked_groups_host_mask_valid_ = false;
         core::Tensor selection_group_counts_scratch_;
-        core::Tensor selection_merge_prewarm_a_;
-        core::Tensor selection_merge_prewarm_b_;
         std::array<core::Tensor, 2> selection_output_buffers_;
         size_t selection_output_buffer_index_ = 0;
-        bool selection_merge_kernel_prewarmed_ = false;
         std::shared_ptr<core::Tensor> testing_screen_positions_;
         std::unordered_map<int, std::shared_ptr<core::Tensor>> testing_camera_screen_positions_;
         std::optional<ViewportInfo> testing_viewport_;

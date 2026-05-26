@@ -52,6 +52,17 @@ def _ui_label(key: str, fallback: str) -> str:
     return fallback
 
 
+def _format_ui_label(key: str, fallback: str, *args) -> str:
+    template = _ui_label(key, fallback).replace("%zu", "%d")
+    try:
+        return template % args
+    except (TypeError, ValueError):
+        try:
+            return template.format(*args)
+        except (IndexError, KeyError, ValueError):
+            return fallback % args
+
+
 def _quat_dot(a: List[float], b: List[float]) -> float:
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
 
@@ -121,17 +132,23 @@ class TransformControlsController:
         model.bind_func("transform_tool_label", self._tool_label)
         model.bind_func(
             "transform_node_name",
-            lambda: f"Node: {self._selected[0]}" if self._selected else "",
+            lambda: _format_ui_label("transform.node", "Node: %s", self._selected[0])
+            if self._selected
+            else "",
         )
         model.bind_func(
             "transform_multi_label",
-            lambda: f"{len(self._selected)} nodes selected" if self._selected else "",
+            lambda: _format_ui_label("transform.nodes_selected", "%d nodes selected", len(self._selected))
+            if self._selected
+            else "",
         )
         model.bind_func(
             "transform_reset_label",
-            lambda: "Reset All" if len(self._selected) > 1 else "Reset Transform",
+            lambda: _ui_label("transform.reset_all_short", "Reset All")
+            if len(self._selected) > 1
+            else _ui_label("transform.reset_transform", "Reset Transform"),
         )
-        model.bind_func("transform_bake_label", lambda: "Bake Transform")
+        model.bind_func("transform_bake_label", lambda: _ui_label("transform.bake_transform", "Bake Transform"))
         model.bind_func("transform_is_single", lambda: len(self._selected) == 1)
         model.bind_func("transform_is_multi", lambda: len(self._selected) > 1)
         model.bind_func("transform_show_translate", lambda: self._active_tool == "builtin.translate")
@@ -290,7 +307,7 @@ class TransformControlsController:
             "builtin.scale": _ui_label("toolbar.scale", "Scale"),
             _MIRROR_TOOL_ID: _ui_label("toolbar.mirror", "Mirror"),
         }
-        return labels.get(self._active_tool, "Transform")
+        return labels.get(self._active_tool, _ui_label("transform.tool", "Transform"))
 
     def _space_label(self):
         if self._transform_space == _SPACE_LOCAL:
@@ -299,8 +316,8 @@ class TransformControlsController:
 
     def _submode_label(self):
         if self._active_tool == _MIRROR_TOOL_ID:
-            return "Axis"
-        return "Space"
+            return _ui_label("transform.axis", "Axis")
+        return _ui_label("transform.space_plain", "Space")
 
     def _submode_tooltip_key(self):
         if self._active_tool == _MIRROR_TOOL_ID:

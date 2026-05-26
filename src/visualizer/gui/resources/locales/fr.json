@@ -769,7 +769,15 @@
     "sequencer": "Séquenceur",
     "ellipsoid": "Ellipsoid",
     "histogram": "Histogram",
-    "depth_map": "Carte de profondeur"
+    "depth_map": "Carte de profondeur",
+    "depth_mode_disable": "Désactiver le mode profondeur",
+    "depth_mode_enable": "Activer le mode profondeur",
+    "delete_selection": "Supprimer la sélection",
+    "undo": "Annuler",
+    "redo": "Rétablir",
+    "invert_selection": "Inverser la sélection",
+    "select_all": "Tout sélectionner",
+    "unselect": "Désélectionner"
   },
   "transform": {
     "node": "Nœud : %s",
@@ -783,8 +791,20 @@
     "uniform_scale": "Échelle Uniforme",
     "use_gizmo": "Utiliser le gizmo pour transformer",
     "reset_all": "Réinitialiser Toutes les Transformations",
+    "reset_all_short": "Tout réinitialiser",
     "reset_transform": "Réinitialiser la Transformation",
-    "nodes_selected": "%zu nœuds sélectionnés"
+    "nodes_selected": "%zu nœuds sélectionnés",
+    "bake_transform": "Appliquer la transformation",
+    "tool": "Transformation",
+    "axis": "Axe",
+    "space_plain": "Espace"
+  },
+  "selection": {
+    "operation_failed": "Opération de sélection échouée",
+    "operation_failed_generic": "Opération échouée.",
+    "update_depth_failed": "Impossible de mettre à jour le filtre de profondeur de sélection.",
+    "undo_failed": "Annulation échouée.",
+    "redo_failed": "Rétablissement échoué."
   },
   "cropbox": {
     "title": "Boîte de Recadrage",

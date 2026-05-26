@@ -230,7 +230,6 @@ namespace lfs::vis::input {
         const auto config_dir = getConfigDir();
         const auto path = config_dir / (name + ".json");
         if (std::filesystem::exists(path) && loadProfileFromFile(path)) {
-            notifyBindingsChanged();
             return;
         }
 
@@ -454,6 +453,7 @@ namespace lfs::vis::input {
                     saveProfileToFile(config_default);
                 }
             }
+            notifyBindingsChanged();
             return true;
         } catch (const std::exception& e) {
             LOG_ERROR("Failed to load profile: {}", e.what());
@@ -824,7 +824,9 @@ namespace lfs::vis::input {
     }
 
     void InputBindings::setBinding(ToolMode mode, Action action, const InputTrigger& trigger) {
-        clearBinding(mode, action);
+        std::erase_if(bindings_, [mode, action](const Binding& b) {
+            return b.mode == mode && b.action == action;
+        });
         bindings_.push_back({mode, trigger, action, getActionName(action)});
         rebuildLookupMaps();
         notifyBindingsChanged();
@@ -871,6 +873,9 @@ namespace lfs::vis::input {
     }
 
     void InputBindings::notifyBindingsChanged() {
+        ++bindings_revision_;
+        if (bindings_revision_ == 0)
+            ++bindings_revision_;
         if (on_bindings_changed_) {
             on_bindings_changed_();
         }

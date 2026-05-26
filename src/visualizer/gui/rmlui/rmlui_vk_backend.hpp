@@ -153,11 +153,11 @@ private:
     };
 
     struct texture_data_t {
-        VkImage m_p_vk_image;
-        VkImageView m_p_vk_image_view;
-        VkSampler m_p_vk_sampler;
-        VkDescriptorSet m_p_vk_descriptor_set;
-        VmaAllocation m_p_vma_allocation;
+        VkImage m_p_vk_image = VK_NULL_HANDLE;
+        VkImageView m_p_vk_image_view = VK_NULL_HANDLE;
+        VkSampler m_p_vk_sampler = VK_NULL_HANDLE;
+        VkDescriptorSet m_p_vk_descriptor_set = VK_NULL_HANDLE;
+        VmaAllocation m_p_vma_allocation = VK_NULL_HANDLE;
     };
 
     struct async_preview_result_t {
@@ -690,6 +690,11 @@ private:
     Rml::Array<Rml::Vector<texture_data_t*>, kSwapchainBackBufferCount> m_pending_for_deletion_textures_by_frames;
     std::vector<std::shared_ptr<async_preview_state_t>> m_async_preview_textures;
     Rml::Vector<render_layer_t> m_render_layers;
+    Rml::CompiledGeometryHandle m_texture_quad_geometry = {};
+    float m_texture_quad_x = 0.0f;
+    float m_texture_quad_y = 0.0f;
+    float m_texture_quad_w = 0.0f;
+    float m_texture_quad_h = 0.0f;
     Rml::Array<Rml::Vector<VmaVirtualAllocation>, kSwapchainBackBufferCount> m_transient_shader_allocations_by_frame;
     VkImage m_external_swapchain_image = VK_NULL_HANDLE;
     VkImageView m_external_swapchain_image_view = VK_NULL_HANDLE;

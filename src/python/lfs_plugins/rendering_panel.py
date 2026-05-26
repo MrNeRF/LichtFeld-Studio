@@ -303,6 +303,10 @@ class RenderingPanel(Panel):
 
         signals = (
             AppState.scene_generation,
+            AppState.selection_generation,
+            AppState.active_tool,
+            AppState.transform_space,
+            AppState.pivot_mode,
         )
         self._reactive_unsubscribers = [
             signal.subscribe(lambda _value: self._request_reactive_update())

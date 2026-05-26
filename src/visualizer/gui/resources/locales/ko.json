@@ -769,7 +769,15 @@
     "sequencer": "시퀀서",
     "ellipsoid": "Ellipsoid",
     "histogram": "Histogram",
-    "depth_map": "깊이 맵"
+    "depth_map": "깊이 맵",
+    "depth_mode_disable": "깊이 모드 비활성화",
+    "depth_mode_enable": "깊이 모드 활성화",
+    "delete_selection": "선택 삭제",
+    "undo": "실행 취소",
+    "redo": "다시 실행",
+    "invert_selection": "선택 반전",
+    "select_all": "모두 선택",
+    "unselect": "선택 해제"
   },
   "transform": {
     "node": "노드: %s",
@@ -783,8 +791,20 @@
     "uniform_scale": "균일 크기",
     "use_gizmo": "기즈모를 사용하여 변환",
     "reset_all": "모든 변환 재설정",
+    "reset_all_short": "모두 재설정",
     "reset_transform": "변환 재설정",
-    "nodes_selected": "%zu개 노드 선택됨"
+    "nodes_selected": "%zu개 노드 선택됨",
+    "bake_transform": "변환 적용",
+    "tool": "변환",
+    "axis": "축",
+    "space_plain": "공간"
+  },
+  "selection": {
+    "operation_failed": "선택 작업 실패",
+    "operation_failed_generic": "작업이 실패했습니다.",
+    "update_depth_failed": "선택 깊이 필터를 업데이트할 수 없습니다.",
+    "undo_failed": "실행 취소 실패.",
+    "redo_failed": "다시 실행 실패."
   },
   "cropbox": {
     "title": "자르기 상자",

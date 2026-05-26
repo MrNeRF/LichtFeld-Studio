@@ -771,7 +771,15 @@
     "orthographic": "Orthographic",
     "sequencer": "Sequencer",
     "histogram": "Histogram",
-    "depth_map": "Depth Map"
+    "depth_map": "Depth Map",
+    "depth_mode_disable": "Disable Depth Mode",
+    "depth_mode_enable": "Enable Depth Mode",
+    "delete_selection": "Delete Selection",
+    "undo": "Undo",
+    "redo": "Redo",
+    "invert_selection": "Invert Selection",
+    "select_all": "Select All",
+    "unselect": "Unselect"
   },
   "transform": {
     "node": "Node: %s",
@@ -785,8 +793,20 @@
     "uniform_scale": "Uniform Scale",
     "use_gizmo": "Use gizmo to transform",
     "reset_all": "Reset All Transforms",
+    "reset_all_short": "Reset All",
     "reset_transform": "Reset Transform",
-    "nodes_selected": "%zu nodes selected"
+    "nodes_selected": "%zu nodes selected",
+    "bake_transform": "Bake Transform",
+    "tool": "Transform",
+    "axis": "Axis",
+    "space_plain": "Space"
+  },
+  "selection": {
+    "operation_failed": "Selection Operation Failed",
+    "operation_failed_generic": "Operation failed.",
+    "update_depth_failed": "Could not update selection depth filter.",
+    "undo_failed": "Undo failed.",
+    "redo_failed": "Redo failed."
   },
   "cropbox": {
     "title": "Crop Box",

@@ -266,6 +266,7 @@ namespace lfs::vis {
             const void* cached_selection_mask_ptr = nullptr;
             std::size_t cached_selection_mask_id = 0;
             std::size_t cached_selection_mask_count = 0;
+            std::uint64_t cached_selection_revision = 0;
             const void* cached_preview_selection_mask_ptr = nullptr;
             std::size_t cached_preview_selection_mask_id = 0;
             std::size_t cached_preview_selection_mask_count = 0;
@@ -925,7 +926,8 @@ namespace lfs::vis {
                 cache.cached_selection_mask_ptr,
                 cache.cached_selection_mask_id,
                 cache.cached_selection_mask_count,
-                nullptr);
+                &cache.cached_selection_revision,
+                req.selection_revision);
             if (!selection_count) {
                 return std::unexpected(selection_count.error());
             }

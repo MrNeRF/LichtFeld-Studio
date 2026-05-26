@@ -83,11 +83,12 @@ namespace lfs::python {
 
     void PyUIHookRegistry::add_hook(const std::string& panel,
                                     const std::string& section,
-                                    nb::object callback,
-                                    PyHookPosition position) {
+        nb::object callback,
+        PyHookPosition position) {
         std::lock_guard lock(mutex_);
         const std::string key = panel + ":" + section;
-        hooks_[key].push_back({std::move(callback), position});
+        const std::string name = callback_name(callback);
+        hooks_[key].push_back({std::move(callback), position, name});
     }
 
     void PyUIHookRegistry::remove_hook(const std::string& panel,
@@ -130,7 +131,7 @@ namespace lfs::python {
                                            Rml::ElementDocument* document,
                                            PyHookPosition position) {
         nb::gil_scoped_acquire gil;
-        std::vector<nb::object> callbacks;
+        std::vector<HookEntry> callbacks;
         {
             std::lock_guard lock(mutex_);
             const std::string key = panel + ":" + section;
@@ -141,7 +142,7 @@ namespace lfs::python {
             }
             for (const auto& entry : it->second) {
                 if (entry.position == position) {
-                    callbacks.push_back(entry.callback);
+                    callbacks.push_back(entry);
                 }
             }
         }
@@ -152,21 +153,20 @@ namespace lfs::python {
         }
 
         bool dirty = consume_document_dirty_with_attribution(
-            document, panel, section, position, "<pending>", "before_callbacks");
-        for (const auto& cb : callbacks) {
-            const std::string name = callback_name(cb);
+            document, panel, section, position, "<pre_hooks>", "before_callbacks");
+        for (const auto& entry : callbacks) {
             try {
                 if (document) {
-                    cb(PyRmlDocument(document));
+                    entry.callback(PyRmlDocument(document));
                 } else {
                     PyUILayout layout;
-                    cb(layout);
+                    entry.callback(layout);
                 }
             } catch (const std::exception& e) {
                 LOG_ERROR("Hook {}:{} error: {}", panel, section, e.what());
             }
             dirty |= consume_document_dirty_with_attribution(
-                document, panel, section, position, name, "after_callback");
+                document, panel, section, position, entry.name, "after_callback");
         }
         return dirty;
     }

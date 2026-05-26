@@ -1355,29 +1355,48 @@ void RenderInterface_VK::RenderTextureQuad(Rml::TextureHandle texture, const flo
     if (m_p_current_command_buffer == nullptr || texture == 0 || w <= 0.0f || h <= 0.0f)
         return;
 
-    Rml::Vertex vertices[4];
-    vertices[0].position = {x, y};
-    vertices[0].tex_coord = {0.0f, 0.0f};
-    vertices[1].position = {x + w, y};
-    vertices[1].tex_coord = {1.0f, 0.0f};
-    vertices[2].position = {x + w, y + h};
-    vertices[2].tex_coord = {1.0f, 1.0f};
-    vertices[3].position = {x, y + h};
-    vertices[3].tex_coord = {0.0f, 1.0f};
-    for (Rml::Vertex& vertex : vertices)
-        vertex.colour = Rml::ColourbPremultiplied(255, 255, 255, 255);
+    if (!m_texture_quad_geometry ||
+        m_texture_quad_x != x || m_texture_quad_y != y ||
+        m_texture_quad_w != w || m_texture_quad_h != h) {
+        if (m_texture_quad_geometry) {
+            ReleaseGeometry(m_texture_quad_geometry);
+            m_texture_quad_geometry = {};
+        }
 
-    int indices[6] = {0, 1, 2, 0, 2, 3};
+        Rml::Vertex vertices[4];
+        vertices[0].position = {x, y};
+        vertices[0].tex_coord = {0.0f, 0.0f};
+        vertices[1].position = {x + w, y};
+        vertices[1].tex_coord = {1.0f, 0.0f};
+        vertices[2].position = {x + w, y + h};
+        vertices[2].tex_coord = {1.0f, 1.0f};
+        vertices[3].position = {x, y + h};
+        vertices[3].tex_coord = {0.0f, 1.0f};
+        for (Rml::Vertex& vertex : vertices)
+            vertex.colour = Rml::ColourbPremultiplied(255, 255, 255, 255);
+
+        static constexpr int indices[6] = {0, 1, 2, 0, 2, 3};
+        m_texture_quad_geometry = CompileGeometry({vertices, 4}, {indices, 6});
+        m_texture_quad_x = x;
+        m_texture_quad_y = y;
+        m_texture_quad_w = w;
+        m_texture_quad_h = h;
+    }
 
     const bool transform_enabled = m_is_transform_enabled;
-    const Rml::Matrix4f transform = m_user_data_for_vertex_shader.m_transform;
+    const shader_vertex_user_data_t user_data = m_user_data_for_vertex_shader;
+    const Rml::Matrix4f rml_transform = m_rml_transform;
+    const Rml::Matrix4f context_transform = m_context_transform;
+    const Rml::Vector2f context_offset = m_context_offset;
     SetTransform(nullptr);
-    if (Rml::CompiledGeometryHandle handle = CompileGeometry({vertices, 4}, {indices, 6})) {
-        RenderGeometry(handle, {}, texture);
-        ReleaseGeometry(handle);
+    if (m_texture_quad_geometry) {
+        RenderGeometry(m_texture_quad_geometry, {}, texture);
     }
     m_is_transform_enabled = transform_enabled;
-    m_user_data_for_vertex_shader.m_transform = transform;
+    m_user_data_for_vertex_shader = user_data;
+    m_rml_transform = rml_transform;
+    m_context_transform = context_transform;
+    m_context_offset = context_offset;
 }
 
 VkRect2D RenderInterface_VK::ContextClipScissor() const noexcept {
@@ -3168,6 +3187,10 @@ void RenderInterface_VK::FreeAllTransientShaderAllocations() noexcept {
 }
 
 void RenderInterface_VK::Destroy_Geometries() noexcept {
+    if (m_texture_quad_geometry) {
+        ReleaseGeometry(m_texture_quad_geometry);
+        m_texture_quad_geometry = {};
+    }
     FreeAllTransientShaderAllocations();
     for (uint32_t slot = 0; slot < kSwapchainBackBufferCount; ++slot)
         Update_PendingForDeletion_Geometries(slot);
@@ -3584,9 +3607,9 @@ void RenderInterface_VK::RenderFullscreenTexture(texture_data_t& texture, Rml::B
 
 void RenderInterface_VK::DestroyRenderLayer(render_layer_t& layer) noexcept {
     if (layer.m_color.m_p_vma_allocation)
-        Destroy_Texture(layer.m_color);
+        QueueTextureForDeferredDeletion(new texture_data_t(layer.m_color));
     if (layer.m_depth_stencil.m_p_vma_allocation)
-        Destroy_Texture(layer.m_depth_stencil);
+        QueueTextureForDeferredDeletion(new texture_data_t(layer.m_depth_stencil));
     layer = {};
 }
 

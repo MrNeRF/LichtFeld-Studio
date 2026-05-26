@@ -167,8 +167,8 @@ void VulkanGSPipeline::createBuffer(size_t size, _VulkanBuffer& buffer) {
 void VulkanGSPipeline::destroyBuffer(_VulkanBuffer& buffer) {
     if (commandBatchInProgress)
         _THROW_ERROR("destroyBuffer called when command batch in progress");
-    waitForPendingBatch();
     if (buffer.buffer != VK_NULL_HANDLE && buffer.allocation != VK_NULL_HANDLE) {
+        waitForPendingBatch();
         vmaDestroyBuffer(allocator, buffer.buffer, buffer.allocation);
         if (current_vram < buffer.allocSize)
             _THROW_ERROR("Negative VRAM");

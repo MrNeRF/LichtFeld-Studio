@@ -41,6 +41,28 @@ namespace lfs::vis::gui {
         int height = 0;
     };
 
+    struct RmlRect {
+        float x1 = 0.0f;
+        float y1 = 0.0f;
+        float x2 = 0.0f;
+        float y2 = 0.0f;
+    };
+
+    struct CachedVulkanContextDraw {
+        Rml::Context* context = nullptr;
+        CachedVulkanContextRender* cache = nullptr;
+        int cache_width = 0;
+        int cache_height = 0;
+        float offset_x = 0.0f;
+        float offset_y = 0.0f;
+        float draw_width = 0.0f;
+        float draw_height = 0.0f;
+        bool refresh = false;
+        bool foreground = false;
+        bool clip_enabled = false;
+        RmlRect clip;
+    };
+
     class RmlUIManager {
     public:
         RmlUIManager();
@@ -78,21 +100,7 @@ namespace lfs::vis::gui {
                                 float clip_y1 = 0.0f,
                                 float clip_x2 = 0.0f,
                                 float clip_y2 = 0.0f);
-        void queueCachedVulkanContext(Rml::Context* context,
-                                      CachedVulkanContextRender* cache,
-                                      int cache_width,
-                                      int cache_height,
-                                      float offset_x,
-                                      float offset_y,
-                                      float draw_width,
-                                      float draw_height,
-                                      bool refresh,
-                                      bool foreground = false,
-                                      bool clip_enabled = false,
-                                      float clip_x1 = 0.0f,
-                                      float clip_y1 = 0.0f,
-                                      float clip_x2 = 0.0f,
-                                      float clip_y2 = 0.0f);
+        void queueCachedVulkanContext(const CachedVulkanContextDraw& draw);
         void releaseCachedVulkanContext(CachedVulkanContextRender& cache);
         void clearVulkanQueue();
         [[nodiscard]] bool beginVulkanFrame(VkCommandBuffer command_buffer,

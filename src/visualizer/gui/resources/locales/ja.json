@@ -769,7 +769,15 @@
     "sequencer": "シーケンサー",
     "ellipsoid": "Ellipsoid",
     "histogram": "Histogram",
-    "depth_map": "深度マップ"
+    "depth_map": "深度マップ",
+    "depth_mode_disable": "深度モードを無効化",
+    "depth_mode_enable": "深度モードを有効化",
+    "delete_selection": "選択を削除",
+    "undo": "元に戻す",
+    "redo": "やり直し",
+    "invert_selection": "選択を反転",
+    "select_all": "すべて選択",
+    "unselect": "選択解除"
   },
   "transform": {
     "node": "ノード: %s",
@@ -783,8 +791,20 @@
     "uniform_scale": "均一スケール",
     "use_gizmo": "ギズモを使用して変換",
     "reset_all": "すべての変換をリセット",
+    "reset_all_short": "すべてリセット",
     "reset_transform": "変換をリセット",
-    "nodes_selected": "%zu ノードを選択中"
+    "nodes_selected": "%zu ノードを選択中",
+    "bake_transform": "変換を適用",
+    "tool": "変換",
+    "axis": "軸",
+    "space_plain": "空間"
+  },
+  "selection": {
+    "operation_failed": "選択操作に失敗しました",
+    "operation_failed_generic": "操作に失敗しました。",
+    "update_depth_failed": "選択深度フィルターを更新できませんでした。",
+    "undo_failed": "元に戻せませんでした。",
+    "redo_failed": "やり直せませんでした。"
   },
   "cropbox": {
     "title": "クロップボックス",

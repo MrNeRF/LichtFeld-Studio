@@ -769,7 +769,15 @@
     "sequencer": "Sequencer",
     "ellipsoid": "Ellipsoid",
     "histogram": "Histogram",
-    "depth_map": "Dieptekaart"
+    "depth_map": "Dieptekaart",
+    "depth_mode_disable": "Dieptemodus uitschakelen",
+    "depth_mode_enable": "Dieptemodus inschakelen",
+    "delete_selection": "Selectie verwijderen",
+    "undo": "Ongedaan maken",
+    "redo": "Opnieuw",
+    "invert_selection": "Selectie omkeren",
+    "select_all": "Alles selecteren",
+    "unselect": "Deselecteren"
   },
   "transform": {
     "node": "Node: %s",
@@ -783,8 +791,20 @@
     "uniform_scale": "Uniforme Schaal",
     "use_gizmo": "Gebruik gizmo om te transformeren",
     "reset_all": "Reset Alle Transformaties",
+    "reset_all_short": "Alles resetten",
     "reset_transform": "Reset Transformatie",
-    "nodes_selected": "%zu nodes geselecteerd"
+    "nodes_selected": "%zu nodes geselecteerd",
+    "bake_transform": "Transformatie toepassen",
+    "tool": "Transformatie",
+    "axis": "As",
+    "space_plain": "Ruimte"
+  },
+  "selection": {
+    "operation_failed": "Selectiebewerking mislukt",
+    "operation_failed_generic": "Bewerking mislukt.",
+    "update_depth_failed": "Selectiedieptefilter kon niet worden bijgewerkt.",
+    "undo_failed": "Ongedaan maken mislukt.",
+    "redo_failed": "Opnieuw uitvoeren mislukt."
   },
   "cropbox": {
     "title": "Bijsnijvak",

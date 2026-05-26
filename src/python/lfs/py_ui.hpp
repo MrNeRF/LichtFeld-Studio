@@ -803,6 +803,7 @@ namespace lfs::python {
         struct HookEntry {
             nb::object callback;
             PyHookPosition position;
+            std::string name;
         };
 
         mutable std::mutex mutex_;

@@ -70,6 +70,7 @@ namespace lfs::vis {
             const lfs::core::Tensor* preview_selection_mask = nullptr;
             const std::array<glm::vec4, lfs::rendering::kSelectionColorTableCount>* selection_colors = nullptr;
             bool preview_selection_additive = true;
+            std::uint64_t selection_revision = 0;
             std::uint64_t preview_selection_revision = 0;
 
             // Optional crop. When set, points outside the local box are either

@@ -201,11 +201,8 @@ namespace lfs::vis::gui {
         const auto& current = loc.getCurrentLanguage();
 
         if (rml_manager_) {
-            for (const auto& lang : langs) {
-                if (lang == "ja" || lang == "ko" || lang == "zh") {
-                    rml_manager_->ensureCjkFontsLoaded();
-                    break;
-                }
+            if (current == "ja" || current == "ko" || current == "zh") {
+                rml_manager_->ensureCjkFontsLoaded();
             }
         }
 

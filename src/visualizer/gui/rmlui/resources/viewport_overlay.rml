@@ -264,6 +264,7 @@
             <div class="toolbar-separator"></div>
             <div class="icon-btn"
                  data-for="button : utility_primary_buttons"
+                 data-attr-id="button.button_id"
                  data-class-selected="button.selected"
                  data-attr-data-tooltip="button.tooltip_key"
                  data-attr-data-shortcut="button.shortcut_text"
@@ -300,6 +301,7 @@
             <div class="toolbar-separator" data-if="show_render_controls"></div>
             <div class="icon-btn"
                  data-for="button : projection_buttons"
+                 data-attr-id="button.button_id"
                  data-class-selected="button.selected"
                  data-attr-data-tooltip="button.tooltip_key"
                  data-attr-title="button.tooltip_text"
@@ -310,6 +312,7 @@
             <div class="toolbar-separator" data-if="show_render_controls"></div>
             <div class="icon-btn"
                  data-for="button : utility_extra_buttons"
+                 data-attr-id="button.button_id"
                  data-class-selected="button.selected"
                  data-attr-data-tooltip="button.tooltip_key"
                  data-attr-title="button.tooltip_text"
@@ -319,6 +322,7 @@
             </div>
             <div class="icon-btn"
                  data-for="button : utility_bottom_buttons"
+                 data-attr-id="button.button_id"
                  data-class-selected="button.selected"
                  data-attr-data-tooltip="button.tooltip_key"
                  data-attr-title="button.tooltip_text"

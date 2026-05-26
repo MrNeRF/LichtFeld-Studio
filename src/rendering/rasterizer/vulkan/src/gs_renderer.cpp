@@ -118,6 +118,8 @@ size_t VulkanGSRenderer::pollDeferredNumIndices() {
         return 0;
     if (!timelineValueComplete(num_indices_readback_signal_, num_indices_readback_value_))
         return 0;
+    if (!invalidateReadbackBuffer(num_indices_readback_buffer_, sizeof(int32_t)))
+        return 0;
     const int32_t value = *num_indices_readback_mapped_;
     num_indices_readback_pending_ = false;
     num_indices_readback_signal_ = VK_NULL_HANDLE;
@@ -280,6 +282,8 @@ VulkanGSRenderer::pollDeferredPrimitiveVisibilityStats() {
         return std::nullopt;
     if (!timelineValueComplete(visible_count_readback_signal_, visible_count_readback_value_))
         return std::nullopt;
+    if (!invalidateReadbackBuffer(visible_count_readback_buffer_, sizeof(uint32_t)))
+        return std::nullopt;
 
     PrimitiveVisibilityStats stats{};
     stats.num_splats = visible_count_readback_num_splats_;
@@ -305,10 +309,18 @@ void VulkanGSRenderer::recordVisibleCountReadback(VulkanGSPipelineBuffers& buffe
                     visible_count_readback_buffer_.buffer,
                     1,
                     &copy);
+    bufferMemoryBarrier({{visible_count_readback_buffer_, TRANSFER_WRITE}},
+                        HOST_READ);
     visible_count_readback_pending_ = true;
     visible_count_readback_signal_ = VK_NULL_HANDLE;
     visible_count_readback_value_ = 0;
     visible_count_readback_num_splats_ = num_splats;
+}
+
+bool VulkanGSRenderer::invalidateReadbackBuffer(_VulkanBuffer& buffer, VkDeviceSize size) {
+    if (buffer.allocation == VK_NULL_HANDLE)
+        return false;
+    return vmaInvalidateAllocation(allocator, buffer.allocation, 0, size) == VK_SUCCESS;
 }
 
 void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::string>& spirv_paths,
@@ -871,6 +883,8 @@ void VulkanGSRenderer::executeCalculateIndexBufferOffset(
         vkCmdCopyBuffer(command_buffer,
                         buffers.index_buffer_offset.deviceBuffer.buffer,
                         num_indices_readback_buffer_.buffer, 1, &copy);
+        bufferMemoryBarrier({{num_indices_readback_buffer_, TRANSFER_WRITE}},
+                            HOST_READ);
         num_indices_readback_pending_ = true;
         num_indices_readback_signal_ = VK_NULL_HANDLE;
         num_indices_readback_value_ = 0;
@@ -1351,9 +1365,10 @@ void VulkanGSRenderer::executeSortPrimitivesByDepth(
         [[maybe_unused]] auto cpu_timer =
             timeCpuStage("vksplat.render.record.executeSortPrimitivesByDepth.copy_primitive_sort_indices");
         auto& sort_indices = resizeDeviceBuffer(buffers.primitive_sort_indices, num_splats);
-        bufferMemoryBarrier({{buffers.sorted_gauss_idx().deviceBuffer, COMPUTE_SHADER_WRITE},
-                             {sort_indices, COMPUTE_SHADER_READ_WRITE}},
-                            TRANSFER_COMPUTE_SHADER_READ_WRITE);
+        bufferMemoryBarrier({{buffers.sorted_gauss_idx().deviceBuffer, COMPUTE_SHADER_WRITE}},
+                            TRANSFER_READ);
+        bufferMemoryBarrier({{sort_indices, COMPUTE_SHADER_READ}},
+                            TRANSFER_WRITE);
         VkBufferCopy copy{};
         copy.srcOffset = buffers.sorted_gauss_idx().deviceBuffer.offset;
         copy.dstOffset = sort_indices.offset;
@@ -1361,7 +1376,7 @@ void VulkanGSRenderer::executeSortPrimitivesByDepth(
         vkCmdCopyBuffer(command_buffer,
                         buffers.sorted_gauss_idx().deviceBuffer.buffer,
                         sort_indices.buffer, 1, &copy);
-        bufferMemoryBarrier({{sort_indices, TRANSFER_COMPUTE_SHADER_WRITE}},
+        bufferMemoryBarrier({{sort_indices, TRANSFER_WRITE}},
                             COMPUTE_SHADER_READ);
     }
 }
@@ -1379,7 +1394,7 @@ void VulkanGSRenderer::executeApplyDepthOrdering(
     auto& tiles_touched_ordered =
         resizeDeviceBuffer(buffers.tiles_touched_depth_ordered, num_splats);
 
-    bufferMemoryBarrier({{buffers.primitive_sort_indices.deviceBuffer, COMPUTE_SHADER_WRITE},
+    bufferMemoryBarrier({{buffers.primitive_sort_indices.deviceBuffer, TRANSFER_WRITE},
                          {buffers.tiles_touched.deviceBuffer, COMPUTE_SHADER_WRITE},
                          {buffers.visible_count.deviceBuffer, COMPUTE_SHADER_WRITE}},
                         COMPUTE_SHADER_READ);

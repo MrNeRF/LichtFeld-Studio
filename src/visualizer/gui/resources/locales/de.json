@@ -769,7 +769,15 @@
     "sequencer": "Sequenzer",
     "ellipsoid": "Ellipsoid",
     "histogram": "Histogram",
-    "depth_map": "Tiefenkarte"
+    "depth_map": "Tiefenkarte",
+    "depth_mode_disable": "Tiefenmodus deaktivieren",
+    "depth_mode_enable": "Tiefenmodus aktivieren",
+    "delete_selection": "Auswahl löschen",
+    "undo": "Rückgängig",
+    "redo": "Wiederholen",
+    "invert_selection": "Auswahl umkehren",
+    "select_all": "Alles auswählen",
+    "unselect": "Auswahl aufheben"
   },
   "transform": {
     "node": "Knoten: %s",
@@ -783,8 +791,20 @@
     "uniform_scale": "Einheitliche Skalierung",
     "use_gizmo": "Gizmo zum Transformieren verwenden",
     "reset_all": "Alle Transformationen zurücksetzen",
+    "reset_all_short": "Alle zurücksetzen",
     "reset_transform": "Transformation zurücksetzen",
-    "nodes_selected": "%zu Knoten ausgewählt"
+    "nodes_selected": "%zu Knoten ausgewählt",
+    "bake_transform": "Transformation anwenden",
+    "tool": "Transformation",
+    "axis": "Achse",
+    "space_plain": "Raum"
+  },
+  "selection": {
+    "operation_failed": "Auswahloperation fehlgeschlagen",
+    "operation_failed_generic": "Operation fehlgeschlagen.",
+    "update_depth_failed": "Auswahltiefenfilter konnte nicht aktualisiert werden.",
+    "undo_failed": "Rückgängig fehlgeschlagen.",
+    "redo_failed": "Wiederholen fehlgeschlagen."
   },
   "cropbox": {
     "title": "Zuschneidebox",

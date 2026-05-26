@@ -1233,6 +1233,7 @@ namespace lfs::vis {
                 vk_req.preview_selection_mask = pc_request.overlay.transient_mask.mask;
                 vk_req.selection_colors = &pc_request.overlay.selection_colors;
                 vk_req.preview_selection_additive = pc_request.overlay.transient_mask.additive;
+                vk_req.selection_revision = point_cloud_preview_selection_revision_;
                 vk_req.preview_selection_revision = point_cloud_preview_selection_revision_;
                 if (pc_request.filters.crop_box.has_value()) {
                     PointCloudVulkanRenderer::CropBox crop{};

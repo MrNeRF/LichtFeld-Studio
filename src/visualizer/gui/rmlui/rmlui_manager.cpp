@@ -209,7 +209,6 @@ namespace lfs::vis::gui {
     void RmlUIManager::ensureCjkFontsLoaded() {
         if (cjk_fonts_loaded_ || !initialized_)
             return;
-        cjk_fonts_loaded_ = true;
 
         struct CjkSpec {
             const char* asset;
@@ -246,10 +245,12 @@ namespace lfs::vis::gui {
             });
         }
 
+        bool all_loaded = true;
         for (std::size_t i = 0; i < 2; ++i) {
             LoadedFont loaded = futures[i].get();
             if (loaded.bytes.empty()) {
                 LOG_WARN("RmlUI: failed to read {}", specs[i].asset);
+                all_loaded = false;
                 continue;
             }
             font_blobs_.push_back(std::move(loaded.bytes));
@@ -261,8 +262,10 @@ namespace lfs::vis::gui {
                 LOG_INFO("RmlUI: loaded CJK font {}", loaded.path.string());
             } else {
                 LOG_WARN("RmlUI: failed to register {}", loaded.path.string());
+                all_loaded = false;
             }
         }
+        cjk_fonts_loaded_ = all_loaded;
     }
 
     void RmlUIManager::shutdown() {
@@ -537,46 +540,32 @@ namespace lfs::vis::gui {
         });
     }
 
-    void RmlUIManager::queueCachedVulkanContext(Rml::Context* const context,
-                                                CachedVulkanContextRender* const cache,
-                                                const int cache_width,
-                                                const int cache_height,
-                                                const float offset_x,
-                                                const float offset_y,
-                                                const float draw_width,
-                                                const float draw_height,
-                                                const bool refresh,
-                                                const bool foreground,
-                                                const bool clip_enabled,
-                                                const float clip_x1,
-                                                const float clip_y1,
-                                                const float clip_x2,
-                                                const float clip_y2) {
-        if (!context || !cache || !vulkan_render_interface_ ||
-            cache_width <= 0 || cache_height <= 0 ||
-            draw_width <= 0.0f || draw_height <= 0.0f)
+    void RmlUIManager::queueCachedVulkanContext(const CachedVulkanContextDraw& draw) {
+        if (!draw.context || !draw.cache || !vulkan_render_interface_ ||
+            draw.cache_width <= 0 || draw.cache_height <= 0 ||
+            draw.draw_width <= 0.0f || draw.draw_height <= 0.0f)
             return;
 
-        auto& queue = foreground ? vulkan_foreground_queue_ : vulkan_queue_;
+        auto& queue = draw.foreground ? vulkan_foreground_queue_ : vulkan_queue_;
         std::string context_name = "unknown";
-        if (const auto it = context_names_.find(context); it != context_names_.end())
+        if (const auto it = context_names_.find(draw.context); it != context_names_.end())
             context_name = it->second;
         queue.push_back({
-            .context = context,
+            .context = draw.context,
             .context_name = std::move(context_name),
-            .offset_x = offset_x,
-            .offset_y = offset_y,
-            .clip_enabled = clip_enabled,
-            .clip_x1 = clip_x1,
-            .clip_y1 = clip_y1,
-            .clip_x2 = clip_x2,
-            .clip_y2 = clip_y2,
-            .cache = cache,
-            .cache_width = cache_width,
-            .cache_height = cache_height,
-            .draw_width = draw_width,
-            .draw_height = draw_height,
-            .refresh_cache = refresh,
+            .offset_x = draw.offset_x,
+            .offset_y = draw.offset_y,
+            .clip_enabled = draw.clip_enabled,
+            .clip_x1 = draw.clip.x1,
+            .clip_y1 = draw.clip.y1,
+            .clip_x2 = draw.clip.x2,
+            .clip_y2 = draw.clip.y2,
+            .cache = draw.cache,
+            .cache_width = draw.cache_width,
+            .cache_height = draw.cache_height,
+            .draw_width = draw.draw_width,
+            .draw_height = draw.draw_height,
+            .refresh_cache = draw.refresh,
         });
     }
 
@@ -648,8 +637,9 @@ namespace lfs::vis::gui {
                         command.context->Render();
                         command.cache->texture = vulkan_render_interface_->SaveLayerAsTexture();
                         vulkan_render_interface_->PopLayer();
-                        command.cache->width = command.cache->texture != 0 ? command.cache_width : 0;
-                        command.cache->height = command.cache->texture != 0 ? command.cache_height : 0;
+                        const bool saved = command.cache->texture != 0;
+                        command.cache->width = saved ? command.cache_width : 0;
+                        command.cache->height = saved ? command.cache_height : 0;
                     }
                 }
 
@@ -698,7 +688,6 @@ namespace lfs::vis::gui {
             vulkan_render_interface_->ResetContextRenderState();
         }
 
-        vulkan_render_interface_->ResetContextRenderState();
         queue.clear();
     }
 

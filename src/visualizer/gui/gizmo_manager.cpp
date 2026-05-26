@@ -1838,13 +1838,6 @@ namespace lfs::vis::gui {
         if (auto* rm = viewer_->getRenderingManager()) {
             rm->setSelectionPreviewMode(toSelectionPreviewMode(mode));
         }
-        if (mode == SelectionSubMode::Centers) {
-            if (auto* service = viewer_->getSceneManager()
-                                    ? viewer_->getSceneManager()->getSelectionService()
-                                    : nullptr) {
-                service->prewarmInteractiveSelectionResources(SelectionShape::Brush);
-            }
-        }
     }
 
     bool GizmoManager::isPositionInViewportGizmo(const double x, const double y) const {

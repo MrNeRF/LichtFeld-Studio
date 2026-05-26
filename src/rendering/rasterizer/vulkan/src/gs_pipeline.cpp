@@ -600,6 +600,12 @@ VkAccessFlags toAccessMask(VulkanGSPipeline::BarrierMask barrierMask) {
         barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_WRITE ||
         barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ_WRITE)
         result |= VK_ACCESS_SHADER_WRITE_BIT;
+    if (barrierMask == VulkanGSPipeline::HOST_READ ||
+        barrierMask == VulkanGSPipeline::HOST_READ_WRITE)
+        result |= VK_ACCESS_HOST_READ_BIT;
+    if (barrierMask == VulkanGSPipeline::HOST_WRITE ||
+        barrierMask == VulkanGSPipeline::HOST_READ_WRITE)
+        result |= VK_ACCESS_HOST_WRITE_BIT;
     if (barrierMask == VulkanGSPipeline::INDIRECT_DISPATCH_READ)
         result |= VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
     return result;

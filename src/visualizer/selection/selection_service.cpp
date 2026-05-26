@@ -998,7 +998,6 @@ namespace lfs::vis {
             (existing && existing->is_valid()) ? std::make_shared<core::Tensor>(existing->clone()) : nullptr;
 
         try {
-            prewarmSelectionCommitResources(n);
             (void)resetBoolScratchBuffer(stroke_selection_, n);
         } catch (const std::exception& e) {
             LOG_WARN("SelectionService: could not allocate stroke selection buffer: {}", e.what());
@@ -1223,11 +1222,7 @@ namespace lfs::vis {
             return false;
         }
         try {
-            prewarmSelectionCommitResources(total);
             (void)resetBoolScratchBuffer(interactive_selection_.working_selection, total);
-            if (shape == SelectionShape::Brush) {
-                prewarmInteractiveBrushPreviewResources(total);
-            }
         } catch (const std::exception& e) {
             LOG_WARN("SelectionService: could not allocate interactive selection preview buffers: {}", e.what());
             interactive_selection_ = {};
@@ -1922,65 +1917,8 @@ namespace lfs::vis {
             return buffer;
         }
 
-        buffer.zero_();
+        buffer.fill_(0.0f, buffer.stream());
         return buffer;
-    }
-
-    void SelectionService::prewarmSelectionCommitResources(const size_t size) {
-        if (size == 0) {
-            return;
-        }
-        LOG_TIMER("SelectionService::prewarmSelectionCommitResources");
-        try {
-            rendering::prepare_selection_group_counts_scratch(selection_group_counts_scratch_);
-            if (scene_manager_) {
-                auto locked_groups = selection::upload_locked_group_mask(
-                    scene_manager_->getScene(),
-                    locked_groups_device_mask_,
-                    locked_groups_host_mask_,
-                    locked_groups_host_mask_valid_);
-                if (!locked_groups) {
-                    LOG_WARN("SelectionService: locked-group mask prewarm skipped: {}", locked_groups.error());
-                }
-            }
-        } catch (const std::exception& e) {
-            LOG_WARN("SelectionService: selection commit prewarm skipped: {}", e.what());
-            selection_group_counts_scratch_ = {};
-        }
-    }
-
-    void SelectionService::prewarmInteractiveSelectionResources(const SelectionShape shape) {
-        const size_t total = activeSelectionGaussianCount(scene_manager_);
-        if (total == 0) {
-            return;
-        }
-
-        try {
-            prewarmSelectionCommitResources(total);
-            if (shape == SelectionShape::Brush) {
-                prewarmInteractiveBrushPreviewResources(total);
-            }
-        } catch (const std::exception& e) {
-            LOG_WARN("SelectionService: interactive selection prewarm skipped: {}", e.what());
-        }
-    }
-
-    void SelectionService::prewarmInteractiveBrushPreviewResources(const size_t size) {
-        if (size == 0 || selection_merge_kernel_prewarmed_) {
-            return;
-        }
-
-        LOG_TIMER("SelectionService::prewarmInteractiveBrushPreviewResources");
-        try {
-            (void)resetBoolScratchBuffer(selection_merge_prewarm_a_, 1);
-            (void)resetBoolScratchBuffer(selection_merge_prewarm_b_, 1);
-            rendering::merge_selection_mask_or(selection_merge_prewarm_a_, selection_merge_prewarm_b_);
-            selection_merge_kernel_prewarmed_ = true;
-        } catch (const std::exception& e) {
-            LOG_WARN("SelectionService: brush preview merge prewarm skipped: {}", e.what());
-            selection_merge_prewarm_a_ = {};
-            selection_merge_prewarm_b_ = {};
-        }
     }
 
     bool SelectionService::buildInteractiveBrushPreviewIncremental() {
@@ -2036,6 +1974,7 @@ namespace lfs::vis {
             session.live_delta_selection = core::Tensor::zeros({total}, core::Device::CUDA, core::DataType::Bool);
         }
         auto& delta_selection = session.live_delta_selection;
+        delta_selection.fill_(0.0f, delta_selection.stream());
         {
             LOG_TIMER("SelectionService::buildInteractiveBrushPreviewIncremental.brush_delta");
             if (!buildBrushSelection(delta_points, session.brush_radius, delta_selection)) {

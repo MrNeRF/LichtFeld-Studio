@@ -598,7 +598,15 @@
     "sequencer": "序列器",
     "ellipsoid": "Ellipsoid",
     "histogram": "Histogram",
-    "depth_map": "深度图"
+    "depth_map": "深度图",
+    "depth_mode_disable": "禁用深度模式",
+    "depth_mode_enable": "启用深度模式",
+    "delete_selection": "删除选择",
+    "undo": "撤销",
+    "redo": "重做",
+    "invert_selection": "反转选择",
+    "select_all": "全选",
+    "unselect": "取消选择"
   },
   "transform": {
     "node": "节点：%s",
@@ -612,8 +620,20 @@
     "uniform_scale": "均匀缩放",
     "use_gizmo": "使用小工具变换",
     "reset_all": "重置所有变换",
+    "reset_all_short": "全部重置",
     "reset_transform": "重置变换",
-    "nodes_selected": "已选择%zu个节点"
+    "nodes_selected": "已选择%zu个节点",
+    "bake_transform": "应用变换",
+    "tool": "变换",
+    "axis": "轴",
+    "space_plain": "空间"
+  },
+  "selection": {
+    "operation_failed": "选择操作失败",
+    "operation_failed_generic": "操作失败。",
+    "update_depth_failed": "无法更新选择深度过滤器。",
+    "undo_failed": "撤销失败。",
+    "redo_failed": "重做失败。"
   },
   "cropbox": {
     "title": "裁剪框",

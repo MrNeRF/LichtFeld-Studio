@@ -515,8 +515,10 @@ def _sync_viewport_overlay_document(doc):
     if _document_controller is None:
         _document_controller = _OverlayDocumentController()
     dirty_sources = _document_controller.update(doc)
-    for source in dirty_sources or []:
-        lf.log.info(f"[PERF] viewport_overlay_document_dirty source={source}")
+    debug_log = getattr(lf.log, "debug", None)
+    if callable(debug_log):
+        for source in dirty_sources or []:
+            debug_log("[PERF] viewport_overlay_document_dirty source=" + str(source))
 
 
 def _draw_viewport_overlay(layout):
