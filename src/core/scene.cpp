@@ -1018,6 +1018,7 @@ namespace lfs::core {
                 selection_mask_.reset();
                 has_selection_ = false;
             }
+            selection_group_counts_dirty_ = true;
         }
         events::state::SelectionChanged{.has_selection = has_selection, .count = count}.emit();
         notifyMutation(MutationType::SELECTION_CHANGED);
@@ -1057,8 +1058,60 @@ namespace lfs::core {
             if (!has_selection_) {
                 selection_mask_.reset();
             }
+            selection_group_counts_dirty_ = true;
         }
         events::state::SelectionChanged{.has_selection = has_selection, .count = count}.emit();
+        notifyMutation(MutationType::SELECTION_CHANGED);
+    }
+
+    void Scene::setSelectionMaskWithGroupCounts(std::shared_ptr<lfs::core::Tensor> mask,
+                                                const size_t selected_count,
+                                                const SelectionGroupCounts& group_counts) {
+        size_t count = selected_count;
+        bool has_selection = false;
+        const size_t expected_size = currentSelectionCapacity();
+        if (mask && mask->is_valid() && mask->numel() > 0 &&
+            mask->numel() != expected_size) {
+            const auto* visible_model = getCombinedModel();
+            const auto visible_indices = getVisibleSelectionIndices();
+            if (visible_model && static_cast<size_t>(visible_model->size()) == mask->numel() &&
+                visible_indices && visible_indices->is_valid() && visible_indices->numel() == mask->numel()) {
+                auto expanded = lfs::core::Tensor::zeros({expected_size}, mask->device(), mask->dtype());
+                expanded.index_copy_(0, *visible_indices, *mask);
+                mask = std::make_shared<lfs::core::Tensor>(std::move(expanded));
+            } else {
+                LOG_WARN("Ignoring selection_mask with stale size: scene has {}, mask has {}",
+                         expected_size, mask->numel());
+                mask.reset();
+                count = 0;
+            }
+        }
+
+        {
+            std::unique_lock lock(selection_mutex_);
+            selection_mask_ = std::move(mask);
+            const bool valid =
+                selection_mask_ && selection_mask_->is_valid() && selection_mask_->numel() > 0;
+
+            has_selection_ = valid && count > 0;
+            has_selection = has_selection_;
+            if (!has_selection_) {
+                selection_mask_.reset();
+                count = 0;
+            }
+        }
+
+        if (has_selection) {
+            applySelectionGroupCounts(group_counts);
+        } else {
+            clearSelectionGroupCounts();
+        }
+        selection_group_counts_dirty_ = false;
+
+        events::state::SelectionChanged{
+            .has_selection = has_selection,
+            .count = static_cast<int>(std::min(count, static_cast<size_t>(std::numeric_limits<int>::max())))}
+            .emit();
         notifyMutation(MutationType::SELECTION_CHANGED);
     }
 
@@ -1068,6 +1121,8 @@ namespace lfs::core {
             selection_mask_.reset();
             has_selection_ = false;
         }
+        clearSelectionGroupCounts();
+        selection_group_counts_dirty_ = false;
         events::state::SelectionChanged{.has_selection = false, .count = 0}.emit();
         notifyMutation(MutationType::SELECTION_CHANGED);
     }
@@ -1120,6 +1175,7 @@ namespace lfs::core {
             if (has_selection_) {
                 count = static_cast<int>(selection_mask_->ne(0).to(core::DataType::Float32).sum_scalar());
             }
+            selection_group_counts_dirty_ = false;
         }
 
         selection_groups_ = snapshot.groups;
@@ -1204,6 +1260,18 @@ namespace lfs::core {
         return (it != selection_groups_.end()) ? &(*it) : nullptr;
     }
 
+    void Scene::applySelectionGroupCounts(const SelectionGroupCounts& group_counts) {
+        for (auto& group : selection_groups_) {
+            group.count = group_counts[group.id];
+        }
+    }
+
+    void Scene::clearSelectionGroupCounts() {
+        for (auto& group : selection_groups_) {
+            group.count = 0;
+        }
+    }
+
     uint8_t Scene::addSelectionGroup(const std::string& name, const glm::vec3& color) {
         if (next_group_id_ == 0) {
             LOG_WARN("Maximum selection groups reached");
@@ -1286,15 +1354,18 @@ namespace lfs::core {
     }
 
     void Scene::updateSelectionGroupCounts() {
-        for (auto& group : selection_groups_) {
-            group.count = 0;
+        if (!selection_group_counts_dirty_) {
+            return;
         }
+        clearSelectionGroupCounts();
 
         std::shared_ptr<lfs::core::Tensor> selection_mask;
         {
             std::shared_lock lock(selection_mutex_);
-            if (!selection_mask_ || !selection_mask_->is_valid())
+            if (!selection_mask_ || !selection_mask_->is_valid()) {
+                selection_group_counts_dirty_ = false;
                 return;
+            }
             selection_mask = selection_mask_;
         }
 
@@ -1308,6 +1379,7 @@ namespace lfs::core {
                 group->count++;
             }
         }
+        selection_group_counts_dirty_ = false;
     }
 
     void Scene::clearSelectionGroup(const uint8_t id) {
@@ -1343,6 +1415,7 @@ namespace lfs::core {
         if (auto* group = findGroup(id)) {
             group->count = 0;
         }
+        selection_group_counts_dirty_ = true;
         notifyMutation(MutationType::SELECTION_CHANGED);
     }
 
@@ -1355,6 +1428,7 @@ namespace lfs::core {
         }
         selection_groups_.clear();
         next_group_id_ = 1;
+        selection_group_counts_dirty_ = false;
         addSelectionGroup("Group 1", glm::vec3(0.0f));
         notifyMutation(MutationType::SELECTION_CHANGED);
     }

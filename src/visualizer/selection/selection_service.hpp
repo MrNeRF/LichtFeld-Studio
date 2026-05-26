@@ -163,6 +163,7 @@ namespace lfs::vis {
                                                       const SelectionFilterState& filters,
                                                       const char* undo_name,
                                                       bool push_undo = true);
+        void prewarmSelectionCommitResources(size_t size);
         [[nodiscard]] core::Tensor& resetBoolScratchBuffer(core::Tensor& buffer, size_t size);
         [[nodiscard]] std::optional<ViewerViewportContext> resolveViewerViewportContext(
             std::optional<glm::vec2> screen_point = std::nullopt,
@@ -224,6 +225,9 @@ namespace lfs::vis {
         std::shared_ptr<core::Tensor> selection_before_stroke_;
         core::Tensor command_selection_buffer_;
         core::Tensor locked_groups_device_mask_;
+        std::array<uint32_t, 8> locked_groups_host_mask_{};
+        bool locked_groups_host_mask_valid_ = false;
+        core::Tensor selection_group_counts_scratch_;
         std::array<core::Tensor, 2> selection_output_buffers_;
         size_t selection_output_buffer_index_ = 0;
         std::shared_ptr<core::Tensor> testing_screen_positions_;

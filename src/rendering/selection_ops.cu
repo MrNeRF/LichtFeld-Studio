@@ -5,6 +5,7 @@
 #include "selection_ops.hpp"
 
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -14,6 +15,10 @@ namespace lfs::rendering {
     namespace {
         constexpr float kInvalidScreenPositionThreshold = -1000.0f;
         constexpr int kBlockSize = 256;
+        constexpr int kCountMaxBlocks = 4096;
+        constexpr std::size_t kSelectionGroupCountBins = 256;
+        constexpr std::size_t kSelectionChangedCountIndex = kSelectionGroupCountBins;
+        constexpr std::size_t kSelectionGroupScratchWords = kSelectionGroupCountBins + 1;
 
         [[nodiscard]] int checkedToInt(const std::size_t value, const char* const message) {
             if (value > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
@@ -58,6 +63,18 @@ namespace lfs::rendering {
 
         [[nodiscard]] bool nodeMaskRestrictsSelection(const std::vector<bool>& mask) {
             return std::any_of(mask.begin(), mask.end(), [](const bool enabled) { return !enabled; });
+        }
+
+        void prepareSelectionGroupCountsScratch(Tensor& counts_scratch) {
+            if (!counts_scratch.is_valid() ||
+                counts_scratch.device() != lfs::core::Device::CUDA ||
+                counts_scratch.dtype() != lfs::core::DataType::Int32 ||
+                counts_scratch.numel() != kSelectionGroupScratchWords) {
+                counts_scratch = Tensor::zeros(
+                    {kSelectionGroupScratchWords}, lfs::core::Device::CUDA, lfs::core::DataType::Int32);
+            } else {
+                counts_scratch.zero_();
+            }
         }
 
         __device__ __forceinline__ bool pointInPolygon(
@@ -196,40 +213,77 @@ namespace lfs::rendering {
             const int* __restrict__ node_indices,
             const bool* __restrict__ valid_nodes,
             const int num_nodes,
-            const bool replace_mode) {
+            const bool replace_mode,
+            int* __restrict__ group_deltas) {
+            __shared__ int local_deltas[256];
+            __shared__ int local_changed_count;
+            if (group_deltas && threadIdx.x < 256) {
+                local_deltas[threadIdx.x] = 0;
+            }
+            if (group_deltas && threadIdx.x == 0) {
+                local_changed_count = 0;
+            }
+            if (group_deltas) {
+                __syncthreads();
+            }
+
             const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= n) {
-                return;
-            }
+            uint8_t output_group = 0;
 
-            const uint8_t existing_group = existing ? existing[idx] : 0;
-            if (node_indices && valid_nodes) {
-                const int node_idx = node_indices[idx];
-                if (node_idx < 0 || node_idx >= num_nodes || !valid_nodes[node_idx]) {
-                    output[idx] = existing_group;
-                    return;
+            if (idx < n) {
+                const uint8_t existing_group = existing ? existing[idx] : 0;
+                output_group = existing_group;
+
+                bool node_valid = true;
+                if (node_indices && valid_nodes) {
+                    const int node_idx = node_indices[idx];
+                    node_valid = node_idx >= 0 && node_idx < num_nodes && valid_nodes[node_idx];
+                }
+
+                if (node_valid) {
+                    const bool selected = cumulative[idx];
+                    const bool is_other_locked = existing_group != 0 &&
+                                                 existing_group != group_id &&
+                                                 locked_groups &&
+                                                 (locked_groups[existing_group / 32] &
+                                                  (1u << (existing_group % 32)));
+
+                    if (replace_mode) {
+                        if (selected) {
+                            output_group = is_other_locked ? existing_group : group_id;
+                        } else if (existing_group == group_id) {
+                            output_group = 0;
+                        }
+                    } else if (add_mode) {
+                        output_group = (selected && !is_other_locked) ? group_id : existing_group;
+                    } else {
+                        output_group = (selected && existing_group == group_id) ? 0 : existing_group;
+                    }
+                }
+
+                output[idx] = output_group;
+                if (group_deltas && output_group != existing_group) {
+                    if (existing_group != 0) {
+                        atomicAdd(&local_deltas[existing_group], -1);
+                    }
+                    if (output_group != 0) {
+                        atomicAdd(&local_deltas[output_group], 1);
+                    }
+                    atomicAdd(&local_changed_count, 1);
                 }
             }
 
-            const bool selected = cumulative[idx];
-            const bool is_other_locked = existing_group != 0 &&
-                                         existing_group != group_id &&
-                                         locked_groups &&
-                                         (locked_groups[existing_group / 32] &
-                                          (1u << (existing_group % 32)));
-
-            if (replace_mode) {
-                if (selected) {
-                    output[idx] = is_other_locked ? existing_group : group_id;
-                } else if (existing_group == group_id) {
-                    output[idx] = 0;
-                } else {
-                    output[idx] = existing_group;
+            if (group_deltas) {
+                __syncthreads();
+                if (threadIdx.x < 256) {
+                    const int delta = local_deltas[threadIdx.x];
+                    if (delta != 0) {
+                        atomicAdd(&group_deltas[threadIdx.x], delta);
+                    }
                 }
-            } else if (add_mode) {
-                output[idx] = (selected && !is_other_locked) ? group_id : existing_group;
-            } else {
-                output[idx] = (selected && existing_group == group_id) ? 0 : existing_group;
+                if (threadIdx.x == 0 && local_changed_count != 0) {
+                    atomicAdd(&group_deltas[kSelectionChangedCountIndex], local_changed_count);
+                }
             }
         }
 
@@ -285,6 +339,33 @@ namespace lfs::rendering {
                 output[output_idx] = (selected && !is_other_locked) ? group_id : existing_group;
             } else {
                 output[output_idx] = (selected && existing_group == group_id) ? 0 : existing_group;
+            }
+        }
+
+        __global__ void countSelectionGroupsKernel(
+            const uint8_t* __restrict__ mask,
+            const int n,
+            int* __restrict__ counts) {
+            __shared__ int local_counts[256];
+            if (threadIdx.x < 256) {
+                local_counts[threadIdx.x] = 0;
+            }
+            __syncthreads();
+
+            const int stride = blockDim.x * gridDim.x;
+            for (int idx = blockIdx.x * blockDim.x + threadIdx.x; idx < n; idx += stride) {
+                const uint8_t group = mask[idx];
+                if (group != 0) {
+                    atomicAdd(&local_counts[group], 1);
+                }
+            }
+            __syncthreads();
+
+            if (threadIdx.x < 256) {
+                const int count = local_counts[threadIdx.x];
+                if (count != 0) {
+                    atomicAdd(&counts[threadIdx.x], count);
+                }
             }
         }
 
@@ -534,7 +615,8 @@ namespace lfs::rendering {
         const bool add_mode,
         const Tensor* const transform_indices,
         const std::vector<bool>& valid_nodes,
-        const bool replace_mode) {
+        const bool replace_mode,
+        Tensor* const group_counts_scratch) {
         if (!cumulative_selection.is_valid() || cumulative_selection.size(0) == 0) {
             return;
         }
@@ -558,6 +640,9 @@ namespace lfs::rendering {
         const bool* const valid_nodes_ptr = valid_nodes_gpu.is_valid()
                                                 ? reinterpret_cast<const bool*>(valid_nodes_gpu.ptr<uint8_t>())
                                                 : nullptr;
+        if (group_counts_scratch != nullptr) {
+            prepareSelectionGroupCountsScratch(*group_counts_scratch);
+        }
 
         const int grid_size = (n + kBlockSize - 1) / kBlockSize;
         applySelectionGroupMaskKernel<<<grid_size, kBlockSize>>>(
@@ -571,7 +656,8 @@ namespace lfs::rendering {
             node_indices_ptr,
             valid_nodes_ptr,
             num_nodes,
-            replace_mode);
+            replace_mode,
+            group_counts_scratch != nullptr ? group_counts_scratch->ptr<int>() : nullptr);
     }
 
     void apply_selection_group_indexed_tensor_mask(
@@ -636,6 +722,97 @@ namespace lfs::rendering {
             valid_nodes_ptr,
             num_nodes,
             replace_mode);
+    }
+
+    std::array<size_t, 256> count_selection_groups(
+        const Tensor& selection_mask,
+        Tensor& counts_scratch) {
+        std::array<size_t, 256> result{};
+        if (!selection_mask.is_valid() || selection_mask.numel() == 0) {
+            return result;
+        }
+        if (selection_mask.device() != lfs::core::Device::CUDA) {
+            const auto mask_cpu = selection_mask.cpu();
+            const auto* const data = mask_cpu.ptr<uint8_t>();
+            const size_t n = mask_cpu.numel();
+            for (size_t i = 0; i < n; ++i) {
+                const uint8_t group = data[i];
+                if (group != 0) {
+                    ++result[group];
+                }
+            }
+            return result;
+        }
+
+        prepareSelectionGroupCountsScratch(counts_scratch);
+
+        const int n = checkedToInt(selection_mask.numel(), "selection mask size exceeds int range");
+        const int grid_size = std::min((n + kBlockSize - 1) / kBlockSize, kCountMaxBlocks);
+        countSelectionGroupsKernel<<<grid_size, kBlockSize>>>(
+            selection_mask.ptr<uint8_t>(),
+            n,
+            counts_scratch.ptr<int>());
+        if (const cudaError_t status = cudaGetLastError(); status != cudaSuccess) {
+            throw std::runtime_error(cudaGetErrorString(status));
+        }
+
+        return read_selection_group_counts(counts_scratch);
+    }
+
+    void prepare_selection_group_counts_scratch(Tensor& counts_scratch) {
+        prepareSelectionGroupCountsScratch(counts_scratch);
+    }
+
+    SelectionGroupCountResult read_selection_group_count_result(const Tensor& counts_scratch) {
+        SelectionGroupCountResult result{};
+        if (!counts_scratch.is_valid() ||
+            counts_scratch.device() != lfs::core::Device::CUDA ||
+            counts_scratch.dtype() != lfs::core::DataType::Int32 ||
+            counts_scratch.numel() != kSelectionGroupScratchWords) {
+            return result;
+        }
+
+        std::array<int, kSelectionGroupScratchWords> host_counts{};
+        if (const cudaError_t status = cudaMemcpy(host_counts.data(),
+                                                  counts_scratch.ptr<int>(),
+                                                  sizeof(host_counts),
+                                                  cudaMemcpyDeviceToHost);
+            status != cudaSuccess) {
+            throw std::runtime_error(cudaGetErrorString(status));
+        }
+        for (size_t i = 0; i < result.group_counts.size(); ++i) {
+            result.group_counts[i] = static_cast<size_t>(std::max(host_counts[i], 0));
+        }
+        result.changed_count = static_cast<size_t>(std::max(host_counts[kSelectionChangedCountIndex], 0));
+        return result;
+    }
+
+    SelectionGroupDeltaResult read_selection_group_delta_result(const Tensor& counts_scratch) {
+        SelectionGroupDeltaResult result{};
+        if (!counts_scratch.is_valid() ||
+            counts_scratch.device() != lfs::core::Device::CUDA ||
+            counts_scratch.dtype() != lfs::core::DataType::Int32 ||
+            counts_scratch.numel() != kSelectionGroupScratchWords) {
+            return result;
+        }
+
+        std::array<int, kSelectionGroupScratchWords> host_counts{};
+        if (const cudaError_t status = cudaMemcpy(host_counts.data(),
+                                                  counts_scratch.ptr<int>(),
+                                                  sizeof(host_counts),
+                                                  cudaMemcpyDeviceToHost);
+            status != cudaSuccess) {
+            throw std::runtime_error(cudaGetErrorString(status));
+        }
+        for (size_t i = 0; i < result.group_deltas.size(); ++i) {
+            result.group_deltas[i] = host_counts[i];
+        }
+        result.changed_count = static_cast<size_t>(std::max(host_counts[kSelectionChangedCountIndex], 0));
+        return result;
+    }
+
+    std::array<size_t, 256> read_selection_group_counts(const Tensor& counts_scratch) {
+        return read_selection_group_count_result(counts_scratch).group_counts;
     }
 
     void filter_selection_by_node(

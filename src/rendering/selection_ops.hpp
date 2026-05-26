@@ -6,6 +6,8 @@
 
 #include "core/tensor.hpp"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <vector>
@@ -13,6 +15,16 @@
 namespace lfs::rendering {
 
     using lfs::core::Tensor;
+
+    struct SelectionGroupCountResult {
+        std::array<size_t, 256> group_counts{};
+        size_t changed_count = 0;
+    };
+
+    struct SelectionGroupDeltaResult {
+        std::array<int32_t, 256> group_deltas{};
+        size_t changed_count = 0;
+    };
 
     void brush_select(
         const float2* screen_positions,
@@ -79,7 +91,8 @@ namespace lfs::rendering {
         bool add_mode,
         const Tensor* transform_indices,
         const std::vector<bool>& valid_nodes,
-        bool replace_mode = false);
+        bool replace_mode = false,
+        Tensor* group_counts_scratch = nullptr);
 
     void apply_selection_group_indexed_tensor_mask(
         const Tensor& visible_selection,
@@ -92,6 +105,17 @@ namespace lfs::rendering {
         const Tensor* transform_indices,
         const std::vector<bool>& valid_nodes,
         bool replace_mode = false);
+
+    [[nodiscard]] std::array<size_t, 256> count_selection_groups(
+        const Tensor& selection_mask,
+        Tensor& counts_scratch);
+    void prepare_selection_group_counts_scratch(Tensor& counts_scratch);
+    [[nodiscard]] SelectionGroupCountResult read_selection_group_count_result(
+        const Tensor& counts_scratch);
+    [[nodiscard]] SelectionGroupDeltaResult read_selection_group_delta_result(
+        const Tensor& counts_scratch);
+    [[nodiscard]] std::array<size_t, 256> read_selection_group_counts(
+        const Tensor& counts_scratch);
 
     void filter_selection_by_node(
         Tensor& selection,

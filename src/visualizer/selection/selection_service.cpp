@@ -23,8 +23,9 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cuda_runtime.h>
 #include <cstring>
+#include <cuda_runtime.h>
+#include <exception>
 #include <glm/geometric.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/trigonometric.hpp>
@@ -92,14 +93,6 @@ namespace lfs::vis {
             return device_buffer;
         }
 
-        [[nodiscard]] size_t countSelected(const core::Tensor& mask) {
-            if (!mask.is_valid()) {
-                return 0;
-            }
-            const auto bool_mask = (mask.dtype() == core::DataType::Bool) ? mask : mask.to(core::DataType::Bool);
-            return static_cast<size_t>(bool_mask.sum_scalar());
-        }
-
         [[nodiscard]] std::optional<std::shared_lock<std::shared_mutex>> acquireLiveModelRenderLock(
             const SceneManager* const scene_manager) {
             std::optional<std::shared_lock<std::shared_mutex>> lock;
@@ -138,26 +131,49 @@ namespace lfs::vis {
             return result;
         }
 
-        [[nodiscard]] core::Tensor& resetCudaByteScratchBuffer(core::Tensor& buffer, const size_t size) {
+        [[nodiscard]] core::Tensor& ensureCudaByteScratchBuffer(core::Tensor& buffer, const size_t size) {
             const bool needs_realloc = !buffer.is_valid() ||
                                        buffer.device() != core::Device::CUDA ||
                                        buffer.dtype() != core::DataType::UInt8 ||
                                        buffer.numel() != size;
             if (needs_realloc) {
-                buffer = core::Tensor::zeros({size}, core::Device::CUDA, core::DataType::UInt8);
-                return buffer;
+                buffer = core::Tensor::empty({size}, core::Device::CUDA, core::DataType::UInt8);
             }
-
-            buffer.zero_();
             return buffer;
         }
 
         [[nodiscard]] core::Tensor& acquireSelectionOutputBuffer(std::array<core::Tensor, 2>& buffers,
                                                                  size_t& next_index,
                                                                  const size_t size) {
-            auto& buffer = resetCudaByteScratchBuffer(buffers[next_index], size);
+            auto& buffer = ensureCudaByteScratchBuffer(buffers[next_index], size);
             next_index = (next_index + 1) % buffers.size();
             return buffer;
+        }
+
+        [[nodiscard]] core::Scene::SelectionGroupCounts cachedSelectionGroupCounts(const core::Scene& scene) {
+            core::Scene::SelectionGroupCounts counts{};
+            for (const auto& group : scene.getSelectionGroups()) {
+                counts[group.id] = group.count;
+            }
+            return counts;
+        }
+
+        [[nodiscard]] core::Scene::SelectionGroupCounts applySelectionGroupDeltas(
+            core::Scene::SelectionGroupCounts counts,
+            const std::array<int32_t, 256>& group_deltas) {
+            for (size_t i = 1; i < counts.size(); ++i) {
+                const int32_t delta = group_deltas[i];
+                if (delta < 0) {
+                    const size_t decrement = static_cast<size_t>(-delta);
+                    counts[i] = decrement >= counts[i] ? 0 : counts[i] - decrement;
+                } else if (delta > 0) {
+                    const size_t increment = static_cast<size_t>(delta);
+                    counts[i] = counts[i] > std::numeric_limits<size_t>::max() - increment
+                                    ? std::numeric_limits<size_t>::max()
+                                    : counts[i] + increment;
+                }
+            }
+            return counts;
         }
 
         [[nodiscard]] size_t activeSelectionGaussianCount(const SceneManager* const scene_manager) {
@@ -981,6 +997,7 @@ namespace lfs::vis {
         selection_before_stroke_ =
             (existing && existing->is_valid()) ? std::make_shared<core::Tensor>(existing->clone()) : nullptr;
 
+        prewarmSelectionCommitResources(n);
         (void)resetBoolScratchBuffer(stroke_selection_, n);
         stroke_active_ = true;
     }
@@ -1197,6 +1214,7 @@ namespace lfs::vis {
             interactive_selection_ = {};
             return false;
         }
+        prewarmSelectionCommitResources(total);
         (void)resetBoolScratchBuffer(interactive_selection_.working_selection, total);
 
         switch (shape) {
@@ -1597,7 +1615,8 @@ namespace lfs::vis {
 
         auto locked_groups = [&] {
             LOG_TIMER("commitSelection.upload_locked_group_mask");
-            return selection::upload_locked_group_mask(scene, locked_groups_device_mask_);
+            return selection::upload_locked_group_mask(
+                scene, locked_groups_device_mask_, locked_groups_host_mask_, locked_groups_host_mask_valid_);
         }();
         if (!locked_groups) {
             return {false, 0, locked_groups.error()};
@@ -1609,6 +1628,12 @@ namespace lfs::vis {
         auto& output_mask = acquireSelectionOutputBuffer(selection_output_buffers_, selection_output_buffer_index_, n);
         const std::vector<bool> empty_node_mask;
         const auto& final_node_mask = commit_node_mask ? *commit_node_mask : empty_node_mask;
+        const bool count_groups_in_apply = !use_indexed_commit;
+        const bool can_apply_group_deltas =
+            count_groups_in_apply && (!existing_ptr || !scene.selectionGroupCountsDirty());
+        const auto base_group_counts = can_apply_group_deltas
+                                           ? cachedSelectionGroupCounts(scene)
+                                           : core::Scene::SelectionGroupCounts{};
 
         if (use_indexed_commit) {
             LOG_TIMER("commitSelection.apply_selection_group_indexed_tensor_mask");
@@ -1619,13 +1644,43 @@ namespace lfs::vis {
             LOG_TIMER("commitSelection.apply_selection_group_tensor_mask");
             rendering::apply_selection_group_tensor_mask(
                 scene_selection_mask, existing_ref, output_mask, group_id, *locked_groups,
-                add_mode, commit_transform_indices.get(), final_node_mask, replace_mode);
+                add_mode, commit_transform_indices.get(), final_node_mask, replace_mode,
+                &selection_group_counts_scratch_);
+        }
+
+        core::Scene::SelectionGroupCounts group_counts{};
+        bool selection_change_known = false;
+        size_t selection_changed_count = 0;
+        try {
+            LOG_TIMER("commitSelection.count_selection_groups");
+            if (count_groups_in_apply) {
+                const auto delta_result =
+                    rendering::read_selection_group_delta_result(selection_group_counts_scratch_);
+                selection_changed_count = delta_result.changed_count;
+                selection_change_known = true;
+                if (can_apply_group_deltas) {
+                    group_counts = applySelectionGroupDeltas(base_group_counts, delta_result.group_deltas);
+                } else {
+                    group_counts = rendering::count_selection_groups(output_mask, selection_group_counts_scratch_);
+                }
+            } else {
+                group_counts = rendering::count_selection_groups(output_mask, selection_group_counts_scratch_);
+            }
+        } catch (const std::exception& e) {
+            return {false, 0, e.what()};
+        }
+        size_t selected_count = 0;
+        for (size_t i = 1; i < group_counts.size(); ++i) {
+            selected_count += group_counts[i];
         }
 
         std::unique_ptr<op::SceneSnapshot> entry;
         if (push_undo) {
             LOG_TIMER("commitSelection.snapshot_captureSelection");
             entry = std::make_unique<op::SceneSnapshot>(*scene_manager_, undo_name);
+            if (selection_change_known) {
+                entry->setSelectionChangeHint(selection_changed_count > 0, true);
+            }
             entry->captureSelection();
         }
 
@@ -1636,7 +1691,7 @@ namespace lfs::vis {
         }();
         {
             LOG_TIMER("commitSelection.setSelectionMask");
-            scene.setSelectionMask(new_selection);
+            scene.setSelectionMaskWithGroupCounts(new_selection, selected_count, group_counts);
         }
 
         if (entry) {
@@ -1651,11 +1706,7 @@ namespace lfs::vis {
         }
 
         rendering_manager_->markDirty(DirtyFlag::SELECTION);
-        const size_t count = [&] {
-            LOG_TIMER("commitSelection.countSelected");
-            return countSelected(*new_selection);
-        }();
-        return {true, count, {}};
+        return {true, selected_count, {}};
     }
 
     std::shared_ptr<core::Tensor> SelectionService::resolveCommandScreenPositions(const int camera_index) const {
@@ -1856,6 +1907,17 @@ namespace lfs::vis {
 
         buffer.zero_();
         return buffer;
+    }
+
+    void SelectionService::prewarmSelectionCommitResources(const size_t size) {
+        if (size == 0) {
+            return;
+        }
+        LOG_TIMER("SelectionService::prewarmSelectionCommitResources");
+        rendering::prepare_selection_group_counts_scratch(selection_group_counts_scratch_);
+        for (auto& buffer : selection_output_buffers_) {
+            (void)ensureCudaByteScratchBuffer(buffer, size);
+        }
     }
 
     bool SelectionService::buildInteractiveBrushPreviewIncremental() {
