@@ -24,6 +24,13 @@
 #include <vector>
 
 namespace lfs::vis::gui {
+    namespace {
+        [[nodiscard]] bool isInteractiveViewportOverlayElement(const Rml::Element* const element) {
+            return element && element->GetTagName() != "body" &&
+                   element->GetId() != "overlay-body" &&
+                   element->GetId() != "dm-root";
+        }
+    } // namespace
 
     void RmlViewportOverlay::init(RmlUIManager* mgr) {
         assert(mgr);
@@ -65,6 +72,8 @@ namespace lfs::vis::gui {
         document_ = nullptr;
         body_el_ = nullptr;
         body_template_rml_.clear();
+        hovered_interactive_ = false;
+        mouse_pos_valid_ = false;
     }
 
     void RmlViewportOverlay::reloadResources() {
@@ -89,6 +98,7 @@ namespace lfs::vis::gui {
         data_model_binding_dirty_ = true;
         toolbar_roots_dirty_ = true;
         animation_active_ = true;
+        hovered_interactive_ = false;
         mouse_pos_valid_ = false;
         last_render_w_ = 0;
         last_render_h_ = 0;
@@ -291,19 +301,38 @@ namespace lfs::vis::gui {
                                 last_mouse_y_ >= 0 && last_mouse_y_ < static_cast<int>(vp_size_.y);
         const bool is_inside = rml_mx >= 0 && rml_mx < static_cast<int>(vp_size_.x) &&
                                rml_my >= 0 && rml_my < static_cast<int>(vp_size_.y);
-        if ((!mouse_pos_valid_ || rml_mx != last_mouse_x_ || rml_my != last_mouse_y_) &&
-            (was_inside || is_inside)) {
+        const bool mouse_moved =
+            !mouse_pos_valid_ || rml_mx != last_mouse_x_ || rml_my != last_mouse_y_;
+        const bool pointer_event =
+            input.mouse_clicked[0] || input.mouse_released[0] ||
+            input.mouse_clicked[1] || input.mouse_released[1] ||
+            input.mouse_wheel != 0.0f;
+        auto* const point_element = is_inside
+                                        ? rml_context_->GetElementAtPoint(Rml::Vector2f(
+                                              static_cast<float>(rml_mx),
+                                              static_cast<float>(rml_my)))
+                                        : nullptr;
+        const bool point_interactive = isInteractiveViewportOverlayElement(point_element);
+        const bool should_process_mouse_move =
+            (mouse_moved || pointer_event) &&
+            (was_inside || is_inside) &&
+            (point_interactive || hovered_interactive_ || was_inside != is_inside);
+        if (should_process_mouse_move) {
             mouse_pos_valid_ = true;
             last_mouse_x_ = rml_mx;
             last_mouse_y_ = rml_my;
             render_needed_ = true;
             rml_context_->ProcessMouseMove(rml_mx, rml_my, mods);
+        } else if (mouse_moved && (was_inside || is_inside)) {
+            mouse_pos_valid_ = true;
+            last_mouse_x_ = rml_mx;
+            last_mouse_y_ = rml_my;
         }
 
-        auto* hover = rml_context_->GetHoverElement();
-        bool over_interactive = hover && hover->GetTagName() != "body" &&
-                                hover->GetId() != "overlay-body" &&
-                                hover->GetId() != "dm-root";
+        auto* const hover = should_process_mouse_move ? rml_context_->GetHoverElement()
+                                                      : point_element;
+        const bool over_interactive = is_inside && isInteractiveViewportOverlayElement(hover);
+        hovered_interactive_ = over_interactive;
 
         if (over_interactive) {
             wants_input_ = true;
@@ -346,9 +375,7 @@ namespace lfs::vis::gui {
         }
 
         auto* const hover = rml_context_->GetElementAtPoint(Rml::Vector2f(local_x, local_y));
-        return hover && hover->GetTagName() != "body" &&
-               hover->GetId() != "overlay-body" &&
-               hover->GetId() != "dm-root";
+        return isInteractiveViewportOverlayElement(hover);
     }
 
     void RmlViewportOverlay::ensureBodyDataModelBound(Rml::Element* body) {
@@ -437,11 +464,13 @@ namespace lfs::vis::gui {
         const int h = static_cast<int>(vp_size_.y);
         const bool theme_current =
             has_theme_signature_ && rml_theme::currentThemeSignature() == last_theme_signature_;
+        const bool document_hooks_due = shouldRunDocumentHooks(false);
         const bool tooltip_changed = tooltip_.hasActiveState() && applyFrameTooltip();
         if (rml_manager_)
             rml_manager_->setContextNeedsPassiveMouseMoveFrames(rml_context_, tooltip_.needsFrame());
         const bool can_update_tooltip_only =
-            rml_manager_ && tooltip_changed && theme_current && !render_needed_ && !animation_active_ &&
+            rml_manager_ && tooltip_changed && theme_current && !document_hooks_due &&
+            !render_needed_ && !animation_active_ &&
             !data_model_binding_dirty_ && !toolbar_roots_dirty_ &&
             w == last_render_w_ && h == last_render_h_;
         if (can_update_tooltip_only) {
@@ -455,6 +484,7 @@ namespace lfs::vis::gui {
             return;
         }
         const bool can_reuse = theme_current && !render_needed_ && !animation_active_ &&
+                               !document_hooks_due &&
                                !data_model_binding_dirty_ && !toolbar_roots_dirty_ &&
                                !tooltip_changed && w == last_render_w_ && h == last_render_h_;
         if (!can_reuse) {

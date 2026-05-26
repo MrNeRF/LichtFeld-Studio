@@ -5218,10 +5218,7 @@ namespace lfs::vis::gui {
 
         {
             LOG_TIMER("gui_render.rml_viewport_overlay.render");
-            if (block_underlay_input)
-                rml_viewport_overlay_.renderCached();
-            else
-                rml_viewport_overlay_.render();
+            rml_viewport_overlay_.renderCached();
         }
 
         applyFrameInputCapture();
