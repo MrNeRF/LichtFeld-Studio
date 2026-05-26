@@ -281,6 +281,8 @@ namespace lfs::core {
             // True when --bg-color was provided on the command line.
             bool cli_bg_color_set = false;
 
+            std::vector<int> disabled_camera_uids;
+
             [[nodiscard]] std::string validate() const;
         };
 

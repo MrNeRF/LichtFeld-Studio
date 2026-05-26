@@ -211,6 +211,14 @@ def test_selection_tool_uses_flyout_modes(toolbar_module, monkeypatch):
     module, _hook_calls, _remove_calls = toolbar_module
     lf_stub = sys.modules["lichtfeld"]
     state = SimpleNamespace(active_tool="", active_submode="")
+    lf_stub.keymap = SimpleNamespace(
+        Action=SimpleNamespace(TOOL_SELECT="tool-select", SELECT_MODE_CENTERS="select-mode-centers"),
+        ToolMode=SimpleNamespace(GLOBAL="global"),
+        get_trigger_description=lambda action, mode: {
+            ("tool-select", "global"): "Alt+8",
+            ("select-mode-centers", "global"): "Ctrl+9",
+        }.get((action, mode), ""),
+    )
     select_tool = SimpleNamespace(
         id="builtin.select",
         icon="selection",
@@ -259,6 +267,10 @@ def test_selection_tool_uses_flyout_modes(toolbar_module, monkeypatch):
     assert snapshot["selection_group_buttons"][0]["action"] == "tool"
     assert snapshot["selection_group_buttons"][0]["value"] == "builtin.select"
     assert snapshot["selection_group_buttons"][0]["icon_src"] == "../icon/selection.png"
+    assert snapshot["selection_group_buttons"][0]["tooltip_text"] == ""
+    assert snapshot["selection_group_buttons"][0]["shortcut_text"] == "Alt+8"
+    assert snapshot["selection_mode_buttons"][0]["shortcut_text"] == "Ctrl+9"
+    assert snapshot["selection_mode_buttons"][1]["shortcut_text"] == ""
     assert [button["action"] for button in snapshot["selection_mode_buttons"]] == [
         "selection_mode",
         "selection_mode",
@@ -505,6 +517,7 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert rml.count('class="toolbar-flyout toolbar-flyout-selection hidden"') == 2
     assert rml.count('class="toolbar-flyout toolbar-flyout-transform hidden"') == 2
     assert rml.count('data-for="button : selection_group_buttons"') == 2
+    assert rml.count('data-attr-data-shortcut="button.shortcut_text"') == 12
     assert rml.count('data-for="button : selection_mode_buttons"') == 2
     assert rml.count('data-for="button : transform_group_buttons"') == 2
     assert rml.count('data-for="button : transform_tool_buttons"') == 2
@@ -543,6 +556,63 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
         assert f'data-tooltip="tooltip.{key}"' in rml
     for locale_path in sorted(locale_dir.glob("*.json")):
         data = json.loads(locale_path.read_text(encoding="utf-8"))
+        toolbar_labels_without_hardcoded_shortcuts = (
+            "selection",
+            "translate",
+            "rotate",
+            "scale",
+            "mirror",
+            "painting",
+            "align_3point",
+            "brush_selection",
+            "rect_selection",
+            "polygon_selection",
+            "lasso_selection",
+            "ring_selection",
+            "color_selection",
+            "home",
+            "fullscreen",
+            "toggle_ui",
+        )
+        forbidden_shortcut_fragments = (
+            "(1)",
+            "(2)",
+            "(3)",
+            "(4)",
+            "(5)",
+            "(6)",
+            "(7)",
+            "(H)",
+            "(F11)",
+            "(F12)",
+            "(Ctrl+1)",
+            "(Ctrl+2)",
+            "(Ctrl+3)",
+            "(Ctrl+4)",
+            "(Ctrl+5)",
+            "(Ctrl+6)",
+            "(Strg+1)",
+            "(Strg+2)",
+            "(Strg+3)",
+            "(Strg+4)",
+            "(Strg+5)",
+            "(Strg+6)",
+            "（H）",
+            "（F11）",
+            "（F12）",
+            "（Ctrl+1）",
+            "（Ctrl+2）",
+            "（Ctrl+3）",
+            "（Ctrl+4）",
+            "（Ctrl+5）",
+            "（Ctrl+6）",
+        )
+        for key in toolbar_labels_without_hardcoded_shortcuts:
+            value = data.get("toolbar", {}).get(key, "")
+            if value:
+                assert not any(fragment in value for fragment in forbidden_shortcut_fragments), (
+                    f"{locale_path.name} toolbar.{key} still contains a hardcoded shortcut: {value}"
+                )
         for key in selection_tooltip_keys:
             assert data.get("tooltip", {}).get(key), f"{locale_path.name} missing tooltip.{key}"
         for key in (*transform_tooltip_keys, *transform_dynamic_tooltip_keys):

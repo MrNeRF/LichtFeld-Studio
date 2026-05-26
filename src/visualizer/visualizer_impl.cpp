@@ -899,7 +899,8 @@ namespace lfs::vis {
         });
 
         internal::TrainerReady::when([this](const auto&) {
-            python::update_trainer_loaded(true, trainer_manager_->getTotalIterations());
+            python::update_trainer_loaded(true, trainer_manager_->getTotalIterations(),
+                                          trainer_manager_->getCurrentIteration());
             python::update_training_state(false, "ready");
         });
 

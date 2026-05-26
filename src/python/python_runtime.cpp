@@ -1160,9 +1160,9 @@ namespace lfs::python {
         }
     }
 
-    void update_trainer_loaded(bool has_trainer, int max_iterations) {
+    void update_trainer_loaded(bool has_trainer, int max_iterations, int initial_iteration) {
         if (g_signal_bridge_callbacks.trainer_loaded) {
-            g_signal_bridge_callbacks.trainer_loaded(has_trainer, max_iterations);
+            g_signal_bridge_callbacks.trainer_loaded(has_trainer, max_iterations, initial_iteration);
         }
     }
 

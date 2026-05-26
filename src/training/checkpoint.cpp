@@ -202,6 +202,9 @@ namespace lfs::training {
             if (params.init_path.has_value()) {
                 params_json["init_path"] = params.init_path.value();
             }
+            if (!params.disabled_camera_uids.empty()) {
+                params_json["disabled_camera_uids"] = params.disabled_camera_uids;
+            }
             const std::string params_str = params_json.dump();
             file.write(params_str.data(), static_cast<std::streamsize>(params_str.size()));
             const auto params_end = file.tellp();
@@ -294,6 +297,9 @@ namespace lfs::training {
                     }
                     if (params_json.contains("init_path")) {
                         params.init_path = params_json["init_path"].get<std::string>();
+                    }
+                    if (params_json.contains("disabled_camera_uids")) {
+                        params.disabled_camera_uids = params_json["disabled_camera_uids"].get<std::vector<int>>();
                     }
                 } else {
                     params.optimization = lfs::core::param::OptimizationParameters::from_json(params_json);

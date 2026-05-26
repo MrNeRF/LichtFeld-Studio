@@ -919,10 +919,13 @@ namespace lfs::vis::gui {
             try {
                 LOG_TIMER(panelDirectTimerName(snap.id, "draw_cached"));
                 snap.panel->setPanelSpace(space);
+                snap.panel->setInput(input);
                 if (snap.panel->drawDirectCached(x, y + y_offset, w, remaining, ctx)) {
+                    snap.panel->setInput(nullptr);
                     used_h = snap.panel->getDirectDrawHeight();
                     draw_succeeded = true;
                 } else {
+                    snap.panel->setInput(nullptr);
                     {
                         LOG_TIMER(panelDirectTimerName(snap.id, "poll"));
                         if (!check_poll(snap, ctx))
@@ -1418,18 +1421,19 @@ namespace lfs::vis::gui {
             LOG_TIMER(panelDirectTimerName(snap.id, "draw_cached"));
             snap.panel->setPanelSpace(panel_space);
             snap.panel->setInputClipY(clip_y_min, clip_y_max);
+            snap.panel->setInput(input);
             if (!snap.panel->drawDirectCached(x, y, w, h, ctx)) {
                 {
                     LOG_TIMER(panelDirectTimerName(snap.id, "poll"));
                     if (!check_poll(snap, ctx)) {
+                        snap.panel->setInput(nullptr);
                         snap.panel->setInputClipY(-1.0f, -1.0f);
                         return 0.0f;
                     }
                 }
-                snap.panel->setInput(input);
                 snap.panel->drawDirect(x, y, w, h, ctx);
-                snap.panel->setInput(nullptr);
             }
+            snap.panel->setInput(nullptr);
             snap.panel->setInputClipY(-1.0f, -1.0f);
             draw_succeeded = true;
         } catch (const std::exception& e) {
@@ -1644,6 +1648,7 @@ namespace lfs::vis::gui {
             try {
                 LOG_TIMER(panelDirectTimerName(snap.id, "draw_cached"));
                 snap.panel->setInputClipY(clip_y_min, clip_y_max);
+                snap.panel->setInput(input);
                 if (snap.panel->drawDirectCached(x, y + y_offset, w, remaining, ctx)) {
                     used_h = snap.panel->getDirectDrawHeight();
                     draw_succeeded = true;
@@ -1651,16 +1656,16 @@ namespace lfs::vis::gui {
                     {
                         LOG_TIMER(panelDirectTimerName(snap.id, "poll"));
                         if (!check_poll(snap, ctx)) {
+                            snap.panel->setInput(nullptr);
                             snap.panel->setInputClipY(-1.0f, -1.0f);
                             continue;
                         }
                     }
-                    snap.panel->setInput(input);
                     snap.panel->drawDirect(x, y + y_offset, w, remaining, ctx);
-                    snap.panel->setInput(nullptr);
                     used_h = snap.panel->getDirectDrawHeight();
                     draw_succeeded = true;
                 }
+                snap.panel->setInput(nullptr);
                 snap.panel->setInputClipY(-1.0f, -1.0f);
             } catch (const std::exception& e) {
                 snap.panel->setInput(nullptr);

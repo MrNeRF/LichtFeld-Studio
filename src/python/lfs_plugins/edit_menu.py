@@ -10,8 +10,9 @@ __lfs_menu_classes__ = ["EditMenu"]
 
 def _shortcut(action, fallback):
     try:
-        shortcut = lf.keymap.get_trigger_description(action, lf.keymap.ToolMode.GLOBAL)
-        return "" if shortcut == "Unbound" else shortcut
+        if not lf.keymap.is_bound(action, lf.keymap.ToolMode.GLOBAL):
+            return ""
+        return lf.keymap.get_trigger_description(action, lf.keymap.ToolMode.GLOBAL)
     except (AttributeError, RuntimeError, TypeError):
         return fallback
 

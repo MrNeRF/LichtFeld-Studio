@@ -2249,6 +2249,13 @@ namespace lfs::vis {
                 throw std::runtime_error("Failed to load training data: " + load_result.error());
             }
 
+            for (const auto* node : scene_.getNodes()) {
+                if (node->type == lfs::core::NodeType::CAMERA && node->camera &&
+                    std::ranges::contains(checkpoint_params.disabled_camera_uids, node->camera->uid())) {
+                    scene_.setCameraTrainingEnabled(node->name, false);
+                }
+            }
+
             // Remove POINTCLOUD node (checkpoint model replaces it)
             for (const auto* node : scene_.getNodes()) {
                 if (node->type == lfs::core::NodeType::POINTCLOUD) {

@@ -1530,7 +1530,7 @@ namespace lfs::vis::gui {
             return;
 
         focusTree();
-        if (!selected_ids_.contains(node_id) || selected_ids_.size() != 1) {
+        if (!selected_ids_.contains(node_id)) {
             scene_manager->selectNode(node_snapshots_[node_id].name);
             selected_ids_.clear();
             selected_ids_.insert(node_id);

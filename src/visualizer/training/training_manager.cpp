@@ -430,12 +430,17 @@ namespace lfs::vis {
             trainer_->request_stop();
         }
 
-        if (training_thread_ && training_thread_->joinable()) {
+        const bool has_thread = training_thread_ && training_thread_->joinable();
+        if (has_thread) {
             training_thread_->request_stop();
         }
 
         state::TrainingStopped{.iteration = getCurrentIteration(), .user_requested = true}.emit();
         LOG_INFO("Training stop requested at iteration {}", getCurrentIteration());
+
+        if (!has_thread) {
+            handleTrainingComplete(true);
+        }
     }
 
     void TrainerManager::requestSaveCheckpoint() {

@@ -3833,7 +3833,8 @@ namespace lfs::training {
         PPISPControllerPool* controller_to_save = controller_pool_for_save(iter_num);
 
         if (save_checkpoint_file) {
-            auto ckpt_result = lfs::training::save_checkpoint(save_path, iter_num, *strategy_, params_,
+            auto ckpt_result = lfs::training::save_checkpoint(save_path, iter_num, *strategy_,
+                                                              params_for_checkpoint_save(),
                                                               bilateral_grid_.get(), ppisp_.get(), controller_to_save);
             if (!ckpt_result) {
                 LOG_WARN("Failed to save checkpoint: {}", ckpt_result.error());
@@ -3866,7 +3867,8 @@ namespace lfs::training {
 
         PPISPControllerPool* controller_to_save = controller_pool_for_save(iteration);
 
-        return lfs::training::save_checkpoint(params_.dataset.output_path, iteration, *strategy_, params_,
+        return lfs::training::save_checkpoint(params_.dataset.output_path, iteration, *strategy_,
+                                              params_for_checkpoint_save(),
                                               bilateral_grid_.get(), ppisp_.get(), controller_to_save);
     }
 
@@ -3878,7 +3880,8 @@ namespace lfs::training {
 
         PPISPControllerPool* controller_to_save = controller_pool_for_save(iteration);
 
-        return lfs::training::save_checkpoint(output_path, iteration, *strategy_, params_,
+        return lfs::training::save_checkpoint(output_path, iteration, *strategy_,
+                                              params_for_checkpoint_save(),
                                               bilateral_grid_.get(), ppisp_.get(), controller_to_save);
     }
 
@@ -3935,6 +3938,15 @@ namespace lfs::training {
         return iteration >= params_.optimization.resolved_ppisp_controller_activation_step(get_total_iterations())
                    ? ppisp_controller_pool_.get()
                    : nullptr;
+    }
+
+    lfs::core::param::TrainingParameters Trainer::params_for_checkpoint_save() const {
+        auto params = params_;
+        if (scene_) {
+            const auto disabled = scene_->getTrainingDisabledCameraUids();
+            params.disabled_camera_uids.assign(disabled.begin(), disabled.end());
+        }
+        return params;
     }
 
     void Trainer::save_final_ply_and_checkpoint(const int iteration) {

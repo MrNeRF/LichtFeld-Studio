@@ -670,7 +670,7 @@ namespace lfs::python {
     using SignalFlushCallback = void (*)();
     using TrainingProgressCallback = void (*)(int iteration, float loss, std::size_t num_gaussians);
     using TrainingStateCallback = void (*)(bool is_training, const char* state);
-    using TrainerLoadedCallback = void (*)(bool has_trainer, int max_iterations);
+    using TrainerLoadedCallback = void (*)(bool has_trainer, int max_iterations, int initial_iteration);
     using PsnrCallback = void (*)(float psnr);
     using SceneCallback = void (*)(bool has_scene, const char* path);
     using SelectionCallback = void (*)(bool has_selection, int count);
@@ -690,7 +690,7 @@ namespace lfs::python {
     // Signal update functions - called by visualizer, dispatch to Python via callbacks
     LFS_PYTHON_RUNTIME_API void update_training_progress(int iteration, float loss, std::size_t num_gaussians);
     LFS_PYTHON_RUNTIME_API void update_training_state(bool is_training, const char* state);
-    LFS_PYTHON_RUNTIME_API void update_trainer_loaded(bool has_trainer, int max_iterations);
+    LFS_PYTHON_RUNTIME_API void update_trainer_loaded(bool has_trainer, int max_iterations, int initial_iteration = 0);
     LFS_PYTHON_RUNTIME_API void update_psnr(float psnr);
     LFS_PYTHON_RUNTIME_API void update_scene(bool has_scene, const char* path);
     LFS_PYTHON_RUNTIME_API void update_selection(bool has_selection, int count);

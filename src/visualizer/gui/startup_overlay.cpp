@@ -200,6 +200,15 @@ namespace lfs::vis::gui {
         const auto names = loc.getAvailableLanguageNames();
         const auto& current = loc.getCurrentLanguage();
 
+        if (rml_manager_) {
+            for (const auto& lang : langs) {
+                if (lang == "ja" || lang == "ko" || lang == "zh") {
+                    rml_manager_->ensureCjkFontsLoaded();
+                    break;
+                }
+            }
+        }
+
         for (size_t i = 0; i < langs.size(); ++i) {
             select->Add(names[i], langs[i]);
             if (langs[i] == current)
