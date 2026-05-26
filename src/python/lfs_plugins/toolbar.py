@@ -58,8 +58,21 @@ def _tooltip_text(label, shortcut=""):
     return label or ""
 
 
+def _keymap_shortcut(lf, action_name, mode_name="GLOBAL"):
+    try:
+        keymap = lf.keymap
+        action = getattr(keymap.Action, action_name)
+        mode = getattr(keymap.ToolMode, mode_name)
+        shortcut = keymap.get_trigger_description(action, mode)
+    except Exception:
+        return ""
+    if not shortcut or shortcut == "Unbound":
+        return ""
+    return str(shortcut)
+
+
 def _button_record(button_id, action, value, icon_src, *,
-                   tooltip_key="", tooltip_text="", selected=False, enabled=True):
+                   tooltip_key="", tooltip_text="", shortcut_text="", selected=False, enabled=True):
     return {
         "button_id": button_id,
         "action": action,
@@ -67,6 +80,7 @@ def _button_record(button_id, action, value, icon_src, *,
         "icon_src": icon_src,
         "tooltip_key": tooltip_key,
         "tooltip_text": tooltip_text,
+        "shortcut_text": shortcut_text,
         "selected": selected,
         "enabled": enabled,
     }
@@ -81,6 +95,16 @@ class _GizmoToolbarController:
         "builtin.mirror": "toolbar.mirror",
         "builtin.brush": "toolbar.painting",
         "builtin.align": "toolbar.align_3point",
+    }
+
+    _TOOL_ACTIONS = {
+        "builtin.select": "TOOL_SELECT",
+        "builtin.translate": "TOOL_TRANSLATE",
+        "builtin.rotate": "TOOL_ROTATE",
+        "builtin.scale": "TOOL_SCALE",
+        "builtin.mirror": "TOOL_MIRROR",
+        "builtin.brush": "TOOL_BRUSH",
+        "builtin.align": "TOOL_ALIGN",
     }
 
     _SUBMODE_LOCALE_KEYS = {
@@ -99,6 +123,15 @@ class _GizmoToolbarController:
         "builtin.mirror:x": "toolbar.mirror_x",
         "builtin.mirror:y": "toolbar.mirror_y",
         "builtin.mirror:z": "toolbar.mirror_z",
+    }
+
+    _SELECTION_MODE_ACTIONS = {
+        "centers": "SELECT_MODE_CENTERS",
+        "rectangle": "SELECT_MODE_RECTANGLE",
+        "polygon": "SELECT_MODE_POLYGON",
+        "lasso": "SELECT_MODE_LASSO",
+        "rings": "SELECT_MODE_RINGS",
+        "color": "SELECT_MODE_COLOR",
     }
 
     _PIVOT_LOCALE_KEYS = {
@@ -195,7 +228,10 @@ class _GizmoToolbarController:
         )
 
     def _tool_button_record(self, tool_def, active_tool_id, context):
+        import lichtfeld as lf
+
         tooltip_key = self._TOOL_LOCALE_KEYS.get(tool_def.id, "")
+        action_name = self._TOOL_ACTIONS.get(tool_def.id, "")
         return _button_record(
             f"tool-{tool_def.id}",
             "tool",
@@ -203,6 +239,7 @@ class _GizmoToolbarController:
             _tool_icon_src(tool_def),
             tooltip_key=tooltip_key,
             tooltip_text="" if tooltip_key else _tooltip_text(tool_def.label, tool_def.shortcut),
+            shortcut_text=_keymap_shortcut(lf, action_name) if action_name else "",
             selected=_tool_selected(tool_def, active_tool_id, context),
             enabled=tool_def.can_activate(context),
         )
@@ -234,6 +271,7 @@ class _GizmoToolbarController:
                     _icon_src(mode.icon) if mode.icon else "",
                     tooltip_key=tooltip_key,
                     tooltip_text="" if tooltip_key else _tooltip_text(mode.label, mode.shortcut),
+                    shortcut_text=_keymap_shortcut(lf, self._SELECTION_MODE_ACTIONS.get(mode.id, "")),
                     selected=selected,
                     enabled=enabled,
                 )
@@ -246,7 +284,8 @@ class _GizmoToolbarController:
             "builtin.select",
             active_mode["icon_src"] if active_mode else _tool_icon_src(tool_def),
             tooltip_key=self._TOOL_LOCALE_KEYS.get(tool_def.id, ""),
-            tooltip_text=_tooltip_text(tool_def.label, tool_def.shortcut),
+            tooltip_text="",
+            shortcut_text=_keymap_shortcut(lf, "TOOL_SELECT"),
             selected=active_tool_id == "builtin.select",
             enabled=enabled,
         )
@@ -267,7 +306,9 @@ class _GizmoToolbarController:
             "tool",
             active_button["value"] if active_button else fallback["value"],
             active_button["icon_src"] if active_button else fallback["icon_src"],
+            tooltip_key=active_button["tooltip_key"] if active_button else "",
             tooltip_text=active_button["tooltip_text"] if active_button else "Transform Tools",
+            shortcut_text=active_button["shortcut_text"] if active_button else "",
             selected=active_button is not None,
             enabled=any(b["enabled"] for b in tool_buttons),
         )
@@ -402,6 +443,11 @@ class _UtilityToolbarController:
         ("ring", "rings", "toolbar.gaussian_rings"),
         ("circle-dot", "centers", "toolbar.center_markers"),
     )
+    _PRIMARY_ACTIONS = {
+        "home": "CAMERA_RESET_HOME",
+        "fullscreen": "TOGGLE_FULLSCREEN",
+        "toggle_ui": "TOGGLE_UI",
+    }
 
     @staticmethod
     def _group_button(group_id, sub_buttons, fallback_label):
@@ -464,17 +510,20 @@ class _UtilityToolbarController:
         ]
         primary_buttons = [
             _button_record("util-home", "home", "", _icon_src("home"),
-                           tooltip_key="toolbar.home"),
+                           tooltip_key="toolbar.home",
+                           shortcut_text=_keymap_shortcut(lf, self._PRIMARY_ACTIONS["home"])),
             _button_record(
                 "util-fullscreen",
                 "fullscreen",
                 "",
                 _icon_src("arrows-minimize" if is_fullscreen else "arrows-maximize"),
                 tooltip_key="toolbar.fullscreen",
+                shortcut_text=_keymap_shortcut(lf, self._PRIMARY_ACTIONS["fullscreen"]),
                 selected=is_fullscreen,
             ),
             _button_record("util-toggle-ui", "toggle_ui", "", _icon_src("layout-off"),
-                           tooltip_key="toolbar.toggle_ui"),
+                           tooltip_key="toolbar.toggle_ui",
+                           shortcut_text=_keymap_shortcut(lf, self._PRIMARY_ACTIONS["toggle_ui"])),
         ]
 
         render_mode_buttons = []

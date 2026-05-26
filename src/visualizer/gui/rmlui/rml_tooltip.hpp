@@ -27,7 +27,14 @@ namespace lfs::vis::gui {
                 const char* resolved = loc.get(key.c_str());
                 if (!resolved || std::string_view(resolved) == key.c_str())
                     return {};
-                return resolved;
+                std::string text(resolved);
+                const auto shortcut = el->GetAttribute<Rml::String>("data-shortcut", "");
+                if (!shortcut.empty()) {
+                    text += " (";
+                    text += shortcut.c_str();
+                    text += ")";
+                }
+                return text;
             }
 
             const auto title = el->GetAttribute<Rml::String>("title", "");
