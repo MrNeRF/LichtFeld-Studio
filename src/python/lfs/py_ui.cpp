@@ -3643,7 +3643,8 @@ namespace lfs::python {
                                  {0, 0}, {u1, v1}, t, {0, 0, 0, 0});
                 },
                 nb::arg("texture"), nb::arg("size"), nb::arg("tint") = nb::none(), "Draw a DynamicTexture with automatic UV scaling")
-            .def("image_tensor", [](PyUILayout& /*self*/, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
+            .def(
+                "image_tensor", [](PyUILayout& /*self*/, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
                     PyDynamicTexture* tex_ptr = nullptr;
                     {
                         std::lock_guard lock(g_dynamic_textures_mutex);
@@ -4926,7 +4927,8 @@ namespace lfs::python {
               "Free all dynamic textures associated with a plugin");
 
         // Asset Manager save callback
-        m.def("set_save_asset_callback", [](nb::callable save_cb) {
+        m.def(
+            "set_save_asset_callback", [](nb::callable save_cb) {
                   g_save_asset_callback = std::move(save_cb);
                   set_save_asset_callback(
                       [](const char* node_name) {
@@ -5449,13 +5451,14 @@ namespace lfs::python {
         });
 
         set_python_document_hook_invoker([](const char* panel, const char* section,
-                                            void* document, bool prepend) {
+                                            void* document, bool prepend) -> bool {
             auto& registry = PyUIHookRegistry::instance();
             if (registry.has_hooks(panel, section)) {
-                registry.invoke_document(
+                return registry.invoke_document(
                     panel, section, static_cast<Rml::ElementDocument*>(document),
                     prepend ? PyHookPosition::Prepend : PyHookPosition::Append);
             }
+            return false;
         });
 
         set_python_hook_checker([](const char* panel, const char* section) -> bool {

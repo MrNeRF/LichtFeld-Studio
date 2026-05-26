@@ -64,10 +64,10 @@ namespace lfs::python {
     void PyUIHookRegistry::invoke(const std::string& panel,
                                   const std::string& section,
                                   PyHookPosition position) {
-        invoke_document(panel, section, nullptr, position);
+        (void)invoke_document(panel, section, nullptr, position);
     }
 
-    void PyUIHookRegistry::invoke_document(const std::string& panel,
+    bool PyUIHookRegistry::invoke_document(const std::string& panel,
                                            const std::string& section,
                                            Rml::ElementDocument* document,
                                            PyHookPosition position) {
@@ -78,7 +78,7 @@ namespace lfs::python {
             const std::string key = panel + ":" + section;
             auto it = hooks_.find(key);
             if (it == hooks_.end()) {
-                return;
+                return document && consume_document_dirty(document);
             }
             for (const auto& entry : it->second) {
                 if (entry.position == position) {
@@ -88,7 +88,7 @@ namespace lfs::python {
         }
 
         if (callbacks.empty()) {
-            return;
+            return document && consume_document_dirty(document);
         }
 
         for (const auto& cb : callbacks) {
@@ -103,6 +103,7 @@ namespace lfs::python {
                 LOG_ERROR("Hook {}:{} error: {}", panel, section, e.what());
             }
         }
+        return document && consume_document_dirty(document);
     }
 
     bool PyUIHookRegistry::has_hooks(const std::string& panel, const std::string& section) const {

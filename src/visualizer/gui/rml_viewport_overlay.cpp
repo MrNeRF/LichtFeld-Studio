@@ -465,7 +465,11 @@ namespace lfs::vis::gui {
         const bool theme_current =
             has_theme_signature_ && rml_theme::currentThemeSignature() == last_theme_signature_;
         const bool document_hooks_due = shouldRunDocumentHooks(false);
-        const bool tooltip_changed = tooltip_.hasActiveState() && applyFrameTooltip();
+        bool tooltip_changed = false;
+        if (tooltip_.hasActiveState()) {
+            LOG_TIMER("gui_render.rml_viewport_overlay.render.tooltip");
+            tooltip_changed = applyFrameTooltip();
+        }
         if (rml_manager_)
             rml_manager_->setContextNeedsPassiveMouseMoveFrames(rml_context_, tooltip_.needsFrame());
         const bool can_update_tooltip_only =
@@ -514,37 +518,57 @@ namespace lfs::vis::gui {
         const int h = static_cast<int>(vp_size_.y);
         const bool size_changed = (w != last_render_w_ || h != last_render_h_);
         const bool toolbar_changed = updateToolbarRoots();
-        const bool run_document_hooks = shouldRunDocumentHooks(
-            theme_changed || size_changed || toolbar_changed || render_needed_ || animation_active_);
+        const bool hook_force = theme_changed || size_changed || toolbar_changed || render_needed_;
+        const bool run_document_hooks = shouldRunDocumentHooks(hook_force);
+        bool document_dirty = false;
         if (run_document_hooks) {
-            lfs::python::invoke_python_document_hooks("viewport_overlay", "document", document_, true);
-            lfs::python::invoke_python_document_hooks("viewport_overlay", "document", document_, false);
+            LOG_TIMER("gui_render.rml_viewport_overlay.render.document_hooks");
+            document_dirty |= lfs::python::invoke_python_document_hooks("viewport_overlay", "document", document_, true);
+            document_dirty |= lfs::python::invoke_python_document_hooks("viewport_overlay", "document", document_, false);
             last_document_hook_run_ = std::chrono::steady_clock::now();
-            data_model_binding_dirty_ = true;
         }
 
         if (!body_el_)
             body_el_ = document_->GetElementById("overlay-body");
-        if (data_model_binding_dirty_) {
+        const bool had_data_model_binding_dirty = data_model_binding_dirty_;
+        if (had_data_model_binding_dirty) {
+            LOG_TIMER("gui_render.rml_viewport_overlay.render.bind_data_model");
             ensureBodyDataModelBound(body_el_);
             data_model_binding_dirty_ = false;
         }
-        const bool tooltip_changed = tooltip_.hasActiveState() && applyFrameTooltip();
+        bool tooltip_changed = false;
+        if (tooltip_.hasActiveState()) {
+            LOG_TIMER("gui_render.rml_viewport_overlay.render.tooltip");
+            tooltip_changed = applyFrameTooltip();
+        }
         if (rml_manager_)
             rml_manager_->setContextNeedsPassiveMouseMoveFrames(rml_context_, tooltip_.needsFrame());
 
-        const bool needs_render = render_needed_ || animation_active_ || run_document_hooks ||
-                                  theme_changed || size_changed || toolbar_changed || tooltip_changed;
+        const bool needs_render = render_needed_ || animation_active_ || document_dirty ||
+                                  theme_changed || size_changed || toolbar_changed ||
+                                  tooltip_changed || had_data_model_binding_dirty;
         if (!needs_render) {
             queueVulkanContext();
             return;
         }
 
-        rml_manager_->trackContextFrame(rml_context_,
-                                        static_cast<int>(vp_pos_.x - screen_origin_.x),
-                                        static_cast<int>(vp_pos_.y - screen_origin_.y));
-        rml_context_->SetDimensions(Rml::Vector2i(w, h));
-        rml_context_->Update();
+        LOG_PERF("gui_render.rml_viewport_overlay.render_reasons render_needed={} animation={} document_dirty={} theme={} size={} toolbar={} tooltip={} data_model={}",
+                 render_needed_,
+                 animation_active_,
+                 document_dirty,
+                 theme_changed,
+                 size_changed,
+                 toolbar_changed,
+                 tooltip_changed,
+                 had_data_model_binding_dirty);
+        {
+            LOG_TIMER("gui_render.rml_viewport_overlay.render.update");
+            rml_manager_->trackContextFrame(rml_context_,
+                                            static_cast<int>(vp_pos_.x - screen_origin_.x),
+                                            static_cast<int>(vp_pos_.y - screen_origin_.y));
+            rml_context_->SetDimensions(Rml::Vector2i(w, h));
+            rml_context_->Update();
+        }
 
         queueVulkanContext();
         animation_active_ = (rml_context_->GetNextUpdateDelay() == 0);
