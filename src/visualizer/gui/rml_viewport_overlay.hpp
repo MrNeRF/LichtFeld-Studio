@@ -64,7 +64,7 @@ namespace lfs::vis::gui {
         void processInput(const PanelInputState& input);
         bool wantsInput() const { return wants_input_; }
         [[nodiscard]] bool needsAnimationFrame() const {
-            return render_needed_ || animation_active_ || tooltip_.needsFrame() ||
+            return render_needed_ || document_sync_dirty_ || animation_active_ || tooltip_.needsFrame() ||
                    (vram_hud_ && vram_hud_->needsAnimationFrame());
         }
         [[nodiscard]] bool blocksPointer(double screen_x, double screen_y) const;
@@ -75,6 +75,8 @@ namespace lfs::vis::gui {
         void ensureBodyDataModelBound(Rml::Element* body);
         bool shouldRunDocumentHooks(bool force, bool prepend) const;
         bool shouldRunAnyDocumentHooks(bool force) const;
+        void markDocumentSyncDirty();
+        bool syncBuiltinDocument(bool force);
         bool updateToolbarRoots();
         void bindReactiveStore();
         void refreshGTMetricsOverlayFromStore();
@@ -108,6 +110,7 @@ namespace lfs::vis::gui {
         bool wants_input_ = false;
         bool doc_registered_ = false;
         bool render_needed_ = true;
+        bool document_sync_dirty_ = true;
         bool data_model_binding_dirty_ = true;
         bool animation_active_ = false;
         bool hovered_interactive_ = false;
@@ -123,6 +126,7 @@ namespace lfs::vis::gui {
         lfs::core::reactive::SubscriptionToken gt_metrics_config_subscription_;
         lfs::core::reactive::SubscriptionToken camera_metrics_subscription_;
         lfs::core::reactive::SubscriptionToken vram_hud_subscription_;
+        std::vector<lfs::core::reactive::SubscriptionToken> document_sync_subscriptions_;
         std::unique_ptr<VramHudOverlay> vram_hud_;
         RmlTooltipController tooltip_;
         std::chrono::steady_clock::time_point last_document_hook_run_{};

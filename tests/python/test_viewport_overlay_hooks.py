@@ -158,27 +158,25 @@ def overlays_module(monkeypatch):
     return (module, *fixture)
 
 
-def test_register_uses_document_and_draw_hooks(overlays_module):
+def test_register_uses_draw_hook_and_native_document_sync(overlays_module):
     module, hook_calls, _remove_calls, *_rest = overlays_module
 
     module.register()
 
     assert hook_calls == [
-        ("viewport_overlay", "document", hook_calls[0][2], "append"),
-        ("viewport_overlay", "draw", hook_calls[1][2], "append"),
+        ("viewport_overlay", "draw", hook_calls[0][2], "append"),
     ]
 
 
-def test_unregister_removes_both_hooks(overlays_module):
+def test_unregister_removes_draw_hook(overlays_module):
     module, hook_calls, remove_calls, *_rest = overlays_module
 
     module.register()
     module.unregister()
 
-    assert len(hook_calls) == 2
+    assert len(hook_calls) == 1
     assert remove_calls == [
-        ("viewport_overlay", "document", hook_calls[0][2]),
-        ("viewport_overlay", "draw", hook_calls[1][2]),
+        ("viewport_overlay", "draw", hook_calls[0][2]),
     ]
 
 
@@ -209,7 +207,8 @@ def test_document_sync_binds_model_and_updates_actions(overlays_module):
         "stage": "Encoding",
     })
 
-    module._sync_viewport_overlay_document(document)
+    module._hook_registered = True
+    assert module.sync_document(document) is True
 
     assert document.created_models == ["viewport_overlay_status"]
     assert document.model.handle.dirty_all_calls == 3

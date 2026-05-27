@@ -7,7 +7,6 @@ import lichtfeld as lf
 from .. import toolbar as viewport_toolbar
 
 _HOOK_PANEL = "viewport_overlay"
-_DOCUMENT_SECTION = "document"
 _DRAW_SECTION = "draw"
 _HOOK_POSITION = "append"
 
@@ -510,7 +509,7 @@ def _draw_drag_drop_overlay(layout):
     layout.end_window()
 
 
-def _sync_viewport_overlay_document(doc):
+def _sync_viewport_overlay_document(doc=None):
     global _document_controller
     if _document_controller is None:
         _document_controller = _OverlayDocumentController()
@@ -519,6 +518,14 @@ def _sync_viewport_overlay_document(doc):
     if callable(debug_log):
         for source in dirty_sources or []:
             debug_log("[PERF] viewport_overlay_document_dirty source=" + str(source))
+    return bool(dirty_sources)
+
+
+def sync_document(doc=None):
+    """Synchronize the first-party viewport overlay data model."""
+    if not _hook_registered:
+        return False
+    return _sync_viewport_overlay_document(doc)
 
 
 def _draw_viewport_overlay(layout):
@@ -532,9 +539,9 @@ def register():
     if _hook_registered:
         return
 
-    lf.ui.add_hook(_HOOK_PANEL, _DOCUMENT_SECTION, _sync_viewport_overlay_document, _HOOK_POSITION)
     lf.ui.add_hook(_HOOK_PANEL, _DRAW_SECTION, _draw_viewport_overlay, _HOOK_POSITION)
     _hook_registered = True
+    _sync_viewport_overlay_document()
 
 
 def unregister():
@@ -543,7 +550,6 @@ def unregister():
     if not _hook_registered:
         return
 
-    lf.ui.remove_hook(_HOOK_PANEL, _DOCUMENT_SECTION, _sync_viewport_overlay_document)
     lf.ui.remove_hook(_HOOK_PANEL, _DRAW_SECTION, _draw_viewport_overlay)
     _hook_registered = False
     if _document_controller is not None:

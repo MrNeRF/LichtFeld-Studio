@@ -77,6 +77,7 @@ namespace lfs::vis::gui {
         gt_metrics_config_subscription_.reset();
         camera_metrics_subscription_.reset();
         vram_hud_subscription_.reset();
+        document_sync_subscriptions_.clear();
 
         if (vram_hud_)
             vram_hud_->onDocumentDestroyed();
@@ -112,6 +113,7 @@ namespace lfs::vis::gui {
         has_theme_signature_ = false;
         wants_input_ = false;
         render_needed_ = true;
+        document_sync_dirty_ = true;
         data_model_binding_dirty_ = true;
         toolbar_roots_dirty_ = true;
         animation_active_ = true;
@@ -187,6 +189,22 @@ namespace lfs::vis::gui {
 
     bool RmlViewportOverlay::shouldRunAnyDocumentHooks(const bool force) const {
         return shouldRunDocumentHooks(force, true) || shouldRunDocumentHooks(force, false);
+    }
+
+    void RmlViewportOverlay::markDocumentSyncDirty() {
+        document_sync_dirty_ = true;
+    }
+
+    bool RmlViewportOverlay::syncBuiltinDocument(const bool force) {
+        if (!document_ || (!force && !document_sync_dirty_))
+            return false;
+
+        LOG_TIMER("gui_render.rml_viewport_overlay.render.builtin_document_sync");
+        const bool dirty = lfs::python::sync_viewport_overlay_document(document_);
+        document_sync_dirty_ = false;
+        if (dirty)
+            render_needed_ = true;
+        return dirty;
     }
 
     void RmlViewportOverlay::setViewportBounds(glm::vec2 pos, glm::vec2 size,
@@ -289,6 +307,17 @@ namespace lfs::vis::gui {
                 }
                 setVramHudOverlay(std::move(overlay));
             });
+
+        auto mark_document_dirty = [this](const auto&) {
+            markDocumentSyncDirty();
+        };
+        document_sync_subscriptions_.push_back(store.training_state.subscribe(mark_document_dirty));
+        document_sync_subscriptions_.push_back(store.scene_generation.subscribe(mark_document_dirty));
+        document_sync_subscriptions_.push_back(store.selection_generation.subscribe(mark_document_dirty));
+        document_sync_subscriptions_.push_back(store.active_tool.subscribe(mark_document_dirty));
+        document_sync_subscriptions_.push_back(store.active_submode.subscribe(mark_document_dirty));
+        document_sync_subscriptions_.push_back(store.transform_space.subscribe(mark_document_dirty));
+        document_sync_subscriptions_.push_back(store.pivot_mode.subscribe(mark_document_dirty));
     }
 
     void RmlViewportOverlay::refreshGTMetricsOverlayFromStore() {
@@ -615,6 +644,7 @@ namespace lfs::vis::gui {
         const bool theme_current =
             has_theme_signature_ && rml_theme::currentThemeSignature() == last_theme_signature_;
         const bool document_hooks_due = shouldRunAnyDocumentHooks(false);
+        const bool builtin_document_sync_due = document_sync_dirty_;
         bool tooltip_changed = false;
         if (tooltip_.hasActiveState()) {
             LOG_TIMER("gui_render.rml_viewport_overlay.render.tooltip");
@@ -624,7 +654,7 @@ namespace lfs::vis::gui {
             rml_manager_->setContextNeedsPassiveMouseMoveFrames(rml_context_, tooltip_.needsFrame());
         const bool can_update_tooltip_only =
             rml_manager_ && tooltip_changed && theme_current && !document_hooks_due &&
-            !render_needed_ && !animation_active_ &&
+            !builtin_document_sync_due && !render_needed_ && !animation_active_ &&
             !data_model_binding_dirty_ && !toolbar_roots_dirty_ &&
             w == last_render_w_ && h == last_render_h_;
         if (can_update_tooltip_only) {
@@ -638,7 +668,7 @@ namespace lfs::vis::gui {
             return;
         }
         const bool can_reuse = theme_current && !render_needed_ && !animation_active_ &&
-                               !document_hooks_due &&
+                               !document_hooks_due && !builtin_document_sync_due &&
                                !data_model_binding_dirty_ && !toolbar_roots_dirty_ &&
                                !tooltip_changed && w == last_render_w_ && h == last_render_h_;
         if (!can_reuse) {
@@ -669,9 +699,9 @@ namespace lfs::vis::gui {
         const bool size_changed = (w != last_render_w_ || h != last_render_h_);
         const bool toolbar_changed = updateToolbarRoots();
         const bool hook_force = theme_changed || size_changed || toolbar_changed || render_needed_ || animation_active_;
+        bool document_dirty = syncBuiltinDocument(hook_force);
         const bool run_prepend_document_hooks = shouldRunDocumentHooks(hook_force, true);
         const bool run_append_document_hooks = shouldRunDocumentHooks(hook_force, false);
-        bool document_dirty = false;
         if (run_prepend_document_hooks || run_append_document_hooks) {
             LOG_TIMER("gui_render.rml_viewport_overlay.render.document_hooks");
             if (run_prepend_document_hooks)
