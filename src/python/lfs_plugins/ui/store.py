@@ -116,6 +116,9 @@ class AppStore:
     selection_generation = StoreSignal[int]("selection_generation", 0)
     fps = StoreSignal[float]("fps", 0.0)
     mode_text = StoreSignal[str]("mode_text", "")
+    active_tool = StoreSignal[str]("active_tool", "")
+    transform_space = StoreSignal[int]("transform_space", 0)
+    pivot_mode = StoreSignal[int]("pivot_mode", 0)
 
 
 class _BatchContext:

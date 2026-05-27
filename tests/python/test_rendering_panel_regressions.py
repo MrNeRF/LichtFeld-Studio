@@ -243,7 +243,7 @@ def test_rendering_panel_reacts_to_native_scene_generation(rendering_panel_modul
     panel._unsubscribe_reactive_state()
 
 
-def test_rendering_panel_keeps_legacy_tool_state_subscription(rendering_panel_module):
+def test_rendering_panel_reacts_to_native_tool_state(rendering_panel_module):
     module = rendering_panel_module
     model = _BindingModelStub()
     panel = module.RenderingPanel()
@@ -254,10 +254,10 @@ def test_rendering_panel_keeps_legacy_tool_state_subscription(rendering_panel_mo
 
     next_tool = (
         "builtin.move"
-        if module.AppState.active_tool.value == "builtin.select"
+        if module.NativeAppStore.active_tool.value == "builtin.select"
         else "builtin.select"
     )
-    module.AppState.active_tool.value = next_tool
+    module.NativeAppStore.active_tool.value = next_tool
 
     assert model.handle.dirty_fields == ["__all__"]
     panel._unsubscribe_reactive_state()

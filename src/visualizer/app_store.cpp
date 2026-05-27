@@ -25,7 +25,10 @@ namespace lfs::vis {
                                     Field::GTMetricsOverlayConfigValue,
                                     "gt_metrics_overlay_config",
                                     GTMetricsOverlayConfig{}),
-          vram_hud(store_, Field::VramHudValue, "vram_hud", VramHud{}) {}
+          vram_hud(store_, Field::VramHudValue, "vram_hud", VramHud{}),
+          active_tool(store_, Field::ActiveTool, "active_tool", std::string{}),
+          transform_space(store_, Field::TransformSpaceValue, "transform_space", 0),
+          pivot_mode(store_, Field::PivotModeValue, "pivot_mode", 0) {}
 
     AppStore& app_store() {
         static AppStore instance;

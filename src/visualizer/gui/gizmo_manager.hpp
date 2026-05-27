@@ -43,9 +43,9 @@ namespace lfs::vis {
             void setSelectionSubMode(SelectionSubMode mode);
 
             [[nodiscard]] TransformSpace getTransformSpace() const { return transform_space_; }
-            void setTransformSpace(TransformSpace space) { transform_space_ = space; }
+            void setTransformSpace(TransformSpace space);
             [[nodiscard]] PivotMode getPivotMode() const { return pivot_mode_; }
-            void setPivotMode(PivotMode mode) { pivot_mode_ = mode; }
+            void setPivotMode(PivotMode mode);
             [[nodiscard]] GizmoOperation getCurrentOperation() const { return current_operation_; }
             void setCurrentOperation(GizmoOperation op) { current_operation_ = op; }
             [[nodiscard]] SelectionSubMode getSelectionSubMode() const { return selection_mode_; }

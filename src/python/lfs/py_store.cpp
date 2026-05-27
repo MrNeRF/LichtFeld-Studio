@@ -100,6 +100,12 @@ namespace lfs::python {
                 store.fps.set(nb::cast<float>(value));
             else if (field == "mode_text")
                 store.mode_text.set(nb::cast<std::string>(value));
+            else if (field == "active_tool")
+                store.active_tool.set(nb::cast<std::string>(value));
+            else if (field == "transform_space")
+                store.transform_space.set(nb::cast<int>(value));
+            else if (field == "pivot_mode")
+                store.pivot_mode.set(nb::cast<int>(value));
             else
                 throw_unknown_field(field);
         }
@@ -134,6 +140,12 @@ namespace lfs::python {
                 return nb::cast(store.fps.get());
             if (field == "mode_text")
                 return nb::cast(store.mode_text.get());
+            if (field == "active_tool")
+                return nb::cast(store.active_tool.get());
+            if (field == "transform_space")
+                return nb::cast(store.transform_space.get());
+            if (field == "pivot_mode")
+                return nb::cast(store.pivot_mode.get());
             throw_unknown_field(field);
         }
 
@@ -167,6 +179,12 @@ namespace lfs::python {
                 return subscribe_observable(store.fps, std::move(callback));
             if (field == "mode_text")
                 return subscribe_observable(store.mode_text, std::move(callback));
+            if (field == "active_tool")
+                return subscribe_observable(store.active_tool, std::move(callback));
+            if (field == "transform_space")
+                return subscribe_observable(store.transform_space, std::move(callback));
+            if (field == "pivot_mode")
+                return subscribe_observable(store.pivot_mode, std::move(callback));
             throw_unknown_field(field);
         }
 

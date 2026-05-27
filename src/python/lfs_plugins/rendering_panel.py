@@ -10,7 +10,6 @@ import lichtfeld as lf
 from . import rml_widgets as w
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
-from .ui.state import AppState
 from .ui.store import AppStore as NativeAppStore
 
 __lfs_panel_classes__ = ["RenderingPanel"]
@@ -305,15 +304,13 @@ class RenderingPanel(Panel):
         native_signals = (
             NativeAppStore.scene_generation,
             NativeAppStore.selection_generation,
-        )
-        legacy_signals = (
-            AppState.active_tool,
-            AppState.transform_space,
-            AppState.pivot_mode,
+            NativeAppStore.active_tool,
+            NativeAppStore.transform_space,
+            NativeAppStore.pivot_mode,
         )
         self._reactive_unsubscribers = [
             signal.subscribe(lambda _value: self._request_reactive_update())
-            for signal in (*native_signals, *legacy_signals)
+            for signal in native_signals
         ]
 
     def _unsubscribe_reactive_state(self):

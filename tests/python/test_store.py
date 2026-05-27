@@ -32,9 +32,12 @@ def test_fallback_suppresses_same_value():
     assert notified == [1]
 
 
-def test_app_store_exposes_scene_generation_signals():
+def test_app_store_exposes_panel_reactive_signals():
     assert isinstance(AppStore.scene_generation, StoreSignal)
     assert isinstance(AppStore.selection_generation, StoreSignal)
+    assert isinstance(AppStore.active_tool, StoreSignal)
+    assert isinstance(AppStore.transform_space, StoreSignal)
+    assert isinstance(AppStore.pivot_mode, StoreSignal)
 
 
 def test_fallback_batch_defers_and_dedups_notifications():

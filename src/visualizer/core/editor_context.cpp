@@ -4,8 +4,11 @@
 
 #include "core/editor_context.hpp"
 #include "scene/scene_manager.hpp"
+#include "visualizer/app_store.hpp"
 #include "training/training_manager.hpp"
 #include "visualizer/gui_capabilities.hpp"
+
+#include <string_view>
 
 namespace lfs::vis {
 
@@ -20,6 +23,20 @@ namespace lfs::vis {
             if (found_untransformable)
                 return has_editable ? "selection contains unsupported nodes" : "select parent node";
             return "No transform targets provided";
+        }
+
+        [[nodiscard]] std::string_view activeToolId(const ToolType tool) noexcept {
+            switch (tool) {
+            case ToolType::Selection: return "builtin.select";
+            case ToolType::Translate: return "builtin.translate";
+            case ToolType::Rotate: return "builtin.rotate";
+            case ToolType::Scale: return "builtin.scale";
+            case ToolType::Mirror: return "builtin.mirror";
+            case ToolType::Brush: return "builtin.brush";
+            case ToolType::Align: return "builtin.align";
+            case ToolType::None:
+            default: return {};
+            }
         }
     } // namespace
 
@@ -201,6 +218,7 @@ namespace lfs::vis {
     void EditorContext::validateActiveTool() {
         if (!isToolAvailable(active_tool_)) {
             active_tool_ = ToolType::None;
+            app_store().active_tool.set(std::string{});
         }
     }
 
@@ -208,6 +226,7 @@ namespace lfs::vis {
         LOG_DEBUG("EditorContext::setActiveOperator: id='{}', gizmo_type='{}'", id, gizmo_type);
         active_operator_id_ = id;
         gizmo_type_ = gizmo_type;
+        app_store().active_tool.set(active_operator_id_);
         LOG_DEBUG("EditorContext::setActiveOperator: active_operator_id_='{}', hasActive={}",
                   active_operator_id_, !active_operator_id_.empty());
     }
@@ -216,6 +235,7 @@ namespace lfs::vis {
         LOG_DEBUG("EditorContext::clearActiveOperator: was '{}'", active_operator_id_);
         active_operator_id_.clear();
         gizmo_type_.clear();
+        app_store().active_tool.set(std::string(activeToolId(active_tool_)));
     }
 
     void EditorContext::setGizmoType(const std::string& type) { gizmo_type_ = type; }

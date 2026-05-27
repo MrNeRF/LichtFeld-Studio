@@ -27,6 +27,7 @@
 #include "tools/brush_tool.hpp"
 #include "tools/selection_tool.hpp"
 #include "tools/unified_tool_registry.hpp"
+#include "visualizer/app_store.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer_impl.hpp"
@@ -1842,6 +1843,20 @@ namespace lfs::vis::gui {
         if (auto* rm = viewer_->getRenderingManager()) {
             rm->setSelectionPreviewMode(toSelectionPreviewMode(mode));
         }
+    }
+
+    void GizmoManager::setTransformSpace(const TransformSpace space) {
+        if (transform_space_ == space)
+            return;
+        transform_space_ = space;
+        app_store().transform_space.set(static_cast<int>(transform_space_));
+    }
+
+    void GizmoManager::setPivotMode(const PivotMode mode) {
+        if (pivot_mode_ == mode)
+            return;
+        pivot_mode_ = mode;
+        app_store().pivot_mode.set(static_cast<int>(pivot_mode_));
     }
 
     bool GizmoManager::isPositionInViewportGizmo(const double x, const double y) const {

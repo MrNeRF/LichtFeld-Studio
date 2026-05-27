@@ -146,6 +146,9 @@ class AppState:
         bind(NativeAppStore.num_gaussians, cls.num_gaussians)
         bind(NativeAppStore.scene_generation, cls.scene_generation)
         bind(NativeAppStore.selection_generation, cls.selection_generation)
+        bind(NativeAppStore.active_tool, cls.active_tool)
+        bind(NativeAppStore.transform_space, cls.transform_space)
+        bind(NativeAppStore.pivot_mode, cls.pivot_mode)
 
     @classmethod
     def unbind_native_store(cls) -> None:

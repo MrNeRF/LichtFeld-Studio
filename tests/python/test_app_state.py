@@ -121,6 +121,27 @@ class TestAppState:
             AppState.unbind_native_store()
             AppState.reset()
 
+    def test_native_store_binding_mirrors_tool_values(self):
+        """Native tool-state values should mirror into legacy AppState signals."""
+        AppState.unbind_native_store()
+        AppState.reset()
+        NativeAppStore.active_tool.value = ""
+        NativeAppStore.transform_space.value = 0
+        NativeAppStore.pivot_mode.value = 0
+
+        AppState.bind_native_store()
+        try:
+            NativeAppStore.active_tool.value = "builtin.translate"
+            NativeAppStore.transform_space.value = 1
+            NativeAppStore.pivot_mode.value = 1
+
+            assert AppState.active_tool.value == "builtin.translate"
+            assert AppState.transform_space.value == 1
+            assert AppState.pivot_mode.value == 1
+        finally:
+            AppState.unbind_native_store()
+            AppState.reset()
+
     def test_native_store_binding_can_unbind(self):
         """Unbinding should stop native AppStore mirroring."""
         AppState.unbind_native_store()

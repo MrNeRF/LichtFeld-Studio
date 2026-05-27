@@ -74,6 +74,9 @@ namespace lfs::vis {
             CameraMetricsValue,
             GTMetricsOverlayConfigValue,
             VramHudValue,
+            ActiveTool,
+            TransformSpaceValue,
+            PivotModeValue,
         };
 
         AppStore();
@@ -98,6 +101,9 @@ namespace lfs::vis {
         lfs::core::reactive::Observable<std::optional<CameraMetrics>> camera_metrics;
         lfs::core::reactive::Observable<GTMetricsOverlayConfig> gt_metrics_overlay_config;
         lfs::core::reactive::Observable<VramHud> vram_hud;
+        lfs::core::reactive::Observable<std::string> active_tool;
+        lfs::core::reactive::Observable<int> transform_space;
+        lfs::core::reactive::Observable<int> pivot_mode;
 
     private:
         lfs::core::reactive::Store store_;
