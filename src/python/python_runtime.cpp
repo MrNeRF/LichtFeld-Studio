@@ -40,6 +40,7 @@ namespace lfs::python {
 
         ExportCallback g_export_callback = nullptr;
         DrawPopupsCallback g_popup_draw_callback = nullptr;
+        HasPopupsCallback g_popup_has_callback = nullptr;
         EnsureInitializedCallback g_ensure_initialized_callback = nullptr;
 
         // Exit popup state for window close callback (thread-safe)
@@ -903,6 +904,11 @@ namespace lfs::python {
     const ModalEnqueueCallback& get_modal_enqueue_callback() { return g_modal_enqueue_callback; }
 
     void set_popup_draw_callback(DrawPopupsCallback cb) { g_popup_draw_callback = cb; }
+    void set_popup_has_callback(HasPopupsCallback cb) { g_popup_has_callback = cb; }
+
+    bool has_python_popups() {
+        return g_popup_draw_callback && g_popup_has_callback && g_popup_has_callback();
+    }
 
     void draw_python_popups(lfs::core::Scene* scene) {
         if (!g_popup_draw_callback)

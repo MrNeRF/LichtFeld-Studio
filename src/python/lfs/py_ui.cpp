@@ -5519,6 +5519,12 @@ namespace lfs::python {
                                 PyHookPosition::Append);
             }
         });
+        set_popup_has_callback([]() {
+            return PyUIHookRegistry::instance().has_hooks(
+                LEGACY_POPUP_PANEL_STR,
+                LEGACY_POPUP_SECTION_STR,
+                PyHookPosition::Append);
+        });
     }
 
     void register_class_api(nb::module_& m) {

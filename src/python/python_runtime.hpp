@@ -166,7 +166,10 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API const ModalEnqueueCallback& get_modal_enqueue_callback();
 
     using DrawPopupsCallback = void (*)();
+    using HasPopupsCallback = bool (*)();
     LFS_PYTHON_RUNTIME_API void set_popup_draw_callback(DrawPopupsCallback cb);
+    LFS_PYTHON_RUNTIME_API void set_popup_has_callback(HasPopupsCallback cb);
+    LFS_PYTHON_RUNTIME_API bool has_python_popups();
     LFS_PYTHON_RUNTIME_API void draw_python_popups(lfs::core::Scene* scene = nullptr);
 
     using ExportCallback = void (*)(int format, const char* path, const char** node_names,

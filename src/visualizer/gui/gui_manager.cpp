@@ -5381,7 +5381,7 @@ namespace lfs::vis::gui {
             LOG_TIMER("gui_render.python_modals_and_popups");
             python::draw_python_modals(scene);
         }
-        {
+        if (python::has_python_popups()) {
             LOG_TIMER("gui_render.python_popups");
             python::draw_python_popups(scene);
         }
