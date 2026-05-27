@@ -112,6 +112,8 @@ class AppStore:
     trainer_loaded = StoreSignal[bool]("trainer_loaded", False)
     eval_psnr = StoreSignal[float | None]("eval_psnr", None)
     eval_ssim = StoreSignal[float | None]("eval_ssim", None)
+    scene_generation = StoreSignal[int]("scene_generation", 0)
+    selection_generation = StoreSignal[int]("selection_generation", 0)
     fps = StoreSignal[float]("fps", 0.0)
     mode_text = StoreSignal[str]("mode_text", "")
 

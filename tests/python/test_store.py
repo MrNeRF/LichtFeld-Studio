@@ -5,7 +5,7 @@
 import pytest
 
 from lfs_plugins.ui import store as store_module
-from lfs_plugins.ui.store import StoreSignal, batch_updates
+from lfs_plugins.ui.store import AppStore, StoreSignal, batch_updates
 
 
 @pytest.fixture(autouse=True)
@@ -30,6 +30,11 @@ def test_fallback_suppresses_same_value():
 
     assert signal.value == 1
     assert notified == [1]
+
+
+def test_app_store_exposes_scene_generation_signals():
+    assert isinstance(AppStore.scene_generation, StoreSignal)
+    assert isinstance(AppStore.selection_generation, StoreSignal)
 
 
 def test_fallback_batch_defers_and_dedups_notifications():
