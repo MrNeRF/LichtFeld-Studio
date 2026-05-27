@@ -3,6 +3,10 @@
 Current branch: `reactive_ui`
 
 Last completed commits:
+- `00c2a5864 Cache idle bottom dock sequencer rendering`
+- `131da29ec Publish scene panel invalidations through app store`
+- `a0034df40 Gate native scene panel sync by visible sources`
+- `a1a860dc3 Document remaining reactive UI migration work`
 - `681177eae Gate menu bar label sync by source version`
 - `a62db2085 Remove remaining dirty panel intervals`
 - `40f15f521 Remove redundant dirty panel intervals`
@@ -15,71 +19,23 @@ Current verified state:
 - First-party Python plugin panels no longer define `update_interval_ms`.
 - Python panel updates are dirty/reactive driven through `NativeAppStore` subscriptions, explicit model update requests, or targeted deferred timers.
 - Menu bar label localization/copying is gated by menu source version plus `language_generation`.
+- Native scene panel sync is source-stamped and driven by store-published scene/selection generations.
+- Bottom dock has a cached render branch; the sequencer panel queues cached RmlUi textures on idle frames.
 - Last broad Python panel slice passed: 191 tests.
+- Last focused sequencer C++ slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Sequencer*'`.
 - Last C++ build passed: `cmake --build build -j16`.
 
 ## Remaining Goal
 
 Drive idle GUI CPU toward zero and keep p99 CPU UI work under 2 ms by removing remaining unconditional native/RmlUi panel work and tightening frame routing around explicit demand.
 
-## Next Batch 1: Native Panel Preload Gating
+## Completed Batches
 
-Focus files:
-- `src/visualizer/gui/panel_registry.{hpp,cpp}`
-- `src/visualizer/gui/panel_layout.cpp`
-- `src/visualizer/gui/scene_panel_native.{hpp,cpp}`
+- Native scene panel preload gating: `a0034df40`.
+- Scene panel reactive invalidation publication: `131da29ec`.
+- Bottom dock and sequencer cached rendering: `00c2a5864`.
 
-Tasks:
-- Audit `preload_panels_direct`, `preload_single_panel_direct`, and `preload_child_panels_direct`.
-- Avoid running expensive native/Rml preload paths when a panel has a valid cached direct draw layer and no relevant dirty state.
-- Preserve layout measurement correctness. Do not skip first-frame or size-change measurement.
-- Add a small explicit dirty/layout hint API if needed; avoid a broad "damage bus" abstraction unless it removes real complexity.
-
-Acceptance:
-- Cached right-panel branch does not call full scene-panel sync on idle frames.
-- Scene tree, history, logging, and search still update on scene/selection/language/history/log changes.
-- Existing scene panel behavior and input remain unchanged.
-
-## Next Batch 2: Scene Panel Reactive Invalidations
-
-Focus files:
-- `src/visualizer/gui/scene_panel_native.cpp`
-- `src/visualizer/gui/rmlui/elements/scene_graph_element.cpp`
-- `src/visualizer/include/visualizer/app_store.hpp`
-
-Tasks:
-- Replace remaining passive scene-panel polling with explicit invalidation sources:
-  - `scene_generation`
-  - `selection_generation`
-  - `language_generation`
-  - undo-history generation
-  - log-buffer generation
-- Keep local input-driven updates immediate for search/filter/rename/context menu.
-- Mark host content dirty exactly where data/model/DOM changes happen.
-
-Acceptance:
-- Idle cached frames do not rebuild scene rows.
-- Selection changes update the scene panel without polling.
-- Language changes relocalize the panel exactly once per generation.
-
-## Next Batch 3: Bottom Dock And Sequencer
-
-Focus files:
-- `src/visualizer/gui/panel_layout.cpp`
-- `src/visualizer/gui/native_panels.{hpp,cpp}`
-- `src/visualizer/gui/sequencer_ui_manager.{hpp,cpp}`
-- `src/visualizer/gui/rml_sequencer_overlay.{hpp,cpp}`
-
-Tasks:
-- Add cached bottom-dock rendering parallel to right-panel cached rendering.
-- Gate sequencer preload/draw by visibility, input activity, animation state, and dirty state.
-- Keep resizing and floating panel behavior live while the user interacts.
-
-Acceptance:
-- Idle frames hit cached bottom-dock/sequencer paths.
-- Scrubbing, resizing, and keyframe edits remain live.
-
-## Next Batch 4: Modal And Startup Overlay Demand
+## Next Batch 1: Modal And Startup Overlay Demand
 
 Focus files:
 - `src/visualizer/gui/rml_modal_overlay.{hpp,cpp}`
@@ -95,7 +51,7 @@ Acceptance:
 - Closed modal overlay does not enter full render path on idle frames.
 - Startup overlay remains responsive and correctly localized/themed.
 
-## Next Batch 5: Frame Router Cleanup
+## Next Batch 2: Frame Router Cleanup
 
 Focus files:
 - `src/visualizer/gui/gui_manager.cpp`
