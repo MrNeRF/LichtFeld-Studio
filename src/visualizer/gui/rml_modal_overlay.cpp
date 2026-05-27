@@ -34,6 +34,8 @@ namespace lfs::vis::gui {
     RmlModalOverlay::~RmlModalOverlay() {
         if (Rml::GetSystemInterface())
             text_input_revert_.clear();
+        if (rml_manager_ && rml_manager_->isInitialized())
+            rml_manager_->releaseCachedVulkanContext(direct_cache_);
         if (rml_context_ && rml_manager_ && rml_manager_->isInitialized())
             rml_manager_->destroyContext("modal_overlay");
     }
@@ -45,6 +47,19 @@ namespace lfs::vis::gui {
 
     bool RmlModalOverlay::isOpen() const {
         return active_.has_value();
+    }
+
+    bool RmlModalOverlay::hasPendingRequest() const {
+        std::lock_guard lock(queue_mutex_);
+        return !queue_.empty();
+    }
+
+    bool RmlModalOverlay::hasPendingRenderWork() const {
+        return active_.has_value() || hasPendingRequest();
+    }
+
+    bool RmlModalOverlay::needsAnimationFrame() const {
+        return hasPendingRequest();
     }
 
     void RmlModalOverlay::initContext() {
@@ -95,6 +110,8 @@ namespace lfs::vis::gui {
         has_theme_signature_ = false;
         width_ = 0;
         height_ = 0;
+        if (rml_manager_)
+            rml_manager_->releaseCachedVulkanContext(direct_cache_);
         render_needed_ = true;
         dialog_position_valid_ = false;
         last_mouse_valid_ = false;
@@ -474,6 +491,7 @@ namespace lfs::vis::gui {
             rml_context_->Update();
         }
 
+        bool position_changed = false;
         if (el_dialog_ && active_) {
             LOG_TIMER("gui_render.menu_context_modal_render.modal_overlay.position");
             const float dp_ratio = rml_manager_->getDpRatio();
@@ -490,17 +508,33 @@ namespace lfs::vis::gui {
                 last_dialog_left_ = dialog_left;
                 last_dialog_top_ = dialog_top;
                 dialog_position_valid_ = true;
+                position_changed = true;
                 LOG_TIMER("gui_render.menu_context_modal_render.modal_overlay.position.update");
                 rml_context_->Update();
             }
         }
 
+        const bool refresh_cache = needs_update || position_changed || direct_cache_.texture == 0;
         render_needed_ = false;
         LOG_TIMER("gui_render.menu_context_modal_render.modal_overlay.queue");
-        rml_manager_->queueVulkanContext(rml_context_, 0.0f, 0.0f, true);
+        rml_manager_->queueCachedVulkanContext({
+            .context = rml_context_,
+            .cache = &direct_cache_,
+            .cache_width = w,
+            .cache_height = h,
+            .offset_x = 0.0f,
+            .offset_y = 0.0f,
+            .draw_width = static_cast<float>(w),
+            .draw_height = static_cast<float>(h),
+            .refresh = refresh_cache,
+            .foreground = true,
+            .clip = {},
+        });
     }
 
     void RmlModalOverlay::releaseRendererResources() {
+        if (rml_manager_)
+            rml_manager_->releaseCachedVulkanContext(direct_cache_);
     }
 
     void RmlModalOverlay::OverlayEventListener::ProcessEvent(Rml::Event& event) {

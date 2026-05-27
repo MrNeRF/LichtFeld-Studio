@@ -2601,7 +2601,7 @@ namespace lfs::vis::gui {
         window_states_["python_console"] = false;
 
         lfs::python::set_modal_enqueue_callback(
-            [this](lfs::core::ModalRequest req) { rml_modal_overlay_->enqueue(std::move(req)); });
+            [this](lfs::core::ModalRequest req) { enqueueModal(std::move(req)); });
 
         setupEventHandlers();
         async_tasks_.setupEvents();
@@ -2657,7 +2657,7 @@ namespace lfs::vis::gui {
             ls.save();
         };
 
-        rml_modal_overlay_->enqueue(std::move(req));
+        enqueueModal(std::move(req));
 #endif
     }
 
@@ -4797,14 +4797,16 @@ namespace lfs::vis::gui {
         }
 
         bool modal_overlay_open = false;
+        bool modal_overlay_pending = false;
         bool context_menu_open = false;
         bool block_underlay_input = false;
         {
             LOG_TIMER("gui_render.panel_setup.frame_state");
             rmlui_manager_.beginFrameCursorTracking();
             modal_overlay_open = rml_modal_overlay_->isOpen();
+            modal_overlay_pending = rml_modal_overlay_->hasPendingRequest();
             context_menu_open = global_context_menu_ && global_context_menu_->isOpen();
-            block_underlay_input = modal_overlay_open || context_menu_open;
+            block_underlay_input = modal_overlay_open || modal_overlay_pending || context_menu_open;
 
             if (ImGui::IsKeyPressed(ImGuiKey_Escape) && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) {
                 auto* console_state = panels::PythonConsoleState::tryGetInstance();
@@ -5271,11 +5273,13 @@ namespace lfs::vis::gui {
                 next_vram_hud_publish_ = now + std::chrono::milliseconds(250);
             }
         };
-        startup_overlay_.setInput(&panel_input);
         if (startup_overlay_.isVisible()) {
+            startup_overlay_.setInput(&panel_input);
             auto& focus = guiFocusState();
             focus.want_capture_mouse = true;
             focus.want_capture_keyboard = true;
+        } else {
+            startup_overlay_.setInput(nullptr);
         }
         {
             LOG_TIMER("gui_render.rml_viewport_overlay.processInput");
@@ -5373,13 +5377,16 @@ namespace lfs::vis::gui {
             reg.draw_panels(PanelSpace::StatusBar, draw_ctx, &panel_input);
         }
 
-        {
+        if (python::has_python_modals()) {
             LOG_TIMER("gui_render.python_modals_and_popups");
             python::draw_python_modals(scene);
+        }
+        {
+            LOG_TIMER("gui_render.python_popups");
             python::draw_python_popups(scene);
         }
 
-        {
+        if (rml_modal_overlay_->isOpen()) {
             LOG_TIMER("gui_render.rml_modal_processInput");
             rml_modal_overlay_->processInput(raw_panel_input);
         }
@@ -5402,7 +5409,7 @@ namespace lfs::vis::gui {
                 global_context_menu_->render(panel_input.screen_w, panel_input.screen_h,
                                              panel_input.screen_x, panel_input.screen_y);
             }
-            {
+            if (rml_modal_overlay_->hasPendingRenderWork()) {
                 LOG_TIMER("gui_render.menu_context_modal_render.modal_overlay");
                 rml_modal_overlay_->render(panel_input.screen_w,
                                            panel_input.screen_h,
@@ -6215,7 +6222,7 @@ namespace lfs::vis::gui {
                     LOG_INFO("Export cancelled by user");
             };
 
-            rml_modal_overlay_->enqueue(std::move(req));
+            enqueueModal(std::move(req));
         });
 
         state::DatasetLoadCompleted::when([this](const auto& e) {
@@ -6235,7 +6242,7 @@ namespace lfs::vis::gui {
             req.style = lfs::core::ModalStyle::Error;
             req.width_dp = 520;
             req.buttons = {{"OK", "primary"}};
-            rml_modal_overlay_->enqueue(std::move(req));
+            enqueueModal(std::move(req));
         });
 
         internal::TrainerReady::when([this](const auto&) {
@@ -6339,6 +6346,15 @@ namespace lfs::vis::gui {
         window_states_[name] = show;
     }
 
+    void GuiManager::enqueueModal(lfs::core::ModalRequest request) {
+        if (!rml_modal_overlay_)
+            return;
+
+        rml_modal_overlay_->enqueue(std::move(request));
+        if (auto* const window_manager = viewer_ ? viewer_->getWindowManager() : nullptr)
+            window_manager->wakeEventLoop();
+    }
+
     bool GuiManager::isVramHudOverlayVisible() const {
         return show_vram_hud_ && lfs::diagnostics::VramProfiler::instance().enabled();
     }
@@ -6353,6 +6369,8 @@ namespace lfs::vis::gui {
         if (isViewportExportLocked())
             return true;
         if (startup_overlay_.needsAnimationFrame())
+            return true;
+        if (rml_modal_overlay_ && rml_modal_overlay_->needsAnimationFrame())
             return true;
         if (video_widget_ && video_widget_->isVideoPlaying())
             return true;

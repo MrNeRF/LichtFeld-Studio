@@ -27,6 +27,7 @@ TEST(VisualizerPostWorkTest, QueuedWorkWakesEventLoop) {
     bool ran = false;
     {
         auto viewer = lfs::vis::Visualizer::create(options);
+        SDL_FlushEvents(SDL_EVENT_USER, SDL_EVENT_USER);
 
         EXPECT_FALSE(SDL_HasEvents(SDL_EVENT_USER, SDL_EVENT_USER));
         EXPECT_TRUE(viewer->postWork({
