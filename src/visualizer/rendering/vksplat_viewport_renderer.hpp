@@ -109,7 +109,8 @@ namespace lfs::vis {
             VulkanContext& context,
             const lfs::core::SplatData& splat_data,
             const lfs::rendering::ViewportRenderRequest& request,
-            OutputSlot output_slot = OutputSlot::Main);
+            OutputSlot output_slot = OutputSlot::Main,
+            bool synchronize_input_read = false);
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
             VulkanContext& context,
             OutputSlot output_slot = OutputSlot::Main) const;
@@ -295,7 +296,6 @@ namespace lfs::vis {
         std::array<CudaOverlaySlot, kInputRingSize> cuda_overlays_{};
         CudaSelectionQuerySlot cuda_selection_query_{};
         std::array<ModelInputSnapshot, kInputRingSize> ring_uploaded_{};
-        std::array<ModelInputSnapshot, kInputRingSize> ring_model_snapshot_{};
         int current_input_sh_degree_ = -1;
         std::size_t last_vram_report_signature_ = 0;
 
