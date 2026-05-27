@@ -165,7 +165,14 @@ namespace lfs::python {
 
     bool has_python_hooks(const std::string& panel, const std::string& section) {
         const auto checker = g_hook_checker.load(std::memory_order_acquire);
-        return checker && checker(panel.c_str(), section.c_str());
+        return checker &&
+               (checker(panel.c_str(), section.c_str(), true) ||
+                checker(panel.c_str(), section.c_str(), false));
+    }
+
+    bool has_python_hooks(const std::string& panel, const std::string& section, const bool prepend) {
+        const auto checker = g_hook_checker.load(std::memory_order_acquire);
+        return checker && checker(panel.c_str(), section.c_str(), prepend);
     }
 
 } // namespace lfs::python

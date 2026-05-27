@@ -176,13 +176,17 @@ namespace lfs::vis::gui {
     // hook must break the cached-render path even if all native overlay state is
     // unchanged. Plugins that register passive hooks therefore opt into this
     // polling cadence; hooks that dirty every poll intentionally repaint.
-    bool RmlViewportOverlay::shouldRunDocumentHooks(const bool force) const {
-        if (!lfs::python::has_python_hooks("viewport_overlay", "document"))
+    bool RmlViewportOverlay::shouldRunDocumentHooks(const bool force, const bool prepend) const {
+        if (!lfs::python::has_python_hooks("viewport_overlay", "document", prepend))
             return false;
         if (force || last_document_hook_run_ == std::chrono::steady_clock::time_point{})
             return true;
         return (std::chrono::steady_clock::now() - last_document_hook_run_) >=
                kDocumentHookPollInterval;
+    }
+
+    bool RmlViewportOverlay::shouldRunAnyDocumentHooks(const bool force) const {
+        return shouldRunDocumentHooks(force, true) || shouldRunDocumentHooks(force, false);
     }
 
     void RmlViewportOverlay::setViewportBounds(glm::vec2 pos, glm::vec2 size,
@@ -610,7 +614,7 @@ namespace lfs::vis::gui {
         const int h = static_cast<int>(vp_size_.y);
         const bool theme_current =
             has_theme_signature_ && rml_theme::currentThemeSignature() == last_theme_signature_;
-        const bool document_hooks_due = shouldRunDocumentHooks(false);
+        const bool document_hooks_due = shouldRunAnyDocumentHooks(false);
         bool tooltip_changed = false;
         if (tooltip_.hasActiveState()) {
             LOG_TIMER("gui_render.rml_viewport_overlay.render.tooltip");
@@ -665,12 +669,17 @@ namespace lfs::vis::gui {
         const bool size_changed = (w != last_render_w_ || h != last_render_h_);
         const bool toolbar_changed = updateToolbarRoots();
         const bool hook_force = theme_changed || size_changed || toolbar_changed || render_needed_ || animation_active_;
-        const bool run_document_hooks = shouldRunDocumentHooks(hook_force);
+        const bool run_prepend_document_hooks = shouldRunDocumentHooks(hook_force, true);
+        const bool run_append_document_hooks = shouldRunDocumentHooks(hook_force, false);
         bool document_dirty = false;
-        if (run_document_hooks) {
+        if (run_prepend_document_hooks || run_append_document_hooks) {
             LOG_TIMER("gui_render.rml_viewport_overlay.render.document_hooks");
-            document_dirty |= lfs::python::invoke_python_document_hooks("viewport_overlay", "document", document_, true);
-            document_dirty |= lfs::python::invoke_python_document_hooks("viewport_overlay", "document", document_, false);
+            if (run_prepend_document_hooks)
+                document_dirty |= lfs::python::invoke_python_document_hooks(
+                    "viewport_overlay", "document", document_, true);
+            if (run_append_document_hooks)
+                document_dirty |= lfs::python::invoke_python_document_hooks(
+                    "viewport_overlay", "document", document_, false);
             last_document_hook_run_ = std::chrono::steady_clock::now();
         }
 

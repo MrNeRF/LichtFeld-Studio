@@ -202,6 +202,19 @@ namespace lfs::python {
         return it != hooks_.end() && !it->second.empty();
     }
 
+    bool PyUIHookRegistry::has_hooks(const std::string& panel,
+                                     const std::string& section,
+                                     const PyHookPosition position) const {
+        std::lock_guard lock(mutex_);
+        const std::string key = panel + ":" + section;
+        auto it = hooks_.find(key);
+        if (it == hooks_.end())
+            return false;
+        return std::any_of(it->second.begin(), it->second.end(), [position](const HookEntry& entry) {
+            return entry.position == position;
+        });
+    }
+
     std::vector<std::string> PyUIHookRegistry::get_hook_points() const {
         std::lock_guard lock(mutex_);
         std::vector<std::string> points;

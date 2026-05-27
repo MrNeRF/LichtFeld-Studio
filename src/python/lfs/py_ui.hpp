@@ -790,6 +790,7 @@ namespace lfs::python {
 
         // Check if hooks exist
         bool has_hooks(const std::string& panel, const std::string& section) const;
+        bool has_hooks(const std::string& panel, const std::string& section, PyHookPosition position) const;
 
         // Get all registered hook points
         std::vector<std::string> get_hook_points() const;

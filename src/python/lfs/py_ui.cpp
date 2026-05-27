@@ -5455,16 +5455,17 @@ namespace lfs::python {
         set_python_document_hook_invoker([](const char* panel, const char* section,
                                             void* document, bool prepend) -> bool {
             auto& registry = PyUIHookRegistry::instance();
-            if (registry.has_hooks(panel, section)) {
+            const auto position = prepend ? PyHookPosition::Prepend : PyHookPosition::Append;
+            if (registry.has_hooks(panel, section, position)) {
                 return registry.invoke_document(
-                    panel, section, static_cast<Rml::ElementDocument*>(document),
-                    prepend ? PyHookPosition::Prepend : PyHookPosition::Append);
+                    panel, section, static_cast<Rml::ElementDocument*>(document), position);
             }
             return false;
         });
 
-        set_python_hook_checker([](const char* panel, const char* section) -> bool {
-            return PyUIHookRegistry::instance().has_hooks(panel, section);
+        set_python_hook_checker([](const char* panel, const char* section, const bool prepend) -> bool {
+            return PyUIHookRegistry::instance().has_hooks(
+                panel, section, prepend ? PyHookPosition::Prepend : PyHookPosition::Append);
         });
 
         set_popup_draw_callback([]() {

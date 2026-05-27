@@ -73,7 +73,8 @@ namespace lfs::vis::gui {
         bool updateTheme();
         void cacheBodyTemplate();
         void ensureBodyDataModelBound(Rml::Element* body);
-        bool shouldRunDocumentHooks(bool force) const;
+        bool shouldRunDocumentHooks(bool force, bool prepend) const;
+        bool shouldRunAnyDocumentHooks(bool force) const;
         bool updateToolbarRoots();
         void bindReactiveStore();
         void refreshGTMetricsOverlayFromStore();
