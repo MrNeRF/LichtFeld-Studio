@@ -26,6 +26,7 @@
 #include "sequencer/keyframe.hpp"
 #include "sequencer/sequencer_controller.hpp"
 #include "training/training_manager.hpp"
+#include "visualizer/app_store.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer_impl.hpp"
@@ -33,6 +34,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <condition_variable>
 #include <format>
 #include <functional>
 #include <future>
@@ -520,6 +522,7 @@ namespace lfs::vis::gui {
                 import_state_.thread->join();
             import_state_.thread.reset();
         }
+        cancelImportCompletionDismiss();
 
         mesh2splat_state_.active.store(false);
         mesh2splat_state_.pending.store(false);
@@ -560,22 +563,29 @@ namespace lfs::vis::gui {
         state::DatasetLoadStarted::when([this](const auto& e) {
             if (import_state_.active.load())
                 return;
-            const std::lock_guard lock(import_state_.mutex);
+            cancelImportCompletionDismiss();
             import_state_.active.store(true);
             import_state_.progress.store(0.0f);
-            import_state_.path = e.path;
-            import_state_.stage = "Initializing...";
-            import_state_.error.clear();
-            import_state_.num_images = 0;
-            import_state_.num_points = 0;
-            import_state_.success = false;
-            import_state_.dataset_type = getDatasetTypeName(e.path);
+            {
+                const std::lock_guard lock(import_state_.mutex);
+                import_state_.path = e.path;
+                import_state_.stage = "Initializing...";
+                import_state_.error.clear();
+                import_state_.num_images = 0;
+                import_state_.num_points = 0;
+                import_state_.success = false;
+                import_state_.dataset_type = getDatasetTypeName(e.path);
+            }
+            publishImportOverlayState();
         });
 
         state::DatasetLoadProgress::when([this](const auto& e) {
             import_state_.progress.store(e.progress / 100.0f);
-            const std::lock_guard lock(import_state_.mutex);
-            import_state_.stage = e.step;
+            {
+                const std::lock_guard lock(import_state_.mutex);
+                import_state_.stage = e.step;
+            }
+            publishImportOverlayState();
         });
 
         state::DatasetLoadCompleted::when([this](const auto& e) {
@@ -600,6 +610,9 @@ namespace lfs::vis::gui {
             }
             import_state_.active.store(false);
             import_state_.show_completion.store(true);
+            if (e.success)
+                scheduleImportCompletionDismiss();
+            publishImportOverlayState();
         });
 
         cmd::SequencerExportVideo::when([this](const auto& evt) {
@@ -1062,6 +1075,89 @@ namespace lfs::vis::gui {
         }
     }
 
+    void AsyncTaskManager::publishImportOverlayState() {
+        lfs::vis::AppStore::ImportOverlayState state;
+        state.active = import_state_.active.load();
+        state.show_completion = import_state_.show_completion.load();
+        state.progress = import_state_.progress.load();
+        {
+            const std::lock_guard lock(import_state_.mutex);
+            state.stage = import_state_.stage;
+            state.dataset_type = import_state_.dataset_type;
+            state.path = lfs::core::path_to_utf8(import_state_.path.filename());
+            state.success = import_state_.success;
+            state.error = import_state_.error;
+            state.num_images = static_cast<std::uint64_t>(import_state_.num_images);
+            state.num_points = static_cast<std::uint64_t>(import_state_.num_points);
+            if (state.show_completion &&
+                import_state_.completion_time != std::chrono::steady_clock::time_point{}) {
+                const auto elapsed = std::chrono::steady_clock::now() - import_state_.completion_time;
+                state.seconds_since_completion = std::chrono::duration<float>(elapsed).count();
+            }
+        }
+        lfs::vis::app_store().import_overlay_state.set(std::move(state));
+    }
+
+    void AsyncTaskManager::publishVideoExportOverlayState() {
+        lfs::vis::AppStore::VideoExportOverlayState state;
+        state.active = video_export_state_.active.load();
+        state.progress = video_export_state_.progress.load();
+        state.current_frame = video_export_state_.current_frame.load();
+        state.total_frames = video_export_state_.total_frames.load();
+        {
+            const std::lock_guard lock(video_export_state_.mutex);
+            state.stage = video_export_state_.stage;
+        }
+        lfs::vis::app_store().video_export_overlay_state.set(std::move(state));
+    }
+
+    void AsyncTaskManager::cancelImportCompletionDismiss() {
+        import_state_.completion_generation.fetch_add(1, std::memory_order_acq_rel);
+        if (import_state_.completion_dismiss_thread) {
+            import_state_.completion_dismiss_thread->request_stop();
+            if (import_state_.completion_dismiss_thread->joinable())
+                import_state_.completion_dismiss_thread->join();
+            import_state_.completion_dismiss_thread.reset();
+        }
+    }
+
+    void AsyncTaskManager::scheduleImportCompletionDismiss() {
+        cancelImportCompletionDismiss();
+
+        const auto generation =
+            import_state_.completion_generation.fetch_add(1, std::memory_order_acq_rel) + 1;
+        import_state_.completion_dismiss_thread.emplace(
+            [this, generation](std::stop_token stop_token) {
+                std::mutex mutex;
+                std::condition_variable_any cv;
+                std::unique_lock lock(mutex);
+                cv.wait_for(lock, stop_token, std::chrono::milliseconds(3000), [] { return false; });
+                if (stop_token.stop_requested())
+                    return;
+                if (import_state_.completion_generation.load(std::memory_order_acquire) != generation)
+                    return;
+                if (import_state_.active.load() || !import_state_.show_completion.load())
+                    return;
+
+                bool success = false;
+                {
+                    const std::lock_guard state_lock(import_state_.mutex);
+                    success = import_state_.success;
+                }
+                if (!success)
+                    return;
+
+                import_state_.show_completion.store(false);
+                publishImportOverlayState();
+            });
+    }
+
+    void AsyncTaskManager::dismissImport() {
+        cancelImportCompletionDismiss();
+        import_state_.show_completion.store(false);
+        publishImportOverlayState();
+    }
+
     void AsyncTaskManager::cancelImport() {
         const bool had_activity = import_state_.active.load() ||
                                   import_state_.show_completion.load() ||
@@ -1071,6 +1167,7 @@ namespace lfs::vis::gui {
         }
 
         LOG_INFO("Cancelling import");
+        cancelImportCompletionDismiss();
         if (import_state_.thread) {
             import_state_.thread->request_stop();
             if (import_state_.thread->joinable()) {
@@ -1097,6 +1194,7 @@ namespace lfs::vis::gui {
             import_state_.params = {};
         }
         PanelRegistry::instance().invalidate_poll_cache();
+        publishImportOverlayState();
     }
 
     void AsyncTaskManager::startAsyncImport(const std::filesystem::path& path,
@@ -1106,6 +1204,7 @@ namespace lfs::vis::gui {
             return;
         }
 
+        cancelImportCompletionDismiss();
         import_state_.active.store(true);
         import_state_.load_complete.store(false);
         import_state_.show_completion.store(false);
@@ -1124,6 +1223,7 @@ namespace lfs::vis::gui {
             import_state_.params = params;
             import_state_.dataset_type = getDatasetTypeName(path);
         }
+        publishImportOverlayState();
 
         LOG_INFO("Async import: {}", lfs::core::path_to_utf8(path));
 
@@ -1154,8 +1254,11 @@ namespace lfs::vis::gui {
                         if (stop_token.stop_requested())
                             return;
                         import_state_.progress.store(pct / 100.0f);
-                        const std::lock_guard lock(import_state_.mutex);
-                        import_state_.stage = msg; },
+                        {
+                            const std::lock_guard lock(import_state_.mutex);
+                            import_state_.stage = msg;
+                        }
+                        publishImportOverlayState(); },
                     .cancel_requested = [&stop_token]() { return stop_token.stop_requested(); }};
 
                 auto loader = lfs::io::Loader::create();
@@ -1163,6 +1266,7 @@ namespace lfs::vis::gui {
 
                 if (stop_token.stop_requested()) {
                     import_state_.active.store(false);
+                    publishImportOverlayState();
                     return;
                 }
 
@@ -1196,6 +1300,7 @@ namespace lfs::vis::gui {
                 }
                 import_state_.progress.store(1.0f);
                 import_state_.load_complete.store(true, std::memory_order_release);
+                publishImportOverlayState();
                 wakeMainThreadForAsyncWork();
             });
     }
@@ -1215,8 +1320,11 @@ namespace lfs::vis::gui {
         } else {
             import_state_.active.store(false);
             import_state_.show_completion.store(true);
-            const std::lock_guard lock(import_state_.mutex);
-            import_state_.completion_time = std::chrono::steady_clock::now();
+            {
+                const std::lock_guard lock(import_state_.mutex);
+                import_state_.completion_time = std::chrono::steady_clock::now();
+            }
+            publishImportOverlayState();
         }
         PanelRegistry::instance().invalidate_poll_cache();
 
@@ -1231,6 +1339,7 @@ namespace lfs::vis::gui {
         if (!scene_manager) {
             LOG_ERROR("No scene manager");
             import_state_.active.store(false);
+            publishImportOverlayState();
             return;
         }
 
@@ -1248,6 +1357,7 @@ namespace lfs::vis::gui {
         if (!load_result) {
             LOG_ERROR("No load result");
             import_state_.active.store(false);
+            publishImportOverlayState();
             return;
         }
 
@@ -1281,6 +1391,9 @@ namespace lfs::vis::gui {
             is_mesh_load = import_state_.is_mesh;
         }
         import_state_.show_completion.store(!(success_val && is_mesh_load));
+        if (success_val && !is_mesh_load)
+            scheduleImportCompletionDismiss();
+        publishImportOverlayState();
 
         lfs::core::events::state::DatasetLoadCompleted{
             .path = path,
@@ -1324,6 +1437,7 @@ namespace lfs::vis::gui {
             std::lock_guard lock(video_export_state_.mutex);
             video_export_state_.stage = "Cancelling";
         }
+        publishVideoExportOverlayState();
         if (video_export_state_.thread) {
             video_export_state_.thread->request_stop();
         }
@@ -1344,6 +1458,7 @@ namespace lfs::vis::gui {
                 video_export_state_.error = error;
                 video_export_state_.path = path;
             }
+            publishVideoExportOverlayState();
             lfs::core::events::state::VideoExportFailed{.error = std::move(error)}.emit();
         };
 
@@ -1417,6 +1532,7 @@ namespace lfs::vis::gui {
             video_export_state_.error.clear();
             video_export_state_.path = path;
         }
+        publishVideoExportOverlayState();
 
         resetVideoExportEnvironmentState();
         video_export_environment_state_ = std::make_unique<VideoExportEnvironmentState>();
@@ -1453,6 +1569,7 @@ namespace lfs::vis::gui {
                         video_export_state_.stage = "Failed";
                     }
                     video_export_state_.active.store(false);
+                    publishVideoExportOverlayState();
                     lfs::core::events::state::VideoExportFailed{
                         .error = "Video encoder not available"}
                         .emit();
@@ -1464,6 +1581,7 @@ namespace lfs::vis::gui {
                     std::lock_guard lock(video_export_state_.mutex);
                     video_export_state_.stage = "Opening encoder";
                 }
+                publishVideoExportOverlayState();
 
                 auto result = encoder->open(path, export_options);
                 if (!result) {
@@ -1477,6 +1595,7 @@ namespace lfs::vis::gui {
                         .error = result.error()}
                         .emit();
                     video_export_state_.active.store(false);
+                    publishVideoExportOverlayState();
                     cleanup_environment_state();
                     return;
                 }
@@ -1504,6 +1623,7 @@ namespace lfs::vis::gui {
                                 "Failed to render frame {}: {}", frame + 1, frame_tensor.error());
                             video_export_state_.stage = "Render error";
                         }
+                        publishVideoExportOverlayState();
                         break;
                     }
 
@@ -1519,9 +1639,12 @@ namespace lfs::vis::gui {
                     const auto* const gpu_ptr = image_hwc.data_ptr();
                     auto write_result = encoder->writeFrameGpu(gpu_ptr, width, height, nullptr);
                     if (!write_result) {
-                        std::lock_guard lock(video_export_state_.mutex);
-                        video_export_state_.error = write_result.error();
-                        video_export_state_.stage = "Encode error";
+                        {
+                            std::lock_guard lock(video_export_state_.mutex);
+                            video_export_state_.error = write_result.error();
+                            video_export_state_.stage = "Encode error";
+                        }
+                        publishVideoExportOverlayState();
                         LOG_ERROR("Failed to encode frame {}: {}", frame, write_result.error());
                         break;
                     }
@@ -1533,6 +1656,7 @@ namespace lfs::vis::gui {
                         std::lock_guard lock(video_export_state_.mutex);
                         video_export_state_.stage = std::format("Encoding frame {}/{}", frame + 1, total_frames);
                     }
+                    publishVideoExportOverlayState();
                 }
 
                 {
@@ -1543,11 +1667,15 @@ namespace lfs::vis::gui {
                         video_export_state_.stage = "Finalizing";
                     }
                 }
+                publishVideoExportOverlayState();
 
                 if (auto close_result = encoder->close(); !close_result) {
-                    std::lock_guard lock(video_export_state_.mutex);
-                    video_export_state_.error = close_result.error();
-                    video_export_state_.stage = "Failed";
+                    {
+                        std::lock_guard lock(video_export_state_.mutex);
+                        video_export_state_.error = close_result.error();
+                        video_export_state_.stage = "Failed";
+                    }
+                    publishVideoExportOverlayState();
                     LOG_ERROR("Failed to close encoder: {}", close_result.error());
                 } else {
                     bool emit_completed = false;
@@ -1561,6 +1689,7 @@ namespace lfs::vis::gui {
                             emit_completed = true;
                         }
                     }
+                    publishVideoExportOverlayState();
                     if (emit_completed) {
                         lfs::core::events::state::VideoExportCompleted{
                             .path = path,
@@ -1583,6 +1712,7 @@ namespace lfs::vis::gui {
                 }
                 cleanup_environment_state();
                 video_export_state_.active.store(false);
+                publishVideoExportOverlayState();
             });
     }
 

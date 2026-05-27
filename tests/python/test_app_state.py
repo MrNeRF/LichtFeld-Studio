@@ -13,6 +13,14 @@ from lfs_plugins.ui.signals import Signal, ThrottledSignal
 from lfs_plugins.ui.store import AppStore as NativeAppStore
 
 
+def _drain_native_store():
+    import lichtfeld as lf
+
+    drain = getattr(lf.ui.store, "_drain_for_tests", None)
+    if callable(drain):
+        drain()
+
+
 class TestAppState:
     """Tests for AppState signal definitions."""
 
@@ -112,6 +120,7 @@ class TestAppState:
             NativeAppStore.total_iterations.value = 7000
             NativeAppStore.training_state.value = "running"
             NativeAppStore.eval_psnr.value = 29.5
+            _drain_native_store()
 
             assert AppState.iteration.value == 123
             assert AppState.max_iterations.value == 7000
@@ -134,6 +143,7 @@ class TestAppState:
             NativeAppStore.active_tool.value = "builtin.translate"
             NativeAppStore.transform_space.value = 1
             NativeAppStore.pivot_mode.value = 1
+            _drain_native_store()
 
             assert AppState.active_tool.value == "builtin.translate"
             assert AppState.transform_space.value == 1
@@ -151,6 +161,7 @@ class TestAppState:
         AppState.bind_native_store()
         AppState.unbind_native_store()
         NativeAppStore.iteration.value = 321
+        _drain_native_store()
 
         assert AppState.iteration.value == 0
         AppState.reset()

@@ -34,6 +34,7 @@ namespace lfs::python {
         std::mutex g_subscriptions_mutex;
         std::unordered_map<std::uint64_t, std::shared_ptr<PyStoreSubscription>> g_subscriptions;
         std::atomic_uint64_t g_next_subscription_id{1};
+        thread_local bool g_test_drain_with_current_gil = false;
 
         template <typename Observable>
         std::uint64_t subscribe_observable(Observable& observable, nb::object callback) {
@@ -45,11 +46,52 @@ namespace lfs::python {
                 const auto subscription = weak_subscription.lock();
                 if (!subscription)
                     return;
-                if (!can_acquire_gil())
+                const bool can_acquire = can_acquire_gil();
+                const bool use_current_gil = !can_acquire && g_test_drain_with_current_gil && PyGILState_Check();
+                if (!can_acquire && !use_current_gil)
                     return;
-                const GilAcquire gil;
                 try {
-                    subscription->callback(value);
+                    if (can_acquire) {
+                        const GilAcquire gil;
+                        subscription->callback(value);
+                    } else {
+                        subscription->callback(value);
+                    }
+                } catch (const nb::python_error& e) {
+                    LOG_ERROR("Python app store subscriber failed: {}", e.what());
+                } catch (const std::exception& e) {
+                    LOG_ERROR("Python app store subscriber failed: {}", e.what());
+                }
+            });
+
+            {
+                std::lock_guard lock(g_subscriptions_mutex);
+                g_subscriptions.emplace(id, std::move(subscription));
+            }
+            return id;
+        }
+
+        template <typename Observable, typename Convert>
+        std::uint64_t subscribe_observable_as(Observable& observable, nb::object callback, Convert convert) {
+            const auto id = g_next_subscription_id.fetch_add(1, std::memory_order_relaxed);
+            auto subscription = std::make_shared<PyStoreSubscription>();
+            subscription->callback = std::move(callback);
+            const std::weak_ptr<PyStoreSubscription> weak_subscription = subscription;
+            subscription->token = observable.subscribe([weak_subscription, convert = std::move(convert)](const auto& value) {
+                const auto subscription = weak_subscription.lock();
+                if (!subscription)
+                    return;
+                const bool can_acquire = can_acquire_gil();
+                const bool use_current_gil = !can_acquire && g_test_drain_with_current_gil && PyGILState_Check();
+                if (!can_acquire && !use_current_gil)
+                    return;
+                try {
+                    if (can_acquire) {
+                        const GilAcquire gil;
+                        subscription->callback(convert(value));
+                    } else {
+                        subscription->callback(convert(value));
+                    }
                 } catch (const nb::python_error& e) {
                     LOG_ERROR("Python app store subscriber failed: {}", e.what());
                 } catch (const std::exception& e) {
@@ -68,7 +110,79 @@ namespace lfs::python {
             throw std::invalid_argument(std::string("Unknown app store field: ") + std::string(field));
         }
 
-        void set_field(const std::string& field, const nb::object& value) {
+        template <typename T>
+        T dict_value(const nb::dict& dict, const char* key, T fallback) {
+            const auto py_key = nb::str(key);
+            if (!dict.contains(py_key))
+                return fallback;
+            return nb::cast<T>(dict[py_key]);
+        }
+
+        nb::dict import_overlay_state_to_dict(const lfs::vis::AppStore::ImportOverlayState& value) {
+            nb::dict state;
+            state["active"] = value.active;
+            state["show_completion"] = value.show_completion;
+            state["progress"] = value.progress;
+            state["stage"] = value.stage;
+            state["dataset_type"] = value.dataset_type;
+            state["path"] = value.path;
+            state["success"] = value.success;
+            state["error"] = value.error;
+            state["num_images"] = value.num_images;
+            state["num_points"] = value.num_points;
+            state["seconds_since_completion"] = value.seconds_since_completion;
+            return state;
+        }
+
+        lfs::vis::AppStore::ImportOverlayState import_overlay_state_from_object(const nb::object& value) {
+            if (value.is_none())
+                return {};
+            if (!nb::isinstance<nb::dict>(value))
+                throw nb::type_error("import_overlay_state must be a dict");
+
+            const nb::dict dict = nb::cast<nb::dict>(value);
+            lfs::vis::AppStore::ImportOverlayState state;
+            state.active = dict_value(dict, "active", false);
+            state.show_completion = dict_value(dict, "show_completion", false);
+            state.progress = dict_value(dict, "progress", 0.0f);
+            state.stage = dict_value(dict, "stage", std::string{});
+            state.dataset_type = dict_value(dict, "dataset_type", std::string{});
+            state.path = dict_value(dict, "path", std::string{});
+            state.success = dict_value(dict, "success", false);
+            state.error = dict_value(dict, "error", std::string{});
+            state.num_images = dict_value(dict, "num_images", std::uint64_t{0});
+            state.num_points = dict_value(dict, "num_points", std::uint64_t{0});
+            state.seconds_since_completion = dict_value(dict, "seconds_since_completion", 0.0f);
+            return state;
+        }
+
+        nb::dict video_export_overlay_state_to_dict(const lfs::vis::AppStore::VideoExportOverlayState& value) {
+            nb::dict state;
+            state["active"] = value.active;
+            state["progress"] = value.progress;
+            state["current_frame"] = value.current_frame;
+            state["total_frames"] = value.total_frames;
+            state["stage"] = value.stage;
+            return state;
+        }
+
+        lfs::vis::AppStore::VideoExportOverlayState video_export_overlay_state_from_object(const nb::object& value) {
+            if (value.is_none())
+                return {};
+            if (!nb::isinstance<nb::dict>(value))
+                throw nb::type_error("video_export_overlay_state must be a dict");
+
+            const nb::dict dict = nb::cast<nb::dict>(value);
+            lfs::vis::AppStore::VideoExportOverlayState state;
+            state.active = dict_value(dict, "active", false);
+            state.progress = dict_value(dict, "progress", 0.0f);
+            state.current_frame = dict_value(dict, "current_frame", 0);
+            state.total_frames = dict_value(dict, "total_frames", 0);
+            state.stage = dict_value(dict, "stage", std::string{});
+            return state;
+        }
+
+        void set_field(const std::string& field, nb::object value) {
             auto& store = lfs::vis::app_store();
             if (field == "iteration")
                 store.iteration.set(nb::cast<int>(value));
@@ -108,6 +222,10 @@ namespace lfs::python {
                 store.transform_space.set(nb::cast<int>(value));
             else if (field == "pivot_mode")
                 store.pivot_mode.set(nb::cast<int>(value));
+            else if (field == "import_overlay_state")
+                store.import_overlay_state.set(import_overlay_state_from_object(value));
+            else if (field == "video_export_overlay_state")
+                store.video_export_overlay_state.set(video_export_overlay_state_from_object(value));
             else
                 throw_unknown_field(field);
         }
@@ -150,6 +268,10 @@ namespace lfs::python {
                 return nb::cast(store.transform_space.get());
             if (field == "pivot_mode")
                 return nb::cast(store.pivot_mode.get());
+            if (field == "import_overlay_state")
+                return import_overlay_state_to_dict(store.import_overlay_state.get());
+            if (field == "video_export_overlay_state")
+                return video_export_overlay_state_to_dict(store.video_export_overlay_state.get());
             throw_unknown_field(field);
         }
 
@@ -191,6 +313,12 @@ namespace lfs::python {
                 return subscribe_observable(store.transform_space, std::move(callback));
             if (field == "pivot_mode")
                 return subscribe_observable(store.pivot_mode, std::move(callback));
+            if (field == "import_overlay_state")
+                return subscribe_observable_as(
+                    store.import_overlay_state, std::move(callback), import_overlay_state_to_dict);
+            if (field == "video_export_overlay_state")
+                return subscribe_observable_as(
+                    store.video_export_overlay_state, std::move(callback), video_export_overlay_state_to_dict);
             throw_unknown_field(field);
         }
 
@@ -205,6 +333,22 @@ namespace lfs::python {
 
         void end_batch() {
             lfs::vis::app_store().store().end_batch();
+        }
+
+        bool drain_for_tests() {
+            struct ScopedTestDrain {
+                bool previous;
+                explicit ScopedTestDrain(const bool enabled)
+                    : previous(g_test_drain_with_current_gil) {
+                    g_test_drain_with_current_gil = enabled;
+                }
+                ~ScopedTestDrain() {
+                    g_test_drain_with_current_gil = previous;
+                }
+            };
+
+            const ScopedTestDrain allow_current_gil(true);
+            return lfs::vis::app_store().store().drain_dirty_into_frame();
         }
     } // namespace
 
@@ -222,12 +366,13 @@ namespace lfs::python {
 
     void register_store(nb::module_& ui_module) {
         auto store = ui_module.def_submodule("store", "Reactive C++ app store bridge");
-        store.def("set", &set_field, "Set an app store field");
+        store.def("set", &set_field, nb::arg("field"), nb::arg("value").none(), "Set an app store field");
         store.def("get", &get_field, "Get an app store field");
         store.def("subscribe", &subscribe_field, "Subscribe to an app store field");
         store.def("unsubscribe", &unsubscribe_field, "Unsubscribe from an app store field");
         store.def("begin_batch", &begin_batch, "Begin a batched app store update");
         store.def("end_batch", &end_batch, "End a batched app store update");
+        store.def("_drain_for_tests", &drain_for_tests, "Drain pending app store notifications in tests");
     }
 
 } // namespace lfs::python

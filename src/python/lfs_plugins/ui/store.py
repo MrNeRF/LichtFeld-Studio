@@ -130,6 +130,8 @@ class AppStore:
     active_submode = StoreSignal[str]("active_submode", "")
     transform_space = StoreSignal[int]("transform_space", 0)
     pivot_mode = StoreSignal[int]("pivot_mode", 0)
+    import_overlay_state = StoreSignal[dict[str, object]]("import_overlay_state", {})
+    video_export_overlay_state = StoreSignal[dict[str, object]]("video_export_overlay_state", {})
 
 
 class _BatchContext:

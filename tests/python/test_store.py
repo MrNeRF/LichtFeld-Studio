@@ -39,6 +39,8 @@ def test_app_store_exposes_panel_reactive_signals():
     assert isinstance(AppStore.active_submode, StoreSignal)
     assert isinstance(AppStore.transform_space, StoreSignal)
     assert isinstance(AppStore.pivot_mode, StoreSignal)
+    assert isinstance(AppStore.import_overlay_state, StoreSignal)
+    assert isinstance(AppStore.video_export_overlay_state, StoreSignal)
 
 
 def test_native_value_helper_does_not_read_fallback_signal_without_native_store(monkeypatch):

@@ -56,6 +56,32 @@ namespace lfs::vis {
             }
         };
 
+        struct LFS_VIS_API ImportOverlayState {
+            bool active = false;
+            bool show_completion = false;
+            float progress = 0.0f;
+            std::string stage;
+            std::string dataset_type;
+            std::string path;
+            bool success = false;
+            std::string error;
+            std::uint64_t num_images = 0;
+            std::uint64_t num_points = 0;
+            float seconds_since_completion = 0.0f;
+
+            bool operator==(const ImportOverlayState&) const = default;
+        };
+
+        struct LFS_VIS_API VideoExportOverlayState {
+            bool active = false;
+            float progress = 0.0f;
+            int current_frame = 0;
+            int total_frames = 0;
+            std::string stage;
+
+            bool operator==(const VideoExportOverlayState&) const = default;
+        };
+
         enum Field : std::uint32_t {
             Iteration = 1,
             TotalIterations,
@@ -78,6 +104,8 @@ namespace lfs::vis {
             ActiveSubmode,
             TransformSpaceValue,
             PivotModeValue,
+            ImportOverlayStateValue,
+            VideoExportOverlayStateValue,
         };
 
         AppStore();
@@ -106,6 +134,8 @@ namespace lfs::vis {
         lfs::core::reactive::Observable<std::string> active_submode;
         lfs::core::reactive::Observable<int> transform_space;
         lfs::core::reactive::Observable<int> pivot_mode;
+        lfs::core::reactive::Observable<ImportOverlayState> import_overlay_state;
+        lfs::core::reactive::Observable<VideoExportOverlayState> video_export_overlay_state;
 
     private:
         lfs::core::reactive::Store store_;

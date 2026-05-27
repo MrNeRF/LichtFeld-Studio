@@ -29,7 +29,12 @@ namespace lfs::vis {
           active_tool(store_, Field::ActiveTool, "active_tool", std::string{}),
           active_submode(store_, Field::ActiveSubmode, "active_submode", std::string{}),
           transform_space(store_, Field::TransformSpaceValue, "transform_space", 0),
-          pivot_mode(store_, Field::PivotModeValue, "pivot_mode", 0) {}
+          pivot_mode(store_, Field::PivotModeValue, "pivot_mode", 0),
+          import_overlay_state(store_, Field::ImportOverlayStateValue, "import_overlay_state", ImportOverlayState{}),
+          video_export_overlay_state(store_,
+                                     Field::VideoExportOverlayStateValue,
+                                     "video_export_overlay_state",
+                                     VideoExportOverlayState{}) {}
 
     AppStore& app_store() {
         static AppStore instance;
