@@ -36,8 +36,15 @@ def test_app_store_exposes_panel_reactive_signals():
     assert isinstance(AppStore.scene_generation, StoreSignal)
     assert isinstance(AppStore.selection_generation, StoreSignal)
     assert isinstance(AppStore.active_tool, StoreSignal)
+    assert isinstance(AppStore.active_submode, StoreSignal)
     assert isinstance(AppStore.transform_space, StoreSignal)
     assert isinstance(AppStore.pivot_mode, StoreSignal)
+
+
+def test_native_value_helper_does_not_read_fallback_signal_without_native_store(monkeypatch):
+    monkeypatch.setattr(AppStore.active_tool, "_fallback", "fallback-only")
+
+    assert store_module.native_value("active_tool", "missing") == "missing"
 
 
 def test_fallback_batch_defers_and_dedups_notifications():
@@ -111,6 +118,14 @@ def test_native_store_proxy(monkeypatch):
     assert native.values["subscribed_field"] == "fps"
     unsubscribe()
     assert native.unsubscribe_calls == [42]
+
+
+def test_native_value_helper_reads_native_store(monkeypatch):
+    native = _NativeStore()
+    native.values["active_tool"] = "builtin.translate"
+    monkeypatch.setattr(store_module, "_native_store", lambda: native)
+
+    assert store_module.native_value("active_tool", "missing") == "builtin.translate"
 
 
 def test_native_batch_is_closed_on_exception(monkeypatch):

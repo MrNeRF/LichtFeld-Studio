@@ -11,12 +11,19 @@ from .tools import ToolRegistry
 from .transform_controls import TransformControlsController
 from .ui.state import AppState
 
+try:
+    from .ui.store import native_value as _native_store_value
+except Exception:
+    def _native_store_value(_field, fallback):
+        return fallback
+
 
 _TOOLBAR_HIDDEN_STATES = ("running", "paused", "stopping", "completed")
 _RML_PATH_SAFE_CHARS = "/:._-~"
 _OVERLAY_DOC_KEY_ATTR = "data-viewport-toolbar-doc-key"
 
 _toolbar_controller = None
+_MISSING = object()
 
 
 def __lfs_after_reload__(runtime):
@@ -60,9 +67,35 @@ def _tooltip_text(label, shortcut=""):
     return label or ""
 
 
+def _keymap_shortcut(action_id, fallback=""):
+    if not action_id:
+        return fallback or ""
+    try:
+        import lichtfeld as lf
+
+        keymap = getattr(lf, "keymap", None)
+        action_enum = getattr(keymap, "Action", None)
+        mode_enum = getattr(keymap, "ToolMode", None)
+        if keymap is None or action_enum is None or mode_enum is None:
+            return fallback or ""
+        action = getattr(action_enum, action_id, None)
+        mode = getattr(mode_enum, "GLOBAL", None)
+        if action is None or mode is None:
+            return fallback or ""
+        is_bound = getattr(keymap, "is_bound", None)
+        if callable(is_bound) and not is_bound(action, mode):
+            return fallback or ""
+        describe = getattr(keymap, "get_trigger_description", None)
+        if callable(describe):
+            return describe(action, mode) or fallback or ""
+    except Exception:
+        return fallback or ""
+    return fallback or ""
+
+
 def _button_record(button_id, action, value, icon_src, *,
                    tooltip_key="", tooltip_text="", action_id="",
-                   selected=False, enabled=True):
+                   shortcut_text="", selected=False, enabled=True):
     return {
         "button_id": button_id,
         "action": action,
@@ -71,6 +104,7 @@ def _button_record(button_id, action, value, icon_src, *,
         "tooltip_key": tooltip_key,
         "tooltip_text": tooltip_text,
         "action_id": action_id,
+        "shortcut_text": _keymap_shortcut(action_id, shortcut_text),
         "selected": selected,
         "enabled": enabled,
     }
@@ -167,7 +201,11 @@ class _GizmoToolbarController:
         self._was_hidden = False
 
         context = get_context()
-        active_tool_id = lf.ui.get_active_tool() or ""
+        active_tool_id = _native_store_value("active_tool", _MISSING)
+        if active_tool_id is _MISSING:
+            active_tool_id = lf.ui.get_active_tool() or ""
+        else:
+            active_tool_id = active_tool_id or ""
         tool_defs = ToolRegistry.get_all()
         tool_def = ToolRegistry.get(active_tool_id) if active_tool_id else None
         select_tool_def = ToolRegistry.get("builtin.select")
@@ -226,6 +264,7 @@ class _GizmoToolbarController:
             tooltip_key=tooltip_key,
             tooltip_text="" if tooltip_key else _tooltip_text(tool_def.label, tool_def.shortcut),
             action_id=self._TOOL_ACTIONS.get(tool_def.id, ""),
+            shortcut_text=tool_def.shortcut,
             selected=_tool_selected(tool_def, active_tool_id, context),
             enabled=tool_def.can_activate(context),
         )
@@ -237,8 +276,11 @@ class _GizmoToolbarController:
             return [], []
 
         enabled = tool_def.can_activate(context)
-        get_active_submode = getattr(lf.ui, "get_active_submode", None)
-        active_submode = get_active_submode() if callable(get_active_submode) else ""
+        active_submode = _native_store_value("active_submode", _MISSING)
+        if active_submode is _MISSING:
+            get_active_submode = getattr(lf.ui, "get_active_submode", None)
+            active_submode = get_active_submode() if callable(get_active_submode) else ""
+        active_submode = active_submode or ""
         if active_tool_id == "builtin.select" and not active_submode:
             active_submode = tool_def.submodes[0].id
             set_selection_mode = getattr(lf.ui, "set_selection_mode", None)
@@ -258,6 +300,7 @@ class _GizmoToolbarController:
                     tooltip_key=tooltip_key,
                     tooltip_text="" if tooltip_key else _tooltip_text(mode.label, mode.shortcut),
                     action_id=self._SELECTION_MODE_ACTIONS.get(mode.id, ""),
+                    shortcut_text=mode.shortcut,
                     selected=selected,
                     enabled=enabled,
                 )
@@ -272,6 +315,7 @@ class _GizmoToolbarController:
             tooltip_key=self._TOOL_LOCALE_KEYS.get(tool_def.id, ""),
             tooltip_text="",
             action_id="TOOL_SELECT",
+            shortcut_text=getattr(tool_def, "shortcut", ""),
             selected=active_tool_id == "builtin.select",
             enabled=enabled,
         )
@@ -295,6 +339,7 @@ class _GizmoToolbarController:
             tooltip_key=active_button["tooltip_key"] if active_button else "",
             tooltip_text=active_button["tooltip_text"] if active_button else "Transform Tools",
             action_id=active_button["action_id"] if active_button else "",
+            shortcut_text=active_button["shortcut_text"] if active_button else fallback["shortcut_text"],
             selected=active_button is not None,
             enabled=any(b["enabled"] for b in tool_buttons),
         )
@@ -308,8 +353,13 @@ class _GizmoToolbarController:
         if active_tool_id == "builtin.select":
             return []
 
-        current_space = lf.ui.get_transform_space()
-        active_submode = lf.ui.get_active_submode()
+        current_space = _native_store_value("transform_space", _MISSING)
+        if current_space is _MISSING:
+            current_space = lf.ui.get_transform_space()
+        active_submode = _native_store_value("active_submode", _MISSING)
+        if active_submode is _MISSING:
+            active_submode = lf.ui.get_active_submode()
+        active_submode = active_submode or ""
         is_transform_tool = active_tool_id in self._TRANSFORM_TOOL_IDS
         is_mirror_tool = active_tool_id == "builtin.mirror"
 
@@ -334,6 +384,7 @@ class _GizmoToolbarController:
                     _icon_src(mode.icon) if mode.icon else "",
                     tooltip_key=tooltip_key,
                     tooltip_text="" if tooltip_key else _tooltip_text(mode.label, mode.shortcut),
+                    shortcut_text=mode.shortcut,
                     selected=selected,
                 )
             )
@@ -345,7 +396,9 @@ class _GizmoToolbarController:
         if tool_def is None or not tool_def.pivot_modes:
             return []
 
-        current_pivot = lf.ui.get_pivot_mode()
+        current_pivot = _native_store_value("pivot_mode", _MISSING)
+        if current_pivot is _MISSING:
+            current_pivot = lf.ui.get_pivot_mode()
         records = []
         for mode in tool_def.pivot_modes:
             tooltip_key = self._PIVOT_LOCALE_KEYS.get(mode.id, "")
@@ -909,8 +962,20 @@ class _ViewportToolbarController:
             except Exception:
                 return default
 
-        active_tool = call("", getattr(lf.ui, "get_active_tool", None)) or ""
-        active_submode = call("", getattr(lf.ui, "get_active_submode", None)) or ""
+        active_tool = _native_store_value("active_tool", _MISSING)
+        if active_tool is _MISSING:
+            active_tool = call("", getattr(lf.ui, "get_active_tool", None))
+        active_tool = active_tool or ""
+        active_submode = _native_store_value("active_submode", _MISSING)
+        if active_submode is _MISSING:
+            active_submode = call("", getattr(lf.ui, "get_active_submode", None))
+        active_submode = active_submode or ""
+        transform_space = _native_store_value("transform_space", _MISSING)
+        if transform_space is _MISSING:
+            transform_space = call(1, getattr(lf.ui, "get_transform_space", None))
+        pivot_mode = _native_store_value("pivot_mode", _MISSING)
+        if pivot_mode is _MISSING:
+            pivot_mode = call(0, getattr(lf.ui, "get_pivot_mode", None))
         tool_defs = ToolRegistry.get_all()
         tool_ids = tuple(
             (getattr(tool_def, "id", ""), getattr(tool_def, "group", ""))
@@ -933,8 +998,8 @@ class _ViewportToolbarController:
             trainer_state,
             active_tool,
             active_submode,
-            call(1, getattr(lf.ui, "get_transform_space", None)),
-            call(0, getattr(lf.ui, "get_pivot_mode", None)),
+            transform_space,
+            pivot_mode,
             has_scene,
             num_gaussians,
             selected_nodes,

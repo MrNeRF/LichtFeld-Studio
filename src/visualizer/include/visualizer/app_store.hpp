@@ -75,6 +75,7 @@ namespace lfs::vis {
             GTMetricsOverlayConfigValue,
             VramHudValue,
             ActiveTool,
+            ActiveSubmode,
             TransformSpaceValue,
             PivotModeValue,
         };
@@ -102,6 +103,7 @@ namespace lfs::vis {
         lfs::core::reactive::Observable<GTMetricsOverlayConfig> gt_metrics_overlay_config;
         lfs::core::reactive::Observable<VramHud> vram_hud;
         lfs::core::reactive::Observable<std::string> active_tool;
+        lfs::core::reactive::Observable<std::string> active_submode;
         lfs::core::reactive::Observable<int> transform_space;
         lfs::core::reactive::Observable<int> pivot_mode;
 

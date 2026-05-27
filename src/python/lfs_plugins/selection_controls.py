@@ -8,6 +8,12 @@ import lichtfeld as lf
 
 from . import rml_widgets as w
 
+try:
+    from .ui.store import native_value as _native_store_value
+except Exception:
+    def _native_store_value(_field, fallback):
+        return fallback
+
 
 _SELECTION_TOOL_ID = "builtin.select"
 _DEPTH_MIN = 0.0
@@ -18,6 +24,7 @@ _DEPTH_SLIDER_MIN_SPAN = 1.0
 _DEFAULT_DEPTH_NEAR = 0.0
 _DEFAULT_DEPTH_FAR = 5.3
 _DEFAULT_FRUSTUM_HALF_WIDTH = 1.35
+_MISSING = object()
 
 _MODE_LABELS = {
     "centers": ("toolbar.brush_selection", "Brush"),
@@ -236,6 +243,9 @@ class SelectionControlsController:
         return _ui_label(key, fallback)
 
     def _get_active_tool(self):
+        value = _native_store_value("active_tool", _MISSING)
+        if value is not _MISSING:
+            return value or ""
         getter = getattr(lf.ui, "get_active_tool", None)
         if not callable(getter):
             return ""
@@ -245,6 +255,9 @@ class SelectionControlsController:
             return ""
 
     def _get_active_mode(self):
+        value = _native_store_value("active_submode", _MISSING)
+        if value is not _MISSING:
+            return value or ""
         getter = getattr(lf.ui, "get_active_submode", None)
         if not callable(getter):
             return ""

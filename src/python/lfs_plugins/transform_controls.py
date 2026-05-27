@@ -10,6 +10,12 @@ import lichtfeld as lf
 
 from . import rml_widgets as w
 
+try:
+    from .ui.store import native_value as _native_store_value
+except Exception:
+    def _native_store_value(_field, fallback):
+        return fallback
+
 TRANSLATE_STEP = 0.01
 TRANSLATE_STEP_FAST = 0.1
 ROTATE_STEP = 1.0
@@ -43,6 +49,7 @@ _SPACE_LOCAL = 0
 _SPACE_WORLD = 1
 _PIVOT_ORIGIN = 0
 _PIVOT_BOUNDS = 1
+_MISSING = object()
 
 
 def _ui_label(key: str, fallback: str) -> str:
@@ -239,7 +246,10 @@ class TransformControlsController:
         prev_space = self._transform_space
         prev_selected = tuple(self._selected)
 
-        self._active_tool = lf.ui.get_active_tool() or ""
+        active_tool = _native_store_value("active_tool", _MISSING)
+        if active_tool is _MISSING:
+            active_tool = lf.ui.get_active_tool() or ""
+        self._active_tool = active_tool or ""
         active_transform_tool = self._active_tool in _TRANSFORM_OVERLAY_TOOL_IDS
         wrap = doc.get_element_by_id("transform-block")
         if not active_transform_tool and not self._visible:
@@ -338,6 +348,12 @@ class TransformControlsController:
         return _ui_label("toolbar.origin_pivot", "Origin")
 
     def _current_transform_space(self) -> int:
+        value = _native_store_value("transform_space", _MISSING)
+        if value is not _MISSING:
+            try:
+                return int(value)
+            except Exception:
+                return _SPACE_WORLD
         getter = getattr(lf.ui, "get_transform_space", None)
         if callable(getter):
             try:
@@ -347,6 +363,12 @@ class TransformControlsController:
         return _SPACE_WORLD
 
     def _current_pivot_mode(self) -> int:
+        value = _native_store_value("pivot_mode", _MISSING)
+        if value is not _MISSING:
+            try:
+                return int(value)
+            except Exception:
+                return _PIVOT_ORIGIN
         getter = getattr(lf.ui, "get_pivot_mode", None)
         if callable(getter):
             try:

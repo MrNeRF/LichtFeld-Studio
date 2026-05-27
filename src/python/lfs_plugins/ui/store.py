@@ -24,6 +24,16 @@ def _native_store():
         return None
 
 
+def native_value(field: str, fallback: T) -> T:
+    native = _native_store()
+    if native is None:
+        return fallback
+    try:
+        return getattr(AppStore, field).value
+    except Exception:
+        return fallback
+
+
 class StoreSignal(Generic[T]):
     """Signal-shaped wrapper around one C++ app-store field."""
 
@@ -117,6 +127,7 @@ class AppStore:
     fps = StoreSignal[float]("fps", 0.0)
     mode_text = StoreSignal[str]("mode_text", "")
     active_tool = StoreSignal[str]("active_tool", "")
+    active_submode = StoreSignal[str]("active_submode", "")
     transform_space = StoreSignal[int]("transform_space", 0)
     pivot_mode = StoreSignal[int]("pivot_mode", 0)
 

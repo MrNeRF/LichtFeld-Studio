@@ -13,6 +13,7 @@
                      data-attr-id="button.button_id"
                      data-attr-data-tooltip="button.tooltip_key"
                      data-attr-data-action="button.action_id"
+                     data-attr-data-shortcut="button.shortcut_text"
                      data-attr-title="button.tooltip_text"
                      data-attrif-disabled="!button.enabled"
                      data-event-click="toolbar_action(button.action, button.value)">
@@ -26,6 +27,7 @@
                          data-class-selected="button.selected"
                          data-attr-data-tooltip="button.tooltip_key"
                          data-attr-data-action="button.action_id"
+                         data-attr-data-shortcut="button.shortcut_text"
                          data-attr-title="button.tooltip_text"
                          data-attrif-disabled="!button.enabled"
                          data-event-click="toolbar_action(button.action, button.value)">
@@ -40,6 +42,7 @@
                      data-attr-id="button.button_id"
                      data-attr-data-tooltip="button.tooltip_key"
                      data-attr-data-action="button.action_id"
+                     data-attr-data-shortcut="button.shortcut_text"
                      data-attr-title="button.tooltip_text"
                      data-attrif-disabled="!button.enabled"
                      data-event-click="toolbar_action(button.action, button.value)">
@@ -53,6 +56,7 @@
                          data-class-selected="button.selected"
                          data-attr-data-tooltip="button.tooltip_key"
                          data-attr-data-action="button.action_id"
+                         data-attr-data-shortcut="button.shortcut_text"
                          data-attr-title="button.tooltip_text"
                          data-attrif-disabled="!button.enabled"
                          data-event-click="toolbar_action(button.action, button.value)">
@@ -66,6 +70,7 @@
                  data-class-selected="button.selected"
                  data-attr-data-tooltip="button.tooltip_key"
                  data-attr-data-action="button.action_id"
+                 data-attr-data-shortcut="button.shortcut_text"
                  data-attr-title="button.tooltip_text"
                  data-attrif-disabled="!button.enabled"
                  data-event-click="toolbar_action(button.action, button.value)">
@@ -185,6 +190,7 @@
                      data-class-selected="button.selected"
                      data-attr-data-tooltip="button.tooltip_key"
                      data-attr-data-action="button.action_id"
+                     data-attr-data-shortcut="button.shortcut_text"
                      data-attr-title="button.tooltip_text"
                      data-attrif-disabled="!button.enabled"
                      data-event-click="toolbar_action(button.action, button.value)">
@@ -198,6 +204,7 @@
                          data-class-selected="button.selected"
                          data-attr-data-tooltip="button.tooltip_key"
                          data-attr-data-action="button.action_id"
+                         data-attr-data-shortcut="button.shortcut_text"
                          data-attr-title="button.tooltip_text"
                          data-attrif-disabled="!button.enabled"
                          data-event-click="toolbar_action(button.action, button.value)">
@@ -212,6 +219,7 @@
                      data-class-selected="button.selected"
                      data-attr-data-tooltip="button.tooltip_key"
                      data-attr-data-action="button.action_id"
+                     data-attr-data-shortcut="button.shortcut_text"
                      data-attr-title="button.tooltip_text"
                      data-attrif-disabled="!button.enabled"
                      data-event-click="toolbar_action(button.action, button.value)">
@@ -225,6 +233,7 @@
                          data-class-selected="button.selected"
                          data-attr-data-tooltip="button.tooltip_key"
                          data-attr-data-action="button.action_id"
+                         data-attr-data-shortcut="button.shortcut_text"
                          data-attr-title="button.tooltip_text"
                          data-attrif-disabled="!button.enabled"
                          data-event-click="toolbar_action(button.action, button.value)">
@@ -238,6 +247,7 @@
                  data-class-selected="button.selected"
                  data-attr-data-tooltip="button.tooltip_key"
                  data-attr-data-action="button.action_id"
+                 data-attr-data-shortcut="button.shortcut_text"
                  data-attr-title="button.tooltip_text"
                  data-attrif-disabled="!button.enabled"
                  data-event-click="toolbar_action(button.action, button.value)">
@@ -475,6 +485,7 @@
                                 data-class-selected="button.selected"
                                 data-attr-data-tooltip="button.tooltip_key"
                                 data-attr-data-action="button.action_id"
+                                data-attr-data-shortcut="button.shortcut_text"
                                 data-attr-title="button.tooltip_text"
                                 data-attrif-disabled="!button.enabled"
                                 data-event-click="toolbar_action(button.action, button.value)">
@@ -489,6 +500,7 @@
                                 data-class-selected="button.selected"
                                 data-attr-data-tooltip="button.tooltip_key"
                                 data-attr-data-action="button.action_id"
+                                data-attr-data-shortcut="button.shortcut_text"
                                 data-attr-title="button.tooltip_text"
                                 data-attrif-disabled="!button.enabled"
                                 data-event-click="toolbar_action(button.action, button.value)">

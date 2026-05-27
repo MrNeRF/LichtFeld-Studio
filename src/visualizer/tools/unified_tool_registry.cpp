@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "unified_tool_registry.hpp"
+#include "visualizer/app_store.hpp"
 #include <algorithm>
 #include <cassert>
 
@@ -108,6 +109,7 @@ namespace lfs::vis {
     void UnifiedToolRegistry::setActiveSubmode(const std::string& submode_id) {
         std::lock_guard lock(mutex_);
         active_submode_id_ = submode_id;
+        app_store().active_submode.set(active_submode_id_);
     }
 
     const std::string& UnifiedToolRegistry::getActiveSubmode() const {
@@ -118,6 +120,7 @@ namespace lfs::vis {
     void UnifiedToolRegistry::clearActiveSubmode() {
         std::lock_guard lock(mutex_);
         active_submode_id_.clear();
+        app_store().active_submode.set(std::string{});
     }
 
 } // namespace lfs::vis
