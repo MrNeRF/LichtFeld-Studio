@@ -45,6 +45,7 @@ def test_app_store_exposes_panel_reactive_signals():
     assert isinstance(AppStore.mesh2splat_state, StoreSignal)
     assert isinstance(AppStore.splat_simplify_state, StoreSignal)
     assert isinstance(AppStore.scripts_generation, StoreSignal)
+    assert isinstance(AppStore.language_generation, StoreSignal)
 
 
 def test_native_value_helper_does_not_read_fallback_signal_without_native_store(monkeypatch):

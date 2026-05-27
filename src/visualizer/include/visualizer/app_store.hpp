@@ -146,6 +146,7 @@ namespace lfs::vis {
             Mesh2SplatStateValue,
             SplatSimplifyStateValue,
             ScriptsGeneration,
+            LanguageGeneration,
         };
 
         AppStore();
@@ -180,11 +181,13 @@ namespace lfs::vis {
         lfs::core::reactive::Observable<TaskProgressState> mesh2splat_state;
         lfs::core::reactive::Observable<TaskProgressState> splat_simplify_state;
         lfs::core::reactive::Observable<std::uint64_t> scripts_generation;
+        lfs::core::reactive::Observable<std::uint64_t> language_generation;
 
     private:
         lfs::core::reactive::Store store_;
     };
 
     LFS_VIS_API AppStore& app_store();
+    LFS_VIS_API void publish_language_generation();
 
 } // namespace lfs::vis

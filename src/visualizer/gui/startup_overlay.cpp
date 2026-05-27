@@ -15,6 +15,7 @@
 #include "gui/string_keys.hpp"
 #include "internal/resource_paths.hpp"
 #include "theme/theme.hpp"
+#include "visualizer/app_store.hpp"
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
@@ -69,7 +70,8 @@ namespace lfs::vis::gui {
                 return;
 
             const auto& lang = available[idx];
-            loc.setLanguage(lang);
+            if (loc.setLanguage(lang))
+                lfs::vis::publish_language_generation();
             if (mgr_ && (lang == "ja" || lang == "ko" || lang == "zh"))
                 mgr_->ensureCjkFontsLoaded();
         }

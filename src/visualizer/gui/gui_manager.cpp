@@ -3441,10 +3441,12 @@ namespace lfs::vis::gui {
 
         if (!current_language.empty() && current_language != loc.getCurrentLanguage()) {
             const auto available = loc.getAvailableLanguages();
-            if (std::find(available.begin(), available.end(), current_language) != available.end())
+            if (std::find(available.begin(), available.end(), current_language) != available.end()) {
                 loc.setLanguage(current_language);
+            }
         }
 
+        lfs::vis::publish_language_generation();
         return true;
     }
 

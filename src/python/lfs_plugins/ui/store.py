@@ -136,6 +136,7 @@ class AppStore:
     mesh2splat_state = StoreSignal[dict[str, object]]("mesh2splat_state", {})
     splat_simplify_state = StoreSignal[dict[str, object]]("splat_simplify_state", {})
     scripts_generation = StoreSignal[int]("scripts_generation", 0)
+    language_generation = StoreSignal[int]("language_generation", 0)
 
 
 class _BatchContext:

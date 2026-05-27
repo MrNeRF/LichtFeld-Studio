@@ -44,11 +44,17 @@ namespace lfs::vis {
                                Field::SplatSimplifyStateValue,
                                "splat_simplify_state",
                                TaskProgressState{}),
-          scripts_generation(store_, Field::ScriptsGeneration, "scripts_generation", 0) {}
+          scripts_generation(store_, Field::ScriptsGeneration, "scripts_generation", 0),
+          language_generation(store_, Field::LanguageGeneration, "language_generation", 0) {}
 
     AppStore& app_store() {
         static AppStore instance;
         return instance;
+    }
+
+    void publish_language_generation() {
+        auto& signal = app_store().language_generation;
+        signal.set(signal.get() + 1);
     }
 
 } // namespace lfs::vis

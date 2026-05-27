@@ -37,6 +37,7 @@
 #include "python/ui_hooks.hpp"
 #include "rendering/render_constants.hpp"
 #include "visualizer/core/editor_context.hpp"
+#include "visualizer/app_store.hpp"
 #include "visualizer/gui/panel_registry.hpp"
 #include "visualizer/operation/undo_history.hpp"
 #include "visualizer/operator/operator_context.hpp"
@@ -5074,7 +5075,9 @@ namespace lfs::python {
         m.def(
             "set_language",
             [](const std::string& lang_code) {
-                lfs::event::LocalizationManager::getInstance().setLanguage(lang_code);
+                if (lfs::event::LocalizationManager::getInstance().setLanguage(lang_code)) {
+                    lfs::vis::publish_language_generation();
+                }
             },
             nb::arg("lang_code"), "Set language by code (e.g., 'en', 'de')");
 
