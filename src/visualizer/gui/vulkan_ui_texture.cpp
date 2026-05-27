@@ -7,6 +7,7 @@
 #include "config.h"
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "gui/rmlui/rmlui_vk_backend.hpp"
 #include "rendering/image_layout.hpp"
 #include "window/vulkan_context.hpp"
@@ -19,8 +20,10 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <format>
 #include <limits>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -135,6 +138,7 @@ namespace lfs::vis::gui {
         VkImage image = VK_NULL_HANDLE;
         VmaAllocation image_allocation = VK_NULL_HANDLE;
         VkImageView image_view = VK_NULL_HANDLE;
+        std::string image_vram_label;
         VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
         VkImageLayout image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
         VulkanImageBarrierTracker image_barriers;
@@ -398,12 +402,18 @@ namespace lfs::vis::gui {
 
             VmaAllocationCreateInfo allocation_info{};
             allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-            if (vmaCreateImage(allocator, &image_info, &allocation_info, &image, &image_allocation, nullptr) != VK_SUCCESS) {
+            VmaAllocationInfo created_allocation_info{};
+            if (vmaCreateImage(allocator, &image_info, &allocation_info, &image, &image_allocation, &created_allocation_info) != VK_SUCCESS) {
                 LOG_ERROR("Failed to create Vulkan UI texture image");
                 destroyImage();
                 return false;
             }
             vmaSetAllocationName(allocator, image_allocation, "Vulkan UI texture");
+            image_vram_label = std::format("cpu_upload_rgba8:{}x{}", new_width, new_height);
+            lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                "vulkan.ui_texture.image",
+                image_vram_label,
+                static_cast<std::size_t>(created_allocation_info.size));
 
             VkImageViewCreateInfo view_info{};
             view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -473,7 +483,11 @@ namespace lfs::vis::gui {
                 static_cast<std::uint32_t>(new_width),
                 static_cast<std::uint32_t>(new_height),
             };
-            if (!context->createExternalImage(extent, VK_FORMAT_R8G8B8A8_UNORM, interop_image) ||
+            if (!context->createExternalImage(extent,
+                                              VK_FORMAT_R8G8B8A8_UNORM,
+                                              interop_image,
+                                              "vulkan.ui_texture.interop_image",
+                                              "rgba8") ||
                 !context->createExternalTimelineSemaphore(0, interop_semaphore)) {
                 LOG_WARN("Vulkan UI texture interop setup failed: {}", context->lastError());
                 destroyImage();
@@ -743,6 +757,12 @@ namespace lfs::vis::gui {
                     image_view = VK_NULL_HANDLE;
                 }
                 if (image != VK_NULL_HANDLE) {
+                    if (!image_vram_label.empty()) {
+                        lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                            "vulkan.ui_texture.image",
+                            image_vram_label,
+                            0);
+                    }
                     image_barriers.forgetImage(image);
                     vmaDestroyImage(allocator, image, image_allocation);
                     image = VK_NULL_HANDLE;
@@ -750,6 +770,7 @@ namespace lfs::vis::gui {
                 }
             }
             image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            image_vram_label.clear();
             mode = Mode::Uninitialized;
             width = 0;
             height = 0;

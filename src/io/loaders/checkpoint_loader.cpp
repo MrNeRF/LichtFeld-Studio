@@ -72,7 +72,7 @@ namespace lfs::io {
         }
 
         LOG_INFO("Loading checkpoint file: {}", lfs::core::path_to_utf8(path));
-        auto splat_result = lfs::core::load_checkpoint_splat_data(path);
+        auto splat_result = lfs::core::load_checkpoint_splat_data(path, options.splat_tensor_allocator);
         if (!splat_result) {
             return make_error(ErrorCode::CORRUPTED_DATA,
                               std::format("Failed to load checkpoint: {}", splat_result.error()), path);

@@ -777,7 +777,7 @@ namespace lfs::core {
 
     void SplatData::clear_deleted() {
         if (_deleted.is_valid()) {
-            _deleted.zero_();
+            _deleted = Tensor();
         }
     }
 
@@ -919,7 +919,7 @@ namespace lfs::core {
         LOG_DEBUG("Serialized SplatData: {} Gaussians, SH {}/{}", size(), _active_sh_degree, _max_sh_degree);
     }
 
-    void SplatData::deserialize(std::istream& is) {
+    void SplatData::deserialize(std::istream& is, SplatTensorAllocator tensor_allocator) {
         uint32_t magic = 0, version = 0;
         is.read(reinterpret_cast<char*>(&magic), sizeof(magic));
         is.read(reinterpret_cast<char*>(&version), sizeof(version));
@@ -940,11 +940,28 @@ namespace lfs::core {
         Tensor means, sh0, scaling, rotation, opacity;
         is >> means >> sh0 >> scaling >> rotation >> opacity;
 
-        _means = std::move(means).cuda();
-        _sh0 = std::move(sh0).cuda();
-        _scaling = std::move(scaling).cuda();
-        _rotation = std::move(rotation).cuda();
-        _opacity = std::move(opacity).cuda();
+        const auto copy_param = [&](Tensor source, std::string_view name) {
+            Tensor source_cuda = std::move(source).cuda();
+            if (!source_cuda.is_contiguous()) {
+                source_cuda = source_cuda.contiguous();
+            }
+            if (!tensor_allocator) {
+                source_cuda.set_name(std::string{name});
+                return source_cuda;
+            }
+            Tensor dst = allocate_param_tensor(source_cuda.shape(),
+                                               source_cuda.capacity(),
+                                               tensor_allocator,
+                                               name);
+            dst.copy_from(source_cuda);
+            return dst;
+        };
+
+        _means = copy_param(std::move(means), "SplatData.means");
+        _sh0 = copy_param(std::move(sh0), "SplatData.sh0");
+        _scaling = copy_param(std::move(scaling), "SplatData.scaling");
+        _rotation = copy_param(std::move(rotation), "SplatData.rotation");
+        _opacity = copy_param(std::move(opacity), "SplatData.opacity");
         _max_sh_degree = std::clamp(max_sh, 0, MAX_SUPPORTED_SH_DEGREE);
         _active_sh_degree = std::clamp(active_sh, 0, _max_sh_degree);
         _scene_scale = scene_scale;
@@ -953,12 +970,31 @@ namespace lfs::core {
             Tensor shN_canon;
             is >> shN_canon;
             // shN_canon is canonical [N, K, 3]; reorder into swizzled storage.
-            shN_set_from_canonical(shN_canon.cuda(), static_cast<size_t>(_means.capacity()));
+            const size_t n = static_cast<size_t>(size());
+            const size_t cap = std::max<size_t>(_means.capacity(), n);
+            const auto layout_rest = static_cast<uint32_t>(max_sh_coeffs_rest());
+            _shN = allocate_swizzled_shN(n,
+                                         cap,
+                                         layout_rest,
+                                         tensor_allocator,
+                                         "SplatData.shN");
+            const auto src_rest = std::min(canonical_rest_coefficients(shN_canon), layout_rest);
+            if (shN_canon.is_valid() && shN_canon.numel() > 0 && n > 0 && src_rest > 0 && layout_rest > 0) {
+                reorder_canonical_into_swizzled(shN_canon.cuda(),
+                                                _shN.ptr<float>(),
+                                                n,
+                                                src_rest,
+                                                layout_rest);
+            }
         } else {
             // Allocate an empty swizzled tensor so _shN is valid even at SH degree 0.
             const size_t n = static_cast<size_t>(size());
             const size_t cap = std::max<size_t>(_means.capacity(), n);
-            _shN = allocate_swizzled_shN(n, cap, static_cast<uint32_t>(max_sh_coeffs_rest()));
+            _shN = allocate_swizzled_shN(n,
+                                         cap,
+                                         static_cast<uint32_t>(max_sh_coeffs_rest()),
+                                         tensor_allocator,
+                                         "SplatData.shN");
         }
 
         uint8_t has_deleted = 0;
@@ -966,7 +1002,12 @@ namespace lfs::core {
         if (has_deleted) {
             Tensor deleted;
             is >> deleted;
-            _deleted = std::move(deleted).cuda();
+            Tensor deleted_cuda = std::move(deleted).cuda();
+            if (deleted_cuda.sum_scalar() != 0.0f) {
+                _deleted = std::move(deleted_cuda);
+            } else {
+                _deleted = Tensor{};
+            }
         }
 
         uint8_t has_densification = 0;

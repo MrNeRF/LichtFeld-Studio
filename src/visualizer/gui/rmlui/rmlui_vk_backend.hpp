@@ -158,6 +158,9 @@ private:
         VkSampler m_p_vk_sampler = VK_NULL_HANDLE;
         VkDescriptorSet m_p_vk_descriptor_set = VK_NULL_HANDLE;
         VmaAllocation m_p_vma_allocation = VK_NULL_HANDLE;
+        std::string m_vram_scope;
+        std::string m_vram_label;
+        VkDeviceSize m_vram_allocation_size = 0;
     };
 
     struct async_preview_result_t {

@@ -55,6 +55,7 @@ namespace lfs::training {
         lfs::core::param::TrainingParameters& params,
         BilateralGrid* bilateral_grid = nullptr,
         PPISP* ppisp = nullptr,
-        PPISPControllerPool* ppisp_controller_pool = nullptr);
+        PPISPControllerPool* ppisp_controller_pool = nullptr,
+        lfs::core::SplatTensorAllocator tensor_allocator = {});
 
 } // namespace lfs::training

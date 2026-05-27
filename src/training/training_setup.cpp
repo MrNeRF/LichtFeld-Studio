@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "training_setup.hpp"
+#include "core/cuda/sh_layout.cuh"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
@@ -13,6 +14,7 @@
 #include "core/splat_data_transform.hpp"
 #include "dataset.hpp"
 #include "io/loader.hpp"
+#include <algorithm>
 #include <format>
 #include <memory>
 #include <variant>
@@ -141,7 +143,131 @@ namespace lfs::training {
                      model.size());
             return {};
         }
+
+        [[nodiscard]] bool isVulkanExternalTensorReady(const lfs::core::Tensor& tensor,
+                                                       const size_t required_capacity) {
+            if (!tensor.is_valid() || tensor.numel() == 0) {
+                return required_capacity == 0;
+            }
+            return tensor.is_external_storage() &&
+                   tensor.external_storage_kind() == "vulkan_external_buffer" &&
+                   tensor.capacity() >= required_capacity;
+        }
+
+        std::expected<void, std::string> migrateTrainingModelToAllocatorImpl(
+            const lfs::core::param::TrainingParameters& params,
+            lfs::core::SplatData& model,
+            const lfs::core::SplatTensorAllocator& tensor_allocator) {
+            if (!tensor_allocator) {
+                return {};
+            }
+
+            const size_t n = static_cast<size_t>(model.size());
+            const size_t target_capacity =
+                params.optimization.max_cap > 0
+                    ? std::max<size_t>(static_cast<size_t>(params.optimization.max_cap), n)
+                    : std::max<size_t>(model.means_raw().capacity(), n);
+            const auto layout_rest = static_cast<std::uint32_t>(model.max_sh_coeffs_rest());
+            const size_t target_shN_capacity =
+                layout_rest > 0 ? lfs::core::sh_swizzled_float_count(target_capacity, layout_rest) : 0;
+
+            const bool already_allocator_backed =
+                isVulkanExternalTensorReady(model.means_raw(), target_capacity) &&
+                isVulkanExternalTensorReady(model.sh0_raw(), target_capacity) &&
+                isVulkanExternalTensorReady(model.scaling_raw(), target_capacity) &&
+                isVulkanExternalTensorReady(model.rotation_raw(), target_capacity) &&
+                isVulkanExternalTensorReady(model.opacity_raw(), target_capacity) &&
+                (target_shN_capacity == 0 ||
+                 isVulkanExternalTensorReady(model.shN_raw(), target_shN_capacity));
+            if (already_allocator_backed) {
+                return {};
+            }
+
+            try {
+                const int max_sh = model.get_max_sh_degree();
+                const int active_sh = model.get_active_sh_degree();
+                const float scene_scale = model.get_scene_scale();
+                lfs::core::Tensor deleted = model.has_deleted_mask() ? model.deleted() : lfs::core::Tensor{};
+                lfs::core::Tensor densification_info = model._densification_info;
+
+                const auto copy_param =
+                    [&](const lfs::core::Tensor& source,
+                        const lfs::core::TensorShape& shape,
+                        const size_t capacity,
+                        const std::string_view name) -> lfs::core::Tensor {
+                    lfs::core::Tensor source_cuda = source.device() == lfs::core::Device::CUDA
+                                                        ? source
+                                                        : source.cuda();
+                    if (!source_cuda.is_contiguous()) {
+                        source_cuda = source_cuda.contiguous();
+                    }
+                    lfs::core::Tensor dst = tensor_allocator(
+                        shape,
+                        capacity,
+                        source_cuda.dtype(),
+                        name);
+                    dst.set_name(std::string{name});
+                    dst.copy_from(source_cuda);
+                    return dst;
+                };
+
+                lfs::core::Tensor means = copy_param(
+                    model.means_raw(), model.means_raw().shape(), target_capacity, "SplatData.means");
+                lfs::core::Tensor sh0 = copy_param(
+                    model.sh0_raw(), model.sh0_raw().shape(), target_capacity, "SplatData.sh0");
+                lfs::core::Tensor scaling = copy_param(
+                    model.scaling_raw(), model.scaling_raw().shape(), target_capacity, "SplatData.scaling");
+                lfs::core::Tensor rotation = copy_param(
+                    model.rotation_raw(), model.rotation_raw().shape(), target_capacity, "SplatData.rotation");
+                lfs::core::Tensor opacity = copy_param(
+                    model.opacity_raw(), model.opacity_raw().shape(), target_capacity, "SplatData.opacity");
+
+                lfs::core::Tensor shN;
+                if (target_shN_capacity > 0 && model.shN_raw().is_valid() && model.shN_raw().numel() > 0) {
+                    shN = copy_param(
+                        model.shN_raw(), model.shN_raw().shape(), target_shN_capacity, "SplatData.shN");
+                }
+
+                lfs::core::SplatData migrated(max_sh,
+                                              std::move(means),
+                                              std::move(sh0),
+                                              std::move(shN),
+                                              std::move(scaling),
+                                              std::move(rotation),
+                                              std::move(opacity),
+                                              scene_scale,
+                                              lfs::core::SplatData::ShNLayout::Swizzled);
+                migrated.set_active_sh_degree(active_sh);
+                if (deleted.is_valid()) {
+                    migrated.deleted() = std::move(deleted);
+                }
+                if (densification_info.is_valid()) {
+                    migrated._densification_info = std::move(densification_info);
+                }
+                model = std::move(migrated);
+                lfs::core::Tensor::trim_memory_pool();
+
+                LOG_INFO("Migrated training SplatData tensors to Vulkan-external storage "
+                         "(gaussians={}, capacity={}, shN_capacity_floats={})",
+                         n,
+                         target_capacity,
+                         target_shN_capacity);
+            } catch (const std::exception& e) {
+                return std::unexpected(std::format(
+                    "Failed to migrate training SplatData to Vulkan-external storage: {}",
+                    e.what()));
+            }
+
+            return {};
+        }
     } // namespace
+
+    std::expected<void, std::string> migrateTrainingModelToAllocator(
+        const lfs::core::param::TrainingParameters& params,
+        lfs::core::SplatData& model,
+        const lfs::core::SplatTensorAllocator& tensor_allocator) {
+        return migrateTrainingModelToAllocatorImpl(params, model, tensor_allocator);
+    }
 
     std::expected<void, std::string> loadTrainingDataIntoScene(
         const lfs::core::param::TrainingParameters& params,
@@ -336,6 +462,9 @@ namespace lfs::training {
             if (auto result = appendAddedSplats(params, *model); !result) {
                 return result;
             }
+            if (auto result = migrateTrainingModelToAllocator(params, *model, tensor_allocator); !result) {
+                return result;
+            }
             scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
             return {};
         }
@@ -449,7 +578,7 @@ namespace lfs::training {
         }
 
         auto splat_result = lfs::core::init_model_from_pointcloud(
-            params, scene_center, point_cloud_to_use, max_cap, std::move(tensor_allocator));
+            params, scene_center, point_cloud_to_use, max_cap, tensor_allocator);
 
         if (!splat_result) {
             return std::unexpected(std::format("Failed to initialize model: {}", splat_result.error()));
@@ -470,6 +599,9 @@ namespace lfs::training {
         auto model = std::make_unique<lfs::core::SplatData>(std::move(*splat_result));
         applyTrainingSHDegree(*model, params.optimization.sh_degree);
         if (auto result = appendAddedSplats(params, *model); !result) {
+            return result;
+        }
+        if (auto result = migrateTrainingModelToAllocator(params, *model, tensor_allocator); !result) {
             return result;
         }
         LOG_INFO("Created training model with {} gaussians", model->size());

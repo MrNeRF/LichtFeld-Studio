@@ -6,13 +6,16 @@
 
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "internal/resource_paths.hpp"
 #include "window/vulkan_context.hpp"
 
 #include <OpenImageIO/imageio.h>
 #include <array>
 #include <cstring>
+#include <format>
 #include <limits>
+#include <string>
 #include <vector>
 #include <vk_mem_alloc.h>
 
@@ -85,6 +88,7 @@ namespace lfs::vis {
         VkImage image = VK_NULL_HANDLE;
         VmaAllocation image_alloc = VK_NULL_HANDLE;
         VkImageView image_view = VK_NULL_HANDLE;
+        std::string image_vram_label;
         std::filesystem::path loaded_path;
         bool load_failed_for_path = false;
 
@@ -150,10 +154,17 @@ namespace lfs::vis {
                 image_view = VK_NULL_HANDLE;
             }
             if (image != VK_NULL_HANDLE) {
+                if (!image_vram_label.empty()) {
+                    lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                        "vulkan.environment.image",
+                        image_vram_label,
+                        0);
+                }
                 vmaDestroyImage(allocator, image, image_alloc);
                 image = VK_NULL_HANDLE;
                 image_alloc = VK_NULL_HANDLE;
             }
+            image_vram_label.clear();
             loaded_path.clear();
         }
 
@@ -430,9 +441,18 @@ namespace lfs::vis {
             img.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             VmaAllocationCreateInfo ai{};
             ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-            if (vmaCreateImage(allocator, &img, &ai, &image, &image_alloc, nullptr) != VK_SUCCESS) {
+            VmaAllocationInfo allocation_info{};
+            if (vmaCreateImage(allocator, &img, &ai, &image, &image_alloc, &allocation_info) != VK_SUCCESS) {
                 return false;
             }
+            image_vram_label = std::format("env:{}:{}x{}",
+                                           lfs::core::path_to_utf8(path),
+                                           w,
+                                           h);
+            lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                "vulkan.environment.image",
+                image_vram_label,
+                static_cast<std::size_t>(allocation_info.size));
 
             const VkDeviceSize bytes = static_cast<VkDeviceSize>(rgba.size()) * sizeof(std::uint16_t);
             VkBuffer staging = VK_NULL_HANDLE;

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <atomic>
+#include <algorithm>
 #include <gtest/gtest.h>
 #include <memory>
 #include <thread>
@@ -244,6 +245,61 @@ namespace lfs::python {
         const auto* model = dummy_scene_.getTrainingModel();
         ASSERT_NE(model, nullptr);
         expect_sh_degree(*model, 1, 0, count);
+    }
+
+    TEST_F(SceneValidityTest, InitializeTrainingModelMigratesExistingModelIntoProvidedAllocator) {
+        constexpr size_t count = 4;
+        constexpr size_t capacity = 16;
+        dummy_scene_.addNode("Model", make_test_splat(count, 1));
+        dummy_scene_.setTrainingModelNode("Model");
+
+        struct AllocCall {
+            std::string name;
+            size_t capacity;
+        };
+        auto calls = std::make_shared<std::vector<AllocCall>>();
+        core::SplatTensorAllocator allocator =
+            [calls](core::TensorShape shape,
+                    const size_t requested_capacity,
+                    const core::DataType dtype,
+                    const std::string_view name) {
+                EXPECT_EQ(dtype, core::DataType::Float32);
+                calls->push_back({std::string{name}, requested_capacity});
+                auto tensor = core::Tensor::zeros_direct(std::move(shape), requested_capacity, core::Device::CUDA);
+                tensor.set_name(std::string{name});
+                return tensor;
+            };
+
+        core::param::TrainingParameters params;
+        params.optimization.sh_degree = 1;
+        params.optimization.max_cap = static_cast<int>(capacity);
+
+        const auto result = lfs::training::initializeTrainingModel(params, dummy_scene_, allocator);
+
+        ASSERT_TRUE(result.has_value()) << result.error();
+        const auto* model = dummy_scene_.getTrainingModel();
+        ASSERT_NE(model, nullptr);
+        EXPECT_EQ(model->means_raw().capacity(), capacity);
+        EXPECT_EQ(model->sh0_raw().capacity(), capacity);
+        EXPECT_EQ(model->scaling_raw().capacity(), capacity);
+        EXPECT_EQ(model->rotation_raw().capacity(), capacity);
+        EXPECT_EQ(model->opacity_raw().capacity(), capacity);
+        EXPECT_EQ(model->shN_raw().capacity(),
+                  core::sh_swizzled_float_count(capacity, core::sh_rest_coefficients_for_degree(1)));
+
+        const auto capacity_for = [&](const std::string_view name) -> size_t {
+            const auto it = std::find_if(calls->begin(), calls->end(), [&](const AllocCall& call) {
+                return call.name == name;
+            });
+            return it == calls->end() ? 0 : it->capacity;
+        };
+        EXPECT_EQ(capacity_for("SplatData.means"), capacity);
+        EXPECT_EQ(capacity_for("SplatData.sh0"), capacity);
+        EXPECT_EQ(capacity_for("SplatData.scaling"), capacity);
+        EXPECT_EQ(capacity_for("SplatData.rotation"), capacity);
+        EXPECT_EQ(capacity_for("SplatData.opacity"), capacity);
+        EXPECT_EQ(capacity_for("SplatData.shN"),
+                  core::sh_swizzled_float_count(capacity, core::sh_rest_coefficients_for_degree(1)));
     }
 
     TEST_F(SceneValidityTest, SceneManagerEmptyStateKeepsApplicationSceneContext) {

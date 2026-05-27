@@ -6,6 +6,7 @@
 
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "vulkan_result.hpp"
 
 #include <algorithm>
@@ -250,6 +251,65 @@ namespace lfs::vis {
             case VK_COLOR_SPACE_DISPLAY_NATIVE_AMD: return "VK_COLOR_SPACE_DISPLAY_NATIVE_AMD";
             default: return "VK_COLOR_SPACE_UNKNOWN";
             }
+        }
+
+        [[nodiscard]] std::size_t estimateFormatBytesPerPixel(const VkFormat format) {
+            switch (format) {
+            case VK_FORMAT_R8_UNORM:
+            case VK_FORMAT_R8_SNORM:
+            case VK_FORMAT_R8_UINT:
+            case VK_FORMAT_R8_SINT:
+                return 1;
+            case VK_FORMAT_R8G8_UNORM:
+            case VK_FORMAT_R8G8_SNORM:
+            case VK_FORMAT_R8G8_UINT:
+            case VK_FORMAT_R8G8_SINT:
+            case VK_FORMAT_R16_UNORM:
+            case VK_FORMAT_R16_SNORM:
+            case VK_FORMAT_R16_UINT:
+            case VK_FORMAT_R16_SINT:
+            case VK_FORMAT_R16_SFLOAT:
+                return 2;
+            case VK_FORMAT_B8G8R8A8_UNORM:
+            case VK_FORMAT_B8G8R8A8_SRGB:
+            case VK_FORMAT_R8G8B8A8_UNORM:
+            case VK_FORMAT_R8G8B8A8_SRGB:
+            case VK_FORMAT_A8B8G8R8_UNORM_PACK32:
+            case VK_FORMAT_A8B8G8R8_SRGB_PACK32:
+            case VK_FORMAT_R16G16_UNORM:
+            case VK_FORMAT_R16G16_SNORM:
+            case VK_FORMAT_R16G16_UINT:
+            case VK_FORMAT_R16G16_SINT:
+            case VK_FORMAT_R16G16_SFLOAT:
+            case VK_FORMAT_R32_UINT:
+            case VK_FORMAT_R32_SINT:
+            case VK_FORMAT_R32_SFLOAT:
+            case VK_FORMAT_D32_SFLOAT:
+            case VK_FORMAT_D24_UNORM_S8_UINT:
+                return 4;
+            case VK_FORMAT_R16G16B16A16_UNORM:
+            case VK_FORMAT_R16G16B16A16_SNORM:
+            case VK_FORMAT_R16G16B16A16_UINT:
+            case VK_FORMAT_R16G16B16A16_SINT:
+            case VK_FORMAT_R16G16B16A16_SFLOAT:
+            case VK_FORMAT_R32G32_UINT:
+            case VK_FORMAT_R32G32_SINT:
+            case VK_FORMAT_R32G32_SFLOAT:
+            case VK_FORMAT_D32_SFLOAT_S8_UINT:
+                return 8;
+            case VK_FORMAT_R32G32B32A32_UINT:
+            case VK_FORMAT_R32G32B32A32_SINT:
+            case VK_FORMAT_R32G32B32A32_SFLOAT:
+                return 16;
+            default:
+                return 0;
+            }
+        }
+
+        void recordCurrentVulkanBytes(std::string_view scope,
+                                      std::string_view label,
+                                      const std::size_t bytes) {
+            lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(scope, label, bytes);
         }
     } // namespace
 
@@ -1319,12 +1379,31 @@ namespace lfs::vis {
         vmaGetHeapBudgets(allocator_, budgets.data());
 
         std::uint64_t total_usage = 0;
+        std::uint64_t total_block_bytes = 0;
+        std::uint64_t total_allocation_bytes = 0;
         for (std::uint32_t i = 0; i < mem_props.memoryHeapCount; ++i) {
             if (mem_props.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
                 total_usage += budgets[i].usage;
+                total_block_bytes += budgets[i].statistics.blockBytes;
+                total_allocation_bytes += budgets[i].statistics.allocationBytes;
             }
         }
+        auto& profiler = lfs::diagnostics::VramProfiler::instance();
+        profiler.setGauge("vulkan.vma.budget_usage", static_cast<double>(total_usage));
+        profiler.setGauge("vulkan.vma.block_bytes", static_cast<double>(total_block_bytes));
+        profiler.setGauge("vulkan.vma.allocation_bytes", static_cast<double>(total_allocation_bytes));
+        const std::uint64_t block_free =
+            total_block_bytes > total_allocation_bytes ? total_block_bytes - total_allocation_bytes : 0;
+        recordCurrentVulkanBytes("vulkan.vma", "allocator_free_in_blocks", static_cast<std::size_t>(block_free));
         return static_cast<std::size_t>(total_usage);
+    }
+
+    std::string VulkanContext::makeAllocationDiagnosticLabel(const std::string_view label) {
+        const std::uint64_t serial = ++allocation_diagnostic_serial_;
+        if (label.empty()) {
+            return std::format("allocation#{}", serial);
+        }
+        return std::format("{}#{}", label, serial);
     }
 
     VkSurfaceFormatKHR VulkanContext::chooseSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& formats) const {
@@ -1442,7 +1521,11 @@ namespace lfs::vis {
 #endif
     }
 
-    bool VulkanContext::createExternalImage(const VkExtent2D extent, const VkFormat format, ExternalImage& out) {
+    bool VulkanContext::createExternalImage(const VkExtent2D extent,
+                                            const VkFormat format,
+                                            ExternalImage& out,
+                                            const std::string_view diagnostic_scope,
+                                            const std::string_view diagnostic_label) {
         out = {};
 
         if (!device_ || !physical_device_) {
@@ -1492,6 +1575,8 @@ namespace lfs::vis {
 
         out.extent = extent;
         out.format = format;
+        out.diagnostic_scope = diagnostic_scope.empty() ? "vulkan.external.image" : std::string(diagnostic_scope);
+        out.diagnostic_label = makeAllocationDiagnosticLabel(diagnostic_label);
 
         VkExternalMemoryImageCreateInfo external_image_info{};
         external_image_info.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO;
@@ -1568,6 +1653,7 @@ namespace lfs::vis {
             return fail(std::format("vkAllocateMemory(external image) failed: {}", vkResultToString(result)));
         }
         setDebugObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, out.memory, "External image memory");
+        recordCurrentVulkanBytes(out.diagnostic_scope, out.diagnostic_label, static_cast<std::size_t>(out.allocation_size));
 
         result = vkBindImageMemory(device_, out.image, out.memory, 0);
         if (result != VK_SUCCESS) {
@@ -1628,6 +1714,9 @@ namespace lfs::vis {
     }
 
     void VulkanContext::destroyExternalImage(ExternalImage& image) {
+        if (!image.diagnostic_scope.empty() && !image.diagnostic_label.empty()) {
+            recordCurrentVulkanBytes(image.diagnostic_scope, image.diagnostic_label, 0);
+        }
         if (device_) {
             if (image.view != VK_NULL_HANDLE) {
                 vkDestroyImageView(device_, image.view, nullptr);
@@ -1651,7 +1740,9 @@ namespace lfs::vis {
 
     bool VulkanContext::createExternalBuffer(const VkDeviceSize size,
                                              const VkBufferUsageFlags usage,
-                                             ExternalBuffer& out) {
+                                             ExternalBuffer& out,
+                                             const std::string_view diagnostic_scope,
+                                             const std::string_view diagnostic_label) {
         out = {};
 
         if (!device_ || !physical_device_) {
@@ -1700,6 +1791,8 @@ namespace lfs::vis {
         vkGetBufferMemoryRequirements(device_, out.buffer, &memory_requirements);
         out.size = size;
         out.allocation_size = memory_requirements.size;
+        out.diagnostic_scope = diagnostic_scope.empty() ? "vulkan.external.buffer" : std::string(diagnostic_scope);
+        out.diagnostic_label = makeAllocationDiagnosticLabel(diagnostic_label);
 
         VkExportMemoryAllocateInfo export_info{};
         export_info.sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO;
@@ -1722,6 +1815,7 @@ namespace lfs::vis {
             return fail(std::format("vkAllocateMemory(external buffer) failed: {}", vkResultToString(result)));
         }
         setDebugObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, out.memory, "External buffer memory");
+        recordCurrentVulkanBytes(out.diagnostic_scope, out.diagnostic_label, static_cast<std::size_t>(out.allocation_size));
 
         result = vkBindBufferMemory(device_, out.buffer, out.memory, 0);
         if (result != VK_SUCCESS) {
@@ -1768,7 +1862,9 @@ namespace lfs::vis {
     bool VulkanContext::importExternalBuffer(ExternalNativeHandle handle,
                                              const VkDeviceSize size,
                                              const VkBufferUsageFlags usage,
-                                             ExternalBuffer& out) {
+                                             ExternalBuffer& out,
+                                             const std::string_view diagnostic_scope,
+                                             const std::string_view diagnostic_label) {
         out = {};
 
         if (!device_ || !physical_device_) {
@@ -1817,6 +1913,8 @@ namespace lfs::vis {
         vkGetBufferMemoryRequirements(device_, out.buffer, &memory_requirements);
         out.size = size;
         out.allocation_size = memory_requirements.size;
+        out.diagnostic_scope = diagnostic_scope.empty() ? "vulkan.external.imported_buffer" : std::string(diagnostic_scope);
+        out.diagnostic_label = makeAllocationDiagnosticLabel(diagnostic_label);
 
 #ifdef _WIN32
         VkImportMemoryWin32HandleInfoKHR import_info{};
@@ -1879,6 +1977,9 @@ namespace lfs::vis {
     }
 
     void VulkanContext::destroyExternalBuffer(ExternalBuffer& buffer) {
+        if (!buffer.diagnostic_scope.empty() && !buffer.diagnostic_label.empty()) {
+            recordCurrentVulkanBytes(buffer.diagnostic_scope, buffer.diagnostic_label, 0);
+        }
         if (device_) {
             if (buffer.buffer != VK_NULL_HANDLE) {
                 vkDestroyBuffer(device_, buffer.buffer, nullptr);
@@ -2223,6 +2324,14 @@ namespace lfs::vis {
         vkGetSwapchainImagesKHR(device_, swapchain_, &image_count, nullptr);
         swapchain_images_.resize(image_count);
         vkGetSwapchainImagesKHR(device_, swapchain_, &image_count, swapchain_images_.data());
+        const std::size_t bytes_per_pixel = estimateFormatBytesPerPixel(surface_format.format);
+        swapchain_estimated_bytes_ = bytes_per_pixel > 0
+                                         ? static_cast<std::size_t>(extent.width) *
+                                               static_cast<std::size_t>(extent.height) *
+                                               static_cast<std::size_t>(image_count) *
+                                               bytes_per_pixel
+                                         : 0;
+        recordCurrentVulkanBytes("vulkan.swapchain", "driver_owned_images_estimate", swapchain_estimated_bytes_);
         swapchain_images_in_flight_.assign(image_count, VK_NULL_HANDLE);
         swapchain_format_ = surface_format.format;
         swapchain_color_space_ = surface_format.colorSpace;
@@ -2335,7 +2444,11 @@ namespace lfs::vis {
 
         depth_stencil_resources_.assign(swapchain_images_.size(), {});
         const auto destroy_created = [&]() {
-            for (DepthStencilResource& resource : depth_stencil_resources_) {
+            for (std::size_t i = 0; i < depth_stencil_resources_.size(); ++i) {
+                DepthStencilResource& resource = depth_stencil_resources_[i];
+                recordCurrentVulkanBytes("vulkan.swapchain.depth_stencil",
+                                         std::format("image#{}", i),
+                                         0);
                 if (resource.view != VK_NULL_HANDLE) {
                     vkDestroyImageView(device_, resource.view, nullptr);
                     resource.view = VK_NULL_HANDLE;
@@ -2354,12 +2467,13 @@ namespace lfs::vis {
 
         for (std::size_t i = 0; i < depth_stencil_resources_.size(); ++i) {
             DepthStencilResource& resource = depth_stencil_resources_[i];
+            VmaAllocationInfo created_allocation_info{};
             VkResult result = vmaCreateImage(allocator_,
                                              &image_info,
                                              &allocation_info,
                                              &resource.image,
                                              &resource.allocation,
-                                             nullptr);
+                                             &created_allocation_info);
             if (result != VK_SUCCESS) {
                 destroy_created();
                 return fail(std::format("vmaCreateImage(depth/stencil {}) failed: {}", i, vkResultToString(result)));
@@ -2367,6 +2481,9 @@ namespace lfs::vis {
             setDebugObjectName(VK_OBJECT_TYPE_IMAGE, resource.image, std::format("Depth/stencil image {}", i));
             const std::string allocation_name = std::format("Depth/stencil allocation {}", i);
             vmaSetAllocationName(allocator_, resource.allocation, allocation_name.c_str());
+            recordCurrentVulkanBytes("vulkan.swapchain.depth_stencil",
+                                     std::format("image#{}", i),
+                                     static_cast<std::size_t>(created_allocation_info.size));
 
             view_info.image = resource.image;
             result = vkCreateImageView(device_, &view_info, nullptr, &resource.view);
@@ -2602,6 +2719,10 @@ namespace lfs::vis {
         }
 
         for (DepthStencilResource& resource : depth_stencil_resources_) {
+            const auto resource_index = static_cast<std::size_t>(&resource - depth_stencil_resources_.data());
+            recordCurrentVulkanBytes("vulkan.swapchain.depth_stencil",
+                                     std::format("image#{}", resource_index),
+                                     0);
             if (resource.view != VK_NULL_HANDLE) {
                 vkDestroyImageView(device_, resource.view, nullptr);
                 resource.view = VK_NULL_HANDLE;
@@ -2636,6 +2757,10 @@ namespace lfs::vis {
             swapchain_ = VK_NULL_HANDLE;
         }
         swapchain_image_usage_ = 0;
+        if (swapchain_estimated_bytes_ > 0) {
+            recordCurrentVulkanBytes("vulkan.swapchain", "driver_owned_images_estimate", 0);
+            swapchain_estimated_bytes_ = 0;
+        }
     }
 
     bool VulkanContext::waitForFrameFences() {

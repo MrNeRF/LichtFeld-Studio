@@ -252,6 +252,31 @@ namespace lfs::vis {
         }
 
         if (trainer_->isInitialized()) {
+            const auto& params = trainer_->getParams();
+            auto tensor_allocator = makeVulkanTrainingTensorAllocator(viewer_);
+            if (scene_ && tensor_allocator) {
+                trainer_->setSplatTensorAllocator(tensor_allocator);
+                if (auto* model = scene_->getTrainingModel()) {
+                    if (auto result = lfs::training::migrateTrainingModelToAllocator(
+                            params, *model, tensor_allocator);
+                        !result) {
+                        LOG_ERROR("Failed to migrate initialized training model: {}", result.error());
+                        last_error_ = result.error();
+                        state::TrainingCompleted{
+                            .iteration = getCurrentIteration(),
+                            .final_loss = 0.0f,
+                            .elapsed_seconds = 0.0f,
+                            .success = false,
+                            .user_stopped = false,
+                            .error = last_error_}
+                            .emit();
+                        if (!state_machine_.transitionToFinished(FinishReason::Error)) {
+                            LOG_WARN("Failed to transition to Finished(Error)");
+                        }
+                        return false;
+                    }
+                }
+            }
             LOG_DEBUG("Resuming from iteration {}", trainer_->get_current_iteration());
         } else {
             const auto& params = trainer_->getParams();
@@ -313,6 +338,7 @@ namespace lfs::vis {
                         LOG_INFO("Training model tensors will use Vulkan-external CUDA storage");
                     }
                 }
+                trainer_->setSplatTensorAllocator(tensor_allocator);
                 if (auto result = lfs::training::initializeTrainingModel(
                         params, *scene_, std::move(tensor_allocator));
                     !result) {

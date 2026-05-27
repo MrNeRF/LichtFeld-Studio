@@ -5,11 +5,14 @@
 #include "vulkan_depth_blit_pass.hpp"
 
 #include "core/logger.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "window/vulkan_context.hpp"
 
 #include <array>
 #include <cstring>
+#include <format>
 #include <limits>
+#include <string>
 #include <vk_mem_alloc.h>
 
 #include "viewport/depth_blit.frag.spv.h"
@@ -59,6 +62,7 @@ namespace lfs::vis {
         VkImageView image_view = VK_NULL_HANDLE;
         std::uint32_t image_width = 0;
         std::uint32_t image_height = 0;
+        std::string image_vram_label;
 
         const lfs::core::Tensor* uploaded_tensor = nullptr;
         std::uint64_t uploaded_generation = 0;
@@ -426,6 +430,12 @@ namespace lfs::vis {
                 image_view = VK_NULL_HANDLE;
             }
             if (image != VK_NULL_HANDLE) {
+                if (!image_vram_label.empty()) {
+                    lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                        "vulkan.depth_blit.image",
+                        image_vram_label,
+                        0);
+                }
                 vmaDestroyImage(allocator, image, image_alloc);
                 image = VK_NULL_HANDLE;
                 image_alloc = VK_NULL_HANDLE;
@@ -455,9 +465,15 @@ namespace lfs::vis {
             img.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             VmaAllocationCreateInfo ai{};
             ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-            if (vmaCreateImage(allocator, &img, &ai, &image, &image_alloc, nullptr) != VK_SUCCESS) {
+            VmaAllocationInfo allocation_info{};
+            if (vmaCreateImage(allocator, &img, &ai, &image, &image_alloc, &allocation_info) != VK_SUCCESS) {
                 return false;
             }
+            image_vram_label = std::format("r32_float:{}x{}", w, h);
+            lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                "vulkan.depth_blit.image",
+                image_vram_label,
+                static_cast<std::size_t>(allocation_info.size));
             VkImageViewCreateInfo vi{};
             vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
             vi.image = image;

@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <format>
+#include <limits>
 #include <string_view>
 #include <utility>
 
@@ -669,6 +670,9 @@ namespace lfs::vis::gui {
                 }
                 return io_group;
             }
+            if (scope.rfind("vulkan.", 0) == 0) {
+                return first_dot_segments(scope, 3);
+            }
             return top_segment(scope);
         };
 
@@ -693,24 +697,46 @@ namespace lfs::vis::gui {
             entries.push_back({k, v, false});
         }
 
-        // Synthetic entries: bytes we know about from system queries but that aren't
-        // covered by any allocator scope row.
+        // Synthetic entries come from process-wide APIs. They are useful for
+        // explaining the remaining gap, but can overlap with current-sample rows
+        // above, so never let them push the breakdown beyond the measured process
+        // total.
+        const auto synthetic_budget = [&]() -> std::size_t {
+            if (process_used == 0) {
+                return std::numeric_limits<std::size_t>::max();
+            }
+            return process_used > tracked_total ? process_used - tracked_total : 0;
+        };
+        const auto add_synthetic_row =
+            [&](std::string label, const std::size_t bytes, const bool unaccounted = false) {
+            const std::size_t capped = std::min(bytes, synthetic_budget());
+            if (capped == 0) {
+                return;
+            }
+            tracked_total += capped;
+            entries.push_back({std::move(label), capped, unaccounted});
+        };
+        const auto add_hidden_synthetic = [&](const std::size_t bytes) {
+            tracked_total += std::min(bytes, synthetic_budget());
+        };
+
+        // Synthetic entries: bytes we know about from system queries but that are
+        // not already covered by allocator scope rows.
         const auto& proc = state_.snapshot.process;
         if (proc.cuda_pool_valid && proc.cuda_pool_reserved > proc.cuda_pool_used) {
             const std::size_t pool_overhead = proc.cuda_pool_reserved - proc.cuda_pool_used;
-            tracked_total += pool_overhead;
-            entries.push_back({"cuda.pool.overhead", pool_overhead, false});
+            add_synthetic_row("cuda.pool.overhead", pool_overhead);
         }
+        std::size_t pool_untracked = 0;
         if (proc.cuda_pool_valid &&
             proc.cuda_pool_used > state_.snapshot.accounted_cuda_pool_live_bytes) {
             // CUDA's default pool has bytes actively checked out that our tensor
             // allocation map does not own. This can come from CUDA/nvImageCodec/CUB
             // internals using cudaMallocAsync, so keep it separate from opaque
-            // process.residual.
-            const std::size_t pool_untracked =
+            // process.residual. It may overlap with current-sample rows, so add it
+            // only after the more specific synthetic rows have consumed their budget.
+            pool_untracked =
                 proc.cuda_pool_used - state_.snapshot.accounted_cuda_pool_live_bytes;
-            tracked_total += pool_untracked;
-            entries.push_back({"cuda.pool.untracked_used", pool_untracked, false});
         }
         // Per-phase CUDA decomposition. ONLY actually-measured allocation deltas go in
         // the running sum. The cudaDeviceGetLimit values (stack/printf/malloc_heap) are
@@ -720,43 +746,57 @@ namespace lfs::vis::gui {
         const auto add_phase = [&](const char* label, std::size_t bytes) {
             if (bytes == 0)
                 return;
-            phase_total += bytes;
-            entries.push_back({label, bytes, false});
+            const std::size_t capped = std::min(bytes, synthetic_budget());
+            if (capped == 0) {
+                return;
+            }
+            phase_total += capped;
+            tracked_total += capped;
+            entries.push_back({label, capped, false});
         };
         add_phase("cuda.primary_context", proc.cuda_phase_primary_context);
         add_phase("cuda.default_pool", proc.cuda_phase_default_pool);
         add_phase("cuda.curand_load", proc.cuda_phase_curand_load);
-        tracked_total += phase_total;
 
         // Residual = (total context_baseline) − (sum of measured phases). Anything the
         // driver allocates that no probe surfaces lands here, so the picture closes.
         if (proc.cuda_context_baseline > phase_total) {
             const std::size_t residual = proc.cuda_context_baseline - phase_total;
-            tracked_total += residual;
-            entries.push_back({"cuda.context.residual", residual, false});
+            add_synthetic_row("cuda.context.residual", residual);
         }
         if (proc.cuda_warmup_bytes > 0) {
-            tracked_total += proc.cuda_warmup_bytes;
-            entries.push_back({"cuda.warmup_kernels", proc.cuda_warmup_bytes, false});
+            add_synthetic_row("cuda.warmup_kernels", proc.cuda_warmup_bytes);
         }
         if (proc.vulkan_vma_used > 0) {
-            // The Vulkan budget reports the *whole* process heap including:
-            //   1) buffers we already publish as vksplat.* rows
-            //   2) the CUDA-exportable splat block imported as a VkDeviceMemory —
-            //      same physical bytes accounted under the model.* rows via
-            //      record_splat_vram_breakdown.
-            // Subtract both so the synthetic "vulkan.driver" entry is residual only:
-            // swap-chain images, framebuffers, descriptor pools, command-buffer state.
+            // The Vulkan budget reports the *whole* process heap. Subtract the
+            // Vulkan-backed rows we have named explicitly, legacy vksplat.* rows,
+            // and the CUDA-exportable splat block imported as VkDeviceMemory. What
+            // remains is the driver-owned/unknown residual, not a catch-all for
+            // allocations we already labelled.
             const auto vksplat_it = groups.find("vksplat");
             const std::size_t vksplat_labeled =
                 vksplat_it != groups.end() ? vksplat_it->second : 0;
-            const std::size_t deductions = vksplat_labeled + proc.exportable_splat_bytes;
+            std::size_t vulkan_labeled = 0;
+            for (const auto& [label, bytes] : groups) {
+                if (label.rfind("vulkan.", 0) == 0) {
+                    vulkan_labeled += bytes;
+                }
+            }
+            const std::size_t deductions =
+                vksplat_labeled + vulkan_labeled + proc.exportable_splat_bytes;
             const std::size_t vulkan_residual =
                 proc.vulkan_vma_used > deductions ? proc.vulkan_vma_used - deductions : 0;
             if (vulkan_residual > 0) {
-                tracked_total += vulkan_residual;
-                entries.push_back({"vulkan.driver", vulkan_residual, false});
+                // Keep the totals closed, but do not show a synthetic Vulkan
+                // residual row. VMA budget usage includes driver/runtime heap
+                // that is not an application allocation and was repeatedly
+                // confused with actionable VRAM.
+                add_hidden_synthetic(vulkan_residual);
             }
+        }
+
+        if (pool_untracked > 0) {
+            add_synthetic_row("cuda.pool.untracked_used", pool_untracked);
         }
 
         const bool cuda_runtime_active =
@@ -767,8 +807,7 @@ namespace lfs::vis::gui {
             // backing memory, but no API tells us the exact owner, so keep the HUD
             // label explicit instead of pretending it is a proven CUDA phase.
             const std::size_t residual = process_used - tracked_total;
-            tracked_total += residual;
-            entries.push_back({"process.residual", residual, true});
+            add_synthetic_row("process.residual", residual, true);
         }
 
         std::sort(entries.begin(), entries.end(),

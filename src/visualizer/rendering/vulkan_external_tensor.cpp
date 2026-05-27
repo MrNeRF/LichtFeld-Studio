@@ -103,7 +103,11 @@ namespace lfs::vis {
         constexpr VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                              VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                              VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-        if (!context.createExternalBuffer(static_cast<VkDeviceSize>(bytes), usage, buffer)) {
+        if (!context.createExternalBuffer(static_cast<VkDeviceSize>(bytes),
+                                          usage,
+                                          buffer,
+                                          "vulkan.external_tensor.buffer",
+                                          debug_name ? debug_name : "unnamed")) {
             return std::unexpected(std::format("Vulkan external tensor '{}' allocation failed: {}",
                                                debug_name ? debug_name : "<unnamed>",
                                                context.lastError()));
@@ -183,7 +187,9 @@ namespace lfs::vis {
         if (!context.importExternalBuffer(storage.block->handle.native,
                                           static_cast<VkDeviceSize>(storage.block->size),
                                           usage,
-                                          imported)) {
+                                          imported,
+                                          "vulkan.external_tensor.alias",
+                                          "exportable_splat_block")) {
             return std::unexpected(std::format(
                 "Vulkan import of CUDA-exported splat block failed: {}",
                 context.lastError()));

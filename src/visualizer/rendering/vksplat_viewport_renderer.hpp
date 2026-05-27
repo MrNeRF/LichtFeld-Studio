@@ -192,6 +192,11 @@ namespace lfs::vis {
             std::array<std::size_t, kInputRegionCount> region_offset{};
             std::array<std::size_t, kInputRegionCount> region_bytes{};
         };
+        struct CudaOpacityCopySlot {
+            VulkanContext::ExternalBuffer buffer{};
+            lfs::rendering::CudaVulkanBufferInterop interop{};
+            std::size_t bytes = 0;
+        };
         struct CudaOverlaySlot {
             VulkanContext::ExternalBuffer buffer{};
             lfs::rendering::CudaVulkanBufferInterop interop{};
@@ -247,6 +252,7 @@ namespace lfs::vis {
         void plugRingInputs(std::size_t ring_slot, std::size_t num_splats, bool reset_cached_raster_state);
         void aliasSortScratchToInputSlot(std::size_t ring_slot);
         void releaseInputSlot(VulkanContext& context, std::size_t ring_slot);
+        void releaseOpacityCopySlot(VulkanContext& context, std::size_t ring_slot);
         void logVramBreakdownIfChanged(std::string_view reason);
 
         VulkanContext* context_ = nullptr;
@@ -285,6 +291,7 @@ namespace lfs::vis {
         // training tensors bypass this ring and bind their VkBuffers directly.
         static constexpr std::size_t kInputRingSize = kFrameRingSize;
         std::array<CudaInputSlot, kInputRingSize> cuda_inputs_{};
+        std::array<CudaOpacityCopySlot, kInputRingSize> cuda_opacity_copies_{};
         std::array<CudaOverlaySlot, kInputRingSize> cuda_overlays_{};
         CudaSelectionQuerySlot cuda_selection_query_{};
         std::array<ModelInputSnapshot, kInputRingSize> ring_uploaded_{};

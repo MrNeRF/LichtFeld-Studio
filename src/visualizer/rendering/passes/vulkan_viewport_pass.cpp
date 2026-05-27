@@ -6,6 +6,7 @@
 
 #include "config.h"
 #include "core/logger.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "vulkan_environment_pass.hpp"
 #include "vulkan_mesh_pass.hpp"
 #include "vulkan_scene_image_uploader.hpp"
@@ -32,6 +33,7 @@
 #include <functional>
 #include <limits>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace lfs::vis {
@@ -196,6 +198,7 @@ namespace lfs::vis {
         VkImage shape_overlay_dummy_depth_image = VK_NULL_HANDLE;
         VmaAllocation shape_overlay_dummy_depth_alloc = VK_NULL_HANDLE;
         VkImageView shape_overlay_dummy_depth_view = VK_NULL_HANDLE;
+        std::string shape_overlay_dummy_depth_vram_label;
         VkDescriptorSetLayout shape_overlay_descriptor_layout = VK_NULL_HANDLE;
         VkDescriptorPool shape_overlay_descriptor_pool = VK_NULL_HANDLE;
 
@@ -524,11 +527,17 @@ namespace lfs::vis {
             img_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             VmaAllocationCreateInfo alloc{};
             alloc.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+            VmaAllocationInfo allocation_info{};
             if (vmaCreateImage(allocator, &img_info, &alloc,
                                &shape_overlay_dummy_depth_image, &shape_overlay_dummy_depth_alloc,
-                               nullptr) != VK_SUCCESS) {
+                               &allocation_info) != VK_SUCCESS) {
                 return false;
             }
+            shape_overlay_dummy_depth_vram_label = "r32_float:1x1";
+            lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                "vulkan.viewport.shape_overlay_dummy_depth",
+                shape_overlay_dummy_depth_vram_label,
+                static_cast<std::size_t>(allocation_info.size));
             VkImageViewCreateInfo view_info{};
             view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
             view_info.image = shape_overlay_dummy_depth_image;
@@ -1615,8 +1624,15 @@ namespace lfs::vis {
                     vkDestroyDescriptorSetLayout(device, shape_overlay_descriptor_layout, nullptr);
                 if (shape_overlay_dummy_depth_view != VK_NULL_HANDLE)
                     vkDestroyImageView(device, shape_overlay_dummy_depth_view, nullptr);
-                if (shape_overlay_dummy_depth_image != VK_NULL_HANDLE)
+                if (shape_overlay_dummy_depth_image != VK_NULL_HANDLE) {
+                    if (!shape_overlay_dummy_depth_vram_label.empty()) {
+                        lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                            "vulkan.viewport.shape_overlay_dummy_depth",
+                            shape_overlay_dummy_depth_vram_label,
+                            0);
+                    }
                     vmaDestroyImage(allocator, shape_overlay_dummy_depth_image, shape_overlay_dummy_depth_alloc);
+                }
                 if (shape_overlay_depth_sampler != VK_NULL_HANDLE)
                     vkDestroySampler(device, shape_overlay_depth_sampler, nullptr);
             }

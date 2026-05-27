@@ -5,6 +5,7 @@
 #include "point_cloud_vulkan_renderer.hpp"
 
 #include "core/logger.hpp"
+#include "diagnostics/vram_profiler.hpp"
 
 #include <algorithm>
 #include <array>
@@ -57,9 +58,14 @@ namespace lfs::vis {
             VmaAllocation allocation = VK_NULL_HANDLE;
             VkDeviceSize size = 0;
             VkBufferUsageFlags usage = 0;
+            std::string vram_scope;
+            std::string vram_label;
         };
 
         void destroyBuffer(VmaAllocator allocator, ManagedBuffer& buf) {
+            if (!buf.vram_scope.empty() && !buf.vram_label.empty()) {
+                lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(buf.vram_scope, buf.vram_label, 0);
+            }
             if (buf.buffer != VK_NULL_HANDLE) {
                 vmaDestroyBuffer(allocator, buf.buffer, buf.allocation);
             }
@@ -67,7 +73,9 @@ namespace lfs::vis {
         }
 
         bool createDeviceBuffer(VmaAllocator allocator, VkDeviceSize size,
-                                VkBufferUsageFlags usage, ManagedBuffer& out) {
+                                VkBufferUsageFlags usage, ManagedBuffer& out,
+                                std::string_view vram_scope = "vulkan.point_cloud.buffer",
+                                std::string_view vram_label = {}) {
             destroyBuffer(allocator, out);
             VkBufferCreateInfo bi{};
             bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -78,14 +86,23 @@ namespace lfs::vis {
             VmaAllocationCreateInfo ai{};
             ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
 
+            VmaAllocationInfo allocation_info{};
             const VkResult r = vmaCreateBuffer(allocator, &bi, &ai,
-                                               &out.buffer, &out.allocation, nullptr);
+                                               &out.buffer, &out.allocation, &allocation_info);
             if (r != VK_SUCCESS) {
                 out = {};
                 return false;
             }
             out.size = bi.size;
             out.usage = bi.usage;
+            out.vram_scope = std::string(vram_scope);
+            out.vram_label = vram_label.empty()
+                                 ? std::format("buffer.{}B", static_cast<std::size_t>(bi.size))
+                                 : std::string(vram_label);
+            lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                out.vram_scope,
+                out.vram_label,
+                static_cast<std::size_t>(allocation_info.size));
             return true;
         }
 
@@ -292,6 +309,8 @@ namespace lfs::vis {
             VkImage depth_image = VK_NULL_HANDLE;
             VmaAllocation depth_alloc = VK_NULL_HANDLE;
             VkImageView depth_view = VK_NULL_HANDLE;
+            std::string color_vram_label;
+            std::string depth_vram_label;
 
             glm::ivec2 size{0, 0};
             VkImageLayout color_layout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -322,7 +341,12 @@ namespace lfs::vis {
                                                     VkDeviceSize bytes,
                                                     ManagedBuffer& dst,
                                                     const char* what) {
-            if (!createDeviceBuffer(allocator, bytes, usage, dst)) {
+            if (!createDeviceBuffer(allocator,
+                                    bytes,
+                                    usage,
+                                    dst,
+                                    "vulkan.point_cloud.buffer",
+                                    what)) {
                 return std::unexpected<std::string>(std::format("Failed to allocate {} buffer", what));
             }
             ManagedBuffer staging{};
@@ -354,8 +378,12 @@ namespace lfs::vis {
             if (auto r = createCommandResources(); !r) {
                 return r;
             }
-            if (!createDeviceBuffer(allocator, kPlaceholderSize,
-                                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, placeholder)) {
+            if (!createDeviceBuffer(allocator,
+                                    kPlaceholderSize,
+                                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                    placeholder,
+                                    "vulkan.point_cloud.buffer",
+                                    "placeholder")) {
                 return std::unexpected<std::string>("Failed to create placeholder buffer");
             }
             initialized = true;
@@ -598,11 +626,18 @@ namespace lfs::vis {
 
             VmaAllocationCreateInfo ai{};
             ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+            const std::size_t slot_index = static_cast<std::size_t>(&slot - slots.data());
+            VmaAllocationInfo color_allocation_info{};
             VkResult r = vmaCreateImage(allocator, &color_info, &ai, &slot.color_image,
-                                        &slot.color_alloc, nullptr);
+                                        &slot.color_alloc, &color_allocation_info);
             if (r != VK_SUCCESS) {
                 return std::unexpected<std::string>(vkError("vmaCreateImage(color)", r));
             }
+            slot.color_vram_label = std::format("color.slot{}:{}x{}", slot_index, size.x, size.y);
+            lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                "vulkan.point_cloud.output_image",
+                slot.color_vram_label,
+                static_cast<std::size_t>(color_allocation_info.size));
             VkImageViewCreateInfo cv{};
             cv.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
             cv.image = slot.color_image;
@@ -620,12 +655,18 @@ namespace lfs::vis {
             depth_info.format = kDepthFormat;
             depth_info.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
                                VK_IMAGE_USAGE_SAMPLED_BIT;
+            VmaAllocationInfo depth_allocation_info{};
             r = vmaCreateImage(allocator, &depth_info, &ai, &slot.depth_image,
-                               &slot.depth_alloc, nullptr);
+                               &slot.depth_alloc, &depth_allocation_info);
             if (r != VK_SUCCESS) {
                 destroySlot(slot);
                 return std::unexpected<std::string>(vkError("vmaCreateImage(depth)", r));
             }
+            slot.depth_vram_label = std::format("depth.slot{}:{}x{}", slot_index, size.x, size.y);
+            lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                "vulkan.point_cloud.output_image",
+                slot.depth_vram_label,
+                static_cast<std::size_t>(depth_allocation_info.size));
             VkImageViewCreateInfo dv{};
             dv.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
             dv.image = slot.depth_image;
@@ -654,6 +695,12 @@ namespace lfs::vis {
 
         void destroySlot(OutputSlotResources& slot) {
             if (slot.color_image != VK_NULL_HANDLE) {
+                if (!slot.color_vram_label.empty()) {
+                    lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                        "vulkan.point_cloud.output_image",
+                        slot.color_vram_label,
+                        0);
+                }
                 context->imageBarriers().forgetImage(slot.color_image);
                 if (slot.color_view != VK_NULL_HANDLE) {
                     vkDestroyImageView(device, slot.color_view, nullptr);
@@ -661,6 +708,12 @@ namespace lfs::vis {
                 vmaDestroyImage(allocator, slot.color_image, slot.color_alloc);
             }
             if (slot.depth_image != VK_NULL_HANDLE) {
+                if (!slot.depth_vram_label.empty()) {
+                    lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                        "vulkan.point_cloud.output_image",
+                        slot.depth_vram_label,
+                        0);
+                }
                 context->imageBarriers().forgetImage(slot.depth_image);
                 if (slot.depth_view != VK_NULL_HANDLE) {
                     vkDestroyImageView(device, slot.depth_view, nullptr);
@@ -796,8 +849,12 @@ namespace lfs::vis {
                         return r;
                     }
                 } else if (cache.transforms.buffer == VK_NULL_HANDLE) {
-                    if (!createDeviceBuffer(allocator, kPlaceholderSize,
-                                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, cache.transforms)) {
+                    if (!createDeviceBuffer(allocator,
+                                            kPlaceholderSize,
+                                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                            cache.transforms,
+                                            "vulkan.point_cloud.buffer",
+                                            "transforms.placeholder")) {
                         return std::unexpected<std::string>("Failed to allocate transforms placeholder");
                     }
                 }
@@ -835,7 +892,9 @@ namespace lfs::vis {
                 if (cache.transform_indices.buffer == VK_NULL_HANDLE) {
                     if (!createDeviceBuffer(allocator, kPlaceholderSize,
                                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                            cache.transform_indices)) {
+                                            cache.transform_indices,
+                                            "vulkan.point_cloud.buffer",
+                                            "transform_indices.placeholder")) {
                         return std::unexpected<std::string>("Failed to allocate indices placeholder");
                     }
                 }
@@ -861,8 +920,12 @@ namespace lfs::vis {
                         return r;
                     }
                 } else if (cache.visibility.buffer == VK_NULL_HANDLE) {
-                    if (!createDeviceBuffer(allocator, kPlaceholderSize,
-                                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, cache.visibility)) {
+                    if (!createDeviceBuffer(allocator,
+                                            kPlaceholderSize,
+                                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                            cache.visibility,
+                                            "vulkan.point_cloud.buffer",
+                                            "visibility.placeholder")) {
                         return std::unexpected<std::string>("Failed to allocate visibility placeholder");
                     }
                 }
