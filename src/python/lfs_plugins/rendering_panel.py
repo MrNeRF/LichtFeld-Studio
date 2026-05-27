@@ -11,6 +11,7 @@ from . import rml_widgets as w
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
 from .ui.state import AppState
+from .ui.store import AppStore as NativeAppStore
 
 __lfs_panel_classes__ = ["RenderingPanel"]
 __lfs_panel_ids__ = ["lfs.rendering"]
@@ -301,16 +302,18 @@ class RenderingPanel(Panel):
         if self._reactive_unsubscribers:
             return
 
-        signals = (
-            AppState.scene_generation,
-            AppState.selection_generation,
+        native_signals = (
+            NativeAppStore.scene_generation,
+            NativeAppStore.selection_generation,
+        )
+        legacy_signals = (
             AppState.active_tool,
             AppState.transform_space,
             AppState.pivot_mode,
         )
         self._reactive_unsubscribers = [
             signal.subscribe(lambda _value: self._request_reactive_update())
-            for signal in signals
+            for signal in (*native_signals, *legacy_signals)
         ]
 
     def _unsubscribe_reactive_state(self):
