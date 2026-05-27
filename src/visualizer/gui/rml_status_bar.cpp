@@ -19,6 +19,7 @@
 #include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
 #include "training/training_manager.hpp"
+#include "visualizer/app_store.hpp"
 #include "visualizer_impl.hpp"
 
 #include <RmlUi/Core.h>
@@ -30,6 +31,7 @@
 #include <cmath>
 #include <cstring>
 #include <format>
+#include <vector>
 
 #include "git_version.h"
 
@@ -234,17 +236,20 @@ namespace lfs::vis::gui {
         }
 
         attachGitCommitListener();
+        bindReactiveStore();
 
         if (!speed_events_initialized_) {
             lfs::core::events::ui::SpeedChanged::when([this](const auto& e) {
                 speed_state_.showWasd(e.current_speed);
                 animation_active_ = true;
                 next_refresh_at_ = {};
+                markModelDirty();
             });
             lfs::core::events::ui::ZoomSpeedChanged::when([this](const auto& e) {
                 speed_state_.showZoom(e.zoom_speed);
                 animation_active_ = true;
                 next_refresh_at_ = {};
+                markModelDirty();
             });
             speed_events_initialized_ = true;
         }
@@ -262,6 +267,7 @@ namespace lfs::vis::gui {
             }
         }
 
+        subscriptions_.clear();
         model_handle_ = {};
         if (rml_context_ && rml_manager_)
             rml_manager_->destroyContext("status_bar");
@@ -304,8 +310,39 @@ namespace lfs::vis::gui {
         }
 
         attachGitCommitListener();
+        bindReactiveStore();
 
         updateTheme();
+    }
+
+    void RmlStatusBar::bindReactiveStore() {
+        subscriptions_.clear();
+        auto& store = lfs::vis::app_store();
+        const auto bind = [this](auto& observable) {
+            subscriptions_.push_back(observable.subscribe([this](const auto&) {
+                markModelDirty();
+            }));
+        };
+
+        bind(store.iteration);
+        bind(store.total_iterations);
+        bind(store.loss);
+        bind(store.num_gaussians);
+        bind(store.max_gaussians);
+        bind(store.training_running);
+        bind(store.training_state);
+        bind(store.trainer_loaded);
+        bind(store.eval_psnr);
+        bind(store.eval_ssim);
+        bind(store.scene_generation);
+        bind(store.selection_generation);
+        bind(store.fps);
+        bind(store.mode_text);
+    }
+
+    void RmlStatusBar::markModelDirty() {
+        model_dirty_ = true;
+        next_refresh_at_ = {};
     }
 
     bool RmlStatusBar::updateTheme() {

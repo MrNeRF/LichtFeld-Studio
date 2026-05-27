@@ -28,6 +28,7 @@
 #include "py_prop_registry.hpp"
 #include "py_rml.hpp"
 #include "py_signals.hpp"
+#include "py_store.hpp"
 #include "py_tensor.hpp"
 #include "py_uilist.hpp"
 #include "py_viewport.hpp"
@@ -5141,6 +5142,7 @@ namespace lfs::python {
             PyGizmoRegistry::instance().unregister_all();
             PyUIListRegistry::instance().unregister_all();
             vis::op::operators().unregisterAllPython();
+            shutdown_store_bridge();
             shutdown_signal_bridge();
             g_cancel_operator_py_callback = nb::callable();
             g_modal_event_py_callback = nb::callable();

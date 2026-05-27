@@ -649,6 +649,7 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API void set_graphics_thread_id(std::thread::id id);
     LFS_PYTHON_RUNTIME_API bool on_graphics_thread();
     LFS_PYTHON_RUNTIME_API void schedule_graphics_callback(std::function<void()> fn);
+    LFS_PYTHON_RUNTIME_API bool has_pending_graphics_callbacks();
     LFS_PYTHON_RUNTIME_API void flush_graphics_callbacks();
 
     // Exit popup state - thread-safe flag for window close callback

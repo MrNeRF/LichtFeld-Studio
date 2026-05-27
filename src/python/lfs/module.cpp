@@ -31,6 +31,7 @@
 #include "py_signals.hpp"
 #include "py_splat_data.hpp"
 #include "py_splat_simplify.hpp"
+#include "py_store.hpp"
 #include "py_tensor.hpp"
 #include "py_ui.hpp"
 #include "py_uilist.hpp"
@@ -1662,6 +1663,7 @@ NB_MODULE(lichtfeld, m) {
 
     // Signal bridge for reactive UI updates
     lfs::python::register_signals(ui_module);
+    lfs::python::register_store(ui_module);
 
     // Set up notification handlers (C++ events -> PyModalRegistry)
     lfs::python::setup_notification_handlers();

@@ -12,6 +12,7 @@ Usage:
 from .signals import Signal, ComputedSignal, ThrottledSignal, Batch
 from .subscription_registry import SubscriptionRegistry
 from .state import AppState
+from .store import AppStore as NativeAppStore, StoreSignal, batch_updates
 
 __all__ = [
     "Signal",
@@ -20,4 +21,7 @@ __all__ = [
     "Batch",
     "SubscriptionRegistry",
     "AppState",
+    "NativeAppStore",
+    "StoreSignal",
+    "batch_updates",
 ]

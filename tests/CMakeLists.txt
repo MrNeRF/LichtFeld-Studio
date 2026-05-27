@@ -90,6 +90,7 @@ set(BENCHMARK_FILES
     benchmark_scheduler.cpp
     benchmark_losses.cpp
     benchmark_ppisp_controller.cpp
+    benchmark_reactive_store.cpp
     # profile_adam_optimizer.cpp  # Disabled - missing header
     test_tensor_benchmark.cpp
     test_memory_pool_benchmark.cpp
@@ -212,6 +213,7 @@ set(TEST_FILES
     test_view_info_json.cpp
     test_video_export_utils.cpp
     test_visualizer_post_work.cpp
+    test_reactive_store.cpp
     test_video_color_convert.cpp
     test_python_integration.cpp
     test_python_lsp_client.cpp

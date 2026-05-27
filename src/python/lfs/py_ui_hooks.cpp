@@ -7,6 +7,8 @@
 #include "py_ui.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <cstdlib>
 #include <string>
 
 namespace lfs::python {
@@ -55,6 +57,20 @@ namespace lfs::python {
             if (!module.empty() && qualname != "<callable>")
                 return module + "." + qualname;
             return qualname;
+        }
+
+        void warn_deprecated_ui_hooks_once() {
+            if (std::getenv("LFS_NO_DEPRECATION_WARNINGS"))
+                return;
+
+            static std::atomic_bool warned{false};
+            if (warned.exchange(true, std::memory_order_acq_rel))
+                return;
+
+            LOG_WARN("Python UI hooks are deprecated and will be removed after the reactive "
+                     "RmlUi store migration. Use lfs_plugins.ui.store.AppStore and "
+                     "Rml data-model updates instead. Set LFS_NO_DEPRECATION_WARNINGS=1 "
+                     "to suppress this warning.");
         }
 
         bool consume_document_dirty_with_attribution(Rml::ElementDocument* document,
@@ -199,6 +215,7 @@ namespace lfs::python {
             "add_hook",
             [](const std::string& panel, const std::string& section,
                nb::object callback, const std::string& position) {
+                warn_deprecated_ui_hooks_once();
                 PyUIHookRegistry::instance().add_hook(panel, section, callback, parse_position(position));
             },
             nb::arg("panel"), nb::arg("section"), nb::arg("callback"),
@@ -246,6 +263,7 @@ namespace lfs::python {
             "hook",
             [](const std::string& panel, const std::string& section, const std::string& position) {
                 return nb::cpp_function([panel, section, position](nb::object func) {
+                    warn_deprecated_ui_hooks_once();
                     PyUIHookRegistry::instance().add_hook(panel, section, func, parse_position(position));
                     return func;
                 });

@@ -6,11 +6,13 @@
 
 #include "gui/gpu_memory_query.hpp"
 #include "gui/panel_registry.hpp"
+#include "core/reactive/store.hpp"
 #include <RmlUi/Core/DataModelHandle.h>
 #include <chrono>
 #include <cstddef>
 #include <future>
 #include <string>
+#include <vector>
 
 namespace Rml {
     class Context;
@@ -47,6 +49,8 @@ namespace lfs::vis::gui {
         void setModelString(const char* name, std::string& field, std::string value);
         void setModelBool(const char* name, bool& field, bool value);
         void attachGitCommitListener();
+        void bindReactiveStore();
+        void markModelDirty();
 
         RmlUIManager* rml_manager_ = nullptr;
         Rml::Context* rml_context_ = nullptr;
@@ -128,6 +132,7 @@ namespace lfs::vis::gui {
         std::chrono::steady_clock::time_point next_gpu_refresh_at_{};
         bool model_dirty_ = true;
         bool animation_active_ = false;
+        std::vector<lfs::core::reactive::SubscriptionToken> subscriptions_;
         int last_render_w_ = 0;
         int last_render_h_ = 0;
         int last_document_h_ = 0;

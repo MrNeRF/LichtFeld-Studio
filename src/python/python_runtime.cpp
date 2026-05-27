@@ -1059,6 +1059,11 @@ namespace lfs::python {
         g_graphics_callbacks.push_back(std::move(fn));
     }
 
+    bool has_pending_graphics_callbacks() {
+        std::lock_guard lock(g_graphics_callbacks_mutex);
+        return !g_graphics_callbacks.empty();
+    }
+
     void flush_graphics_callbacks() {
         std::vector<std::function<void()>> pending;
         {

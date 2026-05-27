@@ -4764,7 +4764,8 @@ namespace lfs::vis::gui {
         // Run queued Python/UI mutations before panel registries take draw snapshots.
         {
             LOG_TIMER("gui_render.panel_setup.python_flush_callbacks");
-            python::flush_graphics_callbacks();
+            if (python::has_pending_graphics_callbacks())
+                python::flush_graphics_callbacks();
         }
 
         bool modal_overlay_open = false;
@@ -5259,9 +5260,18 @@ namespace lfs::vis::gui {
             const float status_bar_x = screen.work_pos.x;
             const float status_bar_y = screen.work_pos.y + screen.work_size.y - status_bar_h;
             const float status_bar_w = screen.work_size.x;
-            if (!block_underlay_input) {
+            const bool status_input =
+                !block_underlay_input &&
+                ((panel_input.mouse_x >= status_bar_x &&
+                  panel_input.mouse_x < status_bar_x + status_bar_w &&
+                  panel_input.mouse_y >= status_bar_y &&
+                  panel_input.mouse_y < status_bar_y + status_bar_h) ||
+                 panel_input.mouse_released[0]);
+            if (status_input) {
                 rml_status_bar_.processInput(panel_input, status_bar_x, status_bar_y,
                                              status_bar_w, status_bar_h);
+            }
+            if (status_input) {
                 rml_status_bar_.render(draw_ctx,
                                        status_bar_x,
                                        status_bar_y,

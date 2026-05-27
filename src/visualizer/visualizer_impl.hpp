@@ -194,21 +194,24 @@ namespace lfs::vis {
             bool input_event = false;
             bool posted_work = false;
             bool render_work = false;
+            bool store_dirty = false;
 
             [[nodiscard]] bool shouldRenderFrame() const {
                 return viewport_export_locked || scene_dirty || continuous_input ||
                        python_animation || python_overlay || python_redraw ||
-                       gui_animation || input_event || posted_work || render_work;
+                       gui_animation || input_event || posted_work || render_work ||
+                       store_dirty;
             }
 
             [[nodiscard]] bool needsContinuousLoop() const {
                 return scene_dirty || continuous_input || python_animation ||
                        python_overlay || python_redraw || gui_animation ||
-                       render_work || viewport_export_locked;
+                       render_work || viewport_export_locked || store_dirty;
             }
         };
 
-        [[nodiscard]] FrameDemand collectFrameDemand(bool viewport_export_locked);
+        [[nodiscard]] FrameDemand collectFrameDemand(bool viewport_export_locked,
+                                                     bool drained_store_dirty = false);
         void waitForNextEvent(bool is_training);
 
         class CallbackCleanup {
