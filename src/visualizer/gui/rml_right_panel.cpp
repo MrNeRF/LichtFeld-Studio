@@ -94,6 +94,8 @@ namespace lfs::vis::gui {
         tab_model_ = {};
         tabs_.clear();
         active_tab_.clear();
+        if (rml_manager_)
+            rml_manager_->releaseCachedVulkanContext(direct_cache_);
         if (rml_context_ && rml_manager_)
             rml_manager_->destroyContext("right_panel");
         rml_context_ = nullptr;
@@ -113,6 +115,9 @@ namespace lfs::vis::gui {
     void RmlRightPanel::reloadResources() {
         if (!rml_context_)
             return;
+
+        if (rml_manager_)
+            rml_manager_->releaseCachedVulkanContext(direct_cache_);
 
         if (document_) {
             rml_context_->UnloadDocument(document_);
@@ -586,15 +591,28 @@ namespace lfs::vis::gui {
         if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
             return;
 
-        rml_manager_->queueVulkanContext(rml_context_,
-                                         layout.pos.x - screen_x,
-                                         layout.pos.y - screen_y,
-                                         false,
-                                         true,
-                                         layout.pos.x - screen_x,
-                                         layout.pos.y - screen_y,
-                                         layout.pos.x - screen_x + static_cast<float>(w),
-                                         layout.pos.y - screen_y + static_cast<float>(h));
+        const float x = layout.pos.x - screen_x;
+        const float y = layout.pos.y - screen_y;
+        rml_manager_->queueCachedVulkanContext({
+            .context = rml_context_,
+            .cache = &direct_cache_,
+            .cache_width = w,
+            .cache_height = h,
+            .offset_x = x,
+            .offset_y = y,
+            .draw_width = static_cast<float>(w),
+            .draw_height = static_cast<float>(h),
+            .refresh = needs_render || direct_cache_.texture == 0 ||
+                       direct_cache_.width != w || direct_cache_.height != h,
+            .foreground = false,
+            .clip_enabled = true,
+            .clip = {
+                .x1 = x,
+                .y1 = y,
+                .x2 = x + static_cast<float>(w),
+                .y2 = y + static_cast<float>(h),
+            },
+        });
     }
 
 } // namespace lfs::vis::gui
