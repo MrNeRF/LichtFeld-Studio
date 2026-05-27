@@ -4,12 +4,15 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from contextlib import contextmanager
 from threading import Lock
 from typing import Generic, TypeVar
 
 T = TypeVar("T")
+
+logger = logging.getLogger(__name__)
 
 
 def _native_store():
@@ -42,16 +45,30 @@ class StoreSignal(Generic[T]):
 
     @value.setter
     def value(self, new_value: T) -> None:
-        self._fallback = new_value
         native = _native_store()
         if native is not None:
+            self._fallback = new_value
             native.set(self._field, new_value)
             return
 
+        if self._fallback == new_value:
+            return
+
+        self._fallback = new_value
+        if _batch_context.is_batching:
+            _batch_context.pending_notifications.add(self)
+            return
+
+        self._notify()
+
+    def _notify(self) -> None:
         with self._lock:
             callbacks = list(self._subscribers.values())
         for callback in callbacks:
-            callback(new_value)
+            try:
+                callback(self._fallback)
+            except Exception as e:
+                logger.error("Store signal '%s' callback error: %s", self._field, e)
 
     def subscribe(self, callback: Callable[[T], None]) -> Callable[[], None]:
         native = _native_store()
@@ -99,15 +116,46 @@ class AppStore:
     mode_text = StoreSignal[str]("mode_text", "")
 
 
+class _BatchContext:
+    __slots__ = ("depth", "pending_notifications")
+
+    def __init__(self) -> None:
+        self.depth = 0
+        self.pending_notifications: set[StoreSignal[object]] = set()
+
+    @property
+    def is_batching(self) -> bool:
+        return self.depth > 0
+
+    def begin(self) -> None:
+        self.depth += 1
+
+    def end(self) -> None:
+        self.depth = max(0, self.depth - 1)
+        if self.depth != 0:
+            return
+        pending = list(self.pending_notifications)
+        self.pending_notifications.clear()
+        for signal in pending:
+            signal._notify()
+
+
+_batch_context = _BatchContext()
+
+
 @contextmanager
 def batch_updates():
     native = _native_store()
-    if native is None:
-        yield
+    if native is not None:
+        native.begin_batch()
+        try:
+            yield
+        finally:
+            native.end_batch()
         return
 
-    native.begin_batch()
+    _batch_context.begin()
     try:
         yield
     finally:
-        native.end_batch()
+        _batch_context.end()
