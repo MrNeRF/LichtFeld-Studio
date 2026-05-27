@@ -195,6 +195,8 @@ namespace lfs::vis {
             void scheduleImportCompletionDismiss();
             void publishImportOverlayState();
             void publishVideoExportOverlayState();
+            void publishMesh2SplatState();
+            void publishSplatSimplifyState();
 
             VisualizerImpl* viewer_;
 

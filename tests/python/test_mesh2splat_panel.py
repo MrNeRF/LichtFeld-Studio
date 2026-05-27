@@ -208,3 +208,32 @@ def test_mesh2splat_panel_progress_updates_retained_fields(mesh2splat_module):
         "show_error",
         "error_text",
     ]
+
+
+def test_mesh2splat_panel_prefers_native_store_progress(mesh2splat_module, monkeypatch):
+    module, state = mesh2splat_module
+    panel = module.Mesh2SplatPanel()
+    panel._handle = _HandleStub()
+    state.active = False
+    state.progress = 0.0
+    state.stage = "legacy"
+    state.error = "legacy error"
+
+    monkeypatch.setattr(
+        module,
+        "_native_store_value",
+        lambda field, fallback: {
+            "active": True,
+            "progress": 0.875,
+            "stage": "Native progress",
+            "error": "native error",
+        }
+        if field == "mesh2splat_state"
+        else fallback,
+    )
+
+    assert panel._sync_conversion_state(force=False) is True
+    assert panel._last_active is True
+    assert panel._last_progress_value == "0.875"
+    assert panel._last_progress_stage == "Native progress"
+    assert panel._error_text == "native error"

@@ -34,7 +34,12 @@ namespace lfs::vis {
           video_export_overlay_state(store_,
                                      Field::VideoExportOverlayStateValue,
                                      "video_export_overlay_state",
-                                     VideoExportOverlayState{}) {}
+                                     VideoExportOverlayState{}),
+          mesh2splat_state(store_, Field::Mesh2SplatStateValue, "mesh2splat_state", TaskProgressState{}),
+          splat_simplify_state(store_,
+                               Field::SplatSimplifyStateValue,
+                               "splat_simplify_state",
+                               TaskProgressState{}) {}
 
     AppStore& app_store() {
         static AppStore instance;

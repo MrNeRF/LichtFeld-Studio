@@ -82,6 +82,24 @@ namespace lfs::vis {
             bool operator==(const VideoExportOverlayState&) const = default;
         };
 
+        struct LFS_VIS_API TaskProgressState {
+            bool active = false;
+            float progress = 0.0f;
+            std::string stage;
+            std::string error;
+            std::string source_name;
+            std::string output_name;
+
+            [[nodiscard]] bool operator==(const TaskProgressState& other) const noexcept {
+                return active == other.active &&
+                       std::abs(progress - other.progress) <= 0.0005f &&
+                       stage == other.stage &&
+                       error == other.error &&
+                       source_name == other.source_name &&
+                       output_name == other.output_name;
+            }
+        };
+
         enum Field : std::uint32_t {
             Iteration = 1,
             TotalIterations,
@@ -106,6 +124,8 @@ namespace lfs::vis {
             PivotModeValue,
             ImportOverlayStateValue,
             VideoExportOverlayStateValue,
+            Mesh2SplatStateValue,
+            SplatSimplifyStateValue,
         };
 
         AppStore();
@@ -136,6 +156,8 @@ namespace lfs::vis {
         lfs::core::reactive::Observable<int> pivot_mode;
         lfs::core::reactive::Observable<ImportOverlayState> import_overlay_state;
         lfs::core::reactive::Observable<VideoExportOverlayState> video_export_overlay_state;
+        lfs::core::reactive::Observable<TaskProgressState> mesh2splat_state;
+        lfs::core::reactive::Observable<TaskProgressState> splat_simplify_state;
 
     private:
         lfs::core::reactive::Store store_;

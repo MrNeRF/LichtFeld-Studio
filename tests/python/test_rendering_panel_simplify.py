@@ -211,3 +211,32 @@ def test_rendering_panel_simplify_progress_and_cancel_update_retained_state(rend
 
     panel._on_simplify_cancel()
     assert state.cancel_calls == 1
+
+
+def test_rendering_panel_simplify_prefers_native_store_progress(rendering_panel_module, monkeypatch):
+    module, state = rendering_panel_module
+    panel = module.RenderingPanel()
+    panel._handle = _HandleStub()
+    state.active = False
+    state.progress = 0.0
+    state.stage = "legacy"
+    state.error = "legacy error"
+
+    monkeypatch.setattr(
+        module,
+        "_native_store_value",
+        lambda field, fallback: {
+            "active": True,
+            "progress": 0.875,
+            "stage": "Native simplify",
+            "error": "native error",
+        }
+        if field == "splat_simplify_state"
+        else fallback,
+    )
+
+    assert panel._sync_simplify_task_state(force=False) is True
+    assert panel._simplify_task_active is True
+    assert panel._simplify_progress_value == "0.875"
+    assert panel._simplify_progress_stage == "Native simplify"
+    assert panel._simplify_error_text == "native error"

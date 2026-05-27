@@ -10,7 +10,7 @@ import lichtfeld as lf
 from . import rml_widgets as w
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
-from .ui.store import AppStore as NativeAppStore
+from .ui.store import AppStore as NativeAppStore, native_value as _native_store_value
 
 __lfs_panel_classes__ = ["RenderingPanel"]
 __lfs_panel_ids__ = ["lfs.rendering"]
@@ -307,6 +307,7 @@ class RenderingPanel(Panel):
             NativeAppStore.active_tool,
             NativeAppStore.transform_space,
             NativeAppStore.pivot_mode,
+            NativeAppStore.splat_simplify_state,
         )
         self._reactive_unsubscribers = [
             signal.subscribe(lambda _value: self._request_reactive_update())
@@ -1152,12 +1153,24 @@ class RenderingPanel(Panel):
         except (TypeError, ValueError):
             return "0%"
 
+    def _simplify_task_state(self) -> dict[str, object]:
+        state = _native_store_value("splat_simplify_state", None)
+        if isinstance(state, dict):
+            return state
+        return {
+            "active": bool(getattr(lf, "is_splat_simplify_active", lambda: False)()),
+            "progress": getattr(lf, "get_splat_simplify_progress", lambda: 0.0)(),
+            "stage": getattr(lf, "get_splat_simplify_stage", lambda: "")() or "",
+            "error": getattr(lf, "get_splat_simplify_error", lambda: "")() or "",
+        }
+
     def _sync_simplify_task_state(self, force: bool) -> bool:
-        active = bool(getattr(lf, "is_splat_simplify_active", lambda: False)())
-        progress = max(0.0, min(1.0, float(getattr(lf, "get_splat_simplify_progress", lambda: 0.0)())))
+        state = self._simplify_task_state()
+        active = bool(state.get("active", False))
+        progress = max(0.0, min(1.0, float(state.get("progress", 0.0))))
         progress_value = f"{progress:.4f}".rstrip("0").rstrip(".") or "0"
-        stage = str(getattr(lf, "get_splat_simplify_stage", lambda: "")() or "")
-        error_text = str(getattr(lf, "get_splat_simplify_error", lambda: "")() or "")
+        stage = str(state.get("stage", "") or "")
+        error_text = str(state.get("error", "") or "")
 
         changed = force or (
             active != self._simplify_task_active or

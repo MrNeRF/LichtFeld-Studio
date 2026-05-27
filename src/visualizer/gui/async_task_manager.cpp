@@ -1111,6 +1111,33 @@ namespace lfs::vis::gui {
         lfs::vis::app_store().video_export_overlay_state.set(std::move(state));
     }
 
+    void AsyncTaskManager::publishMesh2SplatState() {
+        lfs::vis::AppStore::TaskProgressState state;
+        state.active = mesh2splat_state_.active.load();
+        state.progress = mesh2splat_state_.progress.load();
+        {
+            const std::lock_guard lock(mesh2splat_state_.mutex);
+            state.stage = mesh2splat_state_.stage;
+            state.error = mesh2splat_state_.error;
+            state.source_name = mesh2splat_state_.source_name;
+        }
+        lfs::vis::app_store().mesh2splat_state.set(std::move(state));
+    }
+
+    void AsyncTaskManager::publishSplatSimplifyState() {
+        lfs::vis::AppStore::TaskProgressState state;
+        state.active = splat_simplify_state_.active.load();
+        state.progress = splat_simplify_state_.progress.load();
+        {
+            const std::lock_guard lock(splat_simplify_state_.mutex);
+            state.stage = splat_simplify_state_.stage;
+            state.error = splat_simplify_state_.error;
+            state.source_name = splat_simplify_state_.source_name;
+            state.output_name = splat_simplify_state_.output_name;
+        }
+        lfs::vis::app_store().splat_simplify_state.set(std::move(state));
+    }
+
     void AsyncTaskManager::cancelImportCompletionDismiss() {
         import_state_.completion_generation.fetch_add(1, std::memory_order_acq_rel);
         if (import_state_.completion_dismiss_thread) {
@@ -1744,6 +1771,7 @@ namespace lfs::vis::gui {
         LOG_INFO("Mesh2Splat conversion started: {} (resolution={}, sigma={})",
                  source_name, options.resolution_target, options.sigma);
 
+        publishMesh2SplatState();
         mesh2splat_state_.pending.store(true);
         wakeMainThreadForAsyncWork();
     }
@@ -1777,6 +1805,7 @@ namespace lfs::vis::gui {
 
         mesh2splat_state_.active.store(false);
         mesh2splat_state_.progress.store(has_result ? 1.0f : 0.0f);
+        publishMesh2SplatState();
     }
 
     void AsyncTaskManager::executeMesh2SplatOnGraphicsThread() {
@@ -1796,22 +1825,28 @@ namespace lfs::vis::gui {
             options,
             [this](const float progress, const std::string& stage) {
                 mesh2splat_state_.progress.store(progress);
-                const std::lock_guard lock(mesh2splat_state_.mutex);
-                mesh2splat_state_.stage = stage;
+                {
+                    const std::lock_guard lock(mesh2splat_state_.mutex);
+                    mesh2splat_state_.stage = stage;
+                }
+                publishMesh2SplatState();
                 return mesh2splat_state_.active.load();
             });
 
-        const std::lock_guard lock(mesh2splat_state_.mutex);
-        if (result) {
-            mesh2splat_state_.result = std::move(*result);
-            mesh2splat_state_.error.clear();
-            mesh2splat_state_.stage = "Complete";
-        } else {
-            mesh2splat_state_.result.reset();
-            mesh2splat_state_.error = result.error();
-            mesh2splat_state_.stage = "Failed";
-            LOG_ERROR("Mesh2Splat conversion failed: {}", mesh2splat_state_.error);
+        {
+            const std::lock_guard lock(mesh2splat_state_.mutex);
+            if (result) {
+                mesh2splat_state_.result = std::move(*result);
+                mesh2splat_state_.error.clear();
+                mesh2splat_state_.stage = "Complete";
+            } else {
+                mesh2splat_state_.result.reset();
+                mesh2splat_state_.error = result.error();
+                mesh2splat_state_.stage = "Failed";
+                LOG_ERROR("Mesh2Splat conversion failed: {}", mesh2splat_state_.error);
+            }
         }
+        publishMesh2SplatState();
     }
 
     void AsyncTaskManager::applyMesh2SplatResult() {
@@ -1851,6 +1886,7 @@ namespace lfs::vis::gui {
             const std::lock_guard lock(mesh2splat_state_.mutex);
             mesh2splat_state_.stage = "Complete";
         }
+        publishMesh2SplatState();
 
         const auto* const added_node = scene.getNode(added_name);
         const size_t num_gaussians =
@@ -1929,6 +1965,7 @@ namespace lfs::vis::gui {
 
         auto input = std::move(capture->model);
         auto opts = options;
+        publishSplatSimplifyState();
         splat_simplify_state_.thread.emplace([this, opts, input = std::move(input)](std::stop_token stop_token) mutable {
             auto progress_cb = [this, &stop_token](const float progress, const std::string& stage) -> bool {
                 if (stop_token.stop_requested() || splat_simplify_state_.cancel_requested.load())
@@ -1938,6 +1975,7 @@ namespace lfs::vis::gui {
                     const std::lock_guard lock(splat_simplify_state_.mutex);
                     splat_simplify_state_.stage = stage;
                 }
+                publishSplatSimplifyState();
                 return true;
             };
 
@@ -1950,6 +1988,7 @@ namespace lfs::vis::gui {
                 }
                 splat_simplify_state_.progress.store(1.0f);
                 splat_simplify_state_.apply_pending.store(true, std::memory_order_release);
+                publishSplatSimplifyState();
             } else {
                 const bool cancelled = splat_simplify_state_.cancel_requested.load() || stop_token.stop_requested() ||
                                        result.error() == "Cancelled";
@@ -1959,6 +1998,7 @@ namespace lfs::vis::gui {
                     splat_simplify_state_.stage = cancelled ? "Cancelled" : "Failed";
                 }
                 splat_simplify_state_.active.store(false);
+                publishSplatSimplifyState();
             }
             splat_simplify_state_.completed.store(true, std::memory_order_release);
             wakeMainThreadForAsyncWork();
@@ -1977,6 +2017,7 @@ namespace lfs::vis::gui {
                 LOG_ERROR("Splat simplify: no scene manager");
                 splat_simplify_state_.active.store(false);
                 splat_simplify_state_.completed.store(false);
+                publishSplatSimplifyState();
                 return;
             }
 
@@ -1994,6 +2035,7 @@ namespace lfs::vis::gui {
                 LOG_ERROR("Splat simplify: missing result payload");
                 splat_simplify_state_.active.store(false);
                 splat_simplify_state_.completed.store(false);
+                publishSplatSimplifyState();
                 return;
             }
 
@@ -2009,6 +2051,7 @@ namespace lfs::vis::gui {
             }
             splat_simplify_state_.active.store(false);
             splat_simplify_state_.completed.store(false);
+            publishSplatSimplifyState();
             return;
         }
 
@@ -2020,6 +2063,7 @@ namespace lfs::vis::gui {
             splat_simplify_state_.thread.reset();
         }
         splat_simplify_state_.completed.store(false);
+        publishSplatSimplifyState();
     }
 
     void AsyncTaskManager::cancelSplatSimplify() {
@@ -2029,6 +2073,7 @@ namespace lfs::vis::gui {
             splat_simplify_state_.stage = "Cancelling...";
             splat_simplify_state_.error.clear();
         }
+        publishSplatSimplifyState();
         if (splat_simplify_state_.thread) {
             splat_simplify_state_.thread->request_stop();
         }
