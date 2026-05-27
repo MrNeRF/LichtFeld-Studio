@@ -13,6 +13,7 @@
 #include "theme/theme.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
+#include "visualizer/app_store.hpp"
 #include "vksplat_viewport_renderer.hpp"
 
 #include <algorithm>
@@ -60,6 +61,16 @@ namespace lfs::vis {
                 .psnr = metrics->psnr,
                 .ssim = metrics->ssim,
                 .used_mask = metrics->used_mask};
+        }
+
+        [[nodiscard]] AppStore::CameraMetrics toAppCameraMetrics(
+            const RenderingManager::CameraMetricsOverlayState& metrics) {
+            return AppStore::CameraMetrics{
+                .camera_id = metrics.camera_id,
+                .iteration = metrics.iteration,
+                .psnr = metrics.psnr,
+                .ssim = metrics.ssim,
+                .used_mask = metrics.used_mask};
         }
     } // namespace
 
@@ -309,14 +320,21 @@ namespace lfs::vis {
     }
 
     void RenderingManager::setLatestCameraMetrics(CameraMetricsOverlayState metrics) {
-        std::lock_guard<std::mutex> lock(camera_metrics_mutex_);
-        latest_camera_metrics_ = std::move(metrics);
-        last_camera_metrics_refresh_time_ = std::chrono::steady_clock::now();
+        const auto app_metrics = toAppCameraMetrics(metrics);
+        {
+            std::lock_guard<std::mutex> lock(camera_metrics_mutex_);
+            latest_camera_metrics_ = std::move(metrics);
+            last_camera_metrics_refresh_time_ = std::chrono::steady_clock::now();
+        }
+        app_store().camera_metrics.set(app_metrics);
     }
 
     void RenderingManager::clearLatestCameraMetrics() {
-        std::lock_guard<std::mutex> lock(camera_metrics_mutex_);
-        latest_camera_metrics_.reset();
+        {
+            std::lock_guard<std::mutex> lock(camera_metrics_mutex_);
+            latest_camera_metrics_.reset();
+        }
+        app_store().camera_metrics.set(std::optional<AppStore::CameraMetrics>{});
     }
 
     std::optional<RenderingManager::CameraMetricsOverlayState> RenderingManager::getLatestCameraMetrics() const {
@@ -325,13 +343,17 @@ namespace lfs::vis {
     }
 
     void RenderingManager::invalidateCameraMetricsRequests(const bool clear_latest) {
-        std::lock_guard<std::mutex> lock(camera_metrics_mutex_);
-        ++camera_metrics_request_generation_;
-        pending_camera_metrics_request_.reset();
-        last_camera_metrics_refresh_time_ = {};
-        if (clear_latest) {
-            latest_camera_metrics_.reset();
+        {
+            std::lock_guard<std::mutex> lock(camera_metrics_mutex_);
+            ++camera_metrics_request_generation_;
+            pending_camera_metrics_request_.reset();
+            last_camera_metrics_refresh_time_ = {};
+            if (clear_latest) {
+                latest_camera_metrics_.reset();
+            }
         }
+        if (clear_latest)
+            app_store().camera_metrics.set(std::optional<AppStore::CameraMetrics>{});
     }
 
     void RenderingManager::queueCameraMetricsRefreshIfStale(SceneManager* const scene_manager) {
@@ -443,6 +465,7 @@ namespace lfs::vis {
                 request.settings);
 
             bool applied = false;
+            std::optional<AppStore::CameraMetrics> app_metrics;
             {
                 std::lock_guard<std::mutex> lock(camera_metrics_mutex_);
                 if (active_camera_metrics_request_ &&
@@ -453,6 +476,7 @@ namespace lfs::vis {
                 if (request.generation == camera_metrics_request_generation_) {
                     if (metrics) {
                         latest_camera_metrics_ = *metrics;
+                        app_metrics = toAppCameraMetrics(*metrics);
                     } else {
                         latest_camera_metrics_.reset();
                     }
@@ -462,6 +486,7 @@ namespace lfs::vis {
             }
 
             if (applied) {
+                app_store().camera_metrics.set(std::move(app_metrics));
                 markDirty(DirtyFlag::OVERLAY);
             }
         }

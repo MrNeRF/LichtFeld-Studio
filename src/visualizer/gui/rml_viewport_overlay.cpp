@@ -57,7 +57,8 @@ namespace lfs::vis::gui {
             }
             cacheBodyTemplate();
             document_->Show();
-            applyGTMetricsOverlay();
+            bindReactiveStore();
+            refreshGTMetricsOverlayFromStore();
             if (vram_hud_)
                 vram_hud_->onDocumentLoaded(document_);
         } catch (const std::exception& e) {
@@ -73,6 +74,9 @@ namespace lfs::vis::gui {
         if (doc_registered_)
             lfs::python::unregister_rml_document("viewport_overlay");
         doc_registered_ = false;
+        gt_metrics_config_subscription_.reset();
+        camera_metrics_subscription_.reset();
+        vram_hud_subscription_.reset();
 
         if (vram_hud_)
             vram_hud_->onDocumentDestroyed();
@@ -247,6 +251,59 @@ namespace lfs::vis::gui {
 
     bool RmlViewportOverlay::isDueForVramProcessSample(std::chrono::milliseconds interval) {
         return vram_hud_ ? vram_hud_->isDueForProcessSample(interval) : false;
+    }
+
+    void RmlViewportOverlay::bindReactiveStore() {
+        auto& store = lfs::vis::app_store();
+        gt_metrics_config_ = store.gt_metrics_overlay_config.get();
+        camera_metrics_ = store.camera_metrics.get();
+
+        const auto vram_hud_state = store.vram_hud.get();
+        RmlViewportOverlay::VramHudOverlayState overlay_state;
+        if (vram_hud_state.visible && vram_hud_state.snapshot) {
+            overlay_state.visible = true;
+            overlay_state.snapshot = *vram_hud_state.snapshot;
+        }
+        setVramHudOverlay(std::move(overlay_state));
+
+        gt_metrics_config_subscription_ = store.gt_metrics_overlay_config.subscribe(
+            [this](const lfs::vis::AppStore::GTMetricsOverlayConfig& config) {
+                gt_metrics_config_ = config;
+                refreshGTMetricsOverlayFromStore();
+            });
+        camera_metrics_subscription_ = store.camera_metrics.subscribe(
+            [this](const std::optional<lfs::vis::AppStore::CameraMetrics>& metrics) {
+                camera_metrics_ = metrics;
+                refreshGTMetricsOverlayFromStore();
+            });
+        vram_hud_subscription_ = store.vram_hud.subscribe(
+            [this](const lfs::vis::AppStore::VramHud& state) {
+                RmlViewportOverlay::VramHudOverlayState overlay;
+                if (state.visible && state.snapshot) {
+                    overlay.visible = true;
+                    overlay.snapshot = *state.snapshot;
+                }
+                setVramHudOverlay(std::move(overlay));
+            });
+    }
+
+    void RmlViewportOverlay::refreshGTMetricsOverlayFromStore() {
+        GTMetricsOverlayState state;
+        state.visible = gt_metrics_config_.visible;
+        state.x = gt_metrics_config_.x;
+        state.y = gt_metrics_config_.y;
+        state.show_ssim = gt_metrics_config_.show_ssim;
+        state.psnr_text = "--";
+        state.ssim_text = "--";
+
+        if (state.visible && camera_metrics_ &&
+            camera_metrics_->camera_id == gt_metrics_config_.current_camera_id) {
+            state.psnr_text = std::format("{:.2f}", camera_metrics_->psnr);
+            if (state.show_ssim && camera_metrics_->ssim.has_value())
+                state.ssim_text = std::format("{:.4f}", *camera_metrics_->ssim);
+        }
+
+        setGTMetricsOverlay(std::move(state));
     }
 
     bool RmlViewportOverlay::updateToolbarRoots() {

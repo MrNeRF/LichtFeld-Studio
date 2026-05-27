@@ -6,12 +6,14 @@
 
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/vram_hud_overlay.hpp"
+#include "visualizer/app_store.hpp"
 
 #include <RmlUi/Core/DataModelHandle.h>
 #include <chrono>
 #include <cstddef>
 #include <glm/glm.hpp>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace Rml {
@@ -73,6 +75,8 @@ namespace lfs::vis::gui {
         void ensureBodyDataModelBound(Rml::Element* body);
         bool shouldRunDocumentHooks(bool force) const;
         bool updateToolbarRoots();
+        void bindReactiveStore();
+        void refreshGTMetricsOverlayFromStore();
         void applyGTMetricsOverlay();
         bool applyFrameTooltip();
         void queueVulkanContext();
@@ -113,6 +117,11 @@ namespace lfs::vis::gui {
         int last_render_w_ = 0;
         int last_render_h_ = 0;
         GTMetricsOverlayState gt_metrics_overlay_;
+        lfs::vis::AppStore::GTMetricsOverlayConfig gt_metrics_config_;
+        std::optional<lfs::vis::AppStore::CameraMetrics> camera_metrics_;
+        lfs::core::reactive::SubscriptionToken gt_metrics_config_subscription_;
+        lfs::core::reactive::SubscriptionToken camera_metrics_subscription_;
+        lfs::core::reactive::SubscriptionToken vram_hud_subscription_;
         std::unique_ptr<VramHudOverlay> vram_hud_;
         RmlTooltipController tooltip_;
         std::chrono::steady_clock::time_point last_document_hook_run_{};

@@ -64,6 +64,7 @@
 #include "tools/selection_tool.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
+#include "visualizer/app_store.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer_impl.hpp"
 #include "window/vulkan_context.hpp"
@@ -5170,40 +5171,49 @@ namespace lfs::vis::gui {
         rml_viewport_overlay_.setViewportBounds(
             viewport_layout_.pos, viewport_layout_.size,
             {panel_input.screen_x, panel_input.screen_y});
-        RmlViewportOverlay::GTMetricsOverlayState gt_metrics_overlay;
+        AppStore::GTMetricsOverlayConfig gt_metrics_config;
         if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr) {
             const auto settings = rendering->getSettings();
             if (rendering->isGTComparisonActive() &&
                 settings.camera_metrics_mode != RenderSettings::CameraMetricsMode::Off) {
-                gt_metrics_overlay.visible = true;
-                gt_metrics_overlay.psnr_text = "--";
-                gt_metrics_overlay.show_ssim =
+                gt_metrics_config.visible = true;
+                gt_metrics_config.show_ssim =
                     settings.camera_metrics_mode == RenderSettings::CameraMetricsMode::PSNRSSIM;
-                gt_metrics_overlay.ssim_text = "--";
 
                 const auto content_bounds = rendering->getContentBounds(glm::ivec2(
                     std::max(static_cast<int>(viewport_layout_.size.x), 0),
                     std::max(static_cast<int>(viewport_layout_.size.y), 0)));
-                gt_metrics_overlay.x =
+                gt_metrics_config.x =
                     content_bounds.x + content_bounds.width * settings.split_position + 18.0f;
-                gt_metrics_overlay.y = content_bounds.y + 18.0f;
-
-                const int current_camera_id = rendering->getCurrentCameraId();
-                if (const auto metrics = rendering->getLatestCameraMetrics();
-                    metrics && metrics->camera_id == current_camera_id) {
-                    gt_metrics_overlay.psnr_text = std::format("{:.2f}", metrics->psnr);
-                    if (gt_metrics_overlay.show_ssim && metrics->ssim.has_value()) {
-                        gt_metrics_overlay.ssim_text = std::format("{:.4f}", *metrics->ssim);
-                    }
-                }
+                gt_metrics_config.y = content_bounds.y + 18.0f;
+                gt_metrics_config.current_camera_id = rendering->getCurrentCameraId();
             }
         }
-        rml_viewport_overlay_.setGTMetricsOverlay(std::move(gt_metrics_overlay));
-        const auto publish_vram_hud_overlay = [&]() {
-            RmlViewportOverlay::VramHudOverlayState vram_hud_overlay;
-            if (auto& profiler = lfs::diagnostics::VramProfiler::instance();
-                show_vram_hud_ && profiler.enabled()) {
-                if (rml_viewport_overlay_.isDueForVramProcessSample(std::chrono::milliseconds(250))) {
+        if (!published_gt_metrics_overlay_config_ ||
+            !(*published_gt_metrics_overlay_config_ == gt_metrics_config)) {
+            app_store().gt_metrics_overlay_config.set(gt_metrics_config);
+            published_gt_metrics_overlay_config_ = gt_metrics_config;
+        }
+        const auto publish_vram_hud_overlay_if_due = [&]() {
+            auto& profiler = lfs::diagnostics::VramProfiler::instance();
+            const bool visible = show_vram_hud_ && profiler.enabled();
+            const auto now = std::chrono::steady_clock::now();
+            const bool due =
+                visible && (next_vram_hud_publish_ == std::chrono::steady_clock::time_point{} ||
+                            now >= next_vram_hud_publish_);
+
+            if (!visible) {
+                if (vram_hud_visible_published_) {
+                    app_store().vram_hud.set(AppStore::VramHud{});
+                    vram_hud_visible_published_ = false;
+                }
+                next_vram_hud_publish_ = {};
+                return;
+            }
+
+            if (due) {
+                {
+                    LOG_TIMER("gui_render.vram_hud_sample");
                     profiler.sampleCudaMemory();
                     const auto memory = queryGpuMemory();
                     profiler.updateProcessMemory(memory.process_used,
@@ -5216,10 +5226,13 @@ namespace lfs::vis::gui {
                         }
                     }
                 }
-                vram_hud_overlay.visible = true;
-                vram_hud_overlay.snapshot = profiler.snapshot();
+                app_store().vram_hud.set(AppStore::VramHud{
+                    .visible = true,
+                    .snapshot = std::make_shared<const lfs::diagnostics::VramProfilerSnapshot>(
+                        profiler.snapshot())});
+                vram_hud_visible_published_ = true;
+                next_vram_hud_publish_ = now + std::chrono::milliseconds(250);
             }
-            rml_viewport_overlay_.setVramHudOverlay(std::move(vram_hud_overlay));
         };
         startup_overlay_.setInput(&panel_input);
         if (startup_overlay_.isVisible()) {
@@ -5273,7 +5286,7 @@ namespace lfs::vis::gui {
             overlay_renderer->endFrame();
         }
 
-        publish_vram_hud_overlay();
+        publish_vram_hud_overlay_if_due();
         {
             LOG_TIMER("gui_render.rml_viewport_overlay.render");
             rml_viewport_overlay_.renderCached();
@@ -6046,6 +6059,7 @@ namespace lfs::vis::gui {
 
         ui::ToggleVramHud::when([this](const auto&) {
             show_vram_hud_ = !show_vram_hud_;
+            next_vram_hud_publish_ = {};
         });
 
         ui::ToggleFullscreen::when([this](const auto&) {

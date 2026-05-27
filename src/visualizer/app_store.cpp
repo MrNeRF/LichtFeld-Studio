@@ -19,7 +19,13 @@ namespace lfs::vis {
           scene_generation(store_, Field::SceneGeneration, "scene_generation", 0),
           selection_generation(store_, Field::SelectionGeneration, "selection_generation", 0),
           fps(store_, Field::Fps, "fps", 0.0f),
-          mode_text(store_, Field::ModeText, "mode_text", std::string{}) {}
+          mode_text(store_, Field::ModeText, "mode_text", std::string{}),
+          camera_metrics(store_, Field::CameraMetricsValue, "camera_metrics", std::optional<CameraMetrics>{}),
+          gt_metrics_overlay_config(store_,
+                                    Field::GTMetricsOverlayConfigValue,
+                                    "gt_metrics_overlay_config",
+                                    GTMetricsOverlayConfig{}),
+          vram_hud(store_, Field::VramHudValue, "vram_hud", VramHud{}) {}
 
     AppStore& app_store() {
         static AppStore instance;

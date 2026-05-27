@@ -7,14 +7,55 @@
 #include "core/reactive/observable.hpp"
 #include "core/reactive/store.hpp"
 
+#include <cmath>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
+
+namespace lfs::diagnostics {
+    struct VramProfilerSnapshot;
+} // namespace lfs::diagnostics
 
 namespace lfs::vis {
 
     class LFS_VIS_API AppStore {
     public:
+        struct CameraMetrics {
+            int camera_id = -1;
+            int iteration = -1;
+            float psnr = 0.0f;
+            std::optional<float> ssim;
+            bool used_mask = false;
+
+            bool operator==(const CameraMetrics&) const = default;
+        };
+
+        struct GTMetricsOverlayConfig {
+            bool visible = false;
+            float x = 16.0f;
+            float y = 16.0f;
+            bool show_ssim = false;
+            int current_camera_id = -1;
+
+            [[nodiscard]] bool operator==(const GTMetricsOverlayConfig& other) const noexcept {
+                return visible == other.visible &&
+                       std::abs(x - other.x) <= 0.5f &&
+                       std::abs(y - other.y) <= 0.5f &&
+                       show_ssim == other.show_ssim &&
+                       current_camera_id == other.current_camera_id;
+            }
+        };
+
+        struct VramHud {
+            bool visible = false;
+            std::shared_ptr<const lfs::diagnostics::VramProfilerSnapshot> snapshot;
+
+            [[nodiscard]] bool operator==(const VramHud& other) const noexcept {
+                return visible == other.visible && snapshot == other.snapshot;
+            }
+        };
+
         enum Field : std::uint32_t {
             Iteration = 1,
             TotalIterations,
@@ -30,6 +71,9 @@ namespace lfs::vis {
             SelectionGeneration,
             Fps,
             ModeText,
+            CameraMetricsValue,
+            GTMetricsOverlayConfigValue,
+            VramHudValue,
         };
 
         AppStore();
@@ -51,6 +95,9 @@ namespace lfs::vis {
         lfs::core::reactive::Observable<std::uint64_t> selection_generation;
         lfs::core::reactive::Observable<float> fps;
         lfs::core::reactive::Observable<std::string> mode_text;
+        lfs::core::reactive::Observable<std::optional<CameraMetrics>> camera_metrics;
+        lfs::core::reactive::Observable<GTMetricsOverlayConfig> gt_metrics_overlay_config;
+        lfs::core::reactive::Observable<VramHud> vram_hud;
 
     private:
         lfs::core::reactive::Store store_;

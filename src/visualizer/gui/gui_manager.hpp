@@ -28,6 +28,7 @@
 #include "gui/ui_context.hpp"
 #include "gui/utils/drag_drop_native.hpp"
 #include "rendering/passes/vulkan_viewport_pass.hpp"
+#include "visualizer/app_store.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
 #include <chrono>
 #include <cstddef>
@@ -234,6 +235,9 @@ namespace lfs::vis {
             std::unordered_map<std::string, bool> window_states_;
             bool show_main_panel_ = true;
             bool show_vram_hud_ = true;
+            bool vram_hud_visible_published_ = false;
+            std::chrono::steady_clock::time_point next_vram_hud_publish_{};
+            std::optional<AppStore::GTMetricsOverlayConfig> published_gt_metrics_overlay_config_;
 
             // Panel layout and viewport
             PanelLayoutManager panel_layout_;
