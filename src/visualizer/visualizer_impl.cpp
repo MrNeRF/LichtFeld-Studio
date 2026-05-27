@@ -9,6 +9,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/services.hpp"
+#include "gui/panel_registry.hpp"
 #include "gui/panels/tools_panel.hpp"
 #include "gui/panels/windows_console_utils.hpp"
 #include "ipc/render_settings_convert.hpp"
@@ -214,6 +215,13 @@ namespace lfs::vis {
         callback_cleanup_.add([] { python::set_main_loop_wake_callback(nullptr); });
         core::reactive::Store::set_wake_callback(&wakeEventLoopViaServices);
         callback_cleanup_.add([] { core::reactive::Store::set_wake_callback(nullptr); });
+        auto active_tool_poll_cache_token = std::make_shared<core::reactive::SubscriptionToken>(
+            app_store().active_tool.subscribe([](const std::string&) {
+                gui::PanelRegistry::instance().invalidate_poll_cache();
+            }));
+        callback_cleanup_.add([active_tool_poll_cache_token] {
+            active_tool_poll_cache_token->reset();
+        });
         python::set_mesh2splat_callbacks(
             [](std::shared_ptr<core::MeshData> mesh, std::string name, core::Mesh2SplatOptions opts) {
                 auto* gm = python::get_gui_manager();

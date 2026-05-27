@@ -48,6 +48,7 @@ def selection_groups_module(monkeypatch):
     module = import_module("lfs_plugins.selection_groups")
     module.NativeAppStore.scene_generation.value = 0
     module.NativeAppStore.selection_generation.value = 0
+    module.NativeAppStore.active_tool.value = "builtin.select"
     return module
 
 
@@ -61,6 +62,9 @@ class _HandleStub:
 
     def dirty(self, name):
         self.dirty_fields.append(name)
+
+    def dirty_all(self):
+        self.dirty_fields.append("__all__")
 
 
 def _make_group(group_id, name, count, locked, color):
@@ -86,12 +90,22 @@ class _DocStub:
 
 
 def _make_panel_lf(scene):
+    context_menu_state = SimpleNamespace(items=None, callback=None)
+
+    def show_context_menu(items, _sx, _sy, on_action=None):
+        context_menu_state.items = items
+        context_menu_state.callback = on_action
+
     return SimpleNamespace(
         get_scene=lambda: scene,
         ui=SimpleNamespace(
             get_active_tool=lambda: "builtin.select",
             poll_context_menu=lambda: None,
+            show_context_menu=show_context_menu,
+            get_mouse_screen_pos=lambda: (120.0, 220.0),
+            tr=lambda key: key,
         ),
+        context_menu_state=context_menu_state,
     )
 
 
@@ -178,3 +192,41 @@ def test_selection_groups_on_update_skips_unchanged_count_poll(selection_groups_
     panel.on_update(doc)
 
     assert count_updates == 2
+
+
+def test_selection_groups_store_update_invalidates_dirty_panel(selection_groups_module):
+    panel = selection_groups_module.SelectionGroupsPanel()
+    panel._handle = _HandleStub()
+
+    panel._subscribe_reactive_state()
+    try:
+        selection_groups_module.NativeAppStore.selection_generation.value += 1
+
+        assert "__all__" in panel._handle.dirty_fields
+    finally:
+        panel._unsubscribe_reactive_state()
+
+
+def test_selection_groups_context_menu_uses_callback_without_poll(selection_groups_module):
+    panel = selection_groups_module.SelectionGroupsPanel()
+    panel._handle = _HandleStub()
+    groups = [_make_group(1, "Foreground", 5, False, (1.0, 0.0, 0.0))]
+
+    def remove_group(group_id):
+        groups[:] = [group for group in groups if group.id != group_id]
+
+    scene = SimpleNamespace(
+        active_selection_group=1,
+        selection_groups=lambda: groups,
+        update_selection_group_counts=lambda: None,
+        remove_selection_group=remove_group,
+    )
+    selection_groups_module.lf = _make_panel_lf(scene)
+
+    panel._show_context_menu(1, SimpleNamespace())
+    assert callable(selection_groups_module.lf.context_menu_state.callback)
+
+    selection_groups_module.lf.context_menu_state.callback("delete")
+
+    assert groups == []
+    assert panel._handle.records["groups"] == []
