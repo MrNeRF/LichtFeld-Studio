@@ -46,7 +46,8 @@ def selection_groups_module(monkeypatch):
     sys.modules.pop("lfs_plugins", None)
     _install_lf_stub(monkeypatch)
     module = import_module("lfs_plugins.selection_groups")
-    module.AppState.reset()
+    module.NativeAppStore.scene_generation.value = 0
+    module.NativeAppStore.selection_generation.value = 0
     return module
 
 
@@ -173,7 +174,7 @@ def test_selection_groups_on_update_skips_unchanged_count_poll(selection_groups_
 
     assert count_updates == 1
 
-    selection_groups_module.AppState.selection_generation.value += 1
+    selection_groups_module.NativeAppStore.selection_generation.value += 1
     panel.on_update(doc)
 
     assert count_updates == 2

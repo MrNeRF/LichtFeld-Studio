@@ -5,7 +5,7 @@
 import lichtfeld as lf
 
 from .types import Panel
-from .ui.state import AppState
+from .ui.store import AppStore as NativeAppStore
 
 SELECTION_GROUPS_MODEL = "selection_groups"
 __lfs_panel_classes__ = ["SelectionGroupsPanel"]
@@ -100,8 +100,8 @@ class SelectionGroupsPanel(Panel):
             self._handle_context_action(action, self._context_menu_group_id)
             self._context_menu_group_id = None
 
-        scene_generation = AppState.scene_generation.value
-        selection_generation = AppState.selection_generation.value
+        scene_generation = NativeAppStore.scene_generation.value
+        selection_generation = NativeAppStore.selection_generation.value
         if (
             self._prev_group_hash is not None
             and scene_generation == self._last_scene_generation
