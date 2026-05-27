@@ -3,6 +3,7 @@
 Current branch: `reactive_ui`
 
 Last completed commits:
+- `ed519dac5 Gate idle panel registry branches`
 - `f9107672c Cache idle right panel shell rendering`
 - `22582d69d Cache idle viewport overlay rendering`
 - `a7a76ec5b Cache idle status bar rendering`
@@ -37,7 +38,9 @@ Current verified state:
 - The viewport overlay preserves document-hook, tooltip, and input invalidation but uses cached foreground texture blits for stable frames.
 - The right-panel Rml shell now reuses a cached texture when tab/layout/input flags are stable; dirty tab, resize, splitter, or hover paths still refresh.
 - Legacy Python popup drawing is guarded by an explicit hook-presence predicate, so idle frames skip Python UI preparation/GIL work when no popup callback is registered.
+- `GuiManager::render()` now computes explicit panel-space demand flags and skips side-panel preload, floating-panel hit testing/draw, status-bar plugin draw, and screen-overlay renderer work when those spaces have no enabled panels.
 - Last broad Python panel slice passed: 191 tests.
+- Last frame-router slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Shell*:*Rml*:*Menu*:*Modal*:*Startup*'` and the 191-test Python panel suite.
 - Last focused Python popup/plugin slice passed: 74 tests from plugin system, plugin API surface, and import dialog panels.
 - Last focused status/Rml C++ slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Status*:*Rml*:VisualizerPostWorkTest.*'`.
 - Last focused training/rendering Python slice passed: 51 tests.
@@ -68,6 +71,7 @@ Drive idle GUI CPU toward zero and keep p99 CPU UI work under 2 ms by removing r
 - Status bar cached rendering: `a7a76ec5b`.
 - Viewport overlay cached rendering: `22582d69d`.
 - Right-panel shell cached rendering: `f9107672c`.
+- Idle panel registry branch gating: `ed519dac5`.
 
 ## Next Batch 1: Frame Router Cleanup
 

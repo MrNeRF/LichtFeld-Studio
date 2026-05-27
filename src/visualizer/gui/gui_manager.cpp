@@ -4933,6 +4933,10 @@ namespace lfs::vis::gui {
         }
 
         auto& reg = PanelRegistry::instance();
+        const bool has_side_panel_plugins = reg.has_panels(PanelSpace::SidePanel);
+        const bool has_floating_panels = reg.has_panels(PanelSpace::Floating);
+        const bool has_status_bar_panels = reg.has_panels(PanelSpace::StatusBar);
+        const bool has_viewport_overlay_panels = reg.has_panels(PanelSpace::ViewportOverlay);
         const bool right_panel_visible = show_main_panel_ && !ui_hidden_;
         const bool panel_registry_needs_animation =
             reg.needsAnimationFrameForVisiblePanels({
@@ -5010,7 +5014,7 @@ namespace lfs::vis::gui {
         if (auto* cc = lfs::event::command_center())
             draw_ctx.is_training = cc->snapshot().is_running;
 
-        if (reg.has_panels(PanelSpace::SidePanel)) {
+        if (has_side_panel_plugins) {
             LOG_TIMER("gui_render.panel_setup.legacy_side_panel_preload");
             reg.preload_panels(PanelSpace::SidePanel, draw_ctx);
         }
@@ -5087,8 +5091,8 @@ namespace lfs::vis::gui {
             rp_layout.splitter_h = splitter_h;
             const bool right_panel_was_dirty = rml_right_panel_.needsAnimationFrame();
 
-            const bool float_blocks_rp = reg.isPositionOverFloatingPanel(
-                panel_input.mouse_x, panel_input.mouse_y);
+            const bool float_blocks_rp = has_floating_panels &&
+                reg.isPositionOverFloatingPanel(panel_input.mouse_x, panel_input.mouse_y);
             if (float_blocks_rp) {
                 PanelInputState masked_input = panel_input;
                 masked_input.mouse_x = -1.0e9f;
@@ -5157,6 +5161,17 @@ namespace lfs::vis::gui {
                                            panel_input, screen);
         }
 
+        LOG_PERF("gui_render.router side_panel_plugins={} floating_panels={} status_bar_panels={} viewport_overlay_panels={} right_live={} bottom_live={} layout_changed={} panel_registry_anim={} block_underlay={}",
+                 has_side_panel_plugins,
+                 has_floating_panels,
+                 has_status_bar_panels,
+                 has_viewport_overlay_panels,
+                 right_panel_requires_live_layout,
+                 bottom_dock_requires_live_layout,
+                 ui_layout_changed,
+                 panel_registry_needs_animation,
+                 block_underlay_input);
+
         applyFrameInputCapture(&rml_right_panel_);
 
         auto apply_cursor = [](CursorRequest req) {
@@ -5172,7 +5187,7 @@ namespace lfs::vis::gui {
         PanelInputState floating_input = panel_input;
         floating_input.bg_draw_list = ImGui::GetForegroundDrawList(ImGui::GetMainViewport());
         panel_setup_timer.reset();
-        {
+        if (has_floating_panels) {
             LOG_TIMER("gui_render.draw_panels.Floating");
             reg.draw_panels(PanelSpace::Floating, draw_ctx, &floating_input);
         }
@@ -5312,17 +5327,17 @@ namespace lfs::vis::gui {
         if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr) {
             overlay_renderer = rendering->getScreenOverlayRenderer();
         }
-        if (overlay_renderer) {
+        if (overlay_renderer && has_viewport_overlay_panels) {
             LOG_TIMER("gui_render.screen_overlay_renderer.beginFrame");
             overlay_renderer->beginFrame();
         }
 
-        {
+        if (has_viewport_overlay_panels) {
             LOG_TIMER("gui_render.draw_panels.ViewportOverlay");
             reg.draw_panels(PanelSpace::ViewportOverlay, draw_ctx);
         }
 
-        if (overlay_renderer) {
+        if (overlay_renderer && has_viewport_overlay_panels) {
             LOG_TIMER("gui_render.screen_overlay_renderer.endFrame");
             overlay_renderer->endFrame();
         }
@@ -5374,7 +5389,8 @@ namespace lfs::vis::gui {
                                              panel_input.screen_w,
                                              panel_input.screen_h);
             }
-            reg.draw_panels(PanelSpace::StatusBar, draw_ctx, &panel_input);
+            if (has_status_bar_panels)
+                reg.draw_panels(PanelSpace::StatusBar, draw_ctx, &panel_input);
         }
 
         if (python::has_python_modals()) {
