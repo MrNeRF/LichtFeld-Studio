@@ -6,6 +6,7 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "gui/rmlui/vulkan/rmlui_shaders_spv.hpp"
 #include "internal/resource_paths.hpp"
 #include <RmlUi/Core/Core.h>
@@ -17,8 +18,10 @@
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <format>
 #include <optional>
 #include <semaphore>
 #include <stb_image.h>
@@ -230,6 +233,29 @@ namespace {
 
         request.max_size = thumb_size > 0 ? thumb_size : (preview_size > 0 ? preview_size : dataset_size);
         return request;
+    }
+
+    void RecordRmlUiVram(std::string_view scope, std::string_view label, VkDeviceSize bytes) {
+        lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+            scope,
+            label,
+            static_cast<std::size_t>(bytes));
+    }
+
+    std::string TextureVramLabel(std::string_view prefix,
+                                 std::string_view name,
+                                 int width,
+                                 int height,
+                                 const void* ptr) {
+        if (name.empty()) {
+            name = "unnamed";
+        }
+        return std::format("{}:{}:{}x{}@0x{:x}",
+                           prefix,
+                           name,
+                           width,
+                           height,
+                           reinterpret_cast<std::uintptr_t>(ptr));
     }
 
 } // namespace
@@ -724,12 +750,26 @@ Rml::TextureHandle RenderInterface_VK::SaveLayerAsTexture() {
     VmaAllocationCreateInfo allocation_info{};
     allocation_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
 
-    VkResult status = vmaCreateImage(m_p_allocator, &image_info, &allocation_info, &texture->m_p_vk_image, &texture->m_p_vma_allocation, nullptr);
+    VmaAllocationInfo allocation_stats{};
+    VkResult status = vmaCreateImage(m_p_allocator,
+                                     &image_info,
+                                     &allocation_info,
+                                     &texture->m_p_vk_image,
+                                     &texture->m_p_vma_allocation,
+                                     &allocation_stats);
     RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to create saved RmlUi layer texture");
     if (status != VK_SUCCESS) {
         delete texture;
         return {};
     }
+    texture->m_vram_scope = "vulkan.rmlui.saved_layer_texture";
+    texture->m_vram_label = TextureVramLabel("saved_layer",
+                                             "clip",
+                                             static_cast<int>(bounds.extent.width),
+                                             static_cast<int>(bounds.extent.height),
+                                             texture);
+    texture->m_vram_allocation_size = allocation_stats.size;
+    RecordRmlUiVram(texture->m_vram_scope, texture->m_vram_label, texture->m_vram_allocation_size);
 
     VkImageViewCreateInfo view_info{};
     view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -744,6 +784,8 @@ Rml::TextureHandle RenderInterface_VK::SaveLayerAsTexture() {
     status = vkCreateImageView(m_p_device, &view_info, nullptr, &texture->m_p_vk_image_view);
     RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to create saved RmlUi layer texture view");
     if (status != VK_SUCCESS) {
+        if (!texture->m_vram_scope.empty() && !texture->m_vram_label.empty())
+            RecordRmlUiVram(texture->m_vram_scope, texture->m_vram_label, 0);
         vmaDestroyImage(m_p_allocator, texture->m_p_vk_image, texture->m_p_vma_allocation);
         delete texture;
         return {};
@@ -1149,7 +1191,6 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
 
     RMLUI_VK_ASSERTMSG(!source.empty(), "you pushed not valid data for copying to buffer");
     RMLUI_VK_ASSERTMSG(m_p_allocator, "you have to initialize Vma Allocator for this method");
-    (void)name;
 
     int width = dimensions.x;
     int height = dimensions.y;
@@ -1201,6 +1242,10 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
 
     p_texture->m_p_vk_image = p_image;
     p_texture->m_p_vma_allocation = p_allocation;
+    p_texture->m_vram_scope = "vulkan.rmlui.texture";
+    p_texture->m_vram_label = TextureVramLabel("texture", name, width, height, p_texture);
+    p_texture->m_vram_allocation_size = info_stats.size;
+    RecordRmlUiVram(p_texture->m_vram_scope, p_texture->m_vram_label, p_texture->m_vram_allocation_size);
 
 #ifdef RMLUI_VK_DEBUG
     vmaSetAllocationName(m_p_allocator, p_allocation, name.c_str());
@@ -3032,12 +3077,23 @@ void RenderInterface_VK::Create_DepthStencilImage() noexcept {
     info_alloc.flags = VMA_ALLOCATION_CREATE_USER_DATA_COPY_STRING_BIT;
     info_alloc.pUserData = const_cast<char*>(p_commentary);
 
-    VkResult status = vmaCreateImage(m_p_allocator, &info, &info_alloc, &p_image, &p_allocation, nullptr);
+    VmaAllocationInfo allocation_stats{};
+    VkResult status = vmaCreateImage(m_p_allocator, &info, &info_alloc, &p_image, &p_allocation, &allocation_stats);
 
     RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vmaCreateImage");
 
     m_texture_depthstencil.m_p_vk_image = p_image;
     m_texture_depthstencil.m_p_vma_allocation = p_allocation;
+    m_texture_depthstencil.m_vram_scope = "vulkan.rmlui.depth_stencil";
+    m_texture_depthstencil.m_vram_label = TextureVramLabel("depth_stencil",
+                                                           "swapchain",
+                                                           m_width,
+                                                           m_height,
+                                                           &m_texture_depthstencil);
+    m_texture_depthstencil.m_vram_allocation_size = allocation_stats.size;
+    RecordRmlUiVram(m_texture_depthstencil.m_vram_scope,
+                    m_texture_depthstencil.m_vram_label,
+                    m_texture_depthstencil.m_vram_allocation_size);
     m_depth_stencil_layout = VK_IMAGE_LAYOUT_UNDEFINED;
 }
 
@@ -3202,6 +3258,8 @@ void RenderInterface_VK::Destroy_Texture(const texture_data_t& texture) noexcept
     RMLUI_VK_ASSERTMSG(m_p_device, "you must have initialized VkDevice");
 
     if (texture.m_p_vma_allocation) {
+        if (!texture.m_vram_scope.empty() && !texture.m_vram_label.empty())
+            RecordRmlUiVram(texture.m_vram_scope, texture.m_vram_label, 0);
         m_image_barriers.forgetImage(texture.m_p_vk_image);
         vmaDestroyImage(m_p_allocator, texture.m_p_vk_image, texture.m_p_vma_allocation);
         vkDestroyImageView(m_p_device, texture.m_p_vk_image_view, nullptr);
@@ -3311,9 +3369,16 @@ void RenderInterface_VK::EnsureRenderLayer(Rml::LayerHandle layer_handle) {
     VmaAllocationCreateInfo allocation_info{};
     allocation_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
 
+    VmaAllocationInfo color_allocation_stats{};
     VkResult status = vmaCreateImage(m_p_allocator, &color_info, &allocation_info, &layer.m_color.m_p_vk_image,
-                                     &layer.m_color.m_p_vma_allocation, nullptr);
+                                     &layer.m_color.m_p_vma_allocation, &color_allocation_stats);
     RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to create RmlUi Vulkan layer color image");
+    layer.m_color.m_vram_scope = "vulkan.rmlui.render_layer";
+    layer.m_color.m_vram_label = TextureVramLabel("layer_color", "rmlui", m_width, m_height, &layer.m_color);
+    layer.m_color.m_vram_allocation_size = color_allocation_stats.size;
+    RecordRmlUiVram(layer.m_color.m_vram_scope,
+                    layer.m_color.m_vram_label,
+                    layer.m_color.m_vram_allocation_size);
 
     VkImageViewCreateInfo color_view_info{};
     color_view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -3342,9 +3407,16 @@ void RenderInterface_VK::EnsureRenderLayer(Rml::LayerHandle layer_handle) {
     depth_info.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     depth_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
+    VmaAllocationInfo depth_allocation_stats{};
     status = vmaCreateImage(m_p_allocator, &depth_info, &allocation_info, &layer.m_depth_stencil.m_p_vk_image,
-                            &layer.m_depth_stencil.m_p_vma_allocation, nullptr);
+                            &layer.m_depth_stencil.m_p_vma_allocation, &depth_allocation_stats);
     RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to create RmlUi Vulkan layer depth/stencil image");
+    layer.m_depth_stencil.m_vram_scope = "vulkan.rmlui.render_layer";
+    layer.m_depth_stencil.m_vram_label = TextureVramLabel("layer_depth", "rmlui", m_width, m_height, &layer.m_depth_stencil);
+    layer.m_depth_stencil.m_vram_allocation_size = depth_allocation_stats.size;
+    RecordRmlUiVram(layer.m_depth_stencil.m_vram_scope,
+                    layer.m_depth_stencil.m_vram_label,
+                    layer.m_depth_stencil.m_vram_allocation_size);
 
     VkImageViewCreateInfo depth_view_info{};
     depth_view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;

@@ -217,7 +217,6 @@
     "type.dataset": "Dataset",
     "type.mesh": "MESH",
     "type.usd": "USD",
-    "type.video": "VIDEO",
     "type.gaussian_splat": "Gaussian Splat",
     "type.point_cloud": "Point Cloud",
     "type.asset": "Asset",

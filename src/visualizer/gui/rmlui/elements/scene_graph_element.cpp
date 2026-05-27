@@ -495,7 +495,7 @@ namespace lfs::vis::gui {
 
     void SceneGraphElement::OnResize() { dom_dirty_ = true; }
 
-    void SceneGraphElement::OnRender() {
+    void SceneGraphElement::OnUpdate() {
         ensureDom();
         if (tree_rebuild_needed_) {
             if (auto* scene_manager = services().sceneOrNull()) {

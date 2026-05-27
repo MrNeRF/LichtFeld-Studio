@@ -33,6 +33,7 @@
 #include "rasterization/gsplat_rasterizer.hpp"
 #include "strategies/mcmc.hpp"
 #include "strategies/strategy_factory.hpp"
+#include "training/training_setup.hpp"
 #include "training/kernels/camera_loss_heatmap.cuh"
 #include "training/kernels/grad_alpha.hpp"
 #include "training/kernels/mrnf_kernels.hpp"
@@ -47,6 +48,7 @@
 #include <cstdlib>
 #include <cuda_runtime.h>
 #include <expected>
+#include <format>
 #include <limits>
 #include <memory>
 #include <numeric>
@@ -1958,6 +1960,12 @@ namespace lfs::training {
             // Re-initialize strategy with new parameters
             strategy_->set_training_dataset(train_dataset_);
             strategy_->initialize(get_runtime_optimization_params());
+            {
+                std::unique_lock<std::shared_mutex> render_lock(render_mutex_);
+                if (auto result = ensureModelTensorAllocatorStorage(splat, "strategy initialization"); !result) {
+                    return std::unexpected(result.error());
+                }
+            }
             LOG_DEBUG("Strategy initialized");
 
             // Initialize bilateral grid if enabled
@@ -2254,6 +2262,24 @@ namespace lfs::training {
     void Trainer::setCameraLossHeatmap(std::shared_ptr<CameraLossHeatmapState> heatmap) {
         std::lock_guard<std::mutex> lock(camera_loss_heatmap_mutex_);
         camera_loss_heatmap_ = std::move(heatmap);
+    }
+
+    std::expected<void, std::string> Trainer::ensureModelTensorAllocatorStorage(
+        lfs::core::SplatData& model,
+        const std::string_view reason) {
+        if (!splat_tensor_allocator_) {
+            return {};
+        }
+
+        if (auto result = lfs::training::migrateTrainingModelToAllocator(
+                params_, model, splat_tensor_allocator_);
+            !result) {
+            return std::unexpected(std::format(
+                "Failed to keep training model in Vulkan-external storage after {}: {}",
+                reason,
+                result.error()));
+        }
+        return {};
     }
 
     std::expected<Trainer::CameraMetricsSnapshot, std::string> Trainer::computeCameraMetrics(
@@ -2866,6 +2892,9 @@ namespace lfs::training {
                 }
                 if (static_cast<size_t>(model.size()) != model_size_before) {
                     syncTrainingSceneTopology(scene_, model);
+                }
+                if (auto result = ensureModelTensorAllocatorStorage(model, "fastgs strategy post_backward"); !result) {
+                    return std::unexpected(result.error());
                 }
             }
 
@@ -3721,6 +3750,9 @@ namespace lfs::training {
                     if (static_cast<size_t>(model.size()) != model_size_before) {
                         syncTrainingSceneTopology(scene_, model);
                     }
+                    if (auto result = ensureModelTensorAllocatorStorage(model, "strategy step"); !result) {
+                        return std::unexpected(result.error());
+                    }
                 }
 
                 // Clean evaluation - let the evaluator handle everything
@@ -4329,9 +4361,17 @@ namespace lfs::training {
 
         auto result = lfs::training::load_checkpoint(
             checkpoint_path, *strategy_, params_, bilateral_grid_.get(), ppisp_.get(),
-            ppisp_controller_pool_.get());
+            ppisp_controller_pool_.get(), splat_tensor_allocator_);
         if (!result) {
             return result;
+        }
+        {
+            std::unique_lock<std::shared_mutex> render_lock(render_mutex_);
+            if (auto storage_result = ensureModelTensorAllocatorStorage(
+                    strategy_->get_model(), "checkpoint load");
+                !storage_result) {
+                return std::unexpected(storage_result.error());
+            }
         }
 
         if (params_.optimization.enable_sparsity) {

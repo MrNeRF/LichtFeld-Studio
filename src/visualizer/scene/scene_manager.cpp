@@ -2298,7 +2298,8 @@ namespace lfs::vis {
                 }
             }
 
-            auto splat_result = lfs::core::load_checkpoint_splat_data(path);
+            auto tensor_allocator = makeViewerSplatTensorAllocator();
+            auto splat_result = lfs::core::load_checkpoint_splat_data(path, tensor_allocator);
             if (!splat_result) {
                 throw std::runtime_error("Failed to load checkpoint SplatData: " + splat_result.error());
             }
@@ -2315,6 +2316,7 @@ namespace lfs::vis {
             checkpoint_params.resume_checkpoint = path;
 
             auto trainer = std::make_unique<lfs::training::Trainer>(scene_);
+            trainer->setSplatTensorAllocator(tensor_allocator);
             const auto init_result = trainer->initialize(checkpoint_params);
             if (!init_result) {
                 throw std::runtime_error("Failed to initialize trainer: " + init_result.error());

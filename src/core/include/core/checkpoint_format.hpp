@@ -46,7 +46,8 @@ namespace lfs::core {
         const std::filesystem::path& path);
 
     LFS_CORE_API std::expected<SplatData, std::string> load_checkpoint_splat_data(
-        const std::filesystem::path& path);
+        const std::filesystem::path& path,
+        SplatTensorAllocator tensor_allocator = {});
 
     LFS_CORE_API std::expected<param::TrainingParameters, std::string> load_checkpoint_params(
         const std::filesystem::path& path);

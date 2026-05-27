@@ -13,6 +13,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -277,6 +278,8 @@ namespace lfs::vis::input {
         std::optional<InputTrigger> getTriggerForAction(Action action, ToolMode mode = ToolMode::GLOBAL) const;
         std::optional<InputTrigger> getEffectiveTriggerForAction(Action action, ToolMode mode = ToolMode::GLOBAL) const;
         std::string getTriggerDescription(Action action, ToolMode mode = ToolMode::GLOBAL) const;
+        [[nodiscard]] std::string getLocalizedTriggerDescription(
+            Action action, ToolMode mode = ToolMode::GLOBAL) const;
 
         // Get the key code for a continuous action (returns -1 if not a key binding)
         int getKeyForAction(Action action, ToolMode mode = ToolMode::GLOBAL) const;
@@ -352,5 +355,11 @@ namespace lfs::vis::input {
     LFS_VIS_API std::string getMouseButtonName(MouseButton button);
     LFS_VIS_API std::string getModifierString(int modifiers);
     [[nodiscard]] LFS_VIS_API ShortcutScope shortcutScopeForAction(Action action);
+
+    [[nodiscard]] LFS_VIS_API std::string_view actionNameKey(Action action);
+    [[nodiscard]] LFS_VIS_API std::optional<Action> actionFromName(std::string_view name);
+    [[nodiscard]] LFS_VIS_API std::string getLocalizedActionName(Action action);
+    [[nodiscard]] LFS_VIS_API std::string getLocalizedToolModeName(ToolMode mode);
+    [[nodiscard]] LFS_VIS_API std::string localizeTriggerDescription(std::string description);
 
 } // namespace lfs::vis::input

@@ -31,6 +31,7 @@ using lfs::core::Device;
 using lfs::core::SplatData;
 using lfs::core::Tensor;
 using lfs::vis::vksplat::buildPaddedShReference;
+using lfs::vis::vksplat::copyRawOpacityToBuffer;
 using lfs::vis::vksplat::deviceInputLayout;
 using lfs::vis::vksplat::DevicePackedInputs;
 using lfs::vis::vksplat::packDeviceInputs;
@@ -425,5 +426,40 @@ TEST(VksplatInputPackerTest, RawDeviceLayoutUsesRequestedUploadShDegree) {
             << "upload_sh_degree=" << upload_sh_degree;
         EXPECT_EQ(raw_layout->omits_shN, upload_sh_degree == 0)
             << "upload_sh_degree=" << upload_sh_degree;
+    }
+}
+
+TEST(VksplatInputPackerTest, RawOpacityCopyBakesDeletedMaskOnlyIntoOpacity) {
+    constexpr std::size_t n = 5;
+    SyntheticInputs in = makeInputs(n, /*max_sh_degree=*/1, /*seed=*/0x0A91u);
+    auto splat = buildSplatData(in);
+
+    Tensor copied = Tensor::empty({n}, Device::CUDA, DataType::Float32);
+    auto copy_status = copyRawOpacityToBuffer(*splat, copied.ptr<float>(), copied.stream());
+    ASSERT_TRUE(copy_status.has_value()) << copy_status.error();
+    const auto unmasked = copied.cpu().to_vector();
+    ASSERT_EQ(unmasked.size(), n);
+    for (std::size_t i = 0; i < n; ++i) {
+        EXPECT_FLOAT_EQ(unmasked[i], in.opacity[i]);
+    }
+
+    const auto mask = Tensor::from_vector(
+                          std::vector<int>{0, 1, 0, 1, 0},
+                          {n},
+                          Device::CUDA)
+                          .to(DataType::Bool);
+    splat->soft_delete(mask);
+
+    Tensor masked = Tensor::empty({n}, Device::CUDA, DataType::Float32);
+    copy_status = copyRawOpacityToBuffer(*splat, masked.ptr<float>(), masked.stream());
+    ASSERT_TRUE(copy_status.has_value()) << copy_status.error();
+    const auto masked_values = masked.cpu().to_vector();
+    ASSERT_EQ(masked_values.size(), n);
+    for (std::size_t i = 0; i < n; ++i) {
+        if (i == 1 || i == 3) {
+            EXPECT_NEAR(masked_values[i], -20.0f, 1e-5f);
+        } else {
+            EXPECT_FLOAT_EQ(masked_values[i], in.opacity[i]);
+        }
     }
 }

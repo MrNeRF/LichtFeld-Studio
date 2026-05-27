@@ -54,6 +54,19 @@ namespace lfs::training {
         lfs::core::SplatTensorAllocator tensor_allocator = {});
 
     /**
+     * @brief Copy an existing training model into caller-provided tensor storage.
+     *
+     * GUI/Vulkan training uses this to repair loaded or restored scene-owned
+     * SplatData before VkSplat renders it. It preserves the SplatData object and
+     * swaps only its parameter tensors, so strategies that hold a SplatData
+     * reference remain valid.
+     */
+    std::expected<void, std::string> migrateTrainingModelToAllocator(
+        const lfs::core::param::TrainingParameters& params,
+        lfs::core::SplatData& model,
+        const lfs::core::SplatTensorAllocator& tensor_allocator);
+
+    /**
      * @brief Validate dataset path without loading data
      *
      * Checks that the dataset path exists and has the required structure.

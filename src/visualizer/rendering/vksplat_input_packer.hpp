@@ -110,15 +110,12 @@ namespace lfs::vis::vksplat {
         const lfs::core::SplatData& splat_data,
         int upload_sh_degree = -1);
 
-    LFS_VIS_API [[nodiscard]] std::expected<void, std::string> copyRawDeviceInputsToBuffer(
+    // Copy just raw opacity, baking SplatData::deleted() into the destination
+    // when present. This lets the live renderer borrow all other raw tensors
+    // directly instead of allocating a full raw-model copy only to honor deletes.
+    LFS_VIS_API [[nodiscard]] std::expected<void, std::string> copyRawOpacityToBuffer(
         const lfs::core::SplatData& splat_data,
-        void* xyz_dst,
-        void* sh0_dst,
-        void* shN_dst,
-        void* rotations_dst,
-        void* scaling_dst,
         void* opacity_dst,
-        cudaStream_t stream,
-        int upload_sh_degree = -1);
+        cudaStream_t stream);
 
 } // namespace lfs::vis::vksplat

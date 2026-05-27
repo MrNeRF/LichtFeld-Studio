@@ -12,7 +12,7 @@
                      data-class-selected="button.selected"
                      data-attr-id="button.button_id"
                      data-attr-data-tooltip="button.tooltip_key"
-                     data-attr-data-shortcut="button.shortcut_text"
+                     data-attr-data-action="button.action_id"
                      data-attr-title="button.tooltip_text"
                      data-attrif-disabled="!button.enabled"
                      data-event-click="toolbar_action(button.action, button.value)">
@@ -25,7 +25,7 @@
                          data-attr-id="button.button_id"
                          data-class-selected="button.selected"
                          data-attr-data-tooltip="button.tooltip_key"
-                         data-attr-data-shortcut="button.shortcut_text"
+                         data-attr-data-action="button.action_id"
                          data-attr-title="button.tooltip_text"
                          data-attrif-disabled="!button.enabled"
                          data-event-click="toolbar_action(button.action, button.value)">
@@ -39,7 +39,7 @@
                      data-class-selected="button.selected"
                      data-attr-id="button.button_id"
                      data-attr-data-tooltip="button.tooltip_key"
-                     data-attr-data-shortcut="button.shortcut_text"
+                     data-attr-data-action="button.action_id"
                      data-attr-title="button.tooltip_text"
                      data-attrif-disabled="!button.enabled"
                      data-event-click="toolbar_action(button.action, button.value)">
@@ -52,7 +52,7 @@
                          data-attr-id="button.button_id"
                          data-class-selected="button.selected"
                          data-attr-data-tooltip="button.tooltip_key"
-                         data-attr-data-shortcut="button.shortcut_text"
+                         data-attr-data-action="button.action_id"
                          data-attr-title="button.tooltip_text"
                          data-attrif-disabled="!button.enabled"
                          data-event-click="toolbar_action(button.action, button.value)">
@@ -65,7 +65,7 @@
                  data-attr-id="button.button_id"
                  data-class-selected="button.selected"
                  data-attr-data-tooltip="button.tooltip_key"
-                 data-attr-data-shortcut="button.shortcut_text"
+                 data-attr-data-action="button.action_id"
                  data-attr-title="button.tooltip_text"
                  data-attrif-disabled="!button.enabled"
                  data-event-click="toolbar_action(button.action, button.value)">
@@ -78,6 +78,7 @@
                      data-class-selected="button.selected"
                      data-attr-id="button.button_id"
                      data-attr-data-tooltip="button.tooltip_key"
+                     data-attr-data-action="button.action_id"
                      data-attr-title="button.tooltip_text"
                      data-event-click="toolbar_action(button.action, button.value)">
                     <img data-attr-src="button.icon_src" />
@@ -89,6 +90,7 @@
                          data-attr-id="button.button_id"
                          data-class-selected="button.selected"
                          data-attr-data-tooltip="button.tooltip_key"
+                         data-attr-data-action="button.action_id"
                          data-attr-title="button.tooltip_text"
                          data-attrif-disabled="!button.enabled"
                          data-event-click="toolbar_action(button.action, button.value)">
@@ -102,7 +104,7 @@
                  data-attr-id="button.button_id"
                  data-class-selected="button.selected"
                  data-attr-data-tooltip="button.tooltip_key"
-                 data-attr-data-shortcut="button.shortcut_text"
+                 data-attr-data-action="button.action_id"
                  data-attr-title="button.tooltip_text"
                  data-attrif-disabled="!button.enabled"
                  data-event-click="toolbar_action(button.action, button.value)">
@@ -115,6 +117,7 @@
                      data-class-selected="button.selected"
                      data-attr-id="button.button_id"
                      data-attr-data-tooltip="button.tooltip_key"
+                     data-attr-data-action="button.action_id"
                      data-attr-title="button.tooltip_text"
                      data-event-click="toolbar_action(button.action, button.value)">
                     <img data-attr-src="button.icon_src" />
@@ -126,6 +129,7 @@
                          data-attr-id="button.button_id"
                          data-class-selected="button.selected"
                          data-attr-data-tooltip="button.tooltip_key"
+                         data-attr-data-action="button.action_id"
                          data-attr-title="button.tooltip_text"
                          data-attrif-disabled="!button.enabled"
                          data-event-click="toolbar_action(button.action, button.value)">
@@ -139,6 +143,7 @@
                  data-attr-id="button.button_id"
                  data-class-selected="button.selected"
                  data-attr-data-tooltip="button.tooltip_key"
+                 data-attr-data-action="button.action_id"
                  data-attr-title="button.tooltip_text"
                  data-attrif-disabled="!button.enabled"
                  data-event-click="toolbar_action(button.action, button.value)">
@@ -150,6 +155,7 @@
                  data-attr-id="button.button_id"
                  data-class-selected="button.selected"
                  data-attr-data-tooltip="button.tooltip_key"
+                 data-attr-data-action="button.action_id"
                  data-attr-title="button.tooltip_text"
                  data-attrif-disabled="!button.enabled"
                  data-event-click="toolbar_action(button.action, button.value)">
@@ -160,6 +166,7 @@
                  data-attr-id="button.button_id"
                  data-class-selected="button.selected"
                  data-attr-data-tooltip="button.tooltip_key"
+                 data-attr-data-action="button.action_id"
                  data-attr-title="button.tooltip_text"
                  data-attrif-disabled="!button.enabled"
                  data-event-click="toolbar_action(button.action, button.value)">
@@ -177,7 +184,7 @@
                      data-attr-id="button.button_id"
                      data-class-selected="button.selected"
                      data-attr-data-tooltip="button.tooltip_key"
-                     data-attr-data-shortcut="button.shortcut_text"
+                     data-attr-data-action="button.action_id"
                      data-attr-title="button.tooltip_text"
                      data-attrif-disabled="!button.enabled"
                      data-event-click="toolbar_action(button.action, button.value)">
@@ -190,7 +197,7 @@
                          data-attr-id="button.button_id"
                          data-class-selected="button.selected"
                          data-attr-data-tooltip="button.tooltip_key"
-                         data-attr-data-shortcut="button.shortcut_text"
+                         data-attr-data-action="button.action_id"
                          data-attr-title="button.tooltip_text"
                          data-attrif-disabled="!button.enabled"
                          data-event-click="toolbar_action(button.action, button.value)">
@@ -204,7 +211,7 @@
                      data-attr-id="button.button_id"
                      data-class-selected="button.selected"
                      data-attr-data-tooltip="button.tooltip_key"
-                     data-attr-data-shortcut="button.shortcut_text"
+                     data-attr-data-action="button.action_id"
                      data-attr-title="button.tooltip_text"
                      data-attrif-disabled="!button.enabled"
                      data-event-click="toolbar_action(button.action, button.value)">
@@ -217,7 +224,7 @@
                          data-attr-id="button.button_id"
                          data-class-selected="button.selected"
                          data-attr-data-tooltip="button.tooltip_key"
-                         data-attr-data-shortcut="button.shortcut_text"
+                         data-attr-data-action="button.action_id"
                          data-attr-title="button.tooltip_text"
                          data-attrif-disabled="!button.enabled"
                          data-event-click="toolbar_action(button.action, button.value)">
@@ -230,7 +237,7 @@
                  data-attr-id="button.button_id"
                  data-class-selected="button.selected"
                  data-attr-data-tooltip="button.tooltip_key"
-                 data-attr-data-shortcut="button.shortcut_text"
+                 data-attr-data-action="button.action_id"
                  data-attr-title="button.tooltip_text"
                  data-attrif-disabled="!button.enabled"
                  data-event-click="toolbar_action(button.action, button.value)">
@@ -243,6 +250,7 @@
                      data-attr-id="button.button_id"
                      data-class-selected="button.selected"
                      data-attr-data-tooltip="button.tooltip_key"
+                     data-attr-data-action="button.action_id"
                      data-attr-title="button.tooltip_text"
                      data-event-click="toolbar_action(button.action, button.value)">
                     <img data-attr-src="button.icon_src" />
@@ -254,6 +262,7 @@
                          data-attr-id="button.button_id"
                          data-class-selected="button.selected"
                          data-attr-data-tooltip="button.tooltip_key"
+                         data-attr-data-action="button.action_id"
                          data-attr-title="button.tooltip_text"
                          data-attrif-disabled="!button.enabled"
                          data-event-click="toolbar_action(button.action, button.value)">
@@ -267,7 +276,7 @@
                  data-attr-id="button.button_id"
                  data-class-selected="button.selected"
                  data-attr-data-tooltip="button.tooltip_key"
-                 data-attr-data-shortcut="button.shortcut_text"
+                 data-attr-data-action="button.action_id"
                  data-attr-title="button.tooltip_text"
                  data-attrif-disabled="!button.enabled"
                  data-event-click="toolbar_action(button.action, button.value)">
@@ -280,6 +289,7 @@
                      data-attr-id="button.button_id"
                      data-class-selected="button.selected"
                      data-attr-data-tooltip="button.tooltip_key"
+                     data-attr-data-action="button.action_id"
                      data-attr-title="button.tooltip_text"
                      data-event-click="toolbar_action(button.action, button.value)">
                     <img data-attr-src="button.icon_src" />
@@ -291,6 +301,7 @@
                          data-attr-id="button.button_id"
                          data-class-selected="button.selected"
                          data-attr-data-tooltip="button.tooltip_key"
+                         data-attr-data-action="button.action_id"
                          data-attr-title="button.tooltip_text"
                          data-attrif-disabled="!button.enabled"
                          data-event-click="toolbar_action(button.action, button.value)">
@@ -304,6 +315,7 @@
                  data-attr-id="button.button_id"
                  data-class-selected="button.selected"
                  data-attr-data-tooltip="button.tooltip_key"
+                 data-attr-data-action="button.action_id"
                  data-attr-title="button.tooltip_text"
                  data-attrif-disabled="!button.enabled"
                  data-event-click="toolbar_action(button.action, button.value)">
@@ -315,6 +327,7 @@
                  data-attr-id="button.button_id"
                  data-class-selected="button.selected"
                  data-attr-data-tooltip="button.tooltip_key"
+                 data-attr-data-action="button.action_id"
                  data-attr-title="button.tooltip_text"
                  data-attrif-disabled="!button.enabled"
                  data-event-click="toolbar_action(button.action, button.value)">
@@ -325,6 +338,7 @@
                  data-attr-id="button.button_id"
                  data-class-selected="button.selected"
                  data-attr-data-tooltip="button.tooltip_key"
+                 data-attr-data-action="button.action_id"
                  data-attr-title="button.tooltip_text"
                  data-attrif-disabled="!button.enabled"
                  data-event-click="toolbar_action(button.action, button.value)">
@@ -381,6 +395,7 @@
                 <div class="viewport-transform-actions viewport-selection-actions">
                     <button class="icon-btn viewport-transform-action"
                             data-tooltip="tooltip.selection_depth_mode"
+                            data-action="toggle_selection_depth_filter"
                             data-attr-title="selection_depth_toggle_label"
                             data-class-selected="selection_depth_mode_active"
                             data-attrif-disabled="!selection_has_scene"
@@ -389,6 +404,7 @@
                     </button>
                     <button class="icon-btn viewport-transform-action"
                             data-tooltip="tooltip.selection_delete"
+                            data-action="delete_selected"
                             data-attr-title="selection_delete_label"
                             data-attrif-disabled="!selection_can_delete"
                             data-event-click="selection_action('delete')">
@@ -396,6 +412,7 @@
                     </button>
                     <button class="icon-btn viewport-transform-action"
                             data-tooltip="tooltip.selection_undo"
+                            data-action="undo"
                             data-attr-title="selection_undo_label"
                             data-attrif-disabled="!selection_can_undo"
                             data-event-click="selection_action('undo')">
@@ -403,6 +420,7 @@
                     </button>
                     <button class="icon-btn viewport-transform-action"
                             data-tooltip="tooltip.selection_redo"
+                            data-action="redo"
                             data-attr-title="selection_redo_label"
                             data-attrif-disabled="!selection_can_redo"
                             data-event-click="selection_action('redo')">
@@ -410,6 +428,7 @@
                     </button>
                     <button class="icon-btn viewport-transform-action"
                             data-tooltip="tooltip.selection_invert"
+                            data-action="invert_selection"
                             data-attr-title="selection_invert_label"
                             data-attrif-disabled="!selection_has_scene"
                             data-event-click="selection_action('invert')">
@@ -417,6 +436,7 @@
                     </button>
                     <button class="icon-btn viewport-transform-action"
                             data-tooltip="tooltip.selection_select_all"
+                            data-action="select_all"
                             data-attr-title="selection_select_all_label"
                             data-attrif-disabled="!selection_has_scene"
                             data-event-click="selection_action('select_all')">
@@ -424,6 +444,7 @@
                     </button>
                     <button class="icon-btn viewport-transform-action"
                             data-tooltip="tooltip.selection_unselect"
+                            data-action="deselect_all"
                             data-attr-title="selection_unselect_label"
                             data-attrif-disabled="!selection_has_selection"
                             data-event-click="selection_action('unselect')">
@@ -453,6 +474,7 @@
                                 data-attr-id="button.button_id"
                                 data-class-selected="button.selected"
                                 data-attr-data-tooltip="button.tooltip_key"
+                                data-attr-data-action="button.action_id"
                                 data-attr-title="button.tooltip_text"
                                 data-attrif-disabled="!button.enabled"
                                 data-event-click="toolbar_action(button.action, button.value)">
@@ -466,6 +488,7 @@
                                 data-attr-id="button.button_id"
                                 data-class-selected="button.selected"
                                 data-attr-data-tooltip="button.tooltip_key"
+                                data-attr-data-action="button.action_id"
                                 data-attr-title="button.tooltip_text"
                                 data-attrif-disabled="!button.enabled"
                                 data-event-click="toolbar_action(button.action, button.value)">

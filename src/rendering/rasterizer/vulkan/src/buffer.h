@@ -78,12 +78,8 @@ public:
         return *this;
     }
 
-    size_t byteLength() const { return this->size() * sizeof(T); }
     size_t deviceSize() const { return deviceBuffer.size / sizeof(T); }
 };
-
-#define _DECL_DEVICE_BUFFER(dtype, name) Buffer<dtype> name = Buffer<dtype>(false)
-// #define _DECL_DEVICE_BUFFER(dtype, name) Buffer<dtype> name
 
 struct VulkanGSPipelineBuffers {
     size_t num_splats = 0;

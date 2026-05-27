@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "core/event_bridge/localization_manager.hpp"
+#include "core/export.hpp"
 
 #include <RmlUi/Core/Element.h>
 #include <chrono>
@@ -19,30 +19,7 @@ namespace lfs::vis::gui {
 
     inline constexpr auto kRmlTooltipShowDelay = std::chrono::milliseconds(500);
 
-    inline std::string resolveRmlTooltip(Rml::Element* hover) {
-        for (auto* el = hover; el; el = el->GetParentNode()) {
-            const auto key = el->GetAttribute<Rml::String>("data-tooltip", "");
-            if (!key.empty()) {
-                auto& loc = lfs::event::LocalizationManager::getInstance();
-                const char* resolved = loc.get(key.c_str());
-                if (!resolved || std::string_view(resolved) == key.c_str())
-                    return {};
-                std::string text(resolved);
-                const auto shortcut = el->GetAttribute<Rml::String>("data-shortcut", "");
-                if (!shortcut.empty()) {
-                    text += " (";
-                    text += shortcut.c_str();
-                    text += ")";
-                }
-                return text;
-            }
-
-            const auto title = el->GetAttribute<Rml::String>("title", "");
-            if (!title.empty())
-                return std::string(title.c_str(), title.size());
-        }
-        return {};
-    }
+    LFS_VIS_API std::string resolveRmlTooltip(Rml::Element* hover);
 
     // Per-document tooltip state. Each renderer owns one instance and drives it
     // from its own input/render passes, so the tooltip element lives inside the

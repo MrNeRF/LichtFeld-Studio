@@ -5,13 +5,16 @@
 #include "vulkan_split_view_pass.hpp"
 
 #include "core/logger.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "rendering/image_layout.hpp"
 #include "window/vulkan_context.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <format>
 #include <limits>
+#include <string>
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 #include <vk_mem_alloc.h>
@@ -152,6 +155,7 @@ namespace lfs::vis {
             // via vkResetCommandBuffer instead of vkAllocate/Free per upload.
             VkCommandBuffer cmd = VK_NULL_HANDLE;
             VkFence fence = VK_NULL_HANDLE;
+            std::string image_vram_label;
         };
         PanelImage left{};
         PanelImage right{};
@@ -441,6 +445,12 @@ namespace lfs::vis {
                 p.view = VK_NULL_HANDLE;
             }
             if (p.image != VK_NULL_HANDLE) {
+                if (!p.image_vram_label.empty()) {
+                    lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                        "vulkan.split_view.panel_image",
+                        p.image_vram_label,
+                        0);
+                }
                 vmaDestroyImage(allocator, p.image, p.alloc);
                 p.image = VK_NULL_HANDLE;
                 p.alloc = VK_NULL_HANDLE;
@@ -468,6 +478,7 @@ namespace lfs::vis {
             // memcpy reading from it — so we must NOT clear pack_bytes here.
             p.width = 0;
             p.height = 0;
+            p.image_vram_label.clear();
             p.uploaded_tensor = nullptr;
         }
 
@@ -540,9 +551,16 @@ namespace lfs::vis {
             img.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             VmaAllocationCreateInfo ai{};
             ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-            if (vmaCreateImage(allocator, &img, &ai, &p.image, &p.alloc, nullptr) != VK_SUCCESS) {
+            VmaAllocationInfo allocation_info{};
+            if (vmaCreateImage(allocator, &img, &ai, &p.image, &p.alloc, &allocation_info) != VK_SUCCESS) {
                 return false;
             }
+            const char* const side = &p == &left ? "left" : "right";
+            p.image_vram_label = std::format("{}:{}x{}", side, w, h);
+            lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                "vulkan.split_view.panel_image",
+                p.image_vram_label,
+                static_cast<std::size_t>(allocation_info.size));
             VkImageViewCreateInfo vi{};
             vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
             vi.image = p.image;

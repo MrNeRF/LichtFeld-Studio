@@ -3895,7 +3895,11 @@ namespace lfs::vis::gui {
                 static_cast<std::uint32_t>(target_size.x),
                 static_cast<std::uint32_t>(target_size.y),
             };
-            if (!context.createExternalImage(extent, VK_FORMAT_R8G8B8A8_UNORM, target->image) ||
+            if (!context.createExternalImage(extent,
+                                             VK_FORMAT_R8G8B8A8_UNORM,
+                                             target->image,
+                                             "vulkan.gui.interop_image",
+                                             std::format("scene.frame{}", frame_slot)) ||
                 !context.createExternalTimelineSemaphore(0, target->semaphore)) {
                 const std::string error = std::format("target creation failed: {}", context.lastError());
                 if (target->image.image != VK_NULL_HANDLE || target->semaphore.semaphore != VK_NULL_HANDLE) {
@@ -4113,7 +4117,11 @@ namespace lfs::vis::gui {
                 static_cast<std::uint32_t>(target_size.x),
                 static_cast<std::uint32_t>(target_size.y),
             };
-            if (!context.createExternalImage(extent, VK_FORMAT_R8G8B8A8_UNORM, target->image) ||
+            if (!context.createExternalImage(extent,
+                                             VK_FORMAT_R8G8B8A8_UNORM,
+                                             target->image,
+                                             "vulkan.gui.interop_image",
+                                             std::format("split_right.frame{}", frame_slot)) ||
                 !context.createExternalTimelineSemaphore(0, target->semaphore)) {
                 const std::string error = std::format("target creation failed: {}", context.lastError());
                 if (target->image.image != VK_NULL_HANDLE || target->semaphore.semaphore != VK_NULL_HANDLE) {
@@ -4323,7 +4331,11 @@ namespace lfs::vis::gui {
                 static_cast<std::uint32_t>(target_size.x),
                 static_cast<std::uint32_t>(target_size.y),
             };
-            if (!context.createExternalImage(extent, VK_FORMAT_R32_SFLOAT, target->image) ||
+            if (!context.createExternalImage(extent,
+                                             VK_FORMAT_R32_SFLOAT,
+                                             target->image,
+                                             "vulkan.gui.interop_image",
+                                             std::format("depth_blit.frame{}", frame_slot)) ||
                 !context.createExternalTimelineSemaphore(0, target->semaphore)) {
                 const std::string error = std::format("target creation failed: {}", context.lastError());
                 if (target->image.image != VK_NULL_HANDLE || target->semaphore.semaphore != VK_NULL_HANDLE) {
