@@ -116,6 +116,8 @@ void VulkanGSRenderer::destroyNumIndicesReadback() {
 size_t VulkanGSRenderer::pollDeferredNumIndices() {
     if (!num_indices_readback_pending_ || !num_indices_readback_mapped_)
         return 0;
+    if (num_indices_readback_signal_ == VK_NULL_HANDLE || num_indices_readback_value_ == 0)
+        return 0;
     if (!timelineValueComplete(num_indices_readback_signal_, num_indices_readback_value_))
         return 0;
     if (!invalidateReadbackBuffer(num_indices_readback_buffer_, sizeof(int32_t)))
@@ -277,8 +279,10 @@ void VulkanGSRenderer::destroyVisibleCountReadback() {
 std::optional<VulkanGSRenderer::PrimitiveVisibilityStats>
 VulkanGSRenderer::pollDeferredPrimitiveVisibilityStats() {
     // Consume only after the tagged render-completion timeline has signaled;
-    // otherwise keep the last estimate and avoid a CPU-side GPU drain.
+    // otherwise keep the previous stats and avoid a CPU-side GPU drain.
     if (!visible_count_readback_pending_ || !visible_count_readback_mapped_)
+        return std::nullopt;
+    if (visible_count_readback_signal_ == VK_NULL_HANDLE || visible_count_readback_value_ == 0)
         return std::nullopt;
     if (!timelineValueComplete(visible_count_readback_signal_, visible_count_readback_value_))
         return std::nullopt;
@@ -454,20 +458,15 @@ void VulkanGSRenderer::executeGenerateKeys(
     DEVICE_GUARD;
 
     const size_t num_elements = buffers.num_splats;
-    // num_indices here is the deferred-readback high-water-mark estimate, not the
-    // exact GPU value. The shader clamps writes to uniforms.sort_capacity, so a
-    // stale estimate can drop a frame's excess intersections but cannot overrun
-    // the sort buffers.
+    // executeCalculateIndexBufferOffset publishes a conservative deferred
+    // estimate, avoiding a CPU-side queue drain for the cumsum tail.
     const size_t capacity = buffers.num_indices;
 
     auto& unsorted_keys = resizeDeviceBuffer(buffers.unsorted_keys(), capacity);
     auto& unsorted_idx = resizeDeviceBuffer(buffers.unsorted_gauss_idx(), capacity);
 
-    // Pre-fill unsorted_keys with the max sentinel (0xFFFFFFFF) so that any tail
-    // entries [actual_num_indices, capacity) sort to the end of the radix sort and
-    // produce empty tile ranges in compute_tile_ranges (whose num_isects is read
-    // from the GPU-resident cumsum tail, not the CPU estimate). This gives us
-    // capacity-bounded buffers with correct sort output regardless of overestimate.
+    // Pre-fill with the max sentinel; this keeps any untouched entries harmless
+    // if a shader path emits fewer keys than the exact cumsum count.
     bufferMemoryBarrier({{unsorted_keys, COMPUTE_SHADER_READ_WRITE}},
                         TRANSFER_COMPUTE_SHADER_WRITE);
     vkCmdFillBuffer(command_buffer, unsorted_keys.buffer, unsorted_keys.offset, unsorted_keys.size,
@@ -505,9 +504,8 @@ void VulkanGSRenderer::executeComputeTileRanges(
                         },
                         COMPUTE_SHADER_READ);
 
-    // Dispatch over the CPU-known sort capacity. The shader clamps the actual
-    // cumsum tail to uniforms.sort_capacity, avoiding stale-estimate OOB reads
-    // without a synchronous cumsum readback.
+    // Dispatch over the exact CPU-known tile-instance count. The shader still
+    // clamps to uniforms.sort_capacity as a defensive bounds check.
     executeCompute(
         {{buffers.num_indices + 1, 256}},
         &uniforms, sizeof(uniforms),

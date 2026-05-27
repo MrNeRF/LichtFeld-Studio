@@ -80,7 +80,6 @@ namespace lfs::python {
                      "Rml data-model updates instead. Set LFS_NO_DEPRECATION_WARNINGS=1 "
                      "to suppress this warning.");
         }
-
         bool consume_document_dirty_with_attribution(Rml::ElementDocument* document,
                                                      const std::string& panel,
                                                      const std::string& section,

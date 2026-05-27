@@ -74,7 +74,6 @@ class ToolRegistry:
             set_active_tool(tool_id)
         else:
             lf.ui.set_active_operator(tool_id, gizmo)
-
         if tool_id == "builtin.select":
             lf.ui.set_selection_mode("centers")
 

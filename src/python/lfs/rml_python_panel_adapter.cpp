@@ -39,7 +39,7 @@ namespace lfs::vis::gui {
             }
             return truthy != 0;
         }
-    }
+    } // namespace
 
     bool RmlPythonPanelAdapter::isModelBound() const {
         return lifecycle_state_ == LifecycleState::ModelBound ||

@@ -657,10 +657,10 @@ namespace lfs::vis::gui {
                                                                      command.clip_y2);
                     }
                     vulkan_render_interface_->RenderTextureQuad(command.cache->texture,
-                                                               command.offset_x,
-                                                               command.offset_y,
-                                                               command.draw_width,
-                                                               command.draw_height);
+                                                                command.offset_x,
+                                                                command.offset_y,
+                                                                command.draw_width,
+                                                                command.draw_height);
                 } else {
                     lfs::core::ScopedTimer timer(timer_name);
                     vulkan_render_interface_->ResetContextRenderState();

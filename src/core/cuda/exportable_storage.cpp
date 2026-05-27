@@ -159,6 +159,15 @@ namespace lfs::core {
             return std::unexpected("cuMemSetAccess failed: " + cu_error(r));
         }
 
+        // Zero the whole exportable block once. Capacity-backed tensor views can
+        // expose slack rows before training fills them, and Vulkan reads those
+        // views directly in the zero-copy path.
+        if (const auto err = cudaMemset(reinterpret_cast<void*>(a.va), 0, aligned_size);
+            err != cudaSuccess) {
+            teardown(a);
+            return std::unexpected(std::format("cudaMemset on exportable block failed: {}",
+                                               cudaGetErrorString(err)));
+        }
 #ifdef _WIN32
         void* native = nullptr;
         if (const auto r = cuMemExportToShareableHandle(&native, a.mem_handle,

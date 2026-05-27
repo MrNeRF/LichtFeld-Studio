@@ -4,6 +4,7 @@
 
 #include "perf_timer.h"
 
+#include <cstdint>
 #include <optional>
 
 PACK_STRUCT(struct VulkanGSRendererUniforms {

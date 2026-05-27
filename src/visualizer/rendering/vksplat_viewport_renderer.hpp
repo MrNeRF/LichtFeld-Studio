@@ -109,7 +109,8 @@ namespace lfs::vis {
             VulkanContext& context,
             const lfs::core::SplatData& splat_data,
             const lfs::rendering::ViewportRenderRequest& request,
-            OutputSlot output_slot = OutputSlot::Main);
+            OutputSlot output_slot = OutputSlot::Main,
+            bool synchronize_input_read = false);
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
             VulkanContext& context,
             OutputSlot output_slot = OutputSlot::Main) const;

@@ -120,6 +120,17 @@ namespace lfs::vis {
             return shLayoutSlotsForDegree(input_layout_sh_degree);
         }
 
+        [[nodiscard]] int effectiveRenderShDegree(
+            const lfs::core::SplatData& splat_data,
+            const int requested_sh_degree) {
+            const int max_model_degree = std::min(3, splat_data.get_max_sh_degree());
+            const int active_model_degree = std::clamp(
+                splat_data.get_active_sh_degree(),
+                0,
+                max_model_degree);
+            return std::clamp(requested_sh_degree, 0, active_model_degree);
+        }
+
         [[nodiscard]] std::filesystem::path resolveVkSplatSpirvRoot() {
             constexpr std::string_view probe_file = "generated/projection_forward.spv";
             std::vector<std::filesystem::path> search_paths;
@@ -1822,7 +1833,8 @@ namespace lfs::vis {
         if (!external_layout) {
             return std::unexpected(external_layout.error());
         }
-        const bool input_snapshot_changed = force_upload || !inputsResident(splat_data, ring_slot);
+        const bool input_snapshot_changed = !inputsResident(splat_data, ring_slot);
+        const bool input_upload_requested = force_upload || input_snapshot_changed;
 
         std::shared_ptr<VulkanExternalTensorStorage> means_storage, sh0_storage, shN_storage,
             rotations_storage, scaling_storage, opacity_storage;
@@ -1959,7 +1971,7 @@ namespace lfs::vis {
                     }
                 }
                 opacity_copy_upload_needed =
-                    input_snapshot_changed ||
+                    input_upload_requested ||
                     !opacity_slot_had_buffer ||
                     opacity_slot.buffer.buffer != previous_opacity_buffer ||
                     previous_opacity_bytes != layout->opacity_bytes;
@@ -3307,7 +3319,8 @@ namespace lfs::vis {
         VulkanContext& context,
         const lfs::core::SplatData& splat_data,
         const lfs::rendering::ViewportRenderRequest& request,
-        const OutputSlot output_slot) {
+        const OutputSlot output_slot,
+        const bool synchronize_input_read) {
         const glm::ivec2 size = request.frame_view.size;
         if (size.x <= 0 || size.y <= 0) {
             return std::unexpected("VkSplat selection overlay received an invalid viewport size");
@@ -3375,8 +3388,7 @@ namespace lfs::vis {
         VulkanGSRendererUniforms uniforms{};
         {
             LOG_TIMER("vksplat.selection_overlay.populateUniforms");
-            const int active_sh_degree =
-                std::clamp(request.sh_degree, 0, std::min(3, splat_data.get_max_sh_degree()));
+            const int active_sh_degree = effectiveRenderShDegree(splat_data, request.sh_degree);
             const int resident_sh_degree =
                 current_input_sh_degree_ >= 0
                     ? std::min(active_sh_degree, current_input_sh_degree_)
@@ -3399,7 +3411,10 @@ namespace lfs::vis {
         const std::uint64_t completion_value = ++render_complete_value_;
         try {
             LOG_TIMER("vksplat.selection_overlay.batch_total");
-            auto batch = DeviceGuard(&renderer_, false, render_complete_timeline_, completion_value);
+            auto batch = DeviceGuard(&renderer_,
+                                     synchronize_input_read,
+                                     render_complete_timeline_,
+                                     completion_value);
             {
                 LOG_TIMER("vksplat.selection_overlay.record");
                 {
@@ -3473,7 +3488,7 @@ namespace lfs::vis {
             return std::unexpected("VkSplat forward path requires CUDA/Vulkan external-memory interop");
         }
 
-        const int active_sh_degree = std::clamp(request.sh_degree, 0, std::min(3, splat_data.get_max_sh_degree()));
+        const int active_sh_degree = effectiveRenderShDegree(splat_data, request.sh_degree);
         if (auto ok = ensureInitialized(context); !ok) {
             return std::unexpected(ok.error());
         }
@@ -3589,10 +3604,15 @@ namespace lfs::vis {
             // Timer/guard ordering trick: the LOG_TIMER for batch_total is
             // declared FIRST so it destructs LAST. The DeviceGuard `batch`
             // destructs first at try-block exit, triggering endCommandBatch().
-            // The batch now signals a timeline semaphore instead of waiting on
-            // the CPU; gui_render waits on that semaphore in its frame submit.
+            // When rendering a live training model, keep the caller's shared
+            // render lock held until Vulkan has finished reading the zero-copy
+            // tensors. Otherwise CUDA training can mutate scales/opacities for
+            // the next iteration while this frame is still in flight.
             LOG_TIMER("vksplat.render.batch_total");
-            auto batch = DeviceGuard(&renderer_, false, render_complete_timeline_, completion_value);
+            auto batch = DeviceGuard(&renderer_,
+                                     synchronize_input_upload,
+                                     render_complete_timeline_,
+                                     completion_value);
             {
                 LOG_TIMER("vksplat.render.record");
                 {

@@ -994,6 +994,11 @@ class _ViewportToolbarController:
         selected_nodes = tuple(call([], selected_getter) or []) if callable(selected_getter) else ()
 
         render_mode = call(None, lf.get_render_mode) if hasattr(lf, "get_render_mode") else None
+        vram_profiler_enabled = (
+            bool(call(False, getattr(lf, "get_vram_profiler_enabled", None)))
+            if hasattr(lf, "get_vram_profiler_enabled")
+            else False
+        )
         return (
             trainer_state,
             active_tool,
@@ -1012,6 +1017,7 @@ class _ViewportToolbarController:
             call("", getattr(lf.ui, "get_split_view_mode", None)),
             bool(call(False, lf.get_depth_view)) if hasattr(lf, "get_depth_view") else False,
             bool(call(False, getattr(lf.ui, "is_sequencer_visible", None))),
+            vram_profiler_enabled,
             bool(histogram_mode_available(ui_context)) if ui_context is not None else False,
             bool(call(False, getattr(lf.ui, "is_panel_enabled", None), "lfs.histogram")),
         )

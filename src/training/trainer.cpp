@@ -37,6 +37,7 @@
 #include "training/kernels/camera_loss_heatmap.cuh"
 #include "training/kernels/grad_alpha.hpp"
 #include "training/kernels/mrnf_kernels.hpp"
+#include "training/training_setup.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -3519,6 +3520,7 @@ namespace lfs::training {
                         } else {
                             tile_context_guard.release();
                             if (run_fastgs_gaussian_backward) {
+                                std::unique_lock<std::shared_mutex> model_write_lock(render_mutex_);
                                 fast_rasterize_backward(*fast_ctx, raster_grad, strategy_->get_model(),
                                                         strategy_->get_optimizer(), tile_grad_alpha,
                                                         use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{},

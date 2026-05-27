@@ -1430,7 +1430,8 @@ namespace lfs::vis {
                                 *context.vulkan_context,
                                 *model,
                                 request,
-                                VksplatViewportRenderer::OutputSlot::Main);
+                                VksplatViewportRenderer::OutputSlot::Main,
+                                synchronize_vksplat_input_upload);
                         } catch (const std::exception& e) {
                             overlay_result = std::unexpected(
                                 std::format("VkSplat selection overlay threw: {}", e.what()));

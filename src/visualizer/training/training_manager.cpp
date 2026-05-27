@@ -298,9 +298,9 @@ namespace lfs::vis {
                 const bool vulkan_interop_available = false;
 #endif
                 if (vulkan_interop_available && max_cap > 0) {
+                    const auto exportable_capacity = static_cast<std::size_t>(max_cap);
                     auto storage_result =
-                        lfs::core::SplatExportableStorage::create(static_cast<std::size_t>(max_cap),
-                                                                  sh_degree);
+                        lfs::core::SplatExportableStorage::create(exportable_capacity, sh_degree);
                     if (storage_result) {
                         splat_storage_ = std::move(*storage_result);
 #ifdef LFS_VULKAN_VIEWER_ENABLED
@@ -312,7 +312,7 @@ namespace lfs::vis {
                             LOG_INFO("Training tensors share one CUDA-exportable VMM block "
                                      "imported into Vulkan (capacity={}, sh_degree={}, "
                                      "block={} MiB) — zero-copy viewer interop",
-                                     max_cap,
+                                     exportable_capacity,
                                      sh_degree,
                                      splat_storage_->block->size >> 20);
                         } else {
