@@ -15,7 +15,6 @@
 #include "gui/utils/native_file_dialog.hpp"
 #include "internal/resource_paths.hpp"
 #include "operation/undo_history.hpp"
-#include "scene/scene_manager.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/core/services.hpp"
 
@@ -470,7 +469,7 @@ namespace lfs::vis::gui {
         if (!ensureInitialized())
             return;
 
-        if (shouldSyncPanel(ctx, input))
+        if (shouldSyncPanel(input))
             syncPanel(ctx);
         last_prepare_frame_ = ctx.frame_serial;
         host_.prepareDirect(w, h);
@@ -639,37 +638,35 @@ namespace lfs::vis::gui {
         if (changed)
             host_.markContentDirty();
 
-        last_sync_stamp_ = makeSyncStamp(ctx);
+        last_sync_stamp_ = makeSyncStamp();
         has_last_sync_stamp_ = true;
     }
 
-    bool NativeScenePanel::shouldSyncPanel(const PanelDrawContext& ctx,
-                                           const PanelInputState* input) const {
+    bool NativeScenePanel::shouldSyncPanel(const PanelInputState* input) const {
         if (!tree_el_ || !has_last_sync_stamp_)
             return true;
         if (logging_feedback_dirty_)
             return true;
         if (hasDiscreteInputActivity(input))
             return true;
-        return makeSyncStamp(ctx) != last_sync_stamp_;
+        return makeSyncStamp() != last_sync_stamp_;
     }
 
-    NativeScenePanel::SyncStamp NativeScenePanel::makeSyncStamp(const PanelDrawContext& ctx) const {
+    NativeScenePanel::SyncStamp NativeScenePanel::makeSyncStamp() const {
         SyncStamp stamp;
         stamp.active_tab = active_tab_;
-        stamp.language_generation = app_store().language_generation.get();
+        auto& store = app_store();
+        stamp.language_generation = store.language_generation.get();
         stamp.dp_ratio_milli = manager_
                                    ? static_cast<int>(std::lround(manager_->getDpRatio() * 1000.0f))
                                    : 1000;
 
         if (active_tab_ == Tab::Scene) {
-            stamp.scene_generation = ctx.scene_generation;
-            if (auto* scene_manager = services().sceneOrNull())
-                stamp.selection_generation = scene_manager->selectionState().generation();
+            stamp.scene_generation = store.scene_generation.get();
+            stamp.selection_generation = store.selection_generation.get();
             if (auto* params = services().paramsOrNull())
                 stamp.invert_masks = params->getActiveParams().invert_masks;
 
-            auto& store = app_store();
             stamp.num_gaussians = store.num_gaussians.get();
             stamp.eval_psnr_milli = optionalMetricMilli(store.eval_psnr.get());
             stamp.eval_ssim_milli = optionalMetricMilli(store.eval_ssim.get());

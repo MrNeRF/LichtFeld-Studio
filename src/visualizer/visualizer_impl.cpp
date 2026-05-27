@@ -215,6 +215,11 @@ namespace lfs::vis {
         callback_cleanup_.add([] { python::set_main_loop_wake_callback(nullptr); });
         core::reactive::Store::set_wake_callback(&wakeEventLoopViaServices);
         callback_cleanup_.add([] { core::reactive::Store::set_wake_callback(nullptr); });
+        python::set_scene_generation_callback([](const uint64_t generation) {
+            app_store().scene_generation.set(generation);
+        });
+        callback_cleanup_.add([] { python::set_scene_generation_callback(nullptr); });
+        app_store().scene_generation.set(python::get_scene_generation());
         auto active_tool_poll_cache_token = std::make_shared<core::reactive::SubscriptionToken>(
             app_store().active_tool.subscribe([](const std::string&) {
                 gui::PanelRegistry::instance().invalidate_poll_cache();
@@ -952,13 +957,13 @@ namespace lfs::vis {
         });
 
         state::SceneLoaded::when([](const auto& event) {
-            app_store().scene_generation.set(app_store().scene_generation.get() + 1);
+            app_store().scene_generation.set(python::get_scene_generation());
             const std::string path_utf8 = core::path_to_utf8(event.path);
             python::update_scene(true, path_utf8.c_str());
         });
 
         state::SceneCleared::when([](const auto&) {
-            app_store().scene_generation.set(app_store().scene_generation.get() + 1);
+            app_store().scene_generation.set(python::get_scene_generation());
             python::update_scene(false, "");
         });
 

@@ -547,6 +547,8 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API uint32_t consume_scene_mutation_flags();
     LFS_PYTHON_RUNTIME_API void bump_scene_generation();
     LFS_PYTHON_RUNTIME_API void set_scene_mutation_flags(uint32_t flags);
+    using SceneGenerationCallback = void (*)(uint64_t generation);
+    LFS_PYTHON_RUNTIME_API void set_scene_generation_callback(SceneGenerationCallback cb);
 
     LFS_PYTHON_RUNTIME_API void set_gil_state_ready(bool ready);
     LFS_PYTHON_RUNTIME_API bool is_gil_state_ready();

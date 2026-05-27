@@ -3,7 +3,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <algorithm>
 #include <gtest/gtest.h>
 #include <memory>
 #include <thread>
@@ -17,7 +16,9 @@
 #include "python/python_runtime.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/training_setup.hpp"
+#include "visualizer/app_store.hpp"
 #include "visualizer/scene/scene_manager.hpp"
+#include "visualizer/scene/selection_state.hpp"
 
 namespace lfs::python {
 
@@ -109,6 +110,7 @@ namespace lfs::python {
         }
 
         void TearDown() override {
+            set_scene_generation_callback(nullptr);
             set_application_scene(nullptr);
         }
 
@@ -183,6 +185,20 @@ namespace lfs::python {
         }
     }
 
+    TEST_F(SceneValidityTest, SceneGenerationCallbackCanPublishToAppStore) {
+        set_scene_generation_callback([](const uint64_t generation) {
+            lfs::vis::app_store().scene_generation.set(generation);
+        });
+
+        set_application_scene(&dummy_scene_);
+        EXPECT_EQ(lfs::vis::app_store().scene_generation.get(), get_scene_generation());
+
+        bump_scene_generation();
+        EXPECT_EQ(lfs::vis::app_store().scene_generation.get(), get_scene_generation());
+
+        set_scene_generation_callback(nullptr);
+    }
+
     TEST_F(SceneValidityTest, MutationFlagsAccumulateUntilConsumed) {
         set_application_scene(&dummy_scene_);
 
@@ -197,6 +213,14 @@ namespace lfs::python {
         EXPECT_EQ(consume_scene_mutation_flags(), combined);
         EXPECT_EQ(get_scene_mutation_flags(), 0u);
         EXPECT_EQ(consume_scene_mutation_flags(), 0u);
+    }
+
+    TEST_F(SceneValidityTest, SelectionGenerationPublishesToAppStore) {
+        lfs::vis::SelectionState selection;
+
+        selection.selectNode(7);
+
+        EXPECT_EQ(lfs::vis::app_store().selection_generation.get(), selection.generation());
     }
 
     TEST_F(SceneValidityTest, ClearResetsDatasetMetadata) {

@@ -74,6 +74,7 @@ namespace lfs::python {
         // Menu bar UI callbacks
         ShowInputSettingsCallback g_show_input_settings_cb = nullptr;
         ShowPythonConsoleCallback g_show_python_console_cb = nullptr;
+        SceneGenerationCallback g_scene_generation_cb = nullptr;
 
         // Section drawing callbacks
         SectionDrawCallbacks g_section_draw_callbacks;
@@ -542,7 +543,9 @@ namespace lfs::python {
     void ApplicationSceneContext::set(core::Scene* scene) {
         scene_.store(scene);
         mutation_flags_.store(0, std::memory_order_release);
-        generation_.fetch_add(1);
+        const uint64_t generation = generation_.fetch_add(1, std::memory_order_acq_rel) + 1;
+        if (g_scene_generation_cb)
+            g_scene_generation_cb(generation);
     }
 
     core::Scene* ApplicationSceneContext::get() const { return scene_.load(); }
@@ -557,7 +560,11 @@ namespace lfs::python {
         return mutation_flags_.exchange(0, std::memory_order_acq_rel);
     }
 
-    void ApplicationSceneContext::bump() { generation_.fetch_add(1); }
+    void ApplicationSceneContext::bump() {
+        const uint64_t generation = generation_.fetch_add(1, std::memory_order_acq_rel) + 1;
+        if (g_scene_generation_cb)
+            g_scene_generation_cb(generation);
+    }
 
     void ApplicationSceneContext::set_mutation_flags(const uint32_t flags) {
         mutation_flags_.fetch_or(flags, std::memory_order_acq_rel);
@@ -577,6 +584,10 @@ namespace lfs::python {
 
     void set_scene_mutation_flags(const uint32_t flags) {
         g_app_scene_context.set_mutation_flags(flags);
+    }
+
+    void set_scene_generation_callback(SceneGenerationCallback cb) {
+        g_scene_generation_cb = cb;
     }
 
     void set_gil_state_ready(const bool ready) { g_gil_state_ready.store(ready, std::memory_order_release); }

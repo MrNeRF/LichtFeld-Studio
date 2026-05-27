@@ -66,7 +66,7 @@ namespace lfs::vis::gui {
         struct SyncStamp {
             Tab active_tab = Tab::Scene;
             uint64_t scene_generation = 0;
-            uint32_t selection_generation = 0;
+            uint64_t selection_generation = 0;
             int64_t num_gaussians = 0;
             int eval_psnr_milli = 0;
             int eval_ssim_milli = 0;
@@ -84,8 +84,8 @@ namespace lfs::vis::gui {
         void clearElementCache();
         void cacheElements();
         void syncPanel(const PanelDrawContext& ctx);
-        bool shouldSyncPanel(const PanelDrawContext& ctx, const PanelInputState* input) const;
-        SyncStamp makeSyncStamp(const PanelDrawContext& ctx) const;
+        bool shouldSyncPanel(const PanelInputState* input) const;
+        SyncStamp makeSyncStamp() const;
         bool syncSceneState(const PanelDrawContext& ctx);
         bool syncHistoryState();
         bool syncLoggingState();
