@@ -51,6 +51,11 @@ namespace lfs::vis::gui {
         }
     }
 
+    void wakeMainThreadForAsyncWork() {
+        if (auto* const window_manager = services().windowOrNull())
+            window_manager->wakeEventLoop();
+    }
+
     [[nodiscard]] std::unique_ptr<lfs::core::SplatData> cloneSplatData(const lfs::core::SplatData& src) {
         auto cloned = std::make_unique<lfs::core::SplatData>(
             src.get_max_sh_degree(),
@@ -615,6 +620,13 @@ namespace lfs::vis::gui {
         checkAsyncImportCompletion();
     }
 
+    bool AsyncTaskManager::hasPendingMainThreadCompletions() const {
+        return import_state_.load_complete.load(std::memory_order_acquire) ||
+               mesh2splat_state_.pending.load(std::memory_order_acquire) ||
+               splat_simplify_state_.apply_pending.load(std::memory_order_acquire) ||
+               splat_simplify_state_.completed.load(std::memory_order_acquire);
+    }
+
     void AsyncTaskManager::performExport(ExportFormat format, const std::filesystem::path& path,
                                          const std::vector<std::string>& node_names, int sh_degree,
                                          const std::vector<float>& rad_lod_ratios,
@@ -1154,41 +1166,43 @@ namespace lfs::vis::gui {
                     return;
                 }
 
-                const std::lock_guard lock(import_state_.mutex);
-                if (result) {
-                    import_state_.load_result = std::move(*result);
-                    import_state_.success = true;
-                    import_state_.stage = "Applying...";
-                    std::visit([this](const auto& data) {
-                        using T = std::decay_t<decltype(data)>;
-                        if constexpr (std::is_same_v<T, std::shared_ptr<lfs::core::SplatData>>) {
-                            import_state_.num_points = data->size();
-                            import_state_.num_images = 0;
-                        } else if constexpr (std::is_same_v<T, lfs::io::LoadedScene>) {
-                            import_state_.num_images = data.cameras.size();
-                            import_state_.num_points = data.point_cloud ? data.point_cloud->size() : 0;
-                        } else if constexpr (std::is_same_v<T, std::shared_ptr<lfs::core::MeshData>>) {
-                            import_state_.num_points = data ? data->vertex_count() : 0;
-                            import_state_.num_images = 0;
-                            import_state_.is_mesh = true;
-                        }
-                    },
-                               import_state_.load_result->data);
-                } else {
-                    import_state_.success = false;
-                    import_state_.error = result.error().format();
-                    import_state_.stage = "Failed";
-                    LOG_ERROR("Import failed: {}", import_state_.error);
+                {
+                    const std::lock_guard lock(import_state_.mutex);
+                    if (result) {
+                        import_state_.load_result = std::move(*result);
+                        import_state_.success = true;
+                        import_state_.stage = "Applying...";
+                        std::visit([this](const auto& data) {
+                            using T = std::decay_t<decltype(data)>;
+                            if constexpr (std::is_same_v<T, std::shared_ptr<lfs::core::SplatData>>) {
+                                import_state_.num_points = data->size();
+                                import_state_.num_images = 0;
+                            } else if constexpr (std::is_same_v<T, lfs::io::LoadedScene>) {
+                                import_state_.num_images = data.cameras.size();
+                                import_state_.num_points = data.point_cloud ? data.point_cloud->size() : 0;
+                            } else if constexpr (std::is_same_v<T, std::shared_ptr<lfs::core::MeshData>>) {
+                                import_state_.num_points = data ? data->vertex_count() : 0;
+                                import_state_.num_images = 0;
+                                import_state_.is_mesh = true;
+                            }
+                        },
+                                   import_state_.load_result->data);
+                    } else {
+                        import_state_.success = false;
+                        import_state_.error = result.error().format();
+                        import_state_.stage = "Failed";
+                        LOG_ERROR("Import failed: {}", import_state_.error);
+                    }
                 }
                 import_state_.progress.store(1.0f);
-                import_state_.load_complete.store(true);
+                import_state_.load_complete.store(true, std::memory_order_release);
+                wakeMainThreadForAsyncWork();
             });
     }
 
     void AsyncTaskManager::checkAsyncImportCompletion() {
-        if (!import_state_.load_complete.load())
+        if (!import_state_.load_complete.exchange(false, std::memory_order_acq_rel))
             return;
-        import_state_.load_complete.store(false);
 
         bool success;
         {
@@ -1601,12 +1615,12 @@ namespace lfs::vis::gui {
                  source_name, options.resolution_target, options.sigma);
 
         mesh2splat_state_.pending.store(true);
+        wakeMainThreadForAsyncWork();
     }
 
     void AsyncTaskManager::pollMesh2SplatCompletion() {
-        if (!mesh2splat_state_.pending.load())
+        if (!mesh2splat_state_.pending.exchange(false, std::memory_order_acq_rel))
             return;
-        mesh2splat_state_.pending.store(false);
 
         executeMesh2SplatOnGraphicsThread();
 
@@ -1805,7 +1819,7 @@ namespace lfs::vis::gui {
                     splat_simplify_state_.stage = "Applying...";
                 }
                 splat_simplify_state_.progress.store(1.0f);
-                splat_simplify_state_.apply_pending.store(true);
+                splat_simplify_state_.apply_pending.store(true, std::memory_order_release);
             } else {
                 const bool cancelled = splat_simplify_state_.cancel_requested.load() || stop_token.stop_requested() ||
                                        result.error() == "Cancelled";
@@ -1816,12 +1830,13 @@ namespace lfs::vis::gui {
                 }
                 splat_simplify_state_.active.store(false);
             }
-            splat_simplify_state_.completed.store(true);
+            splat_simplify_state_.completed.store(true, std::memory_order_release);
+            wakeMainThreadForAsyncWork();
         });
     }
 
     void AsyncTaskManager::pollSplatSimplifyCompletion() {
-        if (splat_simplify_state_.apply_pending.exchange(false)) {
+        if (splat_simplify_state_.apply_pending.exchange(false, std::memory_order_acq_rel)) {
             if (splat_simplify_state_.thread && splat_simplify_state_.thread->joinable()) {
                 splat_simplify_state_.thread->join();
                 splat_simplify_state_.thread.reset();

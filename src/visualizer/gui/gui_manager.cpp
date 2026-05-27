@@ -4793,8 +4793,8 @@ namespace lfs::vis::gui {
             }
         }
 
-        // Check for async import completion (must happen on main thread)
-        {
+        // Check for async completions that must be applied on the main thread.
+        if (async_tasks_.hasPendingMainThreadCompletions()) {
             LOG_TIMER("gui_render.panel_setup.async_poll");
             async_tasks_.pollImportCompletion();
             async_tasks_.pollMesh2SplatCompletion();
@@ -4802,7 +4802,7 @@ namespace lfs::vis::gui {
         }
 
         // Poll UV package manager for async operations
-        {
+        if (python::PackageManager::instance().has_running_operation()) {
             LOG_TIMER("gui_render.panel_setup.package_poll");
             python::PackageManager::instance().poll();
         }

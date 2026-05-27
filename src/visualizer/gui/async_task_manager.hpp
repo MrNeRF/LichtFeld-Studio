@@ -45,6 +45,7 @@ namespace lfs::vis {
 
             void setupEvents();
             void pollImportCompletion();
+            [[nodiscard]] bool hasPendingMainThreadCompletions() const;
 
             // Export
             void performExport(lfs::core::ExportFormat format, const std::filesystem::path& path,
