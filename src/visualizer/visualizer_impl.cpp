@@ -883,7 +883,6 @@ namespace lfs::vis {
             store.iteration.set(event.iteration);
             store.loss.set(event.loss);
             store.num_gaussians.set(static_cast<std::int64_t>(event.num_gaussians));
-            python::update_training_progress(event.iteration, event.loss, event.num_gaussians);
         });
 
         state::TrainingStarted::when([this](const auto& event) {
@@ -942,7 +941,6 @@ namespace lfs::vis {
             lfs::core::reactive::BatchUpdate batch(store.store());
             store.eval_psnr.set(event.psnr);
             store.eval_ssim.set(event.ssim);
-            python::update_psnr(event.psnr);
         });
 
         state::SceneLoaded::when([](const auto& event) {
