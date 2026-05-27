@@ -255,6 +255,8 @@ namespace lfs::vis::gui {
         menu_labels_.clear();
         dropdown_items_.clear();
         open_menu_idname_.clear();
+        if (rml_manager_)
+            rml_manager_->releaseCachedVulkanContext(direct_cache_);
         if (rml_context_ && rml_manager_)
             rml_manager_->destroyContext("menu_bar");
         rml_context_ = nullptr;
@@ -302,6 +304,8 @@ namespace lfs::vis::gui {
         last_ctx_w_ = 0;
         last_ctx_h_ = 0;
         last_document_h_ = 0;
+        if (rml_manager_)
+            rml_manager_->releaseCachedVulkanContext(direct_cache_);
 
         try {
             const auto rml_path = lfs::vis::getAssetPath("rmlui/menubar.rml");
@@ -653,26 +657,36 @@ namespace lfs::vis::gui {
         }
 
         const bool size_changed = (ctx_w != last_ctx_w_ || ctx_h != last_ctx_h_);
-        const bool needs_render = render_needed_ || theme_changed || size_changed;
-        if (!needs_render) {
-            rml_manager_->queueVulkanContext(rml_context_, 0.0f, 0.0f, true,
-                                             true, 0.0f, 0.0f,
-                                             static_cast<float>(screen_w),
-                                             static_cast<float>(ctx_h));
-            return;
+        const bool refresh_cache = render_needed_ || theme_changed || size_changed || direct_cache_.texture == 0;
+
+        if (refresh_cache) {
+            rml_context_->SetDimensions(Rml::Vector2i(ctx_w, ctx_h));
+            if (ctx_h != last_document_h_) {
+                document_->SetProperty("height", std::format("{}px", ctx_h));
+                last_document_h_ = ctx_h;
+            }
+            rml_context_->Update();
         }
 
-        rml_context_->SetDimensions(Rml::Vector2i(ctx_w, ctx_h));
-        if (ctx_h != last_document_h_) {
-            document_->SetProperty("height", std::format("{}px", ctx_h));
-            last_document_h_ = ctx_h;
-        }
-        rml_context_->Update();
-
-        rml_manager_->queueVulkanContext(rml_context_, 0.0f, 0.0f, true,
-                                         true, 0.0f, 0.0f,
-                                         static_cast<float>(screen_w),
-                                         static_cast<float>(ctx_h));
+        rml_manager_->queueCachedVulkanContext({
+            .context = rml_context_,
+            .cache = &direct_cache_,
+            .cache_width = ctx_w,
+            .cache_height = ctx_h,
+            .offset_x = 0.0f,
+            .offset_y = 0.0f,
+            .draw_width = static_cast<float>(screen_w),
+            .draw_height = static_cast<float>(ctx_h),
+            .refresh = refresh_cache,
+            .foreground = true,
+            .clip_enabled = true,
+            .clip = {
+                .x1 = 0.0f,
+                .y1 = 0.0f,
+                .x2 = static_cast<float>(screen_w),
+                .y2 = static_cast<float>(ctx_h),
+            },
+        });
         last_ctx_w_ = ctx_w;
         last_ctx_h_ = ctx_h;
         render_needed_ = false;
