@@ -63,10 +63,29 @@ namespace lfs::vis::gui {
             Error,
         };
 
+        struct SyncStamp {
+            Tab active_tab = Tab::Scene;
+            uint64_t scene_generation = 0;
+            uint32_t selection_generation = 0;
+            int64_t num_gaussians = 0;
+            int eval_psnr_milli = 0;
+            int eval_ssim_milli = 0;
+            uint64_t history_generation = 0;
+            uint64_t log_generation = 0;
+            lfs::core::LogLevel log_level = lfs::core::LogLevel::Off;
+            uint64_t language_generation = 0;
+            int dp_ratio_milli = 1000;
+            bool invert_masks = false;
+
+            bool operator==(const SyncStamp&) const = default;
+        };
+
         bool ensureInitialized();
         void clearElementCache();
         void cacheElements();
         void syncPanel(const PanelDrawContext& ctx);
+        bool shouldSyncPanel(const PanelDrawContext& ctx, const PanelInputState* input) const;
+        SyncStamp makeSyncStamp(const PanelDrawContext& ctx) const;
         bool syncSceneState(const PanelDrawContext& ctx);
         bool syncHistoryState();
         bool syncLoggingState();
@@ -137,6 +156,8 @@ namespace lfs::vis::gui {
         uint64_t last_log_generation_ = 0;
         lfs::core::LogLevel last_log_level_ = lfs::core::LogLevel::Off;
         uint64_t last_prepare_frame_ = 0;
+        SyncStamp last_sync_stamp_{};
+        bool has_last_sync_stamp_ = false;
         std::string logging_feedback_text_;
         FeedbackTone logging_feedback_tone_ = FeedbackTone::Info;
         bool logging_feedback_dirty_ = false;
