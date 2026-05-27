@@ -4,6 +4,7 @@
 
 import os
 import re
+import threading
 import time
 from typing import Any, Optional
 
@@ -13,6 +14,7 @@ from . import rml_widgets as w
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
 from .ui.state import AppState
+from .ui.store import AppStore as NativeAppStore
 
 # Asset Manager integration (optional)
 try:
@@ -380,6 +382,7 @@ class TrainingPanel(Panel):
     template = "rmlui/training.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
     update_interval_ms = 100
+    update_policy = "dirty"
 
     def __init__(self):
         self._handle = None
@@ -417,6 +420,10 @@ class TrainingPanel(Panel):
         self._psnr_tick_mid = ""
         self._psnr_tick_min = ""
         self._last_panel_label = ""
+        self._reactive_unsubscribers = []
+        self._deferred_update_pending = False
+        self._deferred_update_deadline = None
+        self._deferred_update_generation = 0
         self._escape_revert = w.EscapeRevertController()
         self._scrub_fields = ScrubFieldController(
             SCRUB_FIELD_DEFS,
@@ -1144,6 +1151,90 @@ class TrainingPanel(Panel):
         self._psnr_graph_el = doc.get_element_by_id("psnr-graph-el")
         self._scrub_fields.mount(doc)
         self._sync_section_states()
+        self._subscribe_reactive_state()
+
+    def _subscribe_reactive_state(self):
+        if self._reactive_unsubscribers:
+            return
+
+        native_signals = (
+            NativeAppStore.training_running,
+            NativeAppStore.training_state,
+            NativeAppStore.trainer_loaded,
+            NativeAppStore.iteration,
+            NativeAppStore.total_iterations,
+            NativeAppStore.loss,
+            NativeAppStore.eval_psnr,
+            NativeAppStore.num_gaussians,
+            NativeAppStore.scene_generation,
+        )
+        self._reactive_unsubscribers = [
+            signal.subscribe(lambda _value: self._request_reactive_update())
+            for signal in native_signals
+        ]
+
+    def _unsubscribe_reactive_state(self):
+        for unsubscribe in self._reactive_unsubscribers:
+            try:
+                unsubscribe()
+            except Exception:
+                pass
+        self._reactive_unsubscribers = []
+
+    def _request_reactive_update(self):
+        if self._handle:
+            w.request_model_update(self._handle)
+
+    def _schedule_deferred_update(self, delay_seconds):
+        delay_seconds = max(0.0, float(delay_seconds))
+        deadline = time.monotonic() + delay_seconds
+        if (
+            self._deferred_update_pending
+            and self._deferred_update_deadline is not None
+            and self._deferred_update_deadline <= deadline
+        ):
+            return
+        self._deferred_update_generation += 1
+        self._deferred_update_pending = True
+        self._deferred_update_deadline = deadline
+        generation = self._deferred_update_generation
+
+        def fire():
+            def request_on_ui_thread():
+                if generation != self._deferred_update_generation:
+                    return
+                self._deferred_update_pending = False
+                self._deferred_update_deadline = None
+                self._request_reactive_update()
+
+            try:
+                scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
+                if scheduler is None:
+                    scheduler = getattr(lf.ui, "_run_on_ui_thread", None)
+                if callable(scheduler):
+                    scheduler(request_on_ui_thread)
+                else:
+                    self._deferred_update_pending = False
+                    self._deferred_update_deadline = None
+            except Exception:
+                self._deferred_update_pending = False
+                self._deferred_update_deadline = None
+
+        timer = threading.Timer(delay_seconds, fire)
+        timer.daemon = True
+        timer.start()
+
+    def _cancel_deferred_updates(self):
+        self._deferred_update_generation += 1
+        self._deferred_update_pending = False
+        self._deferred_update_deadline = None
+
+    def _mark_checkpoint_saved(self):
+        self._checkpoint_saved_time = time.time()
+        self._last_checkpoint_saved_visible = True
+        if self._handle:
+            self._handle.dirty("show_checkpoint_saved")
+        self._schedule_deferred_update(2.05)
 
     def on_update(self, doc):
         if not self._handle:
@@ -1191,7 +1282,7 @@ class TrainingPanel(Panel):
                     self._handle.dirty_all()
                     dirty = True
 
-        self._update_step_repeat()
+        dirty |= self._update_step_repeat()
         dirty |= self._update_progress()
         dirty |= self._update_save_steps(doc)
         dirty |= self._update_color_swatch(doc)
@@ -1254,6 +1345,8 @@ class TrainingPanel(Panel):
             self._handle.dirty_all()
 
     def on_unmount(self, doc):
+        self._unsubscribe_reactive_state()
+        self._cancel_deferred_updates()
         doc.remove_data_model("training")
         self._handle = None
         self._doc = None
@@ -1655,6 +1748,7 @@ class TrainingPanel(Panel):
         self._step_repeat_dir = direction
         self._step_repeat_start = now
         self._step_repeat_last = now
+        self._schedule_deferred_update(0.15)
 
     def _on_number_input_change(self, event):
         if not event.get_bool_parameter("linebreak", False):
@@ -1733,14 +1827,18 @@ class TrainingPanel(Panel):
 
     def _update_step_repeat(self):
         if not self._step_repeat_prop:
-            return
+            return False
         now = time.monotonic()
         if now - self._step_repeat_start < 0.15:
-            return
+            self._schedule_deferred_update(0.15 - (now - self._step_repeat_start))
+            return False
         if now - self._step_repeat_last < 0.01:
-            return
+            self._schedule_deferred_update(0.01 - (now - self._step_repeat_last))
+            return False
         self._step_repeat_last = now
         self._apply_num_step(self._step_repeat_prop, self._step_repeat_dir)
+        self._schedule_deferred_update(0.01)
+        return True
 
     def _get_section_elements(self, name):
         if not self._doc:
@@ -1817,7 +1915,7 @@ class TrainingPanel(Panel):
             lf.switch_to_edit_mode()
         elif action == "save_checkpoint":
             lf.save_checkpoint()
-            self._checkpoint_saved_time = time.time()
+            self._mark_checkpoint_saved()
         elif action == "browse_bg":
             selected = lf.ui.open_image_dialog("")
             if selected:
@@ -2106,7 +2204,7 @@ class TrainingPanel(Panel):
                 tr("training_panel.save_checkpoint"), "primary", FULL_WIDTH
             ):
                 lf.save_checkpoint()
-                self._checkpoint_saved_time = time.time()
+                self._mark_checkpoint_saved()
 
             if time.time() - self._checkpoint_saved_time < 2.0:
                 theme = lf.ui.theme()

@@ -69,12 +69,16 @@ class _HandleStub:
     def __init__(self):
         self.dirty_fields = []
         self.dirty_all_count = 0
+        self.request_update_count = 0
 
     def dirty(self, name):
         self.dirty_fields.append(name)
 
     def dirty_all(self):
         self.dirty_all_count += 1
+
+    def request_update(self):
+        self.request_update_count += 1
 
 
 def _make_signal(value):
@@ -152,6 +156,76 @@ def test_training_panel_progress_updates_bound_value(training_panel_module, monk
     assert panel._update_progress() is True
     assert panel._progress_value == "0.25"
     assert panel._handle.dirty_fields == ["progress_value"]
+
+
+def test_training_panel_uses_dirty_update_policy(training_panel_module):
+    assert training_panel_module.TrainingPanel.update_policy == "dirty"
+
+
+def test_training_panel_store_update_requests_panel_update(training_panel_module):
+    panel = training_panel_module.TrainingPanel()
+    panel._handle = _HandleStub()
+
+    panel._subscribe_reactive_state()
+    try:
+        training_panel_module.NativeAppStore.iteration.value += 1
+
+        assert panel._handle.request_update_count == 1
+        assert panel._handle.dirty_all_count == 0
+    finally:
+        panel._unsubscribe_reactive_state()
+        training_panel_module.NativeAppStore.iteration._fallback = 0
+
+
+def test_training_panel_checkpoint_saved_dirties_field(training_panel_module, monkeypatch):
+    panel = training_panel_module.TrainingPanel()
+    panel._handle = _HandleStub()
+    scheduled = []
+    monkeypatch.setattr(panel, "_schedule_deferred_update", lambda delay: scheduled.append(delay))
+
+    panel._mark_checkpoint_saved()
+
+    assert panel._last_checkpoint_saved_visible is True
+    assert panel._handle.dirty_fields == ["show_checkpoint_saved"]
+    assert scheduled == [2.05]
+
+
+def test_training_panel_deferred_update_keeps_earliest_timer(training_panel_module, monkeypatch):
+    panel = training_panel_module.TrainingPanel()
+    panel._handle = _HandleStub()
+    timers = []
+    scheduled_callbacks = []
+
+    class _TimerStub:
+        def __init__(self, delay, callback):
+            self.delay = delay
+            self.callback = callback
+            timers.append(self)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(training_panel_module.threading, "Timer", _TimerStub)
+    monkeypatch.setattr(
+        training_panel_module.lf.ui,
+        "schedule_on_ui_thread",
+        scheduled_callbacks.append,
+        raising=False,
+    )
+
+    panel._schedule_deferred_update(1.0)
+    panel._schedule_deferred_update(2.0)
+    panel._schedule_deferred_update(0.5)
+
+    assert [timer.delay for timer in timers] == [1.0, 0.5]
+
+    timers[0].callback()
+    scheduled_callbacks.pop(0)()
+    assert panel._handle.request_update_count == 0
+
+    timers[1].callback()
+    scheduled_callbacks.pop(0)()
+    assert panel._handle.request_update_count == 1
 
 
 def test_training_panel_loss_graph_updates_bound_labels(training_panel_module, monkeypatch):
