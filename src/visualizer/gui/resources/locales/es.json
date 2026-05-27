@@ -421,5 +421,15 @@
     "tooltip.refresh": "Volver a escanear todos los directorios de activos y actualizar los metadatos del catálogo",
     "tooltip.clean_missing": "Eliminar entradas del catálogo cuyos archivos ya no existen en el disco",
     "project.watch_dirs_badge": "Watched"
+  },
+  "training": {
+    "options.strategy.igs_plus": "IGS+",
+    "refinement.grow_until_iter": "Grow until iteration",
+    "tooltip.grow_until_iter": "Continue densification until this training iteration."
+  },
+  "training_panel": {
+    "color_red_prefix": "R:",
+    "color_green_prefix": "G:",
+    "color_blue_prefix": "B:"
   }
 }
