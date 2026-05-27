@@ -269,6 +269,8 @@ namespace lfs::vis::gui {
 
         subscriptions_.clear();
         model_handle_ = {};
+        if (rml_manager_)
+            rml_manager_->releaseCachedVulkanContext(direct_cache_);
         if (rml_context_ && rml_manager_)
             rml_manager_->destroyContext("status_bar");
         rml_context_ = nullptr;
@@ -280,6 +282,9 @@ namespace lfs::vis::gui {
     void RmlStatusBar::reloadResources() {
         if (!rml_context_)
             return;
+
+        if (rml_manager_)
+            rml_manager_->releaseCachedVulkanContext(direct_cache_);
 
         if (document_) {
             rml_context_->UnloadDocument(document_);
@@ -687,21 +692,35 @@ namespace lfs::vis::gui {
             rml_context_->ProcessMouseButtonUp(0, mods);
     }
 
-    void RmlStatusBar::queueVulkanContext(const float x, const float y,
-                                          const float w_px, const float h_px,
-                                          const int screen_w, const int screen_h) {
+    void RmlStatusBar::queueCachedVulkanContext(const float x, const float y,
+                                                const float w_px, const float h_px,
+                                                const int screen_w, const int screen_h,
+                                                const int render_w, const int render_h,
+                                                const bool refresh_cache) {
         if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
             return;
 
         const auto blit_rect = toFramebufferBlitRect(rml_manager_->getWindow(),
                                                      x, y, w_px, h_px, screen_w, screen_h);
-        rml_manager_->queueVulkanContext(rml_context_, blit_rect.x, blit_rect.y,
-                                         false,
-                                         true,
-                                         blit_rect.x,
-                                         blit_rect.y,
-                                         blit_rect.x + blit_rect.w,
-                                         blit_rect.y + blit_rect.h);
+        rml_manager_->queueCachedVulkanContext({
+            .context = rml_context_,
+            .cache = &direct_cache_,
+            .cache_width = render_w,
+            .cache_height = render_h,
+            .offset_x = blit_rect.x,
+            .offset_y = blit_rect.y,
+            .draw_width = blit_rect.w,
+            .draw_height = blit_rect.h,
+            .refresh = refresh_cache,
+            .foreground = false,
+            .clip_enabled = true,
+            .clip = {
+                .x1 = blit_rect.x,
+                .y1 = blit_rect.y,
+                .x2 = blit_rect.x + blit_rect.w,
+                .y2 = blit_rect.y + blit_rect.h,
+            },
+        });
     }
 
     void RmlStatusBar::renderCached(const PanelDrawContext& ctx, const float x, const float y,
@@ -723,7 +742,8 @@ namespace lfs::vis::gui {
             return;
         }
 
-        queueVulkanContext(x, y, w_px, h_px, screen_w, screen_h);
+        queueCachedVulkanContext(x, y, w_px, h_px, screen_w, screen_h,
+                                 render_w, render_h, direct_cache_.texture == 0);
     }
 
     void RmlStatusBar::render(const PanelDrawContext& ctx, const float x, const float y,
@@ -765,7 +785,8 @@ namespace lfs::vis::gui {
             last_render_h_ = render_h;
         }
 
-        queueVulkanContext(x, y, w_px, h_px, screen_w, screen_h);
+        queueCachedVulkanContext(x, y, w_px, h_px, screen_w, screen_h,
+                                 render_w, render_h, true);
     }
 
 } // namespace lfs::vis::gui

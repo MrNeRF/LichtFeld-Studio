@@ -6,6 +6,7 @@
 
 #include "gui/gpu_memory_query.hpp"
 #include "gui/panel_registry.hpp"
+#include "gui/rmlui/rmlui_manager.hpp"
 #include "core/reactive/store.hpp"
 #include <RmlUi/Core/DataModelHandle.h>
 #include <chrono>
@@ -26,8 +27,6 @@ namespace lfs::vis {
 }
 namespace lfs::vis::gui {
 
-    class RmlUIManager;
-
     class RmlStatusBar {
     public:
         void init(RmlUIManager* mgr);
@@ -43,8 +42,10 @@ namespace lfs::vis::gui {
     private:
         bool updateContent(const PanelDrawContext& ctx, bool force_refresh);
         bool updateTheme();
-        void queueVulkanContext(float x, float y, float w_px, float h_px,
-                                int screen_w, int screen_h);
+        void queueCachedVulkanContext(float x, float y, float w_px, float h_px,
+                                      int screen_w, int screen_h,
+                                      int render_w, int render_h,
+                                      bool refresh_cache);
         void pollGpuMemoryQuery(std::chrono::steady_clock::time_point now);
         void setModelString(const char* name, std::string& field, std::string value);
         void setModelBool(const char* name, bool& field, bool value);
@@ -136,6 +137,7 @@ namespace lfs::vis::gui {
         int last_render_w_ = 0;
         int last_render_h_ = 0;
         int last_document_h_ = 0;
+        CachedVulkanContextRender direct_cache_;
         static constexpr auto kIdleRefreshInterval = std::chrono::milliseconds(200);
         static constexpr auto kBusyRefreshInterval = std::chrono::milliseconds(100);
         static constexpr auto kAnimatedRefreshInterval = std::chrono::milliseconds(16);
