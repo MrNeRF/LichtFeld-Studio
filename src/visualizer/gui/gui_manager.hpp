@@ -241,6 +241,9 @@ namespace lfs::vis {
             bool vram_hud_visible_published_ = false;
             std::chrono::steady_clock::time_point next_vram_hud_publish_{};
             std::optional<AppStore::GTMetricsOverlayConfig> published_gt_metrics_overlay_config_;
+            bool menu_labels_synced_ = false;
+            std::uint64_t synced_menu_entries_version_ = 0;
+            std::uint64_t synced_menu_language_generation_ = 0;
 
             // Panel layout and viewport
             PanelLayoutManager panel_layout_;

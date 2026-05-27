@@ -4865,19 +4865,28 @@ namespace lfs::vis::gui {
             LOG_TIMER("gui_render.panel_setup.menu_bar");
             menu_bar_->render();
 
-            if (menu_bar_->hasMenuEntries()) {
-                auto entries = menu_bar_->getMenuEntries();
-                std::vector<std::string> labels;
-                std::vector<std::string> idnames;
-                labels.reserve(entries.size());
-                idnames.reserve(entries.size());
-                for (const auto& entry : entries) {
-                    labels.emplace_back(LOC(entry.label.c_str()));
-                    idnames.emplace_back(entry.idname);
+            const auto menu_entries_version = menu_bar_->menuEntriesVersion();
+            const auto menu_language_generation = app_store().language_generation.get();
+            if (!menu_labels_synced_ ||
+                menu_entries_version != synced_menu_entries_version_ ||
+                menu_language_generation != synced_menu_language_generation_) {
+                if (menu_bar_->hasMenuEntries()) {
+                    auto entries = menu_bar_->getMenuEntries();
+                    std::vector<std::string> labels;
+                    std::vector<std::string> idnames;
+                    labels.reserve(entries.size());
+                    idnames.reserve(entries.size());
+                    for (const auto& entry : entries) {
+                        labels.emplace_back(LOC(entry.label.c_str()));
+                        idnames.emplace_back(entry.idname);
+                    }
+                    rml_menu_bar_.updateLabels(labels, idnames);
+                } else {
+                    rml_menu_bar_.updateLabels({}, {});
                 }
-                rml_menu_bar_.updateLabels(labels, idnames);
-            } else {
-                rml_menu_bar_.updateLabels({}, {});
+                synced_menu_entries_version_ = menu_entries_version;
+                synced_menu_language_generation_ = menu_language_generation;
+                menu_labels_synced_ = true;
             }
 
             // Reserve work area for the RML menu bar via ImGui's internal inset mechanism
