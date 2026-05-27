@@ -3,6 +3,7 @@
 Current branch: `reactive_ui`
 
 Last completed commits:
+- `fcb5b0649 Cache modal and startup overlay rendering`
 - `00c2a5864 Cache idle bottom dock sequencer rendering`
 - `131da29ec Publish scene panel invalidations through app store`
 - `a0034df40 Gate native scene panel sync by visible sources`
@@ -21,7 +22,10 @@ Current verified state:
 - Menu bar label localization/copying is gated by menu source version plus `language_generation`.
 - Native scene panel sync is source-stamped and driven by store-published scene/selection generations.
 - Bottom dock has a cached render branch; the sequencer panel queues cached RmlUi textures on idle frames.
+- Modal requests wake the event loop, closed modal overlays skip input/render work, and modal/startup overlays reuse cached RmlUi textures once stable.
 - Last broad Python panel slice passed: 191 tests.
+- Last focused modal/post-work C++ slice passed: `./build/tests/lichtfeld_tests --gtest_filter='PyModalRegistryRegression.*:VisualizerPostWorkTest.*'`.
+- Last focused modal/startup C++ slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Modal*:*Startup*'`.
 - Last focused sequencer C++ slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Sequencer*'`.
 - Last C++ build passed: `cmake --build build -j16`.
 
@@ -34,24 +38,9 @@ Drive idle GUI CPU toward zero and keep p99 CPU UI work under 2 ms by removing r
 - Native scene panel preload gating: `a0034df40`.
 - Scene panel reactive invalidation publication: `131da29ec`.
 - Bottom dock and sequencer cached rendering: `00c2a5864`.
+- Modal and startup overlay demand/caching: `fcb5b0649`.
 
-## Next Batch 1: Modal And Startup Overlay Demand
-
-Focus files:
-- `src/visualizer/gui/rml_modal_overlay.{hpp,cpp}`
-- `src/visualizer/gui/startup_overlay.{hpp,cpp}`
-- `src/visualizer/gui/gui_manager.cpp`
-
-Tasks:
-- Add cheap `needsRender()` style queries for modal/startup overlays.
-- Only process/render full overlay paths when open, newly queued, input-active, theme/language changed, or first-frame settling is needed.
-- Keep modal text input and IME handling intact.
-
-Acceptance:
-- Closed modal overlay does not enter full render path on idle frames.
-- Startup overlay remains responsive and correctly localized/themed.
-
-## Next Batch 2: Frame Router Cleanup
+## Next Batch 1: Frame Router Cleanup
 
 Focus files:
 - `src/visualizer/gui/gui_manager.cpp`
