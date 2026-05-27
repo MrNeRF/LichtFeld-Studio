@@ -67,6 +67,27 @@ class _HandleStub:
     def dirty_all(self):
         self.dirty_fields.append("__all__")
 
+    def request_update(self):
+        self.dirty_fields.append("__update__")
+
+
+class _SignalStub:
+    def __init__(self):
+        self._callbacks = []
+
+    def subscribe(self, callback):
+        self._callbacks.append(callback)
+
+        def unsubscribe():
+            if callback in self._callbacks:
+                self._callbacks.remove(callback)
+
+        return unsubscribe
+
+    def emit(self, value):
+        for callback in list(self._callbacks):
+            callback(value)
+
 
 class _ElementStub:
     def __init__(self, attrs=None, parent=None, tag_name="div"):
@@ -160,6 +181,34 @@ def _make_asset():
         "modified_at": "2026-04-28T14:48:57.606369",
         "is_favorite": False,
     }
+
+
+def test_asset_manager_uses_dirty_update_policy(asset_manager_panel_module):
+    assert asset_manager_panel_module.AssetManagerPanel.update_policy == "dirty"
+    assert "update_interval_ms" not in asset_manager_panel_module.AssetManagerPanel.__dict__
+
+
+def test_asset_manager_requests_update_from_reactive_store(asset_manager_panel_module, monkeypatch):
+    module = asset_manager_panel_module
+    signals = SimpleNamespace(
+        scene_generation=_SignalStub(),
+        language_generation=_SignalStub(),
+    )
+    monkeypatch.setattr(module, "NativeAppStore", signals)
+
+    panel = module.AssetManagerPanel()
+    panel._handle = _HandleStub()
+
+    panel._subscribe_reactive_state()
+    signals.scene_generation.emit(1)
+    signals.language_generation.emit(1)
+
+    assert panel._handle.dirty_fields == ["__update__", "__update__"]
+
+    panel._unsubscribe_reactive_state()
+    signals.scene_generation.emit(2)
+
+    assert panel._handle.dirty_fields == ["__update__", "__update__"]
 
 
 def test_asset_rows_expose_scalar_tag_label(asset_manager_panel_module):

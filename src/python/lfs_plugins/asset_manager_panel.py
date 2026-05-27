@@ -22,6 +22,7 @@ from .asset_manager_integration import (
 )
 from .import_panels import open_url_import_panel, open_watch_dirs_dialog
 from .types import Panel
+from .ui.store import AppStore as NativeAppStore
 
 _logger = logging.getLogger(__name__)
 
@@ -81,7 +82,7 @@ class AssetManagerPanel(Panel):
     template = "rmlui/asset_manager.rml"
     height_mode = lf.ui.PanelHeightMode.FILL
     size = (980, 620)
-    update_interval_ms = 500
+    update_policy = "dirty"
 
     # Storage path for asset manager data
     STORAGE_PATH = resolve_asset_manager_storage_path()
@@ -280,6 +281,9 @@ class AssetManagerPanel(Panel):
         self._library_mtime: float = 0.0
         self._updating_selection_details: bool = False
         self._pending_transform_applications: List[Dict[str, Any]] = []
+        self._reactive_unsubscribers = []
+        self._last_scene_generation: Optional[int] = None
+        self._last_language_generation: Optional[int] = None
 
         # New project menu state
         self._new_project_menu_open: bool = False
@@ -2693,6 +2697,7 @@ class AssetManagerPanel(Panel):
                 "pending_subtree_nodes": set(),
             }
         )
+        self._request_model_update()
 
     def _resolve_loaded_asset_root_name(self, scene, pending: Dict[str, Any]) -> Optional[str]:
         geometry_metadata = pending.get("geometry_metadata", {}) or {}
@@ -3482,17 +3487,40 @@ class AssetManagerPanel(Panel):
 
         # Initial refresh must dirty scalar bindings after catalog load.
         self.refresh_catalog()
+        self._last_scene_generation = NativeAppStore.scene_generation.value
+        self._last_language_generation = NativeAppStore.language_generation.value
+        self._subscribe_reactive_state()
 
     def on_scene_changed(self, doc):
         self._flush_pending_transform_applications()
         self._sync_runtime_scene_catalog(select_current=True)
+        self._last_scene_generation = NativeAppStore.scene_generation.value
         self.refresh_catalog()
 
     def on_update(self, doc):
-        """Periodic update - check for missing files."""
+        """Dirty-policy update for catalog and deferred scene work."""
+        changed = False
+
+        language_generation = NativeAppStore.language_generation.value
+        if language_generation != self._last_language_generation:
+            self._last_language_generation = language_generation
+            if self._handle:
+                self._handle.dirty_all()
+            changed = True
+
         if not self._asset_index:
-            return False
+            return changed
+
         self._flush_pending_transform_applications()
+        if self._pending_transform_applications:
+            self._request_model_update()
+
+        scene_generation = NativeAppStore.scene_generation.value
+        if scene_generation != self._last_scene_generation:
+            self._last_scene_generation = scene_generation
+            self._sync_runtime_scene_catalog(select_current=True)
+            self.refresh_catalog(request_update=False)
+            changed = True
 
         try:
             library_path = self._asset_index.library_path
@@ -3503,8 +3531,8 @@ class AssetManagerPanel(Panel):
                     if self._sync_existing_asset_metadata() and library_path.exists():
                         current_mtime = library_path.stat().st_mtime
                     self._library_mtime = current_mtime
-                    self.refresh_catalog()
-                    return False
+                    self.refresh_catalog(request_update=False)
+                    changed = True
 
             if hasattr(self._asset_index, "mark_missing_files"):
                 previous_missing = sum(
@@ -3516,14 +3544,16 @@ class AssetManagerPanel(Panel):
                 if current_missing != previous_missing:
                     if library_path.exists():
                         self._library_mtime = library_path.stat().st_mtime
-                    self.refresh_catalog()
+                    self.refresh_catalog(request_update=False)
+                    changed = True
         except Exception:
             pass
 
-        return False
+        return changed
 
     def on_unmount(self, doc):
         """Save index on unmount."""
+        self._unsubscribe_reactive_state()
         clear_active_asset_manager_panel(self)
         if self._asset_index and hasattr(self._asset_index, "save"):
             try:
@@ -3534,6 +3564,31 @@ class AssetManagerPanel(Panel):
         doc.remove_data_model("asset_manager")
         self._handle = None
         self._doc = None
+
+    def _subscribe_reactive_state(self):
+        if self._reactive_unsubscribers:
+            return
+
+        native_signals = (
+            NativeAppStore.scene_generation,
+            NativeAppStore.language_generation,
+        )
+        self._reactive_unsubscribers = [
+            signal.subscribe(lambda _value: self._request_model_update())
+            for signal in native_signals
+        ]
+
+    def _unsubscribe_reactive_state(self):
+        for unsubscribe in self._reactive_unsubscribers:
+            try:
+                unsubscribe()
+            except Exception:
+                pass
+        self._reactive_unsubscribers = []
+
+    def _request_model_update(self):
+        if self._handle:
+            rml_widgets.request_model_update(self._handle)
 
     def _bind_dom_event_listeners(self, doc) -> None:
         """Bind stable DOM listeners for dynamic Asset Manager rows.
@@ -3990,12 +4045,14 @@ class AssetManagerPanel(Panel):
 
     # ── Helper Methods ─────────────────────────────────────────
 
-    def refresh_catalog(self):
+    def refresh_catalog(self, *, request_update: bool = True):
         """Refresh all catalog data in the UI."""
         self._reconcile_selection()
         self._update_all_record_lists()
         if self._handle:
             self._handle.dirty_all()
+            if request_update:
+                self._request_model_update()
 
     def refresh_catalog_scan(self, _handle=None, _ev=None, _args=None):
         """Rescan all known asset directories and refresh the catalog."""
