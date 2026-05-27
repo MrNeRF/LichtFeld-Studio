@@ -135,6 +135,7 @@ class AppStore:
     export_progress_state = StoreSignal[dict[str, object]]("export_progress_state", {})
     mesh2splat_state = StoreSignal[dict[str, object]]("mesh2splat_state", {})
     splat_simplify_state = StoreSignal[dict[str, object]]("splat_simplify_state", {})
+    scripts_generation = StoreSignal[int]("scripts_generation", 0)
 
 
 class _BatchContext:

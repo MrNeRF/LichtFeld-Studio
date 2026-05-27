@@ -43,7 +43,8 @@ namespace lfs::vis {
           splat_simplify_state(store_,
                                Field::SplatSimplifyStateValue,
                                "splat_simplify_state",
-                               TaskProgressState{}) {}
+                               TaskProgressState{}),
+          scripts_generation(store_, Field::ScriptsGeneration, "scripts_generation", 0) {}
 
     AppStore& app_store() {
         static AppStore instance;

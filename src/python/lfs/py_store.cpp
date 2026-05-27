@@ -288,6 +288,8 @@ namespace lfs::python {
                 store.mesh2splat_state.set(task_progress_state_from_object(value));
             else if (field == "splat_simplify_state")
                 store.splat_simplify_state.set(task_progress_state_from_object(value));
+            else if (field == "scripts_generation")
+                store.scripts_generation.set(nb::cast<std::uint64_t>(value));
             else
                 throw_unknown_field(field);
         }
@@ -340,6 +342,8 @@ namespace lfs::python {
                 return task_progress_state_to_dict(store.mesh2splat_state.get());
             if (field == "splat_simplify_state")
                 return task_progress_state_to_dict(store.splat_simplify_state.get());
+            if (field == "scripts_generation")
+                return nb::cast(store.scripts_generation.get());
             throw_unknown_field(field);
         }
 
@@ -396,6 +400,8 @@ namespace lfs::python {
             if (field == "splat_simplify_state")
                 return subscribe_observable_as(
                     store.splat_simplify_state, std::move(callback), task_progress_state_to_dict);
+            if (field == "scripts_generation")
+                return subscribe_observable(store.scripts_generation, std::move(callback));
             throw_unknown_field(field);
         }
 

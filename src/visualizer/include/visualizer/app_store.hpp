@@ -145,6 +145,7 @@ namespace lfs::vis {
             ExportProgressStateValue,
             Mesh2SplatStateValue,
             SplatSimplifyStateValue,
+            ScriptsGeneration,
         };
 
         AppStore();
@@ -178,6 +179,7 @@ namespace lfs::vis {
         lfs::core::reactive::Observable<ExportProgressState> export_progress_state;
         lfs::core::reactive::Observable<TaskProgressState> mesh2splat_state;
         lfs::core::reactive::Observable<TaskProgressState> splat_simplify_state;
+        lfs::core::reactive::Observable<std::uint64_t> scripts_generation;
 
     private:
         lfs::core::reactive::Store store_;

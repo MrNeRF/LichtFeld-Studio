@@ -6,6 +6,7 @@
 
 #include "core/export.hpp"
 
+#include <cstdint>
 #include <filesystem>
 #include <mutex>
 #include <string>
@@ -32,7 +33,7 @@ namespace lfs::vis::gui::panels {
         void clearErrors();
         void clear();
 
-        const std::vector<ScriptInfo>& scripts() const { return scripts_; }
+        std::vector<ScriptInfo> scriptsSnapshot() const;
         std::vector<std::filesystem::path> enabledScripts() const;
         bool needsReload() const { return needs_reload_; }
         void setNeedsReload(bool val) { needs_reload_ = val; }
@@ -41,6 +42,7 @@ namespace lfs::vis::gui::panels {
         PythonScriptManagerState() = default;
 
         std::vector<ScriptInfo> scripts_;
+        std::uint64_t generation_ = 0;
         bool needs_reload_ = false;
         mutable std::mutex mutex_;
     };
