@@ -5,6 +5,7 @@
 #pragma once
 
 #include "gui/rmlui/rml_tooltip.hpp"
+#include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/vram_hud_overlay.hpp"
 #include "visualizer/app_store.hpp"
 
@@ -27,7 +28,6 @@ namespace lfs::vis {
 }
 namespace lfs::vis::gui {
 
-    class RmlUIManager;
     struct PanelInputState;
 
     class RmlViewportOverlay {
@@ -82,7 +82,7 @@ namespace lfs::vis::gui {
         void refreshGTMetricsOverlayFromStore();
         void applyGTMetricsOverlay();
         bool applyFrameTooltip();
-        void queueVulkanContext();
+        void queueCachedVulkanContext(bool refresh_cache);
 
         RmlUIManager* rml_manager_ = nullptr;
         Rml::Context* rml_context_ = nullptr;
@@ -120,6 +120,7 @@ namespace lfs::vis::gui {
         int last_mouse_y_ = 0;
         int last_render_w_ = 0;
         int last_render_h_ = 0;
+        CachedVulkanContextRender direct_cache_;
         GTMetricsOverlayState gt_metrics_overlay_;
         lfs::vis::AppStore::GTMetricsOverlayConfig gt_metrics_config_;
         std::optional<lfs::vis::AppStore::CameraMetrics> camera_metrics_;

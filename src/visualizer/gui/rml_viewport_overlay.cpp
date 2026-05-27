@@ -81,6 +81,8 @@ namespace lfs::vis::gui {
 
         if (vram_hud_)
             vram_hud_->onDocumentDestroyed();
+        if (rml_manager_)
+            rml_manager_->releaseCachedVulkanContext(direct_cache_);
         if (rml_context_ && rml_manager_)
             rml_manager_->destroyContext("viewport_overlay");
         rml_context_ = nullptr;
@@ -99,6 +101,9 @@ namespace lfs::vis::gui {
         if (doc_registered_)
             lfs::python::unregister_rml_document("viewport_overlay");
         doc_registered_ = false;
+
+        if (rml_manager_)
+            rml_manager_->releaseCachedVulkanContext(direct_cache_);
 
         if (document_) {
             rml_context_->UnloadDocument(document_);
@@ -621,18 +626,32 @@ namespace lfs::vis::gui {
                               static_cast<int>(vp_size_.y));
     }
 
-    void RmlViewportOverlay::queueVulkanContext() {
+    void RmlViewportOverlay::queueCachedVulkanContext(const bool refresh_cache) {
         if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
             return;
-        rml_manager_->queueVulkanContext(rml_context_,
-                                         vp_pos_.x - screen_origin_.x,
-                                         vp_pos_.y - screen_origin_.y,
-                                         true,
-                                         true,
-                                         vp_pos_.x - screen_origin_.x,
-                                         vp_pos_.y - screen_origin_.y,
-                                         vp_pos_.x - screen_origin_.x + vp_size_.x,
-                                         vp_pos_.y - screen_origin_.y + vp_size_.y);
+        const float x = vp_pos_.x - screen_origin_.x;
+        const float y = vp_pos_.y - screen_origin_.y;
+        const int w = static_cast<int>(vp_size_.x);
+        const int h = static_cast<int>(vp_size_.y);
+        rml_manager_->queueCachedVulkanContext({
+            .context = rml_context_,
+            .cache = &direct_cache_,
+            .cache_width = w,
+            .cache_height = h,
+            .offset_x = x,
+            .offset_y = y,
+            .draw_width = vp_size_.x,
+            .draw_height = vp_size_.y,
+            .refresh = refresh_cache,
+            .foreground = true,
+            .clip_enabled = true,
+            .clip = {
+                .x1 = x,
+                .y1 = y,
+                .x2 = x + vp_size_.x,
+                .y2 = y + vp_size_.y,
+            },
+        });
     }
 
     void RmlViewportOverlay::renderCached() {
@@ -665,7 +684,7 @@ namespace lfs::vis::gui {
                                             static_cast<int>(vp_pos_.y - screen_origin_.y));
             rml_context_->SetDimensions(Rml::Vector2i(w, h));
             rml_context_->Update();
-            queueVulkanContext();
+            queueCachedVulkanContext(true);
             animation_active_ = (rml_context_->GetNextUpdateDelay() == 0);
             return;
         }
@@ -678,7 +697,9 @@ namespace lfs::vis::gui {
             return;
         }
 
-        queueVulkanContext();
+        queueCachedVulkanContext(direct_cache_.texture == 0 ||
+                                 direct_cache_.width != w ||
+                                 direct_cache_.height != h);
     }
 
     void RmlViewportOverlay::render() {
@@ -735,7 +756,9 @@ namespace lfs::vis::gui {
                                   theme_changed || size_changed || toolbar_changed ||
                                   tooltip_changed || had_data_model_binding_dirty;
         if (!needs_render) {
-            queueVulkanContext();
+            queueCachedVulkanContext(direct_cache_.texture == 0 ||
+                                     direct_cache_.width != w ||
+                                     direct_cache_.height != h);
             return;
         }
 
@@ -766,7 +789,7 @@ namespace lfs::vis::gui {
             }
         }
 
-        queueVulkanContext();
+        queueCachedVulkanContext(true);
         {
             LOG_TIMER("gui_render.rml_viewport_overlay.render.update.next_delay");
             animation_active_ = (rml_context_->GetNextUpdateDelay() == 0);
