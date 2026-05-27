@@ -11,7 +11,7 @@ import lichtfeld as lf
 from . import rml_widgets
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
-from .ui.store import native_value as _native_store_value
+from .ui.store import AppStore as NativeAppStore, native_value as _native_store_value
 
 __lfs_panel_classes__ = ["Mesh2SplatPanel"]
 __lfs_panel_ids__ = ["native.mesh2splat"]
@@ -34,6 +34,7 @@ class Mesh2SplatPanel(Panel):
     height_mode = lf.ui.PanelHeightMode.CONTENT
     size = (420, 0)
     update_interval_ms = 100
+    update_policy = "dirty"
 
     _RESOLUTION_OPTIONS = (128, 256, 512, 1024, 2048, 4096)
     _MIN_RESOLUTION = 16
@@ -51,6 +52,7 @@ class Mesh2SplatPanel(Panel):
         self._last_progress_stage = ""
         self._last_active = False
         self._error_text = ""
+        self._reactive_unsubscribers = []
         self._scrub_fields = ScrubFieldController(
             SCRUB_FIELD_DEFS,
             self._get_scrub_value,
@@ -100,6 +102,33 @@ class Mesh2SplatPanel(Panel):
         self._refresh_scene_state(force=True)
         self._sync_conversion_state(force=True)
         self._scrub_fields.mount(doc)
+        self._subscribe_reactive_state()
+
+    def _subscribe_reactive_state(self):
+        if self._reactive_unsubscribers:
+            return
+
+        native_signals = (
+            NativeAppStore.scene_generation,
+            NativeAppStore.mesh2splat_state,
+        )
+        self._reactive_unsubscribers = [
+            signal.subscribe(lambda _value: self._request_reactive_update())
+            for signal in native_signals
+        ]
+
+    def _unsubscribe_reactive_state(self):
+        for unsubscribe in self._reactive_unsubscribers:
+            try:
+                unsubscribe()
+            except Exception:
+                pass
+        self._reactive_unsubscribers = []
+
+    def _request_reactive_update(self):
+        self._last_mesh_key = None
+        if self._handle:
+            self._handle.dirty_all()
 
     def on_update(self, doc):
         del doc
@@ -115,6 +144,7 @@ class Mesh2SplatPanel(Panel):
         return dirty
 
     def on_unmount(self, doc):
+        self._unsubscribe_reactive_state()
         doc.remove_data_model("mesh2splat")
         self._handle = None
         self._scrub_fields.unmount()

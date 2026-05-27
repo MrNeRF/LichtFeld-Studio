@@ -237,3 +237,20 @@ def test_mesh2splat_panel_prefers_native_store_progress(mesh2splat_module, monke
     assert panel._last_progress_value == "0.875"
     assert panel._last_progress_stage == "Native progress"
     assert panel._error_text == "native error"
+
+
+def test_mesh2splat_panel_store_update_invalidates_model(mesh2splat_module):
+    module, _state = mesh2splat_module
+    panel = module.Mesh2SplatPanel()
+    panel._handle = _HandleStub()
+    panel._last_mesh_key = ("cached",)
+
+    panel._subscribe_reactive_state()
+    try:
+        module.NativeAppStore.mesh2splat_state.value = {"active": True, "progress": 0.5}
+
+        assert panel._last_mesh_key is None
+        assert "__all__" in panel._handle.dirty_fields
+    finally:
+        panel._unsubscribe_reactive_state()
+        module.NativeAppStore.mesh2splat_state._fallback = {}
