@@ -224,6 +224,22 @@ namespace lfs::vis {
             [[nodiscard]] bool isVramHudOverlayVisible() const;
             [[nodiscard]] bool isVramHudPublishDue(std::chrono::steady_clock::time_point now) const;
 
+            struct EditorContextUpdateStamp {
+                bool valid = false;
+                bool has_scene_manager = false;
+                bool has_trainer_manager = false;
+                bool has_dataset = false;
+                bool has_training_model = false;
+                bool trainer_running = false;
+                bool trainer_paused = false;
+                bool trainer_finished = false;
+                std::uint64_t scene_generation = 0;
+                std::uint64_t selection_generation = 0;
+                std::uint64_t scene_node_count = 0;
+
+                bool operator==(const EditorContextUpdateStamp&) const = default;
+            };
+
             // Core dependencies
             VisualizerImpl* viewer_;
 
@@ -341,6 +357,7 @@ namespace lfs::vis {
             std::vector<std::shared_ptr<IPanel>> native_panel_storage_;
             uint64_t panel_frame_serial_ = 0;
             uint8_t ui_layout_settle_frames_ = 0;
+            EditorContextUpdateStamp last_editor_context_update_stamp_;
             glm::vec2 last_ui_layout_work_pos_{-1.0f, -1.0f};
             glm::vec2 last_ui_layout_work_size_{-1.0f, -1.0f};
             float last_ui_layout_right_panel_w_ = -1.0f;

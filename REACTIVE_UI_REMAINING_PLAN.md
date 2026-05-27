@@ -3,6 +3,7 @@
 Current branch: `reactive_ui`
 
 Last completed commits:
+- `afbdafefd Skip stable editor context refreshes`
 - `ed519dac5 Gate idle panel registry branches`
 - `f9107672c Cache idle right panel shell rendering`
 - `22582d69d Cache idle viewport overlay rendering`
@@ -39,8 +40,10 @@ Current verified state:
 - The right-panel Rml shell now reuses a cached texture when tab/layout/input flags are stable; dirty tab, resize, splitter, or hover paths still refresh.
 - Legacy Python popup drawing is guarded by an explicit hook-presence predicate, so idle frames skip Python UI preparation/GIL work when no popup callback is registered.
 - `GuiManager::render()` now computes explicit panel-space demand flags and skips side-panel preload, floating-panel hit testing/draw, status-bar plugin draw, and screen-overlay renderer work when those spaces have no enabled panels.
+- `EditorContext::update()` is now source-stamped at the router level and is skipped on unrelated store-only redraws while still refreshing on scene generation, selection generation, trainer state, structural scene changes, or input activity.
 - Last broad Python panel slice passed: 191 tests.
 - Last frame-router slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Shell*:*Rml*:*Menu*:*Modal*:*Startup*'` and the 191-test Python panel suite.
+- Last editor-context router slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Selection*:*Rml*:*Menu*:*Modal*:*Startup*:VisualizerPostWorkTest.*'` and 67 Python toolbar/rendering/training/selection tests.
 - Last focused Python popup/plugin slice passed: 74 tests from plugin system, plugin API surface, and import dialog panels.
 - Last focused status/Rml C++ slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Status*:*Rml*:VisualizerPostWorkTest.*'`.
 - Last focused training/rendering Python slice passed: 51 tests.
@@ -72,6 +75,7 @@ Drive idle GUI CPU toward zero and keep p99 CPU UI work under 2 ms by removing r
 - Viewport overlay cached rendering: `22582d69d`.
 - Right-panel shell cached rendering: `f9107672c`.
 - Idle panel registry branch gating: `ed519dac5`.
+- Stable editor context refresh gating: `afbdafefd`.
 
 ## Next Batch 1: Frame Router Cleanup
 

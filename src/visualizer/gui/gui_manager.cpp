@@ -4931,6 +4931,8 @@ namespace lfs::vis::gui {
                 frame_input.viewport_keyboard_focus = wm->inputRouter().isViewportKeyboardFocused();
             }
         }
+        const bool frame_has_input_activity =
+            sdl_input.window_event || hasPointerActivity(sdl_input) || hasKeyboardActivity(sdl_input);
 
         auto& reg = PanelRegistry::instance();
         const bool has_side_panel_plugins = reg.has_panels(PanelSpace::SidePanel);
@@ -4979,9 +4981,34 @@ namespace lfs::vis::gui {
 
         // Update editor context state for this frame
         auto& editor_ctx = viewer_->getEditorContext();
-        {
+        auto* const scene_manager = viewer_->getSceneManager();
+        auto* const trainer_manager = viewer_->getTrainerManager();
+        EditorContextUpdateStamp editor_context_stamp;
+        editor_context_stamp.valid = true;
+        editor_context_stamp.has_scene_manager = scene_manager != nullptr;
+        editor_context_stamp.has_trainer_manager = trainer_manager != nullptr;
+        editor_context_stamp.scene_generation = python::get_scene_generation();
+        editor_context_stamp.selection_generation = app_store().selection_generation.get();
+        if (scene_manager) {
+            editor_context_stamp.has_dataset = scene_manager->hasDataset();
+            const auto& scene_ref = scene_manager->getScene();
+            editor_context_stamp.has_training_model = scene_ref.getTrainingModel() != nullptr;
+            editor_context_stamp.scene_node_count =
+                static_cast<std::uint64_t>(scene_ref.getNodeCount());
+        }
+        if (trainer_manager) {
+            editor_context_stamp.trainer_running = trainer_manager->isRunning();
+            editor_context_stamp.trainer_paused = trainer_manager->isPaused();
+            editor_context_stamp.trainer_finished = trainer_manager->isFinished();
+        }
+        const bool editor_context_sources_changed =
+            !(editor_context_stamp == last_editor_context_update_stamp_);
+        const bool update_editor_context =
+            editor_context_sources_changed || frame_has_input_activity;
+        if (update_editor_context) {
             LOG_TIMER("gui_render.panel_setup.editor_context_update");
-            editor_ctx.update(viewer_->getSceneManager(), viewer_->getTrainerManager());
+            editor_ctx.update(scene_manager, trainer_manager);
+            last_editor_context_update_stamp_ = editor_context_stamp;
         }
 
         // Create context for this frame
@@ -5161,11 +5188,12 @@ namespace lfs::vis::gui {
                                            panel_input, screen);
         }
 
-        LOG_PERF("gui_render.router side_panel_plugins={} floating_panels={} status_bar_panels={} viewport_overlay_panels={} right_live={} bottom_live={} layout_changed={} panel_registry_anim={} block_underlay={}",
+        LOG_PERF("gui_render.router side_panel_plugins={} floating_panels={} status_bar_panels={} viewport_overlay_panels={} editor_update={} right_live={} bottom_live={} layout_changed={} panel_registry_anim={} block_underlay={}",
                  has_side_panel_plugins,
                  has_floating_panels,
                  has_status_bar_panels,
                  has_viewport_overlay_panels,
+                 update_editor_context,
                  right_panel_requires_live_layout,
                  bottom_dock_requires_live_layout,
                  ui_layout_changed,
