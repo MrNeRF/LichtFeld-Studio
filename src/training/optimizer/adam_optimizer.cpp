@@ -675,7 +675,19 @@ namespace lfs::training {
         }
 
         const size_t n_new = new_values.shape()[0];
-        param = lfs::core::Tensor::cat({param, new_values}, 0);
+        if (n_new == 0) {
+            return;
+        }
+
+        const size_t old_size = param.shape()[0];
+        const size_t new_size = old_size + n_new;
+        if (param.capacity() >= new_size) {
+            param.append_zeros(n_new);
+            auto appended = param.slice(0, old_size, new_size);
+            appended.copy_from(new_values);
+        } else {
+            param = lfs::core::Tensor::cat({param, new_values}, 0);
+        }
         extend_state_for_new_params(type, n_new);
     }
 

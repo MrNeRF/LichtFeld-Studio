@@ -14,6 +14,7 @@
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
 #include "python/python_runtime.hpp"
+#include "training/optimizer/adam_optimizer.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 
@@ -437,6 +438,49 @@ namespace lfs::python {
 
             ASSERT_TRUE(result.has_value()) << result.error();
             EXPECT_EQ(allocation_calls, 0);
+        }
+
+        TEST_F(SceneValidityTest, AdamAddNewParamsPreservesExportableStorage) {
+            constexpr size_t count = 4;
+            constexpr size_t capacity = 16;
+            constexpr int sh_degree = 1;
+            const auto rest_coeffs = core::sh_rest_coefficients_for_degree(sh_degree);
+            std::vector<std::shared_ptr<std::vector<float>>> owners;
+
+            auto model = std::make_unique<core::SplatData>(
+                sh_degree,
+                make_external_float_tensor(owners, {count, size_t{3}}, capacity),
+                make_external_float_tensor(owners, {count, size_t{1}, size_t{3}}, capacity),
+                make_external_float_tensor(owners,
+                                           {core::sh_swizzled_float_count(count, rest_coeffs)},
+                                           core::sh_swizzled_float_count(capacity, rest_coeffs)),
+                make_external_float_tensor(owners, {count, size_t{3}}, capacity),
+                make_external_float_tensor(owners, {count, size_t{4}}, capacity),
+                make_external_float_tensor(owners, {count, size_t{1}}, capacity),
+                1.0f,
+                core::SplatData::ShNLayout::Swizzled);
+
+            training::AdamConfig config;
+            training::AdamOptimizer optimizer(*model, config);
+
+            auto new_means = core::Tensor::from_vector(
+                {10.0f, 11.0f, 12.0f, 20.0f, 21.0f, 22.0f},
+                {size_t{2}, size_t{3}},
+                core::Device::CPU);
+            optimizer.add_new_params(training::ParamType::Means, new_means, true);
+
+            EXPECT_EQ(model->means_raw().shape()[0], count + 2);
+            EXPECT_EQ(model->means_raw().capacity(), capacity);
+            EXPECT_EQ(model->means_raw().external_storage_kind(), "splat.exportable");
+
+            const auto values = model->means_raw().to_vector();
+            ASSERT_EQ(values.size(), (count + 2) * 3);
+            EXPECT_FLOAT_EQ(values[count * 3 + 0], 10.0f);
+            EXPECT_FLOAT_EQ(values[count * 3 + 1], 11.0f);
+            EXPECT_FLOAT_EQ(values[count * 3 + 2], 12.0f);
+            EXPECT_FLOAT_EQ(values[(count + 1) * 3 + 0], 20.0f);
+            EXPECT_FLOAT_EQ(values[(count + 1) * 3 + 1], 21.0f);
+            EXPECT_FLOAT_EQ(values[(count + 1) * 3 + 2], 22.0f);
         }
 
     TEST_F(SceneValidityTest, SceneManagerEmptyStateKeepsApplicationSceneContext) {

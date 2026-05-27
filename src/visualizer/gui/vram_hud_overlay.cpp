@@ -28,6 +28,7 @@ namespace lfs::vis::gui {
 
         constexpr int kRowIndentPx = 10;
         constexpr std::size_t kDefaultCollapseDepth = 2;
+        constexpr std::size_t kMaxAnnotationRows = 512;
         constexpr float kMinHudWidthPx = 360.0f;
         constexpr float kMinHudHeightPx = 200.0f;
 
@@ -937,8 +938,21 @@ namespace lfs::vis::gui {
     }
 
     void VramHudOverlay::applyAnnotations() {
-        if (!anno_rows_root_)
+        if (!document_ || !anno_rows_root_)
             return;
+
+        const auto clear_rows = [this]() {
+            while (!anno_rows_.empty()) {
+                if (anno_rows_.back().row)
+                    anno_rows_root_->RemoveChild(anno_rows_.back().row);
+                anno_rows_.pop_back();
+            }
+        };
+
+        if (active_tab_ != "annotations") {
+            clear_rows();
+            return;
+        }
 
         struct Entry {
             std::string category;
@@ -1027,8 +1041,14 @@ namespace lfs::vis::gui {
         std::sort(entries.begin(), entries.end(),
                   [](const Entry& a, const Entry& b) { return a.name < b.name; });
 
+        const auto total_entries = entries.size();
+        if (entries.size() > kMaxAnnotationRows)
+            entries.resize(kMaxAnnotationRows);
+
         if (anno_summary_value_) {
-            std::string text = std::format("{}", entries.size());
+            std::string text = total_entries > entries.size()
+                                   ? std::format("{} / {}", entries.size(), total_entries)
+                                   : std::format("{}", entries.size());
             setText(anno_summary_value_, cached_anno_summary_, std::move(text));
         }
 
