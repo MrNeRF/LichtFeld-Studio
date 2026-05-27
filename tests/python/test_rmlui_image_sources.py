@@ -170,6 +170,23 @@ def test_getting_started_panel_uses_dirty_update_policy(panel_modules):
     assert getting_started.GettingStartedPanel.update_policy == "dirty"
 
 
+def test_image_preview_uses_dirty_update_policy(panel_modules):
+    image_preview, _ = panel_modules
+    assert image_preview.ImagePreviewPanel.update_policy == "dirty"
+
+
+def test_image_preview_dirty_request_schedules_update(panel_modules):
+    image_preview, _ = panel_modules
+    panel = image_preview.ImagePreviewPanel()
+    panel._handle = _HandleStub()
+    panel._dirty = False
+
+    panel._mark_dirty()
+
+    assert panel._dirty is True
+    assert panel._handle.request_update_count == 1
+
+
 def test_getting_started_panel_requests_update_when_thumbnail_ready(panel_modules):
     _, getting_started = panel_modules
     callbacks = []
