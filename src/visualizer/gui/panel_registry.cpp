@@ -1198,6 +1198,41 @@ namespace lfs::vis::gui {
         return false;
     }
 
+    bool PanelRegistry::needsAnimationFrameForVisiblePanels(
+        const PanelAnimationVisibility visibility) const {
+        auto is_visible = [&](const PanelInfo& p) {
+            if (!p.parent_id.empty())
+                return visibility.right_panel_visible &&
+                       p.parent_id == visibility.active_main_tab;
+
+            switch (p.space) {
+            case PanelSpace::Floating:
+            case PanelSpace::SidePanel:
+            case PanelSpace::StatusBar:
+                return visibility.ui_visible;
+            case PanelSpace::ViewportOverlay:
+                return true;
+            case PanelSpace::SceneHeader:
+                return visibility.right_panel_visible;
+            case PanelSpace::MainPanelTab:
+                return visibility.right_panel_visible &&
+                       p.id == visibility.active_main_tab;
+            case PanelSpace::BottomDock:
+                return visibility.ui_visible && visibility.bottom_dock_visible;
+            }
+            return false;
+        };
+
+        std::lock_guard lock(mutex_);
+        for (const auto& p : panels_) {
+            if (!p.enabled || p.error_disabled || !p.panel || !is_visible(p))
+                continue;
+            if (p.panel->needsAnimationFrame())
+                return true;
+        }
+        return false;
+    }
+
     bool PanelRegistry::set_panel_label(const std::string& id, const std::string& new_label) {
         std::lock_guard lock(mutex_);
         for (auto& p : panels_) {

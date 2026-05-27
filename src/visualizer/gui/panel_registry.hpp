@@ -16,6 +16,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -167,6 +168,13 @@ namespace lfs::vis::gui {
         }
     };
 
+    struct PanelAnimationVisibility {
+        std::string_view active_main_tab;
+        bool ui_visible = true;
+        bool right_panel_visible = true;
+        bool bottom_dock_visible = true;
+    };
+
     struct PanelSummary {
         std::string label;
         std::string id;
@@ -281,6 +289,7 @@ namespace lfs::vis::gui {
         bool is_panel_enabled(const std::string& id) const;
         void rescale_floating_panels(float previous_scale, float new_scale);
         bool needsAnimationFrame() const;
+        bool needsAnimationFrameForVisiblePanels(PanelAnimationVisibility visibility) const;
         bool set_panel_label(const std::string& id, const std::string& new_label);
         bool set_panel_order(const std::string& id, int new_order);
         bool set_panel_space(const std::string& id, PanelSpace new_space);

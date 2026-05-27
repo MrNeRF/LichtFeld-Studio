@@ -4920,7 +4920,14 @@ namespace lfs::vis::gui {
         }
 
         auto& reg = PanelRegistry::instance();
-        const bool panel_registry_needs_animation = reg.needsAnimationFrame();
+        const bool right_panel_visible = show_main_panel_ && !ui_hidden_;
+        const bool panel_registry_needs_animation =
+            reg.needsAnimationFrameForVisiblePanels({
+                .active_main_tab = panel_layout_.getActiveTab(),
+                .ui_visible = !ui_hidden_,
+                .right_panel_visible = right_panel_visible,
+                .bottom_dock_visible = panel_layout_.isBottomDockVisible(),
+            });
 
         if (!ui_hidden_) {
             LOG_TIMER("gui_render.panel_setup.shell_frame");
@@ -6334,7 +6341,12 @@ namespace lfs::vis::gui {
             return true;
         if (rml_right_panel_.needsAnimationFrame())
             return true;
-        if (PanelRegistry::instance().needsAnimationFrame())
+        if (PanelRegistry::instance().needsAnimationFrameForVisiblePanels({
+                .active_main_tab = panel_layout_.getActiveTab(),
+                .ui_visible = !ui_hidden_,
+                .right_panel_visible = show_main_panel_ && !ui_hidden_,
+                .bottom_dock_visible = panel_layout_.isBottomDockVisible(),
+            }))
             return true;
         return false;
     }
