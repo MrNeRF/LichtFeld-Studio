@@ -3,6 +3,7 @@
 Current branch: `reactive_ui`
 
 Last completed commits:
+- `f5f2dec65 Cache idle shell frame rendering`
 - `099ea616e Cache idle menu bar rendering`
 - `0130e5ce1 Cache idle context menu rendering`
 - `fcb5b0649 Cache modal and startup overlay rendering`
@@ -27,12 +28,14 @@ Current verified state:
 - Modal requests wake the event loop, closed modal overlays skip input/render work, and modal/startup overlays reuse cached RmlUi textures once stable.
 - Global context menus are gated behind pending/open state and reuse cached RmlUi textures while open and idle.
 - The Rml menu bar keeps existing input/menu semantics but reuses cached foreground textures when labels, theme, size, and open dropdown state are stable.
+- The shell frame no longer rewrites region properties or queues a raw RmlUi render on stable frames; it reuses a cached background texture keyed by layout/theme.
 - Last broad Python panel slice passed: 191 tests.
 - Last focused menu Python slices passed: 226 plugin/menu tests plus 14 menubar/menu schema/API tests.
 - Last focused context-menu-adjacent Python slice passed: 41 tests from plugin marketplace, input settings, and import dialogs.
 - Last focused modal/post-work C++ slice passed: `./build/tests/lichtfeld_tests --gtest_filter='PyModalRegistryRegression.*:VisualizerPostWorkTest.*'`.
 - Last focused modal/startup C++ slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Modal*:*Startup*'`.
 - Last focused sequencer C++ slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Sequencer*'`.
+- Last focused shell/Rml C++ slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Shell*:*Rml*'`.
 - Last C++ build passed: `cmake --build build -j16`.
 
 ## Remaining Goal
@@ -47,6 +50,7 @@ Drive idle GUI CPU toward zero and keep p99 CPU UI work under 2 ms by removing r
 - Modal and startup overlay demand/caching: `fcb5b0649`.
 - Context menu demand/caching: `0130e5ce1`.
 - Menu bar cached rendering: `099ea616e`.
+- Shell frame cached rendering: `f5f2dec65`.
 
 ## Next Batch 1: Frame Router Cleanup
 
