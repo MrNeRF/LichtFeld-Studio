@@ -256,6 +256,7 @@ class _DocStub:
 def test_input_settings_uses_dirty_update_policy(input_settings_module):
     module, _state = input_settings_module
     assert module.InputSettingsPanel.update_policy == "dirty"
+    assert "update_interval_ms" not in module.InputSettingsPanel.__dict__
 
 
 def test_input_settings_requests_update_on_language_generation(input_settings_module):

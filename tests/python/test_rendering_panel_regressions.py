@@ -231,6 +231,9 @@ def test_rendering_panel_reacts_to_native_scene_generation(rendering_panel_modul
     model = _BindingModelStub()
     panel = module.RenderingPanel()
 
+    assert module.RenderingPanel.update_policy == "dirty"
+    assert "update_interval_ms" not in module.RenderingPanel.__dict__
+
     panel.on_bind_model(_BindingContextStub(model))
     panel._subscribe_reactive_state()
     model.handle.dirty_fields.clear()
@@ -258,6 +261,23 @@ def test_rendering_panel_reacts_to_native_tool_state(rendering_panel_module):
         else "builtin.select"
     )
     module.NativeAppStore.active_tool.value = next_tool
+
+    assert model.handle.dirty_fields == ["__all__"]
+    panel._unsubscribe_reactive_state()
+
+
+def test_rendering_panel_reacts_to_native_language_generation(rendering_panel_module):
+    module = rendering_panel_module
+    model = _BindingModelStub()
+    panel = module.RenderingPanel()
+
+    panel.on_bind_model(_BindingContextStub(model))
+    panel._subscribe_reactive_state()
+    model.handle.dirty_fields.clear()
+
+    module.NativeAppStore.language_generation.value = (
+        module.NativeAppStore.language_generation.value + 1
+    )
 
     assert model.handle.dirty_fields == ["__all__"]
     panel._unsubscribe_reactive_state()

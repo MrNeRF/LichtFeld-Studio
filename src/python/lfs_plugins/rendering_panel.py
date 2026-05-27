@@ -230,7 +230,6 @@ class RenderingPanel(Panel):
     order = 10
     template = "rmlui/rendering.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
-    update_interval_ms = 16
     update_policy = "dirty"
 
     def __init__(self):
@@ -296,6 +295,7 @@ class RenderingPanel(Panel):
         self._scrub_fields.mount(doc)
         self._sync_section_states()
         self._subscribe_reactive_state()
+        self._request_reactive_update()
 
     def _subscribe_reactive_state(self):
         if self._reactive_unsubscribers:
@@ -308,6 +308,7 @@ class RenderingPanel(Panel):
             NativeAppStore.transform_space,
             NativeAppStore.pivot_mode,
             NativeAppStore.splat_simplify_state,
+            NativeAppStore.language_generation,
         )
         self._reactive_unsubscribers = [
             signal.subscribe(lambda _value: self._request_reactive_update())

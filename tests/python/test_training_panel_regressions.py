@@ -160,6 +160,7 @@ def test_training_panel_progress_updates_bound_value(training_panel_module, monk
 
 def test_training_panel_uses_dirty_update_policy(training_panel_module):
     assert training_panel_module.TrainingPanel.update_policy == "dirty"
+    assert "update_interval_ms" not in training_panel_module.TrainingPanel.__dict__
 
 
 def test_training_panel_store_update_requests_panel_update(training_panel_module):
@@ -175,6 +176,21 @@ def test_training_panel_store_update_requests_panel_update(training_panel_module
     finally:
         panel._unsubscribe_reactive_state()
         training_panel_module.NativeAppStore.iteration._fallback = 0
+
+
+def test_training_panel_language_update_requests_panel_update(training_panel_module):
+    panel = training_panel_module.TrainingPanel()
+    panel._handle = _HandleStub()
+
+    panel._subscribe_reactive_state()
+    try:
+        training_panel_module.NativeAppStore.language_generation.value += 1
+
+        assert panel._handle.request_update_count == 1
+        assert panel._handle.dirty_all_count == 0
+    finally:
+        panel._unsubscribe_reactive_state()
+        training_panel_module.NativeAppStore.language_generation._fallback = 0
 
 
 def test_training_panel_checkpoint_saved_dirties_field(training_panel_module, monkeypatch):

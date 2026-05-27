@@ -22,7 +22,6 @@ class InputSettingsPanel(Panel):
     height_mode = lf.ui.PanelHeightMode.CONTENT
     size = (500, 0)
     options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    update_interval_ms = 50
     update_policy = "dirty"
 
     TOOL_MODES = [

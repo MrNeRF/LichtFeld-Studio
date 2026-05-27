@@ -381,7 +381,6 @@ class TrainingPanel(Panel):
     order = 20
     template = "rmlui/training.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
-    update_interval_ms = 100
     update_policy = "dirty"
 
     def __init__(self):
@@ -1152,6 +1151,7 @@ class TrainingPanel(Panel):
         self._scrub_fields.mount(doc)
         self._sync_section_states()
         self._subscribe_reactive_state()
+        self._request_reactive_update()
 
     def _subscribe_reactive_state(self):
         if self._reactive_unsubscribers:
@@ -1167,6 +1167,7 @@ class TrainingPanel(Panel):
             NativeAppStore.eval_psnr,
             NativeAppStore.num_gaussians,
             NativeAppStore.scene_generation,
+            NativeAppStore.language_generation,
         )
         self._reactive_unsubscribers = [
             signal.subscribe(lambda _value: self._request_reactive_update())

@@ -376,7 +376,6 @@ def _register_discovered_assets(
 class _ImportDialogPanel(Panel):
     """Common behavior for retained import dialogs."""
 
-    update_interval_ms = 200
     update_policy = "dirty"
     form_id = ""
 
@@ -1388,7 +1387,6 @@ class WatchDirsDialogPanel(Panel):
     template = "rmlui/watch_dirs_dialog.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
     size = (520, 0)
-    update_interval_ms = 200
     update_policy = "dirty"
 
     def __init__(self):

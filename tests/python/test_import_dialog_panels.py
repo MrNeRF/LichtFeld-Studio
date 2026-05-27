@@ -540,6 +540,11 @@ def test_import_dialogs_use_dirty_update_policy(import_dialog_module):
     assert module.ResumeCheckpointPanel.update_policy == "dirty"
     assert module.URLImportPanel.update_policy == "dirty"
     assert module.WatchDirsDialogPanel.update_policy == "dirty"
+    assert "update_interval_ms" not in module.DatasetImportPanel.__dict__
+    assert "update_interval_ms" not in module.ResumeCheckpointPanel.__dict__
+    assert "update_interval_ms" not in module.URLImportPanel.__dict__
+    assert "update_interval_ms" not in module.WatchDirsDialogPanel.__dict__
+    assert "update_interval_ms" not in module._ImportDialogPanel.__dict__
 
 
 def test_import_dialogs_request_update_on_language_generation(import_dialog_module):
