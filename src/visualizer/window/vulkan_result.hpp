@@ -4,9 +4,6 @@
 
 #pragma once
 
-#include "config.h"
-
-#ifdef LFS_VULKAN_VIEWER_ENABLED
 #include <vulkan/vulkan.h>
 
 namespace lfs::vis {
@@ -56,4 +53,3 @@ namespace lfs::vis {
     }
 
 } // namespace lfs::vis
-#endif

@@ -19,6 +19,7 @@
 #include "visualizer/scene/scene_manager.hpp"
 
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
@@ -741,6 +742,49 @@ namespace lfs::vis {
 
         EXPECT_EQ(scene.getVisibleNodeIndex(trained_id), 0);
         EXPECT_EQ(scene.getVisibleNodeIndex(bike_id), 1);
+    }
+
+    TEST(ViewportRequestBuilderTest, PointCloudRequestCarriesSelectionOverlay) {
+        using lfs::core::DataType;
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+
+        Viewport viewport(640, 480);
+        SceneRenderState scene_state;
+        scene_state.selection_mask = std::make_shared<Tensor>(
+            Tensor::zeros({size_t{2}}, Device::CPU, DataType::UInt8));
+        scene_state.selection_mask->ptr<std::uint8_t>()[0] = 1;
+
+        Tensor preview_selection =
+            Tensor::zeros({size_t{2}}, Device::CPU, DataType::UInt8);
+        preview_selection.ptr<std::uint8_t>()[1] = 1;
+
+        RenderSettings settings;
+        settings.selection_color_committed = {0.25f, 0.5f, 0.75f};
+        settings.selection_color_preview = {0.1f, 0.9f, 0.2f};
+        settings.voxel_size = 0.02f;
+
+        const FrameContext ctx{
+            .viewport = viewport,
+            .scene_state = scene_state,
+            .settings = settings,
+            .render_size = {640, 480},
+            .viewport_pos = {0, 0},
+            .cursor_preview =
+                {.add_mode = false,
+                 .preview_selection = &preview_selection},
+        };
+        const std::vector<glm::mat4> transforms{glm::mat4(1.0f)};
+
+        const auto request = buildPointCloudRenderRequest(ctx, {640, 480}, transforms);
+
+        EXPECT_EQ(request.overlay.selection_mask, scene_state.selection_mask);
+        EXPECT_EQ(request.overlay.transient_mask.mask, &preview_selection);
+        EXPECT_FALSE(request.overlay.transient_mask.additive);
+        EXPECT_EQ(request.overlay.selection_colors[1], glm::vec4(settings.selection_color_committed, 1.0f));
+        EXPECT_EQ(request.overlay.selection_colors[lfs::rendering::kSelectionPreviewColorIndex],
+                  glm::vec4(settings.selection_color_preview, 1.0f));
+        EXPECT_EQ(request.render.voxel_size, settings.voxel_size);
     }
 
     TEST(ViewportFrameLifecycleServiceTest, ResizeActiveDefersFullRefreshUntilDebounceCompletes) {

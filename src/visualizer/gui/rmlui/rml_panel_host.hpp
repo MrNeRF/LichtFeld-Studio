@@ -7,6 +7,7 @@
 #include "gui/panel_height_mode.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
+#include "gui/rmlui/rmlui_manager.hpp"
 #include <core/export.hpp>
 #include <cstddef>
 #include <mutex>
@@ -40,6 +41,7 @@ namespace lfs::vis::gui {
         void draw(const PanelDrawContext& ctx, float avail_w, float avail_h,
                   float pos_x, float pos_y);
         void drawDirect(float x, float y, float w, float h);
+        bool drawDirectCached(float x, float y, float w, float h);
         void prepareDirect(float w, float h);
         void syncDirectLayout(float w, float h);
         bool ensureContext();
@@ -57,14 +59,17 @@ namespace lfs::vis::gui {
         PanelHeightMode getHeightMode() const { return height_mode_; }
         float getContentHeight() const { return last_content_height_; }
         void setForcedHeight(float h) { forced_height_ = h; }
-        void markContentDirty() { content_dirty_ = true; }
+        void markContentDirty() {
+            content_dirty_ = true;
+            direct_cache_dirty_ = true;
+        }
         void setForeground(bool fg) { foreground_ = fg; }
         void setInputClipY(float y_min, float y_max) {
             clip_y_min_ = y_min;
             clip_y_max_ = y_max;
         }
         bool needsAnimationFrame() const {
-            return render_needed_ || content_dirty_ || animation_active_;
+            return render_needed_ || content_dirty_ || animation_active_ || tooltip_.needsFrame();
         }
 
         Rml::ElementDocument* getDocument() { return document_; }
@@ -83,7 +88,7 @@ namespace lfs::vis::gui {
         std::optional<ShadowRect> collectVisibleColorPickerPopupShadow(float panel_screen_x,
                                                                        float panel_screen_y) const;
         void applyHoverTooltip(int pw, float panel_y, float display_h);
-        bool hitTestPanelShape(float local_x, float local_y, float logical_w, float logical_h);
+        bool hitTestPanelShape(float local_x, float local_y, float logical_w, float logical_h) const;
         bool forwardInput(float panel_x, float panel_y);
         bool syncThemeProperties();
         bool loadDocument();
@@ -95,7 +100,7 @@ namespace lfs::vis::gui {
         void resolveDirectRenderHeight(float requested_h, int& ph, float& display_h) const;
         bool updateContextLayout(int pw, int ph);
         void renderIfDirty(int pw, int ph, float& display_h);
-        void compositeDirectToScreen(float x, float y, float w, float h) const;
+        void compositeDirectToScreen(float x, float y, float w, float h);
 
         RmlUIManager* manager_;
         std::string context_name_;
@@ -129,6 +134,8 @@ namespace lfs::vis::gui {
 
         bool render_needed_ = true;
         bool animation_active_ = false;
+        bool direct_cache_dirty_ = true;
+        CachedVulkanContextRender direct_cache_;
         int last_fbo_w_ = 0;
         int last_fbo_h_ = 0;
         int last_layout_w_ = 0;

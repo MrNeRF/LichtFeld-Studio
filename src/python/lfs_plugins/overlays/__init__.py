@@ -78,58 +78,75 @@ class _OverlayDocumentController:
         if doc is None or not hasattr(doc, "get_element_by_id"):
             doc = lf.ui.rml.get_document(_HOOK_PANEL)
         if doc is None:
-            return
+            return []
 
         if not self._ensure_model(doc):
-            return
+            return []
 
         import_state = self._get_import_state()
         video_state = self._get_video_state()
 
+        import_active = import_state.get("active", False)
+        import_completion = import_state.get("show_completion", False)
         seconds_since = import_state.get("seconds_since_completion", 0.0)
-        import_signature = (
-            import_state.get("active", False),
-            import_state.get("show_completion", False),
-            import_state.get("success", False),
-            import_state.get("dataset_type", ""),
-            import_state.get("path", ""),
-            import_state.get("progress", 0.0),
-            import_state.get("stage", ""),
-            import_state.get("num_images", 0),
-            import_state.get("num_points", 0),
-            import_state.get("error", ""),
-            round(seconds_since, 1),
-        )
-        video_signature = (
-            video_state.get("active", False),
-            video_state.get("progress", 0.0),
-            video_state.get("current_frame", 0),
-            video_state.get("total_frames", 0),
-            video_state.get("stage", ""),
-        )
+        if (import_completion
+                and not import_active
+                and import_state.get("success", False)
+                and seconds_since >= _AUTO_DISMISS_DELAY):
+            lf.ui.dismiss_import()
+            import_state["show_completion"] = False
+            import_completion = False
 
-        needs_dirty = False
+        import_visible = import_active or import_completion
+        if import_visible:
+            import_signature = (
+                import_active,
+                import_completion,
+                import_state.get("success", False),
+                import_state.get("dataset_type", ""),
+                import_state.get("path", ""),
+                round(import_state.get("progress", 0.0), 3) if import_active else 1.0,
+                import_state.get("stage", ""),
+                import_state.get("num_images", 0),
+                import_state.get("num_points", 0),
+                import_state.get("error", ""),
+            )
+        else:
+            import_signature = (False,)
+
+        video_active = video_state.get("active", False)
+        if video_active:
+            video_signature = (
+                True,
+                round(video_state.get("progress", 0.0), 3),
+                video_state.get("current_frame", 0),
+                video_state.get("total_frames", 0),
+                video_state.get("stage", ""),
+            )
+        else:
+            video_signature = (False,)
+
+        dirty_sources = []
+        status_dirty = False
 
         if import_signature != self._last_import_signature:
             self._import_state = import_state
             self._last_import_signature = import_signature
-            needs_dirty = True
-
-        if (import_state.get("show_completion", False)
-                and not import_state.get("active", False)
-                and import_state.get("success", False)
-                and seconds_since >= _AUTO_DISMISS_DELAY):
-            lf.ui.dismiss_import()
+            dirty_sources.append("import_status")
+            status_dirty = True
 
         if video_signature != self._last_video_signature:
             self._video_state = video_state
             self._last_video_signature = video_signature
-            needs_dirty = True
+            dirty_sources.append("video_status")
+            status_dirty = True
 
-        viewport_toolbar.update_overlay(doc)
+        toolbar_sources = viewport_toolbar.update_overlay(doc) or []
+        dirty_sources.extend(f"toolbar.{source}" for source in toolbar_sources)
 
-        if needs_dirty:
+        if status_dirty:
             self._handle.dirty_all()
+        return dirty_sources
 
     def _ensure_model(self, doc):
         body = doc.get_element_by_id("overlay-body")
@@ -497,7 +514,11 @@ def _sync_viewport_overlay_document(doc):
     global _document_controller
     if _document_controller is None:
         _document_controller = _OverlayDocumentController()
-    _document_controller.update(doc)
+    dirty_sources = _document_controller.update(doc)
+    debug_log = getattr(getattr(lf, "log", None), "debug", None)
+    if callable(debug_log):
+        for source in dirty_sources or []:
+            debug_log("[PERF] viewport_overlay_document_dirty source=" + str(source))
 
 
 def _draw_viewport_overlay(layout):

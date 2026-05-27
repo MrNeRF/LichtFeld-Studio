@@ -21,6 +21,14 @@
 
 namespace lfs::vis::cap {
 
+    bool isTransformableNodeType(const core::NodeType type) {
+        return type == core::NodeType::DATASET ||
+               type == core::NodeType::SPLAT ||
+               type == core::NodeType::CROPBOX ||
+               type == core::NodeType::ELLIPSOID ||
+               type == core::NodeType::MESH;
+    }
+
     namespace {
 
         struct TransformTargetSelection {
@@ -89,14 +97,6 @@ namespace lfs::vis::cap {
             return row_width;
         }
 
-        bool is_transformable_node_type(const core::NodeType type) {
-            return type == core::NodeType::DATASET ||
-                   type == core::NodeType::SPLAT ||
-                   type == core::NodeType::CROPBOX ||
-                   type == core::NodeType::ELLIPSOID ||
-                   type == core::NodeType::MESH;
-        }
-
         bool normalize_rotation_basis(glm::vec3& col0,
                                       glm::vec3& col1,
                                       glm::vec3& col2,
@@ -140,7 +140,7 @@ namespace lfs::vis::cap {
                 if (!node)
                     return std::unexpected("Node not found: " + name);
 
-                if (!is_transformable_node_type(node->type)) {
+                if (!isTransformableNodeType(node->type)) {
                     selection.found_untransformable = true;
                     continue;
                 }
@@ -353,6 +353,11 @@ namespace lfs::vis::cap {
         if (mode == "add") {
             for (const auto& name : names)
                 scene_manager.addToSelection(name);
+            return {};
+        }
+        if (mode == "remove") {
+            for (const auto& name : names)
+                scene_manager.removeFromSelection(name);
             return {};
         }
         if (mode != "replace")

@@ -13,22 +13,38 @@ import pytest
 class _DataModelHandleStub:
     def __init__(self):
         self.dirty_all_calls = 0
+        self.dirty_calls = []
+        self.record_updates = {}
 
     def dirty_all(self):
         self.dirty_all_calls += 1
 
+    def dirty(self, name):
+        self.dirty_calls.append(name)
+
+    def update_record_list(self, name, records):
+        self.record_updates[name] = records
+
 
 class _DataModelStub:
     def __init__(self):
+        self.bound_binds = {}
         self.bound_funcs = {}
         self.bound_events = {}
+        self.bound_record_lists = []
         self.handle = _DataModelHandleStub()
+
+    def bind(self, name, getter, setter):
+        self.bound_binds[name] = (getter, setter)
 
     def bind_func(self, name, getter):
         self.bound_funcs[name] = getter
 
     def bind_event(self, name, callback):
         self.bound_events[name] = callback
+
+    def bind_record_list(self, name):
+        self.bound_record_lists.append(name)
 
     def get_handle(self):
         return self.handle
@@ -37,6 +53,10 @@ class _DataModelStub:
 class _ElementStub:
     def __init__(self):
         self.attrs = {}
+        self.listeners = []
+
+    def add_event_listener(self, name, callback):
+        self.listeners.append((name, callback))
 
     def get_attribute(self, name, default_val=""):
         return self.attrs.get(name, default_val)
@@ -86,6 +106,10 @@ def _install_stub_modules(monkeypatch):
             (panel, section, callback)
         ),
         rml=SimpleNamespace(get_document=lambda _name: document),
+        context=lambda: SimpleNamespace(),
+        get_active_tool=lambda: "",
+        get_transform_space=lambda: 1,
+        get_pivot_mode=lambda: 0,
         UILayout=SimpleNamespace(WindowFlags=SimpleNamespace(
             NoTitleBar=1,
             NoResize=2,
@@ -111,6 +135,7 @@ def _install_stub_modules(monkeypatch):
 
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = ui_stub
+    lf_stub.get_selected_node_names = lambda: []
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
 
     return hook_calls, remove_calls, dismiss_calls, cancel_calls, import_state, video_state, document
@@ -126,6 +151,8 @@ def overlays_module(monkeypatch):
 
     sys.modules.pop("lfs_plugins", None)
     sys.modules.pop("lfs_plugins.overlays", None)
+    sys.modules.pop("lfs_plugins.toolbar", None)
+    sys.modules.pop("lfs_plugins.transform_controls", None)
     fixture = _install_stub_modules(monkeypatch)
     module = import_module("lfs_plugins.overlays")
     return (module, *fixture)
@@ -185,7 +212,7 @@ def test_document_sync_binds_model_and_updates_actions(overlays_module):
     module._sync_viewport_overlay_document(document)
 
     assert document.created_models == ["viewport_overlay_status"]
-    assert document.model.handle.dirty_all_calls == 2
+    assert document.model.handle.dirty_all_calls == 3
     assert document.body.get_attribute("data-viewport-overlay-status-bound", "") == "1"
     assert document.model.bound_funcs["show_import_overlay"]() is True
     assert document.model.bound_funcs["show_import_backdrop"]() is True

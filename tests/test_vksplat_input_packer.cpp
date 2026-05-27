@@ -404,3 +404,26 @@ TEST(VksplatInputPackerTest, RawDeviceLayoutUsesCompactMaxShRest) {
                   static_cast<std::uint32_t>(lfs::core::sh_rest_coefficients_for_degree(2))) *
                   sizeof(float));
 }
+
+TEST(VksplatInputPackerTest, RawDeviceLayoutUsesRequestedUploadShDegree) {
+    constexpr std::size_t n = SH_REORDER_SIZE * 2 + 7;
+    SyntheticInputs in = makeInputs(n, /*max_sh_degree=*/3, /*seed=*/0x5A0u);
+    auto splat = buildSplatData(in);
+
+    for (const int upload_sh_degree : {0, 1, 2, 3}) {
+        auto raw_layout = rawDeviceInputLayout(*splat, upload_sh_degree);
+        ASSERT_TRUE(raw_layout.has_value()) << raw_layout.error();
+        const auto layout_rest = static_cast<std::uint32_t>(
+            lfs::core::sh_rest_coefficients_for_degree(upload_sh_degree));
+        const std::size_t expected_shN_bytes =
+            layout_rest == 0
+                ? 4 * sizeof(float)
+                : lfs::core::sh_swizzled_float_count(n, layout_rest) * sizeof(float);
+        EXPECT_EQ(raw_layout->shN_bytes, expected_shN_bytes)
+            << "upload_sh_degree=" << upload_sh_degree;
+        EXPECT_EQ(raw_layout->shN_layout_rest, layout_rest)
+            << "upload_sh_degree=" << upload_sh_degree;
+        EXPECT_EQ(raw_layout->omits_shN, upload_sh_degree == 0)
+            << "upload_sh_degree=" << upload_sh_degree;
+    }
+}

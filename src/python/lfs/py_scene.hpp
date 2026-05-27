@@ -427,7 +427,8 @@ namespace lfs::python {
                            int width,
                            int height,
                            const std::string& image_path = "",
-                           int uid = -1);
+                           int uid = -1,
+                           std::optional<PyTensor> mask = std::nullopt);
         void remove_node(const std::string& name, bool keep_children = false);
         bool rename_node(const std::string& old_name, const std::string& new_name);
         void clear();

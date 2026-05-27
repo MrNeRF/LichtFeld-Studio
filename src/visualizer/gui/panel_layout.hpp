@@ -73,6 +73,12 @@ namespace lfs::vis::gui {
                               std::string& focus_panel_name,
                               const PanelInputState& input,
                               const ScreenState& screen);
+        void renderRightPanelCached(const UIContext& ctx, const PanelDrawContext& draw_ctx,
+                                    bool show_main_panel, bool ui_hidden,
+                                    std::unordered_map<std::string, bool>& window_states,
+                                    std::string& focus_panel_name,
+                                    const PanelInputState& input,
+                                    const ScreenState& screen);
 
         void renderBottomDock(const PanelDrawContext& draw_ctx, bool show_main_panel,
                               bool ui_hidden, const PanelInputState& input,
@@ -140,7 +146,6 @@ namespace lfs::vis::gui {
 
         float tab_scroll_offset_ = 0.0f;
         float tab_content_total_h_ = 0.0f;
-        size_t background_preload_index_ = 0;
 
         CursorRequest cursor_request_ = CursorRequest::None;
         float prev_mouse_x_ = 0;

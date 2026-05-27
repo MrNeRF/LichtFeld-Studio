@@ -1,6 +1,7 @@
 {
   "builtin-baseline": "c3867e714dd3a51c272826eea77267876517ed99",
   "dependencies": [
+    "cppzmq",
     "args",
     "assimp",
     "boost-preprocessor",
@@ -82,6 +83,14 @@
     "usd"
   ],
   "overrides": [
+    {
+      "name": "cppzmq",
+      "version": "4.11.0"
+    },
+    {
+      "name": "zeromq",
+      "version": "4.3.5#3"
+    },
     {
       "name": "args",
       "version": "6.4.8"

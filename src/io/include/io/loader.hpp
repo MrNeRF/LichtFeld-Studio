@@ -8,6 +8,7 @@
 #include "core/tensor.hpp"
 #include "io/error.hpp"
 #include <chrono>
+#include <cstddef>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -32,6 +33,10 @@ namespace lfs::io {
     using lfs::core::PointCloud;
     using lfs::core::SplatData;
     using lfs::core::Tensor;
+    using SplatTensorAllocator = std::function<Tensor(lfs::core::TensorShape shape,
+                                                      size_t capacity,
+                                                      lfs::core::DataType dtype,
+                                                      std::string_view name)>;
 
     // Progress callback type
     using ProgressCallback = std::function<void(float percentage, const std::string& message)>;
@@ -60,6 +65,7 @@ namespace lfs::io {
         CentralizeDataset centralize = CentralizeDataset::Off;
         ProgressCallback progress = nullptr;
         CancelCallback cancel_requested = nullptr;
+        SplatTensorAllocator splat_tensor_allocator = {};
     };
 
     class LoadCancelledError : public std::runtime_error {

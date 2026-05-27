@@ -27,7 +27,14 @@ namespace lfs::vis::gui {
                 const char* resolved = loc.get(key.c_str());
                 if (!resolved || std::string_view(resolved) == key.c_str())
                     return {};
-                return resolved;
+                std::string text(resolved);
+                const auto shortcut = el->GetAttribute<Rml::String>("data-shortcut", "");
+                if (!shortcut.empty()) {
+                    text += " (";
+                    text += shortcut.c_str();
+                    text += ")";
+                }
+                return text;
             }
 
             const auto title = el->GetAttribute<Rml::String>("title", "");
@@ -53,6 +60,12 @@ namespace lfs::vis::gui {
         // Returns true if the document changed and needs a fresh paint.
         bool apply(Rml::Element* body, int mouse_x, int mouse_y,
                    int doc_w, int doc_h);
+        [[nodiscard]] bool hasActiveState() const {
+            return seen_this_frame_ || visible_ || pending_target_ != nullptr || !pending_text_.empty();
+        }
+        [[nodiscard]] bool needsFrame() const {
+            return pending_target_ != nullptr && !pending_text_.empty() && !visible_;
+        }
 
     private:
         std::string pending_text_;

@@ -383,6 +383,7 @@ namespace lfs::vis::gui {
                          .transform_indices = snapshot.transform_indices,
                          .node_visibility_mask = snapshot.node_visibility_mask},
                     .filters = {},
+                    .overlay = {},
                     .transparent_background = render_environment};
                 applyVideoExportPointCloudFilters(request.filters, snapshot, render_settings);
 
@@ -418,6 +419,7 @@ namespace lfs::vis::gui {
                      .transform_indices = nullptr,
                      .node_visibility_mask = {}},
                 .filters = {},
+                .overlay = {},
                 .transparent_background = render_environment};
             applyVideoExportPointCloudFilters(request.filters, snapshot, render_settings);
 

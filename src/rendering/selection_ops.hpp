@@ -6,6 +6,8 @@
 
 #include "core/tensor.hpp"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <vector>
@@ -13,6 +15,16 @@
 namespace lfs::rendering {
 
     using lfs::core::Tensor;
+
+    struct SelectionGroupCountResult {
+        std::array<size_t, 256> group_counts{};
+        size_t changed_count = 0;
+    };
+
+    struct SelectionGroupDeltaResult {
+        std::array<int32_t, 256> group_deltas{};
+        size_t changed_count = 0;
+    };
 
     void brush_select(
         const float2* screen_positions,
@@ -31,30 +43,12 @@ namespace lfs::rendering {
         bool* selection,
         int n_primitives);
 
-    void rect_select_mode(
-        const float2* positions,
-        float x0,
-        float y0,
-        float x1,
-        float y1,
-        bool* selection,
-        int n_primitives,
-        bool add_mode);
-
     void polygon_select(
         const float2* positions,
         const float2* polygon,
         int num_vertices,
         bool* selection,
         int n_primitives);
-
-    void polygon_select_mode(
-        const float2* positions,
-        const float2* polygon,
-        int num_vertices,
-        bool* selection,
-        int n_primitives,
-        bool add_mode);
 
     void set_selection_element(bool* selection, int index, bool value);
 
@@ -73,25 +67,10 @@ namespace lfs::rendering {
         float y1,
         Tensor& selection_out);
 
-    void rect_select_mode_tensor(
-        const Tensor& screen_positions,
-        float x0,
-        float y0,
-        float x1,
-        float y1,
-        Tensor& selection_out,
-        bool add_mode);
-
     void polygon_select_tensor(
         const Tensor& screen_positions,
         const Tensor& polygon_vertices,
         Tensor& selection_out);
-
-    void polygon_select_mode_tensor(
-        const Tensor& screen_positions,
-        const Tensor& polygon_vertices,
-        Tensor& selection_out,
-        bool add_mode);
 
     void apply_selection_group_tensor(
         const Tensor& cumulative_selection,
@@ -112,7 +91,33 @@ namespace lfs::rendering {
         bool add_mode,
         const Tensor* transform_indices,
         const std::vector<bool>& valid_nodes,
+        bool replace_mode = false,
+        Tensor* group_counts_scratch = nullptr);
+
+    void apply_selection_group_indexed_tensor_mask(
+        const Tensor& visible_selection,
+        const Tensor& visible_indices,
+        const Tensor& existing_mask,
+        Tensor& output_mask,
+        uint8_t group_id,
+        const uint32_t* locked_groups,
+        bool add_mode,
+        const Tensor* transform_indices,
+        const std::vector<bool>& valid_nodes,
         bool replace_mode = false);
+
+    [[nodiscard]] std::array<size_t, 256> count_selection_groups(
+        const Tensor& selection_mask,
+        Tensor& counts_scratch);
+    void prepare_selection_group_counts_scratch(Tensor& counts_scratch);
+    [[nodiscard]] SelectionGroupCountResult read_selection_group_count_result(
+        const Tensor& counts_scratch);
+    [[nodiscard]] SelectionGroupDeltaResult read_selection_group_delta_result(
+        const Tensor& counts_scratch);
+    [[nodiscard]] std::array<size_t, 256> read_selection_group_counts(
+        const Tensor& counts_scratch);
+
+    void merge_selection_mask_or(Tensor& accumulated_mask, const Tensor& delta_mask);
 
     void filter_selection_by_node(
         Tensor& selection,

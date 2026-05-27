@@ -111,8 +111,8 @@ namespace lfs::core {
             EVENT(PasteSelection, );
             EVENT(SelectBrush, float x; float y; float radius; int camera_index; std::string mode;);
             EVENT(SelectRect, float x0; float y0; float x1; float y1; int camera_index; std::string mode;);
-            EVENT(SelectPolygon, std::vector<float> points; int camera_index; std::string mode;);
-            EVENT(SelectLasso, std::vector<float> points; int camera_index; std::string mode;);
+            EVENT(SelectPolygon, std::vector<glm::vec2> points; int camera_index; std::string mode;);
+            EVENT(SelectLasso, std::vector<glm::vec2> points; int camera_index; std::string mode;);
             EVENT(SelectRing, float x; float y; int camera_index; std::string mode;);
             EVENT(SelectByDescription, std::string description; int camera_index;);
             EVENT(ApplySelectionMask, std::vector<uint8_t> mask;);

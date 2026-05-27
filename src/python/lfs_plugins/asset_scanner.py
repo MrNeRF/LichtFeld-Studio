@@ -33,6 +33,7 @@ _EXTENSION_TYPE_MAP = {
     ".stl": "mesh",
     ".dae": "mesh",
     ".3ds": "mesh",
+    ".mesh": "mesh",
     ".ckpt": "checkpoint",
     ".resume": "checkpoint",
     ".mp4": "video",

@@ -35,6 +35,12 @@ layout (std430, binding = 5) writeonly buffer ValuesOut {
   uint32_t data[];  // (N)
 } valuesOut;
 
+#ifdef RADIX_SORT_COUNT_BUFFER
+layout (std430, binding = 6) readonly buffer SortCount {
+  uint32_t elementCount;
+} sortCount;
+#endif
+
 layout (push_constant) uniform PushConstant {
   uint32_t pass;
   uint32_t elementCount;
@@ -88,7 +94,12 @@ void main() {
   uint partitionIndex = gl_WorkGroupID.x;
   uint partitionStart = partitionIndex * PARTITION_SIZE;
 
-  uint elementCount = uniforms.elementCount;
+  uint elementCount =
+#ifdef RADIX_SORT_COUNT_BUFFER
+      sortCount.elementCount;
+#else
+      uniforms.elementCount;
+#endif
   int pass = int(uniforms.pass);
 
   if (partitionStart >= elementCount) return;

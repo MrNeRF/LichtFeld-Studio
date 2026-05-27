@@ -573,6 +573,18 @@ namespace lfs::training {
                 // Attach mask if present
                 if (ready.mask && ready.mask->is_valid()) {
                     example.mask = std::move(*ready.mask);
+                } else if (mask_config_.load_masks && cam->has_in_memory_mask()) {
+                    // Direct-scene plugins attach masks as in-memory tensors
+                    // via Camera::set_mask_tensor — load_and_get_mask returns
+                    // the processed-and-cached tensor (skips file I/O).
+                    auto m = cam->load_and_get_mask(
+                        dataset_->get_resize_factor(),
+                        dataset_->get_max_width(),
+                        mask_config_.invert_masks,
+                        mask_config_.mask_threshold);
+                    if (m.is_valid()) {
+                        example.mask = std::move(m);
+                    }
                 }
 
                 return example;

@@ -74,6 +74,15 @@ void main(
     if (depth_rank >= uniforms.num_splats)
         return;
 
+    // index_buffer_offset is cumsum'd over the depth-ordered tiles_touched
+    // array, so the offset interval for this depth_rank is contiguous.
+    int offset = depth_rank == 0 ? 0 : index_buffer_offset[depth_rank-1];
+    int offset_max = index_buffer_offset[depth_rank];
+    const int sort_capacity = int(uniforms.sort_capacity);
+    if (sort_capacity <= 0 || offset >= sort_capacity || offset >= offset_max)
+        return;
+    offset_max = min(offset_max, sort_capacity);
+
     int32_t primitive_idx = primitive_sort_indices[depth_rank];
 
 #if TILE_CULLING_MODE > 0
@@ -93,15 +102,6 @@ void main(
   #else
     rectangle rect = reinterpret<rectangle>(rect_tile_space[primitive_idx]);
   #endif
-
-    // index_buffer_offset is cumsum'd over the depth-ordered tiles_touched
-    // array, so the offset interval for this depth_rank is contiguous.
-    int offset = depth_rank == 0 ? 0 : index_buffer_offset[depth_rank-1];
-    int offset_max = index_buffer_offset[depth_rank];
-    const int sort_capacity = int(uniforms.sort_capacity);
-    if (sort_capacity <= 0 || offset >= sort_capacity)
-        return;
-    offset_max = min(offset_max, sort_capacity);
 
 #if TILE_CULLING_MODE == 0 || TILE_CULLING_MODE == 1
 

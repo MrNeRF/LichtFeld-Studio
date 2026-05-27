@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "config.h"
+#include "vulkan_image_barrier_tracker.hpp"
 
 #include <array>
 #include <cstddef>
@@ -14,10 +14,8 @@
 #include <string_view>
 #include <type_traits>
 #include <vector>
-
-#ifdef LFS_VULKAN_VIEWER_ENABLED
-#include "vulkan_image_barrier_tracker.hpp"
 #include <vulkan/vulkan.h>
+
 #ifndef VMA_STATIC_VULKAN_FUNCTIONS
 #define VMA_STATIC_VULKAN_FUNCTIONS 1
 #endif
@@ -25,7 +23,6 @@
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
 #endif
 #include <vk_mem_alloc.h>
-#endif
 
 struct SDL_Window;
 
@@ -46,7 +43,6 @@ namespace lfs::vis {
         [[nodiscard]] bool presentBootstrapFrame(float r, float g, float b, float a);
         [[nodiscard]] const std::string& lastError() const { return last_error_; }
 
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         struct Frame {
             uint32_t image_index = 0;
             std::size_t frame_slot = 0;
@@ -184,12 +180,10 @@ namespace lfs::vis {
                                                           VkSemaphore wait_semaphore = VK_NULL_HANDLE,
                                                           std::uint64_t wait_value = 0,
                                                           VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-#endif
 
     private:
         bool fail(std::string message);
 
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         struct QueueFamilies {
             std::optional<uint32_t> graphics;
             std::optional<uint32_t> present;
@@ -344,7 +338,6 @@ namespace lfs::vis {
         std::size_t active_frame_index_ = 0;
         int framebuffer_width_ = 0;
         int framebuffer_height_ = 0;
-#endif
 
         std::string last_error_;
     };

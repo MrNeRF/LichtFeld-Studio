@@ -469,6 +469,13 @@ namespace lfs::vis::gui {
         host_.drawDirect(x, y, w, h);
     }
 
+    bool NativeScenePanel::drawDirectCached(const float x, const float y,
+                                            const float w, const float h,
+                                            const PanelDrawContext& ctx) {
+        (void)ctx;
+        return host_.drawDirectCached(x, y, w, h);
+    }
+
     bool NativeScenePanel::ensureInitialized() {
         if (!host_.ensureDocumentLoaded())
             return false;

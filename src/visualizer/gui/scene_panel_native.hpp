@@ -35,6 +35,8 @@ namespace lfs::vis::gui {
                            const PanelInputState* input) override;
         bool supportsDirectDraw() const override { return true; }
         void drawDirect(float x, float y, float w, float h, const PanelDrawContext& ctx) override;
+        bool drawDirectCached(float x, float y, float w, float h,
+                              const PanelDrawContext& ctx) override;
         float getDirectDrawHeight() const override { return host_.getContentHeight(); }
         void setInputClipY(float y_min, float y_max) override { host_.setInputClipY(y_min, y_max); }
         void setInput(const PanelInputState* input) override { host_.setInput(input); }

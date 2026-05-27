@@ -367,7 +367,8 @@ namespace lfs::vis::vksplat {
     }
 
     std::expected<RawDeviceInputLayout, std::string> rawDeviceInputLayout(
-        const lfs::core::SplatData& splat_data) {
+        const lfs::core::SplatData& splat_data,
+        const int upload_sh_degree) {
         const std::size_t n = static_cast<std::size_t>(splat_data.size());
         if (n == 0) {
             return std::unexpected("VkSplat cannot render an empty model");
@@ -391,17 +392,29 @@ namespace lfs::vis::vksplat {
             return std::unexpected("VkSplat expected SH DC coefficients shaped [N, 1, 3] or [N, 3]");
         }
         const auto layout_rest = static_cast<std::uint32_t>(splat_data.max_sh_coeffs_rest());
-        const std::size_t layout_shN_bytes =
+        const int effective_upload_sh_degree =
+            upload_sh_degree < 0
+                ? splat_data.get_max_sh_degree()
+                : std::clamp(upload_sh_degree, 0, splat_data.get_max_sh_degree());
+        const auto upload_layout_rest = std::min<std::uint32_t>(
+            layout_rest,
+            lfs::core::sh_rest_coefficients_for_degree(effective_upload_sh_degree));
+        const bool omit_shN_upload = upload_layout_rest == 0;
+        const std::size_t resident_shN_bytes =
             lfs::core::sh_swizzled_float_count(n, layout_rest) * sizeof(float);
-        const std::size_t shN_bytes = layout_rest == 0 ? sizeof(float4) : layout_shN_bytes;
-        if (shN_raw.is_valid() && shN_raw.numel() > 0) {
+        const std::size_t upload_shN_bytes =
+            lfs::core::sh_swizzled_float_count(n, upload_layout_rest) * sizeof(float);
+        const std::size_t shN_bytes = omit_shN_upload
+                                          ? sizeof(float4)
+                                          : upload_shN_bytes;
+        if (!omit_shN_upload && shN_raw.is_valid() && shN_raw.numel() > 0) {
             if (shN_raw.ndim() != 1) {
                 return std::unexpected("VkSplat expected swizzled SH rest coefficients as a 1D tensor");
             }
-            if (static_cast<std::size_t>(shN_raw.numel()) * sizeof(float) < layout_shN_bytes) {
+            if (static_cast<std::size_t>(shN_raw.numel()) * sizeof(float) < resident_shN_bytes) {
                 return std::unexpected("VkSplat swizzled SH rest tensor is smaller than expected");
             }
-        } else if (splat_data.max_sh_coeffs_rest() > 0) {
+        } else if (!omit_shN_upload && splat_data.max_sh_coeffs_rest() > 0) {
             return std::unexpected("VkSplat expected swizzled SH rest coefficients for max SH degree");
         }
 
@@ -413,6 +426,8 @@ namespace lfs::vis::vksplat {
             .rotations_bytes = n * 4 * sizeof(float),
             .scaling_bytes = n * 3 * sizeof(float),
             .opacity_bytes = n * sizeof(float),
+            .shN_layout_rest = upload_layout_rest,
+            .omits_shN = omit_shN_upload,
         };
     }
 
@@ -424,8 +439,9 @@ namespace lfs::vis::vksplat {
         void* const rotations_dst,
         void* const scaling_dst,
         void* const opacity_dst,
-        const cudaStream_t stream) {
-        auto layout = rawDeviceInputLayout(splat_data);
+        const cudaStream_t stream,
+        const int upload_sh_degree) {
+        auto layout = rawDeviceInputLayout(splat_data, upload_sh_degree);
         if (!layout) {
             return std::unexpected(layout.error());
         }
@@ -456,7 +472,7 @@ namespace lfs::vis::vksplat {
         if (auto ok = requireCudaFloat32Contiguous(sh0_raw, "sh0"); !ok) {
             return std::unexpected(ok.error());
         }
-        const bool has_shN = shN_raw.is_valid() && shN_raw.numel() > 0;
+        const bool has_shN = !layout->omits_shN && shN_raw.is_valid() && shN_raw.numel() > 0;
         if (has_shN) {
             if (auto ok = requireCudaFloat32Contiguous(shN_raw, "shN"); !ok) {
                 return std::unexpected(ok.error());
@@ -507,10 +523,26 @@ namespace lfs::vis::vksplat {
             return std::unexpected(ok.error());
         }
         if (has_shN) {
-            if (auto ok = copy(shN_dst, shN_raw, layout->shN_bytes,
-                               "cudaMemcpyAsync(VkSplat raw shN -> Vulkan input)");
-                !ok) {
-                return std::unexpected(ok.error());
+            const auto resident_layout_rest = static_cast<std::uint32_t>(splat_data.max_sh_coeffs_rest());
+            if (layout->shN_layout_rest == resident_layout_rest) {
+                if (auto ok = copy(shN_dst, shN_raw, layout->shN_bytes,
+                                   "cudaMemcpyAsync(VkSplat raw shN -> Vulkan input)");
+                    !ok) {
+                    return std::unexpected(ok.error());
+                }
+            } else {
+                lfs::core::shN_swizzled_copy_contiguous(
+                    shN_raw.ptr<float>(),
+                    static_cast<float*>(shN_dst),
+                    layout->num_splats,
+                    0,
+                    resident_layout_rest,
+                    layout->shN_layout_rest,
+                    stream);
+                if (const cudaError_t status = cudaGetLastError(); status != cudaSuccess) {
+                    return std::unexpected(cudaErrorMessage(
+                        "shN_swizzled_copy_contiguous(VkSplat raw shN compact upload)", status));
+                }
             }
         } else {
             const cudaError_t status = cudaMemsetAsync(shN_dst, 0, layout->shN_bytes, stream);
@@ -528,9 +560,37 @@ namespace lfs::vis::vksplat {
             !ok) {
             return std::unexpected(ok.error());
         }
-        if (auto ok = copy(opacity_dst, opacity_raw, layout->opacity_bytes,
-                           "cudaMemcpyAsync(VkSplat raw opacity -> Vulkan input)");
-            !ok) {
+        // Honor SplatData::deleted() in the rasterizer: where the legacy CUDA
+        // rasterizer skipped tombstoned gaussians inside the kernel, the
+        // VkSplat shader has no equivalent skip flag, so bake the mask into the
+        // uploaded opacity by writing a strongly-negative raw value (sigmoid →
+        // ~0) for deleted entries. Re-uploading whenever the mask changes is
+        // handled by ModelInputSnapshot tracking deleted().
+        if (splat_data.has_deleted_mask()) {
+            const Tensor& deleted = splat_data.deleted();
+            const auto n = static_cast<std::size_t>(splat_data.size());
+            if (deleted.dtype() != DataType::Bool ||
+                deleted.device() != Device::CUDA ||
+                !deleted.is_contiguous() ||
+                static_cast<std::size_t>(deleted.numel()) != n) {
+                return std::unexpected(
+                    "VkSplat deleted mask must be a contiguous CUDA bool tensor of size N");
+            }
+            if (auto ok = waitForInputStream(stream, deleted, "deleted"); !ok) {
+                return std::unexpected(ok.error());
+            }
+            const cudaError_t status = detail::launchPackOpacityMaskingDeleted(
+                opacity_raw.ptr<float>(),
+                deleted.ptr<bool>(),
+                static_cast<float*>(opacity_dst),
+                n,
+                stream);
+            if (status != cudaSuccess) {
+                return std::unexpected(cudaErrorMessage("launchPackOpacityMaskingDeleted", status));
+            }
+        } else if (auto ok = copy(opacity_dst, opacity_raw, layout->opacity_bytes,
+                                  "cudaMemcpyAsync(VkSplat raw opacity -> Vulkan input)");
+                   !ok) {
             return std::unexpected(ok.error());
         }
 

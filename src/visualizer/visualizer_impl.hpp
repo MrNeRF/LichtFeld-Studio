@@ -180,6 +180,36 @@ namespace lfs::vis {
         void setupViewContextBridge();
         void beginShutdown(std::string_view reason = "Viewer is shutting down");
         void processRenderWorkQueue();
+        [[nodiscard]] bool hasPendingRenderWork();
+        [[nodiscard]] bool inputFrameRequestsRender() const;
+
+        struct FrameDemand {
+            bool viewport_export_locked = false;
+            bool scene_dirty = false;
+            bool continuous_input = false;
+            bool python_animation = false;
+            bool python_overlay = false;
+            bool python_redraw = false;
+            bool gui_animation = false;
+            bool input_event = false;
+            bool posted_work = false;
+            bool render_work = false;
+
+            [[nodiscard]] bool shouldRenderFrame() const {
+                return viewport_export_locked || scene_dirty || continuous_input ||
+                       python_animation || python_overlay || python_redraw ||
+                       gui_animation || input_event || posted_work || render_work;
+            }
+
+            [[nodiscard]] bool needsContinuousLoop() const {
+                return scene_dirty || continuous_input || python_animation ||
+                       python_overlay || python_redraw || gui_animation ||
+                       render_work || viewport_export_locked;
+            }
+        };
+
+        [[nodiscard]] FrameDemand collectFrameDemand(bool viewport_export_locked);
+        void waitForNextEvent(bool is_training);
 
         class CallbackCleanup {
             std::vector<std::function<void()>> cleanups_;
@@ -243,6 +273,7 @@ namespace lfs::vis {
         bool pending_new_project_ = false;
         bool pending_reset_ = false;
         bool gui_frame_rendered_ = false;
+        bool update_work_processed_ = false;
         std::chrono::high_resolution_clock::time_point last_frame_time_ = std::chrono::high_resolution_clock::now();
         bool sequencer_ui_initialized_ = false;
         std::unique_ptr<python::SequencerUIStateData> sequencer_ui_state_;

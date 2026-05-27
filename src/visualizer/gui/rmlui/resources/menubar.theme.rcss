@@ -29,6 +29,10 @@ body {
     background-color: @{menu.hover};
 }
 
+.menu-item.active {
+    background-color: @{menu.hover};
+}
+
 .menu-item.disabled {
     color: @{text_dim};
 }

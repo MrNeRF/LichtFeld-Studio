@@ -5,13 +5,50 @@
     border-radius: @{num(size.window_rounding)}dp;
 }
 
-.subtoolbar-container {
-    background-color: @{toolbar.sub_background};
-    border-radius: @{num(size.window_rounding)}dp;
+.shelf-background {
+    background-color: @{menu.background};
+}
+
+.toolbar-vertical {
+    background-color: transparent;
+    border-radius: 0;
+}
+
+.toolbar-flyout {
+    background-color: @{toolbar.background};
+    border-color: @{overlay.border};
+}
+
+.flyout-corner-marker {
+    border-bottom-color: @{viewport.icon_dim};
+}
+
+.icon-btn.selected .flyout-corner-marker {
+    border-bottom-color: @{background};
 }
 
 .toolbar-separator {
     background-color: @{alpha(border,0.39)};
+}
+
+.viewport-transform-panel {
+    background-color: @{toolbar.background};
+    border-color: @{overlay.border};
+}
+
+.viewport-transform-meta__tool,
+.viewport-transform-axis-label {
+    color: @{text};
+}
+
+.viewport-transform-meta__target,
+.viewport-transform-group-label,
+.viewport-transform-toggle-label {
+    color: @{text_dim};
+}
+
+.viewport-transform-axis--split {
+    border-color: @{alpha(border,0.30)};
 }
 
 .icon-btn img {
@@ -24,6 +61,10 @@
 
 .icon-btn.selected {
     background-color: @{primary};
+}
+
+.toolbar-vertical .icon-btn.selected {
+    border-color: @{alpha(text,0.25)};
 }
 
 .icon-btn.selected:hover {

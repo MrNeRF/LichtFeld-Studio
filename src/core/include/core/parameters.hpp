@@ -105,6 +105,7 @@ namespace lfs::core {
             float init_opacity = 0.5f;
             float init_scaling = 0.1f;
             int max_cap = 1000000;
+
             std::vector<size_t> eval_steps = {7'000, 30'000};  // Steps to evaluate the model
             std::vector<size_t> save_steps = {7'000, 30'000};  // Steps to save the model
             bool bg_modulation = false;                        // Enable sinusoidal background modulation
@@ -245,9 +246,19 @@ namespace lfs::core {
             static DatasetConfig from_json(const nlohmann::json& j);
         };
 
+        struct LFS_CORE_API ServerConfig {
+            int tcp_server_connection_port = -1;    // Set the TCP connection port when tcp connection is in use for server requests, -1 for auto
+            int tcp_broadcast_connection_port = -1; // Set the TCP connection port when tcp connection is in use for broadcasting, -1 for auto
+            bool tcp_connection = false;            // Use TCP connection for signals and events
+
+            nlohmann::json to_json() const;
+            static ServerConfig from_json(const nlohmann::json& j);
+        };
+
         struct LFS_CORE_API TrainingParameters {
             DatasetConfig dataset;
             OptimizationParameters optimization;
+            ServerConfig server;
 
             // Viewer mode: splat files to load (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume)
             std::vector<std::filesystem::path> view_paths;
@@ -266,6 +277,11 @@ namespace lfs::core {
 
             // Python scripts to execute for custom training callbacks
             std::vector<std::filesystem::path> python_scripts;
+
+            // True when --bg-color was provided on the command line.
+            bool cli_bg_color_set = false;
+
+            std::vector<int> disabled_camera_uids;
 
             [[nodiscard]] std::string validate() const;
         };

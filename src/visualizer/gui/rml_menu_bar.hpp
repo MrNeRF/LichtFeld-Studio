@@ -67,6 +67,7 @@ namespace lfs::vis::gui {
     };
 
     struct MenuDropdownRootView {
+        int index = -1;
         std::string label;
         std::string action;
         std::string operator_id;
@@ -77,6 +78,7 @@ namespace lfs::vis::gui {
         bool has_shortcut = false;
         bool show_checkmark = false;
         bool has_children = false;
+        bool submenu_open = false;
         int callback_index = -1;
         std::vector<MenuDropdownLeafView> children;
     };
@@ -102,6 +104,9 @@ namespace lfs::vis::gui {
         void openDropdown(int index);
         void closeDropdown();
         void rebuildDropdownDOM();
+        void setOpenSubmenu(int index);
+        Rml::Element* dropdownElementAtPoint(float x, float y) const;
+        int submenuIndexForElement(Rml::Element* element) const;
 
         RmlUIManager* rml_manager_ = nullptr;
         Rml::Context* rml_context_ = nullptr;
@@ -120,9 +125,12 @@ namespace lfs::vis::gui {
 
         Rml::Element* menu_items_ = nullptr;
         Rml::Element* dropdown_container_ = nullptr;
+        Rml::Element* dropdown_popup_ = nullptr;
         Rml::Element* dropdown_overlay_ = nullptr;
+        Rml::Element* brand_logo_ = nullptr;
 
         int open_menu_index_ = -1;
+        int open_submenu_index_ = -1;
         std::string open_menu_idname_;
         bool wants_input_ = false;
         bool render_needed_ = true;

@@ -7,6 +7,8 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <source_location>
 #include <string>
@@ -49,6 +51,9 @@ namespace lfs::core {
         std::string message;
     };
 
+    using LogHandler = std::function<void(LogLevel level, const std::source_location& loc, std::string_view msg)>;
+    using LogHandlerToken = uint32_t;
+
     class LFS_LOGGER_API Logger {
     public:
         static Logger& get();
@@ -57,6 +62,9 @@ namespace lfs::core {
                   const std::string& log_file = "",
                   const std::string& filter_pattern = "",
                   bool use_stderr = false);
+
+        LogHandlerToken add_log_handler(LogHandler handler);
+        void remove_log_handler(LogHandlerToken handler_token);
 
         // Log a pre-formatted message (called by macros)
         void log(LogLevel level, const std::source_location& loc, std::string_view msg);
@@ -131,6 +139,8 @@ namespace lfs::core {
             log(level, loc, std::format(fmt, std::forward<Args>(args)...));
         }
 #endif
+
+        [[nodiscard]] static std::string_view to_string(LogLevel level);
 
     private:
         Logger();

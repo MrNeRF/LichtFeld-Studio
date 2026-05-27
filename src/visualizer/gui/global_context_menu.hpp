@@ -55,6 +55,7 @@ namespace lfs::vis::gui {
         void render(int screen_w, int screen_h, float screen_x, float screen_y);
         void releaseRendererResources();
         void reloadResources();
+        void preload();
 
     private:
         void initContext();

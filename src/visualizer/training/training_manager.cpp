@@ -10,13 +10,12 @@
 #include "core/services.hpp"
 #include "core/tensor.hpp"
 #include "python/python_runtime.hpp"
+#include "rendering/vulkan_external_tensor.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/visualizer_impl.hpp"
-#include "window/window_manager.hpp"
-#ifdef LFS_VULKAN_VIEWER_ENABLED
-#include "rendering/vulkan_external_tensor.hpp"
 #include "window/vulkan_context.hpp"
-#endif
+#include "window/window_manager.hpp"
+
 #include <cstring>
 #include <cuda_runtime.h>
 #include <format>
@@ -28,7 +27,6 @@ namespace lfs::vis {
     using namespace lfs::core::events;
 
     namespace {
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         [[nodiscard]] lfs::core::SplatTensorAllocator makeVulkanTrainingTensorAllocator(VisualizerImpl* viewer) {
             if (!viewer || !viewer->getWindowManager()) {
                 return {};
@@ -59,11 +57,6 @@ namespace lfs::vis {
                 return std::move(*tensor);
             };
         }
-#else
-        [[nodiscard]] lfs::core::SplatTensorAllocator makeVulkanTrainingTensorAllocator(VisualizerImpl*) {
-            return {};
-        }
-#endif
     } // namespace
 
     TrainerManager::TrainerManager() {
@@ -489,12 +482,17 @@ namespace lfs::vis {
             trainer_->request_stop();
         }
 
-        if (training_thread_ && training_thread_->joinable()) {
+        const bool has_thread = training_thread_ && training_thread_->joinable();
+        if (has_thread) {
             training_thread_->request_stop();
         }
 
         state::TrainingStopped{.iteration = getCurrentIteration(), .user_requested = true}.emit();
         LOG_INFO("Training stop requested at iteration {}", getCurrentIteration());
+
+        if (!has_thread) {
+            handleTrainingComplete(true);
+        }
     }
 
     void TrainerManager::requestSaveCheckpoint() {

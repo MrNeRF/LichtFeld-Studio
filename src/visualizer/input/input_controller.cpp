@@ -971,21 +971,23 @@ namespace lfs::vis {
                 onCameraMovementEnd();
             }
 
+            // Short-click on a frustum → select that single camera and stop.
+            // Long drags fall through so a rectangle that *started* over a
+            // frustum can still sweep-select the surrounding cameras.
             if (press_consumed_camera_frustum) {
                 const double drag_dist = glm::length(glm::dvec2(x, y) - pressed_camera_frustum_pos);
-                if (pressed_camera_frustum_id >= 0 &&
-                    drag_dist < kCameraFrustumClickThreshold &&
-                    !over_gui &&
-                    !over_transform_gizmo) {
+                const bool was_click = drag_dist < kCameraFrustumClickThreshold;
+                if (was_click && pressed_camera_frustum_id >= 0 &&
+                    !over_gui && !over_transform_gizmo) {
                     selectCameraByUid(pressed_camera_frustum_id);
+                    if (button == node_rect_button_) {
+                        is_node_rect_dragging_ = false;
+                        node_rect_button_ = -1;
+                        node_point_pick_enabled_ = false;
+                        node_rect_select_enabled_ = false;
+                    }
+                    return;
                 }
-                if (button == node_rect_button_) {
-                    is_node_rect_dragging_ = false;
-                    node_rect_button_ = -1;
-                    node_point_pick_enabled_ = false;
-                    node_rect_select_enabled_ = false;
-                }
-                return;
             }
 
             // Node picking on release
@@ -996,7 +998,7 @@ namespace lfs::vis {
                 node_rect_button_ = -1;
                 node_point_pick_enabled_ = false;
                 node_rect_select_enabled_ = false;
-                if (!press_consumed_camera_frustum && tool_context_ && !isPointerOverBlockingUi(x, y)) {
+                if (tool_context_ && !isPointerOverBlockingUi(x, y)) {
                     auto* scene_manager = tool_context_->getSceneManager();
                     if (scene_manager) {
                         constexpr float CLICK_THRESHOLD_PX = 5.0f;
@@ -1057,10 +1059,22 @@ namespace lfs::vis {
                                 pick_viewport.getProjectionMatrix(),
                                 pick_viewport.windowSize);
 
+                            // Modifier-driven selection mode, mirroring the
+                            // gaussian SelectionTool: shift = add, ctrl =
+                            // remove, no mod = replace. An empty rect with no
+                            // modifier clears the selection; with a modifier it
+                            // is a no-op so transient drags don't wipe state.
+                            const bool shift_held = (mods & input::KEYMOD_SHIFT) != 0;
+                            const bool ctrl_held = (mods & input::KEYMOD_CTRL) != 0;
+                            const std::string_view select_mode = ctrl_held    ? "remove"
+                                                                 : shift_held ? "add"
+                                                                              : "replace";
                             if (picked_nodes.empty()) {
-                                (void)cap::clearNodeSelection(*scene_manager);
+                                if (!shift_held && !ctrl_held) {
+                                    (void)cap::clearNodeSelection(*scene_manager);
+                                }
                             } else {
-                                if (auto result = cap::selectNodes(*scene_manager, picked_nodes); !result) {
+                                if (auto result = cap::selectNodes(*scene_manager, picked_nodes, select_mode); !result) {
                                     LOG_WARN("Rectangle node selection failed: {}", result.error());
                                 }
                             }
@@ -1329,8 +1343,11 @@ namespace lfs::vis {
             }
         }
 
-        // Brush radius adjustment for selection/brush tools
-        if (scroll_action == input::Action::BRUSH_RESIZE && !op::operators().hasModalOperator()) {
+        // Brush radius adjustment for selection/brush tools. Modal operators
+        // for selection strokes pass scroll through, so it's safe to honor
+        // BRUSH_RESIZE here even mid-stroke — that's what lets the user grow
+        // or shrink the ring while in the middle of an add or subtract drag.
+        if (scroll_action == input::Action::BRUSH_RESIZE) {
             if (selection_tool_ && selection_tool_->isEnabled()) {
                 const float scale = (yoff > 0) ? 1.1f : 0.9f;
                 selection_tool_->setBrushRadius(selection_tool_->getBrushRadius() * scale);
@@ -1542,6 +1559,11 @@ namespace lfs::vis {
                 }
                 return;
             }
+
+            case input::Action::CAMERA_SET_HOME:
+                activeKeyboardViewport().camera.saveHomePosition();
+                publishCameraMove(&activeKeyboardViewport());
+                return;
 
             case input::Action::CAMERA_RESET_HOME:
                 activeKeyboardViewport().camera.resetToHome();

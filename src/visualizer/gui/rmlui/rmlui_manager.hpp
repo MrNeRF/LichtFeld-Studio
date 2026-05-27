@@ -6,6 +6,8 @@
 
 #include "config.h"
 
+#include <RmlUi/Core/Types.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -13,9 +15,7 @@
 #include <unordered_map>
 #include <vector>
 
-#ifdef LFS_VULKAN_VIEWER_ENABLED
 #include <vulkan/vulkan.h>
-#endif
 
 struct SDL_Window;
 class RenderInterface_VK;
@@ -34,6 +34,34 @@ namespace lfs::vis::gui {
     class RmlSystemInterface;
     class RmlTextInputHandler;
     enum class RmlCursorRequest : uint8_t;
+
+    struct CachedVulkanContextRender {
+        Rml::TextureHandle texture = {};
+        int width = 0;
+        int height = 0;
+    };
+
+    struct RmlRect {
+        float x1 = 0.0f;
+        float y1 = 0.0f;
+        float x2 = 0.0f;
+        float y2 = 0.0f;
+    };
+
+    struct CachedVulkanContextDraw {
+        Rml::Context* context = nullptr;
+        CachedVulkanContextRender* cache = nullptr;
+        int cache_width = 0;
+        int cache_height = 0;
+        float offset_x = 0.0f;
+        float offset_y = 0.0f;
+        float draw_width = 0.0f;
+        float draw_height = 0.0f;
+        bool refresh = false;
+        bool foreground = false;
+        bool clip_enabled = false;
+        RmlRect clip;
+    };
 
     class RmlUIManager {
     public:
@@ -72,8 +100,9 @@ namespace lfs::vis::gui {
                                 float clip_y1 = 0.0f,
                                 float clip_x2 = 0.0f,
                                 float clip_y2 = 0.0f);
+        void queueCachedVulkanContext(const CachedVulkanContextDraw& draw);
+        void releaseCachedVulkanContext(CachedVulkanContextRender& cache);
         void clearVulkanQueue();
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         [[nodiscard]] bool beginVulkanFrame(VkCommandBuffer command_buffer,
                                             VkExtent2D extent,
                                             VkImage swapchain_image,
@@ -82,11 +111,12 @@ namespace lfs::vis::gui {
                                             std::size_t frame_slot);
         void renderQueuedVulkanContexts(bool foreground);
         void endVulkanFrame();
-#endif
 
         void beginFrameCursorTracking();
         void trackContextFrame(const Rml::Context* context, int window_x, int window_y);
+        void setContextNeedsPassiveMouseMoveFrames(const Rml::Context* context, bool needs_frames);
         RmlCursorRequest consumeCursorRequest();
+        [[nodiscard]] bool passiveMouseMoveNeedsRender(float window_x, float window_y) const;
 
         // Focus-state aggregators across all live RmlUi contexts. These replace prior
         // ImGui::GetIO().WantCapture* / ImGui::IsAnyItemActive() reads so viewport input
@@ -99,6 +129,7 @@ namespace lfs::vis::gui {
     private:
         struct VulkanContextCommand {
             Rml::Context* context = nullptr;
+            std::string context_name;
             float offset_x = 0.0f;
             float offset_y = 0.0f;
             bool clip_enabled = false;
@@ -106,6 +137,22 @@ namespace lfs::vis::gui {
             float clip_y1 = 0.0f;
             float clip_x2 = 0.0f;
             float clip_y2 = 0.0f;
+            CachedVulkanContextRender* cache = nullptr;
+            int cache_width = 0;
+            int cache_height = 0;
+            float draw_width = 0.0f;
+            float draw_height = 0.0f;
+            bool refresh_cache = false;
+        };
+
+        struct TrackedContextFrame {
+            Rml::Context* context = nullptr;
+            int window_x = 0;
+            int window_y = 0;
+            int width = 0;
+            int height = 0;
+            std::uint64_t order = 0;
+            bool needs_passive_mouse_move_frames = false;
         };
 
         bool initWithRenderInterface(SDL_Window* window,
@@ -120,6 +167,8 @@ namespace lfs::vis::gui {
         std::vector<std::vector<std::byte>> font_blobs_;
         bool cjk_fonts_loaded_ = false;
         std::unordered_map<std::string, Rml::Context*> contexts_;
+        std::unordered_map<const Rml::Context*, std::string> context_names_;
+        std::unordered_map<const Rml::Context*, TrackedContextFrame> tracked_context_frames_;
         std::vector<VulkanContextCommand> vulkan_queue_;
         std::vector<VulkanContextCommand> vulkan_foreground_queue_;
         SDL_Window* window_ = nullptr;
@@ -130,6 +179,7 @@ namespace lfs::vis::gui {
         bool debugger_initialized_ = false;
         bool vulkan_frame_active_ = false;
         bool initialized_ = false;
+        std::uint64_t tracked_context_order_ = 0;
     };
 
 } // namespace lfs::vis::gui

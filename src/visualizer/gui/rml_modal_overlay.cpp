@@ -20,6 +20,7 @@
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/Input.h>
 #include <cassert>
+#include <cmath>
 #include <format>
 
 namespace lfs::vis::gui {
@@ -94,6 +95,9 @@ namespace lfs::vis::gui {
         has_theme_signature_ = false;
         width_ = 0;
         height_ = 0;
+        render_needed_ = true;
+        dialog_position_valid_ = false;
+        last_mouse_valid_ = false;
 
         try {
             const auto rml_path = lfs::vis::getAssetPath("rmlui/modal_overlay.rml");
@@ -109,6 +113,11 @@ namespace lfs::vis::gui {
             return;
         }
 
+        syncTheme();
+    }
+
+    void RmlModalOverlay::preload() {
+        initContext();
         syncTheme();
     }
 
@@ -137,13 +146,13 @@ namespace lfs::vis::gui {
         el_button_row_->AddEventListener(Rml::EventId::Click, &listener_);
     }
 
-    void RmlModalOverlay::syncTheme() {
+    bool RmlModalOverlay::syncTheme() {
         if (!document_)
-            return;
+            return false;
 
         const std::size_t theme_signature = rml_theme::currentThemeSignature();
         if (has_theme_signature_ && theme_signature == last_theme_signature_)
-            return;
+            return false;
         last_theme_signature_ = theme_signature;
         has_theme_signature_ = true;
 
@@ -151,6 +160,7 @@ namespace lfs::vis::gui {
             base_rcss_ = rml_theme::loadBaseRCSS("rmlui/modal_overlay.rcss");
 
         rml_theme::applyTheme(document_, base_rcss_, rml_theme::loadBaseRCSS("rmlui/modal_overlay.theme.rcss"));
+        return true;
     }
 
     void RmlModalOverlay::showNext() {
@@ -202,6 +212,9 @@ namespace lfs::vis::gui {
         bindTextInputRevert();
         if (active_->has_input)
             el_input_->Focus();
+        render_needed_ = true;
+        dialog_position_valid_ = false;
+        last_mouse_valid_ = false;
     }
 
     lfs::core::ModalResult RmlModalOverlay::collectFormValues() const {
@@ -235,6 +248,9 @@ namespace lfs::vis::gui {
 
         auto on_result = std::move(active_->on_result);
         active_.reset();
+        render_needed_ = true;
+        dialog_position_valid_ = false;
+        last_mouse_valid_ = false;
 
         if (on_result)
             on_result(result);
@@ -263,6 +279,9 @@ namespace lfs::vis::gui {
 
         auto on_cancel = std::move(active_->on_cancel);
         active_.reset();
+        render_needed_ = true;
+        dialog_position_valid_ = false;
+        last_mouse_valid_ = false;
 
         if (on_cancel)
             on_cancel();
@@ -293,12 +312,24 @@ namespace lfs::vis::gui {
 
         const float mx = input.mouse_x - input.screen_x;
         const float my = input.mouse_y - input.screen_y;
-        rml_context_->ProcessMouseMove(static_cast<int>(mx), static_cast<int>(my), mods);
+        const int rml_mx = static_cast<int>(mx);
+        const int rml_my = static_cast<int>(my);
+        if (!last_mouse_valid_ || rml_mx != last_mouse_x_ || rml_my != last_mouse_y_) {
+            rml_context_->ProcessMouseMove(rml_mx, rml_my, mods);
+            last_mouse_valid_ = true;
+            last_mouse_x_ = rml_mx;
+            last_mouse_y_ = rml_my;
+            render_needed_ = true;
+        }
 
-        if (input.mouse_clicked[0])
+        if (input.mouse_clicked[0]) {
+            render_needed_ = true;
             rml_context_->ProcessMouseButtonDown(0, mods);
-        if (input.mouse_released[0])
+        }
+        if (input.mouse_released[0]) {
+            render_needed_ = true;
             rml_context_->ProcessMouseButtonUp(0, mods);
+        }
 
         auto* const text_input_handler =
             rml_manager_ ? rml_manager_->getTextInputHandler() : nullptr;
@@ -321,6 +352,7 @@ namespace lfs::vis::gui {
             }
             const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
             if (rml_key != Rml::Input::KI_UNKNOWN) {
+                render_needed_ = true;
                 if (text_input_handler && text_input_handler->handleKeyDown(rml_key, mods))
                     continue;
                 rml_context_->ProcessKeyDown(rml_key, mods);
@@ -332,18 +364,22 @@ namespace lfs::vis::gui {
             if (composing && (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER))
                 continue;
             const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
-            if (rml_key != Rml::Input::KI_UNKNOWN)
+            if (rml_key != Rml::Input::KI_UNKNOWN) {
+                render_needed_ = true;
                 rml_context_->ProcessKeyUp(rml_key, mods);
+            }
         }
 
         if (!composing && escape_requested) {
             if (rml_input::cancelFocusedElement(*rml_context_)) {
                 has_text_focus = rml_input::isTextEditableElement(rml_context_->GetFocusElement());
+                render_needed_ = true;
                 return;
             }
         }
 
         if (has_text_focus && text_input_handler && input.has_text_editing) {
+            render_needed_ = true;
             text_input_handler->handleTextEditing(
                 input.text_editing, input.text_editing_start, input.text_editing_length);
         }
@@ -351,14 +387,17 @@ namespace lfs::vis::gui {
         bool forward_text_codepoints = input.text_inputs.empty();
         if (has_text_focus) {
             for (const auto& text_input : input.text_inputs) {
+                render_needed_ = true;
                 if (!text_input_handler || !text_input_handler->handleTextInput(text_input))
                     forward_text_codepoints = true;
             }
         }
 
         if (has_text_focus && forward_text_codepoints) {
-            for (uint32_t cp : input.text_codepoints)
+            for (uint32_t cp : input.text_codepoints) {
+                render_needed_ = true;
                 rml_context_->ProcessTextInput(static_cast<Rml::Character>(cp));
+            }
         }
 
         // Re-check active_ since RmlUI event processing above may have triggered
@@ -373,6 +412,7 @@ namespace lfs::vis::gui {
                 return;
         }
         if (!composing && hasKey(input.keys_pressed, SDL_SCANCODE_ESCAPE)) {
+            render_needed_ = true;
             cancel();
         }
     }
@@ -395,8 +435,10 @@ namespace lfs::vis::gui {
                 return;
         }
 
-        if (!active_ && has_pending && elements_cached_)
+        if (!active_ && has_pending && elements_cached_) {
+            LOG_TIMER("gui_render.menu_context_modal_render.modal_overlay.show_next");
             showNext();
+        }
 
         if (!active_)
             return;
@@ -405,7 +447,11 @@ namespace lfs::vis::gui {
             return;
 
         rml_manager_->trackContextFrame(rml_context_, 0, 0);
-        syncTheme();
+        bool theme_changed = false;
+        {
+            LOG_TIMER("gui_render.menu_context_modal_render.modal_overlay.sync_theme");
+            theme_changed = syncTheme();
+        }
 
         const int w = screen_w;
         const int h = screen_h;
@@ -413,25 +459,44 @@ namespace lfs::vis::gui {
         if (w <= 0 || h <= 0)
             return;
 
+        bool needs_update = render_needed_ || theme_changed;
         if (w != width_ || h != height_) {
             width_ = w;
             height_ = h;
             rml_context_->SetDimensions(Rml::Vector2i(w, h));
+            needs_update = true;
+            dialog_position_valid_ = false;
+            last_mouse_valid_ = false;
         }
 
-        rml_context_->Update();
+        if (needs_update) {
+            LOG_TIMER("gui_render.menu_context_modal_render.modal_overlay.update");
+            rml_context_->Update();
+        }
 
         if (el_dialog_ && active_) {
+            LOG_TIMER("gui_render.menu_context_modal_render.modal_overlay.position");
             const float dp_ratio = rml_manager_->getDpRatio();
             const float dialog_w = static_cast<float>(active_->width_dp) * dp_ratio;
             const float dialog_h = el_dialog_->GetClientHeight();
             const float vp_cx = (vp_x - screen_x) + vp_w * 0.5f;
             const float vp_cy = (vp_y - screen_y) + vp_h * 0.5f;
-            el_dialog_->SetProperty("left", std::format("{}px", vp_cx - dialog_w * 0.5f));
-            el_dialog_->SetProperty("top", std::format("{}px", vp_cy - dialog_h * 0.5f));
-            rml_context_->Update();
+            const float dialog_left = vp_cx - dialog_w * 0.5f;
+            const float dialog_top = vp_cy - dialog_h * 0.5f;
+            if (!dialog_position_valid_ || std::abs(dialog_left - last_dialog_left_) > 0.5f ||
+                std::abs(dialog_top - last_dialog_top_) > 0.5f) {
+                el_dialog_->SetProperty("left", std::format("{}px", dialog_left));
+                el_dialog_->SetProperty("top", std::format("{}px", dialog_top));
+                last_dialog_left_ = dialog_left;
+                last_dialog_top_ = dialog_top;
+                dialog_position_valid_ = true;
+                LOG_TIMER("gui_render.menu_context_modal_render.modal_overlay.position.update");
+                rml_context_->Update();
+            }
         }
 
+        render_needed_ = false;
+        LOG_TIMER("gui_render.menu_context_modal_render.modal_overlay.queue");
         rml_manager_->queueVulkanContext(rml_context_, 0.0f, 0.0f, true);
     }
 
@@ -451,6 +516,7 @@ namespace lfs::vis::gui {
         }
 
         if (event == Rml::EventId::Change && event.GetCurrentElement() == overlay->el_form_) {
+            overlay->render_needed_ = true;
             if (event.GetParameter<bool>("linebreak", false) &&
                 rml_input::isTextEditableElement(event.GetTargetElement())) {
                 overlay->dismissFirstEnabledButton();

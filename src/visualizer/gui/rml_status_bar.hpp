@@ -9,6 +9,7 @@
 #include <RmlUi/Core/DataModelHandle.h>
 #include <chrono>
 #include <cstddef>
+#include <future>
 #include <string>
 
 namespace Rml {
@@ -32,12 +33,17 @@ namespace lfs::vis::gui {
         void reloadResources();
         void render(const PanelDrawContext& ctx, float x, float y, float w, float h,
                     int screen_w, int screen_h);
+        void renderCached(const PanelDrawContext& ctx, float x, float y, float w, float h,
+                          int screen_w, int screen_h);
         void processInput(const PanelInputState& input, float bar_x, float bar_y,
                           float bar_w, float bar_h);
 
     private:
         bool updateContent(const PanelDrawContext& ctx, bool force_refresh);
         bool updateTheme();
+        void queueVulkanContext(float x, float y, float w_px, float h_px,
+                                int screen_w, int screen_h);
+        void pollGpuMemoryQuery(std::chrono::steady_clock::time_point now);
         void setModelString(const char* name, std::string& field, std::string value);
         void setModelBool(const char* name, bool& field, bool value);
         void attachGitCommitListener();
@@ -117,6 +123,7 @@ namespace lfs::vis::gui {
 
         ModelState model_;
         GpuMemoryInfo cached_gpu_mem_;
+        std::future<GpuMemoryInfo> pending_gpu_mem_;
         std::chrono::steady_clock::time_point next_refresh_at_{};
         std::chrono::steady_clock::time_point next_gpu_refresh_at_{};
         bool model_dirty_ = true;
@@ -127,7 +134,7 @@ namespace lfs::vis::gui {
         static constexpr auto kIdleRefreshInterval = std::chrono::milliseconds(200);
         static constexpr auto kBusyRefreshInterval = std::chrono::milliseconds(100);
         static constexpr auto kAnimatedRefreshInterval = std::chrono::milliseconds(16);
-        static constexpr auto kGpuRefreshInterval = std::chrono::milliseconds(250);
+        static constexpr auto kGpuRefreshInterval = std::chrono::milliseconds(500);
     };
 
 } // namespace lfs::vis::gui

@@ -783,7 +783,7 @@ namespace lfs::python {
         void invoke(const std::string& panel,
                     const std::string& section,
                     PyHookPosition position);
-        void invoke_document(const std::string& panel,
+        bool invoke_document(const std::string& panel,
                              const std::string& section,
                              Rml::ElementDocument* document,
                              PyHookPosition position);
@@ -803,6 +803,7 @@ namespace lfs::python {
         struct HookEntry {
             nb::object callback;
             PyHookPosition position;
+            std::string name;
         };
 
         mutable std::mutex mutex_;

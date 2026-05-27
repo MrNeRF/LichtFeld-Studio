@@ -23,6 +23,7 @@
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "rendering/vulkan_external_tensor.hpp"
 #include "training/checkpoint.hpp"
 #include "training/components/ppisp.hpp"
 #include "training/components/ppisp_controller.hpp"
@@ -46,16 +47,6 @@ namespace lfs::vis {
 
     namespace {
         constexpr float DEFAULT_VOXEL_SIZE = 0.01f;
-
-        [[nodiscard]] std::vector<float> closeScreenPolygon(std::vector<float> points) {
-            if (points.size() >= 6 &&
-                (points[0] != points[points.size() - 2] ||
-                 points[1] != points[points.size() - 1])) {
-                points.push_back(points[0]);
-                points.push_back(points[1]);
-            }
-            return points;
-        }
 
         template <typename TRenderable>
         [[nodiscard]] bool containsRenderableNode(const std::vector<TRenderable>& renderables, const core::NodeId node_id) {
@@ -94,6 +85,37 @@ namespace lfs::vis {
                 }
             }
             return nodes;
+        }
+
+        [[nodiscard]] lfs::io::SplatTensorAllocator makeViewerSplatTensorAllocator() {
+            auto* const window_manager = services().windowOrNull();
+            auto* const context = window_manager ? window_manager->getVulkanContext() : nullptr;
+            if (!context || !context->externalMemoryInteropEnabled()) {
+                return {};
+            }
+
+            return [context](lfs::core::TensorShape shape,
+                             const size_t capacity,
+                             const lfs::core::DataType dtype,
+                             const std::string_view name) -> lfs::core::Tensor {
+                const std::string debug_name{name};
+                auto tensor = makeVulkanExternalTensor(
+                    *context,
+                    std::move(shape),
+                    dtype,
+                    capacity,
+                    debug_name.c_str(),
+                    nullptr,
+                    false);
+                if (!tensor) {
+                    throw lfs::core::TensorError(std::format(
+                        "Vulkan-external loaded splat tensor allocation failed for '{}': {}",
+                        debug_name,
+                        tensor.error()));
+                }
+                tensor->set_name(debug_name);
+                return std::move(*tensor);
+            };
         }
 
         [[nodiscard]] bool hasActiveSelectionFilter(const RenderingManager* const rendering_manager) {
@@ -480,7 +502,8 @@ namespace lfs::vis {
                 .resize_factor = -1,
                 .max_width = 0,
                 .images_folder = "images",
-                .validate_only = false};
+                .validate_only = false,
+                .splat_tensor_allocator = makeViewerSplatTensorAllocator()};
 
             LOG_TRACE("Loading splat file with loader");
             auto load_result = loader->load(path, options);
@@ -685,7 +708,8 @@ namespace lfs::vis {
                 .resize_factor = -1,
                 .max_width = 0,
                 .images_folder = "images",
-                .validate_only = false};
+                .validate_only = false,
+                .splat_tensor_allocator = makeViewerSplatTensorAllocator()};
 
             auto load_result = loader->load(path, options);
             if (!load_result) {
@@ -999,6 +1023,18 @@ namespace lfs::vis {
         if (selection_.isNodeSelected(id))
             return;
         selection_.addToSelection(id);
+        python::invalidate_poll_caches(1);
+        if (services().renderingOrNull())
+            services().renderingOrNull()->triggerSelectionFlash();
+    }
+
+    void SceneManager::removeFromSelection(const std::string& name) {
+        const core::NodeId id = scene_.getNodeIdByName(name);
+        if (id == core::NULL_NODE)
+            return;
+        if (!selection_.isNodeSelected(id))
+            return;
+        selection_.removeFromSelection(id);
         python::invalidate_poll_caches(1);
         if (services().renderingOrNull())
             services().renderingOrNull()->triggerSelectionFlash();
@@ -2245,6 +2281,13 @@ namespace lfs::vis {
             const auto load_result = lfs::training::loadTrainingDataIntoScene(checkpoint_params, scene_);
             if (!load_result) {
                 throw std::runtime_error("Failed to load training data: " + load_result.error());
+            }
+
+            for (const auto* node : scene_.getNodes()) {
+                if (node->type == lfs::core::NodeType::CAMERA && node->camera &&
+                    std::ranges::contains(checkpoint_params.disabled_camera_uids, node->camera->uid())) {
+                    scene_.setCameraTrainingEnabled(node->name, false);
+                }
             }
 
             // Remove POINTCLOUD node (checkpoint model replaces it)
@@ -4095,10 +4138,10 @@ namespace lfs::vis {
         return selection_service_->selectRect(x0, y0, x1, y1, sel_mode, camera_index);
     }
 
-    SelectionResult SceneManager::selectPolygon(const std::vector<float>& points, const std::string& mode,
+    SelectionResult SceneManager::selectPolygon(const std::vector<glm::vec2>& points, const std::string& mode,
                                                 const int camera_index) {
-        if (!selection_service_ || points.size() < 6 || (points.size() % 2) != 0)
-            return {false, 0, "Polygon requires at least 3 x/y point pairs"};
+        if (!selection_service_ || points.size() < 3)
+            return {false, 0, "Polygon requires at least 3 vertices"};
 
         SelectionMode sel_mode = SelectionMode::Replace;
         if (mode == "add")
@@ -4106,17 +4149,17 @@ namespace lfs::vis {
         else if (mode == "remove")
             sel_mode = SelectionMode::Remove;
 
-        auto closed_points = closeScreenPolygon(points);
-        auto vertices = core::Tensor::from_vector(closed_points,
-                                                  {closed_points.size() / 2, size_t{2}},
-                                                  core::Device::CUDA);
-        return selection_service_->selectPolygon(vertices, sel_mode, camera_index);
+        std::vector<glm::vec2> closed = points;
+        if (closed.size() >= 3 && closed.front() != closed.back()) {
+            closed.push_back(closed.front());
+        }
+        return selection_service_->selectPolygon(closed, sel_mode, camera_index);
     }
 
-    SelectionResult SceneManager::selectLasso(const std::vector<float>& points, const std::string& mode,
+    SelectionResult SceneManager::selectLasso(const std::vector<glm::vec2>& points, const std::string& mode,
                                               const int camera_index) {
-        if (!selection_service_ || points.size() < 6 || (points.size() % 2) != 0)
-            return {false, 0, "Lasso requires at least 3 x/y point pairs"};
+        if (!selection_service_ || points.size() < 3)
+            return {false, 0, "Lasso requires at least 3 vertices"};
 
         SelectionMode sel_mode = SelectionMode::Replace;
         if (mode == "add")
@@ -4124,8 +4167,7 @@ namespace lfs::vis {
         else if (mode == "remove")
             sel_mode = SelectionMode::Remove;
 
-        auto vertices = core::Tensor::from_vector(points, {points.size() / 2, size_t{2}}, core::Device::CUDA);
-        return selection_service_->selectLasso(vertices, sel_mode, camera_index);
+        return selection_service_->selectLasso(points, sel_mode, camera_index);
     }
 
     SelectionResult SceneManager::selectRing(const float x, const float y, const std::string& mode, const int camera_index) {

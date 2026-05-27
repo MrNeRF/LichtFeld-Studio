@@ -9,6 +9,20 @@
 
 namespace lfs::vis {
 
+    namespace {
+        [[nodiscard]] std::string formatTransformSelectionError(const bool has_editable,
+                                                                const bool found_locked,
+                                                                const bool found_untransformable) {
+            if (found_locked && found_untransformable)
+                return "selection contains locked or unsupported nodes";
+            if (found_locked)
+                return has_editable ? "selection contains locked nodes" : "selection is locked";
+            if (found_untransformable)
+                return has_editable ? "selection contains unsupported nodes" : "select parent node";
+            return "No transform targets provided";
+        }
+    } // namespace
+
     void EditorContext::update(const SceneManager* scene_manager, const TrainerManager* trainer_manager) {
         if (!scene_manager) {
             mode_ = EditorMode::EMPTY;
@@ -50,33 +64,55 @@ namespace lfs::vis {
         }
 
         // Update selection state
-        has_selection_ = scene_manager->hasSelectedNode();
-        selected_node_type_ = has_selection_ ? scene_manager->getSelectedNodeType() : core::NodeType::SPLAT;
+        const auto selected_node_names = scene_manager->getSelectedNodeNames();
+        has_selection_ = !selected_node_names.empty();
         has_editable_transform_selection_ = false;
         has_splat_selection_ = false;
         has_editable_splat_selection_ = false;
         transform_selection_error_.clear();
+        selected_node_type_ = core::NodeType::SPLAT;
 
         if (has_selection_) {
-            const auto transform_selection = cap::resolveEditableTransformSelection(
-                *scene_manager, std::nullopt, cap::TransformTargetPolicy::RequireAllEditable);
-            has_editable_transform_selection_ = transform_selection.has_value();
-            if (!transform_selection)
-                transform_selection_error_ = transform_selection.error();
-
             const auto& scene = scene_manager->getScene();
-            for (const auto& name : scene_manager->getSelectedNodeNames()) {
+            bool found_locked = false;
+            bool found_untransformable = false;
+            bool has_editable_transform_target = false;
+            bool selected_type_initialized = false;
+
+            for (const auto& name : selected_node_names) {
                 const auto* const node = scene.getNode(name);
                 if (!node)
                     continue;
 
+                if (!selected_type_initialized) {
+                    selected_node_type_ = node->type;
+                    selected_type_initialized = true;
+                }
+
                 const bool locked = static_cast<bool>(node->locked);
+                const bool transformable = cap::isTransformableNodeType(node->type);
+                if (!transformable) {
+                    found_untransformable = true;
+                } else if (locked) {
+                    found_locked = true;
+                } else {
+                    has_editable_transform_target = true;
+                }
 
                 if (node->type == core::NodeType::SPLAT) {
                     has_splat_selection_ = true;
                     if (!locked)
                         has_editable_splat_selection_ = true;
                 }
+            }
+
+            has_editable_transform_selection_ =
+                has_editable_transform_target && !found_locked && !found_untransformable;
+            if (!has_editable_transform_selection_) {
+                transform_selection_error_ =
+                    formatTransformSelectionError(has_editable_transform_target,
+                                                  found_locked,
+                                                  found_untransformable);
             }
         }
 

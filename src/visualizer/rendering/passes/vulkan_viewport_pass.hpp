@@ -37,6 +37,9 @@ namespace lfs::vis {
         glm::vec2 p1{0.0f};
         glm::vec4 color{1.0f};
         glm::vec4 params{0.0f};
+        // Linear view-space depth (positive forward). 0 means "always in front"
+        // — used by UI overlays (gizmos, pivot) so they don't fade behind splats.
+        float view_depth = 0.0f;
     };
 
     struct VulkanViewportPivotOverlay {
@@ -49,6 +52,9 @@ namespace lfs::vis {
     struct VulkanViewportTexturedOverlayVertex {
         glm::vec2 position{0.0f};
         glm::vec2 uv{0.0f};
+        // Linear view-space depth (positive forward). 0 = "always in front", skips
+        // the splat-depth occlusion test.
+        float view_depth = 0.0f;
     };
 
     struct VulkanViewportTexturedOverlay {

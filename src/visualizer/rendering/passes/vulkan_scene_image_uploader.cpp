@@ -4,7 +4,6 @@
 
 #include "vulkan_scene_image_uploader.hpp"
 
-#ifdef LFS_VULKAN_VIEWER_ENABLED
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
 #include "vulkan_viewport_pass.hpp"
@@ -253,4 +252,3 @@ namespace lfs::vis {
         return impl_->hasImage();
     }
 } // namespace lfs::vis
-#endif

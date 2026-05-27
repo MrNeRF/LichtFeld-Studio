@@ -33,6 +33,7 @@ namespace lfs::python {
         std::map<std::string, DataModelArrayStorage> s_model_storage;
         std::unordered_map<std::string, Rml::DataModelHandle> s_active_handles;
         std::unordered_map<std::string, Rml::Context*> s_model_contexts;
+        std::unordered_map<std::string, Rml::ElementDocument*> s_model_documents;
         std::unordered_set<Rml::Context*> s_string_array_type_contexts;
         std::unordered_set<Rml::Context*> s_record_array_type_contexts;
         std::unordered_set<Rml::Context*> s_builtin_transform_contexts;
@@ -191,6 +192,14 @@ namespace lfs::python {
                 s_dirty_documents.insert(doc);
                 request_redraw();
             }
+        }
+
+        void mark_model_document_dirty(const std::string& model_name) {
+            if (auto it = s_model_documents.find(model_name);
+                it != s_model_documents.end() && it->second) {
+                s_dirty_documents.insert(it->second);
+            }
+            request_redraw();
         }
 
     } // namespace
@@ -753,6 +762,7 @@ namespace lfs::python {
         if (!ctor)
             return nb::none();
         s_model_contexts[name] = ctx;
+        s_model_documents[name] = doc_;
         register_builtin_transforms(ctor, ctx);
         return nb::cast(PyDataModelConstructor(std::move(ctor), name, ctx));
     }
@@ -763,6 +773,7 @@ namespace lfs::python {
         s_model_storage.erase(name);
         s_active_handles.erase(name);
         s_model_contexts.erase(name);
+        s_model_documents.erase(name);
         return ctx->RemoveDataModel(name);
     }
 
@@ -770,12 +781,12 @@ namespace lfs::python {
 
     void PyDataModelHandle::dirty(const std::string& name) {
         handle_.DirtyVariable(name);
-        request_redraw();
+        mark_model_document_dirty(model_name_);
     }
 
     void PyDataModelHandle::dirty_all() {
         handle_.DirtyAllVariables();
-        request_redraw();
+        mark_model_document_dirty(model_name_);
     }
 
     bool PyDataModelHandle::is_dirty(const std::string& name) {
@@ -795,7 +806,7 @@ namespace lfs::python {
             return;
         arr_it->second = std::move(updated);
         handle_.DirtyVariable(name);
-        request_redraw();
+        mark_model_document_dirty(model_name_);
     }
 
     void PyDataModelHandle::update_record_list(const std::string& name, nb::list items) {
@@ -813,7 +824,7 @@ namespace lfs::python {
             return;
         arr_it->second = std::move(updated);
         handle_.DirtyVariable(name);
-        request_redraw();
+        mark_model_document_dirty(model_name_);
     }
 
     // --- PyDataModelConstructor ---

@@ -12,9 +12,34 @@
 
 #include <algorithm>
 #include <cassert>
+#include <nanobind/stl/string.h>
 #include <imgui.h>
 
 namespace lfs::vis::gui {
+    namespace {
+        bool panelHookDirtyResult(const nb::object& result,
+                                  const bool none_is_dirty,
+                                  bool& warned_non_bool,
+                                  const char* const hook_name) {
+            if (result.is_none()) {
+                return none_is_dirty;
+            }
+            if (nb::isinstance<nb::bool_>(result)) {
+                return nb::cast<bool>(result);
+            }
+            if (!warned_non_bool) {
+                LOG_WARN("Panel {} returned a non-bool value; treating it with Python truthiness. "
+                         "Return None for compatibility or bool for explicit dirty state.",
+                         hook_name);
+                warned_non_bool = true;
+            }
+            const int truthy = PyObject_IsTrue(result.ptr());
+            if (truthy < 0) {
+                throw nb::python_error();
+            }
+            return truthy != 0;
+        }
+    }
 
     bool RmlPythonPanelAdapter::isModelBound() const {
         return lifecycle_state_ == LifecycleState::ModelBound ||
@@ -80,8 +105,12 @@ namespace lfs::vis::gui {
             try {
                 if (nb::hasattr(panel_instance_, "update_interval_ms"))
                     update_interval_ms_ = std::max(0, nb::cast<int>(panel_instance_.attr("update_interval_ms")));
+                if (nb::hasattr(panel_instance_, "update_policy")) {
+                    const auto policy = nb::cast<std::string>(panel_instance_.attr("update_policy"));
+                    dirty_driven_updates_ = policy == "dirty" || policy == "reactive";
+                }
             } catch (const std::exception& e) {
-                LOG_ERROR("Panel update_interval_ms error: {}", e.what());
+                LOG_ERROR("Panel update policy error: {}", e.what());
             }
         }
     }
@@ -348,32 +377,43 @@ namespace lfs::vis::gui {
         const auto now = std::chrono::steady_clock::now();
         cachePythonCapabilities();
         const bool update_due =
-            next_update_at_ == std::chrono::steady_clock::time_point{} || now >= next_update_at_;
+            !dirty_driven_updates_ &&
+            (next_update_at_ == std::chrono::steady_clock::time_point{} || now >= next_update_at_);
         const bool should_run_update = scene_changed || pending_dirty || update_due;
 
         if (should_run_update) {
             assert(isMounted());
             const lfs::python::GilAcquire gil;
             auto py_doc = lfs::python::PyRmlDocument(doc);
+            bool run_update = pending_dirty || update_due;
 
             if (scene_changed) {
                 try {
-                    panel_instance_.attr("on_scene_changed")(py_doc);
-                    pending_dirty = true;
+                    nb::object result = panel_instance_.attr("on_scene_changed")(py_doc);
+                    const bool scene_dirty = panelHookDirtyResult(
+                        result, true, warned_non_bool_scene_changed_, "on_scene_changed");
+                    pending_dirty |= scene_dirty;
+                    run_update |= scene_dirty;
                 } catch (const std::exception& e) {
                     LOG_ERROR("Panel on_scene_changed error: {}", e.what());
                 }
+                pending_dirty |= lfs::python::consume_document_dirty(doc);
+                run_update |= pending_dirty;
                 last_scene_gen_ = ctx->scene_generation;
             }
 
-            try {
-                nb::object result = panel_instance_.attr("on_update")(py_doc);
-                pending_dirty |= !result.is_none() && nb::cast<bool>(result);
-            } catch (const std::exception& e) {
-                LOG_ERROR("Panel on_update error: {}", e.what());
+            if (run_update) {
+                try {
+                    nb::object result = panel_instance_.attr("on_update")(py_doc);
+                    pending_dirty |= panelHookDirtyResult(
+                        result, false, warned_non_bool_update_, "on_update");
+                } catch (const std::exception& e) {
+                    LOG_ERROR("Panel on_update error: {}", e.what());
+                }
             }
             pending_dirty |= lfs::python::consume_document_dirty(doc);
-            next_update_at_ = now + updateInterval();
+            if (!dirty_driven_updates_ && run_update)
+                next_update_at_ = now + updateInterval();
         }
 
         pending_dirty |= lfs::python::consume_document_dirty(doc);
@@ -439,6 +479,16 @@ namespace lfs::vis::gui {
             return;
 
         ops.draw_direct(host_, x, y, w, h);
+    }
+
+    bool RmlPythonPanelAdapter::drawDirectCached(float x, float y, float w, float h,
+                                                 const PanelDrawContext& ctx) {
+        (void)ctx;
+        if (!host_)
+            return false;
+
+        const auto& ops = lfs::python::get_rml_panel_host_ops();
+        return ops.draw_direct_cached ? ops.draw_direct_cached(host_, x, y, w, h) : false;
     }
 
     bool RmlPythonPanelAdapter::poll(const PanelDrawContext& ctx) {

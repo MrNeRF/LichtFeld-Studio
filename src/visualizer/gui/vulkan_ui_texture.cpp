@@ -12,10 +12,9 @@
 #include "window/vulkan_context.hpp"
 #include "window/vulkan_image_barrier_tracker.hpp"
 
-#ifdef LFS_VULKAN_VIEWER_ENABLED
 #include "rendering/cuda_vulkan_interop.hpp"
+
 #include <vulkan/vulkan.h>
-#endif
 
 #include <algorithm>
 #include <cstdio>
@@ -30,7 +29,6 @@ namespace lfs::vis::gui {
     namespace {
         VulkanContext* g_texture_context = nullptr;
 
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         [[nodiscard]] std::vector<std::uint8_t> toRgba(const std::uint8_t* pixels,
                                                        const int width,
                                                        const int height,
@@ -108,7 +106,6 @@ namespace lfs::vis::gui {
             }
             return toRgba(formatted.ptr<std::uint8_t>(), width, height, channels, flip_y);
         }
-#endif
     } // namespace
 
     void setVulkanUiTextureContext(VulkanContext* const context) {
@@ -120,7 +117,6 @@ namespace lfs::vis::gui {
     }
 
     struct VulkanUiTexture::Impl {
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         enum class Mode : std::uint8_t {
             Uninitialized,
             Cpu,
@@ -790,12 +786,6 @@ namespace lfs::vis::gui {
             graphics_queue = VK_NULL_HANDLE;
             graphics_queue_family = 0;
         }
-#else
-        [[nodiscard]] bool upload(const std::uint8_t*, int, int, int) { return false; }
-        [[nodiscard]] bool uploadRegion(const std::uint8_t*, int, int, int, int, int, int, int) { return false; }
-        [[nodiscard]] bool uploadCudaTensorImpl(const lfs::core::Tensor&, int, int, bool) { return false; }
-        void reset() {}
-#endif
     };
 
     VulkanUiTexture::~VulkanUiTexture() {
@@ -846,10 +836,6 @@ namespace lfs::vis::gui {
         if (!impl_) {
             impl_ = new Impl();
         }
-#ifdef LFS_VULKAN_VIEWER_ENABLED
-        // Try the GPU-direct path first when the rasterizer left the tensor on CUDA. We bind
-        // the rasterizer's CUDA tensor straight into a Vulkan image via shared external memory,
-        // skipping a CUDA→host→staging-buffer roundtrip per upload.
         if (image.is_valid() && image.device() == lfs::core::Device::CUDA &&
             impl_->mode != Impl::Mode::Cpu) {
             if (impl_->uploadCudaTensorImpl(image, expected_width, expected_height, flip_y))
@@ -857,13 +843,6 @@ namespace lfs::vis::gui {
         }
         const std::vector<std::uint8_t> rgba = tensorToRgba(image, expected_width, expected_height, flip_y);
         return impl_->uploadRgba(rgba, expected_width, expected_height);
-#else
-        (void)image;
-        (void)expected_width;
-        (void)expected_height;
-        (void)flip_y;
-        return false;
-#endif
     }
 
     bool VulkanUiTexture::uploadCudaTensor(const lfs::core::Tensor& image,
@@ -873,45 +852,26 @@ namespace lfs::vis::gui {
         if (!impl_) {
             impl_ = new Impl();
         }
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         return impl_->uploadCudaTensorImpl(image, expected_width, expected_height, flip_y);
-#else
-        (void)image;
-        (void)expected_width;
-        (void)expected_height;
-        (void)flip_y;
-        return false;
-#endif
     }
 
     std::uintptr_t VulkanUiTexture::textureId() const {
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         if (!impl_) {
             return 0;
         }
         impl_->tryReleasePendingUpload();
         return reinterpret_cast<std::uintptr_t>(impl_->descriptor_set);
-#else
-        return 0;
-#endif
     }
 
     std::string VulkanUiTexture::rmlSrcUrl(const int width, const int height) const {
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         if (!impl_) {
             return {};
         }
         impl_->tryReleasePendingUpload();
         return RenderInterface_VK::MakeExternalTextureSource(impl_->image_view, impl_->sampler, width, height);
-#else
-        (void)width;
-        (void)height;
-        return {};
-#endif
     }
 
     bool VulkanUiTexture::valid() const {
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         if (!impl_) {
             return false;
         }
@@ -920,9 +880,6 @@ namespace lfs::vis::gui {
             return false;
         }
         return impl_->mode == Impl::Mode::CudaInterop || impl_->descriptor_set != VK_NULL_HANDLE;
-#else
-        return false;
-#endif
     }
 
     void VulkanUiTexture::reset() {

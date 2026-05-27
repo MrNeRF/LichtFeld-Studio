@@ -33,6 +33,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <future>
 #include <memory>
 #include <optional>
 #include <string>
@@ -123,6 +124,7 @@ namespace lfs::vis {
 
             bool isCapturingInput() const;
             bool isModalWindowOpen() const;
+            [[nodiscard]] bool passiveMouseMoveNeedsRender(float mouse_x, float mouse_y) const;
             [[nodiscard]] bool isStartupVisible() const { return startup_overlay_.isVisible(); }
             void dismissStartupOverlay();
             void captureKey(int physical_key, int logical_key, int mods);
@@ -143,13 +145,17 @@ namespace lfs::vis {
             void setVulkanSceneImage(std::shared_ptr<const lfs::core::Tensor> image,
                                      glm::ivec2 size,
                                      bool flip_y,
-                                     std::uint64_t generation);
+                                     std::uint64_t generation,
+                                     VkSemaphore completion_semaphore = VK_NULL_HANDLE,
+                                     std::uint64_t completion_value = 0);
             void setVulkanExternalSceneImage(VkImage image,
                                              VkImageView image_view,
                                              VkImageLayout layout,
                                              glm::ivec2 size,
                                              bool flip_y,
-                                             std::uint64_t generation);
+                                             std::uint64_t generation,
+                                             VkSemaphore completion_semaphore = VK_NULL_HANDLE,
+                                             std::uint64_t completion_value = 0);
 
             // Split-view's right panel routes through a parallel CUDA/Vulkan interop
             // slot so we don't pay PCIe staging cost for it; the left panel reuses the
@@ -197,9 +203,22 @@ namespace lfs::vis {
             void initCustomCursors();
             void destroyCustomCursors();
             void applyRmlCursorRequest(RmlCursorRequest req);
+            struct DevResourceScanResult {
+                std::unordered_map<std::string, std::filesystem::file_time_type> file_times;
+                bool rml_changed = false;
+                bool locale_changed = false;
+                bool scan_failed = false;
+            };
             void initDevResourceHotReload();
             void pollDevResourceHotReload();
-            std::pair<bool, bool> scanDevResourceFiles(bool detect_changes);
+            DevResourceScanResult scanDevResourceFiles(bool detect_changes);
+            static DevResourceScanResult scanDevResourceFilesSnapshot(
+                std::filesystem::path rml_dir,
+                std::filesystem::path locale_dir,
+                std::unordered_map<std::string, std::filesystem::file_time_type> previous_times,
+                bool detect_changes);
+            void launchDevResourceScan();
+            bool consumeDevResourceScanResult();
             bool shouldDeferDevResourceHotReload() const;
             bool reloadLocalizationResources();
             void reloadRmlResources();
@@ -282,6 +301,8 @@ namespace lfs::vis {
             glm::ivec2 vulkan_external_scene_image_size_{0, 0};
             bool vulkan_external_scene_image_flip_y_ = false;
             std::uint64_t vulkan_external_scene_image_generation_ = 0;
+            VkSemaphore vulkan_frame_completion_semaphore_ = VK_NULL_HANDLE;
+            std::uint64_t vulkan_frame_completion_value_ = 0;
             bool vulkan_scene_interop_disabled_ = false;
 
             // Parallel slot for split-view's right panel.
@@ -331,6 +352,7 @@ namespace lfs::vis {
                 std::filesystem::path locale_dir;
                 std::unordered_map<std::string, std::filesystem::file_time_type> file_times;
                 std::chrono::steady_clock::time_point next_scan{};
+                std::future<DevResourceScanResult> scan_future;
                 bool pending_rml_reload = false;
                 bool pending_locale_reload = false;
             };

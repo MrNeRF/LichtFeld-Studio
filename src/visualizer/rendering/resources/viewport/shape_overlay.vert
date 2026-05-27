@@ -5,11 +5,13 @@ layout(location = 2) in vec2 aP0;
 layout(location = 3) in vec2 aP1;
 layout(location = 4) in vec4 aColor;
 layout(location = 5) in vec4 aParams;
+layout(location = 6) in float aViewDepth;
 layout(location = 0) out vec2 ScreenPos;
 layout(location = 1) out vec2 P0;
 layout(location = 2) out vec2 P1;
 layout(location = 3) out vec4 Color;
 layout(location = 4) out vec4 Params;
+layout(location = 5) out float ViewDepth;
 void main() {
     gl_Position = vec4(aPos.xy, 0.0, 1.0);
     ScreenPos = aScreenPos;
@@ -17,4 +19,5 @@ void main() {
     P1 = aP1;
     Color = aColor;
     Params = aParams;
+    ViewDepth = aViewDepth;
 }

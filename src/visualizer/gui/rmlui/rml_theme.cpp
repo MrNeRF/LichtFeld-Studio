@@ -52,16 +52,40 @@ namespace lfs::vis::gui::rml_theme {
 #endif
     }
 
+    namespace {
+        std::mutex base_rcss_cache_mutex;
+        std::unordered_map<std::string, std::string> base_rcss_cache;
+
+        std::string components_rcss_cache;
+        bool components_rcss_valid = false;
+        std::mutex components_rcss_mutex;
+
+        std::string rcssCacheKey(const std::filesystem::path& path) {
+            return lfs::core::path_to_utf8(path.lexically_normal());
+        }
+    } // namespace
+
     std::string loadBaseRCSS(const std::string& asset_name) {
         try {
             const auto requested_path = std::filesystem::path(asset_name);
             const auto rcss_path = requested_path.is_absolute()
                                        ? requested_path
                                        : lfs::vis::getAssetPath(asset_name);
+            const std::string cache_key = rcssCacheKey(rcss_path);
+
+            {
+                std::lock_guard lock(base_rcss_cache_mutex);
+                if (auto it = base_rcss_cache.find(cache_key); it != base_rcss_cache.end())
+                    return it->second;
+            }
+
             std::ifstream f(rcss_path);
             if (f) {
-                return {std::istreambuf_iterator<char>(f),
-                        std::istreambuf_iterator<char>()};
+                std::string contents{std::istreambuf_iterator<char>(f),
+                                     std::istreambuf_iterator<char>()};
+                std::lock_guard lock(base_rcss_cache_mutex);
+                auto inserted = base_rcss_cache.emplace(cache_key, std::move(contents));
+                return inserted.first->second;
             }
             LOG_ERROR("RmlTheme: failed to open RCSS at {}", rcss_path.string());
         } catch (const std::exception& e) {
@@ -69,12 +93,6 @@ namespace lfs::vis::gui::rml_theme {
         }
         return {};
     }
-
-    namespace {
-        std::string components_rcss_cache;
-        bool components_rcss_valid = false;
-        std::mutex components_rcss_mutex;
-    } // namespace
 
     const std::string& getComponentsRCSS() {
         std::lock_guard lock(components_rcss_mutex);
@@ -86,9 +104,10 @@ namespace lfs::vis::gui::rml_theme {
     }
 
     void invalidateBaseRcssCache() {
-        std::lock_guard lock(components_rcss_mutex);
+        std::scoped_lock lock(components_rcss_mutex, base_rcss_cache_mutex);
         components_rcss_cache.clear();
         components_rcss_valid = false;
+        base_rcss_cache.clear();
     }
 
     namespace {

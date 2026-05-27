@@ -50,6 +50,11 @@ class AppState:
         selection_count: Number of selected gaussians
         selection_generation: Increments when selection changes
 
+    Tool State:
+        active_tool: Current toolbar/operator id
+        transform_space: Current transform space id
+        pivot_mode: Current transform pivot id
+
     Viewport State:
         viewport_width: Viewport width in pixels
         viewport_height: Viewport height in pixels
@@ -77,6 +82,11 @@ class AppState:
     has_selection = Signal(False, "has_selection")
     selection_count = Signal(0, "selection_count")
     selection_generation = Signal(0, "selection_generation")
+
+    # Tool state
+    active_tool = Signal("", "active_tool")
+    transform_space = Signal(1, "transform_space")
+    pivot_mode = Signal(0, "pivot_mode")
 
     # Viewport state
     viewport_width = Signal(0, "viewport_width")
@@ -118,6 +128,9 @@ class AppState:
         cls.has_selection.value = False
         cls.selection_count.value = 0
         cls.selection_generation.value = 0
+        cls.active_tool.value = ""
+        cls.transform_space.value = 1
+        cls.pivot_mode.value = 0
 
 
 # Initialize computed signals

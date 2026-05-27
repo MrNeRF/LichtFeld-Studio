@@ -279,6 +279,8 @@ class Panel:
 
     update_interval_ms: int = 100
 
+    update_policy: str = 'interval'
+
     @classmethod
     def poll(cls, context) -> bool: ...
 

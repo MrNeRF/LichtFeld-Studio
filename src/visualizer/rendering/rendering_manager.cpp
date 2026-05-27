@@ -85,7 +85,10 @@ namespace lfs::vis {
     }
 
     void RenderingManager::initialize() {
-        if (initialized_)
+        // Gate on engine_ rather than initialized_: the Vulkan path flips
+        // initialized_ on first frame without building the auxiliary engine,
+        // and getRenderingEngine() relies on this to lazy-create it on demand.
+        if (engine_)
             return;
 
         LOG_TIMER("RenderingEngine initialization");
@@ -537,8 +540,9 @@ namespace lfs::vis {
     }
 
     void RenderingManager::setRectPreview(float x0, float y0, float x1, float y1, bool add_mode,
-                                          const std::optional<SplitViewPanelId> panel) {
-        viewport_overlay_service_.setRect(x0, y0, x1, y1, add_mode, panel);
+                                          const std::optional<SplitViewPanelId> panel,
+                                          const bool track_cursor) {
+        viewport_overlay_service_.setRect(x0, y0, x1, y1, add_mode, panel, track_cursor);
     }
 
     void RenderingManager::clearRectPreview() {
@@ -561,8 +565,9 @@ namespace lfs::vis {
     }
 
     void RenderingManager::setLassoPreview(const std::vector<std::pair<float, float>>& points, bool add_mode,
-                                           const std::optional<SplitViewPanelId> panel) {
-        viewport_overlay_service_.setLasso(points, add_mode, panel);
+                                           const std::optional<SplitViewPanelId> panel,
+                                           const bool track_cursor) {
+        viewport_overlay_service_.setLasso(points, add_mode, panel, track_cursor);
     }
 
     void RenderingManager::clearLassoPreview() {

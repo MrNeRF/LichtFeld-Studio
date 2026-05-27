@@ -57,10 +57,12 @@ namespace lfs::vis::gui {
         bool isDueForVramProcessSample(std::chrono::milliseconds interval);
         void reloadResources();
         void render();
+        void renderCached();
         void processInput(const PanelInputState& input);
         bool wantsInput() const { return wants_input_; }
         [[nodiscard]] bool needsAnimationFrame() const {
-            return render_needed_ || animation_active_ || (vram_hud_ && vram_hud_->needsAnimationFrame());
+            return render_needed_ || animation_active_ || tooltip_.needsFrame() ||
+                   (vram_hud_ && vram_hud_->needsAnimationFrame());
         }
         [[nodiscard]] bool blocksPointer(double screen_x, double screen_y) const;
 
@@ -69,13 +71,15 @@ namespace lfs::vis::gui {
         void cacheBodyTemplate();
         void ensureBodyDataModelBound(Rml::Element* body);
         bool shouldRunDocumentHooks(bool force) const;
-        void updateToolbarRoots();
+        bool updateToolbarRoots();
         void applyGTMetricsOverlay();
         bool applyFrameTooltip();
+        void queueVulkanContext();
 
         RmlUIManager* rml_manager_ = nullptr;
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
+        Rml::Element* body_el_ = nullptr;
 
         glm::vec2 vp_pos_{0, 0};
         glm::vec2 vp_size_{0, 0};
@@ -85,6 +89,12 @@ namespace lfs::vis::gui {
         bool show_secondary_toolbar_ = false;
         float secondary_toolbar_x_ = 0.0f;
         float secondary_toolbar_width_ = 0.0f;
+        float applied_primary_toolbar_x_ = 0.0f;
+        float applied_primary_toolbar_width_ = -1.0f;
+        bool applied_show_secondary_toolbar_ = false;
+        float applied_secondary_toolbar_x_ = 0.0f;
+        float applied_secondary_toolbar_width_ = -1.0f;
+        bool toolbar_roots_dirty_ = true;
         std::size_t last_theme_signature_ = 0;
         bool has_theme_signature_ = false;
         std::string base_rcss_;
@@ -92,7 +102,10 @@ namespace lfs::vis::gui {
         bool wants_input_ = false;
         bool doc_registered_ = false;
         bool render_needed_ = true;
+        bool data_model_binding_dirty_ = true;
         bool animation_active_ = false;
+        bool hovered_interactive_ = false;
+        Rml::Element* last_hover_element_ = nullptr;
         bool mouse_pos_valid_ = false;
         int last_mouse_x_ = 0;
         int last_mouse_y_ = 0;

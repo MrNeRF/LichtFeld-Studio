@@ -4,6 +4,7 @@ import utils;
 
 static const uint SELECTION_MODE_BRUSH = 0;
 static const uint SELECTION_MODE_RECTANGLE = 1;
+static const uint SELECTION_MODE_POLYGON_MASK = 2;
 
 struct SelectionUniforms
 {
@@ -25,6 +26,10 @@ struct SelectionUniforms
     float cy;
     float4 dist_coeffs;
     float4x4 world_view_transform;
+    uint aabb_x0;
+    uint aabb_y0;
+    uint aabb_w;
+    uint aabb_h;
 }
 
 layout(binding=0) StructuredBuffer<float> xyz_ws;
@@ -35,6 +40,7 @@ layout(binding=4) StructuredBuffer<float4> model_transforms;
 layout(binding=5) StructuredBuffer<float4> rotations;
 layout(binding=6) StructuredBuffer<float> scaling_raw;
 layout(binding=7) RWByteAddressBuffer selection_out;
+layout(binding=8) ByteAddressBuffer polygon_mask;
 
 [ForceInline]
 bool node_visible(uint splat_idx, SelectionUniforms uniforms)
@@ -188,6 +194,17 @@ bool primitive_hit(float2 position, float4 primitive, uint mode)
     return dot(delta, delta) <= primitive.z;
 }
 
+[ForceInline]
+bool polygon_mask_hit(float2 position, SelectionUniforms uniforms)
+{
+    int ix = int(floor(position.x)) - int(uniforms.aabb_x0);
+    int iy = int(floor(position.y)) - int(uniforms.aabb_y0);
+    if (ix < 0 || iy < 0 || uint(ix) >= uniforms.aabb_w || uint(iy) >= uniforms.aabb_h)
+        return false;
+    uint idx = uint(iy) * uniforms.aabb_w + uint(ix);
+    return read_byte(polygon_mask, idx) != 0u;
+}
+
 [shader("compute")]
 [numthreads(SUBGROUP_SIZE, 1, 1)]
 void main(
@@ -208,10 +225,14 @@ void main(
         float2 position;
         bool selected = false;
         if (project_splat(splat_idx, uniforms, position)) {
-            for (uint primitive_idx = 0u; primitive_idx < uniforms.primitive_count; ++primitive_idx) {
-                if (primitive_hit(position, primitives[primitive_idx], uniforms.mode)) {
-                    selected = true;
-                    break;
+            if (uniforms.mode == SELECTION_MODE_POLYGON_MASK) {
+                selected = polygon_mask_hit(position, uniforms);
+            } else {
+                for (uint primitive_idx = 0u; primitive_idx < uniforms.primitive_count; ++primitive_idx) {
+                    if (primitive_hit(position, primitives[primitive_idx], uniforms.mode)) {
+                        selected = true;
+                        break;
+                    }
                 }
             }
         }

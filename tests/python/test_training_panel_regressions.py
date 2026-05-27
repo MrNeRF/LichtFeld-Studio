@@ -96,6 +96,7 @@ class _ParamsStub:
         self.enable_eval = False
         self.save_steps = [7000]
         self.eval_steps = []
+        self.bg_image_path = ""
 
     def has_params(self):
         return True
@@ -614,3 +615,39 @@ def test_set_bool_prop_hasattr_guard(training_panel_module, monkeypatch):
 
     panel._set_bool_prop("nonexistent_property", True)
     assert not hasattr(params, "nonexistent_property")
+
+
+def test_browse_background_image_uses_current_image_dialog(training_panel_module, monkeypatch):
+    panel = training_panel_module.TrainingPanel()
+    panel._handle = _HandleStub()
+    params = _ParamsStub()
+    dataset = _DatasetStub()
+    selected_path = "/tmp/background.png"
+    calls = []
+
+    def open_image_dialog(start_dir):
+        calls.append(start_dir)
+        return selected_path
+
+    monkeypatch.setattr(
+        training_panel_module,
+        "lf",
+        SimpleNamespace(
+            optimization_params=lambda: params,
+            dataset_params=lambda: dataset,
+            ui=SimpleNamespace(open_image_dialog=open_image_dialog),
+        ),
+    )
+
+    panel._on_action(None, None, ["browse_bg"])
+
+    assert calls == [""]
+    assert params.bg_image_path == selected_path
+    assert panel._handle.dirty_all_count == 1
+
+
+def test_training_panel_no_longer_uses_removed_image_dialog_alias():
+    project_root = Path(__file__).parent.parent.parent
+    training_panel = project_root / "src" / "python" / "lfs_plugins" / "training_panel.py"
+
+    assert "open_image_file_dialog" not in training_panel.read_text()

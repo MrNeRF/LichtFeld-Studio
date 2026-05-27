@@ -470,31 +470,27 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    overflow: hidden;
 }
 
 .asset-thumb-splat {
     background-color: #30443b;
-    decorator: vertical-gradient(#6c9b89 #24352f);
 }
 
 .asset-thumb-video {
     background-color: #37384a;
-    decorator: vertical-gradient(#777b9e #242633);
 }
 
 .asset-thumb-checkpoint {
     background-color: #3d4430;
-    decorator: vertical-gradient(#8ca260 #2d3325);
 }
 
 .asset-thumb-dataset {
     background-color: #4c3f2d;
-    decorator: vertical-gradient(#a88a5c #382f23);
 }
 
 .asset-thumb-default {
     background-color: #3b3936;
-    decorator: vertical-gradient(#6b665f #2c2a27);
 }
 
 .asset-thumb-label {

@@ -22,4 +22,16 @@ namespace lfs::vis::vksplat::detail {
         std::size_t num_splats,
         cudaStream_t stream);
 
+    // Copy opacity_raw → opacity_dst, but force soft-deleted entries to a
+    // strongly-negative raw value so sigmoid(raw) ≈ 0 in the rasterizer. Used
+    // to honor SplatData::deleted() through the VkSplat path without modifying
+    // the shared opacity tensor. `deleted_mask` is the bool tensor's storage
+    // (1 byte per element); the kernel only checks non-zero.
+    [[nodiscard]] cudaError_t launchPackOpacityMaskingDeleted(
+        const float* opacity_raw,
+        const bool* deleted_mask,
+        float* opacity_dst,
+        std::size_t num_splats,
+        cudaStream_t stream);
+
 } // namespace lfs::vis::vksplat::detail

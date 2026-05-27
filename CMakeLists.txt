@@ -129,11 +129,10 @@ file(WRITE "${CMAKE_BINARY_DIR}/include/git_version.h"
 # Setup
 get_filename_component(PROJ_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}" ABSOLUTE)
 
-option(ENABLE_VULKAN_VIEWER "Resolve and link required Vulkan viewer dependencies" ON)
-set(ENABLE_VULKAN_VIEWER ON CACHE BOOL "Vulkan viewer dependencies are required" FORCE)
 option(BUILD_TESTS "Build tests" OFF)
 option(BUILD_UNICODE_TEST_ONLY "Build only Unicode path test (no CUDA)" OFF)
 option(ENABLE_ALLOCATION_PROFILING "Enable tensor allocation profiling" OFF)
+option(LFS_FAST_COMPILE "Optimize measured slow C++ components for build speed instead of runtime speed (WIN32 only)" OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # Debug options
@@ -321,11 +320,9 @@ message(STATUS "CUDA Toolkit ${CUDAToolkit_VERSION} found at ${CUDAToolkit_TARGE
 # Find packages
 find_package(TBB REQUIRED)
 find_package(Threads REQUIRED)
-if(ENABLE_VULKAN_VIEWER)
-    find_package(Vulkan REQUIRED)
-    find_package(VulkanMemoryAllocator CONFIG REQUIRED)
-    find_package(volk CONFIG REQUIRED)
-endif()
+find_package(Vulkan REQUIRED)
+find_package(VulkanMemoryAllocator CONFIG REQUIRED)
+find_package(volk CONFIG REQUIRED)
 find_package(SDL3 REQUIRED)
 lfs_validate_linux_sdl_video_backends()
 find_package(glm REQUIRED)
@@ -353,12 +350,6 @@ target_compile_definitions(glm::glm INTERFACE GLM_FORCE_DEPTH_ZERO_TO_ONE)
 # use it here as the global default CUDA architecture list too
 if(LichtFeld-Studio_CUDA_ARCH)
     set(CMAKE_CUDA_ARCHITECTURES "${LichtFeld-Studio_CUDA_ARCH}" CACHE STRING "CUDA architectures" FORCE)
-endif()
-
-if(ENABLE_VULKAN_VIEWER)
-    set(LFS_VULKAN_VIEWER_ENABLED 1)
-else()
-    set(LFS_VULKAN_VIEWER_ENABLED 0)
 endif()
 
 # Create configuration header (static options)
@@ -403,6 +394,7 @@ add_subdirectory(src/io)         # I/O module (lfs::io namespace)
 add_subdirectory(src/rendering)  # Rendering module (lfs::rendering namespace)
 add_subdirectory(src/sequencer)  # Sequencer module (lfs::sequencer namespace)
 add_subdirectory(src/visualizer) # Visualizer module (lfs::vis namespace)
+add_subdirectory(src/tcp)        # TCP event server (ZMQ responder + publisher)
 add_subdirectory(src/geometry)   # Geometry utilities
 add_subdirectory(src/mcp)        # MCP server (AI agent integration)
 add_subdirectory(src/python)
@@ -441,6 +433,7 @@ target_include_directories(${PROJECT_NAME}
         ${CMAKE_CURRENT_SOURCE_DIR}/src              # For training/, visualizer/, etc.
         ${CMAKE_CURRENT_SOURCE_DIR}/src/visualizer   # For internal visualizer headers used by GUI MCP
         ${CMAKE_CURRENT_SOURCE_DIR}/src/rendering/include  # For rendering headers (MCP GUI tools)
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/tcp          # For tcp event server
         ${CMAKE_CURRENT_SOURCE_DIR}/external         # For external headers
 
         ${CUDAToolkit_INCLUDE_DIRS}
@@ -448,11 +441,12 @@ target_include_directories(${PROJECT_NAME}
 
 if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
     set(LFS_APP_INTERNAL_LINK_LIBS
-        "$<LINK_GROUP:RESCAN,lfs_visualizer,lfs_mcp,lfs_sequencer,lfs_rendering_tensor,lfs_training,lfs_geometry,lfs_core,lfs_io,lfs_video,fastlfs_backend,lfs_python_utils>"
+        "$<LINK_GROUP:RESCAN,lfs_visualizer,lfs_mcp,lfs_sequencer,lfs_rendering_tensor,lfs_training,lfs_geometry,lfs_core,lfs_io,lfs_video,fastlfs_backend,lfs_python_utils,lfs_tcp>"
     )
 else()
     set(LFS_APP_INTERNAL_LINK_LIBS
         lfs_visualizer
+        lfs_tcp
         lfs_mcp
         lfs_sequencer
         lfs_rendering_tensor
@@ -478,30 +472,28 @@ target_link_libraries(${PROJECT_NAME}
         SDL3::SDL3
 )
 
-if(ENABLE_VULKAN_VIEWER)
-    target_link_libraries(${PROJECT_NAME}
-            PRIVATE
-            Vulkan::Vulkan
-            GPUOpen::VulkanMemoryAllocator
-            volk::volk_headers)
+target_link_libraries(${PROJECT_NAME}
+        PRIVATE
+        Vulkan::Vulkan
+        GPUOpen::VulkanMemoryAllocator
+        volk::volk_headers)
 
-    if(BUILD_PORTABLE AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        get_filename_component(_lfs_vulkan_loader_realpath "${Vulkan_LIBRARY}" REALPATH)
-        get_filename_component(_lfs_vulkan_loader_realname "${_lfs_vulkan_loader_realpath}" NAME)
-        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E make_directory
-                    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/lib"
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${_lfs_vulkan_loader_realpath}"
-                    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/lib/${_lfs_vulkan_loader_realname}"
-                COMMAND ${CMAKE_COMMAND} -E create_symlink
-                    "${_lfs_vulkan_loader_realname}"
-                    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/lib/libvulkan.so.1"
-                COMMAND ${CMAKE_COMMAND} -E create_symlink
-                    "libvulkan.so.1"
-                    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/lib/libvulkan.so"
-                COMMENT "Copying Vulkan loader to portable runtime directory")
-    endif()
+if(BUILD_PORTABLE AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    get_filename_component(_lfs_vulkan_loader_realpath "${Vulkan_LIBRARY}" REALPATH)
+    get_filename_component(_lfs_vulkan_loader_realname "${_lfs_vulkan_loader_realpath}" NAME)
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/lib"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_lfs_vulkan_loader_realpath}"
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/lib/${_lfs_vulkan_loader_realname}"
+            COMMAND ${CMAKE_COMMAND} -E create_symlink
+                "${_lfs_vulkan_loader_realname}"
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/lib/libvulkan.so.1"
+            COMMAND ${CMAKE_COMMAND} -E create_symlink
+                "libvulkan.so.1"
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/lib/libvulkan.so"
+            COMMENT "Copying Vulkan loader to portable runtime directory")
 endif()
 
 # The app embeds Python and loads the nanobind module at runtime for panels,
@@ -680,6 +672,22 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "${RESOURCE_DIR}/assets/themes"
     COMMENT "Creating resource directory structure"
 )
+
+if(TARGET lfs_vulkan_rasterizer)
+    get_target_property(_LFS_VULKAN_RASTERIZER_SPV_DIR
+        lfs_vulkan_rasterizer
+        LFS_VULKAN_RASTERIZER_SPV_DIR)
+    if(_LFS_VULKAN_RASTERIZER_SPV_DIR)
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "${RESOURCE_DIR}/shaders/vulkan_rasterizer"
+            COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+                "${_LFS_VULKAN_RASTERIZER_SPV_DIR}"
+                "${RESOURCE_DIR}/shaders/vulkan_rasterizer"
+            COMMENT "Copying Vulkan rasterizer shaders"
+        )
+    endif()
+endif()
 
 # Copy visualizer icons
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
@@ -932,7 +940,34 @@ configure_build_type(lfs_rendering)
 configure_build_type(lfs_visualizer)
 configure_build_type(lfs_io)
 configure_build_type(lfs_geometry)
+configure_build_type(lfs_tcp)
 configure_build_type(${PROJECT_NAME})
+
+if(LFS_FAST_COMPILE AND MSVC)
+    function(lfs_enable_fast_cxx_compile target)
+        if(TARGET ${target})
+            target_compile_options(${target} PRIVATE
+                $<$<COMPILE_LANGUAGE:CXX>:/Od>
+                $<$<COMPILE_LANGUAGE:CXX>:/Ob0>
+            )
+        endif()
+    endfunction()
+
+    # curated list of components to optimize for fast compilation (WIN32 only)
+    # CUDA-heavy regressions stay on their target defaults.
+    foreach(_lfs_fast_target IN ITEMS
+        lfs_visualizer
+        lfs_py
+        lfs_core
+        lfs_training
+        lfs_io
+        lfs_mcp
+        Zep
+        OpenMeshCore
+    )
+        lfs_enable_fast_cxx_compile(${_lfs_fast_target})
+    endforeach()
+endif()
 
 # Set the default startup project in Visual Studio to LichtFeld-Studio
 # (without this, VS defaults to ALL_BUILD when opening the solution)
@@ -960,11 +995,8 @@ message(STATUS "===========================================")
 message(STATUS "Build Configuration:")
 message(STATUS "  CUDA Version: ${CUDAToolkit_VERSION}")
 message(STATUS "  CUDA Archs: ${CMAKE_CUDA_ARCHITECTURES}")
-message(STATUS "  Vulkan Viewer Dependencies: ${ENABLE_VULKAN_VIEWER}")
-if(ENABLE_VULKAN_VIEWER)
-    message(STATUS "  Vulkan Found: ${Vulkan_FOUND}")
-    message(STATUS "  Vulkan Include Dirs: ${Vulkan_INCLUDE_DIRS}")
-endif()
+message(STATUS "  Vulkan Found: ${Vulkan_FOUND}")
+message(STATUS "  Vulkan Include Dirs: ${Vulkan_INCLUDE_DIRS}")
 message(STATUS "  FreeType Found: ${FREETYPE_FOUND}")
 message(STATUS "  WebP Found: ${WebP_FOUND}")
 message(STATUS "  LibArchive Found: ${LibArchive_FOUND}")
@@ -1022,6 +1054,12 @@ install(TARGETS lfs_mcp
 install(FILES "${CMAKE_SOURCE_DIR}/LICENSE" DESTINATION ".")
 
 set(INSTALL_RESOURCE_DIR "${CMAKE_INSTALL_DATADIR}/LichtFeld-Studio")
+if(_LFS_VULKAN_RASTERIZER_SPV_DIR)
+    install(DIRECTORY "${_LFS_VULKAN_RASTERIZER_SPV_DIR}/"
+            DESTINATION "${INSTALL_RESOURCE_DIR}/shaders/vulkan_rasterizer"
+            FILES_MATCHING
+            PATTERN "*.spv")
+endif()
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/icon" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/fonts" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
 install(FILES "${CMAKE_SOURCE_DIR}/src/rendering/resources/assets/JetBrainsMono-Regular.ttf" DESTINATION "${INSTALL_RESOURCE_DIR}/assets/fonts")

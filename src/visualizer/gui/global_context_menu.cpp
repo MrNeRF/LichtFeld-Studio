@@ -137,6 +137,11 @@ namespace lfs::vis::gui {
         syncTheme();
     }
 
+    void GlobalContextMenu::preload() {
+        initContext();
+        syncTheme();
+    }
+
     void GlobalContextMenu::syncTheme() {
         if (!doc_)
             return;

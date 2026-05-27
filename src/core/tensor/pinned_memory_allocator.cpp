@@ -158,9 +158,6 @@ namespace lfs::core {
                     lfs::diagnostics::VramProfiler::instance().setPinnedHostUsed(stats_.allocated_bytes);
                     LFS_COUNTER_ADD("io.pinned_host.cache_hit", 1);
 
-                    LOG_TRACE("Pinned memory cache HIT (stream-safe): {} bytes (total allocated: {} MB)",
-                              bytes, stats_.allocated_bytes / (1024.0 * 1024.0));
-
                     return ptr;
                 } else if (status != cudaErrorNotReady) {
                     // Unexpected error - log and skip this block
@@ -247,9 +244,6 @@ namespace lfs::core {
 
         cache_[size].push_back(std::move(block));
         stats_.cached_bytes += size;
-
-        LOG_TRACE("Pinned memory cached with stream sync: {} bytes (stream: {}, cache size: {} MB)",
-                  size, (void*)stream, stats_.cached_bytes / (1024.0 * 1024.0));
     }
 
     void PinnedMemoryAllocator::empty_cache() {

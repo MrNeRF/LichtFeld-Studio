@@ -342,7 +342,22 @@ def _register_discovered_assets(
         )
         if thumbnails is not None:
             try:
-                thumb_path = thumbnails.generate_placeholder(asset.type, asset.id)
+                thumb_path = None
+                if asset.type == "dataset" and hasattr(thumbnails, "generate_dataset_preview"):
+                    thumb_path = thumbnails.generate_dataset_preview(
+                        asset.type,
+                        asset.id,
+                        file_path,
+                        metadata.get("format_specific", {}) or {},
+                    )
+                elif hasattr(thumbnails, "generate_rendered_preview"):
+                    thumb_path = thumbnails.generate_rendered_preview(
+                        asset.type,
+                        asset.id,
+                        file_path,
+                    )
+                if thumb_path is None:
+                    thumb_path = thumbnails.generate_placeholder(asset.type, asset.id)
                 index.update_asset(asset.id, thumbnail_path=str(thumb_path))
             except Exception:
                 _watch_log(

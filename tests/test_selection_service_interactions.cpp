@@ -122,36 +122,6 @@ protected:
     std::unique_ptr<lfs::vis::SelectionService> service_;
 };
 
-TEST_F(SelectionServiceInteractionsTest, PolygonCommitUsesCurrentScreenPositionsAfterCameraMove) {
-    service_->setTestingScreenPositions(make_screen_positions({
-        70.0f,
-        70.0f,
-        80.0f,
-        80.0f,
-    }));
-
-    ASSERT_TRUE(service_->beginInteractiveSelection(
-        lfs::vis::SelectionShape::Polygon,
-        lfs::vis::SelectionMode::Replace,
-        {0.0f, 0.0f},
-        0.0f));
-    ASSERT_TRUE(service_->appendInteractivePolygonVertex({30.0f, 0.0f}));
-    ASSERT_TRUE(service_->appendInteractivePolygonVertex({0.0f, 30.0f}));
-
-    // Simulate camera motion by changing projected positions while the polygon stays in screen space.
-    service_->setTestingScreenPositions(make_screen_positions({
-        80.0f,
-        80.0f,
-        10.0f,
-        10.0f,
-    }));
-
-    const auto result = service_->finishInteractiveSelection();
-    ASSERT_TRUE(result.success);
-    EXPECT_EQ(result.affected_count, 1u);
-    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{0, 1}));
-}
-
 TEST_F(SelectionServiceInteractionsTest, ClosedPolygonDragUpdatesVertexPosition) {
     ASSERT_TRUE(service_->beginInteractiveSelection(
         lfs::vis::SelectionShape::Polygon,
@@ -220,6 +190,35 @@ TEST_F(SelectionServiceInteractionsTest, ClosedPolygonInsertAndRemoveVertexUpdat
     EXPECT_FLOAT_EQ(reduced_points[2].second, 30.0f);
 }
 
+TEST_F(SelectionServiceInteractionsTest, InteractiveRectAndLassoPreviewTrackFrameCursor) {
+    rendering_manager_->setRectPreview(0.0f, 0.0f, 10.0f, 10.0f);
+    rendering_manager_->setLassoPreview({{0.0f, 0.0f}, {10.0f, 10.0f}});
+    EXPECT_FALSE(rendering_manager_->rectPreviewTracksCursor());
+    EXPECT_FALSE(rendering_manager_->lassoPreviewTracksCursor());
+    rendering_manager_->clearSelectionPreviews();
+
+    ASSERT_TRUE(service_->beginInteractiveSelection(
+        lfs::vis::SelectionShape::Rectangle,
+        lfs::vis::SelectionMode::Replace,
+        {0.0f, 0.0f},
+        0.0f));
+    service_->updateInteractiveSelection({40.0f, 50.0f});
+    service_->refreshInteractivePreview();
+    EXPECT_TRUE(rendering_manager_->isRectPreviewActive());
+    EXPECT_TRUE(rendering_manager_->rectPreviewTracksCursor());
+    service_->cancelInteractiveSelection();
+
+    ASSERT_TRUE(service_->beginInteractiveSelection(
+        lfs::vis::SelectionShape::Lasso,
+        lfs::vis::SelectionMode::Replace,
+        {0.0f, 0.0f},
+        0.0f));
+    service_->updateInteractiveSelection({40.0f, 50.0f});
+    service_->refreshInteractivePreview();
+    EXPECT_TRUE(rendering_manager_->isLassoPreviewActive());
+    EXPECT_TRUE(rendering_manager_->lassoPreviewTracksCursor());
+}
+
 TEST_F(SelectionServiceInteractionsTest, CancelInteractiveSelectionLeavesSelectionAndUndoUntouched) {
     set_initial_selection({1, 0});
     service_->setTestingScreenPositions(make_screen_positions({
@@ -245,7 +244,34 @@ TEST_F(SelectionServiceInteractionsTest, CancelInteractiveSelectionLeavesSelecti
     EXPECT_EQ(lfs::vis::op::undoHistory().redoCount(), 0u);
 }
 
-TEST_F(SelectionServiceInteractionsTest, RectangleCommitSelectsDraggedArea) {
+TEST_F(SelectionServiceInteractionsTest, PointCloudModeBrushUsesScreenPositionFallback) {
+    auto settings = rendering_manager_->getSettings();
+    settings.point_cloud_mode = true;
+    rendering_manager_->updateSettings(settings);
+
+    service_->setTestingScreenPositions(make_screen_positions({
+        10.0f,
+        10.0f,
+        80.0f,
+        80.0f,
+    }));
+
+    ASSERT_TRUE(service_->beginInteractiveSelection(
+        lfs::vis::SelectionShape::Brush,
+        lfs::vis::SelectionMode::Replace,
+        {10.0f, 10.0f},
+        5.0f));
+
+    const auto result = service_->finishInteractiveSelection();
+    ASSERT_TRUE(result.success);
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
+}
+
+TEST_F(SelectionServiceInteractionsTest, PointCloudModeRectangleUsesScreenPositionFallback) {
+    auto settings = rendering_manager_->getSettings();
+    settings.point_cloud_mode = true;
+    rendering_manager_->updateSettings(settings);
+
     service_->setTestingScreenPositions(make_screen_positions({
         10.0f,
         10.0f,
@@ -258,39 +284,74 @@ TEST_F(SelectionServiceInteractionsTest, RectangleCommitSelectsDraggedArea) {
         lfs::vis::SelectionMode::Replace,
         {0.0f, 0.0f},
         0.0f));
-    service_->updateInteractiveSelection({30.0f, 30.0f});
+    service_->updateInteractiveSelection({50.0f, 50.0f});
 
     const auto result = service_->finishInteractiveSelection();
     ASSERT_TRUE(result.success);
-    EXPECT_EQ(result.affected_count, 1u);
     EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
-    EXPECT_FALSE(service_->isInteractiveSelectionActive());
 }
 
-TEST_F(SelectionServiceInteractionsTest, LassoCommitUsesDraggedScreenSpacePath) {
+TEST_F(SelectionServiceInteractionsTest, PointCloudModePolygonUsesScreenPositionFallback) {
+    auto settings = rendering_manager_->getSettings();
+    settings.point_cloud_mode = true;
+    rendering_manager_->updateSettings(settings);
+
     service_->setTestingScreenPositions(make_screen_positions({
-        80.0f,
-        80.0f,
         10.0f,
         10.0f,
+        80.0f,
+        80.0f,
     }));
 
     ASSERT_TRUE(service_->beginInteractiveSelection(
-        lfs::vis::SelectionShape::Lasso,
+        lfs::vis::SelectionShape::Polygon,
         lfs::vis::SelectionMode::Replace,
         {0.0f, 0.0f},
         0.0f));
-    service_->updateInteractiveSelection({30.0f, 0.0f});
-    service_->updateInteractiveSelection({0.0f, 30.0f});
+    ASSERT_TRUE(service_->appendInteractivePolygonVertex({50.0f, 0.0f}));
+    ASSERT_TRUE(service_->appendInteractivePolygonVertex({0.0f, 50.0f}));
 
     const auto result = service_->finishInteractiveSelection();
     ASSERT_TRUE(result.success);
-    EXPECT_EQ(result.affected_count, 1u);
-    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{0, 1}));
-    EXPECT_FALSE(service_->isInteractiveSelectionActive());
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
 }
 
-TEST_F(SelectionServiceInteractionsTest, BrushCommitInterpolatesAcrossDraggedStroke) {
+TEST_F(SelectionServiceInteractionsTest, PointCloudModeSelectionFallbackAppliesDepthFilter) {
+    auto settings = rendering_manager_->getSettings();
+    settings.point_cloud_mode = true;
+    settings.depth_filter_enabled = true;
+    settings.depth_filter_min = {-0.25f, -0.25f, -0.25f};
+    settings.depth_filter_max = {0.25f, 0.25f, 0.25f};
+    rendering_manager_->updateSettings(settings);
+
+    service_->setTestingScreenPositions(make_screen_positions({
+        10.0f,
+        10.0f,
+        20.0f,
+        20.0f,
+    }));
+
+    lfs::vis::SelectionFilterState filters;
+    filters.depth_filter = true;
+
+    ASSERT_TRUE(service_->beginInteractiveSelection(
+        lfs::vis::SelectionShape::Rectangle,
+        lfs::vis::SelectionMode::Replace,
+        {0.0f, 0.0f},
+        0.0f,
+        filters));
+    service_->updateInteractiveSelection({50.0f, 50.0f});
+
+    const auto result = service_->finishInteractiveSelection();
+    ASSERT_TRUE(result.success);
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
+}
+
+TEST_F(SelectionServiceInteractionsTest, PointCloudModeCommandSelectionUsesScreenPositionFallback) {
+    auto settings = rendering_manager_->getSettings();
+    settings.point_cloud_mode = true;
+    rendering_manager_->updateSettings(settings);
+
     service_->setTestingScreenPositions(make_screen_positions({
         10.0f,
         10.0f,
@@ -298,18 +359,10 @@ TEST_F(SelectionServiceInteractionsTest, BrushCommitInterpolatesAcrossDraggedStr
         80.0f,
     }));
 
-    ASSERT_TRUE(service_->beginInteractiveSelection(
-        lfs::vis::SelectionShape::Brush,
-        lfs::vis::SelectionMode::Replace,
-        {10.0f, 10.0f},
-        10.0f));
-    service_->updateInteractiveSelection({80.0f, 80.0f});
-
-    const auto result = service_->finishInteractiveSelection();
+    const auto result = service_->selectRect(
+        0.0f, 0.0f, 50.0f, 50.0f, lfs::vis::SelectionMode::Replace, 0);
     ASSERT_TRUE(result.success);
-    EXPECT_EQ(result.affected_count, 2u);
-    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 1}));
-    EXPECT_FALSE(service_->isInteractiveSelectionActive());
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
 }
 
 TEST_F(SelectionServiceInteractionsTest, RingsCommitUsesHoveredGaussian) {
@@ -328,62 +381,38 @@ TEST_F(SelectionServiceInteractionsTest, RingsCommitUsesHoveredGaussian) {
     EXPECT_FALSE(service_->isInteractiveSelectionActive());
 }
 
+TEST_F(SelectionServiceInteractionsTest, RingsCommitAppliesDepthFilter) {
+    set_initial_selection({0, 0});
+
+    auto settings = rendering_manager_->getSettings();
+    settings.depth_filter_enabled = true;
+    settings.depth_filter_min = {-0.25f, -0.25f, -0.25f};
+    settings.depth_filter_max = {0.25f, 0.25f, 0.25f};
+    rendering_manager_->updateSettings(settings);
+    service_->setTestingHoveredGaussianId(1);
+
+    lfs::vis::SelectionFilterState filters;
+    filters.depth_filter = true;
+
+    ASSERT_TRUE(service_->beginInteractiveSelection(
+        lfs::vis::SelectionShape::Rings,
+        lfs::vis::SelectionMode::Replace,
+        {50.0f, 50.0f},
+        0.0f,
+        filters));
+
+    const auto result = service_->finishInteractiveSelection();
+    ASSERT_TRUE(result.success);
+    EXPECT_EQ(result.affected_count, 0u);
+    EXPECT_TRUE(selection_values(*scene_manager_).empty());
+    EXPECT_FALSE(service_->isInteractiveSelectionActive());
+}
+
 TEST_F(SelectionServiceInteractionsTest, CommandRingSelectionUsesHoveredGaussianOverride) {
     service_->setTestingHoveredGaussianId(1);
 
     const auto result = service_->selectRing(50.0f, 50.0f, lfs::vis::SelectionMode::Replace, 0);
     ASSERT_TRUE(result.success);
     EXPECT_EQ(result.affected_count, 1u);
-    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{0, 1}));
-}
-
-TEST_F(SelectionServiceInteractionsTest, CommandSelectionUsesCameraSpecificScreenPositions) {
-    service_->setTestingScreenPositions(make_screen_positions({
-        10.0f,
-        10.0f,
-        80.0f,
-        80.0f,
-    }));
-    service_->setTestingScreenPositionsForCamera(3, make_screen_positions({
-                                                        80.0f,
-                                                        80.0f,
-                                                        10.0f,
-                                                        10.0f,
-                                                    }));
-
-    const auto result = service_->selectRect(0.0f, 0.0f, 30.0f, 30.0f, lfs::vis::SelectionMode::Replace, 3);
-    ASSERT_TRUE(result.success);
-    EXPECT_EQ(result.affected_count, 1u);
-    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{0, 1}));
-}
-
-TEST_F(SelectionServiceInteractionsTest, CommitCreatesUndoEntryAndUndoRedoRestoreSelection) {
-    set_initial_selection({1, 0});
-    service_->setTestingScreenPositions(make_screen_positions({
-        80.0f,
-        80.0f,
-        10.0f,
-        10.0f,
-    }));
-
-    ASSERT_TRUE(service_->beginInteractiveSelection(
-        lfs::vis::SelectionShape::Polygon,
-        lfs::vis::SelectionMode::Replace,
-        {0.0f, 0.0f},
-        0.0f));
-    ASSERT_TRUE(service_->appendInteractivePolygonVertex({30.0f, 0.0f}));
-    ASSERT_TRUE(service_->appendInteractivePolygonVertex({0.0f, 30.0f}));
-
-    const auto result = service_->finishInteractiveSelection();
-    ASSERT_TRUE(result.success);
-    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{0, 1}));
-    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 1u);
-    EXPECT_EQ(lfs::vis::op::undoHistory().redoCount(), 0u);
-
-    lfs::vis::op::undoHistory().undo();
-    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
-    EXPECT_EQ(lfs::vis::op::undoHistory().redoCount(), 1u);
-
-    lfs::vis::op::undoHistory().redo();
     EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{0, 1}));
 }

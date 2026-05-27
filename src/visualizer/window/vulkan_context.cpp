@@ -19,18 +19,15 @@
 #include <set>
 #include <utility>
 
-#ifdef LFS_VULKAN_VIEWER_ENABLED
 #include <SDL3/SDL_vulkan.h>
 #ifdef _WIN32
 #include <windows.h>
 #else
 #include <unistd.h>
 #endif
-#endif
 
 namespace lfs::vis {
     namespace {
-#ifdef LFS_VULKAN_VIEWER_ENABLED
 #ifdef _WIN32
         constexpr VkExternalMemoryHandleTypeFlagBits kExternalMemoryHandleType =
             VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
@@ -254,7 +251,6 @@ namespace lfs::vis {
             default: return "VK_COLOR_SPACE_UNKNOWN";
             }
         }
-#endif
     } // namespace
 
     VulkanContext::~VulkanContext() {
@@ -268,7 +264,6 @@ namespace lfs::vis {
     }
 
     bool VulkanContext::init(SDL_Window* window, const int framebuffer_width, const int framebuffer_height) {
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         framebuffer_width_ = framebuffer_width;
         framebuffer_height_ = framebuffer_height;
 
@@ -284,16 +279,9 @@ namespace lfs::vis {
                createCommandPool() &&
                createCommandBuffers() &&
                createSyncObjects();
-#else
-        (void)window;
-        (void)framebuffer_width;
-        (void)framebuffer_height;
-        return fail("Vulkan viewer dependencies are disabled at compile time");
-#endif
     }
 
     void VulkanContext::shutdown() {
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         if (device_ != VK_NULL_HANDLE) {
             // Shutdown is the one place where a whole-device wait is intentional:
             // all swapchain, UI, and external interop resources are about to be destroyed.
@@ -363,25 +351,18 @@ namespace lfs::vis {
             debug_utils_enabled_ = false;
             validation_enabled_ = false;
         }
-#endif
     }
 
     void VulkanContext::notifyFramebufferResized(const int width, const int height) {
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         if (width == framebuffer_width_ && height == framebuffer_height_) {
             return;
         }
         framebuffer_width_ = width;
         framebuffer_height_ = height;
         framebuffer_resized_ = true;
-#else
-        (void)width;
-        (void)height;
-#endif
     }
 
     bool VulkanContext::presentBootstrapFrame(const float r, const float g, const float b, const float a) {
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         VkClearValue clear_value{};
         clear_value.color = VkClearColorValue{{r, g, b, a}};
 
@@ -390,16 +371,8 @@ namespace lfs::vis {
             return false;
         }
         return endFrame();
-#else
-        (void)r;
-        (void)g;
-        (void)b;
-        (void)a;
-        return false;
-#endif
     }
 
-#ifdef LFS_VULKAN_VIEWER_ENABLED
     bool VulkanContext::beginFrame(const VkClearValue& clear_value, Frame& frame) {
         if (frame_active_) {
             return fail("beginFrame called while another Vulkan frame is active");
@@ -2728,6 +2701,5 @@ namespace lfs::vis {
         framebuffer_resized_ = false;
         return true;
     }
-#endif
 
 } // namespace lfs::vis

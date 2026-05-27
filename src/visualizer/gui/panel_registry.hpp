@@ -98,6 +98,15 @@ namespace lfs::vis::gui {
             (void)h;
             draw(ctx);
         }
+        virtual bool drawDirectCached(float x, float y, float w, float h,
+                                      const PanelDrawContext& ctx) {
+            (void)x;
+            (void)y;
+            (void)w;
+            (void)h;
+            (void)ctx;
+            return false;
+        }
         virtual float getDirectDrawHeight() const { return 0.0f; }
         virtual void setInputClipY(float y_min, float y_max) {
             (void)y_min;
@@ -227,6 +236,9 @@ namespace lfs::vis::gui {
         float draw_panels_direct(PanelSpace space, float x, float y, float w, float max_h,
                                  const PanelDrawContext& ctx,
                                  const PanelInputState* input = nullptr);
+        float draw_panels_direct_cached(PanelSpace space, float x, float y, float w, float max_h,
+                                        const PanelDrawContext& ctx,
+                                        const PanelInputState* input = nullptr);
         float preload_panels_direct(PanelSpace space, float w, float max_h,
                                     const PanelDrawContext& ctx,
                                     float clip_y_min = -1.0f, float clip_y_max = -1.0f,
@@ -235,6 +247,12 @@ namespace lfs::vis::gui {
                                        const PanelDrawContext& ctx,
                                        float clip_y_min = -1.0f, float clip_y_max = -1.0f,
                                        const PanelInputState* input = nullptr);
+        float draw_single_panel_direct_cached(const std::string& id, float x, float y,
+                                              float w, float h,
+                                              const PanelDrawContext& ctx,
+                                              float clip_y_min = -1.0f,
+                                              float clip_y_max = -1.0f,
+                                              const PanelInputState* input = nullptr);
         float preload_single_panel_direct(const std::string& id, float w, float h,
                                           const PanelDrawContext& ctx,
                                           float clip_y_min = -1.0f, float clip_y_max = -1.0f,
@@ -247,6 +265,12 @@ namespace lfs::vis::gui {
                                        const PanelDrawContext& ctx,
                                        float clip_y_min = -1.0f, float clip_y_max = -1.0f,
                                        const PanelInputState* input = nullptr);
+        float draw_child_panels_direct_cached(const std::string& parent_id, float x,
+                                              float y, float w, float h,
+                                              const PanelDrawContext& ctx,
+                                              float clip_y_min = -1.0f,
+                                              float clip_y_max = -1.0f,
+                                              const PanelInputState* input = nullptr);
 
         std::vector<PanelSummary> get_panels_for_space(PanelSpace space);
         std::vector<std::string> get_panel_names(PanelSpace space) const;

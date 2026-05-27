@@ -9,8 +9,8 @@ import lichtfeld as lf
 
 from . import rml_widgets as w
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
-from .transform_controls import TransformControlsController
 from .types import Panel
+from .ui.state import AppState
 
 __lfs_panel_classes__ = ["RenderingPanel"]
 __lfs_panel_ids__ = ["lfs.rendering"]
@@ -128,7 +128,6 @@ COLOR_PROPS = [
 ]
 
 SECTION_NAMES = (
-    "transform",
     "viewport",
     "camera",
     "simplify",
@@ -232,10 +231,10 @@ class RenderingPanel(Panel):
     template = "rmlui/rendering.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
     update_interval_ms = 16
+    update_policy = "dirty"
 
     def __init__(self):
         self._handle = None
-        self._transform_controls = TransformControlsController()
         self._color_edit_prop = None
         self._collapsed = {"selection", "mesh", "post_process", "ppisp_crf"}
         self._popup_el = None
@@ -264,6 +263,7 @@ class RenderingPanel(Panel):
             self._get_scrub_value,
             self._set_scrub_value,
         )
+        self._reactive_unsubscribers = []
 
     def _sync_panel_label(self):
         label = tr("window.rendering")
@@ -294,8 +294,36 @@ class RenderingPanel(Panel):
                 )
         self._refresh_simplify_source(force=True)
         self._scrub_fields.mount(doc)
-        self._transform_controls.mount(doc)
         self._sync_section_states()
+        self._subscribe_reactive_state()
+
+    def _subscribe_reactive_state(self):
+        if self._reactive_unsubscribers:
+            return
+
+        signals = (
+            AppState.scene_generation,
+            AppState.selection_generation,
+            AppState.active_tool,
+            AppState.transform_space,
+            AppState.pivot_mode,
+        )
+        self._reactive_unsubscribers = [
+            signal.subscribe(lambda _value: self._request_reactive_update())
+            for signal in signals
+        ]
+
+    def _unsubscribe_reactive_state(self):
+        for unsubscribe in self._reactive_unsubscribers:
+            try:
+                unsubscribe()
+            except Exception:
+                pass
+        self._reactive_unsubscribers = []
+
+    def _request_reactive_update(self):
+        if self._handle:
+            self._handle.dirty_all()
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("rendering")
@@ -303,8 +331,6 @@ class RenderingPanel(Panel):
             return
 
         s = lf.get_render_settings
-
-        self._transform_controls.bind_model(model)
 
         for prop_id in BOOL_PROPS:
             if prop_id == "equirectangular":
@@ -503,7 +529,6 @@ class RenderingPanel(Panel):
             return False
 
         dirty = False
-        dirty |= self._transform_controls.update(doc)
         dirty |= self._sync_environment_state()
         dirty |= self._sync_projection_state()
         for prop_id in COLOR_PROPS:
@@ -712,14 +737,18 @@ class RenderingPanel(Panel):
 
     def on_scene_changed(self, doc):
         del doc
-        self._transform_controls.scene_changed()
-        if self._handle:
-            self._handle.dirty_all()
+        if not self._handle:
+            return False
+
+        dirty = False
+        dirty |= self._refresh_simplify_source(force=False)
+        dirty |= self._sync_simplify_task_state(force=False)
+        return dirty
 
     def on_unmount(self, doc):
+        self._unsubscribe_reactive_state()
         doc.remove_data_model("rendering")
         self._handle = None
-        self._transform_controls.unmount()
         self._popup_el = None
         self._doc = None
         self._escape_revert.clear()

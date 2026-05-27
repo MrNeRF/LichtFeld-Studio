@@ -5,6 +5,7 @@
 import lichtfeld as lf
 
 from .types import Panel
+from .ui.state import AppState
 
 SELECTION_GROUPS_MODEL = "selection_groups"
 __lfs_panel_classes__ = ["SelectionGroupsPanel"]
@@ -33,6 +34,8 @@ class SelectionGroupsPanel(Panel):
         self._context_menu_group_id = None
         self._picker_click_handled = False
         self._has_groups = False
+        self._last_scene_generation = None
+        self._last_selection_generation = None
 
     @classmethod
     def poll(cls, context):
@@ -97,11 +100,33 @@ class SelectionGroupsPanel(Panel):
             self._handle_context_action(action, self._context_menu_group_id)
             self._context_menu_group_id = None
 
-        self._rebuild_groups()
+        scene_generation = AppState.scene_generation.value
+        selection_generation = AppState.selection_generation.value
+        if (
+            self._prev_group_hash is not None
+            and scene_generation == self._last_scene_generation
+            and selection_generation == self._last_selection_generation
+        ):
+            return
+
+        first_update = (
+            self._last_scene_generation is None
+            or self._last_selection_generation is None
+        )
+        recompute_counts = (
+            first_update
+            or scene_generation != self._last_scene_generation
+            or selection_generation != self._last_selection_generation
+        )
+        self._last_scene_generation = scene_generation
+        self._last_selection_generation = selection_generation
+        self._rebuild_groups(recompute_counts=recompute_counts)
 
     def on_scene_changed(self, doc):
         del doc
         self._prev_group_hash = None
+        self._last_scene_generation = None
+        self._last_selection_generation = None
 
     def on_unmount(self, doc):
         doc.remove_data_model(SELECTION_GROUPS_MODEL)
@@ -142,12 +167,13 @@ class SelectionGroupsPanel(Panel):
         if self._handle:
             self._handle.dirty("show_empty_message")
 
-    def _rebuild_groups(self):
+    def _rebuild_groups(self, recompute_counts=True):
         scene = lf.get_scene()
         if not scene or not self._handle:
             return
 
-        scene.update_selection_group_counts()
+        if recompute_counts:
+            scene.update_selection_group_counts()
         group_hash = self._compute_group_hash(scene)
         if group_hash == self._prev_group_hash:
             return

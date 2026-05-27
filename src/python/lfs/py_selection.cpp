@@ -8,6 +8,7 @@
 #include "py_tensor.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/selection_ops.hpp"
+#include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/internal/viewport.hpp"
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/operation/undo_entry.hpp"
@@ -15,6 +16,8 @@
 #include "visualizer/rendering/rendering_manager.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/selection/selection_service.hpp"
+#include "visualizer/tools/selection_tool.hpp"
+#include "visualizer_impl.hpp"
 
 #include <algorithm>
 #include <glm/glm.hpp>
@@ -38,6 +41,12 @@ namespace lfs::python {
         vis::SceneManager* get_sm() { return get_scene_manager(); }
 
         vis::SelectionService* get_ss() { return get_selection_service(); }
+
+        auto* get_selection_tool() {
+            auto* const gm = get_gui_manager();
+            auto* const viewer = gm ? gm->getViewer() : nullptr;
+            return viewer ? viewer->getSelectionTool() : nullptr;
+        }
 
         template <typename Mutator>
         void apply_selection_state_with_undo(vis::SceneManager& scene_manager,
@@ -145,19 +154,6 @@ namespace lfs::python {
         // ─────────────────────────────────────────────────────────────────────
 
         sel.def(
-            "brush_select", [](float x, float y, float radius) {
-                auto* ss = get_ss();
-                if (!ss)
-                    return;
-                auto screen_pos = ss->getScreenPositions();
-                auto* stroke = ss->getStrokeSelection();
-                if (!screen_pos || !stroke || !stroke->is_valid())
-                    return;
-                rendering::brush_select_tensor(*screen_pos, x, y, radius, *stroke);
-            },
-            nb::arg("x"), nb::arg("y"), nb::arg("radius"), "Brush select at (x, y) with given radius. Accumulates into stroke selection.");
-
-        sel.def(
             "ring_select", [](int index, bool add) {
                 auto* ss = get_ss();
                 if (!ss || index < 0)
@@ -170,66 +166,6 @@ namespace lfs::python {
                 rendering::set_selection_element(stroke->ptr<bool>(), index, add);
             },
             nb::arg("index"), nb::arg("add") = true, "Select/deselect a single gaussian by index (for ring selection mode).");
-
-        sel.def(
-            "rect_select", [](float x0, float y0, float x1, float y1) {
-                auto* ss = get_ss();
-                if (!ss)
-                    return;
-                auto screen_pos = ss->getScreenPositions();
-                auto* stroke = ss->getStrokeSelection();
-                if (!screen_pos || !stroke || !stroke->is_valid())
-                    return;
-                rendering::rect_select_tensor(*screen_pos, x0, y0, x1, y1, *stroke);
-            },
-            nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), "Rectangle select from (x0, y0) to (x1, y1). Sets stroke selection.");
-
-        sel.def(
-            "polygon_select", [](const std::vector<std::pair<float, float>>& vertices) {
-                auto* ss = get_ss();
-                if (!ss || vertices.size() < 3)
-                    return;
-                auto screen_pos = ss->getScreenPositions();
-                auto* stroke = ss->getStrokeSelection();
-                if (!screen_pos || !stroke || !stroke->is_valid())
-                    return;
-
-                // Convert vertices to GPU tensor [N, 2]
-                auto poly_cpu = core::Tensor::empty({vertices.size(), size_t{2}},
-                                                    core::Device::CPU, core::DataType::Float32);
-                auto* data = poly_cpu.ptr<float>();
-                for (size_t i = 0; i < vertices.size(); ++i) {
-                    data[i * 2 + 0] = vertices[i].first;
-                    data[i * 2 + 1] = vertices[i].second;
-                }
-                auto poly_gpu = poly_cpu.cuda();
-
-                rendering::polygon_select_tensor(*screen_pos, poly_gpu, *stroke);
-            },
-            nb::arg("vertices"), "Polygon select with given vertices [(x, y), ...]. Sets stroke selection.");
-
-        sel.def(
-            "lasso_select", [](const std::vector<std::pair<float, float>>& points) {
-                auto* ss = get_ss();
-                if (!ss || points.size() < 3)
-                    return;
-                auto screen_pos = ss->getScreenPositions();
-                auto* stroke = ss->getStrokeSelection();
-                if (!screen_pos || !stroke || !stroke->is_valid())
-                    return;
-
-                auto poly_cpu = core::Tensor::empty({points.size(), size_t{2}},
-                                                    core::Device::CPU, core::DataType::Float32);
-                auto* data = poly_cpu.ptr<float>();
-                for (size_t i = 0; i < points.size(); ++i) {
-                    data[i * 2 + 0] = points[i].first;
-                    data[i * 2 + 1] = points[i].second;
-                }
-                auto poly_gpu = poly_cpu.cuda();
-
-                rendering::polygon_select_tensor(*screen_pos, poly_gpu, *stroke);
-            },
-            nb::arg("points"), "Lasso (freehand polygon) select. Sets stroke selection.");
 
         // ─────────────────────────────────────────────────────────────────────
         // PREVIEW & VISUAL STATE
@@ -353,6 +289,10 @@ namespace lfs::python {
 
         sel.def(
             "set_depth_filter", [](bool enabled, float depth_far, float frustum_half_width, float depth_near) {
+                if (auto* const tool = get_selection_tool()) {
+                    tool->setDepthFilterRange(enabled, depth_near, depth_far, frustum_half_width);
+                    return;
+                }
                 auto* rm = get_rm();
                 if (!rm)
                     return;
@@ -364,6 +304,10 @@ namespace lfs::python {
 
         sel.def(
             "set_depth_filter_range", [](bool enabled, float depth_near, float depth_far, float frustum_half_width) {
+                if (auto* const tool = get_selection_tool()) {
+                    tool->setDepthFilterRange(enabled, depth_near, depth_far, frustum_half_width);
+                    return;
+                }
                 auto* rm = get_rm();
                 if (!rm)
                     return;
@@ -375,6 +319,11 @@ namespace lfs::python {
 
         sel.def(
             "get_depth_filter", []() -> std::tuple<bool, float, float> {
+                if (const auto* const tool = get_selection_tool()) {
+                    return {tool->isDepthFilterEnabled(),
+                            tool->getDepthFar(),
+                            tool->getDepthFrustumHalfWidth()};
+                }
                 auto* rm = get_rm();
                 if (!rm)
                     return {false, 100.0f, 50.0f};
@@ -386,6 +335,12 @@ namespace lfs::python {
 
         sel.def(
             "get_depth_filter_range", []() -> std::tuple<bool, float, float, float> {
+                if (const auto* const tool = get_selection_tool()) {
+                    return {tool->isDepthFilterEnabled(),
+                            tool->getDepthNear(),
+                            tool->getDepthFar(),
+                            tool->getDepthFrustumHalfWidth()};
+                }
                 auto* rm = get_rm();
                 if (!rm)
                     return {false, 0.0f, 100.0f, 50.0f};

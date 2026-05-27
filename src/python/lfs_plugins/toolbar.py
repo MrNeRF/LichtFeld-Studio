@@ -6,13 +6,18 @@ from pathlib import Path
 from urllib.parse import quote
 
 from .histogram_support import histogram_mode_available
+from .selection_controls import SelectionControlsController
 from .tools import ToolRegistry
+from .transform_controls import TransformControlsController
+from .ui.state import AppState
 
 
 _TOOLBAR_HIDDEN_STATES = ("running", "paused", "stopping", "completed")
 _RML_PATH_SAFE_CHARS = "/:._-~"
+_OVERLAY_DOC_KEY_ATTR = "data-viewport-toolbar-doc-key"
 
 _toolbar_controller = None
+_shortcut_cache = {}
 
 
 def __lfs_after_reload__(runtime):
@@ -56,8 +61,38 @@ def _tooltip_text(label, shortcut=""):
     return label or ""
 
 
+def _keymap_shortcut(lf, action_name, mode_name="GLOBAL"):
+    try:
+        keymap = lf.keymap
+        action = getattr(keymap.Action, action_name)
+        mode = getattr(keymap.ToolMode, mode_name)
+        revision_fn = getattr(keymap, "bindings_revision", None)
+        revision = revision_fn() if callable(revision_fn) else 0
+        language_fn = getattr(lf.ui, "get_current_language", None)
+        language = language_fn() if callable(language_fn) else ""
+        cache_key = (revision, language, action_name, mode_name)
+        cached = _shortcut_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        if not keymap.is_bound(action, mode):
+            _shortcut_cache[cache_key] = ""
+            return ""
+        shortcut = keymap.get_trigger_description(action, mode)
+    except (AttributeError, RuntimeError, TypeError):
+        return ""
+    if not shortcut:
+        _shortcut_cache[cache_key] = ""
+        return ""
+    text = str(shortcut)
+    _shortcut_cache[cache_key] = text
+    if len(_shortcut_cache) > 256:
+        for key in list(_shortcut_cache)[:128]:
+            _shortcut_cache.pop(key, None)
+    return text
+
+
 def _button_record(button_id, action, value, icon_src, *,
-                   tooltip_key="", tooltip_text="", selected=False, enabled=True):
+                   tooltip_key="", tooltip_text="", shortcut_text="", selected=False, enabled=True):
     return {
         "button_id": button_id,
         "action": action,
@@ -65,6 +100,7 @@ def _button_record(button_id, action, value, icon_src, *,
         "icon_src": icon_src,
         "tooltip_key": tooltip_key,
         "tooltip_text": tooltip_text,
+        "shortcut_text": shortcut_text,
         "selected": selected,
         "enabled": enabled,
     }
@@ -79,6 +115,16 @@ class _GizmoToolbarController:
         "builtin.mirror": "toolbar.mirror",
         "builtin.brush": "toolbar.painting",
         "builtin.align": "toolbar.align_3point",
+    }
+
+    _TOOL_ACTIONS = {
+        "builtin.select": "TOOL_SELECT",
+        "builtin.translate": "TOOL_TRANSLATE",
+        "builtin.rotate": "TOOL_ROTATE",
+        "builtin.scale": "TOOL_SCALE",
+        "builtin.mirror": "TOOL_MIRROR",
+        "builtin.brush": "TOOL_BRUSH",
+        "builtin.align": "TOOL_ALIGN",
     }
 
     _SUBMODE_LOCALE_KEYS = {
@@ -99,12 +145,22 @@ class _GizmoToolbarController:
         "builtin.mirror:z": "toolbar.mirror_z",
     }
 
+    _SELECTION_MODE_ACTIONS = {
+        "centers": "SELECT_MODE_CENTERS",
+        "rectangle": "SELECT_MODE_RECTANGLE",
+        "polygon": "SELECT_MODE_POLYGON",
+        "lasso": "SELECT_MODE_LASSO",
+        "rings": "SELECT_MODE_RINGS",
+        "color": "SELECT_MODE_COLOR",
+    }
+
     _PIVOT_LOCALE_KEYS = {
         "origin": "toolbar.origin_pivot",
         "bounds": "toolbar.bounds_center_pivot",
     }
 
     _TRANSFORM_TOOL_IDS = {"builtin.translate", "builtin.rotate", "builtin.scale"}
+    _TRANSFORM_GROUP_TOOL_IDS = {"builtin.translate", "builtin.rotate", "builtin.scale", "builtin.mirror"}
     _TRANSFORM_SPACE_IDS = {"local": 0, "world": 1}
     _PIVOT_IDS = {"origin": 0, "bounds": 1}
 
@@ -117,7 +173,6 @@ class _GizmoToolbarController:
     def snapshot(self):
         import lichtfeld as lf
         from .op_context import get_context
-        from .ui.state import AppState
 
         hidden = AppState.trainer_state.value in _TOOLBAR_HIDDEN_STATES
         if hidden:
@@ -126,8 +181,14 @@ class _GizmoToolbarController:
             self._was_hidden = True
             return {
                 "show_gizmo_toolbar": False,
+                "show_selection_controls": False,
+                "show_transform_controls": False,
                 "show_submode_toolbar": False,
                 "show_pivot_toolbar": False,
+                "selection_group_buttons": [],
+                "selection_mode_buttons": [],
+                "transform_group_buttons": [],
+                "transform_tool_buttons": [],
                 "gizmo_buttons": [],
                 "submode_buttons": [],
                 "pivot_buttons": [],
@@ -139,25 +200,57 @@ class _GizmoToolbarController:
         active_tool_id = lf.ui.get_active_tool() or ""
         tool_defs = ToolRegistry.get_all()
         tool_def = ToolRegistry.get(active_tool_id) if active_tool_id else None
+        select_tool_def = ToolRegistry.get("builtin.select")
 
+        transform_tool_defs = [
+            tool_def_item
+            for tool_def_item in tool_defs
+            if self._is_transform_group_tool(tool_def_item)
+        ]
         gizmo_buttons = [
             self._tool_button_record(tool_def_item, active_tool_id, context)
             for tool_def_item in tool_defs
+            if tool_def_item.id != "builtin.select" and not self._is_transform_group_tool(tool_def_item)
         ]
+        selection_group_buttons, selection_mode_buttons = self._build_selection_records(
+            select_tool_def,
+            active_tool_id,
+            context,
+        )
+        transform_group_buttons, transform_tool_buttons = self._build_transform_records(
+            transform_tool_defs,
+            active_tool_id,
+            context,
+        )
         submode_buttons = self._build_submode_records(active_tool_id, tool_def)
         pivot_buttons = self._build_pivot_records(tool_def)
 
         return {
             "show_gizmo_toolbar": bool(gizmo_buttons),
+            "show_selection_controls": bool(selection_group_buttons),
+            "show_transform_controls": bool(transform_group_buttons),
             "show_submode_toolbar": bool(submode_buttons),
             "show_pivot_toolbar": bool(pivot_buttons),
+            "selection_group_buttons": selection_group_buttons,
+            "selection_mode_buttons": selection_mode_buttons,
+            "transform_group_buttons": transform_group_buttons,
+            "transform_tool_buttons": transform_tool_buttons,
             "gizmo_buttons": gizmo_buttons,
             "submode_buttons": submode_buttons,
             "pivot_buttons": pivot_buttons,
         }
 
+    def _is_transform_group_tool(self, tool_def):
+        return (
+            getattr(tool_def, "group", "") == "transform"
+            or getattr(tool_def, "id", "") in self._TRANSFORM_GROUP_TOOL_IDS
+        )
+
     def _tool_button_record(self, tool_def, active_tool_id, context):
+        import lichtfeld as lf
+
         tooltip_key = self._TOOL_LOCALE_KEYS.get(tool_def.id, "")
+        action_name = self._TOOL_ACTIONS.get(tool_def.id, "")
         return _button_record(
             f"tool-{tool_def.id}",
             "tool",
@@ -165,14 +258,87 @@ class _GizmoToolbarController:
             _tool_icon_src(tool_def),
             tooltip_key=tooltip_key,
             tooltip_text="" if tooltip_key else _tooltip_text(tool_def.label, tool_def.shortcut),
+            shortcut_text=_keymap_shortcut(lf, action_name) if action_name else "",
             selected=_tool_selected(tool_def, active_tool_id, context),
             enabled=tool_def.can_activate(context),
         )
+
+    def _build_selection_records(self, tool_def, active_tool_id, context):
+        import lichtfeld as lf
+
+        if tool_def is None or not tool_def.submodes:
+            return [], []
+
+        enabled = tool_def.can_activate(context)
+        get_active_submode = getattr(lf.ui, "get_active_submode", None)
+        active_submode = get_active_submode() if callable(get_active_submode) else ""
+        if active_tool_id == "builtin.select" and not active_submode:
+            active_submode = tool_def.submodes[0].id
+            set_selection_mode = getattr(lf.ui, "set_selection_mode", None)
+            if callable(set_selection_mode):
+                set_selection_mode(active_submode)
+
+        mode_buttons = []
+        for mode in tool_def.submodes:
+            tooltip_key = self._SUBMODE_LOCALE_KEYS.get(f"builtin.select:{mode.id}", "")
+            selected = active_tool_id == "builtin.select" and active_submode == mode.id
+            mode_buttons.append(
+                _button_record(
+                    f"selection-{mode.id}",
+                    "selection_mode",
+                    mode.id,
+                    _icon_src(mode.icon) if mode.icon else "",
+                    tooltip_key=tooltip_key,
+                    tooltip_text="" if tooltip_key else _tooltip_text(mode.label, mode.shortcut),
+                    shortcut_text=_keymap_shortcut(lf, self._SELECTION_MODE_ACTIONS.get(mode.id, "")),
+                    selected=selected,
+                    enabled=enabled,
+                )
+            )
+
+        active_mode = next((b for b in mode_buttons if b["selected"]), None)
+        group_button = _button_record(
+            "group-selection",
+            "tool",
+            "builtin.select",
+            active_mode["icon_src"] if active_mode else _tool_icon_src(tool_def),
+            tooltip_key=self._TOOL_LOCALE_KEYS.get(tool_def.id, ""),
+            tooltip_text="",
+            shortcut_text=_keymap_shortcut(lf, "TOOL_SELECT"),
+            selected=active_tool_id == "builtin.select",
+            enabled=enabled,
+        )
+        return [group_button], mode_buttons
+
+    def _build_transform_records(self, tool_defs, active_tool_id, context):
+        if not tool_defs:
+            return [], []
+
+        tool_buttons = [
+            self._tool_button_record(tool_def, active_tool_id, context)
+            for tool_def in tool_defs
+        ]
+        active_button = next((b for b in tool_buttons if b["selected"]), None)
+        fallback = next((b for b in tool_buttons if b["enabled"]), tool_buttons[0])
+        group_button = _button_record(
+            "group-transform",
+            "tool",
+            active_button["value"] if active_button else fallback["value"],
+            active_button["icon_src"] if active_button else fallback["icon_src"],
+            tooltip_key=active_button["tooltip_key"] if active_button else "",
+            tooltip_text=active_button["tooltip_text"] if active_button else "Transform Tools",
+            shortcut_text=active_button["shortcut_text"] if active_button else "",
+            selected=active_button is not None,
+            enabled=any(b["enabled"] for b in tool_buttons),
+        )
+        return [group_button], tool_buttons
 
     def _build_submode_records(self, active_tool_id, tool_def):
         import lichtfeld as lf
 
         if tool_def is None or not tool_def.submodes:
+            return []
+        if active_tool_id == "builtin.select":
             return []
 
         current_space = lf.ui.get_transform_space()
@@ -233,6 +399,17 @@ class _GizmoToolbarController:
         import lichtfeld as lf
         from .op_context import get_context
 
+        if action == "selection_mode":
+            tool_def = ToolRegistry.get("builtin.select")
+            if tool_def is None or not tool_def.can_activate(get_context()):
+                return
+            if lf.ui.get_active_tool() != "builtin.select":
+                ToolRegistry.set_active("builtin.select")
+            set_selection_mode = getattr(lf.ui, "set_selection_mode", None)
+            if callable(set_selection_mode):
+                set_selection_mode(value)
+            return
+
         if action == "tool":
             tool_def = ToolRegistry.get(value)
             if tool_def is None or not tool_def.can_activate(get_context()):
@@ -251,6 +428,10 @@ class _GizmoToolbarController:
                 transform_space = self._TRANSFORM_SPACE_IDS.get(value, -1)
                 if transform_space >= 0:
                     lf.ui.set_transform_space(transform_space)
+                    try:
+                        AppState.transform_space.value = transform_space
+                    except Exception:
+                        pass
             else:
                 lf.ui.set_selection_mode(value)
             return
@@ -259,6 +440,10 @@ class _GizmoToolbarController:
             pivot_mode = self._PIVOT_IDS.get(value, -1)
             if pivot_mode >= 0:
                 lf.ui.set_pivot_mode(pivot_mode)
+                try:
+                    AppState.pivot_mode.value = pivot_mode
+                except Exception:
+                    pass
 
 
 class _UtilityToolbarController:
@@ -273,9 +458,26 @@ class _UtilityToolbarController:
         ("ring", "rings", "toolbar.gaussian_rings"),
         ("circle-dot", "centers", "toolbar.center_markers"),
     )
+    _PRIMARY_ACTIONS = {
+        "home": "CAMERA_RESET_HOME",
+        "fullscreen": "TOGGLE_FULLSCREEN",
+        "toggle_ui": "TOGGLE_UI",
+    }
 
-    def reset(self):
-        pass
+    @staticmethod
+    def _group_button(group_id, sub_buttons, fallback_label):
+        if not sub_buttons:
+            return []
+        active = next((b for b in sub_buttons if b["selected"]), sub_buttons[0])
+        return [_button_record(
+            f"group-{group_id}",
+            "noop",
+            group_id,
+            active["icon_src"],
+            tooltip_key=active["tooltip_key"],
+            tooltip_text=active["tooltip_text"] or fallback_label,
+            selected=active["selected"],
+        )]
 
     def snapshot(self):
         import lichtfeld as lf
@@ -323,17 +525,20 @@ class _UtilityToolbarController:
         ]
         primary_buttons = [
             _button_record("util-home", "home", "", _icon_src("home"),
-                           tooltip_key="toolbar.home"),
+                           tooltip_key="toolbar.home",
+                           shortcut_text=_keymap_shortcut(lf, self._PRIMARY_ACTIONS["home"])),
             _button_record(
                 "util-fullscreen",
                 "fullscreen",
                 "",
                 _icon_src("arrows-minimize" if is_fullscreen else "arrows-maximize"),
                 tooltip_key="toolbar.fullscreen",
+                shortcut_text=_keymap_shortcut(lf, self._PRIMARY_ACTIONS["fullscreen"]),
                 selected=is_fullscreen,
             ),
             _button_record("util-toggle-ui", "toggle_ui", "", _icon_src("layout-off"),
-                           tooltip_key="toolbar.toggle_ui"),
+                           tooltip_key="toolbar.toggle_ui",
+                           shortcut_text=_keymap_shortcut(lf, self._PRIMARY_ACTIONS["toggle_ui"])),
         ]
 
         render_mode_buttons = []
@@ -440,6 +645,12 @@ class _UtilityToolbarController:
                 )
             )
 
+        camera_group_buttons = self._group_button("camera", camera_mode_buttons, "Camera Mode")
+        render_group_buttons = (
+            self._group_button("render", render_mode_buttons, "Render Mode")
+            if has_render_manager else []
+        )
+
         return {
             "camera_mode_buttons": camera_mode_buttons,
             "show_render_controls": has_render_manager,
@@ -448,6 +659,8 @@ class _UtilityToolbarController:
             "projection_buttons": projection_buttons,
             "utility_extra_buttons": utility_extra_buttons,
             "utility_bottom_buttons": utility_bottom_buttons,
+            "camera_group_buttons": camera_group_buttons,
+            "render_group_buttons": render_group_buttons,
         }
 
     def dispatch(self, action, value):
@@ -509,16 +722,24 @@ class _ViewportToolbarController:
     _BOOLEAN_FIELDS = (
         "show_render_controls",
         "show_gizmo_toolbar",
+        "show_selection_controls",
+        "show_transform_controls",
         "show_submode_toolbar",
         "show_pivot_toolbar",
     )
     _RECORD_FIELDS = (
         "camera_mode_buttons",
+        "camera_group_buttons",
         "utility_primary_buttons",
         "render_mode_buttons",
+        "render_group_buttons",
         "projection_buttons",
         "utility_extra_buttons",
         "utility_bottom_buttons",
+        "selection_group_buttons",
+        "selection_mode_buttons",
+        "transform_group_buttons",
+        "transform_tool_buttons",
         "gizmo_buttons",
         "submode_buttons",
         "pivot_buttons",
@@ -527,17 +748,25 @@ class _ViewportToolbarController:
     def __init__(self):
         self._gizmo = _GizmoToolbarController()
         self._utility = _UtilityToolbarController()
+        self._selection_controls = SelectionControlsController()
+        self._transform_controls = TransformControlsController()
         self.reset()
 
     def reset(self):
         self._handle = None
+        self._mounted_doc_key = None
+        self._next_doc_key = getattr(self, "_next_doc_key", 1)
         self._record_cache = {name: None for name in self._RECORD_FIELDS}
+        self._last_toolbar_signature = None
         self._show_render_controls = False
         self._show_gizmo_toolbar = False
+        self._show_selection_controls = False
+        self._show_transform_controls = False
         self._show_submode_toolbar = False
         self._show_pivot_toolbar = False
         self._gizmo.reset()
-        self._utility.reset()
+        self._selection_controls.unmount()
+        self._transform_controls.unmount()
 
     def bind_model(self, model):
         for field in self._BOOLEAN_FIELDS:
@@ -545,61 +774,225 @@ class _ViewportToolbarController:
         for field in self._RECORD_FIELDS:
             model.bind_record_list(field)
         model.bind_event("toolbar_action", self._on_toolbar_action)
+        self._selection_controls.bind_model(model)
+        self._transform_controls.bind_model(model)
 
     def attach_handle(self, handle):
         self._handle = handle
         self._record_cache = {name: None for name in self._RECORD_FIELDS}
+        self._last_toolbar_signature = None
         if self._handle:
             self._handle.dirty_all()
 
     def update(self, doc):
+        dirty_sources = []
         if doc is None:
-            return
+            return dirty_sources
         if self._handle is None:
-            return
+            return dirty_sources
+
+        can_update_tool_overlays = hasattr(doc, "get_element_by_id")
+        mount_key = self._mount_key(doc) if can_update_tool_overlays else None
+        if mount_key is not None and mount_key != self._mounted_doc_key:
+            self._mounted_doc_key = mount_key
+            self._selection_controls.mount(doc)
+            self._transform_controls.mount(doc)
+            dirty_sources.append("mount")
+
+        if self._sync_toolbar_state(doc):
+            dirty_sources.append("records")
+        if can_update_tool_overlays:
+            selection_dirty = self._selection_controls.update(doc)
+            if selection_dirty:
+                dirty_sources.append(f"selection_controls:{selection_dirty}")
+            transform_dirty = self._transform_controls.update(doc)
+            if transform_dirty:
+                dirty_sources.append("transform_controls")
+        return dirty_sources
+
+    def _mount_key(self, doc):
+        body = doc.get_element_by_id("overlay-body")
+        if body is None:
+            return None
+
+        key = body.get_attribute(_OVERLAY_DOC_KEY_ATTR, "")
+        if key:
+            return key
+
+        key = str(self._next_doc_key)
+        self._next_doc_key += 1
+        body.set_attribute(_OVERLAY_DOC_KEY_ATTR, key)
+        return key
+
+    def _sync_toolbar_state(self, doc=None):
+        if self._handle is None:
+            return False
+        signature = self._toolbar_signature()
+        if signature == self._last_toolbar_signature:
+            return False
+        self._last_toolbar_signature = signature
 
         utility_state = self._utility.snapshot()
         gizmo_state = self._gizmo.snapshot()
 
-        self._sync_flag("show_render_controls", utility_state["show_render_controls"])
-        self._sync_flag("show_gizmo_toolbar", gizmo_state["show_gizmo_toolbar"])
-        self._sync_flag("show_submode_toolbar", gizmo_state["show_submode_toolbar"])
-        self._sync_flag("show_pivot_toolbar", gizmo_state["show_pivot_toolbar"])
+        dirty = False
+        dirty |= self._sync_flag("show_render_controls", utility_state["show_render_controls"])
+        dirty |= self._sync_flag("show_gizmo_toolbar", gizmo_state["show_gizmo_toolbar"])
+        dirty |= self._sync_flag("show_selection_controls", gizmo_state["show_selection_controls"])
+        dirty |= self._sync_flag("show_transform_controls", gizmo_state["show_transform_controls"])
+        dirty |= self._sync_flag("show_submode_toolbar", gizmo_state["show_submode_toolbar"])
+        dirty |= self._sync_flag("show_pivot_toolbar", gizmo_state["show_pivot_toolbar"])
 
-        self._sync_records("camera_mode_buttons", utility_state["camera_mode_buttons"])
-        self._sync_records("utility_primary_buttons", utility_state["primary_buttons"])
-        self._sync_records("render_mode_buttons", utility_state["render_mode_buttons"])
-        self._sync_records("projection_buttons", utility_state["projection_buttons"])
-        self._sync_records("utility_extra_buttons", utility_state["utility_extra_buttons"])
-        self._sync_records("utility_bottom_buttons", utility_state["utility_bottom_buttons"])
-        self._sync_records("gizmo_buttons", gizmo_state["gizmo_buttons"])
-        self._sync_records("submode_buttons", gizmo_state["submode_buttons"])
-        self._sync_records("pivot_buttons", gizmo_state["pivot_buttons"])
+        dirty |= self._sync_records("camera_mode_buttons", utility_state["camera_mode_buttons"])
+        dirty |= self._sync_records("camera_group_buttons", utility_state["camera_group_buttons"])
+        dirty |= self._sync_records("utility_primary_buttons", utility_state["primary_buttons"])
+        dirty |= self._sync_records("render_mode_buttons", utility_state["render_mode_buttons"])
+        dirty |= self._sync_records("render_group_buttons", utility_state["render_group_buttons"])
+        dirty |= self._sync_records("projection_buttons", utility_state["projection_buttons"])
+        dirty |= self._sync_records("utility_extra_buttons", utility_state["utility_extra_buttons"])
+        dirty |= self._sync_records("utility_bottom_buttons", utility_state["utility_bottom_buttons"])
+        dirty |= self._sync_records("selection_group_buttons", gizmo_state["selection_group_buttons"], doc)
+        dirty |= self._sync_records("selection_mode_buttons", gizmo_state["selection_mode_buttons"], doc)
+        dirty |= self._sync_records("transform_group_buttons", gizmo_state["transform_group_buttons"])
+        dirty |= self._sync_records("transform_tool_buttons", gizmo_state["transform_tool_buttons"])
+        dirty |= self._sync_records("gizmo_buttons", gizmo_state["gizmo_buttons"])
+        dirty |= self._sync_records("submode_buttons", gizmo_state["submode_buttons"])
+        dirty |= self._sync_records("pivot_buttons", gizmo_state["pivot_buttons"])
+        return dirty
 
     def _sync_flag(self, name, value):
         current = getattr(self, f"_{name}")
         if current == value:
-            return
+            return False
         setattr(self, f"_{name}", value)
         if self._handle:
             self._handle.dirty(name)
+        return True
 
-    def _sync_records(self, name, records):
-        if self._record_cache.get(name) == records:
-            return
+    def _sync_records(self, name, records, doc=None):
+        previous = self._record_cache.get(name)
+        if previous == records:
+            return False
+        if self._patch_selection_record_state(name, previous, records, doc):
+            self._record_cache[name] = records
+            return True
         self._record_cache[name] = records
         if self._handle:
             self._handle.update_record_list(name, records)
+        return True
+
+    def _patch_selection_record_state(self, name, previous, records, doc):
+        if doc is None or previous is None:
+            return False
+        if name not in {"selection_group_buttons", "selection_mode_buttons"}:
+            return False
+        if len(previous) != len(records):
+            return False
+
+        stable_fields = {
+            "button_id",
+            "action",
+            "value",
+            "tooltip_key",
+            "tooltip_text",
+            "shortcut_text",
+            "enabled",
+        }
+        for old, new in zip(previous, records):
+            for field in stable_fields:
+                if old.get(field) != new.get(field):
+                    return False
+
+        patched = False
+        for record in records:
+            button_id = record.get("button_id", "")
+            if not button_id:
+                return False
+            try:
+                buttons = doc.query_selector_all(f"#{button_id}")
+            except Exception:
+                return False
+            if not buttons:
+                return False
+
+            for button in buttons:
+                button.set_class("selected", bool(record.get("selected", False)))
+                if name == "selection_group_buttons":
+                    img = button.query_selector("img")
+                    if img is not None:
+                        img.set_attribute("src", record.get("icon_src", ""))
+                patched = True
+
+        return patched
+
+    def _toolbar_signature(self):
+        import lichtfeld as lf
+
+        try:
+            trainer_state = AppState.trainer_state.value
+        except Exception:
+            trainer_state = ""
+
+        def call(default, getter, *args):
+            if not callable(getter):
+                return default
+            try:
+                return getter(*args)
+            except Exception:
+                return default
+
+        active_tool = call("", getattr(lf.ui, "get_active_tool", None)) or ""
+        active_submode = call("", getattr(lf.ui, "get_active_submode", None)) or ""
+        tool_defs = ToolRegistry.get_all()
+        tool_ids = tuple(
+            (getattr(tool_def, "id", ""), getattr(tool_def, "group", ""))
+            for tool_def in tool_defs
+        )
+
+        ui_context = call(None, lf.ui.context) if hasattr(lf.ui, "context") else None
+        has_scene_getter = getattr(lf, "has_scene", None)
+        has_scene = (
+            bool(getattr(ui_context, "has_scene", False))
+            if ui_context is not None
+            else bool(call(False, has_scene_getter)) if callable(has_scene_getter) else False
+        )
+        num_gaussians = int(getattr(ui_context, "num_gaussians", 0) or 0)
+        selected_getter = getattr(lf, "get_selected_node_names", None)
+        selected_nodes = tuple(call([], selected_getter) or []) if callable(selected_getter) else ()
+
+        render_mode = call(None, lf.get_render_mode) if hasattr(lf, "get_render_mode") else None
+        return (
+            trainer_state,
+            active_tool,
+            active_submode,
+            call(1, getattr(lf.ui, "get_transform_space", None)),
+            call(0, getattr(lf.ui, "get_pivot_mode", None)),
+            has_scene,
+            num_gaussians,
+            selected_nodes,
+            tool_ids,
+            str(call("orbit", lf.get_camera_navigation_mode)).lower() if hasattr(lf, "get_camera_navigation_mode") else "orbit",
+            bool(call(False, lf.get_camera_view_snap_enabled)) if hasattr(lf, "get_camera_view_snap_enabled") else False,
+            str(render_mode),
+            bool(call(False, lf.is_orthographic)) if hasattr(lf, "is_orthographic") else False,
+            bool(call(False, lf.is_fullscreen)) if hasattr(lf, "is_fullscreen") else False,
+            call("", getattr(lf.ui, "get_split_view_mode", None)),
+            bool(call(False, lf.get_depth_view)) if hasattr(lf, "get_depth_view") else False,
+            bool(call(False, getattr(lf.ui, "is_sequencer_visible", None))),
+            bool(histogram_mode_available(ui_context)) if ui_context is not None else False,
+            bool(call(False, getattr(lf.ui, "is_panel_enabled", None), "lfs.histogram")),
+        )
 
     def _on_toolbar_action(self, _handle, _event, args):
         if not args:
             return
         action = str(args[0])
         value = str(args[1]) if len(args) > 1 else ""
-        if action in {"tool", "submode", "pivot"}:
+        if action in {"tool", "submode", "pivot", "selection_mode"}:
             self._gizmo.dispatch(action, value)
         else:
             self._utility.dispatch(action, value)
+        self._sync_toolbar_state()
 
 
 def _ensure_controller():
@@ -620,7 +1013,7 @@ def attach_overlay_model_handle(handle):
 
 def update_overlay(doc):
     _ensure_controller()
-    _toolbar_controller.update(doc)
+    return _toolbar_controller.update(doc)
 
 
 def reset_overlay_state():
