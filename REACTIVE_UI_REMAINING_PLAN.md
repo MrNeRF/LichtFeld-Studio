@@ -3,6 +3,7 @@
 Current branch: `reactive_ui`
 
 Last completed commits:
+- `a7a76ec5b Cache idle status bar rendering`
 - `4f7477613 Gate idle legacy Python popup draws`
 - `f5f2dec65 Cache idle shell frame rendering`
 - `099ea616e Cache idle menu bar rendering`
@@ -30,9 +31,12 @@ Current verified state:
 - Global context menus are gated behind pending/open state and reuse cached RmlUi textures while open and idle.
 - The Rml menu bar keeps existing input/menu semantics but reuses cached foreground textures when labels, theme, size, and open dropdown state are stable.
 - The shell frame no longer rewrites region properties or queues a raw RmlUi render on stable frames; it reuses a cached background texture keyed by layout/theme.
+- The status bar keeps live rendering for active/dirty frames but uses a cached texture from `renderCached()` on stable frames.
 - Legacy Python popup drawing is guarded by an explicit hook-presence predicate, so idle frames skip Python UI preparation/GIL work when no popup callback is registered.
 - Last broad Python panel slice passed: 191 tests.
 - Last focused Python popup/plugin slice passed: 74 tests from plugin system, plugin API surface, and import dialog panels.
+- Last focused status/Rml C++ slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Status*:*Rml*:VisualizerPostWorkTest.*'`.
+- Last focused training/rendering Python slice passed: 51 tests.
 - Last focused menu Python slices passed: 226 plugin/menu tests plus 14 menubar/menu schema/API tests.
 - Last focused context-menu-adjacent Python slice passed: 41 tests from plugin marketplace, input settings, and import dialogs.
 - Last focused modal/post-work C++ slice passed: `./build/tests/lichtfeld_tests --gtest_filter='PyModalRegistryRegression.*:VisualizerPostWorkTest.*'`.
@@ -55,6 +59,7 @@ Drive idle GUI CPU toward zero and keep p99 CPU UI work under 2 ms by removing r
 - Menu bar cached rendering: `099ea616e`.
 - Shell frame cached rendering: `f5f2dec65`.
 - Legacy Python popup demand gating: `4f7477613`.
+- Status bar cached rendering: `a7a76ec5b`.
 
 ## Next Batch 1: Frame Router Cleanup
 
