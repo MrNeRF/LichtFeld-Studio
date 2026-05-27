@@ -5025,7 +5025,7 @@ namespace lfs::vis::gui {
         PanelInputState raw_panel_input = panel_input;
         if (block_underlay_input)
             panel_input = maskInputForBlockedUi(std::move(panel_input));
-        if (!modal_overlay_open)
+        if (!modal_overlay_open && global_context_menu_->isOpen())
             global_context_menu_->processInput(raw_panel_input);
 
         ScreenState screen;
@@ -5404,7 +5404,7 @@ namespace lfs::vis::gui {
                 LOG_TIMER("gui_render.menu_context_modal_render.menu_bar");
                 rml_menu_bar_.draw(panel_input.screen_w, panel_input.screen_h);
             }
-            {
+            if (global_context_menu_->hasPendingRenderWork()) {
                 LOG_TIMER("gui_render.menu_context_modal_render.context_menu");
                 global_context_menu_->render(panel_input.screen_w, panel_input.screen_h,
                                              panel_input.screen_x, panel_input.screen_y);
@@ -6371,6 +6371,8 @@ namespace lfs::vis::gui {
         if (startup_overlay_.needsAnimationFrame())
             return true;
         if (rml_modal_overlay_ && rml_modal_overlay_->needsAnimationFrame())
+            return true;
+        if (global_context_menu_ && global_context_menu_->needsAnimationFrame())
             return true;
         if (video_widget_ && video_widget_->isVideoPlaying())
             return true;

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "gui/rmlui/rmlui_manager.hpp"
+
 #include <RmlUi/Core/DataModelHandle.h>
 #include <RmlUi/Core/EventListener.h>
 #include <core/export.hpp>
@@ -50,6 +52,8 @@ namespace lfs::vis::gui {
                      ActionCallback callback = {});
         std::string pollResult();
         [[nodiscard]] bool isOpen() const { return open_ || pending_open_; }
+        [[nodiscard]] bool hasPendingRenderWork() const { return open_ || pending_open_; }
+        [[nodiscard]] bool needsAnimationFrame() const { return pending_open_; }
 
         void processInput(const PanelInputState& input);
         void render(int screen_w, int screen_h, float screen_x, float screen_y);
@@ -59,7 +63,7 @@ namespace lfs::vis::gui {
 
     private:
         void initContext();
-        void syncTheme();
+        bool syncTheme();
         void hide();
         void focusFirstItem();
 
@@ -92,6 +96,11 @@ namespace lfs::vis::gui {
         bool has_theme_signature_ = false;
         int width_ = 0;
         int height_ = 0;
+        CachedVulkanContextRender direct_cache_;
+        bool render_needed_ = true;
+        bool last_mouse_valid_ = false;
+        int last_mouse_x_ = 0;
+        int last_mouse_y_ = 0;
     };
 
 } // namespace lfs::vis::gui
