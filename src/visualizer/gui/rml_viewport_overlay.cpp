@@ -48,16 +48,6 @@ namespace lfs::vis::gui {
             return;
         }
 
-        auto metrics_ctor = rml_context_->CreateDataModel("viewport_overlay_metrics");
-        assert(metrics_ctor);
-        metrics_ctor.Bind("gt_visible", &metrics_model_.gt_visible);
-        metrics_ctor.Bind("gt_left", &metrics_model_.gt_left);
-        metrics_ctor.Bind("gt_top", &metrics_model_.gt_top);
-        metrics_ctor.Bind("gt_psnr_text", &metrics_model_.gt_psnr_text);
-        metrics_ctor.Bind("gt_show_ssim", &metrics_model_.gt_show_ssim);
-        metrics_ctor.Bind("gt_ssim_text", &metrics_model_.gt_ssim_text);
-        metrics_model_handle_ = metrics_ctor.GetModelHandle();
-
         try {
             const auto rml_path = lfs::vis::getAssetPath("rmlui/viewport_overlay.rml");
             document_ = rml_documents::loadDocument(rml_context_, rml_path);
@@ -88,7 +78,6 @@ namespace lfs::vis::gui {
             vram_hud_->onDocumentDestroyed();
         if (rml_context_ && rml_manager_)
             rml_manager_->destroyContext("viewport_overlay");
-        metrics_model_handle_ = {};
         rml_context_ = nullptr;
         document_ = nullptr;
         body_el_ = nullptr;
@@ -305,38 +294,32 @@ namespace lfs::vis::gui {
             return;
         }
 
-        bool changed = false;
-        const auto set_bool = [&](const char* name, bool& field, const bool value) {
-            if (field == value)
-                return;
-            field = value;
-            dirtyMetricsVariable(name);
-            changed = true;
+        const auto metric_text = [](const std::string& text) -> Rml::String {
+            return text.empty() ? Rml::String("--") : Rml::String(text);
         };
-        const auto set_string = [&](const char* name, std::string& field, std::string value) {
-            if (field == value)
-                return;
-            field = std::move(value);
-            dirtyMetricsVariable(name);
-            changed = true;
-        };
+        bool touched = false;
+        if (auto* const overlay = document_->GetElementById("gt-metrics-overlay")) {
+            overlay->SetClass("hidden", !gt_metrics_overlay_.visible);
+            overlay->SetProperty("left", std::format("{:.1f}px", gt_metrics_overlay_.x));
+            overlay->SetProperty("top", std::format("{:.1f}px", gt_metrics_overlay_.y));
+            touched = true;
+        }
+        if (auto* const psnr = document_->GetElementById("gt-metrics-psnr")) {
+            psnr->SetInnerRML(metric_text(gt_metrics_overlay_.psnr_text));
+            touched = true;
+        }
+        if (auto* const ssim_row = document_->GetElementById("gt-metrics-ssim-row")) {
+            ssim_row->SetClass("hidden", !gt_metrics_overlay_.show_ssim);
+            touched = true;
+        }
+        if (auto* const ssim = document_->GetElementById("gt-metrics-ssim")) {
+            ssim->SetInnerRML(metric_text(gt_metrics_overlay_.ssim_text));
+            touched = true;
+        }
 
-        set_bool("gt_visible", metrics_model_.gt_visible, gt_metrics_overlay_.visible);
-        set_string("gt_left", metrics_model_.gt_left, std::format("{:.1f}px", gt_metrics_overlay_.x));
-        set_string("gt_top", metrics_model_.gt_top, std::format("{:.1f}px", gt_metrics_overlay_.y));
-        set_string("gt_psnr_text", metrics_model_.gt_psnr_text,
-                   gt_metrics_overlay_.psnr_text.empty() ? std::string("--") : gt_metrics_overlay_.psnr_text);
-        set_bool("gt_show_ssim", metrics_model_.gt_show_ssim, gt_metrics_overlay_.show_ssim);
-        set_string("gt_ssim_text", metrics_model_.gt_ssim_text,
-                   gt_metrics_overlay_.ssim_text.empty() ? std::string("--") : gt_metrics_overlay_.ssim_text);
-
-        if (changed) {
+        if (touched) {
             render_needed_ = true;
         }
-    }
-
-    void RmlViewportOverlay::dirtyMetricsVariable(const char* const name) {
-        metrics_model_handle_.DirtyVariable(name);
     }
 
     void RmlViewportOverlay::processInput(const PanelInputState& input) {

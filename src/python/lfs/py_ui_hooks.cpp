@@ -59,8 +59,16 @@ namespace lfs::python {
             return qualname;
         }
 
-        void warn_deprecated_ui_hooks_once() {
+        bool is_first_party_hook(const nb::object& callback) {
+            const std::string module = python_string_attr(callback.ptr(), "__module__");
+            return module == "lfs_plugins" || module.starts_with("lfs_plugins.");
+        }
+
+        void warn_deprecated_ui_hooks_once(const nb::object& callback) {
             if (std::getenv("LFS_NO_DEPRECATION_WARNINGS"))
+                return;
+
+            if (is_first_party_hook(callback))
                 return;
 
             static std::atomic_bool warned{false};
@@ -215,7 +223,7 @@ namespace lfs::python {
             "add_hook",
             [](const std::string& panel, const std::string& section,
                nb::object callback, const std::string& position) {
-                warn_deprecated_ui_hooks_once();
+                warn_deprecated_ui_hooks_once(callback);
                 PyUIHookRegistry::instance().add_hook(panel, section, callback, parse_position(position));
             },
             nb::arg("panel"), nb::arg("section"), nb::arg("callback"),
@@ -263,7 +271,7 @@ namespace lfs::python {
             "hook",
             [](const std::string& panel, const std::string& section, const std::string& position) {
                 return nb::cpp_function([panel, section, position](nb::object func) {
-                    warn_deprecated_ui_hooks_once();
+                    warn_deprecated_ui_hooks_once(func);
                     PyUIHookRegistry::instance().add_hook(panel, section, func, parse_position(position));
                     return func;
                 });

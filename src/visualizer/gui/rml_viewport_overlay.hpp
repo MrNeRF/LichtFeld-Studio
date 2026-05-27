@@ -74,7 +74,6 @@ namespace lfs::vis::gui {
         bool shouldRunDocumentHooks(bool force) const;
         bool updateToolbarRoots();
         void applyGTMetricsOverlay();
-        void dirtyMetricsVariable(const char* name);
         bool applyFrameTooltip();
         void queueVulkanContext();
 
@@ -114,16 +113,6 @@ namespace lfs::vis::gui {
         int last_render_w_ = 0;
         int last_render_h_ = 0;
         GTMetricsOverlayState gt_metrics_overlay_;
-        struct MetricsModel {
-            bool gt_visible = false;
-            std::string gt_left = "16px";
-            std::string gt_top = "16px";
-            std::string gt_psnr_text = "--";
-            bool gt_show_ssim = false;
-            std::string gt_ssim_text = "--";
-        };
-        MetricsModel metrics_model_;
-        Rml::DataModelHandle metrics_model_handle_;
         std::unique_ptr<VramHudOverlay> vram_hud_;
         RmlTooltipController tooltip_;
         std::chrono::steady_clock::time_point last_document_hook_run_{};

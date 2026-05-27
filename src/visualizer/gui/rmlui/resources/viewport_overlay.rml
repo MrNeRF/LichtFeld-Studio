@@ -567,22 +567,15 @@
         </div>
     </div>
 
-    <div id="gt-metrics-overlay"
-         class="viewport-metrics-overlay hidden"
-         data-model="viewport_overlay_metrics"
-         data-class-hidden="!gt_visible"
-         data-style-left="gt_left"
-         data-style-top="gt_top">
+    <div id="gt-metrics-overlay" class="viewport-metrics-overlay hidden">
         <div class="viewport-metrics-card">
             <div class="viewport-metrics-row">
                 <span class="viewport-metrics-label">PSNR</span>
-                <span id="gt-metrics-psnr" class="viewport-metrics-value">{{ gt_psnr_text }}</span>
+                <span id="gt-metrics-psnr" class="viewport-metrics-value">--</span>
             </div>
-            <div id="gt-metrics-ssim-row"
-                 class="viewport-metrics-row hidden"
-                 data-class-hidden="!gt_show_ssim">
+            <div id="gt-metrics-ssim-row" class="viewport-metrics-row hidden">
                 <span class="viewport-metrics-label">SSIM</span>
-                <span id="gt-metrics-ssim" class="viewport-metrics-value">{{ gt_ssim_text }}</span>
+                <span id="gt-metrics-ssim" class="viewport-metrics-value">--</span>
             </div>
         </div>
     </div>
