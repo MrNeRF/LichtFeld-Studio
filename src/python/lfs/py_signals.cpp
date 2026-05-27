@@ -166,6 +166,8 @@ namespace lfs::python {
             try {
                 nb::module_ ui_module = nb::module_::import_("lfs_plugins.ui.state");
                 g_app_state = ui_module.attr("AppState");
+                if (nb::hasattr(g_app_state, "bind_native_store"))
+                    g_app_state.attr("bind_native_store")();
                 g_initialized = true;
 
                 SignalBridgeCallbacks callbacks{};
@@ -196,6 +198,8 @@ namespace lfs::python {
             nb::gil_scoped_acquire gil;
 
             try {
+                if (nb::hasattr(g_app_state, "unbind_native_store"))
+                    g_app_state.attr("unbind_native_store")();
                 g_app_state.attr("reset")();
             } catch (const std::exception& e) {
                 LOG_ERROR("Failed to reset AppState during shutdown: {}", e.what());

@@ -10,6 +10,7 @@ sys.path.insert(0, "build/python")
 
 from lfs_plugins.ui.state import AppState
 from lfs_plugins.ui.signals import Signal, ThrottledSignal
+from lfs_plugins.ui.store import AppStore as NativeAppStore
 
 
 class TestAppState:
@@ -94,6 +95,43 @@ class TestAppState:
         AppState.reset()
         AppState.iteration.value = 999
         assert AppState.iteration.value == 999
+        AppState.reset()
+
+    def test_native_store_binding_mirrors_training_values(self):
+        """Native AppStore values should mirror into legacy AppState signals."""
+        AppState.unbind_native_store()
+        AppState.reset()
+        NativeAppStore.iteration.value = 0
+        NativeAppStore.total_iterations.value = 0
+        NativeAppStore.training_state.value = "idle"
+        NativeAppStore.eval_psnr.value = None
+
+        AppState.bind_native_store()
+        try:
+            NativeAppStore.iteration.value = 123
+            NativeAppStore.total_iterations.value = 7000
+            NativeAppStore.training_state.value = "running"
+            NativeAppStore.eval_psnr.value = 29.5
+
+            assert AppState.iteration.value == 123
+            assert AppState.max_iterations.value == 7000
+            assert AppState.trainer_state.value == "running"
+            assert AppState.psnr.value == pytest.approx(29.5)
+        finally:
+            AppState.unbind_native_store()
+            AppState.reset()
+
+    def test_native_store_binding_can_unbind(self):
+        """Unbinding should stop native AppStore mirroring."""
+        AppState.unbind_native_store()
+        AppState.reset()
+        NativeAppStore.iteration.value = 0
+
+        AppState.bind_native_store()
+        AppState.unbind_native_store()
+        NativeAppStore.iteration.value = 321
+
+        assert AppState.iteration.value == 0
         AppState.reset()
 
 

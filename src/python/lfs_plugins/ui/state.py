@@ -21,7 +21,10 @@ Example:
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from .signals import Signal, ComputedSignal
+from .store import AppStore as NativeAppStore, StoreSignal
 
 
 class AppState:
@@ -95,6 +98,8 @@ class AppState:
     # Application state
     is_headless = Signal(False, "is_headless")
 
+    _native_store_unsubscribers: list[Callable[[], None]] = []
+
     # Derived state
     @classmethod
     def create_computed_signals(cls) -> None:
@@ -110,6 +115,45 @@ class AppState:
             lambda: cls.has_trainer.value and cls.trainer_state.value in ("idle", "ready"),
             [cls.has_trainer, cls.trainer_state],
         )
+
+    @classmethod
+    def bind_native_store(cls) -> None:
+        """Mirror native app-store fields into legacy AppState signals."""
+        if cls._native_store_unsubscribers:
+            return
+
+        def bind(
+            native_signal: StoreSignal,
+            app_signal: Signal,
+            transform: Callable[[object], object] = lambda value: value,
+        ) -> None:
+            app_signal.value = transform(native_signal.value)
+            cls._native_store_unsubscribers.append(
+                native_signal.subscribe(
+                    lambda value, signal=app_signal, fn=transform: setattr(
+                        signal, "value", fn(value)
+                    )
+                )
+            )
+
+        bind(NativeAppStore.training_running, cls.is_training)
+        bind(NativeAppStore.training_state, cls.trainer_state)
+        bind(NativeAppStore.trainer_loaded, cls.has_trainer)
+        bind(NativeAppStore.iteration, cls.iteration)
+        bind(NativeAppStore.total_iterations, cls.max_iterations)
+        bind(NativeAppStore.loss, cls.loss)
+        bind(NativeAppStore.eval_psnr, cls.psnr, lambda value: 0.0 if value is None else value)
+        bind(NativeAppStore.num_gaussians, cls.num_gaussians)
+        bind(NativeAppStore.scene_generation, cls.scene_generation)
+        bind(NativeAppStore.selection_generation, cls.selection_generation)
+
+    @classmethod
+    def unbind_native_store(cls) -> None:
+        """Remove native app-store mirroring subscriptions."""
+        unsubscribers = cls._native_store_unsubscribers
+        cls._native_store_unsubscribers = []
+        for unsubscribe in unsubscribers:
+            unsubscribe()
 
     @classmethod
     def reset(cls) -> None:
