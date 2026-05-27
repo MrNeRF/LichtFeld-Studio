@@ -105,6 +105,14 @@ class _DocumentStub:
         return self._elements.get(element_id)
 
 
+class _HandleStub:
+    def __init__(self):
+        self.request_update_count = 0
+
+    def request_update(self):
+        self.request_update_count += 1
+
+
 def test_image_preview_mask_decorator_escapes_paths(panel_modules, tmp_path):
     image_preview, _ = panel_modules
     panel = image_preview.ImagePreviewPanel()
@@ -155,3 +163,35 @@ def test_getting_started_panel_escapes_thumbnail_paths(panel_modules, tmp_path):
 
     expected_thumb = quote(str(thumb_path), safe=_RML_PATH_SAFE_CHARS)
     assert body.properties["decorator"] == f"image({expected_thumb})"
+
+
+def test_getting_started_panel_uses_dirty_update_policy(panel_modules):
+    _, getting_started = panel_modules
+    assert getting_started.GettingStartedPanel.update_policy == "dirty"
+
+
+def test_getting_started_panel_requests_update_when_thumbnail_ready(panel_modules):
+    _, getting_started = panel_modules
+    callbacks = []
+    sys.modules["lichtfeld"].ui.schedule_on_ui_thread = callbacks.append
+
+    panel = getting_started.GettingStartedPanel()
+    panel._handle = _HandleStub()
+    panel._ready_lock = Lock()
+    panel._ready_queue = []
+    panel._thumb_update_scheduled = False
+
+    panel._on_thumb_ready("intro", "/tmp/intro.jpg")
+    panel._on_thumb_ready("next", "/tmp/next.jpg")
+
+    assert panel._ready_queue == [
+        ("intro", "/tmp/intro.jpg"),
+        ("next", "/tmp/next.jpg"),
+    ]
+    assert len(callbacks) == 1
+    assert panel._handle.request_update_count == 0
+
+    callbacks.pop()()
+
+    assert panel._handle.request_update_count == 1
+    assert panel._thumb_update_scheduled is False
