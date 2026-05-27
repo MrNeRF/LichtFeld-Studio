@@ -273,6 +273,7 @@ namespace lfs::vis::gui {
         mouse_pos_valid_ = false;
         last_mouse_x_ = 0;
         last_mouse_y_ = 0;
+        last_hovered_label_ = -1;
 
         if (open_menu_index_ >= 0)
             closeDropdown();
@@ -301,6 +302,7 @@ namespace lfs::vis::gui {
         wants_input_ = false;
         render_needed_ = true;
         mouse_pos_valid_ = false;
+        last_hovered_label_ = -1;
         last_ctx_w_ = 0;
         last_ctx_h_ = 0;
         last_document_h_ = 0;
@@ -395,8 +397,22 @@ namespace lfs::vis::gui {
                                     last_mouse_y_ >= 0 && last_mouse_y_ < ctx_h;
         const bool is_in_context = rml_mx >= 0 && rml_mx < ctx_w &&
                                    rml_my >= 0 && rml_my < ctx_h;
-        if ((!mouse_pos_valid_ || rml_mx != last_mouse_x_ || rml_my != last_mouse_y_) &&
-            (is_open || was_in_context || is_in_context)) {
+        const bool mouse_moved =
+            !mouse_pos_valid_ || rml_mx != last_mouse_x_ || rml_my != last_mouse_y_;
+        const bool pointer_event =
+            input.mouse_clicked[0] || input.mouse_released[0] ||
+            input.mouse_clicked[1] || input.mouse_released[1] ||
+            input.mouse_clicked[2] || input.mouse_released[2] ||
+            input.mouse_wheel != 0.0f;
+        const bool pointer_down =
+            input.mouse_down[0] || input.mouse_down[1] || input.mouse_down[2];
+        const bool context_size_unchanged = ctx_w == last_ctx_w_ && ctx_h == last_ctx_h_;
+        if (mouse_pos_valid_ && !mouse_moved && !pointer_event && !pointer_down &&
+            context_size_unchanged && !render_needed_) {
+            wants_input_ = is_open || last_hovered_label_ >= 0;
+            return;
+        }
+        if (mouse_moved && (is_open || was_in_context || is_in_context)) {
             mouse_pos_valid_ = true;
             last_mouse_x_ = rml_mx;
             last_mouse_y_ = rml_my;
@@ -415,6 +431,7 @@ namespace lfs::vis::gui {
                 break;
             }
         }
+        last_hovered_label_ = hovered_label;
 
         if (is_open) {
             wants_input_ = true;

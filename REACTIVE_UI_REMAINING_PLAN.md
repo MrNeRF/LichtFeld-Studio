@@ -3,6 +3,7 @@
 Current branch: `reactive_ui`
 
 Last completed commits:
+- `3af7a2a95 Skip idle menu bar hover scans`
 - `bcaabf56d Skip idle viewport overlay input hit tests`
 - `7c623dd8d Skip idle right panel input hit tests`
 - `afbdafefd Skip stable editor context refreshes`
@@ -45,11 +46,13 @@ Current verified state:
 - `EditorContext::update()` is now source-stamped at the router level and is skipped on unrelated store-only redraws while still refreshing on scene generation, selection generation, trainer state, structural scene changes, or input activity.
 - `RmlRightPanel::processInput()` keeps existing drag/focus/layout semantics but skips the RmlUi hover hit-test on frames with no pointer, keyboard, text, drag, focus-blur, or layout work.
 - `RmlViewportOverlay::processInput()` now preserves existing hover/focus claims but skips the RmlUi element hit-test on unchanged, activity-free frames with no VRAM HUD drag capture.
+- `RmlMenuBar::processInput()` now reuses the previous hovered menu label on unchanged, pointer-idle frames with stable context size and no pending render work.
 - Last broad Python panel slice passed: 191 tests.
 - Last frame-router slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Shell*:*Rml*:*Menu*:*Modal*:*Startup*'` and the 191-test Python panel suite.
 - Last editor-context router slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Selection*:*Rml*:*Menu*:*Modal*:*Startup*:VisualizerPostWorkTest.*'` and 67 Python toolbar/rendering/training/selection tests.
 - Last right-panel input slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Rml*:*Menu*:*Modal*:*Startup*:VisualizerPostWorkTest.*'` and 68 Python rendering/training/selection/input tests.
 - Last viewport-overlay input slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Rml*:*Modal*:*Startup*:*Selection*:VisualizerPostWorkTest.*:-PythonIntegrationTest.*:RotatedShCorrectnessTest.*'` and 41 Python toolbar/viewport/rendering/selection/input tests. A broader exploratory C++ filter also ran and exposed unrelated pre-existing failures in `PythonIntegrationTest.RenderViewMatchesViewportVerticalOrientation` and `RotatedShCorrectnessTest.ViewportParityWithExportUnderRotationAndNonUniformScale`.
+- Last menu-bar input slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Menu*:*Rml*:VisualizerPostWorkTest.*'` and 13 Python menubar/menu-schema/toolbar tests. A broader plugin-heavy Python command hit unrelated local setup failures (`uv` unavailable and `lichtfeld.log` missing in that test harness).
 - Last focused Python popup/plugin slice passed: 74 tests from plugin system, plugin API surface, and import dialog panels.
 - Last focused status/Rml C++ slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Status*:*Rml*:VisualizerPostWorkTest.*'`.
 - Last focused training/rendering Python slice passed: 51 tests.
@@ -84,6 +87,7 @@ Drive idle GUI CPU toward zero and keep p99 CPU UI work under 2 ms by removing r
 - Stable editor context refresh gating: `afbdafefd`.
 - Idle right panel input hit-test skip: `7c623dd8d`.
 - Idle viewport overlay input hit-test skip: `bcaabf56d`.
+- Idle menu bar hover scan skip: `3af7a2a95`.
 
 ## Next Batch 1: Frame Router Cleanup
 
