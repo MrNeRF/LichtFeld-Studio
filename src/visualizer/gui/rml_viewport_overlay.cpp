@@ -454,7 +454,25 @@ namespace lfs::vis::gui {
             input.mouse_wheel != 0.0f;
         const bool pointer_drag =
             input.mouse_down[0] || input.mouse_down[1] || input.mouse_down[2];
+        const bool keyboard_event =
+            !input.keys_pressed.empty() || !input.keys_released.empty() ||
+            !input.keys_repeated.empty() || !input.text_codepoints.empty() ||
+            !input.text_inputs.empty() || input.has_text_editing;
         const bool vram_drag_capture = vram_hud_ && vram_hud_->isCapturingPointer();
+        auto* const focused_before = rml_context_->GetFocusElement();
+        const bool focused_text_target =
+            focused_before &&
+            (focused_before->GetTagName() == "input" ||
+             focused_before->GetTagName() == "textarea");
+        if (mouse_pos_valid_ && !mouse_moved && !pointer_event && !pointer_drag &&
+            !keyboard_event && !vram_drag_capture) {
+            wants_input_ = hovered_interactive_ || focused_text_target;
+            if (hovered_interactive_)
+                guiFocusState().want_capture_mouse = true;
+            if (focused_text_target)
+                guiFocusState().want_capture_keyboard = true;
+            return;
+        }
         auto* const point_element = is_inside
                                         ? rml_context_->GetElementAtPoint(Rml::Vector2f(
                                               static_cast<float>(rml_mx),
