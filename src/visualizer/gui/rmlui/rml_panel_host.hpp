@@ -143,6 +143,9 @@ namespace lfs::vis::gui {
         int last_forwarded_mx_ = -1;
         int last_forwarded_my_ = -1;
         bool last_hovered_ = false;
+        // Per-button capture so scrollbar drags continue when the cursor
+        // leaves the panel and the matching Up always reaches RmlUI.
+        bool mouse_captured_[3] = {false, false, false};
         RmlTooltipController tooltip_;
     };
 

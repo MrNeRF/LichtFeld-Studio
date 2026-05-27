@@ -31,6 +31,7 @@
 // TBB includes
 #include <tbb/parallel_for.h>
 
+// CUDA runtime for pinned host memory + async H2D copies
 #include <cuda_runtime.h>
 
 // Platform-specific includes
@@ -209,8 +210,30 @@ namespace lfs::io {
             data = MapViewOfFile(mapping_handle, FILE_MAP_READ, 0, 0, 0);
             if (!data) {
                 LOG_ERROR("Failed to map view of file: {}", lfs::core::path_to_utf8(filepath));
+                return false;
             }
-            return data != nullptr;
+
+            // PrefetchVirtualMemory is Win8+; resolved dynamically so the binary
+            // still loads on older Windows.
+            if (size > ply_constants::FILE_SIZE_THRESHOLD_MB * 1024 * 1024) {
+                struct PrefetchEntry {
+                    PVOID VirtualAddress;
+                    SIZE_T NumberOfBytes;
+                };
+                using PrefetchFn = BOOL(WINAPI*)(HANDLE, ULONG_PTR, PrefetchEntry*, ULONG);
+                static const PrefetchFn prefetch = []() -> PrefetchFn {
+                    HMODULE k32 = GetModuleHandleW(L"kernel32.dll");
+                    return k32 ? reinterpret_cast<PrefetchFn>(
+                                     GetProcAddress(k32, "PrefetchVirtualMemory"))
+                               : nullptr;
+                }();
+                if (prefetch) {
+                    PrefetchEntry entry{data, size};
+                    prefetch(GetCurrentProcess(), 1, &entry, 0);
+                }
+            }
+
+            return true;
         }
 #else
         int fd = -1;
@@ -242,11 +265,11 @@ namespace lfs::io {
                 return false;
             }
 
-            // Prefetching based on file size
-            if (size > ply_constants::FILE_SIZE_THRESHOLD_MB * 1024 * 1024) { // Only for files > 50MB
-                if (madvise(data, size, MADV_SEQUENTIAL) == 0) {
-                    LOG_DEBUG("Applied sequential access optimization for large file");
-                }
+            // Kick off readahead so disk I/O overlaps with header parse + allocations.
+            if (size > ply_constants::FILE_SIZE_THRESHOLD_MB * 1024 * 1024) {
+                madvise(data, size, MADV_SEQUENTIAL);
+                madvise(data, size, MADV_WILLNEED);
+                posix_fadvise(fd, 0, 0, POSIX_FADV_WILLNEED);
             }
 
             return true;
@@ -653,6 +676,100 @@ namespace lfs::io {
                           });
     }
 
+    void extract_scaling_fused_to_host(const char* __restrict__ vertex_data,
+                                       const FastPropertyLayout& layout,
+                                       float* __restrict__ output) {
+        if (!layout.has_scaling())
+            return;
+
+        const size_t count = layout.vertex_count;
+        const size_t stride = layout.vertex_stride;
+        const size_t s0 = layout.scale_offsets[0];
+        const size_t s1 = layout.scale_offsets[1];
+        const size_t s2 = layout.scale_offsets[2];
+
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, count, ply_constants::BLOCK_SIZE_LARGE),
+                          [=](const tbb::blocked_range<size_t>& range) {
+                              for (size_t i = range.begin(); i < range.end(); ++i) {
+                                  const char* p = vertex_data + i * stride;
+                                  output[i * 3 + 0] = *reinterpret_cast<const float*>(p + s0);
+                                  output[i * 3 + 1] = *reinterpret_cast<const float*>(p + s1);
+                                  output[i * 3 + 2] = *reinterpret_cast<const float*>(p + s2);
+                              }
+                          });
+    }
+
+    void extract_rotation_fused_to_host(const char* __restrict__ vertex_data,
+                                        const FastPropertyLayout& layout,
+                                        float* __restrict__ output) {
+        if (!layout.has_rotation())
+            return;
+
+        const size_t count = layout.vertex_count;
+        const size_t stride = layout.vertex_stride;
+        const size_t r0 = layout.rot_offsets[0];
+        const size_t r1 = layout.rot_offsets[1];
+        const size_t r2 = layout.rot_offsets[2];
+        const size_t r3 = layout.rot_offsets[3];
+
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, count, ply_constants::BLOCK_SIZE_LARGE),
+                          [=](const tbb::blocked_range<size_t>& range) {
+                              for (size_t i = range.begin(); i < range.end(); ++i) {
+                                  const char* p = vertex_data + i * stride;
+                                  output[i * 4 + 0] = *reinterpret_cast<const float*>(p + r0);
+                                  output[i * 4 + 1] = *reinterpret_cast<const float*>(p + r1);
+                                  output[i * 4 + 2] = *reinterpret_cast<const float*>(p + r2);
+                                  output[i * 4 + 3] = *reinterpret_cast<const float*>(p + r3);
+                              }
+                          });
+    }
+
+    // Pageable, not value-initialized. Pinning ~1.5 GB via cudaHostAlloc cost
+    // ~700 ms on this path — far more than async H->D overlap could recoup.
+    struct HostBuffer {
+        float* ptr = nullptr;
+        size_t count = 0;
+
+        HostBuffer() = default;
+        explicit HostBuffer(size_t element_count) : count(element_count) {
+            if (count == 0)
+                return;
+            ptr = static_cast<float*>(std::malloc(count * sizeof(float)));
+            if (!ptr) {
+                LOG_ERROR("malloc failed for {} MB host buffer", (count * sizeof(float)) / (1024 * 1024));
+                count = 0;
+            }
+        }
+
+        ~HostBuffer() {
+            if (ptr)
+                std::free(ptr);
+        }
+
+        HostBuffer(const HostBuffer&) = delete;
+        HostBuffer& operator=(const HostBuffer&) = delete;
+
+        HostBuffer(HostBuffer&& other) noexcept { swap(other); }
+        HostBuffer& operator=(HostBuffer&& other) noexcept {
+            if (this != &other) {
+                if (ptr)
+                    std::free(ptr);
+                ptr = nullptr;
+                count = 0;
+                swap(other);
+            }
+            return *this;
+        }
+
+        [[nodiscard]] size_t bytes() const { return count * sizeof(float); }
+
+    private:
+        void swap(HostBuffer& other) noexcept {
+            std::swap(ptr, other.ptr);
+            std::swap(count, other.count);
+        }
+    };
+
     // Main function - returns SplatData
     [[nodiscard]] std::expected<SplatData, std::string>
     load_ply(const std::filesystem::path& filepath, const LoadOptions& options) {
@@ -711,111 +828,112 @@ namespace lfs::io {
 
             const size_t N = layout.vertex_count;
 
-            // Extract positions to host memory
-            std::vector<float> host_means(N * 3);
-            extract_positions_to_host(vertex_data, layout, host_means.data());
-
             // Determine SH dimensions
             int sh0_dim1 = 1, sh0_dim2 = ply_constants::COLOR_CHANNELS;
             int shN_dim1 = 0;
-
-            // Extract SH coefficients
-            std::vector<float> host_sh0;
-            std::vector<float> host_shN_swizzled;
-
+            std::uint32_t layout_rest = 0;
             if (layout.dc_count > 0 && layout.dc_count % ply_constants::COLOR_CHANNELS == 0) {
-                int B0 = layout.dc_count / ply_constants::COLOR_CHANNELS;
-                sh0_dim1 = B0;
-                host_sh0.resize(N * B0 * ply_constants::COLOR_CHANNELS);
-                extract_sh_coefficients_to_host(vertex_data, layout, layout.dc_offsets,
-                                                layout.dc_count, ply_constants::COLOR_CHANNELS, host_sh0.data());
-            } else {
-                host_sh0.resize(N * ply_constants::COLOR_CHANNELS, 0.0f);
+                sh0_dim1 = layout.dc_count / ply_constants::COLOR_CHANNELS;
+            }
+            if (layout.rest_count > 0 && layout.rest_count % ply_constants::COLOR_CHANNELS == 0) {
+                shN_dim1 = layout.rest_count / ply_constants::COLOR_CHANNELS;
+                layout_rest =
+                    lfs::core::sh_rest_coefficients_for_degree(
+                        static_cast<int>(std::sqrt(shN_dim1 + ply_constants::SH_DEGREE_OFFSET)) -
+                        ply_constants::SH_DEGREE_OFFSET);
             }
 
-            if (layout.rest_count > 0 && layout.rest_count % ply_constants::COLOR_CHANNELS == 0) {
-                int Bn = layout.rest_count / ply_constants::COLOR_CHANNELS;
-                shN_dim1 = Bn;
-                const auto layout_rest =
-                    lfs::core::sh_rest_coefficients_for_degree(
-                        static_cast<int>(std::sqrt(Bn + ply_constants::SH_DEGREE_OFFSET)) -
-                        ply_constants::SH_DEGREE_OFFSET);
-                host_shN_swizzled.resize(lfs::core::sh_swizzled_float_count(N, layout_rest), 0.0f);
+            const size_t shN_swizzled_count =
+                layout_rest > 0 ? lfs::core::sh_swizzled_float_count(N, layout_rest) : 0;
+
+            HostBuffer host_means(N * 3);
+            HostBuffer host_sh0(N * static_cast<size_t>(sh0_dim1) * ply_constants::COLOR_CHANNELS);
+            HostBuffer host_shN_swizzled(shN_swizzled_count);
+            HostBuffer host_opacity(N);
+            HostBuffer host_scaling(N * 3);
+            HostBuffer host_rotation(N * 4);
+
+            if (!host_means.ptr || !host_sh0.ptr || !host_scaling.ptr ||
+                !host_rotation.ptr || !host_opacity.ptr ||
+                (shN_swizzled_count > 0 && !host_shN_swizzled.ptr)) {
+                throw std::runtime_error("Failed to allocate host staging buffers for PLY load");
+            }
+
+            extract_positions_to_host(vertex_data, layout, host_means.ptr);
+
+            if (layout.dc_count > 0 && layout.dc_count % ply_constants::COLOR_CHANNELS == 0) {
+                extract_sh_coefficients_to_host(vertex_data,
+                                                layout,
+                                                layout.dc_offsets,
+                                                layout.dc_count,
+                                                ply_constants::COLOR_CHANNELS,
+                                                host_sh0.ptr);
+            } else {
+                std::fill(host_sh0.ptr, host_sh0.ptr + host_sh0.count, 0.0f);
+            }
+
+            if (shN_swizzled_count > 0) {
+                std::fill(host_shN_swizzled.ptr,
+                          host_shN_swizzled.ptr + host_shN_swizzled.count,
+                          0.0f);
                 extract_sh_coefficients_to_swizzled_host(vertex_data,
                                                          layout,
                                                          layout.rest_offsets,
                                                          layout.rest_count,
                                                          ply_constants::COLOR_CHANNELS,
                                                          layout_rest,
-                                                         host_shN_swizzled.data());
+                                                         host_shN_swizzled.ptr);
             }
 
-            // Extract other properties
-            std::vector<float> host_opacity(N, 0.0f);
             if (layout.has_opacity()) {
-                extract_property_to_host(vertex_data, layout, layout.opacity_offset, host_opacity.data());
+                extract_property_to_host(vertex_data, layout, layout.opacity_offset, host_opacity.ptr);
+            } else {
+                std::fill(host_opacity.ptr, host_opacity.ptr + host_opacity.count, 0.0f);
             }
 
-            std::vector<float> host_scaling(N * 3);
             if (layout.has_scaling()) {
-                std::vector<float> s0(N), s1(N), s2(N);
-                extract_property_to_host(vertex_data, layout, layout.scale_offsets[0], s0.data());
-                extract_property_to_host(vertex_data, layout, layout.scale_offsets[1], s1.data());
-                extract_property_to_host(vertex_data, layout, layout.scale_offsets[2], s2.data());
-
-                tbb::parallel_for(tbb::blocked_range<size_t>(0, N, ply_constants::BLOCK_SIZE_SMALL),
-                                  [&](const tbb::blocked_range<size_t>& range) {
-                                      for (size_t i = range.begin(); i < range.end(); ++i) {
-                                          host_scaling[i * 3 + 0] = s0[i];
-                                          host_scaling[i * 3 + 1] = s1[i];
-                                          host_scaling[i * 3 + 2] = s2[i];
-                                      }
-                                  });
+                extract_scaling_fused_to_host(vertex_data, layout, host_scaling.ptr);
             } else {
-                std::fill(host_scaling.begin(), host_scaling.end(), ply_constants::DEFAULT_LOG_SCALE);
+                std::fill(host_scaling.ptr,
+                          host_scaling.ptr + host_scaling.count,
+                          ply_constants::DEFAULT_LOG_SCALE);
             }
 
-            std::vector<float> host_rotation(N * 4, 0.0f);
             if (layout.has_rotation()) {
-                std::vector<float> r0(N), r1(N), r2(N), r3(N);
-                extract_property_to_host(vertex_data, layout, layout.rot_offsets[0], r0.data());
-                extract_property_to_host(vertex_data, layout, layout.rot_offsets[1], r1.data());
-                extract_property_to_host(vertex_data, layout, layout.rot_offsets[2], r2.data());
-                extract_property_to_host(vertex_data, layout, layout.rot_offsets[3], r3.data());
-
-                tbb::parallel_for(tbb::blocked_range<size_t>(0, N, ply_constants::BLOCK_SIZE_SMALL),
+                extract_rotation_fused_to_host(vertex_data, layout, host_rotation.ptr);
+            } else {
+                tbb::parallel_for(tbb::blocked_range<size_t>(0, N, ply_constants::BLOCK_SIZE_LARGE),
                                   [&](const tbb::blocked_range<size_t>& range) {
                                       for (size_t i = range.begin(); i < range.end(); ++i) {
-                                          host_rotation[i * 4 + 0] = r0[i];
-                                          host_rotation[i * 4 + 1] = r1[i];
-                                          host_rotation[i * 4 + 2] = r2[i];
-                                          host_rotation[i * 4 + 3] = r3[i];
+                                          host_rotation.ptr[i * 4 + 0] = ply_constants::IDENTITY_QUATERNION_W;
+                                          host_rotation.ptr[i * 4 + 1] = 0.0f;
+                                          host_rotation.ptr[i * 4 + 2] = 0.0f;
+                                          host_rotation.ptr[i * 4 + 3] = 0.0f;
                                       }
                                   });
-            } else {
-                // Set identity quaternion
-                for (size_t i = 0; i < N; ++i) {
-                    host_rotation[i * 4 + 0] = ply_constants::IDENTITY_QUATERNION_W;
-                }
             }
+
+            const auto host_span = [](const HostBuffer& buffer) -> std::span<const float> {
+                return {buffer.ptr, buffer.count};
+            };
 
             LOG_DEBUG("Creating Tensor objects and uploading to CUDA");
 
-            Tensor means = tensor_from_host_floats(host_means, {N, 3}, options, "SplatData.means");
+            Tensor means = tensor_from_host_floats(host_span(host_means), {N, 3}, options, "SplatData.means");
             Tensor sh0 = tensor_from_host_floats(
-                host_sh0,
+                host_span(host_sh0),
                 {N, static_cast<size_t>(sh0_dim1), static_cast<size_t>(sh0_dim2)},
                 options,
                 "SplatData.sh0");
             Tensor shN = tensor_from_host_floats(
-                host_shN_swizzled,
-                {host_shN_swizzled.size()},
+                host_span(host_shN_swizzled),
+                {host_shN_swizzled.count},
                 options,
                 "SplatData.shN",
-                host_shN_swizzled.size());
-            Tensor scaling = tensor_from_host_floats(host_scaling, {N, 3}, options, "SplatData.scaling");
-            Tensor rotation = tensor_from_host_floats(host_rotation, {N, 4}, options, "SplatData.rotation");
-            Tensor opacity = tensor_from_host_floats(host_opacity, {N, 1}, options, "SplatData.opacity");
+                host_shN_swizzled.count);
+            Tensor scaling = tensor_from_host_floats(host_span(host_scaling), {N, 3}, options, "SplatData.scaling");
+            Tensor rotation = tensor_from_host_floats(host_span(host_rotation), {N, 4}, options, "SplatData.rotation");
+            Tensor opacity = tensor_from_host_floats(host_span(host_opacity), {N, 1}, options, "SplatData.opacity");
 
             // Calculate SH degree
             int sh_degree = static_cast<int>(std::sqrt(shN_dim1 + ply_constants::SH_DEGREE_OFFSET)) - ply_constants::SH_DEGREE_OFFSET;

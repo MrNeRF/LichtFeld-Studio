@@ -47,9 +47,13 @@ namespace lfs::vis::gui {
             if (!controller) {
                 return {};
             }
+            const auto& bindings = controller->getBindings();
+            if (!bindings.getEffectiveTriggerForAction(action, input::ToolMode::GLOBAL).has_value()) {
+                return {};
+            }
             const std::string shortcut =
-                controller->getBindings().getTriggerDescription(action, input::ToolMode::GLOBAL);
-            if (shortcut.empty() || shortcut == "Unbound") {
+                bindings.getLocalizedTriggerDescription(action, input::ToolMode::GLOBAL);
+            if (shortcut.empty()) {
                 return {};
             }
             return fmt::format(

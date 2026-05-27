@@ -235,6 +235,8 @@ namespace lfs::vis::gui {
         last_forwarded_mx_ = -1;
         last_forwarded_my_ = -1;
         last_hovered_ = false;
+        for (auto& captured : mouse_captured_)
+            captured = false;
 
         if (!loadDocument())
             return false;
@@ -909,11 +911,16 @@ namespace lfs::vis::gui {
                 hovered = false;
         }
 
-        const bool hover_changed = (hovered != last_hovered_);
+        // While a button is captured the panel stays active for input
+        // forwarding so an in-progress drag survives the cursor leaving.
+        const bool any_capture = mouse_captured_[0] || mouse_captured_[1] || mouse_captured_[2];
+        const bool effective_hovered = hovered || any_capture;
+
+        const bool hover_changed = (effective_hovered != last_hovered_);
         if (hover_changed) {
-            last_hovered_ = hovered;
+            last_hovered_ = effective_hovered;
             had_input = true;
-            if (!hovered) {
+            if (!effective_hovered) {
                 last_forwarded_mx_ = -1;
                 last_forwarded_my_ = -1;
                 rml_context_->ProcessMouseLeave();
@@ -922,7 +929,7 @@ namespace lfs::vis::gui {
 
         const int rml_mx = static_cast<int>(local_x);
         const int rml_my = static_cast<int>(local_y);
-        const bool mouse_moved = hovered &&
+        const bool mouse_moved = effective_hovered &&
                                  (rml_mx != last_forwarded_mx_ || rml_my != last_forwarded_my_);
 
         const bool pointer_event =
@@ -932,7 +939,7 @@ namespace lfs::vis::gui {
         const bool pointer_active =
             pointer_event ||
             input.mouse_down[0] || input.mouse_down[1] || input.mouse_down[2];
-        if (hovered && pointer_event)
+        if (effective_hovered && pointer_event)
             had_input = true;
 
         const int mods = sdlModsToRml(input.key_ctrl, input.key_shift,
@@ -947,24 +954,42 @@ namespace lfs::vis::gui {
             if (pointer_active || next_hover != prev_hover)
                 had_input = true;
         }
+
+        const auto deliver_button_down = [&](const int button) {
+            rml_context_->ProcessMouseButtonDown(button, mods);
+            mouse_captured_[button] = true;
+        };
+        const auto deliver_button_up = [&](const int button) {
+            rml_context_->ProcessMouseButtonUp(button, mods);
+            mouse_captured_[button] = false;
+            had_input = true;
+        };
+
         if (hovered) {
             if (input.mouse_clicked[0])
-                rml_context_->ProcessMouseButtonDown(0, mods);
-            if (input.mouse_released[0])
-                rml_context_->ProcessMouseButtonUp(0, mods);
-
+                deliver_button_down(0);
             if (input.mouse_clicked[1])
-                rml_context_->ProcessMouseButtonDown(1, mods);
-            if (input.mouse_released[1])
-                rml_context_->ProcessMouseButtonUp(1, mods);
-
-            if (input.mouse_wheel != 0.0f)
+                deliver_button_down(1);
+            if (input.mouse_wheel != 0.0f) {
                 rml_context_->ProcessMouseWheel(Rml::Vector2f(0, -input.mouse_wheel), mods);
-
+                // Re-resolve hover against the new scroll offset so row text
+                // doesn't render against a stale layout for one frame.
+                rml_context_->ProcessMouseMove(rml_mx, rml_my, mods);
+                had_input = true;
+            }
             if (input.mouse_clicked[0])
                 sync_text_focus();
         } else if (input.mouse_clicked[0]) {
             had_input |= blur_focused_element();
+        }
+
+        // Forward release regardless of hover so a drag begun on the scrollbar
+        // ends when the user lets go anywhere on screen.
+        for (int button = 0; button < 2; ++button) {
+            if (mouse_captured_[button] &&
+                (input.mouse_released[button] || !input.mouse_down[button])) {
+                deliver_button_up(button);
+            }
         }
 
         if (hovered) {

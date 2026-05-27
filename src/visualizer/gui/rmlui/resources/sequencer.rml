@@ -29,7 +29,7 @@
                     <div id="btn-stop" class="transport-btn" data-tooltip="tooltip.seq_stop">
                         <img class="transport-icon" src="../icon/sequencer/stop.png" />
                     </div>
-                    <div id="btn-play" class="transport-btn play-btn" data-tooltip="tooltip.seq_play">
+                    <div id="btn-play" class="transport-btn play-btn" data-tooltip="tooltip.seq_play" data-action="sequencer_play_pause">
                         <img id="play-icon" class="transport-icon" src="../icon/sequencer/play.png" />
                     </div>
                     <div id="btn-next-keyframe" class="transport-btn" data-tooltip="tooltip.seq_next_keyframe">
@@ -41,7 +41,7 @@
                     <div id="btn-loop" class="transport-btn" data-tooltip="tooltip.seq_loop_off">
                         <img class="transport-icon" src="../icon/sequencer/loop.png" />
                     </div>
-                    <div id="btn-add" class="transport-btn" data-tooltip="tooltip.seq_add">
+                    <div id="btn-add" class="transport-btn" data-tooltip="tooltip.seq_add" data-action="sequencer_add_keyframe">
                         <img class="transport-icon" src="../icon/sequencer/plus.png" />
                     </div>
                 </div>

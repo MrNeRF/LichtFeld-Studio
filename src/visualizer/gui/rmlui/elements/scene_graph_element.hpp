@@ -43,7 +43,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] static bool ownsContextMenuAction(std::string_view action);
 
     protected:
-        void OnRender() override;
+        void OnUpdate() override;
         void OnResize() override;
         bool GetIntrinsicDimensions(Rml::Vector2f& dimensions, float& ratio) override;
         void ProcessDefaultAction(Rml::Event& event) override;
