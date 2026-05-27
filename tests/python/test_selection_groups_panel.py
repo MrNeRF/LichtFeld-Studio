@@ -148,6 +148,11 @@ def test_selection_groups_builds_record_list(selection_groups_module):
     ]
 
 
+def test_selection_groups_uses_dirty_update_policy(selection_groups_module):
+    assert selection_groups_module.SelectionGroupsPanel.update_policy == "dirty"
+    assert "update_interval_ms" not in selection_groups_module.SelectionGroupsPanel.__dict__
+
+
 def test_selection_groups_marks_empty_state_dirty(selection_groups_module):
     panel = selection_groups_module.SelectionGroupsPanel()
     panel._handle = _HandleStub()

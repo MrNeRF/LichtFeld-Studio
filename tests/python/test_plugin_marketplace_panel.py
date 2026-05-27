@@ -146,6 +146,7 @@ def test_plugin_marketplace_syncs_feedback_nodes(plugin_marketplace_module):
 def test_plugin_marketplace_uses_dirty_update_policy(plugin_marketplace_module):
     module, _state = plugin_marketplace_module
     assert module.PluginMarketplacePanel.update_policy == "dirty"
+    assert "update_interval_ms" not in module.PluginMarketplacePanel.__dict__
 
 
 def test_plugin_marketplace_requests_update_on_language_generation(plugin_marketplace_module):

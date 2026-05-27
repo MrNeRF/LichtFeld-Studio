@@ -166,6 +166,7 @@ def test_export_panel_builds_format_and_model_records(export_panel_module):
     ]
     assert panel._has_models is True
     assert panel.update_policy == "dirty"
+    assert "update_interval_ms" not in module.ExportPanel.__dict__
 
 
 def test_export_panel_seeds_selection_from_scene_nodes(export_panel_module):
@@ -274,12 +275,14 @@ def test_export_panel_store_subscriptions_mark_panel_dirty(export_panel_module, 
     module, _state = export_panel_module
     scene_signal = _SignalStub()
     export_signal = _SignalStub()
+    language_signal = _SignalStub()
     monkeypatch.setattr(
         module,
         "NativeAppStore",
         SimpleNamespace(
             scene_generation=scene_signal,
             export_progress_state=export_signal,
+            language_generation=language_signal,
         ),
     )
     panel = module.ExportPanel()
@@ -300,9 +303,14 @@ def test_export_panel_store_subscriptions_mark_panel_dirty(export_panel_module, 
     assert panel._last_colmap_source_path == ""
     assert panel._handle.dirty_fields == ["__update__", "__update__"]
 
+    language_signal.emit(1)
+
+    assert panel._handle.dirty_fields == ["__update__", "__update__", "__update__"]
+
     panel._unsubscribe_reactive_state()
     assert scene_signal.callbacks == []
     assert export_signal.callbacks == []
+    assert language_signal.callbacks == []
 
 
 def test_export_panel_uses_usd_dialog_and_format_id(export_panel_module):

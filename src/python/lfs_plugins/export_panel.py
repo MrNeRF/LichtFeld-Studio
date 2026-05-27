@@ -79,7 +79,6 @@ class ExportPanel(Panel):
     template = "rmlui/export_panel.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
     size = (320, 0)
-    update_interval_ms = 100
     update_policy = "dirty"
 
     def __init__(self):
@@ -421,6 +420,7 @@ class ExportPanel(Panel):
         self._reactive_unsubscribers = [
             NativeAppStore.scene_generation.subscribe(lambda _value: self._request_scene_update()),
             NativeAppStore.export_progress_state.subscribe(lambda _value: self._request_reactive_update()),
+            NativeAppStore.language_generation.subscribe(lambda _value: self._request_reactive_update()),
         ]
 
     def _unsubscribe_reactive_state(self):

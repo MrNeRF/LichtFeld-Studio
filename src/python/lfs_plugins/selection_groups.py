@@ -24,7 +24,6 @@ class SelectionGroupsPanel(Panel):
     order = 110
     template = "rmlui/selection_groups.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
-    update_interval_ms = 50
     update_policy = "dirty"
 
     def __init__(self):

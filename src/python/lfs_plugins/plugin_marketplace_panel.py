@@ -78,7 +78,6 @@ class PluginMarketplacePanel(Panel):
     template = "rmlui/plugin_marketplace.rml"
     height_mode = lf.ui.PanelHeightMode.FILL
     size = (770, 560)
-    update_interval_ms = 100
     update_policy = "dirty"
 
     def __init__(self):
@@ -223,6 +222,7 @@ class PluginMarketplacePanel(Panel):
             )
         self._sync_view_mode_controls(doc)
         self._subscribe_reactive_state()
+        self._request_model_update()
 
     def on_unmount(self, doc):
         self._unsubscribe_reactive_state()

@@ -65,7 +65,6 @@ class GettingStartedPanel(Panel):
     template = "rmlui/getting_started.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
     size = (560, 0)
-    update_interval_ms = 100
     update_policy = "dirty"
 
     def __init__(self):

@@ -33,7 +33,6 @@ class Mesh2SplatPanel(Panel):
     template = "rmlui/mesh2splat_panel.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
     size = (420, 0)
-    update_interval_ms = 100
     update_policy = "dirty"
 
     _RESOLUTION_OPTIONS = (128, 256, 512, 1024, 2048, 4096)

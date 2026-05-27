@@ -24,7 +24,6 @@ class ScriptsPanel(Panel):
     template = "rmlui/scripts_panel.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
     size = (520, 0)
-    update_interval_ms = 200
     update_policy = "dirty"
 
     def __init__(self):
