@@ -103,7 +103,6 @@ namespace lfs::vis::gui {
         void onFilterClear();
         void updateFilterClearVisibility();
         void setFilterText(std::string text);
-        [[nodiscard]] bool nodeMatchesFilter(std::string_view path) const;
 
         State state_;
         std::uint64_t last_sequence_ = 0;

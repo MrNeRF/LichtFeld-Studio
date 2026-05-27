@@ -17,6 +17,8 @@
 #include <algorithm>
 #include <format>
 #include <memory>
+#include <numeric>
+#include <random>
 #include <variant>
 
 namespace lfs::training {
@@ -27,6 +29,45 @@ namespace lfs::training {
             auto positions = lfs::core::Tensor::rand({N, 3}, lfs::core::Device::CPU) * 2.0f - 1.0f;
             auto colors = lfs::core::Tensor::randint({N, 3}, 0, 256, lfs::core::Device::CPU, lfs::core::DataType::UInt8);
             return std::make_shared<lfs::core::PointCloud>(positions, colors);
+        }
+
+        void randomChoosePointCloud(lfs::core::PointCloud& point_cloud,
+                                    const int target_count,
+                                    const int seed = 0) {
+            const int64_t source_count = point_cloud.size();
+            if (target_count <= 0 || source_count <= 0 ||
+                static_cast<int64_t>(target_count) >= source_count) {
+                return;
+            }
+
+            std::vector<int> all_indices(static_cast<std::size_t>(source_count));
+            std::iota(all_indices.begin(), all_indices.end(), 0);
+            std::mt19937 rng(seed);
+            std::shuffle(all_indices.begin(), all_indices.end(), rng);
+            std::vector<int> selected_indices(
+                all_indices.begin(),
+                all_indices.begin() + target_count);
+
+            auto select_rows = [&](lfs::core::Tensor& tensor) {
+                if (!tensor.is_valid() || tensor.numel() == 0 || tensor.ndim() == 0 ||
+                    static_cast<int64_t>(tensor.size(0)) != source_count) {
+                    return;
+                }
+                auto indices = lfs::core::Tensor::from_vector(
+                    selected_indices,
+                    lfs::core::TensorShape({static_cast<std::size_t>(target_count)}),
+                    tensor.device());
+                tensor = tensor.index_select(0, indices).contiguous();
+            };
+
+            select_rows(point_cloud.means);
+            select_rows(point_cloud.colors);
+            select_rows(point_cloud.normals);
+            select_rows(point_cloud.sh0);
+            select_rows(point_cloud.shN);
+            select_rows(point_cloud.opacity);
+            select_rows(point_cloud.scaling);
+            select_rows(point_cloud.rotation);
         }
 
         lfs::io::CentralizeDataset parse_centralize(const std::string& s) {
@@ -144,14 +185,16 @@ namespace lfs::training {
             return {};
         }
 
-        [[nodiscard]] bool isVulkanExternalTensorReady(const lfs::core::Tensor& tensor,
-                                                       const size_t required_capacity) {
+        [[nodiscard]] bool isAllocatorBackedTrainingTensorReady(const lfs::core::Tensor& tensor,
+                                                                const size_t required_capacity) {
             if (!tensor.is_valid() || tensor.numel() == 0) {
                 return required_capacity == 0;
             }
-            return tensor.is_external_storage() &&
-                   tensor.external_storage_kind() == "vulkan_external_buffer" &&
-                   tensor.capacity() >= required_capacity;
+            if (!tensor.is_external_storage() || tensor.capacity() < required_capacity) {
+                return false;
+            }
+            const auto kind = tensor.external_storage_kind();
+            return kind == "vulkan_external_buffer" || kind == "splat.exportable";
         }
 
         std::expected<void, std::string> migrateTrainingModelToAllocatorImpl(
@@ -172,13 +215,13 @@ namespace lfs::training {
                 layout_rest > 0 ? lfs::core::sh_swizzled_float_count(target_capacity, layout_rest) : 0;
 
             const bool already_allocator_backed =
-                isVulkanExternalTensorReady(model.means_raw(), target_capacity) &&
-                isVulkanExternalTensorReady(model.sh0_raw(), target_capacity) &&
-                isVulkanExternalTensorReady(model.scaling_raw(), target_capacity) &&
-                isVulkanExternalTensorReady(model.rotation_raw(), target_capacity) &&
-                isVulkanExternalTensorReady(model.opacity_raw(), target_capacity) &&
+                isAllocatorBackedTrainingTensorReady(model.means_raw(), target_capacity) &&
+                isAllocatorBackedTrainingTensorReady(model.sh0_raw(), target_capacity) &&
+                isAllocatorBackedTrainingTensorReady(model.scaling_raw(), target_capacity) &&
+                isAllocatorBackedTrainingTensorReady(model.rotation_raw(), target_capacity) &&
+                isAllocatorBackedTrainingTensorReady(model.opacity_raw(), target_capacity) &&
                 (target_shN_capacity == 0 ||
-                 isVulkanExternalTensorReady(model.shN_raw(), target_shN_capacity));
+                 isAllocatorBackedTrainingTensorReady(model.shN_raw(), target_shN_capacity));
             if (already_allocator_backed) {
                 return {};
             }
@@ -561,6 +604,14 @@ namespace lfs::training {
         } else {
             LOG_INFO("No point cloud provided, using random initialization");
             point_cloud_to_use = *createRandomPointCloud();
+        }
+
+        if (!params.optimization.random && max_cap > 0 &&
+            point_cloud_to_use.size() > static_cast<int64_t>(max_cap)) {
+            LOG_WARN("Max cap ({}) is less than initial point count ({}), "
+                     "sampling point cloud before training tensor allocation",
+                     max_cap, point_cloud_to_use.size());
+            randomChoosePointCloud(point_cloud_to_use, max_cap);
         }
 
         lfs::core::Tensor scene_center = scene.getSceneCenter();

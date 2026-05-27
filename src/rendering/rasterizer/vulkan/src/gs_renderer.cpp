@@ -116,6 +116,8 @@ void VulkanGSRenderer::destroyNumIndicesReadback() {
 size_t VulkanGSRenderer::pollDeferredNumIndices() {
     if (!num_indices_readback_pending_ || !num_indices_readback_mapped_)
         return 0;
+    if (num_indices_readback_signal_ == VK_NULL_HANDLE || num_indices_readback_value_ == 0)
+        return 0;
     if (!timelineValueComplete(num_indices_readback_signal_, num_indices_readback_value_))
         return 0;
     if (!invalidateReadbackBuffer(num_indices_readback_buffer_, sizeof(int32_t)))
@@ -279,6 +281,8 @@ VulkanGSRenderer::pollDeferredPrimitiveVisibilityStats() {
     // Consume only after the tagged render-completion timeline has signaled;
     // otherwise keep the last estimate and avoid a CPU-side GPU drain.
     if (!visible_count_readback_pending_ || !visible_count_readback_mapped_)
+        return std::nullopt;
+    if (visible_count_readback_signal_ == VK_NULL_HANDLE || visible_count_readback_value_ == 0)
         return std::nullopt;
     if (!timelineValueComplete(visible_count_readback_signal_, visible_count_readback_value_))
         return std::nullopt;

@@ -32,11 +32,44 @@ namespace lfs::python {
                 sh_degree,
                 core::Tensor::from_vector(means, {count, size_t{3}}, core::Device::CPU),
                 core::Tensor::zeros({count, size_t{1}, size_t{3}}, core::Device::CPU, core::DataType::Float32),
-                core::Tensor::zeros({count, core::sh_rest_coefficients_for_degree(sh_degree), size_t{3}}, core::Device::CPU, core::DataType::Float32),
-                core::Tensor::zeros({count, size_t{3}}, core::Device::CPU, core::DataType::Float32),
-                core::Tensor::from_vector(rotations, {count, size_t{4}}, core::Device::CPU),
-                core::Tensor::zeros({count, size_t{1}}, core::Device::CPU, core::DataType::Float32),
-                1.0f);
+	                core::Tensor::zeros({count, core::sh_rest_coefficients_for_degree(sh_degree), size_t{3}}, core::Device::CPU, core::DataType::Float32),
+	                core::Tensor::zeros({count, size_t{3}}, core::Device::CPU, core::DataType::Float32),
+	                core::Tensor::from_vector(rotations, {count, size_t{4}}, core::Device::CPU),
+	                core::Tensor::zeros({count, size_t{1}}, core::Device::CPU, core::DataType::Float32),
+	                1.0f);
+        }
+
+        std::shared_ptr<core::PointCloud> make_test_point_cloud(size_t count) {
+            std::vector<float> means(count * 3, 0.0f);
+            std::vector<float> colors(count * 3, 0.5f);
+            for (size_t i = 0; i < count; ++i) {
+                means[i * 3 + 0] = static_cast<float>(i);
+                means[i * 3 + 1] = static_cast<float>(i % 3);
+                means[i * 3 + 2] = static_cast<float>(i % 5);
+            }
+
+            return std::make_shared<core::PointCloud>(
+                core::Tensor::from_vector(means, {count, size_t{3}}, core::Device::CPU),
+                core::Tensor::from_vector(colors, {count, size_t{3}}, core::Device::CPU));
+        }
+
+        core::Tensor make_external_float_tensor(
+            std::vector<std::shared_ptr<std::vector<float>>>& owners,
+            core::TensorShape shape,
+            const size_t capacity,
+            std::string kind = "splat.exportable") {
+            const size_t element_count = std::max(shape.elements(), capacity);
+            auto owner = std::make_shared<std::vector<float>>(element_count, 0.0f);
+            auto* data = owner->data();
+            owners.push_back(owner);
+            return core::Tensor::from_external_owner(data,
+                                                     std::move(shape),
+                                                     core::Device::CPU,
+                                                     core::DataType::Float32,
+                                                     std::move(owner),
+                                                     capacity,
+                                                     nullptr,
+                                                     std::move(kind));
         }
 
         void expect_sh_degree(const core::SplatData& splat,
@@ -247,7 +280,7 @@ namespace lfs::python {
         expect_sh_degree(*model, 1, 0, count);
     }
 
-    TEST_F(SceneValidityTest, InitializeTrainingModelMigratesExistingModelIntoProvidedAllocator) {
+	    TEST_F(SceneValidityTest, InitializeTrainingModelMigratesExistingModelIntoProvidedAllocator) {
         constexpr size_t count = 4;
         constexpr size_t capacity = 16;
         dummy_scene_.addNode("Model", make_test_splat(count, 1));
@@ -295,12 +328,116 @@ namespace lfs::python {
         };
         EXPECT_EQ(capacity_for("SplatData.means"), capacity);
         EXPECT_EQ(capacity_for("SplatData.sh0"), capacity);
-        EXPECT_EQ(capacity_for("SplatData.scaling"), capacity);
-        EXPECT_EQ(capacity_for("SplatData.rotation"), capacity);
-        EXPECT_EQ(capacity_for("SplatData.opacity"), capacity);
-        EXPECT_EQ(capacity_for("SplatData.shN"),
-                  core::sh_swizzled_float_count(capacity, core::sh_rest_coefficients_for_degree(1)));
-    }
+	        EXPECT_EQ(capacity_for("SplatData.scaling"), capacity);
+	        EXPECT_EQ(capacity_for("SplatData.rotation"), capacity);
+	        EXPECT_EQ(capacity_for("SplatData.opacity"), capacity);
+	        EXPECT_EQ(capacity_for("SplatData.shN"),
+	                  core::sh_swizzled_float_count(capacity, core::sh_rest_coefficients_for_degree(1)));
+	    }
+
+        TEST_F(SceneValidityTest, InitializeTrainingModelCapsPointCloudBeforeAllocatorAllocation) {
+            constexpr size_t source_count = 12;
+            constexpr size_t capacity = 5;
+            dummy_scene_.addPointCloud("PointCloud", make_test_point_cloud(source_count));
+
+            struct AllocCall {
+                std::string name;
+                size_t capacity;
+            };
+            auto calls = std::make_shared<std::vector<AllocCall>>();
+            core::SplatTensorAllocator allocator =
+                [calls](core::TensorShape shape,
+                        const size_t requested_capacity,
+                        const core::DataType dtype,
+                        const std::string_view name) {
+                    EXPECT_EQ(dtype, core::DataType::Float32);
+                    calls->push_back({std::string{name}, requested_capacity});
+                    auto tensor = core::Tensor::zeros_direct(std::move(shape), requested_capacity, core::Device::CUDA);
+                    tensor.set_name(std::string{name});
+                    return tensor;
+                };
+
+            core::param::TrainingParameters params;
+            params.optimization.random = false;
+            params.optimization.sh_degree = 1;
+            params.optimization.max_cap = static_cast<int>(capacity);
+
+            const auto result = lfs::training::initializeTrainingModel(params, dummy_scene_, allocator);
+
+            ASSERT_TRUE(result.has_value()) << result.error();
+            const auto* model = dummy_scene_.getTrainingModel();
+            ASSERT_NE(model, nullptr);
+            EXPECT_EQ(model->size(), capacity);
+            EXPECT_LE(model->means_raw().capacity(), capacity);
+            EXPECT_LE(model->sh0_raw().capacity(), capacity);
+            EXPECT_LE(model->scaling_raw().capacity(), capacity);
+            EXPECT_LE(model->rotation_raw().capacity(), capacity);
+            EXPECT_LE(model->opacity_raw().capacity(), capacity);
+            EXPECT_LE(model->shN_raw().capacity(),
+                      core::sh_swizzled_float_count(capacity, core::sh_rest_coefficients_for_degree(1)));
+
+            const auto max_capacity_for = [&](const std::string_view name) -> size_t {
+                size_t max_capacity = 0;
+                for (const auto& call : *calls) {
+                    if (call.name == name) {
+                        max_capacity = std::max(max_capacity, call.capacity);
+                    }
+                }
+                return max_capacity;
+            };
+            EXPECT_EQ(max_capacity_for("SplatData.means"), capacity);
+            EXPECT_EQ(max_capacity_for("SplatData.sh0"), capacity);
+            EXPECT_EQ(max_capacity_for("SplatData.scaling"), capacity);
+            EXPECT_EQ(max_capacity_for("SplatData.rotation"), capacity);
+            EXPECT_EQ(max_capacity_for("SplatData.opacity"), capacity);
+            EXPECT_EQ(max_capacity_for("SplatData.shN"),
+                      core::sh_swizzled_float_count(capacity, core::sh_rest_coefficients_for_degree(1)));
+        }
+
+        TEST_F(SceneValidityTest, MigrateTrainingModelAcceptsCudaOnlyExportableStorage) {
+            constexpr size_t count = 4;
+            constexpr size_t capacity = 16;
+            constexpr int sh_degree = 1;
+            const auto rest_coeffs = core::sh_rest_coefficients_for_degree(sh_degree);
+            std::vector<std::shared_ptr<std::vector<float>>> owners;
+
+            auto model = std::make_unique<core::SplatData>(
+                sh_degree,
+                make_external_float_tensor(owners, {count, size_t{3}}, capacity),
+                make_external_float_tensor(owners, {count, size_t{1}, size_t{3}}, capacity),
+                make_external_float_tensor(owners,
+                                           {core::sh_swizzled_float_count(count, rest_coeffs)},
+                                           core::sh_swizzled_float_count(capacity, rest_coeffs)),
+                make_external_float_tensor(owners, {count, size_t{3}}, capacity),
+                make_external_float_tensor(owners, {count, size_t{4}}, capacity),
+                make_external_float_tensor(owners, {count, size_t{1}}, capacity),
+                1.0f,
+                core::SplatData::ShNLayout::Swizzled);
+            dummy_scene_.addNode("Model", std::move(model));
+            dummy_scene_.setTrainingModelNode("Model");
+
+            core::param::TrainingParameters params;
+            params.optimization.sh_degree = sh_degree;
+            params.optimization.max_cap = static_cast<int>(capacity);
+
+            int allocation_calls = 0;
+            core::SplatTensorAllocator allocator =
+                [&allocation_calls](core::TensorShape shape,
+                                    const size_t requested_capacity,
+                                    const core::DataType,
+                                    const std::string_view) {
+                    ++allocation_calls;
+                    return core::Tensor::zeros_direct(std::move(shape), requested_capacity, core::Device::CUDA);
+                };
+
+            auto* training_model = dummy_scene_.getTrainingModel();
+            ASSERT_NE(training_model, nullptr);
+            const auto result =
+                lfs::training::migrateTrainingModelToAllocator(params, *training_model, allocator);
+
+            ASSERT_TRUE(result.has_value()) << result.error();
+            EXPECT_EQ(allocation_calls, 0);
+        }
 
     TEST_F(SceneValidityTest, SceneManagerEmptyStateKeepsApplicationSceneContext) {
         lfs::vis::SceneManager scene_manager;

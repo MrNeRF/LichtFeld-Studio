@@ -1051,7 +1051,15 @@ namespace lfs::core {
             Tensor positions, colors;
 
             if (params.optimization.random) {
-                const int num_points = params.optimization.init_num_pts;
+                int num_points = params.optimization.init_num_pts;
+                if (capacity > 0 && capacity < num_points) {
+                    LOG_WARN("Max cap ({}) is less than random init count ({}), "
+                             "initializing only {} splats",
+                             capacity,
+                             num_points,
+                             capacity);
+                    num_points = capacity;
+                }
                 const float extent = params.optimization.init_extent;
 
                 LOG_DEBUG("  Using random initialization: num_points={}, extent={}", num_points, extent);

@@ -1137,12 +1137,6 @@ namespace lfs::vis::gui {
         }
     }
 
-    bool VramHudOverlay::nodeMatchesFilter(std::string_view path) const {
-        if (filter_text_lower_.empty())
-            return true;
-        return toLowerAscii(path).find(filter_text_lower_) != std::string::npos;
-    }
-
     void VramHudOverlay::applyTree(std::size_t process_used) {
         if (!rows_root_)
             return;
