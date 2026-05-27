@@ -82,6 +82,24 @@ namespace lfs::vis {
             bool operator==(const VideoExportOverlayState&) const = default;
         };
 
+        struct LFS_VIS_API ExportProgressState {
+            bool active = false;
+            float progress = 0.0f;
+            std::string stage;
+            std::string format;
+            std::string error;
+            std::string path;
+
+            [[nodiscard]] bool operator==(const ExportProgressState& other) const noexcept {
+                return active == other.active &&
+                       std::abs(progress - other.progress) <= 0.0005f &&
+                       stage == other.stage &&
+                       format == other.format &&
+                       error == other.error &&
+                       path == other.path;
+            }
+        };
+
         struct LFS_VIS_API TaskProgressState {
             bool active = false;
             float progress = 0.0f;
@@ -124,6 +142,7 @@ namespace lfs::vis {
             PivotModeValue,
             ImportOverlayStateValue,
             VideoExportOverlayStateValue,
+            ExportProgressStateValue,
             Mesh2SplatStateValue,
             SplatSimplifyStateValue,
         };
@@ -156,6 +175,7 @@ namespace lfs::vis {
         lfs::core::reactive::Observable<int> pivot_mode;
         lfs::core::reactive::Observable<ImportOverlayState> import_overlay_state;
         lfs::core::reactive::Observable<VideoExportOverlayState> video_export_overlay_state;
+        lfs::core::reactive::Observable<ExportProgressState> export_progress_state;
         lfs::core::reactive::Observable<TaskProgressState> mesh2splat_state;
         lfs::core::reactive::Observable<TaskProgressState> splat_simplify_state;
 

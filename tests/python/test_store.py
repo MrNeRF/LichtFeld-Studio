@@ -41,6 +41,7 @@ def test_app_store_exposes_panel_reactive_signals():
     assert isinstance(AppStore.pivot_mode, StoreSignal)
     assert isinstance(AppStore.import_overlay_state, StoreSignal)
     assert isinstance(AppStore.video_export_overlay_state, StoreSignal)
+    assert isinstance(AppStore.export_progress_state, StoreSignal)
     assert isinstance(AppStore.mesh2splat_state, StoreSignal)
     assert isinstance(AppStore.splat_simplify_state, StoreSignal)
 

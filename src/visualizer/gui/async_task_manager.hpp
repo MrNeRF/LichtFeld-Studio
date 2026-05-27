@@ -193,6 +193,10 @@ namespace lfs::vis {
             void resetVideoExportEnvironmentState();
             void cancelImportCompletionDismiss();
             void scheduleImportCompletionDismiss();
+            void publishExportFailureState(lfs::core::ExportFormat format,
+                                           const std::filesystem::path& path,
+                                           std::string error);
+            void publishExportState();
             void publishImportOverlayState();
             void publishVideoExportOverlayState();
             void publishMesh2SplatState();

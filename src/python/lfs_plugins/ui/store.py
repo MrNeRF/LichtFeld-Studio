@@ -132,6 +132,7 @@ class AppStore:
     pivot_mode = StoreSignal[int]("pivot_mode", 0)
     import_overlay_state = StoreSignal[dict[str, object]]("import_overlay_state", {})
     video_export_overlay_state = StoreSignal[dict[str, object]]("video_export_overlay_state", {})
+    export_progress_state = StoreSignal[dict[str, object]]("export_progress_state", {})
     mesh2splat_state = StoreSignal[dict[str, object]]("mesh2splat_state", {})
     splat_simplify_state = StoreSignal[dict[str, object]]("splat_simplify_state", {})
 

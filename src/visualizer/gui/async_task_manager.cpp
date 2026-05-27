@@ -53,6 +53,20 @@ namespace lfs::vis::gui {
         }
     }
 
+    [[nodiscard]] const char* exportProgressFormatName(const ExportFormat format) noexcept {
+        switch (format) {
+        case ExportFormat::PLY: return "PLY";
+        case ExportFormat::SOG: return "SOG";
+        case ExportFormat::SPZ: return "SPZ";
+        case ExportFormat::HTML_VIEWER: return "HTML";
+        case ExportFormat::USD: return "USD";
+        case ExportFormat::NUREC_USDZ: return "USDZ";
+        case ExportFormat::RAD: return "RAD";
+        case ExportFormat::COLMAP: return "COLMAP";
+        default: return "file";
+        }
+    }
+
     void wakeMainThreadForAsyncWork() {
         if (auto* const window_manager = services().windowOrNull())
             window_manager->wakeEventLoop();
@@ -653,8 +667,14 @@ namespace lfs::vis::gui {
         }
 
         auto* const scene_manager = viewer_->getSceneManager();
-        if (!scene_manager || node_names.empty())
+        if (!scene_manager) {
+            publishExportFailureState(format, path, "Scene manager is not available");
             return;
+        }
+        if (node_names.empty()) {
+            publishExportFailureState(format, path, "No model selected for export");
+            return;
+        }
 
         const auto& scene = scene_manager->getScene();
         std::vector<ExportSplatSource> splats;
@@ -667,8 +687,10 @@ namespace lfs::vis::gui {
                     .transform = scene_coords::nodeDataWorldTransform(scene, node->id)});
             }
         }
-        if (splats.empty())
+        if (splats.empty()) {
+            publishExportFailureState(format, path, "No splat data to export");
             return;
+        }
 
         auto borrow_plan = makeBorrowSingleIdentityExportPlan(*scene_manager, node_names);
         startAsyncExport(format,
@@ -687,13 +709,16 @@ namespace lfs::vis::gui {
 
         auto* const scene_manager = viewer_->getSceneManager();
         if (!scene_manager) {
-            LOG_ERROR("COLMAP export failed: scene manager not initialized");
+            std::string error = "Scene manager not initialized";
+            LOG_ERROR("COLMAP export failed: {}", error);
+            publishExportFailureState(ExportFormat::COLMAP, path, std::move(error));
             return;
         }
 
         auto snapshot_result = makeColmapExportSnapshot(*scene_manager);
         if (!snapshot_result) {
             LOG_ERROR("COLMAP export failed: {}", snapshot_result.error());
+            publishExportFailureState(ExportFormat::COLMAP, path, snapshot_result.error());
             lfs::core::events::state::ExportFailed{.error = snapshot_result.error()}.emit();
             return;
         }
@@ -708,6 +733,7 @@ namespace lfs::vis::gui {
             export_state_.error.clear();
             export_state_.path = path;
         }
+        publishExportState();
 
         LOG_INFO("COLMAP export started: {}", lfs::core::path_to_utf8(path));
 
@@ -723,6 +749,7 @@ namespace lfs::vis::gui {
                         const std::lock_guard lock(export_state_.mutex);
                         export_state_.stage = stage;
                     }
+                    publishExportState();
                     if (auto* window_manager = services().windowOrNull()) {
                         window_manager->wakeEventLoop();
                     }
@@ -773,6 +800,7 @@ namespace lfs::vis::gui {
                         export_state_.error = error_msg;
                         export_state_.stage = "Cancelled";
                     }
+                    publishExportState();
                     lfs::core::events::state::ExportFailed{.error = error_msg}.emit();
                 } else {
                     LOG_ERROR("COLMAP export failed: {}", error_msg);
@@ -781,11 +809,13 @@ namespace lfs::vis::gui {
                         export_state_.error = error_msg;
                         export_state_.stage = "Failed";
                     }
+                    publishExportState();
                     lfs::core::events::state::ExportFailed{.error = error_msg}.emit();
                 }
 
                 lfs::core::Tensor::trim_memory_pool();
                 export_state_.active.store(false);
+                publishExportState();
                 if (auto* window_manager = services().windowOrNull()) {
                     window_manager->wakeEventLoop();
                 }
@@ -802,6 +832,7 @@ namespace lfs::vis::gui {
                                             bool rad_flip_y) {
         if (splats.empty()) {
             LOG_ERROR("No splat data to export");
+            publishExportFailureState(format, path, "No splat data to export");
             return;
         }
 
@@ -815,6 +846,7 @@ namespace lfs::vis::gui {
             export_state_.error.clear();
             export_state_.path = path;
         }
+        publishExportState();
 
         LOG_INFO("Export started: {} (format: {})", lfs::core::path_to_utf8(path), static_cast<int>(format));
 
@@ -840,6 +872,7 @@ namespace lfs::vis::gui {
                             const std::lock_guard lock(export_state_.mutex);
                             export_state_.stage = "Cancelled";
                         }
+                        publishExportState();
                         if (auto* window_manager = services().windowOrNull()) {
                             window_manager->wakeEventLoop();
                         }
@@ -850,6 +883,7 @@ namespace lfs::vis::gui {
                         const std::lock_guard lock(export_state_.mutex);
                         export_state_.stage = stage;
                     }
+                    publishExportState();
                     if (auto* window_manager = services().windowOrNull()) {
                         window_manager->wakeEventLoop();
                     }
@@ -1029,6 +1063,7 @@ namespace lfs::vis::gui {
                         const std::lock_guard lock(export_state_.mutex);
                         export_state_.stage = "Complete";
                     }
+                    publishExportState();
                     lfs::core::events::state::ExportCompleted{
                         .path = path,
                         .format = format}
@@ -1040,6 +1075,7 @@ namespace lfs::vis::gui {
                         export_state_.error = error_msg;
                         export_state_.stage = "Cancelled";
                     }
+                    publishExportState();
                     lfs::core::events::state::ExportFailed{
                         .error = error_msg}
                         .emit();
@@ -1050,6 +1086,7 @@ namespace lfs::vis::gui {
                         export_state_.error = error_msg;
                         export_state_.stage = "Failed";
                     }
+                    publishExportState();
                     lfs::core::events::state::ExportFailed{
                         .error = error_msg}
                         .emit();
@@ -1058,6 +1095,7 @@ namespace lfs::vis::gui {
                 splat_data.reset();
                 lfs::core::Tensor::trim_memory_pool();
                 export_state_.active.store(false);
+                publishExportState();
             });
     }
 
@@ -1070,9 +1108,40 @@ namespace lfs::vis::gui {
             const std::lock_guard lock(export_state_.mutex);
             export_state_.stage = "Cancelling";
         }
+        publishExportState();
         if (export_state_.thread && export_state_.thread->joinable()) {
             export_state_.thread->request_stop();
         }
+    }
+
+    void AsyncTaskManager::publishExportFailureState(const ExportFormat format,
+                                                     const std::filesystem::path& path,
+                                                     std::string error) {
+        export_state_.active.store(false);
+        export_state_.cancel_requested.store(false);
+        export_state_.progress.store(0.0f);
+        {
+            const std::lock_guard lock(export_state_.mutex);
+            export_state_.format = format;
+            export_state_.stage = "Failed";
+            export_state_.error = std::move(error);
+            export_state_.path = path;
+        }
+        publishExportState();
+    }
+
+    void AsyncTaskManager::publishExportState() {
+        lfs::vis::AppStore::ExportProgressState state;
+        state.active = export_state_.active.load();
+        state.progress = export_state_.progress.load();
+        {
+            const std::lock_guard lock(export_state_.mutex);
+            state.stage = export_state_.stage;
+            state.format = exportProgressFormatName(export_state_.format);
+            state.error = export_state_.error;
+            state.path = lfs::core::path_to_utf8(export_state_.path);
+        }
+        lfs::vis::app_store().export_progress_state.set(std::move(state));
     }
 
     void AsyncTaskManager::publishImportOverlayState() {

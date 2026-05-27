@@ -182,6 +182,34 @@ namespace lfs::python {
             return state;
         }
 
+        nb::dict export_progress_state_to_dict(const lfs::vis::AppStore::ExportProgressState& value) {
+            nb::dict state;
+            state["active"] = value.active;
+            state["progress"] = value.progress;
+            state["stage"] = value.stage;
+            state["format"] = value.format;
+            state["error"] = value.error;
+            state["path"] = value.path;
+            return state;
+        }
+
+        lfs::vis::AppStore::ExportProgressState export_progress_state_from_object(const nb::object& value) {
+            if (value.is_none())
+                return {};
+            if (!nb::isinstance<nb::dict>(value))
+                throw nb::type_error("export_progress_state must be a dict");
+
+            const nb::dict dict = nb::cast<nb::dict>(value);
+            lfs::vis::AppStore::ExportProgressState state;
+            state.active = dict_value(dict, "active", false);
+            state.progress = dict_value(dict, "progress", 0.0f);
+            state.stage = dict_value(dict, "stage", std::string{});
+            state.format = dict_value(dict, "format", std::string{});
+            state.error = dict_value(dict, "error", std::string{});
+            state.path = dict_value(dict, "path", std::string{});
+            return state;
+        }
+
         nb::dict task_progress_state_to_dict(const lfs::vis::AppStore::TaskProgressState& value) {
             nb::dict state;
             state["active"] = value.active;
@@ -254,6 +282,8 @@ namespace lfs::python {
                 store.import_overlay_state.set(import_overlay_state_from_object(value));
             else if (field == "video_export_overlay_state")
                 store.video_export_overlay_state.set(video_export_overlay_state_from_object(value));
+            else if (field == "export_progress_state")
+                store.export_progress_state.set(export_progress_state_from_object(value));
             else if (field == "mesh2splat_state")
                 store.mesh2splat_state.set(task_progress_state_from_object(value));
             else if (field == "splat_simplify_state")
@@ -304,6 +334,8 @@ namespace lfs::python {
                 return import_overlay_state_to_dict(store.import_overlay_state.get());
             if (field == "video_export_overlay_state")
                 return video_export_overlay_state_to_dict(store.video_export_overlay_state.get());
+            if (field == "export_progress_state")
+                return export_progress_state_to_dict(store.export_progress_state.get());
             if (field == "mesh2splat_state")
                 return task_progress_state_to_dict(store.mesh2splat_state.get());
             if (field == "splat_simplify_state")
@@ -355,6 +387,9 @@ namespace lfs::python {
             if (field == "video_export_overlay_state")
                 return subscribe_observable_as(
                     store.video_export_overlay_state, std::move(callback), video_export_overlay_state_to_dict);
+            if (field == "export_progress_state")
+                return subscribe_observable_as(
+                    store.export_progress_state, std::move(callback), export_progress_state_to_dict);
             if (field == "mesh2splat_state")
                 return subscribe_observable_as(
                     store.mesh2splat_state, std::move(callback), task_progress_state_to_dict);
