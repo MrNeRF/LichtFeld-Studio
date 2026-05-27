@@ -114,6 +114,9 @@ class _HandleStub:
     def dirty_all(self):
         self.dirty_fields.append("__all__")
 
+    def request_update(self):
+        self.dirty_fields.append("__update__")
+
 
 class _SignalStub:
     def __init__(self):
@@ -288,14 +291,14 @@ def test_export_panel_store_subscriptions_mark_panel_dirty(export_panel_module, 
     panel._subscribe_reactive_state()
     export_signal.emit({"active": True})
 
-    assert panel._handle.dirty_fields == ["__all__"]
+    assert panel._handle.dirty_fields == ["__update__"]
 
     scene_signal.emit(1)
 
     assert panel._last_node_key is None
     assert panel._last_colmap_key is None
     assert panel._last_colmap_source_path == ""
-    assert panel._handle.dirty_fields == ["__all__", "__all__"]
+    assert panel._handle.dirty_fields == ["__update__", "__update__"]
 
     panel._unsubscribe_reactive_state()
     assert scene_signal.callbacks == []

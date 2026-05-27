@@ -89,6 +89,9 @@ class _HandleStub:
     def dirty_all(self):
         self.dirty_fields.append("__all__")
 
+    def request_update(self):
+        self.dirty_fields.append("__update__")
+
 
 class _ElementStub:
     def __init__(self, attrs=None, parent=None):
@@ -250,7 +253,7 @@ def test_mesh2splat_panel_store_update_invalidates_model(mesh2splat_module):
         module.NativeAppStore.mesh2splat_state.value = {"active": True, "progress": 0.5}
 
         assert panel._last_mesh_key is None
-        assert "__all__" in panel._handle.dirty_fields
+        assert "__update__" in panel._handle.dirty_fields
     finally:
         panel._unsubscribe_reactive_state()
         module.NativeAppStore.mesh2splat_state._fallback = {}

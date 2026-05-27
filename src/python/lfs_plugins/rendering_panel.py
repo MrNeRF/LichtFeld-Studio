@@ -324,7 +324,7 @@ class RenderingPanel(Panel):
 
     def _request_reactive_update(self):
         if self._handle:
-            self._handle.dirty_all()
+            w.request_model_update(self._handle)
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("rendering")

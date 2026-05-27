@@ -66,6 +66,9 @@ class _HandleStub:
     def dirty_all(self):
         self.dirty_fields.append("__all__")
 
+    def request_update(self):
+        self.dirty_fields.append("__update__")
+
 
 def _make_group(group_id, name, count, locked, color):
     return SimpleNamespace(id=group_id, name=name, count=count, locked=locked, color=color)
@@ -202,7 +205,7 @@ def test_selection_groups_store_update_invalidates_dirty_panel(selection_groups_
     try:
         selection_groups_module.NativeAppStore.selection_generation.value += 1
 
-        assert "__all__" in panel._handle.dirty_fields
+        assert "__update__" in panel._handle.dirty_fields
     finally:
         panel._unsubscribe_reactive_state()
 

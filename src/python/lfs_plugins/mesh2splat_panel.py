@@ -128,7 +128,7 @@ class Mesh2SplatPanel(Panel):
     def _request_reactive_update(self):
         self._last_mesh_key = None
         if self._handle:
-            self._handle.dirty_all()
+            rml_widgets.request_model_update(self._handle)
 
     def on_update(self, doc):
         del doc

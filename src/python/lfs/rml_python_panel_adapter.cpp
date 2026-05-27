@@ -373,19 +373,20 @@ namespace lfs::vis::gui {
             return doc;
 
         bool pending_dirty = content_dirty_ || lfs::python::consume_document_dirty(doc);
+        bool update_requested = lfs::python::consume_document_update_request(doc);
         const bool scene_changed = ctx && ctx->scene && ctx->scene_generation != last_scene_gen_;
         const auto now = std::chrono::steady_clock::now();
         cachePythonCapabilities();
         const bool update_due =
             !dirty_driven_updates_ &&
             (next_update_at_ == std::chrono::steady_clock::time_point{} || now >= next_update_at_);
-        const bool should_run_update = scene_changed || pending_dirty || update_due;
+        const bool should_run_update = scene_changed || pending_dirty || update_requested || update_due;
 
         if (should_run_update) {
             assert(isMounted());
             const lfs::python::GilAcquire gil;
             auto py_doc = lfs::python::PyRmlDocument(doc);
-            bool run_update = pending_dirty || update_due;
+            bool run_update = pending_dirty || update_requested || update_due;
 
             if (scene_changed) {
                 try {
@@ -398,7 +399,9 @@ namespace lfs::vis::gui {
                     LOG_ERROR("Panel on_scene_changed error: {}", e.what());
                 }
                 pending_dirty |= lfs::python::consume_document_dirty(doc);
+                update_requested |= lfs::python::consume_document_update_request(doc);
                 run_update |= pending_dirty;
+                run_update |= update_requested;
                 last_scene_gen_ = ctx->scene_generation;
             }
 

@@ -4,6 +4,7 @@
 
 import lichtfeld as lf
 
+from . import rml_widgets
 from .types import Panel
 from .ui.store import AppStore as NativeAppStore
 
@@ -116,7 +117,7 @@ class SelectionGroupsPanel(Panel):
 
     def _request_reactive_update(self):
         if self._handle:
-            self._handle.dirty_all()
+            rml_widgets.request_model_update(self._handle)
 
     def on_update(self, doc):
         return self._sync_panel_state(doc, force=False)
