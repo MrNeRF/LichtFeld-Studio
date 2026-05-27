@@ -4820,22 +4820,30 @@ namespace lfs::vis::gui {
             python::PackageManager::instance().poll();
         }
 
-        {
+        const auto should_poll_dev_resources = [&]() {
+            if (!dev_resource_watch_.enabled)
+                return false;
+            if (dev_resource_watch_.pending_rml_reload ||
+                dev_resource_watch_.pending_locale_reload ||
+                dev_resource_watch_.scan_future.valid())
+                return true;
+            return dev_resource_watch_.next_scan == std::chrono::steady_clock::time_point{} ||
+                   std::chrono::steady_clock::now() >= dev_resource_watch_.next_scan;
+        }();
+        if (should_poll_dev_resources) {
             LOG_TIMER("gui_render.panel_setup.dev_resource_poll");
             pollDevResourceHotReload();
         }
 
         // Hot-reload themes (check once per second)
-        {
+        static auto next_theme_check = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= next_theme_check) {
             LOG_TIMER("gui_render.panel_setup.theme_poll");
-            static auto last_check = std::chrono::steady_clock::now();
-            const auto now = std::chrono::steady_clock::now();
-            if (now - last_check > std::chrono::seconds(1)) {
-                if (checkThemeFileChanges()) {
-                    rml_theme::invalidateThemeMediaCache();
-                }
-                last_check = now;
+            if (checkThemeFileChanges()) {
+                rml_theme::invalidateThemeMediaCache();
             }
+            next_theme_check = now + std::chrono::seconds(1);
         }
 
         if (menu_bar_ && !ui_hidden_) {
