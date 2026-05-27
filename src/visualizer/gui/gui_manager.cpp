@@ -5195,14 +5195,8 @@ namespace lfs::vis::gui {
             published_gt_metrics_overlay_config_ = gt_metrics_config;
         }
         const auto publish_vram_hud_overlay_if_due = [&]() {
-            auto& profiler = lfs::diagnostics::VramProfiler::instance();
-            const bool visible = show_vram_hud_ && profiler.enabled();
             const auto now = std::chrono::steady_clock::now();
-            const bool due =
-                visible && (next_vram_hud_publish_ == std::chrono::steady_clock::time_point{} ||
-                            now >= next_vram_hud_publish_);
-
-            if (!visible) {
+            if (!isVramHudOverlayVisible()) {
                 if (vram_hud_visible_published_) {
                     app_store().vram_hud.set(AppStore::VramHud{});
                     vram_hud_visible_published_ = false;
@@ -5211,7 +5205,8 @@ namespace lfs::vis::gui {
                 return;
             }
 
-            if (due) {
+            if (isVramHudPublishDue(now)) {
+                auto& profiler = lfs::diagnostics::VramProfiler::instance();
                 {
                     LOG_TIMER("gui_render.vram_hud_sample");
                     profiler.sampleCudaMemory();
@@ -6302,6 +6297,16 @@ namespace lfs::vis::gui {
         window_states_[name] = show;
     }
 
+    bool GuiManager::isVramHudOverlayVisible() const {
+        return show_vram_hud_ && lfs::diagnostics::VramProfiler::instance().enabled();
+    }
+
+    bool GuiManager::isVramHudPublishDue(const std::chrono::steady_clock::time_point now) const {
+        return isVramHudOverlayVisible() &&
+               (next_vram_hud_publish_ == std::chrono::steady_clock::time_point{} ||
+                now >= next_vram_hud_publish_);
+    }
+
     bool GuiManager::needsAnimationFrame() const {
         if (isViewportExportLocked())
             return true;
@@ -6310,6 +6315,8 @@ namespace lfs::vis::gui {
         if (video_widget_ && video_widget_->isVideoPlaying())
             return true;
         if (ui_layout_settle_frames_ > 0)
+            return true;
+        if (isVramHudPublishDue(std::chrono::steady_clock::now()))
             return true;
         if (rml_viewport_overlay_.needsAnimationFrame())
             return true;

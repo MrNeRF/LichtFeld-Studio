@@ -224,6 +224,9 @@ namespace lfs::vis {
             bool reloadLocalizationResources();
             void reloadRmlResources();
 
+            [[nodiscard]] bool isVramHudOverlayVisible() const;
+            [[nodiscard]] bool isVramHudPublishDue(std::chrono::steady_clock::time_point now) const;
+
             // Core dependencies
             VisualizerImpl* viewer_;
 

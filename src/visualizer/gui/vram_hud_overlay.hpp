@@ -38,7 +38,7 @@ namespace lfs::vis::gui {
 
         void setState(State state);
         [[nodiscard]] bool isVisible() const noexcept { return state_.visible; }
-        [[nodiscard]] bool needsAnimationFrame() const noexcept { return state_.visible || pointer_captured_; }
+        [[nodiscard]] bool needsAnimationFrame() const noexcept { return pointer_captured_; }
         [[nodiscard]] bool isCapturingPointer() const noexcept { return pointer_captured_; }
 
         [[nodiscard]] bool isDueForProcessSample(std::chrono::milliseconds interval);
