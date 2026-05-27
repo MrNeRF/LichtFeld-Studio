@@ -3,6 +3,7 @@
 Current branch: `reactive_ui`
 
 Last completed commits:
+- `0130e5ce1 Cache idle context menu rendering`
 - `fcb5b0649 Cache modal and startup overlay rendering`
 - `00c2a5864 Cache idle bottom dock sequencer rendering`
 - `131da29ec Publish scene panel invalidations through app store`
@@ -23,7 +24,9 @@ Current verified state:
 - Native scene panel sync is source-stamped and driven by store-published scene/selection generations.
 - Bottom dock has a cached render branch; the sequencer panel queues cached RmlUi textures on idle frames.
 - Modal requests wake the event loop, closed modal overlays skip input/render work, and modal/startup overlays reuse cached RmlUi textures once stable.
+- Global context menus are gated behind pending/open state and reuse cached RmlUi textures while open and idle.
 - Last broad Python panel slice passed: 191 tests.
+- Last focused context-menu-adjacent Python slice passed: 41 tests from plugin marketplace, input settings, and import dialogs.
 - Last focused modal/post-work C++ slice passed: `./build/tests/lichtfeld_tests --gtest_filter='PyModalRegistryRegression.*:VisualizerPostWorkTest.*'`.
 - Last focused modal/startup C++ slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Modal*:*Startup*'`.
 - Last focused sequencer C++ slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Sequencer*'`.
@@ -39,6 +42,7 @@ Drive idle GUI CPU toward zero and keep p99 CPU UI work under 2 ms by removing r
 - Scene panel reactive invalidation publication: `131da29ec`.
 - Bottom dock and sequencer cached rendering: `00c2a5864`.
 - Modal and startup overlay demand/caching: `fcb5b0649`.
+- Context menu demand/caching: `0130e5ce1`.
 
 ## Next Batch 1: Frame Router Cleanup
 
