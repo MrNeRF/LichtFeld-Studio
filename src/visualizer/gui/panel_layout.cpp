@@ -450,6 +450,60 @@ namespace lfs::vis::gui {
         }
     }
 
+    void PanelLayoutManager::renderBottomDockCached(const PanelDrawContext& draw_ctx,
+                                                    const bool show_main_panel,
+                                                    const bool ui_hidden,
+                                                    const PanelInputState& input,
+                                                    const ScreenState& screen) {
+        LOG_TIMER("gui_render.panel_layout.renderBottomDock.cached");
+        auto& reg = PanelRegistry::instance();
+        if (!show_main_panel || ui_hidden || screen.work_size.x <= 0 || screen.work_size.y <= 0 ||
+            !reg.has_panels(PanelSpace::BottomDock)) {
+            bottom_dock_hovering_edge_ = false;
+            bottom_dock_resizing_ = false;
+            bottom_dock_visible_ = false;
+            bottom_dock_top_y_ = -1.0f;
+            prev_mouse_y_ = input.mouse_y;
+            return;
+        }
+
+        const float dpi = lfs::python::get_shared_dpi_scale();
+        const float status_bar_h = STATUS_BAR_HEIGHT * dpi;
+        const float panel_w = computeBottomDockWidth(show_main_panel, ui_hidden, screen);
+        const float max_panel_h = std::min(
+            (screen.work_size.y - status_bar_h) * BOTTOM_DOCK_MAX_RATIO,
+            screen.work_size.y - status_bar_h - MIN_VIEWPORT_HEIGHT * dpi);
+
+        if (panel_w <= 0.0f || max_panel_h <= 0.0f) {
+            bottom_dock_hovering_edge_ = false;
+            bottom_dock_resizing_ = false;
+            bottom_dock_visible_ = false;
+            bottom_dock_top_y_ = -1.0f;
+            prev_mouse_y_ = input.mouse_y;
+            return;
+        }
+
+        const float min_panel_h = std::min(BOTTOM_DOCK_MIN_HEIGHT * dpi, max_panel_h);
+        const float default_panel_h = BOTTOM_DOCK_DEFAULT_HEIGHT * dpi;
+        bottom_dock_height_ = std::clamp(
+            bottom_dock_height_ > 0.0f ? bottom_dock_height_ : default_panel_h,
+            min_panel_h,
+            max_panel_h);
+
+        const float panel_h = bottom_dock_height_;
+        const float panel_y = screen.work_pos.y + screen.work_size.y - status_bar_h - panel_h;
+        const float drawn_h = reg.draw_panels_direct_cached(PanelSpace::BottomDock,
+                                                            screen.work_pos.x,
+                                                            panel_y,
+                                                            panel_w,
+                                                            panel_h,
+                                                            draw_ctx,
+                                                            &input);
+        bottom_dock_visible_ = drawn_h > 0.0f;
+        bottom_dock_top_y_ = bottom_dock_visible_ ? panel_y : -1.0f;
+        prev_mouse_y_ = input.mouse_y;
+    }
+
     void PanelLayoutManager::adjustScenePanelRatio(float delta_y, const ScreenState& screen) {
         const float panel_h = screen.work_size.y - STATUS_BAR_HEIGHT * lfs::python::get_shared_dpi_scale();
         const float padding = 16.0f;

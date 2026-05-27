@@ -83,6 +83,9 @@ namespace lfs::vis::gui {
         void renderBottomDock(const PanelDrawContext& draw_ctx, bool show_main_panel,
                               bool ui_hidden, const PanelInputState& input,
                               const ScreenState& screen);
+        void renderBottomDockCached(const PanelDrawContext& draw_ctx, bool show_main_panel,
+                                    bool ui_hidden, const PanelInputState& input,
+                                    const ScreenState& screen);
 
         ViewportLayout computeViewportLayout(bool show_main_panel, bool ui_hidden,
                                              bool python_console_visible,

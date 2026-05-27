@@ -51,6 +51,7 @@ namespace lfs::vis {
             [[nodiscard]] float panelTopY() const { return panel_ && !panel_->isFloating() ? panel_->cachedPanelY() : -1.0f; }
             [[nodiscard]] bool blocksPointer(double x, double y) const;
             [[nodiscard]] bool blocksKeyboard() const;
+            [[nodiscard]] bool needsAnimationFrame() const;
             [[nodiscard]] float preferredFloatingHeight() const;
 
         private:

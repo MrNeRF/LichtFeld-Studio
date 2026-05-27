@@ -5140,8 +5140,20 @@ namespace lfs::vis::gui {
             panel_layout_.renderRightPanel(ctx, draw_ctx, show_main_panel_, ui_hidden_,
                                            window_states_, focus_panel_name_, panel_input, screen);
         }
-        panel_layout_.renderBottomDock(draw_ctx, show_main_panel_, ui_hidden_,
-                                       panel_input, screen);
+
+        const bool bottom_dock_input_activity =
+            (hasPointerActivity(sdl_input) && !mouse_in_viewport) ||
+            hasKeyboardActivity(sdl_input);
+        const bool bottom_dock_requires_live_layout =
+            ui_layout_changed || panel_layout_.isResizingPanel() ||
+            sequencer_ui_.needsAnimationFrame() || bottom_dock_input_activity;
+        if (block_underlay_input || !bottom_dock_requires_live_layout) {
+            panel_layout_.renderBottomDockCached(draw_ctx, show_main_panel_, ui_hidden_,
+                                                 panel_input, screen);
+        } else {
+            panel_layout_.renderBottomDock(draw_ctx, show_main_panel_, ui_hidden_,
+                                           panel_input, screen);
+        }
 
         applyFrameInputCapture(&rml_right_panel_);
 
