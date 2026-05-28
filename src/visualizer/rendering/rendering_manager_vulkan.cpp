@@ -926,7 +926,11 @@ namespace lfs::vis {
 
             if (camera && !camera->image_path().empty()) {
                 try {
-                    auto gt_tensor = camera->load_and_get_image(-1, render_size.x, false);
+                    // GT comparison loads a viewport-scaled preview. Do not publish that
+                    // transient size on the shared camera; training uses image dimensions
+                    // as its raster target and may be running concurrently.
+                    auto gt_tensor = camera->load_and_get_image(
+                        -1, render_size.x, false, false);
                     if (gt_tensor.is_valid() && gt_tensor.ndim() == 3) {
                         const auto gt_layout = lfs::rendering::detectImageLayout(gt_tensor);
                         if (gt_layout != lfs::rendering::ImageLayout::Unknown) {

@@ -608,19 +608,19 @@ float3 clamp_covariance_2d_extent(float3 cov_vs, float opacity_after_compensatio
 
 [ForceInline]
 [Differentiable]
-float4 add_blur_to_covariance2d(float3 cov_vs) {
+float4 add_blur_to_covariance2d(float3 cov_vs, no_diff bool mip_filter) {
     float4 result = float4(cov_vs, 1.0);
 
-    #if ANTIALIASE_MODE == 0
-        result.x += AA_EPS2D;
-        result.z += AA_EPS2D;
-    #elif ANTIALIASE_MODE == 1
+    if (mip_filter) {
         float old_det = compute_det(result.xyz);
-        result.x += AA_EPS2D;
-        result.z += AA_EPS2D;
+        result.x += DILATION_MIP_FILTER;
+        result.z += DILATION_MIP_FILTER;
         float new_det = compute_det(result.xyz);
         result.w = sqrt(max(0.f, old_det / new_det));
-    #endif
+    } else {
+        result.x += DILATION_3DGS;
+        result.z += DILATION_3DGS;
+    }
 
     return result;
 }
@@ -644,12 +644,12 @@ float2 undistort_fisheye(float2 uv, float4 dist_coeffs) {
 
 // returns (xx, xy, yy, compensation)
 [Differentiable]
-float4 covariance_3d_to_2d(Camera cam, float3 xyz_ws, float3x3 cov_ws) {
+float4 covariance_3d_to_2d(Camera cam, float3 xyz_ws, float3x3 cov_ws, no_diff bool mip_filter) {
     float3x3 R = (float3x3)cam.world_view_transform;
     float3x3 J = compute_jacobian(xyz_ws, cam);
     float3x3 cov_vs = mul(J, mul(R, mul(cov_ws, mul(transpose(R), transpose(J)))));
 
-    return add_blur_to_covariance2d(float3(cov_vs[0][0], cov_vs[0][1], cov_vs[1][1]));
+    return add_blur_to_covariance2d(float3(cov_vs[0][0], cov_vs[0][1], cov_vs[1][1]), mip_filter);
 }
 
 
@@ -1043,7 +1043,7 @@ struct Uniforms {
     uint camera_model;
     uint sort_capacity;
     uint shN_layout_slots;
-    uint pad1;
+    uint mip_filter;
     uint pad2;
     float fx;
     float fy;

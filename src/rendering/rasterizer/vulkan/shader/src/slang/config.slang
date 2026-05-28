@@ -8,12 +8,11 @@
 // triangles against the background.
 #define ALPHA_THRESHOLD (0.5f/255.f)
 
-// 0: vanilla 3DGS
-// 1: Mip-splatting
-#ifndef ANTIALIASE_MODE
-#define ANTIALIASE_MODE 0
-#endif
-#define AA_EPS2D 0.3
+// Matches the CUDA viewer/training rasterizer: the non-mip path dilates by
+// 0.3 px, while mip filtering uses less dilation and compensates opacity by
+// the covariance determinant ratio.
+#define DILATION_3DGS 0.3
+#define DILATION_MIP_FILTER 0.1
 
 #define TILE_HEIGHT 16
 #define TILE_WIDTH 16

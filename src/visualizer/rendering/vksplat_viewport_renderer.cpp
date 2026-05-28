@@ -923,7 +923,8 @@ namespace lfs::vis {
             const std::uint32_t shN_layout_slots,
             const std::size_t num_splats,
             const bool equirectangular,
-            const bool gut) {
+            const bool gut,
+            const bool mip_filter) {
             (void)scene;
             uniforms = {};
             uniforms.image_width = static_cast<std::uint32_t>(frame_view.size.x);
@@ -934,6 +935,7 @@ namespace lfs::vis {
             uniforms.active_sh = static_cast<std::uint32_t>(active_sh_degree);
             uniforms.shN_layout_slots = shN_layout_slots;
             uniforms.camera_model = packedVksplatCameraModel(frame_view, equirectangular, gut);
+            uniforms.mip_filter = mip_filter ? 1u : 0u;
 
             if (frame_view.orthographic) {
                 const float ortho_scale =
@@ -3211,7 +3213,8 @@ namespace lfs::vis {
                                       0,
                                       num_splats,
                                       request.equirectangular,
-                                      request.gut);
+                                      request.gut,
+                                      false);
         VulkanGSSelectionMaskUniforms selection_uniforms{};
         selection_uniforms.num_splats = static_cast<std::uint32_t>(num_splats);
         selection_uniforms.primitive_count = static_cast<std::uint32_t>(request.primitives.size());
@@ -3400,7 +3403,8 @@ namespace lfs::vis {
                                           renderShNLayoutSlots(resident_sh_degree, current_input_sh_degree_),
                                           buffers_.num_splats,
                                           request.equirectangular,
-                                          request.gut);
+                                          request.gut,
+                                          request.mip_filter);
             uniforms.step = static_cast<std::uint32_t>(modelTransformCount(request.scene.model_transforms));
             uniforms.sort_capacity = static_cast<uint32_t>(
                 std::min<std::size_t>(buffers_.num_indices,
@@ -3561,7 +3565,8 @@ namespace lfs::vis {
                                           renderShNLayoutSlots(active_sh_degree, current_input_sh_degree_),
                                           buffers_.num_splats,
                                           request.equirectangular,
-                                          request.gut);
+                                          request.gut,
+                                          request.mip_filter);
             uniforms.step = static_cast<std::uint32_t>(modelTransformCount(request.scene.model_transforms));
         }
 

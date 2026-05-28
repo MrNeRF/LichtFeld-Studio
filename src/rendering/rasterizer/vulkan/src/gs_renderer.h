@@ -18,7 +18,7 @@ PACK_STRUCT(struct VulkanGSRendererUniforms {
     uint32_t camera_model;
     uint32_t sort_capacity;
     uint32_t shN_layout_slots;
-    uint32_t pad1;
+    uint32_t mip_filter;
     uint32_t pad2;
     float fx;
     float fy;
@@ -27,6 +27,7 @@ PACK_STRUCT(struct VulkanGSRendererUniforms {
     float dist_coeffs[4];
     float world_view_transform[16];
 });
+static_assert(sizeof(VulkanGSRendererUniforms) == 144);
 
 PACK_STRUCT(struct VulkanGSSelectionMaskUniforms {
     uint32_t num_splats;

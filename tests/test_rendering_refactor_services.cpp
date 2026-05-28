@@ -5,9 +5,12 @@
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
 #include "core/events.hpp"
+#include "core/image_io.hpp"
+#include "core/image_loader.hpp"
 #include "core/point_cloud.hpp"
 #include "core/services.hpp"
 #include "core/tensor.hpp"
+#include "io/cache_image_loader.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "visualizer/rendering/render_pass.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
@@ -18,6 +21,7 @@
 #include "visualizer/rendering/viewport_request_builder.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -75,6 +79,24 @@ namespace lfs::vis {
                     EXPECT_NEAR(actual[col][row], expected[col][row], epsilon);
                 }
             }
+        }
+
+        void ensureCameraImageLoader() {
+            static bool initialized = false;
+            if (initialized) {
+                return;
+            }
+
+            lfs::io::CacheLoader::getInstance(false, false);
+            lfs::core::set_image_loader([](const lfs::core::ImageLoadParams& p) {
+                return lfs::io::CacheLoader::getInstance().load_cached_image(
+                    p.path,
+                    {.resize_factor = p.resize_factor,
+                     .max_width = p.max_width,
+                     .cuda_stream = p.stream,
+                     .output_uint8 = p.output_uint8});
+            });
+            initialized = true;
         }
     } // namespace
 
@@ -244,6 +266,59 @@ namespace lfs::vis {
         EXPECT_FLOAT_EQ(render_camera->intrinsics->center_x, 640.0f);
         EXPECT_FLOAT_EQ(render_camera->intrinsics->center_y, 480.0f);
         EXPECT_FALSE(render_camera->equirectangular);
+    }
+
+    TEST(CameraImageLoadTest, PreviewLoadsCanAvoidMutatingCameraImageDimensions) {
+        using lfs::core::Camera;
+        using lfs::core::CameraModelType;
+        using lfs::core::DataType;
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+
+        ensureCameraImageLoader();
+
+        const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+        const auto image_path = std::filesystem::temp_directory_path() /
+                                ("lfs_camera_preview_" + std::to_string(now) + ".png");
+        auto image = Tensor::zeros({size_t{6}, size_t{8}, size_t{3}}, Device::CPU, DataType::UInt8);
+        ASSERT_NO_THROW(lfs::core::save_image(image_path, image));
+
+        Camera camera(
+            Tensor::from_vector(
+                {1.0f, 0.0f, 0.0f,
+                 0.0f, 1.0f, 0.0f,
+                 0.0f, 0.0f, 1.0f},
+                {size_t{3}, size_t{3}},
+                Device::CPU),
+            Tensor::from_vector({0.0f, 0.0f, 0.0f}, {size_t{3}}, Device::CPU),
+            500.0f,
+            500.0f,
+            4.0f,
+            3.0f,
+            Tensor(),
+            Tensor(),
+            CameraModelType::PINHOLE,
+            "preview.png",
+            image_path,
+            {},
+            8,
+            6,
+            42);
+
+        auto preview = camera.load_and_get_image(-1, 4, false, false);
+        ASSERT_TRUE(preview.is_valid());
+        ASSERT_EQ(preview.ndim(), 3);
+        EXPECT_EQ(static_cast<int>(preview.shape()[1]), 3);
+        EXPECT_EQ(static_cast<int>(preview.shape()[2]), 4);
+        EXPECT_EQ(camera.image_width(), 8);
+        EXPECT_EQ(camera.image_height(), 6);
+
+        auto published = camera.load_and_get_image(-1, 4, false, true);
+        ASSERT_TRUE(published.is_valid());
+        EXPECT_EQ(camera.image_width(), 4);
+        EXPECT_EQ(camera.image_height(), 3);
+
+        std::filesystem::remove(image_path);
     }
 
     TEST(SplitViewServiceTest, SharedCameraPoseHelperNormalizesSceneRotationAndAppliesVisualizerAxes) {

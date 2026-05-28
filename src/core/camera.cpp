@@ -259,7 +259,8 @@ namespace lfs::core {
         return {_focal_x * x_scale, _focal_y * y_scale, _center_x * x_scale, _center_y * y_scale};
     }
 
-    Tensor Camera::load_and_get_image(int resize_factor, int max_width, const bool output_uint8) {
+    Tensor Camera::load_and_get_image(int resize_factor, int max_width, const bool output_uint8,
+                                      const bool update_dimensions) {
         const ImageLoadParams params{
             .path = _image_path,
             .resize_factor = resize_factor,
@@ -269,9 +270,11 @@ namespace lfs::core {
 
         auto image = load_image_cached(params);
 
-        const auto shape = image.shape();
-        _image_width = shape[2];
-        _image_height = shape[1];
+        if (update_dimensions) {
+            const auto shape = image.shape();
+            _image_width = shape[2];
+            _image_height = shape[1];
+        }
 
         if (image.device() != Device::CUDA) {
             image = image.to(Device::CUDA, _stream);
