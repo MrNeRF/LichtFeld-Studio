@@ -4959,7 +4959,7 @@ namespace lfs::vis::gui {
         const bool right_panel_visible = show_main_panel_ && !ui_hidden_;
         PanelAnimationDemand panel_animation_demand;
         {
-            LOG_TIMER("gui_render.damage_bus_query");
+            LOG_TIMER_THRESHOLD("gui_render.panel_animation_demand", 0.01);
             panel_animation_demand =
                 reg.animationDemandForVisiblePanels({
                     .active_main_tab = panel_layout_.getActiveTab(),

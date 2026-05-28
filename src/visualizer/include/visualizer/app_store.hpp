@@ -21,7 +21,7 @@ namespace lfs::vis {
 
     class LFS_VIS_API AppStore {
     public:
-        struct CameraMetrics {
+        struct LFS_VIS_API CameraMetrics {
             int camera_id = -1;
             int iteration = -1;
             float psnr = 0.0f;
@@ -31,7 +31,7 @@ namespace lfs::vis {
             bool operator==(const CameraMetrics&) const = default;
         };
 
-        struct GTMetricsOverlayConfig {
+        struct LFS_VIS_API GTMetricsOverlayConfig {
             bool visible = false;
             float x = 16.0f;
             float y = 16.0f;
@@ -47,7 +47,7 @@ namespace lfs::vis {
             }
         };
 
-        struct VramHud {
+        struct LFS_VIS_API VramHud {
             bool visible = false;
             std::shared_ptr<const lfs::diagnostics::VramProfilerSnapshot> snapshot;
 

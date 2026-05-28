@@ -1322,7 +1322,7 @@ namespace lfs::vis {
 
         bool store_dirty = false;
         {
-            LOG_TIMER("gui_render.reactive_store_drain");
+            LOG_TIMER_THRESHOLD("gui_render.reactive_store_drain", 0.05);
             store_dirty = app_store().store().drain_dirty_into_frame();
         }
 
