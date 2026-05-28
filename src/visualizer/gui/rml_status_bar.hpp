@@ -133,6 +133,8 @@ namespace lfs::vis::gui {
         std::chrono::steady_clock::time_point next_gpu_refresh_at_{};
         bool model_dirty_ = true;
         bool animation_active_ = false;
+        bool reactive_fps_available_ = false;
+        float reactive_fps_value_ = 0.0f;
         std::vector<lfs::core::reactive::SubscriptionToken> subscriptions_;
         int last_render_w_ = 0;
         int last_render_h_ = 0;

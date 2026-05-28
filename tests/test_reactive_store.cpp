@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <memory>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 #include <gtest/gtest.h>
@@ -115,6 +116,25 @@ TEST(ReactiveStoreTest, MultiThreadProducersSingleGuiDrain) {
 
     EXPECT_TRUE(store.drain_dirty_into_frame());
     EXPECT_EQ(callback_count.load(), kFields);
+}
+
+TEST(ReactiveStoreTest, SubscriberExceptionDoesNotStopRemainingSubscribers) {
+    Store store;
+    Observable<int> value(store, 1, "value", 0);
+
+    int callback_count = 0;
+    auto throwing_token = value.subscribe([](const int&) {
+        throw std::runtime_error("subscriber failure");
+    });
+    auto succeeding_token = value.subscribe([&](const int&) {
+        ++callback_count;
+    });
+
+    value.set(1);
+
+    EXPECT_TRUE(store.drain_dirty_into_frame());
+    EXPECT_EQ(callback_count, 1);
+    EXPECT_FALSE(store.has_dirty());
 }
 
 TEST(ReactiveStoreTest, EnqueueWakesMainThread) {

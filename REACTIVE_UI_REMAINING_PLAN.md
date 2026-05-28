@@ -29,7 +29,9 @@ Last completed commits:
 - `65043c70b Make image preview panel dirty-driven`
 
 Current verified state:
-- Merge from `origin/master` is complete.
+- Merge from `origin/master` is complete, including the GT camera-metrics crash fix and Vulkan mip-toggle fix.
+- `AppStore.fps` store publications now drive the status-bar FPS value after the first reactive FPS update instead of only dirtying a repaint that still read `RenderingManager::getAverageFPS()`.
+- Reactive store subscriber exceptions are logged per callback and no longer abort the rest of the GUI-thread drain.
 - First-party Python plugin panels no longer define `update_interval_ms`.
 - Python panel updates are dirty/reactive driven through `NativeAppStore` subscriptions, explicit model update requests, or targeted deferred timers.
 - Menu bar label localization/copying is gated by menu source version plus `language_generation`.
@@ -53,7 +55,7 @@ Current verified state:
 - Last end-to-end smoke passed via MCP/runtime inspection: `./build/LichtFeld-Studio -d data/bicycle --output-path output --images images_4 --strategy mcmc --max-cap 1500000 --log-level perf --log-file /tmp/reactive-ui-perf.log --train -i 7000 --no-splash`.
 - Fresh smoke metrics: `gui_render.cpu_ui_before_vulkan_begin` across 768 rendered frames had median 0.31 ms, p95 0.57 ms, p99 0.99 ms, max 42.34 ms from startup/preload. After training finished, idle wakes logged `loop_idle skip_gui_render=true` with zero GUI render work.
 - Surgical `fps` store update passed via MCP `editor.run`: three `NativeAppStore.fps.value` updates produced only cached right-panel and viewport-overlay branches plus status-bar cache refreshes; no live `renderRightPanel` calls. Post-update CPU UI across 6 rendered frames had median 0.98 ms, p99 1.21 ms, max 1.55 ms, then idle skips resumed.
-- Last broad Python panel slice passed: 191 tests.
+- Last broad Python panel slice passed: 204 tests.
 - Last frame-router slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Shell*:*Rml*:*Menu*:*Modal*:*Startup*'` and the 191-test Python panel suite.
 - Last editor-context router slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Selection*:*Rml*:*Menu*:*Modal*:*Startup*:VisualizerPostWorkTest.*'` and 67 Python toolbar/rendering/training/selection tests.
 - Last right-panel input slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Rml*:*Menu*:*Modal*:*Startup*:VisualizerPostWorkTest.*'` and 68 Python rendering/training/selection/input tests.
@@ -71,6 +73,8 @@ Current verified state:
 - Last focused sequencer C++ slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Sequencer*'`.
 - Last focused shell/Rml C++ slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Shell*:*Rml*'`.
 - Last C++ build passed: `cmake --build build -j16`.
+- Last post-merge focused C++ slice passed: `./build/tests/lichtfeld_tests --gtest_filter='ReactiveStoreTest.*:CameraImageLoadTest.*:SplitViewServiceTest.GtRenderCameraUsesVisualizerCameraAxesAndNormalizedSceneRotation:SplitViewServiceTest.SharedCameraPoseHelperNormalizesSceneRotationAndAppliesVisualizerAxes:SplitViewServiceTest.GtComparisonPlanPreservesGtTextureOrigin:RenderSettingsBackendNormalization.*:RenderSettingsProxy.*'`.
+- Last post-merge Python panel slice passed: `build/vcpkg_installed/x64-linux/tools/python3/python3.12 -m pytest tests/python/test_rmlui_image_sources.py tests/python/test_histogram_panel.py tests/python/test_asset_manager_panel.py tests/python/test_scripts_panel.py tests/python/test_selection_groups_panel.py tests/python/test_mesh2splat_panel.py tests/python/test_plugin_marketplace_panel.py tests/python/test_export_panel.py tests/python/test_import_dialog_panels.py tests/python/test_input_settings_panel.py tests/python/test_rendering_panel_regressions.py tests/python/test_training_panel_regressions.py tests/python/test_store.py tests/python/test_viewport_overlay_hooks.py`.
 
 ## Remaining Goal
 
@@ -96,27 +100,14 @@ Drive idle GUI CPU toward zero and keep p99 CPU UI work under 2 ms by removing r
 - Idle menu bar hover scan skip: `6dbdbfe60`.
 - Stable gizmo tool-state update skip: `781779335`.
 
-## Next Batch 1: Frame Router Cleanup
+## Remaining Follow-Ups
 
-Focus files:
-- `src/visualizer/gui/gui_manager.cpp`
-- `src/visualizer/visualizer_impl.cpp`
+The frame-router/cache migration has passed the recorded idle and p99 targets on this branch. Remaining work is release hygiene rather than another required hot-path batch:
 
-Tasks:
-- Tighten `GuiManager::render()` into explicit demand checks:
-  - menu bar
-  - right panel
-  - bottom dock
-  - viewport overlay
-  - status bar
-  - modal/context menu
-  - startup overlay
-- Keep `FrameDemand::store_dirty` in the top-level skip gate.
-- Add or preserve `LOG_PERF` evidence around each branch.
-
-Acceptance:
-- Idle `loop_idle skip_gui_render=true` fires consistently after training stops.
-- Store-only updates redraw only the affected RmlUi host/context.
+- Run OS-level main-thread/process idle CPU measurement on the release validation machine.
+- Keep the legacy Python UI hook API during the planned deprecation window, then remove it in the scheduled EOL release.
+- Revisit native GT metrics / VRAM HUD DOM updates only if future profiling shows churn there; the current path is event-driven and cached.
+- Re-run the smoke/perf command after any additional router or panel invalidation change.
 
 ## Final Verification
 

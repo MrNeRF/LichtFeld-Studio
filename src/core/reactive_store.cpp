@@ -3,6 +3,8 @@
 
 #include "core/reactive/store.hpp"
 
+#include "core/logger.hpp"
+
 #include <algorithm>
 #include <cassert>
 #include <mutex>
@@ -152,8 +154,15 @@ namespace lfs::core::reactive {
                     }
                 }
 
-                for (auto& callback : callbacks)
-                    callback();
+                for (auto& callback : callbacks) {
+                    try {
+                        callback();
+                    } catch (const std::exception& e) {
+                        LOG_ERROR("Reactive store subscriber failed for field {}: {}", field_id, e.what());
+                    } catch (...) {
+                        LOG_ERROR("Reactive store subscriber failed for field {} with an unknown exception", field_id);
+                    }
+                }
             }
         } catch (...) {
             draining_.store(false, std::memory_order_release);

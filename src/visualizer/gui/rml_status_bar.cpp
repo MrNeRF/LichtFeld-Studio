@@ -341,7 +341,11 @@ namespace lfs::vis::gui {
         bind(store.eval_ssim);
         bind(store.scene_generation);
         bind(store.selection_generation);
-        bind(store.fps);
+        subscriptions_.push_back(store.fps.subscribe([this](const float& fps) {
+            reactive_fps_available_ = true;
+            reactive_fps_value_ = fps;
+            markModelDirty();
+        }));
         bind(store.mode_text);
     }
 
@@ -655,7 +659,8 @@ namespace lfs::vis::gui {
         setModelString("gpu_mem_color", model_.gpu_mem_color, colorToRml(mem_color));
 
         // FPS
-        float fps = rm ? rm->getAverageFPS() : 0.0f;
+        float fps = reactive_fps_available_ ? reactive_fps_value_
+                                            : (rm ? rm->getAverageFPS() : 0.0f);
         ImVec4 fps_col = fps >= 30.0f ? p.success : (fps >= 15.0f ? p.warning : p.error);
         setModelString("fps_value", model_.fps_value, std::format("{:.0f}", fps));
         setModelString("fps_color", model_.fps_color, colorToRml(fps_col));
