@@ -3,7 +3,7 @@
 Current branch: `reactive_ui`
 
 Last completed commits:
-- `3e3724611 Skip stable gizmo tool-state updates`
+- `781779335 Skip stable gizmo tool-state updates`
 - `6dbdbfe60 Skip idle menu bar hover scans`
 - `54f94aeae Skip idle viewport overlay input hit tests`
 - `8b351724d Skip idle right panel input hit tests`
@@ -50,6 +50,8 @@ Current verified state:
 - `RmlMenuBar::processInput()` now reuses the previous hovered menu label on unchanged, pointer-idle frames with stable context size and no pending render work.
 - `GizmoManager::updateToolState()` is source-stamped and returns early when selected-node presence, active tool, gizmo type, selection submode, UI visibility, and tool/renderer ownership are stable.
 - Last gizmo/tool-state slice passed: `cmake --build build -j16`, 38 focused Python toolbar/tool/rendering/selection/input tests, and 14 non-GPU C++ input/Rml/post-work tests.
+- Last end-to-end smoke passed via MCP/runtime inspection: `./build/LichtFeld-Studio -d data/bicycle --output-path output --images images_4 --strategy mcmc --max-cap 1500000 --log-level perf --log-file /tmp/reactive-ui-perf.log --train -i 7000 --no-splash`.
+- Fresh smoke metrics: `gui_render.cpu_ui_before_vulkan_begin` across 768 rendered frames had median 0.31 ms, p95 0.57 ms, p99 0.99 ms, max 42.34 ms from startup/preload. After training finished, idle wakes logged `loop_idle skip_gui_render=true` with zero GUI render work.
 - Last broad Python panel slice passed: 191 tests.
 - Last frame-router slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Shell*:*Rml*:*Menu*:*Modal*:*Startup*'` and the 191-test Python panel suite.
 - Last editor-context router slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Selection*:*Rml*:*Menu*:*Modal*:*Startup*:VisualizerPostWorkTest.*'` and 67 Python toolbar/rendering/training/selection tests.
@@ -91,7 +93,7 @@ Drive idle GUI CPU toward zero and keep p99 CPU UI work under 2 ms by removing r
 - Idle right panel input hit-test skip: `8b351724d`.
 - Idle viewport overlay input hit-test skip: `54f94aeae`.
 - Idle menu bar hover scan skip: `6dbdbfe60`.
-- Stable gizmo tool-state update skip: `3e3724611`.
+- Stable gizmo tool-state update skip: `781779335`.
 
 ## Next Batch 1: Frame Router Cleanup
 
@@ -140,7 +142,8 @@ End-to-end smoke:
 
 ```bash
 ./build/LichtFeld-Studio -d data/bicycle --output-path output --images images_4 \
-  --strategy mcmc --max-cap 1500000 --log-level debug --train -i 7000 --start
+  --strategy mcmc --max-cap 1500000 --log-level perf \
+  --log-file /tmp/reactive-ui-perf.log --train -i 7000 --no-splash
 ```
 
 Hard targets:
