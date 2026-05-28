@@ -14,7 +14,7 @@ from . import rml_widgets as w
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
 from .ui.state import AppState
-from .ui.store import AppStore as NativeAppStore
+from .ui.store import AppStore as NativeAppStore, PanelStoreBinding
 
 # Asset Manager integration (optional)
 try:
@@ -419,7 +419,7 @@ class TrainingPanel(Panel):
         self._psnr_tick_mid = ""
         self._psnr_tick_min = ""
         self._last_panel_label = ""
-        self._reactive_unsubscribers = []
+        self._reactive_binding = PanelStoreBinding()
         self._deferred_update_pending = False
         self._deferred_update_deadline = None
         self._deferred_update_generation = 0
@@ -1154,7 +1154,7 @@ class TrainingPanel(Panel):
         self._request_reactive_update()
 
     def _subscribe_reactive_state(self):
-        if self._reactive_unsubscribers:
+        if self._reactive_binding.active:
             return
 
         native_signals = (
@@ -1169,18 +1169,10 @@ class TrainingPanel(Panel):
             NativeAppStore.scene_generation,
             NativeAppStore.language_generation,
         )
-        self._reactive_unsubscribers = [
-            signal.subscribe(lambda _value: self._request_reactive_update())
-            for signal in native_signals
-        ]
+        self._reactive_binding.set_handle(self._handle).watch(*native_signals)
 
     def _unsubscribe_reactive_state(self):
-        for unsubscribe in self._reactive_unsubscribers:
-            try:
-                unsubscribe()
-            except Exception:
-                pass
-        self._reactive_unsubscribers = []
+        self._reactive_binding.close()
 
     def _request_reactive_update(self):
         if self._handle:

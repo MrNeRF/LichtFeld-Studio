@@ -5,7 +5,7 @@
 import pytest
 
 from lfs_plugins.ui import store as store_module
-from lfs_plugins.ui.store import AppStore, StoreSignal, batch_updates
+from lfs_plugins.ui.store import AppStore, PanelStoreBinding, StoreSignal, batch_updates, invalidate_panel
 
 
 @pytest.fixture(autouse=True)
@@ -144,3 +144,70 @@ def test_native_batch_is_closed_on_exception(monkeypatch):
             raise RuntimeError("boom")
 
     assert native.batch_events == ["begin", "end"]
+
+
+class _PanelHandle:
+    def __init__(self):
+        self.request_count = 0
+        self.dirty_fields = []
+        self.dirty_all_count = 0
+
+    def request_update(self):
+        self.request_count += 1
+
+    def dirty(self, field):
+        self.dirty_fields.append(field)
+
+    def dirty_all(self):
+        self.dirty_all_count += 1
+
+
+def test_invalidate_panel_uses_request_update_for_default_dirty_policy():
+    handle = _PanelHandle()
+
+    invalidate_panel(handle)
+
+    assert handle.request_count == 1
+    assert handle.dirty_fields == []
+    assert handle.dirty_all_count == 0
+
+
+def test_invalidate_panel_supports_field_and_full_model_dirtying():
+    handle = _PanelHandle()
+
+    invalidate_panel(handle, "title")
+    invalidate_panel(handle, ("rows", "empty_state"))
+    invalidate_panel(handle, "*")
+
+    assert handle.dirty_fields == ["title", "rows", "empty_state"]
+    assert handle.dirty_all_count == 1
+
+
+def test_panel_store_binding_owns_subscriptions_and_invalidates_handle():
+    signal = StoreSignal[int]("selection_generation", 0)
+    handle = _PanelHandle()
+    refreshes = []
+
+    binding = PanelStoreBinding(handle).watch(
+        signal,
+        refresh=lambda: refreshes.append("refresh"),
+    )
+
+    signal.value = 1
+    binding.close()
+    signal.value = 2
+
+    assert refreshes == ["refresh"]
+    assert handle.request_count == 1
+
+
+def test_panel_store_binding_can_dirty_specific_model_fields():
+    signal = StoreSignal[int]("language_generation", 0)
+    handle = _PanelHandle()
+
+    PanelStoreBinding(handle).watch(signal, dirty=("label", "tooltip"))
+
+    signal.value = 1
+
+    assert handle.request_count == 0
+    assert handle.dirty_fields == ["label", "tooltip"]

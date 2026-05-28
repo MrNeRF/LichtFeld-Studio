@@ -10,7 +10,7 @@ import lichtfeld as lf
 from . import rml_widgets as w
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
-from .ui.store import AppStore as NativeAppStore, native_value as _native_store_value
+from .ui.store import AppStore as NativeAppStore, PanelStoreBinding, native_value as _native_store_value
 
 __lfs_panel_classes__ = ["RenderingPanel"]
 __lfs_panel_ids__ = ["lfs.rendering"]
@@ -262,7 +262,7 @@ class RenderingPanel(Panel):
             self._get_scrub_value,
             self._set_scrub_value,
         )
-        self._reactive_unsubscribers = []
+        self._reactive_binding = PanelStoreBinding()
 
     def _sync_panel_label(self):
         label = tr("window.rendering")
@@ -298,7 +298,7 @@ class RenderingPanel(Panel):
         self._request_reactive_update()
 
     def _subscribe_reactive_state(self):
-        if self._reactive_unsubscribers:
+        if self._reactive_binding.active:
             return
 
         native_signals = (
@@ -310,18 +310,10 @@ class RenderingPanel(Panel):
             NativeAppStore.splat_simplify_state,
             NativeAppStore.language_generation,
         )
-        self._reactive_unsubscribers = [
-            signal.subscribe(lambda _value: self._request_reactive_update())
-            for signal in native_signals
-        ]
+        self._reactive_binding.set_handle(self._handle).watch(*native_signals)
 
     def _unsubscribe_reactive_state(self):
-        for unsubscribe in self._reactive_unsubscribers:
-            try:
-                unsubscribe()
-            except Exception:
-                pass
-        self._reactive_unsubscribers = []
+        self._reactive_binding.close()
 
     def _request_reactive_update(self):
         if self._handle:

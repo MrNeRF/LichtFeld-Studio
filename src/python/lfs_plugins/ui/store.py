@@ -5,12 +5,13 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from contextlib import contextmanager
 from threading import Lock
-from typing import Generic, TypeVar
+from typing import Generic, TypeAlias, TypeVar
 
 T = TypeVar("T")
+DirtySpec: TypeAlias = str | Iterable[str] | None
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +110,93 @@ class StoreSignal(Generic[T]):
 
     def peek(self) -> T:
         return self.value
+
+
+def invalidate_panel(handle: object | None, dirty: DirtySpec = None) -> None:
+    """Invalidate an RML data model handle using the most surgical available path."""
+    if handle is None:
+        return
+
+    if dirty is None:
+        request_update = getattr(handle, "request_update", None)
+        if callable(request_update):
+            request_update()
+            return
+
+        dirty_all = getattr(handle, "dirty_all", None)
+        if callable(dirty_all):
+            dirty_all()
+        return
+
+    if dirty == "*":
+        dirty_all = getattr(handle, "dirty_all", None)
+        if callable(dirty_all):
+            dirty_all()
+        return
+
+    dirty_field = getattr(handle, "dirty", None)
+    if not callable(dirty_field):
+        return
+
+    if isinstance(dirty, str):
+        dirty_field(dirty)
+        return
+
+    for field in dirty:
+        dirty_field(field)
+
+
+class PanelStoreBinding:
+    """Own store subscriptions for a dirty-policy RML panel.
+
+    Common panel code should use this instead of hand-written subscription
+    lists. The binding keeps lifetime and data-model invalidation together.
+    """
+
+    __slots__ = ("_handle", "_unsubscribers")
+
+    def __init__(self, handle: object | None = None) -> None:
+        self._handle = handle
+        self._unsubscribers: list[Callable[[], None]] = []
+
+    @property
+    def active(self) -> bool:
+        return bool(self._unsubscribers)
+
+    def set_handle(self, handle: object | None) -> PanelStoreBinding:
+        self._handle = handle
+        return self
+
+    def watch(
+        self,
+        *signals: StoreSignal[object],
+        refresh: Callable[[], None] | None = None,
+        dirty: DirtySpec = None,
+        immediate: bool = False,
+    ) -> PanelStoreBinding:
+        """Refresh and invalidate the panel when any store signal changes."""
+
+        def on_change(_value: object) -> None:
+            if refresh is not None:
+                refresh()
+            invalidate_panel(self._handle, dirty)
+
+        for signal in signals:
+            self._unsubscribers.append(signal.subscribe(on_change))
+
+        if immediate:
+            on_change(None)
+
+        return self
+
+    def close(self) -> None:
+        unsubscribers = self._unsubscribers
+        self._unsubscribers = []
+        for unsubscribe in unsubscribers:
+            try:
+                unsubscribe()
+            except Exception:
+                logger.exception("Panel store unsubscribe failed")
 
 
 class AppStore:
