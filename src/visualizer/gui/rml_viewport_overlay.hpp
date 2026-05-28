@@ -12,6 +12,7 @@
 #include <RmlUi/Core/DataModelHandle.h>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <glm/glm.hpp>
 #include <memory>
 #include <optional>
@@ -83,6 +84,24 @@ namespace lfs::vis::gui {
         void applyGTMetricsOverlay();
         bool applyFrameTooltip();
         void queueCachedVulkanContext(bool refresh_cache);
+        enum class RenderReason : std::uint32_t {
+            Initial = 1u << 0,
+            Reload = 1u << 1,
+            DocumentSync = 1u << 2,
+            DocumentHook = 1u << 3,
+            ViewportResize = 1u << 4,
+            ToolbarLayout = 1u << 5,
+            GTMetrics = 1u << 6,
+            VramHud = 1u << 7,
+            DataModelBinding = 1u << 8,
+            PointerHover = 1u << 9,
+            PointerButton = 1u << 10,
+            PointerWheel = 1u << 11,
+            PointerDrag = 1u << 12,
+            Keyboard = 1u << 13,
+        };
+        void markRenderNeeded(RenderReason reason);
+        [[nodiscard]] std::string renderReasonSources() const;
 
         RmlUIManager* rml_manager_ = nullptr;
         Rml::Context* rml_context_ = nullptr;
@@ -110,6 +129,7 @@ namespace lfs::vis::gui {
         bool wants_input_ = false;
         bool doc_registered_ = false;
         bool render_needed_ = true;
+        std::uint32_t render_reason_bits_ = static_cast<std::uint32_t>(RenderReason::Initial);
         bool document_sync_dirty_ = true;
         bool data_model_binding_dirty_ = true;
         bool animation_active_ = false;

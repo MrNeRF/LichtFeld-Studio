@@ -84,17 +84,8 @@ public:
                             VmaAllocator external_allocator);
     void cleanup();
 
-    // Drop the cached num_indices estimate; the next executeCalculateIndexBufferOffset
-    // will re-seed via a heuristic and reallocate sort buffers as the GPU writes
-    // arrive. Call this when the splat model identity changes (different SplatData,
-    // densification step, etc.) to keep the deferred readback correct.
-    void resetNumIndicesEstimate();
-    void tagDeferredReadbacks(VkSemaphore semaphore, std::uint64_t value);
+    void tagDeferredVisibleCountReadback(VkSemaphore semaphore, std::uint64_t value);
     [[nodiscard]] std::optional<PrimitiveVisibilityStats> pollDeferredPrimitiveVisibilityStats();
-    [[nodiscard]] size_t lastObservedNumIndices() const { return last_observed_num_indices_; }
-    [[nodiscard]] size_t updateNumIndicesEstimate(uint32_t grid_width,
-                                                  uint32_t grid_height,
-                                                  size_t num_splats);
     [[nodiscard]] bool shrinkSortBuffersForCapacity(VulkanGSPipelineBuffers& buffers,
                                                     size_t target_capacity);
 
@@ -209,26 +200,6 @@ protected:
     } pipeline_sorting_indirect_1, pipeline_sorting_indirect_2;
     _ComputePipeline pipeline_null = _ComputePipeline(0);
 
-    // Deferred (1-frame-stale) num_indices readback, replacing the synchronous
-    // mid-frame readElement that used to drain the queue every frame. The mapped
-    // pointer is invalidated/read at the start of the next frame's
-    // executeCalculateIndexBufferOffset after the tagged timeline has signaled.
-    _VulkanBuffer num_indices_readback_buffer_{};
-    int32_t* num_indices_readback_mapped_ = nullptr;
-    bool num_indices_readback_initialized_ = false;
-    bool num_indices_readback_pending_ = false;
-    VkSemaphore num_indices_readback_signal_ = VK_NULL_HANDLE;
-    std::uint64_t num_indices_readback_value_ = 0;
-    size_t num_indices_estimate_ = 0;
-    size_t last_observed_num_indices_ = 0;
-    uint32_t num_indices_estimate_grid_width_ = 0;
-    uint32_t num_indices_estimate_grid_height_ = 0;
-    uint32_t num_indices_readback_grid_width_ = 0;
-    uint32_t num_indices_readback_grid_height_ = 0;
-
-    void ensureNumIndicesReadback();
-    void destroyNumIndicesReadback();
-    size_t pollDeferredNumIndices();
     bool invalidateReadbackBuffer(_VulkanBuffer& buffer, VkDeviceSize size);
 
     // Deferred visible-count readback for diagnostics. The copy is recorded after

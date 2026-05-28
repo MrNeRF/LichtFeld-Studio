@@ -1071,9 +1071,6 @@ namespace lfs::vis {
         for (auto& snap : ring_uploaded_) {
             snap = {};
         }
-        for (auto& snap : ring_model_snapshot_) {
-            snap = {};
-        }
         for (auto& timeline : upload_timelines_) {
             timeline.cuda_semaphore.reset();
             if (context_) {
@@ -1248,7 +1245,6 @@ namespace lfs::vis {
         slot.region_offset = {};
         slot.region_bytes = {};
         ring_uploaded_[ring_slot] = {};
-        ring_model_snapshot_[ring_slot] = {};
     }
 
     void VksplatViewportRenderer::releaseOpacityCopySlot(VulkanContext& context, const std::size_t ring_slot) {
@@ -2090,7 +2086,6 @@ namespace lfs::vis {
             releaseOpacityCopySlot(context, ring_slot);
         }
         ring_uploaded_[ring_slot] = {};
-        ring_model_snapshot_[ring_slot] = {};
         return std::unexpected(std::format(
             "VkSplat refusing full input-copy fallback; model tensors must use Vulkan-external storage ({})",
             input_copy_reason));
@@ -2910,11 +2905,6 @@ namespace lfs::vis {
             }
         }
 
-        const auto current_model_snapshot = makeModelInputSnapshot(splat_data);
-        const bool model_inputs_changed =
-            force_input_upload ||
-            !ring_model_snapshot_[ring_slot].valid() ||
-            ring_model_snapshot_[ring_slot] != current_model_snapshot;
         auto input_binding = [&] {
             LOG_TIMER("VksplatViewportRenderer::buildSelectionMask.prepareInputs");
             return prepareInputs(context, splat_data, ring_slot, force_input_upload,
@@ -2924,10 +2914,6 @@ namespace lfs::vis {
         if (!input_binding) {
             return std::unexpected(input_binding.error());
         }
-        if (model_inputs_changed) {
-            renderer_.resetNumIndicesEstimate();
-        }
-        ring_model_snapshot_[ring_slot] = current_model_snapshot;
         // Intentionally do NOT release ring_slot here. The slot's CUDA-imported
         // Vulkan buffer + uploaded splat data stay resident across selection
         // calls, so the next prepareInputs() hits the inputsResident() fast
@@ -3512,11 +3498,6 @@ namespace lfs::vis {
                      ratio);
         }
 
-        const auto current_model_snapshot = makeModelInputSnapshot(splat_data);
-        const bool model_inputs_changed =
-            force_input_upload ||
-            !ring_model_snapshot_[ring_slot].valid() ||
-            ring_model_snapshot_[ring_slot] != current_model_snapshot;
         auto input_binding = prepareInputs(context,
                                            splat_data,
                                            ring_slot,
@@ -3526,14 +3507,6 @@ namespace lfs::vis {
         if (!input_binding) {
             return std::unexpected(input_binding.error());
         }
-        if (model_inputs_changed) {
-            // Drop the deferred-readback high-water-mark whenever the model identity
-            // changes; a fresh model can have a wildly different num_indices range,
-            // and stale estimates risk under-sizing the sort buffers (or wasting VRAM
-            // if oversized). The next frame re-seeds via heuristic and grows from there.
-            renderer_.resetNumIndicesEstimate();
-        }
-        ring_model_snapshot_[ring_slot] = current_model_snapshot;
         // Keep the ring slot's buffer + CUDA import alive across frames so
         // prepareInputs() can hit the resident fast path. Input-slot sort
         // aliasing is disabled in the async path because overwriting the upload
@@ -3571,25 +3544,14 @@ namespace lfs::vis {
         }
 
         const std::size_t target_sort_capacity =
-            renderer_.updateNumIndicesEstimate(uniforms.grid_width,
-                                               uniforms.grid_height,
-                                               buffers_.num_splats);
+            std::max(buffers_.num_indices, buffers_.num_splats);
         if (renderer_.shrinkSortBuffersForCapacity(buffers_, target_sort_capacity)) {
             LOG_PERF("vksplat.memory.shrink_sort_buffers target_capacity={} splats={}",
                      target_sort_capacity,
                      buffers_.num_splats);
         }
 
-        const bool selection_overlay_may_rerender =
-            request.overlay.cursor.enabled ||
-            request.overlay.emphasis.transient_mask.mask != nullptr ||
-            request.overlay.emphasis.focused_gaussian_id >= 0;
-        constexpr bool kAliasInputSlotForSortScratch = false;
-        if (kAliasInputSlotForSortScratch &&
-            input_binding->uses_temporary_upload_slot && !request.gut && !selection_overlay_may_rerender) {
-            LOG_TIMER("vksplat.render.aliasSortScratch");
-            aliasSortScratchToInputSlot(ring_slot);
-        } else if (input_binding->uses_temporary_upload_slot && !request.gut) {
+        if (input_binding->uses_temporary_upload_slot && !request.gut) {
             const VkBuffer input_buffer = cuda_inputs_[ring_slot].buffer.buffer;
             const auto detach_alias = [input_buffer](auto& buffer) {
                 auto& device_buffer = buffer.deviceBuffer;
@@ -3653,19 +3615,12 @@ namespace lfs::vis {
                     const double instances_per_splat =
                         static_cast<double>(buffers_.num_indices) /
                         static_cast<double>(buffers_.num_splats);
-                    const std::size_t observed_tile_instances =
-                        renderer_.lastObservedNumIndices();
-                    const double observed_instances_per_splat =
-                        static_cast<double>(observed_tile_instances) /
-                        static_cast<double>(buffers_.num_splats);
                     const std::uint32_t grid_width = uniforms.grid_width;
                     const std::uint32_t grid_height = uniforms.grid_height;
-                    LOG_PERF("vksplat.render.tile_instances estimate={} observed={} splats={} instances_per_splat={:.3f} observed_per_splat={:.3f} grid={}x{}",
+                    LOG_PERF("vksplat.render.tile_instances count={} splats={} instances_per_splat={:.3f} grid={}x{}",
                              buffers_.num_indices,
-                             observed_tile_instances,
                              buffers_.num_splats,
                              instances_per_splat,
-                             observed_instances_per_splat,
                              grid_width,
                              grid_height);
                 }
@@ -3736,7 +3691,7 @@ namespace lfs::vis {
             return std::unexpected(compose_status.error());
         }
 
-        renderer_.tagDeferredReadbacks(render_complete_timeline_, completion_value);
+        renderer_.tagDeferredVisibleCountReadback(render_complete_timeline_, completion_value);
         ring_completion_values_[ring_slot] = completion_value;
 
         const auto& output = output_slots_[outputSlotIndex(output_slot)][ring_slot];

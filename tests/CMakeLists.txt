@@ -205,6 +205,7 @@ set(TEST_FILES
     test_mask_loss.cpp
     test_checkpoint_resume.cpp
     test_argument_parser.cpp
+    test_logger.cpp
     test_parameter_manager.cpp
     test_mcp_protocol.cpp
     test_mcp_app_utils.cpp
@@ -213,6 +214,8 @@ set(TEST_FILES
     test_view_info_json.cpp
     test_video_export_utils.cpp
     test_visualizer_post_work.cpp
+    test_panel_registry_animation_demand.cpp
+    test_panel_layout_render_demand.cpp
     test_reactive_store.cpp
     test_video_color_convert.cpp
     test_python_integration.cpp

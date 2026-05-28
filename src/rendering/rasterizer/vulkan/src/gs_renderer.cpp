@@ -22,169 +22,21 @@ VulkanGSRenderer::VulkanGSRenderer()
 VulkanGSRenderer::~VulkanGSRenderer() {
     if (commandBatchInProgress)
         endCommandBatch(false);
-    destroyNumIndicesReadback();
     destroyVisibleCountReadback();
     cleanup();
 }
 
 void VulkanGSRenderer::cleanup() {
-    destroyNumIndicesReadback();
     destroyVisibleCountReadback();
     VulkanGSPipeline::cleanup();
 }
 
-void VulkanGSRenderer::resetNumIndicesEstimate() {
-    num_indices_estimate_ = 0;
-    num_indices_estimate_grid_width_ = 0;
-    num_indices_estimate_grid_height_ = 0;
-    num_indices_readback_grid_width_ = 0;
-    num_indices_readback_grid_height_ = 0;
-    num_indices_readback_pending_ = false;
-    num_indices_readback_signal_ = VK_NULL_HANDLE;
-    num_indices_readback_value_ = 0;
-    last_observed_num_indices_ = 0;
-    visible_count_readback_pending_ = false;
-    visible_count_readback_signal_ = VK_NULL_HANDLE;
-    visible_count_readback_value_ = 0;
-    visible_count_readback_num_splats_ = 0;
-}
-
-void VulkanGSRenderer::tagDeferredReadbacks(const VkSemaphore semaphore,
-                                            const std::uint64_t value) {
-    if (num_indices_readback_pending_) {
-        num_indices_readback_signal_ = semaphore;
-        num_indices_readback_value_ = value;
-    }
+void VulkanGSRenderer::tagDeferredVisibleCountReadback(const VkSemaphore semaphore,
+                                                       const std::uint64_t value) {
     if (visible_count_readback_pending_) {
         visible_count_readback_signal_ = semaphore;
         visible_count_readback_value_ = value;
     }
-}
-
-void VulkanGSRenderer::ensureNumIndicesReadback() {
-    if (num_indices_readback_initialized_)
-        return;
-
-    VkBufferCreateInfo info{};
-    info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    info.size = sizeof(int32_t);
-    info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    VmaAllocationCreateInfo aci{};
-    aci.usage = VMA_MEMORY_USAGE_AUTO;
-    aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
-                VMA_ALLOCATION_CREATE_MAPPED_BIT;
-
-    VmaAllocationInfo alloc_info{};
-    if (vmaCreateBuffer(allocator, &info, &aci,
-                        &num_indices_readback_buffer_.buffer,
-                        &num_indices_readback_buffer_.allocation,
-                        &alloc_info) != VK_SUCCESS) {
-        num_indices_readback_buffer_.buffer = VK_NULL_HANDLE;
-        num_indices_readback_buffer_.allocation = VK_NULL_HANDLE;
-        _THROW_ERROR("Failed to allocate num_indices readback buffer");
-    }
-    num_indices_readback_buffer_.allocSize = sizeof(int32_t);
-    num_indices_readback_buffer_.size = sizeof(int32_t);
-    num_indices_readback_mapped_ = static_cast<int32_t*>(alloc_info.pMappedData);
-    if (num_indices_readback_mapped_)
-        *num_indices_readback_mapped_ = 0;
-    num_indices_readback_initialized_ = true;
-    num_indices_readback_pending_ = false;
-    num_indices_readback_signal_ = VK_NULL_HANDLE;
-    num_indices_readback_value_ = 0;
-}
-
-void VulkanGSRenderer::destroyNumIndicesReadback() {
-    if (!num_indices_readback_initialized_)
-        return;
-    if (num_indices_readback_buffer_.buffer != VK_NULL_HANDLE) {
-        vmaDestroyBuffer(allocator, num_indices_readback_buffer_.buffer,
-                         num_indices_readback_buffer_.allocation);
-    }
-    num_indices_readback_buffer_ = {};
-    num_indices_readback_mapped_ = nullptr;
-    num_indices_readback_initialized_ = false;
-    num_indices_readback_pending_ = false;
-    num_indices_readback_signal_ = VK_NULL_HANDLE;
-    num_indices_readback_value_ = 0;
-    num_indices_readback_grid_width_ = 0;
-    num_indices_readback_grid_height_ = 0;
-}
-
-size_t VulkanGSRenderer::pollDeferredNumIndices() {
-    if (!num_indices_readback_pending_ || !num_indices_readback_mapped_)
-        return 0;
-    if (num_indices_readback_signal_ == VK_NULL_HANDLE || num_indices_readback_value_ == 0)
-        return 0;
-    if (!timelineValueComplete(num_indices_readback_signal_, num_indices_readback_value_))
-        return 0;
-    if (!invalidateReadbackBuffer(num_indices_readback_buffer_, sizeof(int32_t)))
-        return 0;
-    const int32_t value = *num_indices_readback_mapped_;
-    num_indices_readback_pending_ = false;
-    num_indices_readback_signal_ = VK_NULL_HANDLE;
-    num_indices_readback_value_ = 0;
-    last_observed_num_indices_ = value < 0 ? 0u : static_cast<size_t>(value);
-    return last_observed_num_indices_;
-}
-
-size_t VulkanGSRenderer::updateNumIndicesEstimate(const uint32_t grid_width,
-                                                  const uint32_t grid_height,
-                                                  const size_t num_splats) {
-    if (num_splats == 0)
-        return 0;
-
-    const size_t observed = pollDeferredNumIndices();
-    if (observed > num_indices_estimate_) {
-        num_indices_estimate_ = observed;
-        num_indices_estimate_grid_width_ = num_indices_readback_grid_width_;
-        num_indices_estimate_grid_height_ = num_indices_readback_grid_height_;
-    } else if (observed > 0 && num_indices_estimate_grid_width_ == 0) {
-        num_indices_estimate_grid_width_ = num_indices_readback_grid_width_;
-        num_indices_estimate_grid_height_ = num_indices_readback_grid_height_;
-    }
-
-    // CPU-side high-water-mark estimate for sort-buffer sizing this frame.
-    // It is scaled by tile-grid growth so double-click maximize/restore does not
-    // keep using a small-window estimate for a large-window frame. The first
-    // frame still needs slack before the deferred readback exists, but 8x N made
-    // large SH3 scenes pay gigabytes of persistent scratch. 4x N keeps the first
-    // frame conservative while cutting that transient reserve in half.
-    constexpr size_t kSafetyFactor = 2;
-    constexpr size_t kInitialIndicesPerSplat = 4;
-    constexpr size_t kMaxSortCapacity =
-        static_cast<size_t>(std::numeric_limits<int32_t>::max());
-    const size_t current_tiles =
-        std::max<size_t>(1, static_cast<size_t>(grid_width) * grid_height);
-    const size_t estimate_tiles =
-        std::max<size_t>(1,
-                         static_cast<size_t>(num_indices_estimate_grid_width_) *
-                             num_indices_estimate_grid_height_);
-    const auto scale_ceil = [kMaxSortCapacity](const size_t value, const size_t numerator, const size_t denominator) {
-        if (value == 0)
-            return size_t{0};
-        const long double scaled =
-            static_cast<long double>(value) * static_cast<long double>(numerator) /
-            static_cast<long double>(std::max<size_t>(1, denominator));
-        const long double capped =
-            std::min<long double>(scaled, static_cast<long double>(kMaxSortCapacity));
-        return static_cast<size_t>(std::ceil(capped));
-    };
-    const auto multiply_cap = [kMaxSortCapacity](const size_t value, const size_t factor) {
-        if (factor != 0 && value > kMaxSortCapacity / factor)
-            return kMaxSortCapacity;
-        return std::min(kMaxSortCapacity, value * factor);
-    };
-
-    size_t estimate = scale_ceil(num_indices_estimate_, current_tiles, estimate_tiles);
-    estimate = multiply_cap(estimate, kSafetyFactor);
-    if (estimate == 0)
-        estimate = multiply_cap(num_splats, kInitialIndicesPerSplat);
-    if (estimate < num_splats)
-        estimate = num_splats;
-    return std::min(estimate, kMaxSortCapacity);
 }
 
 bool VulkanGSRenderer::shrinkSortBuffersForCapacity(VulkanGSPipelineBuffers& buffers,
@@ -334,7 +186,6 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
                                           VkQueue external_queue,
                                           uint32_t external_queue_family_index,
                                           VmaAllocator external_allocator) {
-    destroyNumIndicesReadback();
     destroyVisibleCountReadback();
     VulkanGSPipeline::initializeExternal(
         external_instance,
@@ -458,8 +309,8 @@ void VulkanGSRenderer::executeGenerateKeys(
     DEVICE_GUARD;
 
     const size_t num_elements = buffers.num_splats;
-    // executeCalculateIndexBufferOffset publishes a conservative deferred
-    // estimate, avoiding a CPU-side queue drain for the cumsum tail.
+    // executeCalculateIndexBufferOffset has synchronously read the cumsum tail,
+    // so num_indices is the exact tile-instance count for this frame.
     const size_t capacity = buffers.num_indices;
 
     auto& unsorted_keys = resizeDeviceBuffer(buffers.unsorted_keys(), capacity);
@@ -852,8 +703,6 @@ void VulkanGSRenderer::executeCalculateIndexBufferOffset(
         return;
     }
 
-    ensureNumIndicesReadback();
-
     // Cumsum on tiles_touched_depth_ordered (output of executeApplyDepthOrdering)
     // so index_buffer_offset[depth_rank] gives the contiguous offset interval
     // for the primitive at depth rank `depth_rank`. Matches the gsplat_fwd CUDA
@@ -870,31 +719,11 @@ void VulkanGSRenderer::executeCalculateIndexBufferOffset(
                         },
                         TRANSFER_COMPUTE_SHADER_READ);
 
-    // Async copy of the cumsum tail into the host-visible buffer for the NEXT
-    // frame's poll. No queue wait; the value is consumed one frame later.
-    {
-        VkBufferCopy copy{};
-        copy.srcOffset = buffers.index_buffer_offset.deviceBuffer.offset +
-                         (num_elements - 1) * sizeof(int32_t);
-        copy.dstOffset = 0;
-        copy.size = sizeof(int32_t);
-        vkCmdCopyBuffer(command_buffer,
-                        buffers.index_buffer_offset.deviceBuffer.buffer,
-                        num_indices_readback_buffer_.buffer, 1, &copy);
-        bufferMemoryBarrier({{num_indices_readback_buffer_, TRANSFER_WRITE}},
-                            HOST_READ);
-        num_indices_readback_pending_ = true;
-        num_indices_readback_signal_ = VK_NULL_HANDLE;
-        num_indices_readback_value_ = 0;
-        num_indices_readback_grid_width_ = uniforms.grid_width;
-        num_indices_readback_grid_height_ = uniforms.grid_height;
-    }
-
-    const size_t estimate = updateNumIndicesEstimate(uniforms.grid_width,
-                                                     uniforms.grid_height,
-                                                     num_elements);
-    buffers.num_indices = estimate;
-    buffers.num_indices_high_water = std::max(buffers.num_indices_high_water, estimate);
+    const int32_t num_indices =
+        readElement<int32_t>(buffers.index_buffer_offset.deviceBuffer, num_elements - 1);
+    buffers.num_indices = num_indices < 0 ? 0u : static_cast<size_t>(num_indices);
+    buffers.num_indices_high_water =
+        std::max(buffers.num_indices_high_water, buffers.num_indices);
 
     executePrepareTileSort(uniforms, buffers);
 }

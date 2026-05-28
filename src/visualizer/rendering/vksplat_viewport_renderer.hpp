@@ -296,7 +296,6 @@ namespace lfs::vis {
         std::array<CudaOverlaySlot, kInputRingSize> cuda_overlays_{};
         CudaSelectionQuerySlot cuda_selection_query_{};
         std::array<ModelInputSnapshot, kInputRingSize> ring_uploaded_{};
-        std::array<ModelInputSnapshot, kInputRingSize> ring_model_snapshot_{};
         int current_input_sh_degree_ = -1;
         std::size_t last_vram_report_signature_ = 0;
 

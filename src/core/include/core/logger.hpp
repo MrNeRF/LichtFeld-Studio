@@ -188,11 +188,15 @@ namespace lfs::core {
     public:
         explicit ScopedTimer(std::string name, LogLevel level = LogLevel::Performance,
                              std::source_location loc = std::source_location::current());
+        ScopedTimer(std::string name, double min_log_ms,
+                    LogLevel level = LogLevel::Performance,
+                    std::source_location loc = std::source_location::current());
         ~ScopedTimer();
 
     private:
         std::chrono::high_resolution_clock::time_point start_;
         std::string name_;
+        double min_log_ms_ = 0.0;
         LogLevel level_;
         std::source_location loc_;
         bool diagnostics_scope_active_ = false;
@@ -227,6 +231,8 @@ namespace lfs::core {
 #define _LOG_TIMER_MACRO_CONCAT(x, y) _LOG_TIMER_CONCAT_IMPL(x, y)
 
 #define LOG_TIMER(name)       ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)(name)
+#define LOG_TIMER_THRESHOLD(name, min_log_ms) \
+    ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)(name, min_log_ms)
 #define LOG_TIMER_TRACE(name) ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)(name, ::lfs::core::LogLevel::Trace)
 #define LOG_TIMER_DEBUG(name) ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)(name, ::lfs::core::LogLevel::Debug)
 

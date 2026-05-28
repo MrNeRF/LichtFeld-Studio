@@ -69,7 +69,8 @@ namespace lfs::vis::gui {
                                               std::unordered_map<std::string, bool>& window_states,
                                               std::string& focus_panel_name,
                                               const PanelInputState& input,
-                                              const ScreenState& screen) {
+                                              const ScreenState& screen,
+                                              const RightPanelRenderDemand demand) {
         LOG_TIMER("gui_render.panel_layout.renderRightPanel");
         cursor_request_ = CursorRequest::None;
 
@@ -122,7 +123,7 @@ namespace lfs::vis::gui {
         const float console_x = right_panel_x - (python_console_visible ? python_console_width_ + PANEL_GAP : 0.0f);
 
         if (python_console_visible) {
-            LOG_TIMER("gui_render.panel_layout.right_panel.python_console");
+            LOG_TIMER_THRESHOLD("gui_render.panel_layout.right_panel.python_console", 0.25);
             renderDockedPythonConsole(ctx, console_x, std::max(0.0f, panel_h - bottom_dock_h),
                                       masked_panel_input, screen);
         } else {
@@ -144,20 +145,26 @@ namespace lfs::vis::gui {
 
         const float scene_h = std::max(min_h, avail_h * scene_panel_ratio_ - splitter_h * 0.5f);
 
-        {
-            LOG_TIMER("gui_render.panel_layout.scene_header.preload");
-            reg.preload_panels_direct(PanelSpace::SceneHeader, content_w, scene_h, draw_ctx,
-                                      -1.0f, -1.0f, &masked_panel_input);
-        }
-        {
-            LOG_TIMER("gui_render.panel_layout.scene_header.draw");
-            reg.draw_panels_direct(PanelSpace::SceneHeader, content_x, content_top,
-                                   content_w, scene_h, draw_ctx, &masked_panel_input);
+        if (demand.scene_header_live) {
+            {
+                LOG_TIMER_THRESHOLD("gui_render.panel_layout.scene_header.preload", 0.25);
+                reg.preload_panels_direct(PanelSpace::SceneHeader, content_w, scene_h, draw_ctx,
+                                          -1.0f, -1.0f, &masked_panel_input);
+            }
+            {
+                LOG_TIMER_THRESHOLD("gui_render.panel_layout.scene_header.draw", 0.25);
+                reg.draw_panels_direct(PanelSpace::SceneHeader, content_x, content_top,
+                                       content_w, scene_h, draw_ctx, &masked_panel_input);
+            }
+        } else {
+            LOG_TIMER_THRESHOLD("gui_render.panel_layout.scene_header.draw_cached", 0.25);
+            reg.draw_panels_direct_cached(PanelSpace::SceneHeader, content_x, content_top,
+                                          content_w, scene_h, draw_ctx, &masked_panel_input);
         }
 
         std::vector<PanelSummary> main_tabs;
         {
-            LOG_TIMER("gui_render.panel_layout.main_tabs.lookup");
+            LOG_TIMER_THRESHOLD("gui_render.panel_layout.main_tabs.lookup", 0.25);
             main_tabs = reg.get_panels_for_space(PanelSpace::MainPanelTab);
         }
         syncActiveTab(main_tabs, focus_panel_name);
@@ -175,24 +182,29 @@ namespace lfs::vis::gui {
         const float clip_y_max = tab_content_y + tab_content_h;
         constexpr float kPreloadMaxHeight = 100000.0f;
 
-        float preloaded_main_h = 0.0f;
-        float preloaded_child_h = 0.0f;
-        {
-            LOG_TIMER("gui_render.panel_layout.active_tab.preload");
-            preloaded_main_h =
-                reg.preload_single_panel_direct(active_tab_id_, content_w, kPreloadMaxHeight, draw_ctx,
-                                                clip_y_min, clip_y_max, &masked_panel_input);
+        float scroll_limit = 0.0f;
+        if (demand.active_tab_live) {
+            float preloaded_main_h = 0.0f;
+            float preloaded_child_h = 0.0f;
+            {
+                LOG_TIMER_THRESHOLD("gui_render.panel_layout.active_tab.preload", 0.25);
+                preloaded_main_h =
+                    reg.preload_single_panel_direct(active_tab_id_, content_w, kPreloadMaxHeight, draw_ctx,
+                                                    clip_y_min, clip_y_max, &masked_panel_input);
+            }
+            {
+                LOG_TIMER_THRESHOLD("gui_render.panel_layout.active_children.preload", 0.25);
+                preloaded_child_h =
+                    reg.preload_child_panels_direct(active_tab_id_, content_w, kPreloadMaxHeight, draw_ctx,
+                                                    clip_y_min, clip_y_max, &masked_panel_input);
+            }
+            const float preloaded_total_h = preloaded_main_h + preloaded_child_h;
+            scroll_limit = std::max(0.0f, preloaded_total_h - tab_content_h);
+            tab_scroll_offset_ = std::clamp(tab_scroll_offset_, 0.0f, scroll_limit);
+        } else {
+            scroll_limit = std::max(0.0f, tab_content_total_h_ - tab_content_h);
+            tab_scroll_offset_ = std::clamp(tab_scroll_offset_, 0.0f, scroll_limit);
         }
-        {
-            LOG_TIMER("gui_render.panel_layout.active_children.preload");
-            preloaded_child_h =
-                reg.preload_child_panels_direct(active_tab_id_, content_w, kPreloadMaxHeight, draw_ctx,
-                                                clip_y_min, clip_y_max, &masked_panel_input);
-        }
-        const float preloaded_total_h = preloaded_main_h + preloaded_child_h;
-        const float preloaded_max_scroll =
-            std::max(0.0f, preloaded_total_h - tab_content_h);
-        tab_scroll_offset_ = std::clamp(tab_scroll_offset_, 0.0f, preloaded_max_scroll);
 
         const bool over_tab_content =
             masked_panel_input.mouse_x >= content_x &&
@@ -202,23 +214,40 @@ namespace lfs::vis::gui {
 
         if (over_tab_content && masked_panel_input.mouse_wheel != 0.0f) {
             tab_scroll_offset_ -= masked_panel_input.mouse_wheel * 30.0f;
-            tab_scroll_offset_ = std::clamp(tab_scroll_offset_, 0.0f, preloaded_max_scroll);
+            tab_scroll_offset_ = std::clamp(tab_scroll_offset_, 0.0f, scroll_limit);
         }
 
         const float y_cursor = tab_content_y - tab_scroll_offset_;
         float main_h = 0.0f;
         float child_h = 0.0f;
-        {
-            LOG_TIMER("gui_render.panel_layout.active_tab.draw");
-            main_h = reg.draw_single_panel_direct(active_tab_id_,
-                                                  content_x, y_cursor, content_w, kPreloadMaxHeight, draw_ctx,
-                                                  clip_y_min, clip_y_max, &masked_panel_input);
-        }
-        {
-            LOG_TIMER("gui_render.panel_layout.active_children.draw");
-            child_h = reg.draw_child_panels_direct(active_tab_id_,
-                                                   content_x, y_cursor + main_h, content_w, kPreloadMaxHeight, draw_ctx,
-                                                   clip_y_min, clip_y_max, &masked_panel_input);
+        if (demand.active_tab_live) {
+            {
+                LOG_TIMER_THRESHOLD("gui_render.panel_layout.active_tab.draw", 0.25);
+                main_h = reg.draw_single_panel_direct(active_tab_id_,
+                                                      content_x, y_cursor, content_w, kPreloadMaxHeight, draw_ctx,
+                                                      clip_y_min, clip_y_max, &masked_panel_input);
+            }
+            {
+                LOG_TIMER_THRESHOLD("gui_render.panel_layout.active_children.draw", 0.25);
+                child_h = reg.draw_child_panels_direct(active_tab_id_,
+                                                       content_x, y_cursor + main_h, content_w, kPreloadMaxHeight, draw_ctx,
+                                                       clip_y_min, clip_y_max, &masked_panel_input);
+            }
+        } else {
+            {
+                LOG_TIMER_THRESHOLD("gui_render.panel_layout.active_tab.draw_cached", 0.25);
+                main_h = reg.draw_single_panel_direct_cached(active_tab_id_,
+                                                             content_x, y_cursor, content_w,
+                                                             kPreloadMaxHeight, draw_ctx,
+                                                             clip_y_min, clip_y_max, &masked_panel_input);
+            }
+            {
+                LOG_TIMER_THRESHOLD("gui_render.panel_layout.active_children.draw_cached", 0.25);
+                child_h = reg.draw_child_panels_direct_cached(active_tab_id_,
+                                                              content_x, y_cursor + main_h,
+                                                              content_w, kPreloadMaxHeight, draw_ctx,
+                                                              clip_y_min, clip_y_max, &masked_panel_input);
+            }
         }
 
         tab_content_total_h_ = main_h + child_h;
@@ -266,7 +295,7 @@ namespace lfs::vis::gui {
         const float console_x = right_panel_x - (python_console_visible ? python_console_width_ + PANEL_GAP : 0.0f);
 
         if (python_console_visible) {
-            LOG_TIMER("gui_render.panel_layout.right_panel.python_console");
+            LOG_TIMER_THRESHOLD("gui_render.panel_layout.right_panel.python_console", 0.25);
             renderDockedPythonConsole(ctx, console_x, std::max(0.0f, panel_h - bottom_dock_h),
                                       input, screen);
         } else {
@@ -288,14 +317,14 @@ namespace lfs::vis::gui {
 
         auto& reg = PanelRegistry::instance();
         {
-            LOG_TIMER("gui_render.panel_layout.scene_header.draw_cached");
+            LOG_TIMER_THRESHOLD("gui_render.panel_layout.scene_header.draw_cached", 0.25);
             reg.draw_panels_direct_cached(PanelSpace::SceneHeader, content_x, content_top,
                                           content_w, scene_h, draw_ctx, &input);
         }
 
         std::vector<PanelSummary> main_tabs;
         {
-            LOG_TIMER("gui_render.panel_layout.main_tabs.lookup");
+            LOG_TIMER_THRESHOLD("gui_render.panel_layout.main_tabs.lookup", 0.25);
             main_tabs = reg.get_panels_for_space(PanelSpace::MainPanelTab);
         }
         syncActiveTab(main_tabs, focus_panel_name);
@@ -319,14 +348,14 @@ namespace lfs::vis::gui {
         float main_h = 0.0f;
         float child_h = 0.0f;
         {
-            LOG_TIMER("gui_render.panel_layout.active_tab.draw_cached");
+            LOG_TIMER_THRESHOLD("gui_render.panel_layout.active_tab.draw_cached", 0.25);
             main_h = reg.draw_single_panel_direct_cached(active_tab_id_,
                                                          content_x, y_cursor, content_w,
                                                          kPreloadMaxHeight, draw_ctx,
                                                          clip_y_min, clip_y_max, &input);
         }
         {
-            LOG_TIMER("gui_render.panel_layout.active_children.draw_cached");
+            LOG_TIMER_THRESHOLD("gui_render.panel_layout.active_children.draw_cached", 0.25);
             child_h = reg.draw_child_panels_direct_cached(active_tab_id_,
                                                           content_x, y_cursor + main_h,
                                                           content_w, kPreloadMaxHeight, draw_ctx,
@@ -428,7 +457,7 @@ namespace lfs::vis::gui {
 
         float preloaded_h = 0.0f;
         {
-            LOG_TIMER("gui_render.panel_layout.bottom_dock.preload");
+            LOG_TIMER_THRESHOLD("gui_render.panel_layout.bottom_dock.preload", 0.25);
             preloaded_h =
                 reg.preload_panels_direct(PanelSpace::BottomDock, panel_w, panel_h, draw_ctx,
                                           panel_y, panel_y + panel_h, &dock_input);
@@ -439,7 +468,7 @@ namespace lfs::vis::gui {
             return;
 
         {
-            LOG_TIMER("gui_render.panel_layout.bottom_dock.draw");
+            LOG_TIMER_THRESHOLD("gui_render.panel_layout.bottom_dock.draw", 0.25);
             reg.draw_panels_direct(PanelSpace::BottomDock,
                                    screen.work_pos.x,
                                    panel_y,

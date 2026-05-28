@@ -168,6 +168,7 @@ namespace lfs::core {
             return std::unexpected(std::format("cudaMemset on exportable block failed: {}",
                                                cudaGetErrorString(err)));
         }
+
 #ifdef _WIN32
         void* native = nullptr;
         if (const auto r = cuMemExportToShareableHandle(&native, a.mem_handle,

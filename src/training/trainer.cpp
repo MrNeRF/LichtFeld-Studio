@@ -33,7 +33,6 @@
 #include "rasterization/gsplat_rasterizer.hpp"
 #include "strategies/mcmc.hpp"
 #include "strategies/strategy_factory.hpp"
-#include "training/training_setup.hpp"
 #include "training/kernels/camera_loss_heatmap.cuh"
 #include "training/kernels/grad_alpha.hpp"
 #include "training/kernels/mrnf_kernels.hpp"

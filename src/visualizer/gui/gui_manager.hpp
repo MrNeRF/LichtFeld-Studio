@@ -368,6 +368,17 @@ namespace lfs::vis {
             bool last_ui_layout_ui_hidden_ = false;
             bool last_ui_layout_python_console_visible_ = false;
             bool last_ui_layout_bottom_dock_visible_ = false;
+            enum class RightPanelPointerRegion : uint8_t {
+                None,
+                Resize,
+                SceneHeader,
+                ActiveTab,
+                Chrome,
+            };
+            bool right_panel_pointer_live_capture_ = false;
+            RightPanelPointerRegion right_panel_pointer_capture_region_ =
+                RightPanelPointerRegion::None;
+            bool bottom_dock_pointer_live_capture_ = false;
             std::string last_ui_layout_active_tab_;
 
             struct DevResourceWatchState {

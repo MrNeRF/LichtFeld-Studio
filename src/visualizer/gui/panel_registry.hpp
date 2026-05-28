@@ -175,6 +175,25 @@ namespace lfs::vis::gui {
         bool bottom_dock_visible = true;
     };
 
+    struct PanelAnimationDemand {
+        bool side_panel = false;
+        bool floating = false;
+        bool viewport_overlay = false;
+        bool main_panel_tab = false;
+        bool scene_header = false;
+        bool bottom_dock = false;
+        bool status_bar = false;
+
+        [[nodiscard]] bool rightPanel() const {
+            return main_panel_tab || scene_header;
+        }
+
+        [[nodiscard]] bool any() const {
+            return side_panel || floating || viewport_overlay || main_panel_tab ||
+                   scene_header || bottom_dock || status_bar;
+        }
+    };
+
     struct PanelSummary {
         std::string label;
         std::string id;
@@ -289,6 +308,8 @@ namespace lfs::vis::gui {
         bool is_panel_enabled(const std::string& id) const;
         void rescale_floating_panels(float previous_scale, float new_scale);
         bool needsAnimationFrame() const;
+        PanelAnimationDemand animationDemandForVisiblePanels(
+            PanelAnimationVisibility visibility) const;
         bool needsAnimationFrameForVisiblePanels(PanelAnimationVisibility visibility) const;
         bool set_panel_label(const std::string& id, const std::string& new_label);
         bool set_panel_order(const std::string& id, int new_order);

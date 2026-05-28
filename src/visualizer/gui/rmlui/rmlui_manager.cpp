@@ -622,7 +622,7 @@ namespace lfs::vis::gui {
                     command.cache->width != command.cache_width ||
                     command.cache->height != command.cache_height;
                 if (refresh_cache) {
-                    lfs::core::ScopedTimer timer(timer_name + ".cache_refresh");
+                    lfs::core::ScopedTimer timer(timer_name + ".cache_refresh", 0.25);
                     if (command.cache->texture != 0)
                         releaseCachedVulkanContext(*command.cache);
 
@@ -648,7 +648,7 @@ namespace lfs::vis::gui {
                         std::string("gui_render.rmlui_record.") +
                         (foreground ? "foreground.cached_context." : "background.cached_context.") +
                         command.context_name;
-                    lfs::core::ScopedTimer timer(blit_timer_name);
+                    lfs::core::ScopedTimer timer(blit_timer_name, 0.25);
                     vulkan_render_interface_->ResetContextRenderState();
                     if (command.clip_enabled) {
                         vulkan_render_interface_->SetContextClipRect(command.clip_x1,

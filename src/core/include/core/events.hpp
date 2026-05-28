@@ -142,7 +142,7 @@ namespace lfs::core {
             EVENT(SetSelectionSubMode, int selection_mode;);
             EVENT(ExecuteMirror, int axis;); // 0=X, 1=Y, 2=Z
             EVENT(CancelActiveOperator, );   // Cancel and revert current operator
-        }                                    // namespace tools
+        } // namespace tools
 
         // ============================================================================
         // State - Notifications about what has happened (broadcasts)
@@ -288,8 +288,8 @@ namespace lfs::core {
             EVENT(WindowFocusLost, );
             EVENT(DisplayScaleChanged, float scale;);
             EVENT(UiScaleChangeRequested, float scale;); // 0 = auto (from OS)
-        }                                                // namespace internal
-    }                                                    // namespace events
+        } // namespace internal
+    } // namespace events
 
     // ============================================================================
     // Convenience functions

@@ -591,6 +591,12 @@ namespace lfs::core {
         }
     }
 
+    ScopedTimer::ScopedTimer(std::string name, const double min_log_ms,
+                             const LogLevel level, const std::source_location loc)
+        : ScopedTimer(std::move(name), level, loc) {
+        min_log_ms_ = min_log_ms;
+    }
+
     ScopedTimer::~ScopedTimer() {
         const auto duration = std::chrono::high_resolution_clock::now() - start_;
         const auto ms = std::chrono::duration<double, std::milli>(duration).count();
@@ -600,6 +606,8 @@ namespace lfs::core {
             } catch (...) {
             }
         }
+        if (ms < min_log_ms_)
+            return;
         Logger::get().log(level_, loc_, std::format("{} took {:.2f}ms", name_, ms));
     }
 

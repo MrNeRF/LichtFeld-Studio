@@ -464,9 +464,13 @@ namespace lfs::vis {
 
         const std::size_t current_frame = frame_index_;
         VkFence frame_fence = in_flight_[current_frame];
-        VkResult result = vkWaitForFences(device_, 1, &frame_fence, VK_TRUE, kWaitForeverNs);
-        if (result != VK_SUCCESS) {
-            return fail(std::format("vkWaitForFences failed: {}", vkResultToString(result)));
+        VkResult result = VK_SUCCESS;
+        {
+            LOG_TIMER_THRESHOLD("frame_pacing.vulkan_beginFrame.wait_frame_fence", 0.25);
+            result = vkWaitForFences(device_, 1, &frame_fence, VK_TRUE, kWaitForeverNs);
+            if (result != VK_SUCCESS) {
+                return fail(std::format("vkWaitForFences failed: {}", vkResultToString(result)));
+            }
         }
 
         uint32_t image_index = 0;
@@ -474,9 +478,12 @@ namespace lfs::vis {
             return fail("Vulkan acquire semaphores have not been created");
         }
         const std::size_t acquire_index = next_acquire_index_;
-        result = vkAcquireNextImageKHR(device_, swapchain_, kWaitForeverNs,
-                                       image_available_[acquire_index],
-                                       VK_NULL_HANDLE, &image_index);
+        {
+            LOG_TIMER_THRESHOLD("frame_pacing.vulkan_beginFrame.acquire_next_image", 0.25);
+            result = vkAcquireNextImageKHR(device_, swapchain_, kWaitForeverNs,
+                                           image_available_[acquire_index],
+                                           VK_NULL_HANDLE, &image_index);
+        }
         if (result == VK_ERROR_OUT_OF_DATE_KHR) {
             if (recreateSwapchain()) {
                 last_error_.clear();
@@ -491,11 +498,14 @@ namespace lfs::vis {
         }
         if (swapchain_images_in_flight_[image_index] != VK_NULL_HANDLE) {
             VkFence image_fence = swapchain_images_in_flight_[image_index];
-            result = vkWaitForFences(device_, 1, &image_fence, VK_TRUE, kWaitForeverNs);
-            if (result != VK_SUCCESS) {
-                return fail(std::format("vkWaitForFences(swapchain image {}) failed: {}",
-                                        image_index,
-                                        vkResultToString(result)));
+            {
+                LOG_TIMER_THRESHOLD("frame_pacing.vulkan_beginFrame.wait_image_fence", 0.25);
+                result = vkWaitForFences(device_, 1, &image_fence, VK_TRUE, kWaitForeverNs);
+                if (result != VK_SUCCESS) {
+                    return fail(std::format("vkWaitForFences(swapchain image {}) failed: {}",
+                                            image_index,
+                                            vkResultToString(result)));
+                }
             }
         }
 

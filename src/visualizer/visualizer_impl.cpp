@@ -1392,7 +1392,7 @@ namespace lfs::vis {
             }
         }
         if (gui_manager_) {
-            LOG_TIMER("VisualizerImpl::render.gui_render");
+            LOG_TIMER("VisualizerImpl::render.gui_frame_total_with_swapchain_wait");
             gui_manager_->render();
         }
 
