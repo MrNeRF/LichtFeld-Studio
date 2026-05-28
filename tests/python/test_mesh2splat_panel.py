@@ -256,10 +256,10 @@ def test_mesh2splat_panel_store_update_invalidates_model(mesh2splat_module):
 
     panel._subscribe_reactive_state()
     try:
-        module.NativeAppStore.mesh2splat_state.value = {"active": True, "progress": 0.5}
+        module.RuntimeState.mesh2splat_state.value = {"active": True, "progress": 0.5}
 
         assert panel._last_mesh_key is None
         assert "__update__" in panel._handle.dirty_fields
     finally:
         panel._unsubscribe_reactive_state()
-        module.NativeAppStore.mesh2splat_state._fallback = {}
+        module.RuntimeState.mesh2splat_state._fallback = {}

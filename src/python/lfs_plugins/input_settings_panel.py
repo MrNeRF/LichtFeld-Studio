@@ -7,7 +7,7 @@ import threading
 import lichtfeld as lf
 from . import rml_widgets as w
 from .types import Panel
-from .ui.store import AppStore as NativeAppStore
+from .ui import RuntimeState
 
 __lfs_panel_classes__ = ["InputSettingsPanel"]
 __lfs_panel_ids__ = ["lfs.input_settings"]
@@ -301,7 +301,7 @@ class InputSettingsPanel(Panel):
             return
 
         self._reactive_unsubscribers = [
-            NativeAppStore.language_generation.subscribe(lambda _value: self._schedule_model_update()),
+            RuntimeState.language_generation.subscribe(lambda _value: self._schedule_model_update()),
         ]
 
     def _unsubscribe_reactive_state(self):

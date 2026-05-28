@@ -1,11 +1,17 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Tests for the Python reactive app-store facade."""
+"""Tests for the Python reactive runtime-state facade."""
 
 import pytest
 
 from lfs_plugins.ui import store as store_module
-from lfs_plugins.ui.store import AppStore, PanelStoreBinding, StoreSignal, batch_updates, invalidate_panel
+from lfs_plugins.ui.store import (
+    PanelStateBinding,
+    RuntimeState,
+    StateSignal,
+    batch_updates,
+    invalidate_panel,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -19,7 +25,7 @@ def fallback_store(monkeypatch):
 
 
 def test_fallback_suppresses_same_value():
-    signal = StoreSignal[int]("iteration", 0)
+    signal = StateSignal[int]("iteration", 0)
     notified = []
 
     signal.subscribe(notified.append)
@@ -32,39 +38,51 @@ def test_fallback_suppresses_same_value():
     assert notified == [1]
 
 
-def test_app_store_exposes_panel_reactive_signals():
-    assert isinstance(AppStore.scene_generation, StoreSignal)
-    assert isinstance(AppStore.selection_generation, StoreSignal)
-    assert isinstance(AppStore.active_tool, StoreSignal)
-    assert isinstance(AppStore.active_submode, StoreSignal)
-    assert isinstance(AppStore.transform_space, StoreSignal)
-    assert isinstance(AppStore.pivot_mode, StoreSignal)
-    assert isinstance(AppStore.import_overlay_state, StoreSignal)
-    assert isinstance(AppStore.video_export_overlay_state, StoreSignal)
-    assert isinstance(AppStore.export_progress_state, StoreSignal)
-    assert isinstance(AppStore.mesh2splat_state, StoreSignal)
-    assert isinstance(AppStore.splat_simplify_state, StoreSignal)
-    assert isinstance(AppStore.scripts_generation, StoreSignal)
-    assert isinstance(AppStore.language_generation, StoreSignal)
+def test_runtime_state_exposes_panel_reactive_signals():
+    assert isinstance(RuntimeState.scene_generation, StateSignal)
+    assert isinstance(RuntimeState.selection_generation, StateSignal)
+    assert isinstance(RuntimeState.active_tool, StateSignal)
+    assert isinstance(RuntimeState.active_submode, StateSignal)
+    assert isinstance(RuntimeState.transform_space, StateSignal)
+    assert isinstance(RuntimeState.pivot_mode, StateSignal)
+    assert isinstance(RuntimeState.import_overlay_state, StateSignal)
+    assert isinstance(RuntimeState.video_export_overlay_state, StateSignal)
+    assert isinstance(RuntimeState.export_progress_state, StateSignal)
+    assert isinstance(RuntimeState.mesh2splat_state, StateSignal)
+    assert isinstance(RuntimeState.splat_simplify_state, StateSignal)
+    assert isinstance(RuntimeState.scripts_generation, StateSignal)
+    assert isinstance(RuntimeState.language_generation, StateSignal)
 
 
-def test_ui_package_exports_preferred_store_names():
-    from lfs_plugins.ui import AppStore as PublicAppStore, NativeAppStore, PanelStoreBinding as PublicBinding
+def test_ui_package_exports_preferred_and_compatibility_names():
+    from lfs_plugins.ui import (
+        AppStore,
+        NativeAppStore,
+        PanelStateBinding as PublicBinding,
+        PanelStoreBinding,
+        RuntimeState as PublicRuntimeState,
+        StateSignal as PublicSignal,
+        StoreSignal,
+    )
 
-    assert PublicAppStore is AppStore
-    assert NativeAppStore is AppStore
-    assert PublicBinding is PanelStoreBinding
+    assert PublicRuntimeState is RuntimeState
+    assert PublicBinding is PanelStateBinding
+    assert PublicSignal is StateSignal
+    assert AppStore is RuntimeState
+    assert NativeAppStore is RuntimeState
+    assert PanelStoreBinding is PanelStateBinding
+    assert StoreSignal is StateSignal
 
 
 def test_native_value_helper_does_not_read_fallback_signal_without_native_store(monkeypatch):
-    monkeypatch.setattr(AppStore.active_tool, "_fallback", "fallback-only")
+    monkeypatch.setattr(RuntimeState.active_tool, "_fallback", "fallback-only")
 
     assert store_module.native_value("active_tool", "missing") == "missing"
 
 
 def test_fallback_batch_defers_and_dedups_notifications():
-    iteration = StoreSignal[int]("iteration", 0)
-    loss = StoreSignal[float]("loss", 0.0)
+    iteration = StateSignal[int]("iteration", 0)
+    loss = StateSignal[float]("loss", 0.0)
     notified = []
 
     iteration.subscribe(lambda value: notified.append(("iteration", value)))
@@ -80,7 +98,7 @@ def test_fallback_batch_defers_and_dedups_notifications():
 
 
 def test_nested_fallback_batches_flush_at_outer_exit():
-    signal = StoreSignal[int]("iteration", 0)
+    signal = StateSignal[int]("iteration", 0)
     notified = []
     signal.subscribe(notified.append)
 
@@ -124,7 +142,7 @@ def test_native_store_proxy(monkeypatch):
     native = _NativeStore()
     monkeypatch.setattr(store_module, "_native_store", lambda: native)
 
-    signal = StoreSignal[float]("fps", 0.0)
+    signal = StateSignal[float]("fps", 0.0)
 
     signal.value = 59.5
     assert signal.value == 59.5
@@ -191,12 +209,12 @@ def test_invalidate_panel_supports_field_and_full_model_dirtying():
     assert handle.dirty_all_count == 1
 
 
-def test_panel_store_binding_owns_subscriptions_and_invalidates_handle():
-    signal = StoreSignal[int]("selection_generation", 0)
+def test_panel_state_binding_owns_subscriptions_and_invalidates_handle():
+    signal = StateSignal[int]("selection_generation", 0)
     handle = _PanelHandle()
     refreshes = []
 
-    binding = PanelStoreBinding(handle).watch(
+    binding = PanelStateBinding(handle).watch(
         signal,
         refresh=lambda: refreshes.append("refresh"),
     )
@@ -209,11 +227,11 @@ def test_panel_store_binding_owns_subscriptions_and_invalidates_handle():
     assert handle.request_count == 1
 
 
-def test_panel_store_binding_can_dirty_specific_model_fields():
-    signal = StoreSignal[int]("language_generation", 0)
+def test_panel_state_binding_can_dirty_specific_model_fields():
+    signal = StateSignal[int]("language_generation", 0)
     handle = _PanelHandle()
 
-    PanelStoreBinding(handle).watch(signal, dirty=("label", "tooltip"))
+    PanelStateBinding(handle).watch(signal, dirty=("label", "tooltip"))
 
     signal.value = 1
 

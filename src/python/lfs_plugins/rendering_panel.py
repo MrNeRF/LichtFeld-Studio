@@ -10,7 +10,7 @@ import lichtfeld as lf
 from . import rml_widgets as w
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
-from .ui.store import AppStore as NativeAppStore, PanelStoreBinding, native_value as _native_store_value
+from .ui import RuntimeState, PanelStateBinding, native_value as _native_store_value
 
 __lfs_panel_classes__ = ["RenderingPanel"]
 __lfs_panel_ids__ = ["lfs.rendering"]
@@ -262,7 +262,7 @@ class RenderingPanel(Panel):
             self._get_scrub_value,
             self._set_scrub_value,
         )
-        self._reactive_binding = PanelStoreBinding()
+        self._reactive_binding = PanelStateBinding()
 
     def _sync_panel_label(self):
         label = tr("window.rendering")
@@ -302,13 +302,13 @@ class RenderingPanel(Panel):
             return
 
         native_signals = (
-            NativeAppStore.scene_generation,
-            NativeAppStore.selection_generation,
-            NativeAppStore.active_tool,
-            NativeAppStore.transform_space,
-            NativeAppStore.pivot_mode,
-            NativeAppStore.splat_simplify_state,
-            NativeAppStore.language_generation,
+            RuntimeState.scene_generation,
+            RuntimeState.selection_generation,
+            RuntimeState.active_tool,
+            RuntimeState.transform_space,
+            RuntimeState.pivot_mode,
+            RuntimeState.splat_simplify_state,
+            RuntimeState.language_generation,
         )
         self._reactive_binding.set_handle(self._handle).watch(*native_signals)
 

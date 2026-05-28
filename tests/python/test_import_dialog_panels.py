@@ -553,11 +553,11 @@ def test_import_dialogs_request_update_on_language_generation(import_dialog_modu
     resume_panel = module.ResumeCheckpointPanel()
     dataset_panel._handle = _HandleStub()
     resume_panel._handle = _HandleStub()
-    module.NativeAppStore.language_generation._fallback = 0
+    module.RuntimeState.language_generation._fallback = 0
 
     dataset_panel._subscribe_reactive_state()
     resume_panel._subscribe_reactive_state()
-    module.NativeAppStore.language_generation.value = 1
+    module.RuntimeState.language_generation.value = 1
 
     assert dataset_panel._handle.request_update_count == 1
     assert resume_panel._handle.request_update_count == 1

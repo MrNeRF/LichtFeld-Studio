@@ -13,8 +13,7 @@ from .histogram_support import METRICS, METRIC_BY_ID, histogram_mode_available, 
 from . import rml_widgets as w
 from .rml_keys import KI_A, KI_DELETE, KI_I
 from .types import Panel
-from .ui.store import AppStore as NativeAppStore
-from .ui.state import AppState
+from .ui import RuntimeState
 
 __lfs_panel_classes__ = ["HistogramPanel"]
 __lfs_panel_ids__ = ["lfs.histogram"]
@@ -339,7 +338,7 @@ class HistogramPanel(Panel):
         scene_generation = lf.get_scene_generation()
         history_generation = self._history_generation_value()
         current_lang = lf.ui.get_current_language()
-        trainer_state = AppState.trainer_state.value
+        trainer_state = RuntimeState.trainer_state.value
         selection_signature = self._scene_node_selection_signature()
         scene_changed = scene_generation != self._scene_generation
         history_changed = history_generation != self._history_generation
@@ -403,10 +402,10 @@ class HistogramPanel(Panel):
             return
 
         native_signals = (
-            NativeAppStore.scene_generation,
-            NativeAppStore.selection_generation,
-            NativeAppStore.training_state,
-            NativeAppStore.language_generation,
+            RuntimeState.scene_generation,
+            RuntimeState.selection_generation,
+            RuntimeState.training_state,
+            RuntimeState.language_generation,
         )
         self._reactive_unsubscribers = [
             signal.subscribe(lambda _value: self._request_reactive_update())

@@ -263,10 +263,10 @@ def test_input_settings_requests_update_on_language_generation(input_settings_mo
     module, _state = input_settings_module
     panel = module.InputSettingsPanel()
     panel._handle = _HandleStub()
-    module.NativeAppStore.language_generation._fallback = 0
+    module.RuntimeState.language_generation._fallback = 0
 
     panel._subscribe_reactive_state()
-    module.NativeAppStore.language_generation.value = 1
+    module.RuntimeState.language_generation.value = 1
 
     assert panel._handle.request_update_count == 1
 

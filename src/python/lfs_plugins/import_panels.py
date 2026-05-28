@@ -69,7 +69,7 @@ from .asset_manager_integration import (
 from .asset_index import resolve_asset_manager_storage_path
 from .types import Panel
 from .rml_keys import KI_ESCAPE, KI_RETURN
-from .ui.store import AppStore as NativeAppStore
+from .ui import RuntimeState
 from .url_downloader import (
     URLDownloadError,
     UnsupportedURLError,
@@ -409,7 +409,7 @@ class _ImportDialogPanel(Panel):
             return
 
         self._reactive_unsubscribers = [
-            NativeAppStore.language_generation.subscribe(lambda _value: self._request_reactive_update()),
+            RuntimeState.language_generation.subscribe(lambda _value: self._request_reactive_update()),
         ]
 
     def _unsubscribe_reactive_state(self):
@@ -1431,7 +1431,7 @@ class WatchDirsDialogPanel(Panel):
             return
 
         self._reactive_unsubscribers = [
-            NativeAppStore.language_generation.subscribe(lambda _value: self._request_reactive_update()),
+            RuntimeState.language_generation.subscribe(lambda _value: self._request_reactive_update()),
         ]
 
     def _unsubscribe_reactive_state(self):

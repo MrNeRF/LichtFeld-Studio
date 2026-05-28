@@ -76,7 +76,7 @@ namespace lfs::python {
                 return;
 
             LOG_WARN("Python UI hooks are deprecated and will be removed after the reactive "
-                     "RmlUi store migration. Use lfs_plugins.ui.store.AppStore and "
+                     "RmlUi state migration. Use lfs_plugins.ui.RuntimeState and "
                      "Rml data-model updates instead. Set LFS_NO_DEPRECATION_WARNINGS=1 "
                      "to suppress this warning.");
         }

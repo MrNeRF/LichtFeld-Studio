@@ -11,7 +11,7 @@ from urllib.parse import quote
 import lichtfeld as lf
 from . import rml_widgets as w
 from .types import Panel
-from .ui.store import AppStore as NativeAppStore
+from .ui import RuntimeState
 from .rml_keys import (
     KI_1, KI_ADD, KI_C, KI_DOWN, KI_END, KI_ESCAPE, KI_F, KI_HOME, KI_I,
     KI_LEFT, KI_M, KI_OEM_MINUS, KI_OEM_PLUS, KI_R, KI_RIGHT, KI_SPACE,
@@ -209,8 +209,8 @@ class ImagePreviewPanel(Panel):
             return
 
         self._reactive_unsubscribers = [
-            NativeAppStore.scene_generation.subscribe(lambda _value: self._mark_dirty()),
-            NativeAppStore.language_generation.subscribe(lambda _value: self._mark_dirty()),
+            RuntimeState.scene_generation.subscribe(lambda _value: self._mark_dirty()),
+            RuntimeState.language_generation.subscribe(lambda _value: self._mark_dirty()),
         ]
 
     def _unsubscribe_reactive_state(self):

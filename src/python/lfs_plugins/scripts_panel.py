@@ -7,7 +7,7 @@ from pathlib import Path
 import lichtfeld as lf
 from . import rml_widgets
 from .types import Panel
-from .ui.store import AppStore as NativeAppStore
+from .ui import RuntimeState
 
 __lfs_panel_classes__ = ["ScriptsPanel"]
 __lfs_panel_ids__ = ["lfs.scripts"]
@@ -73,7 +73,7 @@ class ScriptsPanel(Panel):
             return
 
         self._reactive_unsubscribers = [
-            NativeAppStore.scripts_generation.subscribe(lambda _value: self._request_reactive_update()),
+            RuntimeState.scripts_generation.subscribe(lambda _value: self._request_reactive_update()),
         ]
 
     def _unsubscribe_reactive_state(self):

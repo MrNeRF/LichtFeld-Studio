@@ -177,7 +177,7 @@ def test_histogram_panel_requests_update_from_reactive_store(histogram_panel_mod
         training_state=_SignalStub(),
         language_generation=_SignalStub(),
     )
-    monkeypatch.setattr(module, "NativeAppStore", signals)
+    monkeypatch.setattr(module, "RuntimeState", signals)
 
     panel = module.HistogramPanel()
     panel._handle = _UpdateHandleStub()

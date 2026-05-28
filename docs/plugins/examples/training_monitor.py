@@ -6,7 +6,7 @@ checkpoints at configurable intervals.
 
 import lichtfeld as lf
 from lfs_plugins.props import PropertyGroup, IntProperty, BoolProperty
-from lfs_plugins.ui.state import AppState
+from lfs_plugins.ui import RuntimeState
 from lfs_plugins.ui.signals import Signal
 
 
@@ -27,8 +27,8 @@ class TrainingMonitorPanel(lf.ui.Panel):
         self.loss_history = []
         self.last_auto_save = 0
 
-        AppState.loss.subscribe_as("training_monitor", self._on_loss_update)
-        AppState.iteration.subscribe_as("training_monitor", self._on_iteration)
+        RuntimeState.loss.subscribe_as("training_monitor", self._on_loss_update)
+        RuntimeState.iteration.subscribe_as("training_monitor", self._on_iteration)
 
     def _on_loss_update(self, loss: float):
         if loss <= 0:
@@ -36,7 +36,7 @@ class TrainingMonitorPanel(lf.ui.Panel):
         self.loss_history.append(loss)
         if loss < self.best_loss.value:
             self.best_loss.value = loss
-            self.best_iteration.value = AppState.iteration.value
+            self.best_iteration.value = RuntimeState.iteration.value
 
     def _on_iteration(self, iteration: int):
         if not self.settings.auto_save_enabled:
@@ -49,10 +49,10 @@ class TrainingMonitorPanel(lf.ui.Panel):
 
     @classmethod
     def poll(cls, context) -> bool:
-        return AppState.has_trainer.value
+        return RuntimeState.has_trainer.value
 
     def draw(self, ui):
-        state = AppState.trainer_state.value
+        state = RuntimeState.trainer_state.value
 
         # Status header
         if state == "running":
@@ -63,17 +63,17 @@ class TrainingMonitorPanel(lf.ui.Panel):
             ui.label(f"State: {state}")
 
         # Progress
-        iteration = AppState.iteration.value
-        max_iter = AppState.max_iterations.value
+        iteration = RuntimeState.iteration.value
+        max_iter = RuntimeState.max_iterations.value
         progress = iteration / max_iter if max_iter > 0 else 0.0
         ui.progress_bar(progress, f"{iteration:,} / {max_iter:,}")
 
         ui.separator()
 
         # Statistics
-        ui.label(f"Loss: {AppState.loss.value:.6f}")
-        ui.label(f"PSNR: {AppState.psnr.value:.2f} dB")
-        ui.label(f"Gaussians: {AppState.num_gaussians.value:,}")
+        ui.label(f"Loss: {RuntimeState.loss.value:.6f}")
+        ui.label(f"PSNR: {RuntimeState.psnr.value:.2f} dB")
+        ui.label(f"Gaussians: {RuntimeState.num_gaussians.value:,}")
 
         best = self.best_loss.value
         if best < float("inf"):

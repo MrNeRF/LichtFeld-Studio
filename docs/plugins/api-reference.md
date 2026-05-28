@@ -109,7 +109,7 @@ For retained RML panels, prefer dirty-policy updates over timer polling. A dirty
 
 ```python
 import lichtfeld as lf
-from lfs_plugins.ui import AppStore, PanelStoreBinding
+from lfs_plugins.ui import RuntimeState, PanelStateBinding
 
 
 class MyPanel(lf.ui.Panel):
@@ -120,7 +120,7 @@ class MyPanel(lf.ui.Panel):
 
     def __init__(self):
         self._handle = None
-        self._store_binding = PanelStoreBinding()
+        self._store_binding = PanelStateBinding()
         self._title = "No scene"
 
     def on_bind_model(self, ctx):
@@ -132,8 +132,8 @@ class MyPanel(lf.ui.Panel):
 
     def on_mount(self, doc):
         self._store_binding.set_handle(self._handle).watch(
-            AppStore.scene_generation,
-            AppStore.selection_generation,
+            RuntimeState.scene_generation,
+            RuntimeState.selection_generation,
             refresh=self._refresh_title,
             dirty="title",
             immediate=True,
@@ -149,13 +149,13 @@ class MyPanel(lf.ui.Panel):
         self._title = getattr(scene, "name", "Scene") if scene else "No scene"
 ```
 
-Use `PanelStoreBinding` for normal panel subscriptions. It keeps subscription lifetime and RML invalidation together:
+Use `PanelStateBinding` for normal panel subscriptions. It keeps subscription lifetime and RML invalidation together:
 
 | API | Purpose |
 |---|---|
-| `AppStore.<field>.value` | Read or publish a current app value |
-| `AppStore.<field>.subscribe(callback)` | Low-level subscription, mostly for non-panel code |
-| `PanelStoreBinding(handle).watch(...)` | Preferred retained-panel subscription helper |
+| `RuntimeState.<field>.value` | Read or publish a current app value |
+| `RuntimeState.<field>.subscribe(callback)` | Low-level subscription, mostly for non-panel code |
+| `PanelStateBinding(handle).watch(...)` | Preferred retained-panel subscription helper |
 | `dirty=None` | Request `on_update()` without dirtying every bound variable |
 | `dirty="field"` | Dirty one data-model variable |
 | `dirty=("a", "b")` | Dirty several data-model variables |
@@ -165,36 +165,36 @@ Use `PanelStoreBinding` for normal panel subscriptions. It keeps subscription li
 Store fields currently exposed to plugins:
 
 ```python
-AppStore.iteration
-AppStore.total_iterations
-AppStore.loss
-AppStore.num_gaussians
-AppStore.max_gaussians
-AppStore.training_running
-AppStore.training_state
-AppStore.trainer_loaded
-AppStore.eval_psnr
-AppStore.eval_ssim
-AppStore.scene_generation
-AppStore.selection_generation
-AppStore.fps
-AppStore.mode_text
-AppStore.active_tool
-AppStore.active_submode
-AppStore.transform_space
-AppStore.pivot_mode
-AppStore.import_overlay_state
-AppStore.video_export_overlay_state
-AppStore.export_progress_state
-AppStore.mesh2splat_state
-AppStore.splat_simplify_state
-AppStore.scripts_generation
-AppStore.language_generation
+RuntimeState.iteration
+RuntimeState.total_iterations
+RuntimeState.loss
+RuntimeState.num_gaussians
+RuntimeState.max_gaussians
+RuntimeState.training_running
+RuntimeState.training_state
+RuntimeState.trainer_loaded
+RuntimeState.eval_psnr
+RuntimeState.eval_ssim
+RuntimeState.scene_generation
+RuntimeState.selection_generation
+RuntimeState.fps
+RuntimeState.mode_text
+RuntimeState.active_tool
+RuntimeState.active_submode
+RuntimeState.transform_space
+RuntimeState.pivot_mode
+RuntimeState.import_overlay_state
+RuntimeState.video_export_overlay_state
+RuntimeState.export_progress_state
+RuntimeState.mesh2splat_state
+RuntimeState.splat_simplify_state
+RuntimeState.scripts_generation
+RuntimeState.language_generation
 ```
 
-`NativeAppStore` remains as a compatibility alias for older in-tree code. New plugin code should import `AppStore`.
+`AppState`, `AppStore`, and `NativeAppStore` remain as compatibility aliases for older plugins. New plugin code should import `RuntimeState` from `lfs_plugins.ui`.
 
-Old Python UI hooks still compile, but hook registration is deprecated for external plugins. Use retained RML data models plus `AppStore` subscriptions for new UI.
+Old Python UI hooks still compile, but hook registration is deprecated for external plugins. Use retained RML data models plus `RuntimeState` subscriptions for new UI.
 
 ### Panel spaces
 

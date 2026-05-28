@@ -22,7 +22,7 @@ from .asset_manager_integration import (
 )
 from .import_panels import open_url_import_panel, open_watch_dirs_dialog
 from .types import Panel
-from .ui.store import AppStore as NativeAppStore
+from .ui import RuntimeState
 
 _logger = logging.getLogger(__name__)
 
@@ -3487,21 +3487,21 @@ class AssetManagerPanel(Panel):
 
         # Initial refresh must dirty scalar bindings after catalog load.
         self.refresh_catalog()
-        self._last_scene_generation = NativeAppStore.scene_generation.value
-        self._last_language_generation = NativeAppStore.language_generation.value
+        self._last_scene_generation = RuntimeState.scene_generation.value
+        self._last_language_generation = RuntimeState.language_generation.value
         self._subscribe_reactive_state()
 
     def on_scene_changed(self, doc):
         self._flush_pending_transform_applications()
         self._sync_runtime_scene_catalog(select_current=True)
-        self._last_scene_generation = NativeAppStore.scene_generation.value
+        self._last_scene_generation = RuntimeState.scene_generation.value
         self.refresh_catalog()
 
     def on_update(self, doc):
         """Dirty-policy update for catalog and deferred scene work."""
         changed = False
 
-        language_generation = NativeAppStore.language_generation.value
+        language_generation = RuntimeState.language_generation.value
         if language_generation != self._last_language_generation:
             self._last_language_generation = language_generation
             if self._handle:
@@ -3515,7 +3515,7 @@ class AssetManagerPanel(Panel):
         if self._pending_transform_applications:
             self._request_model_update()
 
-        scene_generation = NativeAppStore.scene_generation.value
+        scene_generation = RuntimeState.scene_generation.value
         if scene_generation != self._last_scene_generation:
             self._last_scene_generation = scene_generation
             self._sync_runtime_scene_catalog(select_current=True)
@@ -3570,8 +3570,8 @@ class AssetManagerPanel(Panel):
             return
 
         native_signals = (
-            NativeAppStore.scene_generation,
-            NativeAppStore.language_generation,
+            RuntimeState.scene_generation,
+            RuntimeState.language_generation,
         )
         self._reactive_unsubscribers = [
             signal.subscribe(lambda _value: self._request_model_update())

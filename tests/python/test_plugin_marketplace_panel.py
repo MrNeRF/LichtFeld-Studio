@@ -153,10 +153,10 @@ def test_plugin_marketplace_requests_update_on_language_generation(plugin_market
     module, _state = plugin_marketplace_module
     panel = module.PluginMarketplacePanel()
     panel._handle = _HandleStub()
-    module.NativeAppStore.language_generation._fallback = 0
+    module.RuntimeState.language_generation._fallback = 0
 
     panel._subscribe_reactive_state()
-    module.NativeAppStore.language_generation.value = 1
+    module.RuntimeState.language_generation.value = 1
 
     assert panel._handle.request_update_count == 1
 

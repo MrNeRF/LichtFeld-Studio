@@ -196,16 +196,16 @@ def test_scripts_panel_requests_update_from_script_generation(scripts_panel_modu
     module, _state = scripts_panel_module
     panel = module.ScriptsPanel()
     panel._handle = _HandleStub()
-    module.NativeAppStore.scripts_generation._fallback = 0
+    module.RuntimeState.scripts_generation._fallback = 0
 
     panel._subscribe_reactive_state()
-    module.NativeAppStore.scripts_generation.value = 1
+    module.RuntimeState.scripts_generation.value = 1
 
     assert panel._handle.request_update_count == 1
     assert panel._handle.dirty_all_calls == 0
 
     panel._unsubscribe_reactive_state()
-    module.NativeAppStore.scripts_generation.value = 2
+    module.RuntimeState.scripts_generation.value = 2
     assert panel._handle.request_update_count == 1
 
 

@@ -9,10 +9,10 @@ from .histogram_support import histogram_mode_available
 from .selection_controls import SelectionControlsController
 from .tools import ToolRegistry
 from .transform_controls import TransformControlsController
-from .ui.state import AppState
+from .ui import RuntimeState
 
 try:
-    from .ui.store import native_value as _native_store_value
+    from .ui import native_value as _native_store_value
 except Exception:
     def _native_store_value(_field, fallback):
         return fallback
@@ -178,7 +178,7 @@ class _GizmoToolbarController:
         import lichtfeld as lf
         from .op_context import get_context
 
-        hidden = AppState.trainer_state.value in _TOOLBAR_HIDDEN_STATES
+        hidden = RuntimeState.trainer_state.value in _TOOLBAR_HIDDEN_STATES
         if hidden:
             if not self._was_hidden:
                 ToolRegistry.clear_active()
@@ -449,7 +449,7 @@ class _GizmoToolbarController:
                 if transform_space >= 0:
                     lf.ui.set_transform_space(transform_space)
                     try:
-                        AppState.transform_space.value = transform_space
+                        RuntimeState.transform_space.value = transform_space
                     except Exception:
                         pass
             else:
@@ -461,7 +461,7 @@ class _GizmoToolbarController:
             if pivot_mode >= 0:
                 lf.ui.set_pivot_mode(pivot_mode)
                 try:
-                    AppState.pivot_mode.value = pivot_mode
+                    RuntimeState.pivot_mode.value = pivot_mode
                 except Exception:
                     pass
 
@@ -950,7 +950,7 @@ class _ViewportToolbarController:
         import lichtfeld as lf
 
         try:
-            trainer_state = AppState.trainer_state.value
+            trainer_state = RuntimeState.trainer_state.value
         except Exception:
             trainer_state = ""
 

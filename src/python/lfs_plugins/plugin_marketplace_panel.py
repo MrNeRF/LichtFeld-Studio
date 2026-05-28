@@ -20,7 +20,7 @@ from .marketplace import (
 )
 from .plugin import PluginInfo, PluginState
 from .types import Panel
-from .ui.store import AppStore as NativeAppStore
+from .ui import RuntimeState
 
 __lfs_panel_classes__ = ["PluginMarketplacePanel"]
 __lfs_panel_ids__ = ["lfs.plugin_marketplace"]
@@ -238,7 +238,7 @@ class PluginMarketplacePanel(Panel):
             return
 
         self._reactive_unsubscribers = [
-            NativeAppStore.language_generation.subscribe(lambda _value: self._schedule_model_update()),
+            RuntimeState.language_generation.subscribe(lambda _value: self._schedule_model_update()),
         ]
 
     def _unsubscribe_reactive_state(self):

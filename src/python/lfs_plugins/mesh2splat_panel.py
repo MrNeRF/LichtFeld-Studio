@@ -11,7 +11,7 @@ import lichtfeld as lf
 from . import rml_widgets
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
-from .ui.store import AppStore as NativeAppStore, native_value as _native_store_value
+from .ui import RuntimeState, native_value as _native_store_value
 
 __lfs_panel_classes__ = ["Mesh2SplatPanel"]
 __lfs_panel_ids__ = ["native.mesh2splat"]
@@ -108,8 +108,8 @@ class Mesh2SplatPanel(Panel):
             return
 
         native_signals = (
-            NativeAppStore.scene_generation,
-            NativeAppStore.mesh2splat_state,
+            RuntimeState.scene_generation,
+            RuntimeState.mesh2splat_state,
         )
         self._reactive_unsubscribers = [
             signal.subscribe(lambda _value: self._request_reactive_update())

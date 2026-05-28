@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Python facade for the C++ reactive app store."""
+"""Python facade for LichtFeld runtime state."""
 
 from __future__ import annotations
 
@@ -9,6 +9,8 @@ from collections.abc import Callable, Iterable
 from contextlib import contextmanager
 from threading import Lock
 from typing import Generic, TypeAlias, TypeVar
+
+from .signals import ComputedSignal, Signal
 
 T = TypeVar("T")
 DirtySpec: TypeAlias = str | Iterable[str] | None
@@ -30,13 +32,13 @@ def native_value(field: str, fallback: T) -> T:
     if native is None:
         return fallback
     try:
-        return getattr(AppStore, field).value
+        return getattr(RuntimeState, field).value
     except Exception:
         return fallback
 
 
-class StoreSignal(Generic[T]):
-    """Signal-shaped wrapper around one C++ app-store field."""
+class StateSignal(Generic[T]):
+    """Signal-shaped wrapper around one native runtime-state field."""
 
     __slots__ = ("_field", "_fallback", "_lock", "_subscribers", "_next_id")
 
@@ -79,26 +81,28 @@ class StoreSignal(Generic[T]):
             try:
                 callback(self._fallback)
             except Exception as e:
-                logger.error("Store signal '%s' callback error: %s", self._field, e)
+                logger.error(
+                    "Runtime state signal '%s' callback error: %s",
+                    self._field,
+                    e,
+                )
 
     def subscribe(self, callback: Callable[[T], None]) -> Callable[[], None]:
-        native = _native_store()
-        if native is not None:
-            token = native.subscribe(self._field, callback)
-
-            def unsubscribe() -> None:
-                native.unsubscribe(token)
-
-            return unsubscribe
-
         with self._lock:
             sub_id = self._next_id
             self._next_id += 1
             self._subscribers[sub_id] = callback
 
+        native = _native_store()
+        native_token = None
+        if native is not None:
+            native_token = native.subscribe(self._field, callback)
+
         def unsubscribe() -> None:
             with self._lock:
                 self._subscribers.pop(sub_id, None)
+            if native is not None and native_token is not None:
+                native.unsubscribe(native_token)
 
         return unsubscribe
 
@@ -146,8 +150,8 @@ def invalidate_panel(handle: object | None, dirty: DirtySpec = None) -> None:
         dirty_field(field)
 
 
-class PanelStoreBinding:
-    """Own store subscriptions for a dirty-policy RML panel.
+class PanelStateBinding:
+    """Own runtime-state subscriptions for a dirty-policy RML panel.
 
     Common panel code should use this instead of hand-written subscription
     lists. The binding keeps lifetime and data-model invalidation together.
@@ -163,18 +167,18 @@ class PanelStoreBinding:
     def active(self) -> bool:
         return bool(self._unsubscribers)
 
-    def set_handle(self, handle: object | None) -> PanelStoreBinding:
+    def set_handle(self, handle: object | None) -> PanelStateBinding:
         self._handle = handle
         return self
 
     def watch(
         self,
-        *signals: StoreSignal[object],
+        *signals: StateSignal[object] | Signal[object] | ComputedSignal[object],
         refresh: Callable[[], None] | None = None,
         dirty: DirtySpec = None,
         immediate: bool = False,
-    ) -> PanelStoreBinding:
-        """Refresh and invalidate the panel when any store signal changes."""
+    ) -> PanelStateBinding:
+        """Refresh and invalidate the panel when any runtime-state signal changes."""
 
         def on_change(_value: object) -> None:
             if refresh is not None:
@@ -196,35 +200,125 @@ class PanelStoreBinding:
             try:
                 unsubscribe()
             except Exception:
-                logger.exception("Panel store unsubscribe failed")
+                logger.exception("Panel state unsubscribe failed")
 
 
-class AppStore:
-    iteration = StoreSignal[int]("iteration", 0)
-    total_iterations = StoreSignal[int]("total_iterations", 0)
-    loss = StoreSignal[float]("loss", 0.0)
-    num_gaussians = StoreSignal[int]("num_gaussians", 0)
-    max_gaussians = StoreSignal[int]("max_gaussians", 0)
-    training_running = StoreSignal[bool]("training_running", False)
-    training_state = StoreSignal[str]("training_state", "idle")
-    trainer_loaded = StoreSignal[bool]("trainer_loaded", False)
-    eval_psnr = StoreSignal[float | None]("eval_psnr", None)
-    eval_ssim = StoreSignal[float | None]("eval_ssim", None)
-    scene_generation = StoreSignal[int]("scene_generation", 0)
-    selection_generation = StoreSignal[int]("selection_generation", 0)
-    fps = StoreSignal[float]("fps", 0.0)
-    mode_text = StoreSignal[str]("mode_text", "")
-    active_tool = StoreSignal[str]("active_tool", "")
-    active_submode = StoreSignal[str]("active_submode", "")
-    transform_space = StoreSignal[int]("transform_space", 0)
-    pivot_mode = StoreSignal[int]("pivot_mode", 0)
-    import_overlay_state = StoreSignal[dict[str, object]]("import_overlay_state", {})
-    video_export_overlay_state = StoreSignal[dict[str, object]]("video_export_overlay_state", {})
-    export_progress_state = StoreSignal[dict[str, object]]("export_progress_state", {})
-    mesh2splat_state = StoreSignal[dict[str, object]]("mesh2splat_state", {})
-    splat_simplify_state = StoreSignal[dict[str, object]]("splat_simplify_state", {})
-    scripts_generation = StoreSignal[int]("scripts_generation", 0)
-    language_generation = StoreSignal[int]("language_generation", 0)
+class RuntimeState:
+    """Single public runtime-state surface for plugins.
+
+    Native fields are backed by the C++ runtime-state bridge. A small set of
+    Python-only compatibility signals remains here until those values have
+    native producers.
+    """
+
+    iteration = StateSignal[int]("iteration", 0)
+    total_iterations = StateSignal[int]("total_iterations", 0)
+    loss = StateSignal[float]("loss", 0.0)
+    num_gaussians = StateSignal[int]("num_gaussians", 0)
+    max_gaussians = StateSignal[int]("max_gaussians", 0)
+    training_running = StateSignal[bool]("training_running", False)
+    training_state = StateSignal[str]("training_state", "idle")
+    trainer_loaded = StateSignal[bool]("trainer_loaded", False)
+    eval_psnr = StateSignal[float | None]("eval_psnr", None)
+    eval_ssim = StateSignal[float | None]("eval_ssim", None)
+    scene_generation = StateSignal[int]("scene_generation", 0)
+    selection_generation = StateSignal[int]("selection_generation", 0)
+    fps = StateSignal[float]("fps", 0.0)
+    mode_text = StateSignal[str]("mode_text", "")
+    active_tool = StateSignal[str]("active_tool", "")
+    active_submode = StateSignal[str]("active_submode", "")
+    transform_space = StateSignal[int]("transform_space", 0)
+    pivot_mode = StateSignal[int]("pivot_mode", 0)
+    import_overlay_state = StateSignal[dict[str, object]]("import_overlay_state", {})
+    video_export_overlay_state = StateSignal[dict[str, object]](
+        "video_export_overlay_state",
+        {},
+    )
+    export_progress_state = StateSignal[dict[str, object]]("export_progress_state", {})
+    mesh2splat_state = StateSignal[dict[str, object]]("mesh2splat_state", {})
+    splat_simplify_state = StateSignal[dict[str, object]]("splat_simplify_state", {})
+    scripts_generation = StateSignal[int]("scripts_generation", 0)
+    language_generation = StateSignal[int]("language_generation", 0)
+
+    # Compatibility names from the old AppState surface.
+    is_training = training_running
+    trainer_state = training_state
+    has_trainer = trainer_loaded
+    max_iterations = total_iterations
+    psnr = ComputedSignal(
+        lambda: (
+            0.0
+            if RuntimeState.eval_psnr.value is None
+            else RuntimeState.eval_psnr.value
+        ),
+        [eval_psnr],
+    )
+
+    # Python-only compatibility values. These should move to native producers
+    # before the legacy AppState alias is removed.
+    has_scene = Signal(False, "has_scene")
+    scene_path = Signal("", "scene_path")
+    has_selection = Signal(False, "has_selection")
+    selection_count = Signal(0, "selection_count")
+    viewport_width = Signal(0, "viewport_width")
+    viewport_height = Signal(0, "viewport_height")
+    is_headless = Signal(False, "is_headless")
+
+    training_progress = ComputedSignal(
+        lambda: RuntimeState.iteration.value / RuntimeState.total_iterations.value
+        if RuntimeState.total_iterations.value > 0
+        else 0.0,
+        [iteration, total_iterations],
+    )
+    can_start_training = ComputedSignal(
+        lambda: RuntimeState.trainer_loaded.value
+        and RuntimeState.training_state.value in ("idle", "ready"),
+        [trainer_loaded, training_state],
+    )
+
+    @classmethod
+    def reset(cls) -> None:
+        """Reset Python fallback state. Primarily used by tests and shutdown."""
+        cls.training_running.value = False
+        cls.training_state.value = "idle"
+        cls.trainer_loaded.value = False
+        cls.iteration.value = 0
+        cls.total_iterations.value = 0
+        cls.loss.value = 0.0
+        cls.num_gaussians.value = 0
+        cls.max_gaussians.value = 0
+        cls.eval_psnr.value = None
+        cls.eval_ssim.value = None
+        cls.scene_generation.value = 0
+        cls.selection_generation.value = 0
+        cls.fps.value = 0.0
+        cls.mode_text.value = ""
+        cls.active_tool.value = ""
+        cls.active_submode.value = ""
+        cls.transform_space.value = 0
+        cls.pivot_mode.value = 0
+        cls.import_overlay_state.value = {}
+        cls.video_export_overlay_state.value = {}
+        cls.export_progress_state.value = {}
+        cls.mesh2splat_state.value = {}
+        cls.splat_simplify_state.value = {}
+        cls.scripts_generation.value = 0
+        cls.language_generation.value = 0
+        cls.has_scene.value = False
+        cls.scene_path.value = ""
+        cls.has_selection.value = False
+        cls.selection_count.value = 0
+        cls.viewport_width.value = 0
+        cls.viewport_height.value = 0
+        cls.is_headless.value = False
+
+    @classmethod
+    def bind_native_store(cls) -> None:
+        """Compatibility no-op: native-backed fields are already live."""
+
+    @classmethod
+    def unbind_native_store(cls) -> None:
+        """Compatibility no-op kept for older plugins."""
 
 
 class _BatchContext:
@@ -232,7 +326,7 @@ class _BatchContext:
 
     def __init__(self) -> None:
         self.depth = 0
-        self.pending_notifications: set[StoreSignal[object]] = set()
+        self.pending_notifications: set[StateSignal[object]] = set()
 
     @property
     def is_batching(self) -> bool:
@@ -270,3 +364,27 @@ def batch_updates():
         yield
     finally:
         _batch_context.end()
+
+
+# Compatibility aliases kept for existing plugins. New code should import
+# RuntimeState, StateSignal, and PanelStateBinding from lfs_plugins.ui.
+AppStore = RuntimeState
+NativeAppStore = RuntimeState
+AppState = RuntimeState
+StoreSignal = StateSignal
+PanelStoreBinding = PanelStateBinding
+
+__all__ = [
+    "RuntimeState",
+    "StateSignal",
+    "PanelStateBinding",
+    "batch_updates",
+    "invalidate_panel",
+    "native_value",
+    # Compatibility aliases.
+    "AppState",
+    "AppStore",
+    "NativeAppStore",
+    "StoreSignal",
+    "PanelStoreBinding",
+]

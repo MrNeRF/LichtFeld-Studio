@@ -11,7 +11,7 @@ import lichtfeld as lf
 from . import rml_widgets
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
-from .ui.store import AppStore as NativeAppStore, native_value as _native_store_value
+from .ui import RuntimeState, native_value as _native_store_value
 
 # Asset Manager integration (optional)
 try:
@@ -418,9 +418,9 @@ class ExportPanel(Panel):
             return
 
         self._reactive_unsubscribers = [
-            NativeAppStore.scene_generation.subscribe(lambda _value: self._request_scene_update()),
-            NativeAppStore.export_progress_state.subscribe(lambda _value: self._request_reactive_update()),
-            NativeAppStore.language_generation.subscribe(lambda _value: self._request_reactive_update()),
+            RuntimeState.scene_generation.subscribe(lambda _value: self._request_scene_update()),
+            RuntimeState.export_progress_state.subscribe(lambda _value: self._request_reactive_update()),
+            RuntimeState.language_generation.subscribe(lambda _value: self._request_reactive_update()),
         ]
 
     def _unsubscribe_reactive_state(self):

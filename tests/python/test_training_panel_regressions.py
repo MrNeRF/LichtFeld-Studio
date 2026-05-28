@@ -146,7 +146,7 @@ def test_training_panel_progress_updates_bound_value(training_panel_module, monk
 
     monkeypatch.setattr(
         training_panel_module,
-        "AppState",
+        "RuntimeState",
         SimpleNamespace(
             iteration=_make_signal(25),
             max_iterations=_make_signal(100),
@@ -169,13 +169,13 @@ def test_training_panel_store_update_requests_panel_update(training_panel_module
 
     panel._subscribe_reactive_state()
     try:
-        training_panel_module.NativeAppStore.iteration.value += 1
+        training_panel_module.RuntimeState.iteration.value += 1
 
         assert panel._handle.request_update_count == 1
         assert panel._handle.dirty_all_count == 0
     finally:
         panel._unsubscribe_reactive_state()
-        training_panel_module.NativeAppStore.iteration._fallback = 0
+        training_panel_module.RuntimeState.iteration._fallback = 0
 
 
 def test_training_panel_language_update_requests_panel_update(training_panel_module):
@@ -184,13 +184,13 @@ def test_training_panel_language_update_requests_panel_update(training_panel_mod
 
     panel._subscribe_reactive_state()
     try:
-        training_panel_module.NativeAppStore.language_generation.value += 1
+        training_panel_module.RuntimeState.language_generation.value += 1
 
         assert panel._handle.request_update_count == 1
         assert panel._handle.dirty_all_count == 0
     finally:
         panel._unsubscribe_reactive_state()
-        training_panel_module.NativeAppStore.language_generation._fallback = 0
+        training_panel_module.RuntimeState.language_generation._fallback = 0
 
 
 def test_training_panel_checkpoint_saved_dirties_field(training_panel_module, monkeypatch):

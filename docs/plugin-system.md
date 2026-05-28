@@ -169,7 +169,7 @@ Retained panels should normally be dirty-driven, not timer-driven:
 
 ```python
 import lichtfeld as lf
-from lfs_plugins.ui import AppStore, PanelStoreBinding
+from lfs_plugins.ui import RuntimeState, PanelStateBinding
 
 
 class MyPanel(lf.ui.Panel):
@@ -177,11 +177,11 @@ class MyPanel(lf.ui.Panel):
 
     def __init__(self):
         self._handle = None
-        self._store_binding = PanelStoreBinding()
+        self._store_binding = PanelStateBinding()
 
     def on_mount(self, doc):
         self._store_binding.set_handle(self._handle).watch(
-            AppStore.scene_generation,
+            RuntimeState.scene_generation,
             refresh=self._refresh_model,
         )
 
@@ -189,9 +189,9 @@ class MyPanel(lf.ui.Panel):
         self._store_binding.close()
 ```
 
-`PanelStoreBinding` owns both the store subscriptions and the RML model invalidation. `update_interval_ms` remains available for animation-like or truly periodic UI, but data panels should subscribe to app-store fields and invalidate only the model variables that changed.
+`PanelStateBinding` owns both the state subscriptions and the RML model invalidation. `update_interval_ms` remains available for animation-like or truly periodic UI, but data panels should subscribe to runtime-state fields and invalidate only the model variables that changed.
 
-Use `AppState` only for older code that already depends on its Python signals. New retained panels should use `AppStore`.
+Compatibility aliases (`AppState`, `AppStore`, and `NativeAppStore`) remain for older plugins. New retained panels should import `RuntimeState` from `lfs_plugins.ui`.
 
 ## Dependency isolation
 

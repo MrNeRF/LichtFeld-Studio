@@ -46,9 +46,9 @@ def selection_groups_module(monkeypatch):
     sys.modules.pop("lfs_plugins", None)
     _install_lf_stub(monkeypatch)
     module = import_module("lfs_plugins.selection_groups")
-    module.NativeAppStore.scene_generation.value = 0
-    module.NativeAppStore.selection_generation.value = 0
-    module.NativeAppStore.active_tool.value = "builtin.select"
+    module.RuntimeState.scene_generation.value = 0
+    module.RuntimeState.selection_generation.value = 0
+    module.RuntimeState.active_tool.value = "builtin.select"
     return module
 
 
@@ -196,7 +196,7 @@ def test_selection_groups_on_update_skips_unchanged_count_poll(selection_groups_
 
     assert count_updates == 1
 
-    selection_groups_module.NativeAppStore.selection_generation.value += 1
+    selection_groups_module.RuntimeState.selection_generation.value += 1
     panel.on_update(doc)
 
     assert count_updates == 2
@@ -208,7 +208,7 @@ def test_selection_groups_store_update_invalidates_dirty_panel(selection_groups_
 
     panel._subscribe_reactive_state()
     try:
-        selection_groups_module.NativeAppStore.selection_generation.value += 1
+        selection_groups_module.RuntimeState.selection_generation.value += 1
 
         assert "__update__" in panel._handle.dirty_fields
     finally:

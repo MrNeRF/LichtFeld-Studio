@@ -13,8 +13,7 @@ import lichtfeld as lf
 from . import rml_widgets as w
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
-from .ui.state import AppState
-from .ui.store import AppStore as NativeAppStore, PanelStoreBinding
+from .ui import RuntimeState, PanelStateBinding
 
 # Asset Manager integration (optional)
 try:
@@ -419,7 +418,7 @@ class TrainingPanel(Panel):
         self._psnr_tick_mid = ""
         self._psnr_tick_min = ""
         self._last_panel_label = ""
-        self._reactive_binding = PanelStoreBinding()
+        self._reactive_binding = PanelStateBinding()
         self._deferred_update_pending = False
         self._deferred_update_deadline = None
         self._deferred_update_generation = 0
@@ -488,7 +487,7 @@ class TrainingPanel(Panel):
         model.bind_func("label_ppisp_sidecar_clear", lambda: tr("training_panel.clear"))
 
         def _btn_start():
-            it = AppState.iteration.value
+            it = RuntimeState.iteration.value
             return (
                 tr("training_panel.resume_training")
                 if it > 0
@@ -499,19 +498,19 @@ class TrainingPanel(Panel):
 
     def _bind_visibility(self, model, p, d):
         def _state():
-            return AppState.trainer_state.value
+            return RuntimeState.trainer_state.value
 
         def _iteration():
-            return AppState.iteration.value
+            return RuntimeState.iteration.value
 
-        model.bind_func("show_no_trainer", lambda: not AppState.has_trainer.value)
+        model.bind_func("show_no_trainer", lambda: not RuntimeState.has_trainer.value)
         model.bind_func(
             "show_no_params",
-            lambda: AppState.has_trainer.value and not (p() and p().has_params()),
+            lambda: RuntimeState.has_trainer.value and not (p() and p().has_params()),
         )
         model.bind_func(
             "show_main",
-            lambda: AppState.has_trainer.value and p() is not None and p().has_params(),
+            lambda: RuntimeState.has_trainer.value and p() is not None and p().has_params(),
         )
 
         for state_name in [
@@ -612,7 +611,7 @@ class TrainingPanel(Panel):
         )
         model.bind_func(
             "show_progress",
-            lambda: AppState.max_iterations.value > 0 and _iteration() > 0,
+            lambda: RuntimeState.max_iterations.value > 0 and _iteration() > 0,
         )
         model.bind_func("has_dataset", lambda: d() is not None and d().has_params())
         model.bind_func(
@@ -653,8 +652,8 @@ class TrainingPanel(Panel):
     def _bind_disabled(self, model, p):
         def _params_edit_locked():
             return not (
-                AppState.trainer_state.value == "ready"
-                and AppState.iteration.value == 0
+                RuntimeState.trainer_state.value == "ready"
+                and RuntimeState.iteration.value == 0
             )
 
         model.bind_func("struct_disabled", _params_edit_locked)
@@ -998,8 +997,8 @@ class TrainingPanel(Panel):
 
     def _bind_status(self, model, p):
         def _status_mode():
-            state = AppState.trainer_state.value
-            it = AppState.iteration.value
+            state = RuntimeState.trainer_state.value
+            it = RuntimeState.iteration.value
             labels = {
                 "idle": tr("training_panel.idle"),
                 "ready": tr("status.ready") if it == 0 else tr("training_panel.resume"),
@@ -1013,17 +1012,17 @@ class TrainingPanel(Panel):
             return f"{tr('status.mode')}: {labels.get(state, tr('status.unknown'))}"
 
         def _status_iteration():
-            it = AppState.iteration.value
+            it = RuntimeState.iteration.value
             _rate_tracker.add_sample(it)
             rate = _rate_tracker.get_rate()
             return f"{tr('status.iteration')} {it:,} ({rate:.1f} {tr('training_panel.iters_per_sec')})"
 
         def _status_gaussians():
-            return tr("progress.num_splats") % f"{AppState.num_gaussians.value:,}"
+            return tr("progress.num_splats") % f"{RuntimeState.num_gaussians.value:,}"
 
         def _progress_text():
-            it = AppState.iteration.value
-            mx = AppState.max_iterations.value
+            it = RuntimeState.iteration.value
+            mx = RuntimeState.max_iterations.value
             return f"{it:,}/{mx:,}" if mx > 0 else ""
 
         def _error_message():
@@ -1158,16 +1157,16 @@ class TrainingPanel(Panel):
             return
 
         native_signals = (
-            NativeAppStore.training_running,
-            NativeAppStore.training_state,
-            NativeAppStore.trainer_loaded,
-            NativeAppStore.iteration,
-            NativeAppStore.total_iterations,
-            NativeAppStore.loss,
-            NativeAppStore.eval_psnr,
-            NativeAppStore.num_gaussians,
-            NativeAppStore.scene_generation,
-            NativeAppStore.language_generation,
+            RuntimeState.training_running,
+            RuntimeState.training_state,
+            RuntimeState.trainer_loaded,
+            RuntimeState.iteration,
+            RuntimeState.total_iterations,
+            RuntimeState.loss,
+            RuntimeState.eval_psnr,
+            RuntimeState.num_gaussians,
+            RuntimeState.scene_generation,
+            RuntimeState.language_generation,
         )
         self._reactive_binding.set_handle(self._handle).watch(*native_signals)
 
@@ -1235,7 +1234,7 @@ class TrainingPanel(Panel):
         self._sync_panel_label()
 
         dirty = False
-        state = AppState.trainer_state.value
+        state = RuntimeState.trainer_state.value
         if state != self._last_state:
             self._last_state = state
             if state == "ready":
@@ -1244,7 +1243,7 @@ class TrainingPanel(Panel):
             self._handle.dirty_all()
             dirty = True
         else:
-            it = AppState.iteration.value
+            it = RuntimeState.iteration.value
             if it != self._last_iteration:
                 self._last_iteration = it
                 self._handle.dirty("status_iteration")
@@ -1252,7 +1251,7 @@ class TrainingPanel(Panel):
                 self._handle.dirty("show_progress")
                 dirty = True
 
-            ng = AppState.num_gaussians.value
+            ng = RuntimeState.num_gaussians.value
             if ng != self._last_num_gaussians:
                 self._last_num_gaussians = ng
                 self._handle.dirty("status_gaussians")
@@ -1267,7 +1266,7 @@ class TrainingPanel(Panel):
                 self._handle.dirty("show_checkpoint_saved")
                 dirty = True
 
-        if state == "ready" and AppState.iteration.value == 0:
+        if state == "ready" and RuntimeState.iteration.value == 0:
             params = lf.optimization_params()
             if params and params.has_params():
                 if self._try_auto_scale_steps(params):
@@ -1285,8 +1284,8 @@ class TrainingPanel(Panel):
         return dirty
 
     def _update_progress(self):
-        it = AppState.iteration.value
-        mx = AppState.max_iterations.value
+        it = RuntimeState.iteration.value
+        mx = RuntimeState.max_iterations.value
         frac = it / mx if mx > 0 and it > 0 else 0.0
         if frac != self._last_progress_frac:
             self._last_progress_frac = frac
@@ -1301,8 +1300,8 @@ class TrainingPanel(Panel):
         if not params or not params.has_params():
             return False
 
-        state = AppState.trainer_state.value
-        can_edit = state == "ready" and AppState.iteration.value == 0
+        state = RuntimeState.trainer_state.value
+        can_edit = state == "ready" and RuntimeState.iteration.value == 0
         if not can_edit:
             return False
 
@@ -3395,9 +3394,9 @@ class TrainingPanel(Panel):
         layout.label(
             f"{tr('status.iteration')} {iteration:,} ({rate:.1f} {tr('training_panel.iters_per_sec')})"
         )
-        layout.label(tr("progress.num_splats") % f"{AppState.num_gaussians.value:,}")
+        layout.label(tr("progress.num_splats") % f"{RuntimeState.num_gaussians.value:,}")
 
-        max_iter = AppState.max_iterations.value
+        max_iter = RuntimeState.max_iterations.value
         if max_iter > 0 and iteration > 0:
             layout.progress_bar(iteration / max_iter, f"{iteration:,}/{max_iter:,}")
 

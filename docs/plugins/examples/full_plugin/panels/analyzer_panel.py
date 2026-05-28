@@ -2,7 +2,7 @@
 
 import lichtfeld as lf
 from lfs_plugins.props import PropertyGroup, FloatProperty, EnumProperty, BoolProperty
-from lfs_plugins.ui.state import AppState
+from lfs_plugins.ui import RuntimeState
 from lfs_plugins.ui.signals import Signal
 
 
@@ -29,7 +29,7 @@ class AnalyzerPanel(lf.ui.Panel):
         self.result_total = Signal(0, name="result_total")
 
         if self.settings.auto_update:
-            AppState.scene_generation.subscribe_as(
+            RuntimeState.scene_generation.subscribe_as(
                 "gaussian_analyzer", lambda _: self._run_analysis()
             )
 
@@ -49,7 +49,7 @@ class AnalyzerPanel(lf.ui.Panel):
 
     @classmethod
     def poll(cls, context) -> bool:
-        return AppState.has_scene.value
+        return RuntimeState.has_scene.value
 
     def draw(self, ui):
         ui.heading("Gaussian Analyzer")

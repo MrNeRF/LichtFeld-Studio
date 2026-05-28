@@ -238,8 +238,8 @@ def test_rendering_panel_reacts_to_native_scene_generation(rendering_panel_modul
     panel._subscribe_reactive_state()
     model.handle.dirty_fields.clear()
 
-    module.NativeAppStore.scene_generation.value = (
-        module.NativeAppStore.scene_generation.value + 1
+    module.RuntimeState.scene_generation.value = (
+        module.RuntimeState.scene_generation.value + 1
     )
 
     assert model.handle.dirty_fields == ["__all__"]
@@ -257,10 +257,10 @@ def test_rendering_panel_reacts_to_native_tool_state(rendering_panel_module):
 
     next_tool = (
         "builtin.move"
-        if module.NativeAppStore.active_tool.value == "builtin.select"
+        if module.RuntimeState.active_tool.value == "builtin.select"
         else "builtin.select"
     )
-    module.NativeAppStore.active_tool.value = next_tool
+    module.RuntimeState.active_tool.value = next_tool
 
     assert model.handle.dirty_fields == ["__all__"]
     panel._unsubscribe_reactive_state()
@@ -275,8 +275,8 @@ def test_rendering_panel_reacts_to_native_language_generation(rendering_panel_mo
     panel._subscribe_reactive_state()
     model.handle.dirty_fields.clear()
 
-    module.NativeAppStore.language_generation.value = (
-        module.NativeAppStore.language_generation.value + 1
+    module.RuntimeState.language_generation.value = (
+        module.RuntimeState.language_generation.value + 1
     )
 
     assert model.handle.dirty_fields == ["__all__"]

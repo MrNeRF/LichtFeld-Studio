@@ -6,7 +6,7 @@ import lichtfeld as lf
 
 from . import rml_widgets
 from .types import Panel
-from .ui.store import AppStore as NativeAppStore, PanelStoreBinding
+from .ui import RuntimeState, PanelStateBinding
 
 SELECTION_GROUPS_MODEL = "selection_groups"
 __lfs_panel_classes__ = ["SelectionGroupsPanel"]
@@ -37,7 +37,7 @@ class SelectionGroupsPanel(Panel):
         self._last_scene_generation = None
         self._last_selection_generation = None
         self._last_visible = None
-        self._reactive_binding = PanelStoreBinding()
+        self._reactive_binding = PanelStateBinding()
 
     @classmethod
     def poll(cls, context):
@@ -97,9 +97,9 @@ class SelectionGroupsPanel(Panel):
             return
 
         native_signals = (
-            NativeAppStore.scene_generation,
-            NativeAppStore.selection_generation,
-            NativeAppStore.active_tool,
+            RuntimeState.scene_generation,
+            RuntimeState.selection_generation,
+            RuntimeState.active_tool,
         )
         self._reactive_binding.set_handle(self._handle).watch(*native_signals)
 
@@ -125,8 +125,8 @@ class SelectionGroupsPanel(Panel):
         if not visible:
             return dirty
 
-        scene_generation = NativeAppStore.scene_generation.value
-        selection_generation = NativeAppStore.selection_generation.value
+        scene_generation = RuntimeState.scene_generation.value
+        selection_generation = RuntimeState.selection_generation.value
         if (
             not force
             and self._prev_group_hash is not None

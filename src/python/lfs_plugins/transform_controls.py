@@ -11,7 +11,7 @@ import lichtfeld as lf
 from . import rml_widgets as w
 
 try:
-    from .ui.store import native_value as _native_store_value
+    from .ui import native_value as _native_store_value
 except Exception:
     def _native_store_value(_field, fallback):
         return fallback

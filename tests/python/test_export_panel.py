@@ -278,7 +278,7 @@ def test_export_panel_store_subscriptions_mark_panel_dirty(export_panel_module, 
     language_signal = _SignalStub()
     monkeypatch.setattr(
         module,
-        "NativeAppStore",
+        "RuntimeState",
         SimpleNamespace(
             scene_generation=scene_signal,
             export_progress_state=export_signal,

@@ -194,7 +194,7 @@ def test_asset_manager_requests_update_from_reactive_store(asset_manager_panel_m
         scene_generation=_SignalStub(),
         language_generation=_SignalStub(),
     )
-    monkeypatch.setattr(module, "NativeAppStore", signals)
+    monkeypatch.setattr(module, "RuntimeState", signals)
 
     panel = module.AssetManagerPanel()
     panel._handle = _HandleStub()
