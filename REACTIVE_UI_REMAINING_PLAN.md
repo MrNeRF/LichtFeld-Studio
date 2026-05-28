@@ -52,6 +52,7 @@ Current verified state:
 - Last gizmo/tool-state slice passed: `cmake --build build -j16`, 38 focused Python toolbar/tool/rendering/selection/input tests, and 14 non-GPU C++ input/Rml/post-work tests.
 - Last end-to-end smoke passed via MCP/runtime inspection: `./build/LichtFeld-Studio -d data/bicycle --output-path output --images images_4 --strategy mcmc --max-cap 1500000 --log-level perf --log-file /tmp/reactive-ui-perf.log --train -i 7000 --no-splash`.
 - Fresh smoke metrics: `gui_render.cpu_ui_before_vulkan_begin` across 768 rendered frames had median 0.31 ms, p95 0.57 ms, p99 0.99 ms, max 42.34 ms from startup/preload. After training finished, idle wakes logged `loop_idle skip_gui_render=true` with zero GUI render work.
+- Surgical `fps` store update passed via MCP `editor.run`: three `NativeAppStore.fps.value` updates produced only cached right-panel and viewport-overlay branches plus status-bar cache refreshes; no live `renderRightPanel` calls. Post-update CPU UI across 6 rendered frames had median 0.98 ms, p99 1.21 ms, max 1.55 ms, then idle skips resumed.
 - Last broad Python panel slice passed: 191 tests.
 - Last frame-router slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Shell*:*Rml*:*Menu*:*Modal*:*Startup*'` and the 191-test Python panel suite.
 - Last editor-context router slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Selection*:*Rml*:*Menu*:*Modal*:*Startup*:VisualizerPostWorkTest.*'` and 67 Python toolbar/rendering/training/selection tests.
@@ -151,6 +152,16 @@ Hard targets:
 - Main-thread GUI idle CPU under 0.5%.
 - `gui_render.cpu_ui_before_vulkan_begin` p99 under 2 ms over a 60-second steady-state run.
 - A 1 Hz `fps` store update should only dirty/redraw status bar paths; viewport overlay and right panel should use cached branches.
+
+Verified on 2026-05-28:
+- End-to-end smoke reached iteration 7000 and finished via MCP runtime state.
+- `gui_render.cpu_ui_before_vulkan_begin` p99 was 0.99 ms across the smoke run's rendered frames.
+- Post-training idle wakes consistently logged `loop_idle skip_gui_render=true`.
+- Three fps-only store updates kept right panel and viewport overlay cached while refreshing status bar.
+
+Residual follow-ups:
+- Measure OS-level main-thread/process idle CPU externally if required by release validation.
+- Keep the old Python UI hook API only for the planned deprecation window; removal remains a future release step.
 
 
 codex resume 019e686d-2ad4-7b81-9ce0-bcef32d1d113
