@@ -717,10 +717,6 @@ namespace lfs::vis::gui {
                 tracked_total += capped;
                 entries.push_back({std::move(label), capped, unaccounted});
             };
-        const auto add_hidden_synthetic = [&](const std::size_t bytes) {
-            tracked_total += std::min(bytes, synthetic_budget());
-        };
-
         // Synthetic entries: bytes we know about from system queries but that are
         // not already covered by allocator scope rows.
         const auto& proc = state_.snapshot.process;
@@ -788,11 +784,10 @@ namespace lfs::vis::gui {
             const std::size_t vulkan_residual =
                 proc.vulkan_vma_used > deductions ? proc.vulkan_vma_used - deductions : 0;
             if (vulkan_residual > 0) {
-                // Keep the totals closed, but do not show a synthetic Vulkan
-                // residual row. VMA budget usage includes driver/runtime heap
-                // that is not an application allocation and was repeatedly
-                // confused with actionable VRAM.
-                add_hidden_synthetic(vulkan_residual);
+                // Driver/runtime backing heap plus any unnamed VMA allocation. Not an
+                // actionable app allocation, so flag it unaccounted (dimmed) — but show
+                // it, otherwise the visible rows silently fall short of Sum/Process.
+                add_synthetic_row("vulkan.residual", vulkan_residual, true);
             }
         }
 
