@@ -3,11 +3,12 @@
 Current branch: `reactive_ui`
 
 Last completed commits:
-- `3af7a2a95 Skip idle menu bar hover scans`
-- `bcaabf56d Skip idle viewport overlay input hit tests`
-- `7c623dd8d Skip idle right panel input hit tests`
-- `afbdafefd Skip stable editor context refreshes`
-- `ed519dac5 Gate idle panel registry branches`
+- `3e3724611 Skip stable gizmo tool-state updates`
+- `6dbdbfe60 Skip idle menu bar hover scans`
+- `54f94aeae Skip idle viewport overlay input hit tests`
+- `8b351724d Skip idle right panel input hit tests`
+- `ac6daaa15 Skip stable editor context refreshes`
+- `96a8ebb0d Gate idle panel registry branches`
 - `f9107672c Cache idle right panel shell rendering`
 - `22582d69d Cache idle viewport overlay rendering`
 - `a7a76ec5b Cache idle status bar rendering`
@@ -47,6 +48,8 @@ Current verified state:
 - `RmlRightPanel::processInput()` keeps existing drag/focus/layout semantics but skips the RmlUi hover hit-test on frames with no pointer, keyboard, text, drag, focus-blur, or layout work.
 - `RmlViewportOverlay::processInput()` now preserves existing hover/focus claims but skips the RmlUi element hit-test on unchanged, activity-free frames with no VRAM HUD drag capture.
 - `RmlMenuBar::processInput()` now reuses the previous hovered menu label on unchanged, pointer-idle frames with stable context size and no pending render work.
+- `GizmoManager::updateToolState()` is source-stamped and returns early when selected-node presence, active tool, gizmo type, selection submode, UI visibility, and tool/renderer ownership are stable.
+- Last gizmo/tool-state slice passed: `cmake --build build -j16`, 38 focused Python toolbar/tool/rendering/selection/input tests, and 14 non-GPU C++ input/Rml/post-work tests.
 - Last broad Python panel slice passed: 191 tests.
 - Last frame-router slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Shell*:*Rml*:*Menu*:*Modal*:*Startup*'` and the 191-test Python panel suite.
 - Last editor-context router slice passed: `./build/tests/lichtfeld_tests --gtest_filter='*Selection*:*Rml*:*Menu*:*Modal*:*Startup*:VisualizerPostWorkTest.*'` and 67 Python toolbar/rendering/training/selection tests.
@@ -83,11 +86,12 @@ Drive idle GUI CPU toward zero and keep p99 CPU UI work under 2 ms by removing r
 - Status bar cached rendering: `a7a76ec5b`.
 - Viewport overlay cached rendering: `22582d69d`.
 - Right-panel shell cached rendering: `f9107672c`.
-- Idle panel registry branch gating: `ed519dac5`.
-- Stable editor context refresh gating: `afbdafefd`.
-- Idle right panel input hit-test skip: `7c623dd8d`.
-- Idle viewport overlay input hit-test skip: `bcaabf56d`.
-- Idle menu bar hover scan skip: `3af7a2a95`.
+- Idle panel registry branch gating: `96a8ebb0d`.
+- Stable editor context refresh gating: `ac6daaa15`.
+- Idle right panel input hit-test skip: `8b351724d`.
+- Idle viewport overlay input hit-test skip: `54f94aeae`.
+- Idle menu bar hover scan skip: `6dbdbfe60`.
+- Stable gizmo tool-state update skip: `3e3724611`.
 
 ## Next Batch 1: Frame Router Cleanup
 
