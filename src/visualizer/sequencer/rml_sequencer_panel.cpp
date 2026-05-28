@@ -95,6 +95,23 @@ namespace lfs::vis {
             return signature;
         }
 
+        [[nodiscard]] int milli(const float value) {
+            return static_cast<int>(std::lround(value * 1000.0f));
+        }
+
+        [[nodiscard]] bool hasInputActivity(const PanelInputState& input) {
+            for (int i = 0; i < 3; ++i) {
+                if (input.mouse_down[i] || input.mouse_clicked[i] || input.mouse_released[i])
+                    return true;
+            }
+            return input.mouse_wheel != 0.0f ||
+                   !input.keys_pressed.empty() ||
+                   !input.keys_released.empty() ||
+                   !input.text_codepoints.empty() ||
+                   !input.text_inputs.empty() ||
+                   input.has_text_editing;
+        }
+
         [[nodiscard]] float clampCenteredSpan(const float center,
                                               const float extent,
                                               const float span) {
@@ -251,6 +268,10 @@ namespace lfs::vis {
 
     void RmlSequencerPanel::destroyGraphicsResources() {
         clearPendingComposite();
+        if (rml_manager_)
+            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+        direct_cache_dirty_ = true;
+        last_render_signature_.reset();
         unregisterFilmStripSources();
         clearFilmThumbPool();
         if (el_film_strip_gaps_)
@@ -336,6 +357,10 @@ namespace lfs::vis {
             return;
 
         clearPendingComposite();
+        if (rml_manager_)
+            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+        direct_cache_dirty_ = true;
+        last_render_signature_.reset();
         unregisterFilmStripSources();
         clearFilmThumbPool();
         if (document_) {
@@ -381,6 +406,91 @@ namespace lfs::vis {
     void RmlSequencerPanel::compositeToScreen(const int screen_w, const int screen_h) {
         (void)screen_w;
         (void)screen_h;
+    }
+
+    RmlSequencerPanel::RenderSignature RmlSequencerPanel::makeRenderSignature(
+        const int width,
+        const int height,
+        const std::size_t theme_signature,
+        std::string language) const {
+        return {
+            .width = width,
+            .height = height,
+            .dp_milli = milli(cached_dp_ratio_),
+            .floating = floating_,
+            .film_strip_attached = film_strip_attached_,
+            .theme_signature = theme_signature,
+            .language = std::move(language),
+            .timeline_revision = controller_.timelineRevision(),
+            .selection_revision = controller_.selectionRevision(),
+            .selected_keyframes_signature = selectedKeyframeSignature(selected_keyframes_),
+            .playhead_milli = milli(controller_.playhead()),
+            .zoom_milli = milli(zoom_level_),
+            .pan_milli = milli(pan_offset_),
+            .playback_speed_milli = milli(ui_state_.playback_speed),
+            .snap_interval_milli = milli(ui_state_.snap_interval),
+            .pip_scale_milli = milli(ui_state_.pip_preview_scale),
+            .state = static_cast<int>(controller_.state()),
+            .loop_mode = static_cast<int>(controller_.loopMode()),
+            .preset = static_cast<int>(ui_state_.preset),
+            .custom_width = ui_state_.custom_width,
+            .custom_height = ui_state_.custom_height,
+            .framerate = ui_state_.framerate,
+            .quality = ui_state_.quality,
+            .follow_playback = ui_state_.follow_playback,
+            .show_camera_path = ui_state_.show_camera_path,
+            .snap_to_grid = ui_state_.snap_to_grid,
+            .show_film_strip = ui_state_.show_film_strip,
+            .show_pip_preview = ui_state_.show_pip_preview,
+            .equirectangular = ui_state_.equirectangular,
+        };
+    }
+
+    bool RmlSequencerPanel::canReuseCachedRender(const RenderSignature& signature,
+                                                 const PanelInputState& input,
+                                                 const int width,
+                                                 const int height) const {
+        return !direct_cache_dirty_ &&
+               direct_cache_.texture != 0 &&
+               direct_cache_.width == width &&
+               direct_cache_.height == height &&
+               last_render_signature_.has_value() &&
+               *last_render_signature_ == signature &&
+               !hasInputActivity(input) &&
+               !tooltip_.needsFrame() &&
+               !quality_scrub_active_ &&
+               !quality_scrub_editing_ &&
+               !duration_editing_;
+    }
+
+    void RmlSequencerPanel::queueCachedRender(const float context_x,
+                                              const float context_y,
+                                              const float panel_width,
+                                              const float total_height,
+                                              const int width,
+                                              const int height,
+                                              const bool refresh) {
+        if (!rml_manager_ || !rml_context_)
+            return;
+        rml_manager_->queueCachedVulkanContext({
+            .context = rml_context_,
+            .cache = &direct_cache_,
+            .cache_width = width,
+            .cache_height = height,
+            .offset_x = context_x,
+            .offset_y = context_y,
+            .draw_width = panel_width,
+            .draw_height = total_height,
+            .refresh = refresh,
+            .foreground = floating_,
+            .clip_enabled = true,
+            .clip = {
+                .x1 = context_x,
+                .y1 = context_y,
+                .x2 = context_x + panel_width,
+                .y2 = context_y + total_height,
+            },
+        });
     }
 
     void RmlSequencerPanel::initContext(const int width, const int height) {
@@ -872,11 +982,25 @@ namespace lfs::vis {
         if (!rml_context_ || !document_)
             return;
 
+        const std::size_t theme_signature = gui::rml_theme::currentThemeSignature();
+        auto language = lfs::event::LocalizationManager::getInstance().getCurrentLanguage();
+        const float context_x = panel_x - input.screen_x;
+        const float context_y = panel_y - input.screen_y;
+        rml_manager_->trackContextFrame(rml_context_,
+                                        static_cast<int>(context_x),
+                                        static_cast<int>(context_y));
+
+        const RenderSignature signature =
+            makeRenderSignature(w, h, theme_signature, language);
+        if (canReuseCachedRender(signature, input, w, h)) {
+            queueCachedRender(context_x, context_y, panel_width, cached_total_height_, w, h, false);
+            return;
+        }
+
         syncTheme();
 
-        const auto& lang = lfs::event::LocalizationManager::getInstance().getCurrentLanguage();
-        if (lang != last_language_) {
-            last_language_ = lang;
+        if (language != last_language_) {
+            last_language_ = std::move(language);
             last_keyframe_count_ = static_cast<size_t>(-1);
         }
 
@@ -931,22 +1055,11 @@ namespace lfs::vis {
             tooltip_.apply(body, local_mx, local_my, w, h);
         }
 
-        const float context_x = panel_x - input.screen_x;
-        const float context_y = panel_y - input.screen_y;
-        rml_manager_->trackContextFrame(rml_context_,
-                                        static_cast<int>(context_x),
-                                        static_cast<int>(context_y));
         rml_context_->SetDimensions(Rml::Vector2i(w, h));
         rml_context_->Update();
-        rml_manager_->queueVulkanContext(rml_context_,
-                                         context_x,
-                                         context_y,
-                                         floating_,
-                                         true,
-                                         context_x,
-                                         context_y,
-                                         context_x + panel_width,
-                                         context_y + cached_total_height_);
+        queueCachedRender(context_x, context_y, panel_width, cached_total_height_, w, h, true);
+        last_render_signature_ = signature;
+        direct_cache_dirty_ = false;
     }
 
     // ── Quality Scrub Field ──────────────────────────────────

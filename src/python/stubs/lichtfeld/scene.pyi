@@ -470,7 +470,7 @@ class Scene:
     def add_camera_group(self, name: str, parent: int, camera_count: int) -> int:
         """Add a camera group node"""
 
-    def add_camera(self, name: str, parent: int, R: lichtfeld.Tensor, T: lichtfeld.Tensor, focal_x: float, focal_y: float, width: int, height: int, image_path: str = '', uid: int = -1) -> int:
+    def add_camera(self, name: str, parent: int, R: lichtfeld.Tensor, T: lichtfeld.Tensor, focal_x: float, focal_y: float, width: int, height: int, image_path: str = '', uid: int = -1, mask: lichtfeld.Tensor | None = None) -> int:
         """
         Add a camera node with intrinsic and extrinsic parameters.
 
@@ -485,6 +485,11 @@ class Scene:
             height: Image height in pixels
             image_path: Optional path to camera image
             uid: Optional unique identifier (-1 for auto-assigned)
+            mask: Optional in-memory mask tensor (H, W) or (1, H, W) at the image
+                resolution. Bypasses the on-disk masks/ workflow — useful for
+                direct-scene plugins that want to attach per-frame masks without
+                writing files. Set the session's ``mask_mode`` to ``Ignore`` or
+                ``Segment`` for it to take effect during training.
 
         Returns:
             Node ID of created camera

@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace lfs::vis::gui {
 
@@ -18,6 +19,13 @@ namespace lfs::vis::gui {
         bool show_sequencer = false;
         std::string file_association;
         std::unordered_map<std::string, bool> window_visibility;
+
+        float vram_hud_x = -1.0f;
+        float vram_hud_y = -1.0f;
+        float vram_hud_width = -1.0f;
+        float vram_hud_height = -1.0f;
+        std::string vram_hud_active_tab;
+        std::vector<std::string> vram_hud_collapsed_paths;
 
         void save() const;
         void load();

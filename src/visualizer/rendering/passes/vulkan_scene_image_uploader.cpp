@@ -4,12 +4,15 @@
 
 #include "vulkan_scene_image_uploader.hpp"
 
-#ifdef LFS_VULKAN_VIEWER_ENABLED
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "vulkan_viewport_pass.hpp"
 #include "window/vulkan_context.hpp"
 #include "window/vulkan_image_barrier_tracker.hpp"
+
+#include <format>
+#include <string>
 
 namespace lfs::vis {
     struct VulkanSceneImageUploader::Impl {
@@ -23,6 +26,7 @@ namespace lfs::vis {
         VkImageView scene_image_view = VK_NULL_HANDLE;
         VulkanImageBarrierTracker scene_image_barriers;
         glm::ivec2 scene_image_size{0, 0};
+        std::string scene_image_vram_label;
         const lfs::core::Tensor* uploaded_scene_tensor = nullptr;
         bool scene_image_external = false;
         std::uint64_t scene_image_external_generation = 0;
@@ -56,6 +60,7 @@ namespace lfs::vis {
             scene_image_allocation = VK_NULL_HANDLE;
             scene_image_view = VK_NULL_HANDLE;
             scene_image_size = {0, 0};
+            scene_image_vram_label.clear();
             uploaded_scene_tensor = nullptr;
             scene_image_external = false;
             scene_image_external_generation = 0;
@@ -90,6 +95,12 @@ namespace lfs::vis {
                 vkDestroyImageView(device, scene_image_view, nullptr);
             }
             if (scene_image != VK_NULL_HANDLE) {
+                if (!scene_image_vram_label.empty()) {
+                    lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                        "vulkan.scene_image.image",
+                        scene_image_vram_label,
+                        0);
+                }
                 vmaDestroyImage(allocator, scene_image, scene_image_allocation);
             }
             clearSceneImageBinding();
@@ -117,16 +128,22 @@ namespace lfs::vis {
 
             VmaAllocationCreateInfo allocation_info{};
             allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+            VmaAllocationInfo created_allocation_info{};
             if (vmaCreateImage(allocator,
                                &image_info,
                                &allocation_info,
                                &scene_image,
                                &scene_image_allocation,
-                               nullptr) != VK_SUCCESS) {
+                               &created_allocation_info) != VK_SUCCESS) {
                 destroySceneImage();
                 return false;
             }
             vmaSetAllocationName(allocator, scene_image_allocation, "Viewport scene image");
+            scene_image_vram_label = std::format("rgba8:{}x{}", size.x, size.y);
+            lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                "vulkan.scene_image.image",
+                scene_image_vram_label,
+                static_cast<std::size_t>(created_allocation_info.size));
 
             VkImageViewCreateInfo view_info{};
             view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -253,4 +270,3 @@ namespace lfs::vis {
         return impl_->hasImage();
     }
 } // namespace lfs::vis
-#endif

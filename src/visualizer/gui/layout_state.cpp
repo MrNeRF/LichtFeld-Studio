@@ -77,6 +77,15 @@ namespace lfs::vis::gui {
             }
             j["windows"] = windows;
 
+            nlohmann::json vram_hud;
+            vram_hud["x"] = vram_hud_x;
+            vram_hud["y"] = vram_hud_y;
+            vram_hud["width"] = vram_hud_width;
+            vram_hud["height"] = vram_hud_height;
+            vram_hud["active_tab"] = vram_hud_active_tab;
+            vram_hud["collapsed"] = vram_hud_collapsed_paths;
+            j["vram_hud"] = vram_hud;
+
             std::ofstream file(path);
             if (file) {
                 file << j.dump(2);
@@ -110,6 +119,22 @@ namespace lfs::vis::gui {
                 for (const auto& [key, val] : j["windows"].items()) {
                     if (val.is_boolean()) {
                         window_visibility[key] = val.get<bool>();
+                    }
+                }
+            }
+
+            if (j.contains("vram_hud") && j["vram_hud"].is_object()) {
+                const auto& vh = j["vram_hud"];
+                vram_hud_x = vh.value("x", vram_hud_x);
+                vram_hud_y = vh.value("y", vram_hud_y);
+                vram_hud_width = vh.value("width", vram_hud_width);
+                vram_hud_height = vh.value("height", vram_hud_height);
+                vram_hud_active_tab = vh.value("active_tab", vram_hud_active_tab);
+                if (vh.contains("collapsed") && vh["collapsed"].is_array()) {
+                    vram_hud_collapsed_paths.clear();
+                    for (const auto& entry : vh["collapsed"]) {
+                        if (entry.is_string())
+                            vram_hud_collapsed_paths.push_back(entry.get<std::string>());
                     }
                 }
             }

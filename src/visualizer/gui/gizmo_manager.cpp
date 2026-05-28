@@ -27,6 +27,7 @@
 #include "tools/brush_tool.hpp"
 #include "tools/selection_tool.hpp"
 #include "tools/unified_tool_registry.hpp"
+#include "visualizer/app_store.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer_impl.hpp"
@@ -359,6 +360,10 @@ namespace lfs::vis::gui {
                 LOG_DEBUG("SetToolbarTool: SCALE");
                 break;
             case ToolType::Selection:
+                // Plain select activation returns to brush selection; explicit
+                // flyout submode picks immediately override this event.
+                setSelectionSubMode(SelectionSubMode::Centers);
+                registry.setActiveSubmode("centers");
                 break;
             default:
                 LOG_DEBUG("SetToolbarTool: tool_mode={}", e.tool_mode);
@@ -483,10 +488,31 @@ namespace lfs::vis::gui {
 
     void GizmoManager::updateToolState(const UIContext& ctx, bool ui_hidden) {
         auto* const scene_manager = ctx.viewer->getSceneManager();
-        if (scene_manager && scene_manager->hasSelectedNode() && !ui_hidden) {
-            const auto& active_tool_id = UnifiedToolRegistry::instance().getActiveTool();
-            const auto& gizmo_type = ctx.editor->getGizmoType();
+        auto* const brush_tool = ctx.viewer->getBrushTool();
+        auto* const align_tool = ctx.viewer->getAlignTool();
+        auto* const selection_tool = ctx.viewer->getSelectionTool();
+        auto* const rendering_manager = ctx.viewer->getRenderingManager();
+        const bool has_selected_node = scene_manager && scene_manager->hasSelectedNode();
+        const std::string active_tool_id = UnifiedToolRegistry::instance().getActiveTool();
+        const std::string gizmo_type = ctx.editor ? ctx.editor->getGizmoType() : std::string{};
 
+        ToolStateStamp stamp;
+        stamp.valid = true;
+        stamp.ui_hidden = ui_hidden;
+        stamp.has_scene_manager = scene_manager != nullptr;
+        stamp.has_selected_node = has_selected_node;
+        stamp.brush_tool = brush_tool;
+        stamp.align_tool = align_tool;
+        stamp.selection_tool = selection_tool;
+        stamp.rendering_manager = rendering_manager;
+        stamp.active_tool_id = active_tool_id;
+        stamp.gizmo_type = gizmo_type;
+        stamp.selection_mode = selection_mode_;
+        if (stamp == last_tool_state_stamp_)
+            return;
+        last_tool_state_stamp_ = stamp;
+
+        if (scene_manager && has_selected_node && !ui_hidden) {
             bool is_transform_tool = false;
             if (!gizmo_type.empty()) {
                 is_transform_tool = true;
@@ -509,9 +535,6 @@ namespace lfs::vis::gui {
             }
             show_node_gizmo_ = is_transform_tool;
 
-            auto* const brush_tool = ctx.viewer->getBrushTool();
-            auto* const align_tool = ctx.viewer->getAlignTool();
-            auto* const selection_tool = ctx.viewer->getSelectionTool();
             const bool is_brush_mode = (active_tool_id == "builtin.brush");
             const bool is_align_mode = (active_tool_id == "builtin.align");
             const bool is_selection_mode = (active_tool_id == "builtin.select");
@@ -531,8 +554,8 @@ namespace lfs::vis::gui {
                 selection_tool->setEnabled(is_selection_mode);
 
             if (is_selection_mode) {
-                if (auto* const rm = ctx.viewer->getRenderingManager()) {
-                    rm->setSelectionPreviewMode(toSelectionPreviewMode(selection_mode_));
+                if (rendering_manager) {
+                    rendering_manager->setSelectionPreviewMode(toSelectionPreviewMode(selection_mode_));
 
                     if (selection_mode_ != previous_selection_mode_) {
                         if (selection_tool)
@@ -1838,6 +1861,20 @@ namespace lfs::vis::gui {
         if (auto* rm = viewer_->getRenderingManager()) {
             rm->setSelectionPreviewMode(toSelectionPreviewMode(mode));
         }
+    }
+
+    void GizmoManager::setTransformSpace(const TransformSpace space) {
+        if (transform_space_ == space)
+            return;
+        transform_space_ = space;
+        app_store().transform_space.set(static_cast<int>(transform_space_));
+    }
+
+    void GizmoManager::setPivotMode(const PivotMode mode) {
+        if (pivot_mode_ == mode)
+            return;
+        pivot_mode_ = mode;
+        app_store().pivot_mode.set(static_cast<int>(pivot_mode_));
     }
 
     bool GizmoManager::isPositionInViewportGizmo(const double x, const double y) const {

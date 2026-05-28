@@ -94,6 +94,8 @@ namespace lfs::vis::gui {
         tab_model_ = {};
         tabs_.clear();
         active_tab_.clear();
+        if (rml_manager_)
+            rml_manager_->releaseCachedVulkanContext(direct_cache_);
         if (rml_context_ && rml_manager_)
             rml_manager_->destroyContext("right_panel");
         rml_context_ = nullptr;
@@ -113,6 +115,9 @@ namespace lfs::vis::gui {
     void RmlRightPanel::reloadResources() {
         if (!rml_context_)
             return;
+
+        if (rml_manager_)
+            rml_manager_->releaseCachedVulkanContext(direct_cache_);
 
         if (document_) {
             rml_context_->UnloadDocument(document_);
@@ -358,6 +363,7 @@ namespace lfs::vis::gui {
     }
 
     void RmlRightPanel::processInput(const RightPanelLayout& layout, const PanelInputState& input) {
+        const CursorRequest previous_cursor_request = cursor_request_;
         wants_input_ = false;
         wants_keyboard_ = false;
         cursor_request_ = CursorRequest::None;
@@ -376,6 +382,33 @@ namespace lfs::vis::gui {
             rml_manager_->trackContextFrame(rml_context_,
                                             static_cast<int>(layout.pos.x - input.screen_x),
                                             static_cast<int>(layout.pos.y - input.screen_y));
+        }
+
+        const bool pointer_event =
+            input.mouse_clicked[0] || input.mouse_clicked[1] || input.mouse_clicked[2] ||
+            input.mouse_released[0] || input.mouse_released[1] || input.mouse_released[2] ||
+            input.mouse_wheel != 0.0f;
+        const bool pointer_down =
+            input.mouse_down[0] || input.mouse_down[1] || input.mouse_down[2];
+        const bool keyboard_event =
+            !input.keys_pressed.empty() || !input.keys_released.empty() ||
+            !input.keys_repeated.empty() || !input.text_codepoints.empty() ||
+            !input.text_inputs.empty() || input.has_text_editing;
+        auto* const focused_before = rml_context_->GetFocusElement();
+        const bool viewport_focus_blurs_panel = input.viewport_keyboard_focus && focused_before;
+        const bool layout_changed =
+            static_cast<int>(layout.size.x) != last_fbo_w_ ||
+            static_cast<int>(layout.size.y) != last_fbo_h_ ||
+            layout.scene_h != last_scene_h_ ||
+            layout.splitter_h != last_splitter_h_;
+        if (!mouse_moved && !pointer_event && !pointer_down && !keyboard_event &&
+            !resize_dragging_ && !splitter_dragging_ && !viewport_focus_blurs_panel &&
+            !layout_changed) {
+            wants_keyboard_ = rml_input::hasFocusedKeyboardTarget(focused_before);
+            wants_input_ = wants_keyboard_ || last_over_interactive_ ||
+                           previous_cursor_request != CursorRequest::None;
+            cursor_request_ = previous_cursor_request;
+            return;
         }
 
         const float mx = input.mouse_x - layout.pos.x;
@@ -586,15 +619,28 @@ namespace lfs::vis::gui {
         if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
             return;
 
-        rml_manager_->queueVulkanContext(rml_context_,
-                                         layout.pos.x - screen_x,
-                                         layout.pos.y - screen_y,
-                                         false,
-                                         true,
-                                         layout.pos.x - screen_x,
-                                         layout.pos.y - screen_y,
-                                         layout.pos.x - screen_x + static_cast<float>(w),
-                                         layout.pos.y - screen_y + static_cast<float>(h));
+        const float x = layout.pos.x - screen_x;
+        const float y = layout.pos.y - screen_y;
+        rml_manager_->queueCachedVulkanContext({
+            .context = rml_context_,
+            .cache = &direct_cache_,
+            .cache_width = w,
+            .cache_height = h,
+            .offset_x = x,
+            .offset_y = y,
+            .draw_width = static_cast<float>(w),
+            .draw_height = static_cast<float>(h),
+            .refresh = needs_render || direct_cache_.texture == 0 ||
+                       direct_cache_.width != w || direct_cache_.height != h,
+            .foreground = false,
+            .clip_enabled = true,
+            .clip = {
+                .x1 = x,
+                .y1 = y,
+                .x2 = x + static_cast<float>(w),
+                .y2 = y + static_cast<float>(h),
+            },
+        });
     }
 
 } // namespace lfs::vis::gui

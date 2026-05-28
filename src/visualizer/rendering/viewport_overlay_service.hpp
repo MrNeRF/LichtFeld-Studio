@@ -73,7 +73,7 @@ namespace lfs::vis {
         [[nodiscard]] const CursorPreviewState& cursorPreview() const { return cursor_preview_; }
 
         void setRect(float x0, float y0, float x1, float y1, bool add_mode,
-                     std::optional<SplitViewPanelId> panel) {
+                     std::optional<SplitViewPanelId> panel, bool track_cursor) {
             rect_.active = true;
             rect_.x0 = x0;
             rect_.y0 = y0;
@@ -81,11 +81,13 @@ namespace lfs::vis {
             rect_.y1 = y1;
             rect_.add_mode = add_mode;
             rect_.panel = panel;
+            rect_.track_cursor = track_cursor;
         }
 
         void clearRect() {
             rect_.active = false;
             rect_.panel.reset();
+            rect_.track_cursor = false;
         }
         [[nodiscard]] bool isRectPreviewActive() const { return rect_.active; }
         [[nodiscard]] float rectX0() const { return rect_.x0; }
@@ -94,6 +96,7 @@ namespace lfs::vis {
         [[nodiscard]] float rectY1() const { return rect_.y1; }
         [[nodiscard]] bool rectAddMode() const { return rect_.add_mode; }
         [[nodiscard]] std::optional<SplitViewPanelId> rectPanel() const { return rect_.panel; }
+        [[nodiscard]] bool rectTracksCursor() const { return rect_.track_cursor; }
 
         void setPolygon(const std::vector<std::pair<float, float>>& points, bool closed, bool add_mode,
                         std::optional<SplitViewPanelId> panel) {
@@ -135,23 +138,26 @@ namespace lfs::vis {
         [[nodiscard]] std::optional<SplitViewPanelId> polygonPanel() const { return polygon_.panel; }
 
         void setLasso(const std::vector<std::pair<float, float>>& points, bool add_mode,
-                      std::optional<SplitViewPanelId> panel) {
+                      std::optional<SplitViewPanelId> panel, bool track_cursor) {
             lasso_.active = true;
             lasso_.points = points;
             lasso_.add_mode = add_mode;
             lasso_.panel = panel;
+            lasso_.track_cursor = track_cursor;
         }
 
         void clearLasso() {
             lasso_.active = false;
             lasso_.points.clear();
             lasso_.panel.reset();
+            lasso_.track_cursor = false;
         }
 
         [[nodiscard]] bool isLassoPreviewActive() const { return lasso_.active; }
         [[nodiscard]] const std::vector<std::pair<float, float>>& lassoPoints() const { return lasso_.points; }
         [[nodiscard]] bool lassoAddMode() const { return lasso_.add_mode; }
         [[nodiscard]] std::optional<SplitViewPanelId> lassoPanel() const { return lasso_.panel; }
+        [[nodiscard]] bool lassoTracksCursor() const { return lasso_.track_cursor; }
 
         [[nodiscard]] int hoveredGaussianId() const { return hovered_gaussian_id_; }
         void setHoveredGaussianId(int hovered_gaussian_id) { hovered_gaussian_id_ = hovered_gaussian_id; }
@@ -198,6 +204,7 @@ namespace lfs::vis {
             float y1 = 0.0f;
             bool add_mode = true;
             std::optional<SplitViewPanelId> panel;
+            bool track_cursor = false;
         };
 
         struct PolygonPreviewState {
@@ -215,6 +222,7 @@ namespace lfs::vis {
             std::vector<std::pair<float, float>> points;
             bool add_mode = true;
             std::optional<SplitViewPanelId> panel;
+            bool track_cursor = false;
         };
 
         CursorPreviewState cursor_preview_;

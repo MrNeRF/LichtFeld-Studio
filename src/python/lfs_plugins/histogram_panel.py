@@ -10,9 +10,10 @@ from typing import Iterable
 import lichtfeld as lf
 
 from .histogram_support import METRICS, METRIC_BY_ID, histogram_mode_available, histogram_tr
+from . import rml_widgets as w
 from .rml_keys import KI_A, KI_DELETE, KI_I
 from .types import Panel
-from .ui.state import AppState
+from .ui import RuntimeState
 
 __lfs_panel_classes__ = ["HistogramPanel"]
 __lfs_panel_ids__ = ["lfs.histogram"]
@@ -48,7 +49,7 @@ class HistogramPanel(Panel):
     template = "rmlui/histogram_panel.rml"
     size = (860, 660)
     height_mode = lf.ui.PanelHeightMode.FILL
-    update_interval_ms = 250
+    update_policy = "dirty"
 
     def __init__(self):
         self._doc = None
@@ -174,6 +175,7 @@ class HistogramPanel(Panel):
         self._compare_selection_top_style = "0%"
         self._compare_selection_width_style = "0%"
         self._compare_selection_height_style = "0%"
+        self._reactive_unsubscribers = []
 
     @classmethod
     def poll(cls, context):
@@ -327,6 +329,7 @@ class HistogramPanel(Panel):
         self._trainer_state = ""
         self._rebuild_metric_options()
         self._refresh()
+        self._subscribe_reactive_state()
 
     def on_update(self, doc):
         del doc
@@ -335,7 +338,7 @@ class HistogramPanel(Panel):
         scene_generation = lf.get_scene_generation()
         history_generation = self._history_generation_value()
         current_lang = lf.ui.get_current_language()
-        trainer_state = AppState.trainer_state.value
+        trainer_state = RuntimeState.trainer_state.value
         selection_signature = self._scene_node_selection_signature()
         scene_changed = scene_generation != self._scene_generation
         history_changed = history_generation != self._history_generation
@@ -386,12 +389,40 @@ class HistogramPanel(Panel):
         self._scene_generation = -1
 
     def on_unmount(self, doc):
+        self._unsubscribe_reactive_state()
         self._clear_owned_scene_selection()
         self._doc = None
         self._chart_el = None
         self._compare_chart_el = None
         self._handle = None
         doc.remove_data_model("histogram_panel")
+
+    def _subscribe_reactive_state(self):
+        if self._reactive_unsubscribers:
+            return
+
+        native_signals = (
+            RuntimeState.scene_generation,
+            RuntimeState.selection_generation,
+            RuntimeState.training_state,
+            RuntimeState.language_generation,
+        )
+        self._reactive_unsubscribers = [
+            signal.subscribe(lambda _value: self._request_reactive_update())
+            for signal in native_signals
+        ]
+
+    def _unsubscribe_reactive_state(self):
+        for unsubscribe in self._reactive_unsubscribers:
+            try:
+                unsubscribe()
+            except Exception:
+                pass
+        self._reactive_unsubscribers = []
+
+    def _request_reactive_update(self):
+        if self._handle:
+            w.request_model_update(self._handle)
 
     def _set_metric_id(self, value):
         metric_id = str(value)
@@ -1809,8 +1840,9 @@ class HistogramPanel(Panel):
         y_finite = y_valid.contiguous().cpu().to("float32")
         # Mirror the primary axis range-of-interest on the compare X axis so the
         # 2D heatmap stays consistent with the 1D histogram.
+        x_auto_min, x_auto_max = self._histogram_bounds(x_finite, self._metric_id)
         x_range_min, x_range_max = self._resolve_active_bounds(
-            self._auto_histogram_min, self._auto_histogram_max
+            x_auto_min, x_auto_max
         )
         log = self._log_scale_enabled
         x_min, x_max = self._snap_bounds_to_data(x_finite, x_range_min, x_range_max, log_scale=log)

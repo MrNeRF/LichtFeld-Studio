@@ -13,22 +13,38 @@ import pytest
 class _DataModelHandleStub:
     def __init__(self):
         self.dirty_all_calls = 0
+        self.dirty_calls = []
+        self.record_updates = {}
 
     def dirty_all(self):
         self.dirty_all_calls += 1
 
+    def dirty(self, name):
+        self.dirty_calls.append(name)
+
+    def update_record_list(self, name, records):
+        self.record_updates[name] = records
+
 
 class _DataModelStub:
     def __init__(self):
+        self.bound_binds = {}
         self.bound_funcs = {}
         self.bound_events = {}
+        self.bound_record_lists = []
         self.handle = _DataModelHandleStub()
+
+    def bind(self, name, getter, setter):
+        self.bound_binds[name] = (getter, setter)
 
     def bind_func(self, name, getter):
         self.bound_funcs[name] = getter
 
     def bind_event(self, name, callback):
         self.bound_events[name] = callback
+
+    def bind_record_list(self, name):
+        self.bound_record_lists.append(name)
 
     def get_handle(self):
         return self.handle
@@ -37,6 +53,10 @@ class _DataModelStub:
 class _ElementStub:
     def __init__(self):
         self.attrs = {}
+        self.listeners = []
+
+    def add_event_listener(self, name, callback):
+        self.listeners.append((name, callback))
 
     def get_attribute(self, name, default_val=""):
         return self.attrs.get(name, default_val)
@@ -86,6 +106,10 @@ def _install_stub_modules(monkeypatch):
             (panel, section, callback)
         ),
         rml=SimpleNamespace(get_document=lambda _name: document),
+        context=lambda: SimpleNamespace(),
+        get_active_tool=lambda: "",
+        get_transform_space=lambda: 1,
+        get_pivot_mode=lambda: 0,
         UILayout=SimpleNamespace(WindowFlags=SimpleNamespace(
             NoTitleBar=1,
             NoResize=2,
@@ -111,6 +135,7 @@ def _install_stub_modules(monkeypatch):
 
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = ui_stub
+    lf_stub.get_selected_node_names = lambda: []
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
 
     return hook_calls, remove_calls, dismiss_calls, cancel_calls, import_state, video_state, document
@@ -126,32 +151,32 @@ def overlays_module(monkeypatch):
 
     sys.modules.pop("lfs_plugins", None)
     sys.modules.pop("lfs_plugins.overlays", None)
+    sys.modules.pop("lfs_plugins.toolbar", None)
+    sys.modules.pop("lfs_plugins.transform_controls", None)
     fixture = _install_stub_modules(monkeypatch)
     module = import_module("lfs_plugins.overlays")
     return (module, *fixture)
 
 
-def test_register_uses_document_and_draw_hooks(overlays_module):
+def test_register_uses_draw_hook_and_native_document_sync(overlays_module):
     module, hook_calls, _remove_calls, *_rest = overlays_module
 
     module.register()
 
     assert hook_calls == [
-        ("viewport_overlay", "document", hook_calls[0][2], "append"),
-        ("viewport_overlay", "draw", hook_calls[1][2], "append"),
+        ("viewport_overlay", "draw", hook_calls[0][2], "append"),
     ]
 
 
-def test_unregister_removes_both_hooks(overlays_module):
+def test_unregister_removes_draw_hook(overlays_module):
     module, hook_calls, remove_calls, *_rest = overlays_module
 
     module.register()
     module.unregister()
 
-    assert len(hook_calls) == 2
+    assert len(hook_calls) == 1
     assert remove_calls == [
-        ("viewport_overlay", "document", hook_calls[0][2]),
-        ("viewport_overlay", "draw", hook_calls[1][2]),
+        ("viewport_overlay", "draw", hook_calls[0][2]),
     ]
 
 
@@ -182,10 +207,11 @@ def test_document_sync_binds_model_and_updates_actions(overlays_module):
         "stage": "Encoding",
     })
 
-    module._sync_viewport_overlay_document(document)
+    module._hook_registered = True
+    assert module.sync_document(document) is True
 
     assert document.created_models == ["viewport_overlay_status"]
-    assert document.model.handle.dirty_all_calls == 2
+    assert document.model.handle.dirty_all_calls == 3
     assert document.body.get_attribute("data-viewport-overlay-status-bound", "") == "1"
     assert document.model.bound_funcs["show_import_overlay"]() is True
     assert document.model.bound_funcs["show_import_backdrop"]() is True
@@ -197,6 +223,52 @@ def test_document_sync_binds_model_and_updates_actions(overlays_module):
 
     assert dismiss_calls == [True]
     assert cancel_calls == [True]
+
+
+def test_document_sync_prefers_native_overlay_store(overlays_module, monkeypatch):
+    (
+        module,
+        _hook_calls,
+        _remove_calls,
+        _dismiss_calls,
+        _cancel_calls,
+        import_state,
+        video_state,
+        document,
+    ) = overlays_module
+
+    import_state.update({"active": False})
+    video_state.update({"active": False})
+    native_states = {
+        "import_overlay_state": {
+            "active": True,
+            "dataset_type": "COLMAP",
+            "path": "bicycle",
+            "progress": 0.7,
+            "stage": "Reading cameras",
+        },
+        "video_export_overlay_state": {
+            "active": True,
+            "progress": 0.25,
+            "current_frame": 4,
+            "total_frames": 16,
+            "stage": "Encoding",
+        },
+    }
+    monkeypatch.setattr(
+        module,
+        "_native_store_value",
+        lambda field, fallback: native_states.get(field, fallback),
+    )
+
+    module._hook_registered = True
+    assert module.sync_document(document) is True
+
+    assert document.model.bound_funcs["show_import_overlay"]() is True
+    assert document.model.bound_funcs["import_progress_pct"]() == "70%"
+    assert document.model.bound_funcs["import_stage"]() == "Reading cameras"
+    assert document.model.bound_funcs["show_video_overlay"]() is True
+    assert document.model.bound_funcs["video_frame_text"]() == "Frame 4 / 16"
 
 
 def test_import_completion_hides_backdrop(overlays_module):

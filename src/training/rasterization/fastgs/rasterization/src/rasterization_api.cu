@@ -6,6 +6,7 @@
 #include "buffer_utils.h"
 #include "core/cuda/memory_arena.hpp"
 #include "cuda_utils.h"
+#include "diagnostics/vram_profiler.hpp"
 #include "forward.h"
 #include "helper_math.h"
 #include "rasterization_api.h"
@@ -29,6 +30,7 @@ namespace fast_lfs::rasterization {
             if (!ptr) {
                 return;
             }
+            lfs::diagnostics::VramProfiler::instance().recordDeallocation(ptr);
 #if CUDART_VERSION >= 11020
             cudaFreeAsync(ptr, nullptr);
 #else

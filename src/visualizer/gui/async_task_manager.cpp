@@ -26,6 +26,7 @@
 #include "sequencer/keyframe.hpp"
 #include "sequencer/sequencer_controller.hpp"
 #include "training/training_manager.hpp"
+#include "visualizer/app_store.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer_impl.hpp"
@@ -33,6 +34,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <condition_variable>
 #include <format>
 #include <functional>
 #include <future>
@@ -49,6 +51,25 @@ namespace lfs::vis::gui {
         case lfs::io::DatasetType::Transforms: return "NeRF/Blender";
         default: return "Dataset";
         }
+    }
+
+    [[nodiscard]] const char* exportProgressFormatName(const ExportFormat format) noexcept {
+        switch (format) {
+        case ExportFormat::PLY: return "PLY";
+        case ExportFormat::SOG: return "SOG";
+        case ExportFormat::SPZ: return "SPZ";
+        case ExportFormat::HTML_VIEWER: return "HTML";
+        case ExportFormat::USD: return "USD";
+        case ExportFormat::NUREC_USDZ: return "USDZ";
+        case ExportFormat::RAD: return "RAD";
+        case ExportFormat::COLMAP: return "COLMAP";
+        default: return "file";
+        }
+    }
+
+    void wakeMainThreadForAsyncWork() {
+        if (auto* const window_manager = services().windowOrNull())
+            window_manager->wakeEventLoop();
     }
 
     [[nodiscard]] std::unique_ptr<lfs::core::SplatData> cloneSplatData(const lfs::core::SplatData& src) {
@@ -383,6 +404,7 @@ namespace lfs::vis::gui {
                          .transform_indices = snapshot.transform_indices,
                          .node_visibility_mask = snapshot.node_visibility_mask},
                     .filters = {},
+                    .overlay = {},
                     .transparent_background = render_environment};
                 applyVideoExportPointCloudFilters(request.filters, snapshot, render_settings);
 
@@ -418,6 +440,7 @@ namespace lfs::vis::gui {
                      .transform_indices = nullptr,
                      .node_visibility_mask = {}},
                 .filters = {},
+                .overlay = {},
                 .transparent_background = render_environment};
             applyVideoExportPointCloudFilters(request.filters, snapshot, render_settings);
 
@@ -513,6 +536,7 @@ namespace lfs::vis::gui {
                 import_state_.thread->join();
             import_state_.thread.reset();
         }
+        cancelImportCompletionDismiss();
 
         mesh2splat_state_.active.store(false);
         mesh2splat_state_.pending.store(false);
@@ -553,22 +577,29 @@ namespace lfs::vis::gui {
         state::DatasetLoadStarted::when([this](const auto& e) {
             if (import_state_.active.load())
                 return;
-            const std::lock_guard lock(import_state_.mutex);
+            cancelImportCompletionDismiss();
             import_state_.active.store(true);
             import_state_.progress.store(0.0f);
-            import_state_.path = e.path;
-            import_state_.stage = "Initializing...";
-            import_state_.error.clear();
-            import_state_.num_images = 0;
-            import_state_.num_points = 0;
-            import_state_.success = false;
-            import_state_.dataset_type = getDatasetTypeName(e.path);
+            {
+                const std::lock_guard lock(import_state_.mutex);
+                import_state_.path = e.path;
+                import_state_.stage = "Initializing...";
+                import_state_.error.clear();
+                import_state_.num_images = 0;
+                import_state_.num_points = 0;
+                import_state_.success = false;
+                import_state_.dataset_type = getDatasetTypeName(e.path);
+            }
+            publishImportOverlayState();
         });
 
         state::DatasetLoadProgress::when([this](const auto& e) {
             import_state_.progress.store(e.progress / 100.0f);
-            const std::lock_guard lock(import_state_.mutex);
-            import_state_.stage = e.step;
+            {
+                const std::lock_guard lock(import_state_.mutex);
+                import_state_.stage = e.step;
+            }
+            publishImportOverlayState();
         });
 
         state::DatasetLoadCompleted::when([this](const auto& e) {
@@ -593,6 +624,9 @@ namespace lfs::vis::gui {
             }
             import_state_.active.store(false);
             import_state_.show_completion.store(true);
+            if (e.success)
+                scheduleImportCompletionDismiss();
+            publishImportOverlayState();
         });
 
         cmd::SequencerExportVideo::when([this](const auto& evt) {
@@ -613,6 +647,13 @@ namespace lfs::vis::gui {
         checkAsyncImportCompletion();
     }
 
+    bool AsyncTaskManager::hasPendingMainThreadCompletions() const {
+        return import_state_.load_complete.load(std::memory_order_acquire) ||
+               mesh2splat_state_.pending.load(std::memory_order_acquire) ||
+               splat_simplify_state_.apply_pending.load(std::memory_order_acquire) ||
+               splat_simplify_state_.completed.load(std::memory_order_acquire);
+    }
+
     void AsyncTaskManager::performExport(ExportFormat format, const std::filesystem::path& path,
                                          const std::vector<std::string>& node_names, int sh_degree,
                                          const std::vector<float>& rad_lod_ratios,
@@ -626,8 +667,14 @@ namespace lfs::vis::gui {
         }
 
         auto* const scene_manager = viewer_->getSceneManager();
-        if (!scene_manager || node_names.empty())
+        if (!scene_manager) {
+            publishExportFailureState(format, path, "Scene manager is not available");
             return;
+        }
+        if (node_names.empty()) {
+            publishExportFailureState(format, path, "No model selected for export");
+            return;
+        }
 
         const auto& scene = scene_manager->getScene();
         std::vector<ExportSplatSource> splats;
@@ -640,8 +687,10 @@ namespace lfs::vis::gui {
                     .transform = scene_coords::nodeDataWorldTransform(scene, node->id)});
             }
         }
-        if (splats.empty())
+        if (splats.empty()) {
+            publishExportFailureState(format, path, "No splat data to export");
             return;
+        }
 
         auto borrow_plan = makeBorrowSingleIdentityExportPlan(*scene_manager, node_names);
         startAsyncExport(format,
@@ -660,13 +709,16 @@ namespace lfs::vis::gui {
 
         auto* const scene_manager = viewer_->getSceneManager();
         if (!scene_manager) {
-            LOG_ERROR("COLMAP export failed: scene manager not initialized");
+            std::string error = "Scene manager not initialized";
+            LOG_ERROR("COLMAP export failed: {}", error);
+            publishExportFailureState(ExportFormat::COLMAP, path, std::move(error));
             return;
         }
 
         auto snapshot_result = makeColmapExportSnapshot(*scene_manager);
         if (!snapshot_result) {
             LOG_ERROR("COLMAP export failed: {}", snapshot_result.error());
+            publishExportFailureState(ExportFormat::COLMAP, path, snapshot_result.error());
             lfs::core::events::state::ExportFailed{.error = snapshot_result.error()}.emit();
             return;
         }
@@ -681,6 +733,7 @@ namespace lfs::vis::gui {
             export_state_.error.clear();
             export_state_.path = path;
         }
+        publishExportState();
 
         LOG_INFO("COLMAP export started: {}", lfs::core::path_to_utf8(path));
 
@@ -696,6 +749,7 @@ namespace lfs::vis::gui {
                         const std::lock_guard lock(export_state_.mutex);
                         export_state_.stage = stage;
                     }
+                    publishExportState();
                     if (auto* window_manager = services().windowOrNull()) {
                         window_manager->wakeEventLoop();
                     }
@@ -746,6 +800,7 @@ namespace lfs::vis::gui {
                         export_state_.error = error_msg;
                         export_state_.stage = "Cancelled";
                     }
+                    publishExportState();
                     lfs::core::events::state::ExportFailed{.error = error_msg}.emit();
                 } else {
                     LOG_ERROR("COLMAP export failed: {}", error_msg);
@@ -754,11 +809,13 @@ namespace lfs::vis::gui {
                         export_state_.error = error_msg;
                         export_state_.stage = "Failed";
                     }
+                    publishExportState();
                     lfs::core::events::state::ExportFailed{.error = error_msg}.emit();
                 }
 
                 lfs::core::Tensor::trim_memory_pool();
                 export_state_.active.store(false);
+                publishExportState();
                 if (auto* window_manager = services().windowOrNull()) {
                     window_manager->wakeEventLoop();
                 }
@@ -775,6 +832,7 @@ namespace lfs::vis::gui {
                                             bool rad_flip_y) {
         if (splats.empty()) {
             LOG_ERROR("No splat data to export");
+            publishExportFailureState(format, path, "No splat data to export");
             return;
         }
 
@@ -788,6 +846,7 @@ namespace lfs::vis::gui {
             export_state_.error.clear();
             export_state_.path = path;
         }
+        publishExportState();
 
         LOG_INFO("Export started: {} (format: {})", lfs::core::path_to_utf8(path), static_cast<int>(format));
 
@@ -813,6 +872,7 @@ namespace lfs::vis::gui {
                             const std::lock_guard lock(export_state_.mutex);
                             export_state_.stage = "Cancelled";
                         }
+                        publishExportState();
                         if (auto* window_manager = services().windowOrNull()) {
                             window_manager->wakeEventLoop();
                         }
@@ -823,6 +883,7 @@ namespace lfs::vis::gui {
                         const std::lock_guard lock(export_state_.mutex);
                         export_state_.stage = stage;
                     }
+                    publishExportState();
                     if (auto* window_manager = services().windowOrNull()) {
                         window_manager->wakeEventLoop();
                     }
@@ -1002,6 +1063,7 @@ namespace lfs::vis::gui {
                         const std::lock_guard lock(export_state_.mutex);
                         export_state_.stage = "Complete";
                     }
+                    publishExportState();
                     lfs::core::events::state::ExportCompleted{
                         .path = path,
                         .format = format}
@@ -1013,6 +1075,7 @@ namespace lfs::vis::gui {
                         export_state_.error = error_msg;
                         export_state_.stage = "Cancelled";
                     }
+                    publishExportState();
                     lfs::core::events::state::ExportFailed{
                         .error = error_msg}
                         .emit();
@@ -1023,6 +1086,7 @@ namespace lfs::vis::gui {
                         export_state_.error = error_msg;
                         export_state_.stage = "Failed";
                     }
+                    publishExportState();
                     lfs::core::events::state::ExportFailed{
                         .error = error_msg}
                         .emit();
@@ -1031,6 +1095,7 @@ namespace lfs::vis::gui {
                 splat_data.reset();
                 lfs::core::Tensor::trim_memory_pool();
                 export_state_.active.store(false);
+                publishExportState();
             });
     }
 
@@ -1043,9 +1108,150 @@ namespace lfs::vis::gui {
             const std::lock_guard lock(export_state_.mutex);
             export_state_.stage = "Cancelling";
         }
+        publishExportState();
         if (export_state_.thread && export_state_.thread->joinable()) {
             export_state_.thread->request_stop();
         }
+    }
+
+    void AsyncTaskManager::publishExportFailureState(const ExportFormat format,
+                                                     const std::filesystem::path& path,
+                                                     std::string error) {
+        export_state_.active.store(false);
+        export_state_.cancel_requested.store(false);
+        export_state_.progress.store(0.0f);
+        {
+            const std::lock_guard lock(export_state_.mutex);
+            export_state_.format = format;
+            export_state_.stage = "Failed";
+            export_state_.error = std::move(error);
+            export_state_.path = path;
+        }
+        publishExportState();
+    }
+
+    void AsyncTaskManager::publishExportState() {
+        lfs::vis::AppStore::ExportProgressState state;
+        state.active = export_state_.active.load();
+        state.progress = export_state_.progress.load();
+        {
+            const std::lock_guard lock(export_state_.mutex);
+            state.stage = export_state_.stage;
+            state.format = exportProgressFormatName(export_state_.format);
+            state.error = export_state_.error;
+            state.path = lfs::core::path_to_utf8(export_state_.path);
+        }
+        lfs::vis::app_store().export_progress_state.set(std::move(state));
+    }
+
+    void AsyncTaskManager::publishImportOverlayState() {
+        lfs::vis::AppStore::ImportOverlayState state;
+        state.active = import_state_.active.load();
+        state.show_completion = import_state_.show_completion.load();
+        state.progress = import_state_.progress.load();
+        {
+            const std::lock_guard lock(import_state_.mutex);
+            state.stage = import_state_.stage;
+            state.dataset_type = import_state_.dataset_type;
+            state.path = lfs::core::path_to_utf8(import_state_.path.filename());
+            state.success = import_state_.success;
+            state.error = import_state_.error;
+            state.num_images = static_cast<std::uint64_t>(import_state_.num_images);
+            state.num_points = static_cast<std::uint64_t>(import_state_.num_points);
+            if (state.show_completion &&
+                import_state_.completion_time != std::chrono::steady_clock::time_point{}) {
+                const auto elapsed = std::chrono::steady_clock::now() - import_state_.completion_time;
+                state.seconds_since_completion = std::chrono::duration<float>(elapsed).count();
+            }
+        }
+        lfs::vis::app_store().import_overlay_state.set(std::move(state));
+    }
+
+    void AsyncTaskManager::publishVideoExportOverlayState() {
+        lfs::vis::AppStore::VideoExportOverlayState state;
+        state.active = video_export_state_.active.load();
+        state.progress = video_export_state_.progress.load();
+        state.current_frame = video_export_state_.current_frame.load();
+        state.total_frames = video_export_state_.total_frames.load();
+        {
+            const std::lock_guard lock(video_export_state_.mutex);
+            state.stage = video_export_state_.stage;
+        }
+        lfs::vis::app_store().video_export_overlay_state.set(std::move(state));
+    }
+
+    void AsyncTaskManager::publishMesh2SplatState() {
+        lfs::vis::AppStore::TaskProgressState state;
+        state.active = mesh2splat_state_.active.load();
+        state.progress = mesh2splat_state_.progress.load();
+        {
+            const std::lock_guard lock(mesh2splat_state_.mutex);
+            state.stage = mesh2splat_state_.stage;
+            state.error = mesh2splat_state_.error;
+            state.source_name = mesh2splat_state_.source_name;
+        }
+        lfs::vis::app_store().mesh2splat_state.set(std::move(state));
+    }
+
+    void AsyncTaskManager::publishSplatSimplifyState() {
+        lfs::vis::AppStore::TaskProgressState state;
+        state.active = splat_simplify_state_.active.load();
+        state.progress = splat_simplify_state_.progress.load();
+        {
+            const std::lock_guard lock(splat_simplify_state_.mutex);
+            state.stage = splat_simplify_state_.stage;
+            state.error = splat_simplify_state_.error;
+            state.source_name = splat_simplify_state_.source_name;
+            state.output_name = splat_simplify_state_.output_name;
+        }
+        lfs::vis::app_store().splat_simplify_state.set(std::move(state));
+    }
+
+    void AsyncTaskManager::cancelImportCompletionDismiss() {
+        import_state_.completion_generation.fetch_add(1, std::memory_order_acq_rel);
+        if (import_state_.completion_dismiss_thread) {
+            import_state_.completion_dismiss_thread->request_stop();
+            if (import_state_.completion_dismiss_thread->joinable())
+                import_state_.completion_dismiss_thread->join();
+            import_state_.completion_dismiss_thread.reset();
+        }
+    }
+
+    void AsyncTaskManager::scheduleImportCompletionDismiss() {
+        cancelImportCompletionDismiss();
+
+        const auto generation =
+            import_state_.completion_generation.fetch_add(1, std::memory_order_acq_rel) + 1;
+        import_state_.completion_dismiss_thread.emplace(
+            [this, generation](std::stop_token stop_token) {
+                std::mutex mutex;
+                std::condition_variable_any cv;
+                std::unique_lock lock(mutex);
+                cv.wait_for(lock, stop_token, std::chrono::milliseconds(3000), [] { return false; });
+                if (stop_token.stop_requested())
+                    return;
+                if (import_state_.completion_generation.load(std::memory_order_acquire) != generation)
+                    return;
+                if (import_state_.active.load() || !import_state_.show_completion.load())
+                    return;
+
+                bool success = false;
+                {
+                    const std::lock_guard state_lock(import_state_.mutex);
+                    success = import_state_.success;
+                }
+                if (!success)
+                    return;
+
+                import_state_.show_completion.store(false);
+                publishImportOverlayState();
+            });
+    }
+
+    void AsyncTaskManager::dismissImport() {
+        cancelImportCompletionDismiss();
+        import_state_.show_completion.store(false);
+        publishImportOverlayState();
     }
 
     void AsyncTaskManager::cancelImport() {
@@ -1057,6 +1263,7 @@ namespace lfs::vis::gui {
         }
 
         LOG_INFO("Cancelling import");
+        cancelImportCompletionDismiss();
         if (import_state_.thread) {
             import_state_.thread->request_stop();
             if (import_state_.thread->joinable()) {
@@ -1083,6 +1290,7 @@ namespace lfs::vis::gui {
             import_state_.params = {};
         }
         PanelRegistry::instance().invalidate_poll_cache();
+        publishImportOverlayState();
     }
 
     void AsyncTaskManager::startAsyncImport(const std::filesystem::path& path,
@@ -1092,6 +1300,7 @@ namespace lfs::vis::gui {
             return;
         }
 
+        cancelImportCompletionDismiss();
         import_state_.active.store(true);
         import_state_.load_complete.store(false);
         import_state_.show_completion.store(false);
@@ -1110,6 +1319,7 @@ namespace lfs::vis::gui {
             import_state_.params = params;
             import_state_.dataset_type = getDatasetTypeName(path);
         }
+        publishImportOverlayState();
 
         LOG_INFO("Async import: {}", lfs::core::path_to_utf8(path));
 
@@ -1140,8 +1350,11 @@ namespace lfs::vis::gui {
                         if (stop_token.stop_requested())
                             return;
                         import_state_.progress.store(pct / 100.0f);
-                        const std::lock_guard lock(import_state_.mutex);
-                        import_state_.stage = msg; },
+                        {
+                            const std::lock_guard lock(import_state_.mutex);
+                            import_state_.stage = msg;
+                        }
+                        publishImportOverlayState(); },
                     .cancel_requested = [&stop_token]() { return stop_token.stop_requested(); }};
 
                 auto loader = lfs::io::Loader::create();
@@ -1149,44 +1362,48 @@ namespace lfs::vis::gui {
 
                 if (stop_token.stop_requested()) {
                     import_state_.active.store(false);
+                    publishImportOverlayState();
                     return;
                 }
 
-                const std::lock_guard lock(import_state_.mutex);
-                if (result) {
-                    import_state_.load_result = std::move(*result);
-                    import_state_.success = true;
-                    import_state_.stage = "Applying...";
-                    std::visit([this](const auto& data) {
-                        using T = std::decay_t<decltype(data)>;
-                        if constexpr (std::is_same_v<T, std::shared_ptr<lfs::core::SplatData>>) {
-                            import_state_.num_points = data->size();
-                            import_state_.num_images = 0;
-                        } else if constexpr (std::is_same_v<T, lfs::io::LoadedScene>) {
-                            import_state_.num_images = data.cameras.size();
-                            import_state_.num_points = data.point_cloud ? data.point_cloud->size() : 0;
-                        } else if constexpr (std::is_same_v<T, std::shared_ptr<lfs::core::MeshData>>) {
-                            import_state_.num_points = data ? data->vertex_count() : 0;
-                            import_state_.num_images = 0;
-                            import_state_.is_mesh = true;
-                        }
-                    },
-                               import_state_.load_result->data);
-                } else {
-                    import_state_.success = false;
-                    import_state_.error = result.error().format();
-                    import_state_.stage = "Failed";
-                    LOG_ERROR("Import failed: {}", import_state_.error);
+                {
+                    const std::lock_guard lock(import_state_.mutex);
+                    if (result) {
+                        import_state_.load_result = std::move(*result);
+                        import_state_.success = true;
+                        import_state_.stage = "Applying...";
+                        std::visit([this](const auto& data) {
+                            using T = std::decay_t<decltype(data)>;
+                            if constexpr (std::is_same_v<T, std::shared_ptr<lfs::core::SplatData>>) {
+                                import_state_.num_points = data->size();
+                                import_state_.num_images = 0;
+                            } else if constexpr (std::is_same_v<T, lfs::io::LoadedScene>) {
+                                import_state_.num_images = data.cameras.size();
+                                import_state_.num_points = data.point_cloud ? data.point_cloud->size() : 0;
+                            } else if constexpr (std::is_same_v<T, std::shared_ptr<lfs::core::MeshData>>) {
+                                import_state_.num_points = data ? data->vertex_count() : 0;
+                                import_state_.num_images = 0;
+                                import_state_.is_mesh = true;
+                            }
+                        },
+                                   import_state_.load_result->data);
+                    } else {
+                        import_state_.success = false;
+                        import_state_.error = result.error().format();
+                        import_state_.stage = "Failed";
+                        LOG_ERROR("Import failed: {}", import_state_.error);
+                    }
                 }
                 import_state_.progress.store(1.0f);
-                import_state_.load_complete.store(true);
+                import_state_.load_complete.store(true, std::memory_order_release);
+                publishImportOverlayState();
+                wakeMainThreadForAsyncWork();
             });
     }
 
     void AsyncTaskManager::checkAsyncImportCompletion() {
-        if (!import_state_.load_complete.load())
+        if (!import_state_.load_complete.exchange(false, std::memory_order_acq_rel))
             return;
-        import_state_.load_complete.store(false);
 
         bool success;
         {
@@ -1199,8 +1416,11 @@ namespace lfs::vis::gui {
         } else {
             import_state_.active.store(false);
             import_state_.show_completion.store(true);
-            const std::lock_guard lock(import_state_.mutex);
-            import_state_.completion_time = std::chrono::steady_clock::now();
+            {
+                const std::lock_guard lock(import_state_.mutex);
+                import_state_.completion_time = std::chrono::steady_clock::now();
+            }
+            publishImportOverlayState();
         }
         PanelRegistry::instance().invalidate_poll_cache();
 
@@ -1215,6 +1435,7 @@ namespace lfs::vis::gui {
         if (!scene_manager) {
             LOG_ERROR("No scene manager");
             import_state_.active.store(false);
+            publishImportOverlayState();
             return;
         }
 
@@ -1232,6 +1453,7 @@ namespace lfs::vis::gui {
         if (!load_result) {
             LOG_ERROR("No load result");
             import_state_.active.store(false);
+            publishImportOverlayState();
             return;
         }
 
@@ -1265,6 +1487,9 @@ namespace lfs::vis::gui {
             is_mesh_load = import_state_.is_mesh;
         }
         import_state_.show_completion.store(!(success_val && is_mesh_load));
+        if (success_val && !is_mesh_load)
+            scheduleImportCompletionDismiss();
+        publishImportOverlayState();
 
         lfs::core::events::state::DatasetLoadCompleted{
             .path = path,
@@ -1308,6 +1533,7 @@ namespace lfs::vis::gui {
             std::lock_guard lock(video_export_state_.mutex);
             video_export_state_.stage = "Cancelling";
         }
+        publishVideoExportOverlayState();
         if (video_export_state_.thread) {
             video_export_state_.thread->request_stop();
         }
@@ -1328,6 +1554,7 @@ namespace lfs::vis::gui {
                 video_export_state_.error = error;
                 video_export_state_.path = path;
             }
+            publishVideoExportOverlayState();
             lfs::core::events::state::VideoExportFailed{.error = std::move(error)}.emit();
         };
 
@@ -1401,6 +1628,7 @@ namespace lfs::vis::gui {
             video_export_state_.error.clear();
             video_export_state_.path = path;
         }
+        publishVideoExportOverlayState();
 
         resetVideoExportEnvironmentState();
         video_export_environment_state_ = std::make_unique<VideoExportEnvironmentState>();
@@ -1437,6 +1665,7 @@ namespace lfs::vis::gui {
                         video_export_state_.stage = "Failed";
                     }
                     video_export_state_.active.store(false);
+                    publishVideoExportOverlayState();
                     lfs::core::events::state::VideoExportFailed{
                         .error = "Video encoder not available"}
                         .emit();
@@ -1448,6 +1677,7 @@ namespace lfs::vis::gui {
                     std::lock_guard lock(video_export_state_.mutex);
                     video_export_state_.stage = "Opening encoder";
                 }
+                publishVideoExportOverlayState();
 
                 auto result = encoder->open(path, export_options);
                 if (!result) {
@@ -1461,6 +1691,7 @@ namespace lfs::vis::gui {
                         .error = result.error()}
                         .emit();
                     video_export_state_.active.store(false);
+                    publishVideoExportOverlayState();
                     cleanup_environment_state();
                     return;
                 }
@@ -1488,6 +1719,7 @@ namespace lfs::vis::gui {
                                 "Failed to render frame {}: {}", frame + 1, frame_tensor.error());
                             video_export_state_.stage = "Render error";
                         }
+                        publishVideoExportOverlayState();
                         break;
                     }
 
@@ -1503,9 +1735,12 @@ namespace lfs::vis::gui {
                     const auto* const gpu_ptr = image_hwc.data_ptr();
                     auto write_result = encoder->writeFrameGpu(gpu_ptr, width, height, nullptr);
                     if (!write_result) {
-                        std::lock_guard lock(video_export_state_.mutex);
-                        video_export_state_.error = write_result.error();
-                        video_export_state_.stage = "Encode error";
+                        {
+                            std::lock_guard lock(video_export_state_.mutex);
+                            video_export_state_.error = write_result.error();
+                            video_export_state_.stage = "Encode error";
+                        }
+                        publishVideoExportOverlayState();
                         LOG_ERROR("Failed to encode frame {}: {}", frame, write_result.error());
                         break;
                     }
@@ -1517,6 +1752,7 @@ namespace lfs::vis::gui {
                         std::lock_guard lock(video_export_state_.mutex);
                         video_export_state_.stage = std::format("Encoding frame {}/{}", frame + 1, total_frames);
                     }
+                    publishVideoExportOverlayState();
                 }
 
                 {
@@ -1527,11 +1763,15 @@ namespace lfs::vis::gui {
                         video_export_state_.stage = "Finalizing";
                     }
                 }
+                publishVideoExportOverlayState();
 
                 if (auto close_result = encoder->close(); !close_result) {
-                    std::lock_guard lock(video_export_state_.mutex);
-                    video_export_state_.error = close_result.error();
-                    video_export_state_.stage = "Failed";
+                    {
+                        std::lock_guard lock(video_export_state_.mutex);
+                        video_export_state_.error = close_result.error();
+                        video_export_state_.stage = "Failed";
+                    }
+                    publishVideoExportOverlayState();
                     LOG_ERROR("Failed to close encoder: {}", close_result.error());
                 } else {
                     bool emit_completed = false;
@@ -1545,6 +1785,7 @@ namespace lfs::vis::gui {
                             emit_completed = true;
                         }
                     }
+                    publishVideoExportOverlayState();
                     if (emit_completed) {
                         lfs::core::events::state::VideoExportCompleted{
                             .path = path,
@@ -1567,6 +1808,7 @@ namespace lfs::vis::gui {
                 }
                 cleanup_environment_state();
                 video_export_state_.active.store(false);
+                publishVideoExportOverlayState();
             });
     }
 
@@ -1598,13 +1840,14 @@ namespace lfs::vis::gui {
         LOG_INFO("Mesh2Splat conversion started: {} (resolution={}, sigma={})",
                  source_name, options.resolution_target, options.sigma);
 
+        publishMesh2SplatState();
         mesh2splat_state_.pending.store(true);
+        wakeMainThreadForAsyncWork();
     }
 
     void AsyncTaskManager::pollMesh2SplatCompletion() {
-        if (!mesh2splat_state_.pending.load())
+        if (!mesh2splat_state_.pending.exchange(false, std::memory_order_acq_rel))
             return;
-        mesh2splat_state_.pending.store(false);
 
         executeMesh2SplatOnGraphicsThread();
 
@@ -1631,6 +1874,7 @@ namespace lfs::vis::gui {
 
         mesh2splat_state_.active.store(false);
         mesh2splat_state_.progress.store(has_result ? 1.0f : 0.0f);
+        publishMesh2SplatState();
     }
 
     void AsyncTaskManager::executeMesh2SplatOnGraphicsThread() {
@@ -1650,22 +1894,28 @@ namespace lfs::vis::gui {
             options,
             [this](const float progress, const std::string& stage) {
                 mesh2splat_state_.progress.store(progress);
-                const std::lock_guard lock(mesh2splat_state_.mutex);
-                mesh2splat_state_.stage = stage;
+                {
+                    const std::lock_guard lock(mesh2splat_state_.mutex);
+                    mesh2splat_state_.stage = stage;
+                }
+                publishMesh2SplatState();
                 return mesh2splat_state_.active.load();
             });
 
-        const std::lock_guard lock(mesh2splat_state_.mutex);
-        if (result) {
-            mesh2splat_state_.result = std::move(*result);
-            mesh2splat_state_.error.clear();
-            mesh2splat_state_.stage = "Complete";
-        } else {
-            mesh2splat_state_.result.reset();
-            mesh2splat_state_.error = result.error();
-            mesh2splat_state_.stage = "Failed";
-            LOG_ERROR("Mesh2Splat conversion failed: {}", mesh2splat_state_.error);
+        {
+            const std::lock_guard lock(mesh2splat_state_.mutex);
+            if (result) {
+                mesh2splat_state_.result = std::move(*result);
+                mesh2splat_state_.error.clear();
+                mesh2splat_state_.stage = "Complete";
+            } else {
+                mesh2splat_state_.result.reset();
+                mesh2splat_state_.error = result.error();
+                mesh2splat_state_.stage = "Failed";
+                LOG_ERROR("Mesh2Splat conversion failed: {}", mesh2splat_state_.error);
+            }
         }
+        publishMesh2SplatState();
     }
 
     void AsyncTaskManager::applyMesh2SplatResult() {
@@ -1705,6 +1955,7 @@ namespace lfs::vis::gui {
             const std::lock_guard lock(mesh2splat_state_.mutex);
             mesh2splat_state_.stage = "Complete";
         }
+        publishMesh2SplatState();
 
         const auto* const added_node = scene.getNode(added_name);
         const size_t num_gaussians =
@@ -1783,6 +2034,7 @@ namespace lfs::vis::gui {
 
         auto input = std::move(capture->model);
         auto opts = options;
+        publishSplatSimplifyState();
         splat_simplify_state_.thread.emplace([this, opts, input = std::move(input)](std::stop_token stop_token) mutable {
             auto progress_cb = [this, &stop_token](const float progress, const std::string& stage) -> bool {
                 if (stop_token.stop_requested() || splat_simplify_state_.cancel_requested.load())
@@ -1792,6 +2044,7 @@ namespace lfs::vis::gui {
                     const std::lock_guard lock(splat_simplify_state_.mutex);
                     splat_simplify_state_.stage = stage;
                 }
+                publishSplatSimplifyState();
                 return true;
             };
 
@@ -1803,7 +2056,8 @@ namespace lfs::vis::gui {
                     splat_simplify_state_.stage = "Applying...";
                 }
                 splat_simplify_state_.progress.store(1.0f);
-                splat_simplify_state_.apply_pending.store(true);
+                splat_simplify_state_.apply_pending.store(true, std::memory_order_release);
+                publishSplatSimplifyState();
             } else {
                 const bool cancelled = splat_simplify_state_.cancel_requested.load() || stop_token.stop_requested() ||
                                        result.error() == "Cancelled";
@@ -1813,13 +2067,15 @@ namespace lfs::vis::gui {
                     splat_simplify_state_.stage = cancelled ? "Cancelled" : "Failed";
                 }
                 splat_simplify_state_.active.store(false);
+                publishSplatSimplifyState();
             }
-            splat_simplify_state_.completed.store(true);
+            splat_simplify_state_.completed.store(true, std::memory_order_release);
+            wakeMainThreadForAsyncWork();
         });
     }
 
     void AsyncTaskManager::pollSplatSimplifyCompletion() {
-        if (splat_simplify_state_.apply_pending.exchange(false)) {
+        if (splat_simplify_state_.apply_pending.exchange(false, std::memory_order_acq_rel)) {
             if (splat_simplify_state_.thread && splat_simplify_state_.thread->joinable()) {
                 splat_simplify_state_.thread->join();
                 splat_simplify_state_.thread.reset();
@@ -1830,6 +2086,7 @@ namespace lfs::vis::gui {
                 LOG_ERROR("Splat simplify: no scene manager");
                 splat_simplify_state_.active.store(false);
                 splat_simplify_state_.completed.store(false);
+                publishSplatSimplifyState();
                 return;
             }
 
@@ -1847,6 +2104,7 @@ namespace lfs::vis::gui {
                 LOG_ERROR("Splat simplify: missing result payload");
                 splat_simplify_state_.active.store(false);
                 splat_simplify_state_.completed.store(false);
+                publishSplatSimplifyState();
                 return;
             }
 
@@ -1862,6 +2120,7 @@ namespace lfs::vis::gui {
             }
             splat_simplify_state_.active.store(false);
             splat_simplify_state_.completed.store(false);
+            publishSplatSimplifyState();
             return;
         }
 
@@ -1873,6 +2132,7 @@ namespace lfs::vis::gui {
             splat_simplify_state_.thread.reset();
         }
         splat_simplify_state_.completed.store(false);
+        publishSplatSimplifyState();
     }
 
     void AsyncTaskManager::cancelSplatSimplify() {
@@ -1882,6 +2142,7 @@ namespace lfs::vis::gui {
             splat_simplify_state_.stage = "Cancelling...";
             splat_simplify_state_.error.clear();
         }
+        publishSplatSimplifyState();
         if (splat_simplify_state_.thread) {
             splat_simplify_state_.thread->request_stop();
         }

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "gui/rmlui/rmlui_manager.hpp"
+
 #include <RmlUi/Core/DataModelHandle.h>
 #include <cstddef>
 #include <cstdint>
@@ -22,8 +24,6 @@ namespace lfs::vis {
     struct Theme;
 }
 namespace lfs::vis::gui {
-
-    class RmlUIManager;
 
     struct TabSnapshot {
         std::string id;
@@ -114,6 +114,7 @@ namespace lfs::vis::gui {
         float last_splitter_h_ = -1.0f;
         bool input_dirty_ = false;
         bool last_over_interactive_ = false;
+        CachedVulkanContextRender direct_cache_;
     };
 
 } // namespace lfs::vis::gui

@@ -4,7 +4,7 @@
 
 This module provides the AssetScanner class which is used by the Asset Manager
 to detect file types, infer asset roles, and extract metadata from various
-file formats including Gaussian splats, checkpoints, datasets, videos, and more.
+file formats including Gaussian splats, checkpoints, datasets, and more.
 """
 
 import json
@@ -33,10 +33,9 @@ _EXTENSION_TYPE_MAP = {
     ".stl": "mesh",
     ".dae": "mesh",
     ".3ds": "mesh",
+    ".mesh": "mesh",
     ".ckpt": "checkpoint",
     ".resume": "checkpoint",
-    ".mp4": "video",
-    ".mov": "video",
     ".usd": "usd",
     ".usda": "usd",
     ".usdc": "usd",
@@ -144,7 +143,7 @@ class AssetScanner:
 
         Returns:
             One of: "ply", "rad", "sog", "spz", "checkpoint", "dataset",
-            "video", "usd", or None if type cannot be determined.
+            "usd", or None if type cannot be determined.
 
         Example:
             >>> scanner.detect_type("model.ply")
@@ -374,8 +373,6 @@ class AssetScanner:
             return "training_checkpoint"
         elif file_type in ("ply", "rad", "sog", "spz"):
             return "trained_output"
-        elif file_type == "video":
-            return "preview"
 
         return "unknown"
 

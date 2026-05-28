@@ -57,16 +57,12 @@ jobs:
           git clone https://github.com/microsoft/vcpkg.git
           .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
 
-      - name: Configure vcpkg triplet
-        run: |
-          Add-Content -Path "$env:VCPKG_ROOT\triplets\x64-windows.cmake" -Value "set(VCPKG_MAX_CONCURRENCY 2)"
-
-      - name: Cache vcpkg packages
+      - name: Cache vcpkg_installed
         uses: actions/cache@v4
         with:
-          path: C:\Users\runneradmin\AppData\Local\vcpkg\archives
-          key: vcpkg-pkgs-${{ runner.os }}-${{ hashFiles('**/vcpkg.json') }}
-          restore-keys: vcpkg-pkgs-${{ runner.os }}-
+          path: build/vcpkg_installed
+          key: vcpkg-installed-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
+          restore-keys: vcpkg-installed-${{ runner.os }}-
 
       - name: Configure
         shell: cmd

@@ -74,6 +74,15 @@ void main(
     if (depth_rank >= uniforms.num_splats)
         return;
 
+    // index_buffer_offset is cumsum'd over the depth-ordered tiles_touched
+    // array, so the offset interval for this depth_rank is contiguous.
+    int offset = depth_rank == 0 ? 0 : index_buffer_offset[depth_rank-1];
+    int offset_max = index_buffer_offset[depth_rank];
+    const int sort_capacity = int(uniforms.sort_capacity);
+    if (sort_capacity <= 0 || offset >= sort_capacity || offset >= offset_max)
+        return;
+    offset_max = min(offset_max, sort_capacity);
+
     int32_t primitive_idx = primitive_sort_indices[depth_rank];
 
 #if TILE_CULLING_MODE > 0
@@ -93,15 +102,6 @@ void main(
   #else
     rectangle rect = reinterpret<rectangle>(rect_tile_space[primitive_idx]);
   #endif
-
-    // index_buffer_offset is cumsum'd over the depth-ordered tiles_touched
-    // array, so the offset interval for this depth_rank is contiguous.
-    int offset = depth_rank == 0 ? 0 : index_buffer_offset[depth_rank-1];
-    int offset_max = index_buffer_offset[depth_rank];
-    const int sort_capacity = int(uniforms.sort_capacity);
-    if (sort_capacity <= 0 || offset >= sort_capacity)
-        return;
-    offset_max = min(offset_max, sort_capacity);
 
 #if TILE_CULLING_MODE == 0 || TILE_CULLING_MODE == 1
 
@@ -222,10 +222,13 @@ void main(
         return;
 
     // Two-stage sort: keys are tile-id-only (no depth packed), so the tile
-    // id is the key value clamped to [0, num_tiles].
-    sortingKey_t key = sorted_keys[globalIdx];
-    uint32_t currtile = globalIdx == num_isects ?
-        num_tiles : min((uint32_t)key, num_tiles);
+    // id is the key value clamped to [0, num_tiles]. The sentinel invocation
+    // at globalIdx == num_isects must not read sorted_keys[num_isects], which
+    // is out of bounds when num_isects is clamped to sort_capacity.
+    uint32_t currtile = num_tiles;
+    if (globalIdx < num_isects) {
+        currtile = min((uint32_t)sorted_keys[globalIdx], num_tiles);
+    }
     uint32_t prevtile = globalIdx == 0 ? (uint32_t)-1 :
         min((uint32_t)sorted_keys[globalIdx-1], num_tiles);
     for (uint32_t i = prevtile+1; i <= currtile; ++i) {

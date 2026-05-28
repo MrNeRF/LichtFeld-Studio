@@ -24,6 +24,7 @@ target_link_libraries(lfs_io_cuda
         INTERFACE
         lfs_core      # Propagate to consumers, not linked during device linking
         PRIVATE
+        lfs_diagnostics
         CUDA::cudart
 )
 

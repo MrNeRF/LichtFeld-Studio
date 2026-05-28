@@ -4,7 +4,10 @@
 
 #include "selection_ops.hpp"
 
+#include "core/tensor/internal/cuda_stream_context.hpp"
+
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -14,12 +17,30 @@ namespace lfs::rendering {
     namespace {
         constexpr float kInvalidScreenPositionThreshold = -1000.0f;
         constexpr int kBlockSize = 256;
+        constexpr int kCountMaxBlocks = 4096;
+        constexpr int kSelectionGroupCount = 256;
+        constexpr std::size_t kSelectionGroupCountBins = kSelectionGroupCount;
+        constexpr std::size_t kSelectionChangedCountIndex = kSelectionGroupCountBins;
+        constexpr std::size_t kSelectionGroupScratchWords = kSelectionGroupCountBins + 1;
 
         [[nodiscard]] int checkedToInt(const std::size_t value, const char* const message) {
             if (value > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
                 throw std::runtime_error(message);
             }
             return static_cast<int>(value);
+        }
+
+        [[nodiscard]] cudaStream_t currentSelectionStream(const Tensor* const tensor = nullptr) {
+            if (const cudaStream_t stream = lfs::core::getCurrentCUDAStream()) {
+                return stream;
+            }
+            return tensor != nullptr && tensor->is_valid() ? tensor->stream() : nullptr;
+        }
+
+        void checkCudaLaunch(const char* const kernel_name) {
+            if (const cudaError_t status = cudaPeekAtLastError(); status != cudaSuccess) {
+                throw std::runtime_error(std::string(kernel_name) + ": " + cudaGetErrorString(status));
+            }
         }
 
         struct PreparedModelTransforms {
@@ -54,6 +75,22 @@ namespace lfs::rendering {
                 ptr[i] = mask[i] ? 1 : 0;
             }
             return tensor.cuda();
+        }
+
+        [[nodiscard]] bool nodeMaskRestrictsSelection(const std::vector<bool>& mask) {
+            return std::any_of(mask.begin(), mask.end(), [](const bool enabled) { return !enabled; });
+        }
+
+        void prepareSelectionGroupCountsScratch(Tensor& counts_scratch) {
+            if (!counts_scratch.is_valid() ||
+                counts_scratch.device() != lfs::core::Device::CUDA ||
+                counts_scratch.dtype() != lfs::core::DataType::Int32 ||
+                counts_scratch.numel() != kSelectionGroupScratchWords) {
+                counts_scratch = Tensor::zeros(
+                    {kSelectionGroupScratchWords}, lfs::core::Device::CUDA, lfs::core::DataType::Int32);
+            } else {
+                counts_scratch.zero_();
+            }
         }
 
         __device__ __forceinline__ bool pointInPolygon(
@@ -100,6 +137,15 @@ namespace lfs::rendering {
             }
         }
 
+        __global__ void setSelectionElementKernel(
+            bool* __restrict__ selection,
+            const int index,
+            const bool value) {
+            if (threadIdx.x == 0 && blockIdx.x == 0) {
+                selection[index] = value;
+            }
+        }
+
         __global__ void rectSelectKernel(
             const float2* __restrict__ positions,
             const float x0,
@@ -114,34 +160,11 @@ namespace lfs::rendering {
             }
 
             const float2 pos = positions[idx];
-            if (pos.x < kInvalidScreenPositionThreshold) {
+            if (pos.x < kInvalidScreenPositionThreshold || pos.y < kInvalidScreenPositionThreshold) {
                 return;
             }
             if (pos.x >= x0 && pos.x <= x1 && pos.y >= y0 && pos.y <= y1) {
                 selection[idx] = true;
-            }
-        }
-
-        __global__ void rectSelectModeKernel(
-            const float2* __restrict__ positions,
-            const float x0,
-            const float y0,
-            const float x1,
-            const float y1,
-            bool* __restrict__ selection,
-            const int n,
-            const bool add_mode) {
-            const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= n) {
-                return;
-            }
-
-            const float2 pos = positions[idx];
-            if (pos.x < kInvalidScreenPositionThreshold) {
-                return;
-            }
-            if (pos.x >= x0 && pos.x <= x1 && pos.y >= y0 && pos.y <= y1) {
-                selection[idx] = add_mode;
             }
         }
 
@@ -157,32 +180,11 @@ namespace lfs::rendering {
             }
 
             const float2 pos = positions[idx];
-            if (pos.x < kInvalidScreenPositionThreshold) {
+            if (pos.x < kInvalidScreenPositionThreshold || pos.y < kInvalidScreenPositionThreshold) {
                 return;
             }
             if (pointInPolygon(pos.x, pos.y, polygon, num_verts)) {
                 selection[idx] = true;
-            }
-        }
-
-        __global__ void polygonSelectModeKernel(
-            const float2* __restrict__ positions,
-            const float2* __restrict__ polygon,
-            const int num_verts,
-            bool* __restrict__ selection,
-            const int n,
-            const bool add_mode) {
-            const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= n) {
-                return;
-            }
-
-            const float2 pos = positions[idx];
-            if (pos.x < kInvalidScreenPositionThreshold) {
-                return;
-            }
-            if (pointInPolygon(pos.x, pos.y, polygon, num_verts)) {
-                selection[idx] = add_mode;
             }
         }
 
@@ -236,22 +238,119 @@ namespace lfs::rendering {
             const int* __restrict__ node_indices,
             const bool* __restrict__ valid_nodes,
             const int num_nodes,
+            const bool replace_mode,
+            int* __restrict__ group_deltas) {
+            __shared__ int local_deltas[kSelectionGroupCount];
+            __shared__ int local_changed_count;
+            if (group_deltas) {
+                for (int bin = threadIdx.x; bin < kSelectionGroupCount; bin += blockDim.x) {
+                    local_deltas[bin] = 0;
+                }
+            }
+            if (group_deltas && threadIdx.x == 0) {
+                local_changed_count = 0;
+            }
+            if (group_deltas) {
+                __syncthreads();
+            }
+
+            const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+            uint8_t output_group = 0;
+
+            if (idx < n) {
+                const uint8_t existing_group = existing ? existing[idx] : 0;
+                output_group = existing_group;
+
+                bool node_valid = true;
+                if (node_indices && valid_nodes) {
+                    const int node_idx = node_indices[idx];
+                    node_valid = node_idx >= 0 && node_idx < num_nodes && valid_nodes[node_idx];
+                }
+
+                if (node_valid) {
+                    const bool selected = cumulative[idx];
+                    const bool is_other_locked = existing_group != 0 &&
+                                                 existing_group != group_id &&
+                                                 locked_groups &&
+                                                 (locked_groups[existing_group / 32] &
+                                                  (1u << (existing_group % 32)));
+
+                    if (replace_mode) {
+                        if (selected) {
+                            output_group = is_other_locked ? existing_group : group_id;
+                        } else if (existing_group == group_id) {
+                            output_group = 0;
+                        }
+                    } else if (add_mode) {
+                        output_group = (selected && !is_other_locked) ? group_id : existing_group;
+                    } else {
+                        output_group = (selected && existing_group == group_id) ? 0 : existing_group;
+                    }
+                }
+
+                output[idx] = output_group;
+                if (group_deltas && output_group != existing_group) {
+                    if (existing_group != 0) {
+                        atomicAdd(&local_deltas[existing_group], -1);
+                    }
+                    if (output_group != 0) {
+                        atomicAdd(&local_deltas[output_group], 1);
+                    }
+                    atomicAdd(&local_changed_count, 1);
+                }
+            }
+
+            if (group_deltas) {
+                __syncthreads();
+                for (int bin = threadIdx.x; bin < kSelectionGroupCount; bin += blockDim.x) {
+                    const int delta = local_deltas[bin];
+                    if (delta != 0) {
+                        atomicAdd(&group_deltas[bin], delta);
+                    }
+                }
+                if (threadIdx.x == 0 && local_changed_count != 0) {
+                    atomicAdd(&group_deltas[kSelectionChangedCountIndex], local_changed_count);
+                }
+            }
+        }
+
+        __global__ void applySelectionGroupIndexedMaskKernel(
+            const bool* __restrict__ cumulative,
+            const int* __restrict__ visible_indices,
+            const uint8_t* __restrict__ existing,
+            uint8_t* __restrict__ output,
+            const int visible_n,
+            const int output_n,
+            const uint8_t group_id,
+            const uint32_t* __restrict__ locked_groups,
+            const bool add_mode,
+            const int* __restrict__ node_indices,
+            const bool* __restrict__ valid_nodes,
+            const int num_nodes,
             const bool replace_mode) {
             const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= n) {
+            if (idx >= visible_n) {
                 return;
             }
 
-            const uint8_t existing_group = existing ? existing[idx] : 0;
+            const int output_idx = visible_indices[idx];
+            if (output_idx < 0 || output_idx >= output_n) {
+                return;
+            }
+
+            const uint8_t existing_group = existing ? existing[output_idx] : 0;
             if (node_indices && valid_nodes) {
                 const int node_idx = node_indices[idx];
                 if (node_idx < 0 || node_idx >= num_nodes || !valid_nodes[node_idx]) {
-                    output[idx] = existing_group;
+                    output[output_idx] = existing_group;
                     return;
                 }
             }
 
             const bool selected = cumulative[idx];
+            if (!selected) {
+                return;
+            }
             const bool is_other_locked = existing_group != 0 &&
                                          existing_group != group_id &&
                                          locked_groups &&
@@ -259,17 +358,88 @@ namespace lfs::rendering {
                                           (1u << (existing_group % 32)));
 
             if (replace_mode) {
-                if (selected) {
-                    output[idx] = is_other_locked ? existing_group : group_id;
-                } else if (existing_group == group_id) {
-                    output[idx] = 0;
-                } else {
-                    output[idx] = existing_group;
-                }
+                output[output_idx] = is_other_locked ? existing_group : group_id;
             } else if (add_mode) {
-                output[idx] = (selected && !is_other_locked) ? group_id : existing_group;
+                if (!is_other_locked) {
+                    output[output_idx] = group_id;
+                }
             } else {
-                output[idx] = (selected && existing_group == group_id) ? 0 : existing_group;
+                if (existing_group == group_id) {
+                    output[output_idx] = 0;
+                }
+            }
+        }
+
+        __global__ void clearSelectionGroupIndexedMaskKernel(
+            const bool* __restrict__ cumulative,
+            const int* __restrict__ visible_indices,
+            const uint8_t* __restrict__ existing,
+            uint8_t* __restrict__ output,
+            const int visible_n,
+            const int output_n,
+            const uint8_t group_id,
+            const int* __restrict__ node_indices,
+            const bool* __restrict__ valid_nodes,
+            const int num_nodes) {
+            const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+            if (idx >= visible_n || cumulative[idx]) {
+                return;
+            }
+
+            const int output_idx = visible_indices[idx];
+            if (output_idx < 0 || output_idx >= output_n) {
+                return;
+            }
+
+            const uint8_t existing_group = existing ? existing[output_idx] : 0;
+            if (existing_group != group_id) {
+                return;
+            }
+
+            if (node_indices && valid_nodes) {
+                const int node_idx = node_indices[idx];
+                if (node_idx < 0 || node_idx >= num_nodes || !valid_nodes[node_idx]) {
+                    return;
+                }
+            }
+
+            output[output_idx] = 0;
+        }
+
+        __global__ void countSelectionGroupsKernel(
+            const uint8_t* __restrict__ mask,
+            const int n,
+            int* __restrict__ counts) {
+            __shared__ int local_counts[kSelectionGroupCount];
+            for (int bin = threadIdx.x; bin < kSelectionGroupCount; bin += blockDim.x) {
+                local_counts[bin] = 0;
+            }
+            __syncthreads();
+
+            const int stride = blockDim.x * gridDim.x;
+            for (int idx = blockIdx.x * blockDim.x + threadIdx.x; idx < n; idx += stride) {
+                const uint8_t group = mask[idx];
+                if (group != 0) {
+                    atomicAdd(&local_counts[group], 1);
+                }
+            }
+            __syncthreads();
+
+            for (int bin = threadIdx.x; bin < kSelectionGroupCount; bin += blockDim.x) {
+                const int count = local_counts[bin];
+                if (count != 0) {
+                    atomicAdd(&counts[bin], count);
+                }
+            }
+        }
+
+        __global__ void mergeSelectionMaskOrKernel(
+            bool* __restrict__ accumulated,
+            const bool* __restrict__ delta,
+            const int n) {
+            const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+            if (idx < n) {
+                accumulated[idx] = accumulated[idx] || delta[idx];
             }
         }
 
@@ -381,8 +551,9 @@ namespace lfs::rendering {
             return;
         }
         const int grid_size = (n_primitives + kBlockSize - 1) / kBlockSize;
-        brushSelectKernel<<<grid_size, kBlockSize>>>(
+        brushSelectKernel<<<grid_size, kBlockSize, 0, currentSelectionStream()>>>(
             screen_positions, mouse_x, mouse_y, radius * radius, selection_out, n_primitives);
+        checkCudaLaunch("brushSelectKernel");
     }
 
     void rect_select(
@@ -397,23 +568,9 @@ namespace lfs::rendering {
             return;
         }
         const int grid_size = (n_primitives + kBlockSize - 1) / kBlockSize;
-        rectSelectKernel<<<grid_size, kBlockSize>>>(positions, x0, y0, x1, y1, selection, n_primitives);
-    }
-
-    void rect_select_mode(
-        const float2* const positions,
-        const float x0,
-        const float y0,
-        const float x1,
-        const float y1,
-        bool* const selection,
-        const int n_primitives,
-        const bool add_mode) {
-        if (n_primitives <= 0) {
-            return;
-        }
-        const int grid_size = (n_primitives + kBlockSize - 1) / kBlockSize;
-        rectSelectModeKernel<<<grid_size, kBlockSize>>>(positions, x0, y0, x1, y1, selection, n_primitives, add_mode);
+        rectSelectKernel<<<grid_size, kBlockSize, 0, currentSelectionStream()>>>(
+            positions, x0, y0, x1, y1, selection, n_primitives);
+        checkCudaLaunch("rectSelectKernel");
     }
 
     void polygon_select(
@@ -426,25 +583,17 @@ namespace lfs::rendering {
             return;
         }
         const int grid_size = (n_primitives + kBlockSize - 1) / kBlockSize;
-        polygonSelectKernel<<<grid_size, kBlockSize>>>(positions, polygon, num_vertices, selection, n_primitives);
-    }
-
-    void polygon_select_mode(
-        const float2* const positions,
-        const float2* const polygon,
-        const int num_vertices,
-        bool* const selection,
-        const int n_primitives,
-        const bool add_mode) {
-        if (n_primitives <= 0 || num_vertices < 3) {
-            return;
-        }
-        const int grid_size = (n_primitives + kBlockSize - 1) / kBlockSize;
-        polygonSelectModeKernel<<<grid_size, kBlockSize>>>(positions, polygon, num_vertices, selection, n_primitives, add_mode);
+        polygonSelectKernel<<<grid_size, kBlockSize, 0, currentSelectionStream()>>>(
+            positions, polygon, num_vertices, selection, n_primitives);
+        checkCudaLaunch("polygonSelectKernel");
     }
 
     void set_selection_element(bool* const selection, const int index, const bool value) {
-        cudaMemcpy(selection + index, &value, sizeof(bool), cudaMemcpyHostToDevice);
+        if (selection == nullptr || index < 0) {
+            return;
+        }
+        setSelectionElementKernel<<<1, 1, 0, currentSelectionStream()>>>(selection, index, value);
+        checkCudaLaunch("setSelectionElementKernel");
     }
 
     void brush_select_tensor(
@@ -461,7 +610,7 @@ namespace lfs::rendering {
                      mouse_x,
                      mouse_y,
                      radius,
-                     selection_out.ptr<uint8_t>(),
+                     reinterpret_cast<uint8_t*>(selection_out.ptr<bool>()),
                      n);
     }
 
@@ -485,28 +634,6 @@ namespace lfs::rendering {
                     n);
     }
 
-    void rect_select_mode_tensor(
-        const Tensor& screen_positions,
-        const float x0,
-        const float y0,
-        const float x1,
-        const float y1,
-        Tensor& selection_out,
-        const bool add_mode) {
-        if (!screen_positions.is_valid() || screen_positions.size(0) == 0) {
-            return;
-        }
-        const int n = checkedToInt(screen_positions.size(0), "n_primitives exceeds int range");
-        rect_select_mode(reinterpret_cast<const float2*>(screen_positions.ptr<float>()),
-                         x0,
-                         y0,
-                         x1,
-                         y1,
-                         selection_out.ptr<bool>(),
-                         n,
-                         add_mode);
-    }
-
     void polygon_select_tensor(
         const Tensor& screen_positions,
         const Tensor& polygon_vertices,
@@ -524,27 +651,6 @@ namespace lfs::rendering {
                        num_vertices,
                        selection_out.ptr<bool>(),
                        n);
-    }
-
-    void polygon_select_mode_tensor(
-        const Tensor& screen_positions,
-        const Tensor& polygon_vertices,
-        Tensor& selection_out,
-        const bool add_mode) {
-        if (!screen_positions.is_valid() || screen_positions.size(0) == 0) {
-            return;
-        }
-        if (!polygon_vertices.is_valid() || polygon_vertices.size(0) < 3) {
-            return;
-        }
-        const int num_vertices = checkedToInt(polygon_vertices.size(0), "polygon vertex count exceeds int range");
-        const int n = checkedToInt(screen_positions.size(0), "n_primitives exceeds int range");
-        polygon_select_mode(reinterpret_cast<const float2*>(screen_positions.ptr<float>()),
-                            reinterpret_cast<const float2*>(polygon_vertices.ptr<float>()),
-                            num_vertices,
-                            selection_out.ptr<bool>(),
-                            n,
-                            add_mode);
     }
 
     void apply_selection_group_tensor(
@@ -571,7 +677,7 @@ namespace lfs::rendering {
                 : nullptr;
 
         const int grid_size = (n + kBlockSize - 1) / kBlockSize;
-        applySelectionGroupKernel<<<grid_size, kBlockSize>>>(
+        applySelectionGroupKernel<<<grid_size, kBlockSize, 0, currentSelectionStream(&output_mask)>>>(
             cumulative_selection.ptr<bool>(),
             existing_ptr,
             output_mask.ptr<uint8_t>(),
@@ -581,6 +687,7 @@ namespace lfs::rendering {
             add_mode,
             node_indices_ptr,
             target_node_index);
+        checkCudaLaunch("applySelectionGroupKernel");
     }
 
     void apply_selection_group_tensor_mask(
@@ -592,33 +699,37 @@ namespace lfs::rendering {
         const bool add_mode,
         const Tensor* const transform_indices,
         const std::vector<bool>& valid_nodes,
-        const bool replace_mode) {
+        const bool replace_mode,
+        Tensor* const group_counts_scratch) {
         if (!cumulative_selection.is_valid() || cumulative_selection.size(0) == 0) {
             return;
         }
 
         const int n = checkedToInt(cumulative_selection.size(0), "selection size exceeds int range");
-        std::vector<bool> default_valid_nodes;
-        const std::vector<bool>* effective_valid_nodes = &valid_nodes;
-        if (effective_valid_nodes->empty()) {
-            default_valid_nodes.push_back(true);
-            effective_valid_nodes = &default_valid_nodes;
-        }
-
-        const int num_nodes = checkedToInt(effective_valid_nodes->size(), "node count exceeds int range");
+        const bool restricts_nodes = nodeMaskRestrictsSelection(valid_nodes);
+        const int num_nodes = restricts_nodes
+                                  ? checkedToInt(valid_nodes.size(), "node count exceeds int range")
+                                  : 0;
         const uint8_t* const existing_ptr =
             (existing_mask.is_valid() && existing_mask.numel() == static_cast<std::size_t>(n))
                 ? existing_mask.ptr<uint8_t>()
                 : nullptr;
         const int* const node_indices_ptr =
-            (transform_indices && transform_indices->is_valid() &&
+            (restricts_nodes &&
+             transform_indices && transform_indices->is_valid() &&
              transform_indices->numel() == static_cast<std::size_t>(n))
                 ? transform_indices->ptr<int>()
                 : nullptr;
+        const Tensor valid_nodes_gpu = node_indices_ptr ? uploadBoolMask(valid_nodes) : Tensor{};
+        const bool* const valid_nodes_ptr = valid_nodes_gpu.is_valid()
+                                                ? reinterpret_cast<const bool*>(valid_nodes_gpu.ptr<uint8_t>())
+                                                : nullptr;
+        if (group_counts_scratch != nullptr) {
+            prepareSelectionGroupCountsScratch(*group_counts_scratch);
+        }
 
-        const Tensor valid_nodes_gpu = uploadBoolMask(*effective_valid_nodes);
         const int grid_size = (n + kBlockSize - 1) / kBlockSize;
-        applySelectionGroupMaskKernel<<<grid_size, kBlockSize>>>(
+        applySelectionGroupMaskKernel<<<grid_size, kBlockSize, 0, currentSelectionStream(&output_mask)>>>(
             cumulative_selection.ptr<bool>(),
             existing_ptr,
             output_mask.ptr<uint8_t>(),
@@ -627,9 +738,203 @@ namespace lfs::rendering {
             locked_groups,
             add_mode,
             node_indices_ptr,
-            reinterpret_cast<const bool*>(valid_nodes_gpu.ptr<uint8_t>()),
+            valid_nodes_ptr,
+            num_nodes,
+            replace_mode,
+            group_counts_scratch != nullptr ? group_counts_scratch->ptr<int>() : nullptr);
+        checkCudaLaunch("applySelectionGroupMaskKernel");
+    }
+
+    void apply_selection_group_indexed_tensor_mask(
+        const Tensor& visible_selection,
+        const Tensor& visible_indices,
+        const Tensor& existing_mask,
+        Tensor& output_mask,
+        const uint8_t group_id,
+        const uint32_t* const locked_groups,
+        const bool add_mode,
+        const Tensor* const transform_indices,
+        const std::vector<bool>& valid_nodes,
+        const bool replace_mode) {
+        if (!visible_selection.is_valid() || !visible_indices.is_valid() ||
+            !output_mask.is_valid() || visible_selection.size(0) == 0) {
+            return;
+        }
+
+        const int visible_n = checkedToInt(visible_selection.size(0), "selection size exceeds int range");
+        const int output_n = checkedToInt(output_mask.size(0), "selection output size exceeds int range");
+        if (visible_indices.numel() != static_cast<std::size_t>(visible_n)) {
+            return;
+        }
+
+        if (existing_mask.is_valid() && existing_mask.numel() == static_cast<std::size_t>(output_n)) {
+            output_mask.copy_from(existing_mask);
+        } else {
+            output_mask.zero_();
+        }
+
+        const bool restricts_nodes = nodeMaskRestrictsSelection(valid_nodes);
+        const int num_nodes = restricts_nodes
+                                  ? checkedToInt(valid_nodes.size(), "node count exceeds int range")
+                                  : 0;
+        const int* const node_indices_ptr =
+            (restricts_nodes &&
+             transform_indices && transform_indices->is_valid() &&
+             transform_indices->numel() == static_cast<std::size_t>(visible_n))
+                ? transform_indices->ptr<int>()
+                : nullptr;
+        const Tensor valid_nodes_gpu = node_indices_ptr ? uploadBoolMask(valid_nodes) : Tensor{};
+        const bool* const valid_nodes_ptr = valid_nodes_gpu.is_valid()
+                                                ? reinterpret_cast<const bool*>(valid_nodes_gpu.ptr<uint8_t>())
+                                                : nullptr;
+        const uint8_t* const existing_ptr =
+            (existing_mask.is_valid() && existing_mask.numel() == static_cast<std::size_t>(output_n))
+                ? existing_mask.ptr<uint8_t>()
+                : nullptr;
+
+        const int grid_size = (visible_n + kBlockSize - 1) / kBlockSize;
+        const cudaStream_t stream = currentSelectionStream(&output_mask);
+        if (replace_mode) {
+            clearSelectionGroupIndexedMaskKernel<<<grid_size, kBlockSize, 0, stream>>>(
+                visible_selection.ptr<bool>(),
+                visible_indices.ptr<int>(),
+                existing_ptr,
+                output_mask.ptr<uint8_t>(),
+                visible_n,
+                output_n,
+                group_id,
+                node_indices_ptr,
+                valid_nodes_ptr,
+                num_nodes);
+            checkCudaLaunch("clearSelectionGroupIndexedMaskKernel");
+        }
+        applySelectionGroupIndexedMaskKernel<<<grid_size, kBlockSize, 0, stream>>>(
+            visible_selection.ptr<bool>(),
+            visible_indices.ptr<int>(),
+            existing_ptr,
+            output_mask.ptr<uint8_t>(),
+            visible_n,
+            output_n,
+            group_id,
+            locked_groups,
+            add_mode,
+            node_indices_ptr,
+            valid_nodes_ptr,
             num_nodes,
             replace_mode);
+        checkCudaLaunch("applySelectionGroupIndexedMaskKernel");
+    }
+
+    std::array<size_t, 256> count_selection_groups(
+        const Tensor& selection_mask,
+        Tensor& counts_scratch) {
+        std::array<size_t, 256> result{};
+        if (!selection_mask.is_valid() || selection_mask.numel() == 0) {
+            return result;
+        }
+        if (selection_mask.device() != lfs::core::Device::CUDA) {
+            const auto mask_cpu = selection_mask.cpu();
+            const auto* const data = mask_cpu.ptr<uint8_t>();
+            const size_t n = mask_cpu.numel();
+            for (size_t i = 0; i < n; ++i) {
+                const uint8_t group = data[i];
+                if (group != 0) {
+                    ++result[group];
+                }
+            }
+            return result;
+        }
+
+        prepareSelectionGroupCountsScratch(counts_scratch);
+
+        const int n = checkedToInt(selection_mask.numel(), "selection mask size exceeds int range");
+        const int grid_size = std::min((n + kBlockSize - 1) / kBlockSize, kCountMaxBlocks);
+        countSelectionGroupsKernel<<<grid_size, kBlockSize, 0, currentSelectionStream(&counts_scratch)>>>(
+            selection_mask.ptr<uint8_t>(),
+            n,
+            counts_scratch.ptr<int>());
+        checkCudaLaunch("countSelectionGroupsKernel");
+
+        return read_selection_group_counts(counts_scratch);
+    }
+
+    void prepare_selection_group_counts_scratch(Tensor& counts_scratch) {
+        prepareSelectionGroupCountsScratch(counts_scratch);
+    }
+
+    SelectionGroupCountResult read_selection_group_count_result(const Tensor& counts_scratch) {
+        SelectionGroupCountResult result{};
+        if (!counts_scratch.is_valid() ||
+            counts_scratch.device() != lfs::core::Device::CUDA ||
+            counts_scratch.dtype() != lfs::core::DataType::Int32 ||
+            counts_scratch.numel() != kSelectionGroupScratchWords) {
+            return result;
+        }
+
+        std::array<int, kSelectionGroupScratchWords> host_counts{};
+        if (const cudaError_t status = cudaMemcpy(host_counts.data(),
+                                                  counts_scratch.ptr<int>(),
+                                                  sizeof(host_counts),
+                                                  cudaMemcpyDeviceToHost);
+            status != cudaSuccess) {
+            throw std::runtime_error(cudaGetErrorString(status));
+        }
+        for (size_t i = 0; i < result.group_counts.size(); ++i) {
+            result.group_counts[i] = static_cast<size_t>(std::max(host_counts[i], 0));
+        }
+        result.changed_count = static_cast<size_t>(std::max(host_counts[kSelectionChangedCountIndex], 0));
+        return result;
+    }
+
+    SelectionGroupDeltaResult read_selection_group_delta_result(const Tensor& counts_scratch) {
+        SelectionGroupDeltaResult result{};
+        if (!counts_scratch.is_valid() ||
+            counts_scratch.device() != lfs::core::Device::CUDA ||
+            counts_scratch.dtype() != lfs::core::DataType::Int32 ||
+            counts_scratch.numel() != kSelectionGroupScratchWords) {
+            return result;
+        }
+
+        std::array<int, kSelectionGroupScratchWords> host_counts{};
+        if (const cudaError_t status = cudaMemcpy(host_counts.data(),
+                                                  counts_scratch.ptr<int>(),
+                                                  sizeof(host_counts),
+                                                  cudaMemcpyDeviceToHost);
+            status != cudaSuccess) {
+            throw std::runtime_error(cudaGetErrorString(status));
+        }
+        for (size_t i = 0; i < result.group_deltas.size(); ++i) {
+            result.group_deltas[i] = host_counts[i];
+        }
+        result.changed_count = static_cast<size_t>(std::max(host_counts[kSelectionChangedCountIndex], 0));
+        return result;
+    }
+
+    std::array<size_t, 256> read_selection_group_counts(const Tensor& counts_scratch) {
+        return read_selection_group_count_result(counts_scratch).group_counts;
+    }
+
+    void merge_selection_mask_or(Tensor& accumulated_mask, const Tensor& delta_mask) {
+        if (!accumulated_mask.is_valid() || !delta_mask.is_valid() ||
+            accumulated_mask.numel() == 0 ||
+            accumulated_mask.numel() != delta_mask.numel()) {
+            return;
+        }
+        if (accumulated_mask.device() != lfs::core::Device::CUDA ||
+            delta_mask.device() != lfs::core::Device::CUDA ||
+            accumulated_mask.dtype() != lfs::core::DataType::Bool ||
+            delta_mask.dtype() != lfs::core::DataType::Bool) {
+            accumulated_mask = accumulated_mask | delta_mask;
+            return;
+        }
+
+        const int n = checkedToInt(accumulated_mask.numel(), "selection mask size exceeds int range");
+        const int grid_size = (n + kBlockSize - 1) / kBlockSize;
+        mergeSelectionMaskOrKernel<<<grid_size, kBlockSize, 0, currentSelectionStream(&accumulated_mask)>>>(
+            accumulated_mask.ptr<bool>(),
+            delta_mask.ptr<bool>(),
+            n);
+        checkCudaLaunch("mergeSelectionMaskOrKernel");
     }
 
     void filter_selection_by_node(
@@ -644,11 +949,12 @@ namespace lfs::rendering {
             return;
         }
         const int grid_size = (n + kBlockSize - 1) / kBlockSize;
-        filterSelectionByNodeKernel<<<grid_size, kBlockSize>>>(
+        filterSelectionByNodeKernel<<<grid_size, kBlockSize, 0, currentSelectionStream(&selection)>>>(
             selection.ptr<bool>(),
             transform_indices.ptr<int>(),
             n,
             target_node_index);
+        checkCudaLaunch("filterSelectionByNodeKernel");
     }
 
     void filter_selection_by_node_mask(
@@ -658,6 +964,9 @@ namespace lfs::rendering {
         if (!selection.is_valid() || !transform_indices.is_valid() || valid_nodes.empty()) {
             return;
         }
+        if (!nodeMaskRestrictsSelection(valid_nodes)) {
+            return;
+        }
         const int n = checkedToInt(selection.size(0), "selection size exceeds int range");
         if (transform_indices.numel() != static_cast<std::size_t>(n)) {
             return;
@@ -665,12 +974,13 @@ namespace lfs::rendering {
         const int num_nodes = checkedToInt(valid_nodes.size(), "node count exceeds int range");
         const Tensor valid_nodes_gpu = uploadBoolMask(valid_nodes);
         const int grid_size = (n + kBlockSize - 1) / kBlockSize;
-        filterSelectionByNodeMaskKernel<<<grid_size, kBlockSize>>>(
+        filterSelectionByNodeMaskKernel<<<grid_size, kBlockSize, 0, currentSelectionStream(&selection)>>>(
             selection.ptr<bool>(),
             transform_indices.ptr<int>(),
             reinterpret_cast<const bool*>(valid_nodes_gpu.ptr<uint8_t>()),
             n,
             num_nodes);
+        checkCudaLaunch("filterSelectionByNodeMaskKernel");
     }
 
     void filter_selection_by_crop(
@@ -729,7 +1039,7 @@ namespace lfs::rendering {
         }
 
         const int grid_size = (n + kBlockSize - 1) / kBlockSize;
-        filterSelectionByCropKernel<<<grid_size, kBlockSize>>>(
+        filterSelectionByCropKernel<<<grid_size, kBlockSize, 0, currentSelectionStream(&selection)>>>(
             selection.ptr<bool>(),
             reinterpret_cast<const float3*>(means.ptr<float>()),
             crop_t_ptr,
@@ -743,6 +1053,7 @@ namespace lfs::rendering {
             transform_indices_ptr,
             prepared_transforms.count,
             n);
+        checkCudaLaunch("filterSelectionByCropKernel");
     }
 
     namespace config {

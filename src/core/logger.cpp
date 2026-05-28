@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/logger.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include <array>
 #include <cstdio>
 #include <deque>
@@ -269,7 +270,9 @@ namespace lfs::core {
                              color, level_str, ANSI_RESET,
                              static_cast<int>(filename.size()), filename.data(), msg.source.line,
                              output_msg.c_str());
-                std::fflush(target_);
+                if (!is_perf) {
+                    std::fflush(target_);
+                }
             }
 
             void flush_() override { std::fflush(target_); }
@@ -400,11 +403,28 @@ namespace lfs::core {
     } // anonymous namespace
 
     struct Logger::Impl {
+        std::vector<std::pair<LogHandlerToken, LogHandler>> log_handlers_{};
+        LogHandlerToken next_handler_token_{0};
         std::shared_ptr<spdlog::logger> logger;
         std::shared_ptr<ColorSink> console_sink;
         std::shared_ptr<MemorySink> memory_sink;
         std::mutex mutex;
+        std::mutex handler_mutex;
     };
+
+    std::string_view Logger::to_string(LogLevel level) {
+        switch (level) {
+        case LogLevel::Trace: return "trace";
+        case LogLevel::Debug: return "debug";
+        case LogLevel::Info: return "info";
+        case LogLevel::Performance: return "perf";
+        case LogLevel::Warn: return "warn";
+        case LogLevel::Error: return "error";
+        case LogLevel::Critical: return "critical";
+        case LogLevel::Off: return "off";
+        default: std::unreachable();
+        }
+    }
 
     Logger::Logger() : impl_(std::make_unique<Impl>()) {
         for (size_t i = 0; i < static_cast<size_t>(LogModule::Count); ++i) {
@@ -453,6 +473,22 @@ namespace lfs::core {
         capture_all_to_file_ = !log_file.empty();
     }
 
+    LogHandlerToken Logger::add_log_handler(LogHandler handler) {
+        std::lock_guard lock(impl_->handler_mutex);
+        const auto token = impl_->next_handler_token_++;
+        impl_->log_handlers_.emplace_back(token, std::move(handler));
+        return token;
+    }
+
+    void Logger::remove_log_handler(LogHandlerToken handler_token) {
+        std::lock_guard lock(impl_->handler_mutex);
+        auto& handlers = impl_->log_handlers_;
+        handlers.erase(
+            std::remove_if(handlers.begin(), handlers.end(),
+                           [handler_token](const auto& p) { return p.first == handler_token; }),
+            handlers.end());
+    }
+
     void Logger::log(const LogLevel level, const std::source_location& loc, const std::string_view msg) {
         if (!impl_->logger)
             return;
@@ -479,6 +515,15 @@ namespace lfs::core {
             spdlog::source_loc{loc.file_name(), static_cast<int>(loc.line()), loc.function_name()},
             to_spdlog_level(level),
             final_msg);
+
+        std::vector<std::pair<LogHandlerToken, LogHandler>> handlers_snapshot;
+        {
+            std::lock_guard lock(impl_->handler_mutex);
+            handlers_snapshot = impl_->log_handlers_;
+        }
+        for (const auto& [token, handler] : handlers_snapshot) {
+            handler(level, loc, final_msg);
+        }
     }
 
     void Logger::enable_module(const LogModule module, const bool enabled) {
@@ -535,14 +580,35 @@ namespace lfs::core {
         : start_(std::chrono::high_resolution_clock::now()),
           name_(std::move(name)),
           level_(level),
-          loc_(loc) {}
+          loc_(loc) {
+        try {
+            diagnostics_scope_active_ = lfs::diagnostics::VramProfiler::instance().enabled();
+            if (diagnostics_scope_active_) {
+                lfs::diagnostics::VramProfiler::instance().pushTimerScope(name_);
+            }
+        } catch (...) {
+            diagnostics_scope_active_ = false;
+        }
+    }
+
+    ScopedTimer::ScopedTimer(std::string name, const double min_log_ms,
+                             const LogLevel level, const std::source_location loc)
+        : ScopedTimer(std::move(name), level, loc) {
+        min_log_ms_ = min_log_ms;
+    }
 
     ScopedTimer::~ScopedTimer() {
         const auto duration = std::chrono::high_resolution_clock::now() - start_;
         const auto ms = std::chrono::duration<double, std::milli>(duration).count();
-        char buf[64];
-        std::snprintf(buf, sizeof(buf), "%s took %.2fms", name_.c_str(), ms);
-        Logger::get().log(level_, loc_, buf);
+        if (diagnostics_scope_active_) {
+            try {
+                lfs::diagnostics::VramProfiler::instance().popTimerScope(ms);
+            } catch (...) {
+            }
+        }
+        if (ms < min_log_ms_)
+            return;
+        Logger::get().log(level_, loc_, std::format("{} took {:.2f}ms", name_, ms));
     }
 
 } // namespace lfs::core

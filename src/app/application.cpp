@@ -14,9 +14,13 @@
 #include "core/pinned_memory_allocator.hpp"
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "io/cache_image_loader.hpp"
+#include "tcp/include/tcp_publisher.hpp"
+#include "tcp/include/tcp_responder.hpp"
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
+#include "visualizer/training/training_manager.hpp"
 #include "visualizer/visualizer.hpp"
 
 #include "app/mcp_gui_tools.hpp"
@@ -61,6 +65,154 @@ namespace lfs::app {
             return lfs::vis::GraphicsBackend::Vulkan;
         }
 
+        std::expected<core::param::TrainingParameters, std::string> loadCheckpointParams(const core::param::TrainingParameters& params, core::Scene& scene) {
+            LOG_INFO("Resuming from checkpoint: {}", core::path_to_utf8(*params.resume_checkpoint));
+
+            auto params_result = core::load_checkpoint_params(*params.resume_checkpoint);
+            if (!params_result) {
+                return std::unexpected(std::format("Failed to load checkpoint params: {}", params_result.error()));
+            }
+            auto checkpoint_params = std::move(*params_result);
+
+            if (!params.dataset.data_path.empty())
+                checkpoint_params.dataset.data_path = params.dataset.data_path;
+            if (!params.dataset.output_path.empty())
+                checkpoint_params.dataset.output_path = params.dataset.output_path;
+            if (!params.dataset.output_name.empty())
+                checkpoint_params.dataset.output_name = params.dataset.output_name;
+
+            if (checkpoint_params.dataset.data_path.empty()) {
+                return std::unexpected("Checkpoint has no dataset path and none provided via --data-path");
+            }
+            if (!std::filesystem::exists(checkpoint_params.dataset.data_path)) {
+                return std::unexpected(std::format("Dataset path does not exist: {}", core::path_to_utf8(checkpoint_params.dataset.data_path)));
+            }
+
+            if (const auto result = training::validateDatasetPath(checkpoint_params); !result) {
+                return std::unexpected(std::format("Dataset validation failed: {}", result.error()));
+            }
+
+            if (const auto result = training::loadTrainingDataIntoScene(checkpoint_params, scene); !result) {
+                return std::unexpected(std::format("Failed to load training data: {}", result.error()));
+            }
+
+            for (const auto* node : scene.getNodes()) {
+                if (node->type == core::NodeType::POINTCLOUD) {
+                    scene.removeNode(node->name, false);
+                    break;
+                }
+            }
+
+            auto splat_result = core::load_checkpoint_splat_data(*params.resume_checkpoint);
+            if (!splat_result) {
+                return std::unexpected(std::format("Failed to load checkpoint splat data: {}", splat_result.error()));
+            }
+
+            auto splat_data = std::make_unique<core::SplatData>(std::move(*splat_result));
+            scene.addSplat("Model", std::move(splat_data), core::NULL_NODE);
+            scene.setTrainingModelNode("Model");
+
+            checkpoint_params.resume_checkpoint = *params.resume_checkpoint;
+            return checkpoint_params;
+        }
+
+        int runHeadlessWithTCP(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
+            if (params->dataset.data_path.empty() && !params->resume_checkpoint) {
+                LOG_ERROR("Headless with TCP mode requires --data-path or --resume");
+                return 1;
+            }
+
+            checkCudaDriverVersion();
+            lfs::event::CommandCenterBridge::instance().set(&lfs::training::CommandCenter::instance());
+
+            {
+                core::Scene scene;
+                std::optional<core::param::TrainingParameters> checkpoint_params{std::nullopt};
+
+                if (params->resume_checkpoint) {
+                    const auto ckpt_params_result = loadCheckpointParams(*params, scene);
+                    if (!ckpt_params_result) {
+                        LOG_ERROR("Failed to load checkpoint: {}", ckpt_params_result.error());
+                        return 1;
+                    }
+                    checkpoint_params = *ckpt_params_result;
+                } else {
+                    LOG_INFO("Starting headless with TCP training...");
+
+                    if (const auto result = training::loadTrainingDataIntoScene(*params, scene); !result) {
+                        LOG_ERROR("Failed to load training data: {}", result.error());
+                        return 1;
+                    }
+
+                    if (const auto result = training::initializeTrainingModel(*params, scene); !result) {
+                        LOG_ERROR("Failed to initialize model: {}", result.error());
+                        return 1;
+                    }
+                }
+
+                auto manager = std::make_shared<vis::TrainerManager>();
+                {
+                    auto trainer = std::make_unique<training::Trainer>(scene);
+
+                    if (!params->python_scripts.empty()) {
+                        trainer->set_python_scripts(params->python_scripts);
+                        vis::gui::panels::PythonScriptManagerState::getInstance().setScripts(params->python_scripts);
+                    }
+
+                    trainer->setParams(checkpoint_params ? *checkpoint_params : *params); // Load checkpoint into trainer is called internally
+                    manager->setTrainer(std::move(trainer));
+                }
+
+                core::Tensor::trim_memory_pool();
+
+                {
+                    tcp::ResponderServer responder(params->server.tcp_server_connection_port, manager);
+                    tcp::PublisherServer publisher(params->server.tcp_broadcast_connection_port, manager);
+
+                    responder.start();
+                    publisher.start();
+                    LOG_INFO("Responder server listening on {}", responder.getEndpoint());
+                    LOG_INFO("Publisher server listening on {}", publisher.getEndpoint());
+
+                    std::promise<core::events::state::TrainingCompleted> training_done;
+                    core::events::state::TrainingCompleted::when(
+                        [&training_done](const core::events::state::TrainingCompleted& evt) {
+                            training_done.set_value(evt);
+                        });
+
+                    manager->startTraining();
+                    training_done.get_future().wait();
+                    manager->waitForCompletion();
+
+                    publisher.stop();
+                    responder.stop();
+                    responder.join();
+                }
+
+                if (manager->getStateMachine().getFinishReason() == vis::FinishReason::Error) {
+                    LOG_ERROR("Training error: {}", manager->getLastError());
+                    if (!params->python_scripts.empty()) {
+                        core::Tensor::shutdown_memory_pool();
+                        core::PinnedMemoryAllocator::instance().shutdown();
+                        python::finalize();
+                        std::_Exit(1);
+                    }
+                    return 1;
+                }
+
+                LOG_INFO("Headless with TCP training completed");
+            }
+
+            core::Tensor::shutdown_memory_pool();
+            core::PinnedMemoryAllocator::instance().shutdown();
+
+            if (!params->python_scripts.empty()) {
+                python::finalize();
+                std::_Exit(0);
+            }
+            return 0;
+        }
+
         int runHeadless(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
             if (params->dataset.data_path.empty() && !params->resume_checkpoint) {
                 LOG_ERROR("Headless mode requires --data-path or --resume");
@@ -74,59 +226,11 @@ namespace lfs::app {
                 core::Scene scene;
 
                 if (params->resume_checkpoint) {
-                    LOG_INFO("Resuming from checkpoint: {}", core::path_to_utf8(*params->resume_checkpoint));
-
-                    auto params_result = core::load_checkpoint_params(*params->resume_checkpoint);
-                    if (!params_result) {
-                        LOG_ERROR("Failed to load checkpoint params: {}", params_result.error());
+                    const auto ckpt_params_result = loadCheckpointParams(*params, scene);
+                    if (!ckpt_params_result) {
+                        LOG_ERROR("Failed to load checkpoint: {}", ckpt_params_result.error());
                         return 1;
                     }
-                    auto checkpoint_params = std::move(*params_result);
-
-                    if (!params->dataset.data_path.empty())
-                        checkpoint_params.dataset.data_path = params->dataset.data_path;
-                    if (!params->dataset.output_path.empty())
-                        checkpoint_params.dataset.output_path = params->dataset.output_path;
-                    if (!params->dataset.output_name.empty())
-                        checkpoint_params.dataset.output_name = params->dataset.output_name;
-
-                    if (checkpoint_params.dataset.data_path.empty()) {
-                        LOG_ERROR("Checkpoint has no dataset path and none provided via --data-path");
-                        return 1;
-                    }
-                    if (!std::filesystem::exists(checkpoint_params.dataset.data_path)) {
-                        LOG_ERROR("Dataset path does not exist: {}", core::path_to_utf8(checkpoint_params.dataset.data_path));
-                        return 1;
-                    }
-
-                    if (const auto result = training::validateDatasetPath(checkpoint_params); !result) {
-                        LOG_ERROR("Dataset validation failed: {}", result.error());
-                        return 1;
-                    }
-
-                    if (const auto result = training::loadTrainingDataIntoScene(checkpoint_params, scene); !result) {
-                        LOG_ERROR("Failed to load training data: {}", result.error());
-                        return 1;
-                    }
-
-                    for (const auto* node : scene.getNodes()) {
-                        if (node->type == core::NodeType::POINTCLOUD) {
-                            scene.removeNode(node->name, false);
-                            break;
-                        }
-                    }
-
-                    auto splat_result = core::load_checkpoint_splat_data(*params->resume_checkpoint);
-                    if (!splat_result) {
-                        LOG_ERROR("Failed to load checkpoint splat data: {}", splat_result.error());
-                        return 1;
-                    }
-
-                    auto splat_data = std::make_unique<core::SplatData>(std::move(*splat_result));
-                    scene.addSplat("Model", std::move(splat_data), core::NULL_NODE);
-                    scene.setTrainingModelNode("Model");
-
-                    checkpoint_params.resume_checkpoint = *params->resume_checkpoint;
 
                     auto trainer = std::make_unique<training::Trainer>(scene);
 
@@ -135,7 +239,7 @@ namespace lfs::app {
                         vis::gui::panels::PythonScriptManagerState::getInstance().setScripts(params->python_scripts);
                     }
 
-                    if (const auto result = trainer->initialize(checkpoint_params); !result) {
+                    if (const auto result = trainer->initialize(*ckpt_params_result); !result) {
                         LOG_ERROR("Failed to initialize trainer: {}", result.error());
                         return 1;
                     }
@@ -242,6 +346,7 @@ namespace lfs::app {
 
             LOG_INFO("Initializing CUDA...");
             fast_lfs::rasterization::warmup_kernels();
+            lfs::diagnostics::VramProfiler::instance().captureCudaWarmupDelta();
         }
 
         void warmupCudaAsync() {
@@ -256,6 +361,7 @@ namespace lfs::app {
             LOG_INFO("Initializing CUDA (async)...");
             cudaWarmupFuture() = std::async(std::launch::async, [] {
                 fast_lfs::rasterization::warmup_kernels();
+                lfs::diagnostics::VramProfiler::instance().captureCudaWarmupDelta();
             });
         }
 
@@ -386,6 +492,10 @@ namespace lfs::app {
                  .cuda_stream = p.stream,
                  .output_uint8 = p.output_uint8});
         });
+
+        if (params->optimization.headless && params->server.tcp_connection) {
+            return runHeadlessWithTCP(std::move(params));
+        }
 
         if (params->optimization.headless) {
             return runHeadless(std::move(params));

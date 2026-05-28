@@ -1093,13 +1093,19 @@ namespace lfs::core {
         Tensor& track() { return set_tracked(true); } // Convenience alias
         Tensor& untrack() { return set_tracked(false); }
 
-        // Optional name for identifying tensors in traces
+        // Optional name for identifying tensors in traces. Also forwarded to the
+        // VRAM profiler so the underlying allocation is labelled with this name.
         const std::string& name() const { return state_->name; }
         Tensor& set_name(std::string name) {
             state_->name = std::move(name);
+            relabel_allocation_for_profiler();
             return *this;
         }
 
+    private:
+        void relabel_allocation_for_profiler();
+
+    public:
         size_t size(size_t dim) const {
             if (!is_valid())
                 return 0;

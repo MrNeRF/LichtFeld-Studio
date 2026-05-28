@@ -2896,11 +2896,10 @@ namespace lfs::app {
                 if (num_vertices < 3)
                     return json{{"error", "Polygon requires at least 3 vertices"}};
 
-                std::vector<float> vertex_data;
-                vertex_data.reserve(num_vertices * 2);
+                std::vector<glm::vec2> vertex_data;
+                vertex_data.reserve(num_vertices);
                 for (const auto& pt : points) {
-                    vertex_data.push_back(pt[0].get<float>());
-                    vertex_data.push_back(pt[1].get<float>());
+                    vertex_data.emplace_back(pt[0].get<float>(), pt[1].get<float>());
                 }
 
                 const std::string mode = args.value("mode", "replace");
@@ -2932,11 +2931,10 @@ namespace lfs::app {
                 if (num_vertices < 3)
                     return json{{"error", "Lasso requires at least 3 points"}};
 
-                std::vector<float> vertex_data;
-                vertex_data.reserve(num_vertices * 2);
+                std::vector<glm::vec2> vertex_data;
+                vertex_data.reserve(num_vertices);
                 for (const auto& pt : points) {
-                    vertex_data.push_back(pt[0].get<float>());
-                    vertex_data.push_back(pt[1].get<float>());
+                    vertex_data.emplace_back(pt[0].get<float>(), pt[1].get<float>());
                 }
 
                 const std::string mode = args.value("mode", "replace");

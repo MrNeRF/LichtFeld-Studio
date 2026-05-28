@@ -4,9 +4,6 @@
 
 #pragma once
 
-#include "config.h"
-
-#ifdef LFS_VULKAN_VIEWER_ENABLED
 #include <memory>
 #include <vulkan/vulkan.h>
 
@@ -34,4 +31,3 @@ namespace lfs::vis {
         std::unique_ptr<Impl> impl_;
     };
 } // namespace lfs::vis
-#endif

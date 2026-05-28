@@ -5,9 +5,40 @@
 #include "core/editor_context.hpp"
 #include "scene/scene_manager.hpp"
 #include "training/training_manager.hpp"
+#include "visualizer/app_store.hpp"
 #include "visualizer/gui_capabilities.hpp"
 
+#include <string_view>
+
 namespace lfs::vis {
+
+    namespace {
+        [[nodiscard]] std::string formatTransformSelectionError(const bool has_editable,
+                                                                const bool found_locked,
+                                                                const bool found_untransformable) {
+            if (found_locked && found_untransformable)
+                return "selection contains locked or unsupported nodes";
+            if (found_locked)
+                return has_editable ? "selection contains locked nodes" : "selection is locked";
+            if (found_untransformable)
+                return has_editable ? "selection contains unsupported nodes" : "select parent node";
+            return "No transform targets provided";
+        }
+
+        [[nodiscard]] std::string_view activeToolId(const ToolType tool) noexcept {
+            switch (tool) {
+            case ToolType::Selection: return "builtin.select";
+            case ToolType::Translate: return "builtin.translate";
+            case ToolType::Rotate: return "builtin.rotate";
+            case ToolType::Scale: return "builtin.scale";
+            case ToolType::Mirror: return "builtin.mirror";
+            case ToolType::Brush: return "builtin.brush";
+            case ToolType::Align: return "builtin.align";
+            case ToolType::None:
+            default: return {};
+            }
+        }
+    } // namespace
 
     void EditorContext::update(const SceneManager* scene_manager, const TrainerManager* trainer_manager) {
         if (!scene_manager) {
@@ -50,33 +81,55 @@ namespace lfs::vis {
         }
 
         // Update selection state
-        has_selection_ = scene_manager->hasSelectedNode();
-        selected_node_type_ = has_selection_ ? scene_manager->getSelectedNodeType() : core::NodeType::SPLAT;
+        const auto selected_node_names = scene_manager->getSelectedNodeNames();
+        has_selection_ = !selected_node_names.empty();
         has_editable_transform_selection_ = false;
         has_splat_selection_ = false;
         has_editable_splat_selection_ = false;
         transform_selection_error_.clear();
+        selected_node_type_ = core::NodeType::SPLAT;
 
         if (has_selection_) {
-            const auto transform_selection = cap::resolveEditableTransformSelection(
-                *scene_manager, std::nullopt, cap::TransformTargetPolicy::RequireAllEditable);
-            has_editable_transform_selection_ = transform_selection.has_value();
-            if (!transform_selection)
-                transform_selection_error_ = transform_selection.error();
-
             const auto& scene = scene_manager->getScene();
-            for (const auto& name : scene_manager->getSelectedNodeNames()) {
+            bool found_locked = false;
+            bool found_untransformable = false;
+            bool has_editable_transform_target = false;
+            bool selected_type_initialized = false;
+
+            for (const auto& name : selected_node_names) {
                 const auto* const node = scene.getNode(name);
                 if (!node)
                     continue;
 
+                if (!selected_type_initialized) {
+                    selected_node_type_ = node->type;
+                    selected_type_initialized = true;
+                }
+
                 const bool locked = static_cast<bool>(node->locked);
+                const bool transformable = cap::isTransformableNodeType(node->type);
+                if (!transformable) {
+                    found_untransformable = true;
+                } else if (locked) {
+                    found_locked = true;
+                } else {
+                    has_editable_transform_target = true;
+                }
 
                 if (node->type == core::NodeType::SPLAT) {
                     has_splat_selection_ = true;
                     if (!locked)
                         has_editable_splat_selection_ = true;
                 }
+            }
+
+            has_editable_transform_selection_ =
+                has_editable_transform_target && !found_locked && !found_untransformable;
+            if (!has_editable_transform_selection_) {
+                transform_selection_error_ =
+                    formatTransformSelectionError(has_editable_transform_target,
+                                                  found_locked,
+                                                  found_untransformable);
             }
         }
 
@@ -165,6 +218,7 @@ namespace lfs::vis {
     void EditorContext::validateActiveTool() {
         if (!isToolAvailable(active_tool_)) {
             active_tool_ = ToolType::None;
+            app_store().active_tool.set(std::string{});
         }
     }
 
@@ -172,6 +226,7 @@ namespace lfs::vis {
         LOG_DEBUG("EditorContext::setActiveOperator: id='{}', gizmo_type='{}'", id, gizmo_type);
         active_operator_id_ = id;
         gizmo_type_ = gizmo_type;
+        app_store().active_tool.set(active_operator_id_);
         LOG_DEBUG("EditorContext::setActiveOperator: active_operator_id_='{}', hasActive={}",
                   active_operator_id_, !active_operator_id_.empty());
     }
@@ -180,6 +235,7 @@ namespace lfs::vis {
         LOG_DEBUG("EditorContext::clearActiveOperator: was '{}'", active_operator_id_);
         active_operator_id_.clear();
         gizmo_type_.clear();
+        app_store().active_tool.set(std::string(activeToolId(active_tool_)));
     }
 
     void EditorContext::setGizmoType(const std::string& type) { gizmo_type_ = type; }

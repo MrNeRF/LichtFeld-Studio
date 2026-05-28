@@ -3,20 +3,26 @@
     <link type="text/rcss" href="menubar.rcss"/>
 </head>
 <body id="body" data-model="menu_bar">
-    <div id="menu-items">
-        <span class="menu-label"
-              data-for="menu : menu_labels"
-              data-class-active="menu.active"
-              data-attr-data-index="menu.index">{{ menu.label }}</span>
+    <div id="menu-row">
+        <div id="menu-items">
+            <span class="menu-label"
+                  data-for="menu : menu_labels"
+                  data-class-active="menu.active"
+                  data-attr-data-index="menu.index">{{ menu.label }}</span>
+        </div>
+        <img id="brand-logo" />
     </div>
     <div id="bottom-border"></div>
     <div id="dropdown-overlay"></div>
     <div id="dropdown-container">
-        <div class="dropdown-popup">
+        <div id="dropdown-popup" class="dropdown-popup">
             <div data-for="item : dropdown_items">
                 <div class="menu-separator" data-if="item.separator_before"></div>
-                <div class="submenu-container" data-if="item.has_children">
-                    <div class="menu-item">
+                <div class="submenu-container"
+                     data-if="item.has_children"
+                     data-class-open="item.submenu_open"
+                     data-attr-data-root-index="item.index">
+                    <div class="menu-item" data-class-active="item.submenu_open">
                         <span class="label">{{ item.label }}</span>
                         <span class="submenu-arrow">&gt;</span>
                     </div>

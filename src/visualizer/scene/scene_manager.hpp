@@ -19,6 +19,7 @@
 #include "training/components/ppisp_controller_pool.hpp"
 #include <expected>
 #include <filesystem>
+#include <glm/vec2.hpp>
 #include <mutex>
 #include <optional>
 
@@ -248,9 +249,9 @@ namespace lfs::vis {
                                                   int camera_index = 0);
         [[nodiscard]] SelectionResult selectRect(float x0, float y0, float x1, float y1, const std::string& mode,
                                                  int camera_index = 0);
-        [[nodiscard]] SelectionResult selectPolygon(const std::vector<float>& points, const std::string& mode,
+        [[nodiscard]] SelectionResult selectPolygon(const std::vector<glm::vec2>& points, const std::string& mode,
                                                     int camera_index = 0);
-        [[nodiscard]] SelectionResult selectLasso(const std::vector<float>& points, const std::string& mode,
+        [[nodiscard]] SelectionResult selectLasso(const std::vector<glm::vec2>& points, const std::string& mode,
                                                   int camera_index = 0);
         [[nodiscard]] SelectionResult selectRing(float x, float y, const std::string& mode, int camera_index = 0);
         [[nodiscard]] SelectionResult applySelectionMask(const std::vector<uint8_t>& mask);

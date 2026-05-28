@@ -8,6 +8,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "cuda/image_format_kernels.cuh"
+#include "diagnostics/vram_profiler.hpp"
 #include "io/nvcodec_image_loader.hpp"
 
 #include <cuda_runtime.h>
@@ -24,6 +25,40 @@ namespace lfs::io {
 
         constexpr int CACHE_HASH_LENGTH = 8;
         constexpr int DEFAULT_DECODER_POOL_SIZE = 8;
+
+        [[nodiscard]] size_t tensor_reserved_bytes(const lfs::core::Tensor& tensor) {
+            if (!tensor.is_valid()) {
+                return 0;
+            }
+
+            if (tensor.capacity() == 0 || tensor.ndim() == 0) {
+                return tensor.bytes();
+            }
+
+            size_t row_elems = 1;
+            if (tensor.ndim() > 1) {
+                for (size_t dim = 1; dim < tensor.ndim(); ++dim) {
+                    row_elems *= tensor.shape()[dim];
+                }
+            }
+
+            return tensor.capacity() * row_elems * lfs::core::dtype_size(tensor.dtype());
+        }
+
+        void subtract_clamped(std::atomic<size_t>& value, const size_t amount) {
+            if (amount == 0) {
+                return;
+            }
+
+            auto current = value.load(std::memory_order_relaxed);
+            while (current > 0) {
+                const size_t next = current > amount ? current - amount : 0;
+                if (value.compare_exchange_weak(
+                        current, next, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+                    return;
+                }
+            }
+        }
 
         struct NvCodecLoaderCacheEntry {
             std::shared_ptr<NvCodecImageLoader> instance;
@@ -240,10 +275,15 @@ namespace lfs::io {
     } // namespace
 
     PipelinedImageLoader::PipelinedImageLoader(PipelinedLoaderConfig config)
-        : config_(std::move(config)) {
+        : config_(std::move(config)),
+          output_queue_(std::max<size_t>(1, config_.output_queue_size)) {
 
-        LOG_INFO("[PipelinedImageLoader] batch_size={}, prefetch={}, io_threads={}, cold_threads={}",
-                 config_.jpeg_batch_size, config_.prefetch_count, config_.io_threads, config_.cold_process_threads);
+        LOG_INFO("[PipelinedImageLoader] batch_size={}, prefetch={}, output_queue={}, io_threads={}, cold_threads={}",
+                 config_.jpeg_batch_size,
+                 config_.prefetch_count,
+                 config_.output_queue_size,
+                 config_.io_threads,
+                 config_.cold_process_threads);
 
         const bool nvcodec_available = is_nvcodec_available();
 
@@ -337,21 +377,26 @@ namespace lfs::io {
 
     ReadyImage PipelinedImageLoader::get() {
         auto result = output_queue_.pop();
+        release_output_ready_bytes(result);
         in_flight_.fetch_sub(1, std::memory_order_acq_rel);
         return result;
     }
 
     std::optional<ReadyImage> PipelinedImageLoader::try_get() {
         auto result = output_queue_.try_pop();
-        if (result)
+        if (result) {
+            release_output_ready_bytes(*result);
             in_flight_.fetch_sub(1, std::memory_order_acq_rel);
+        }
         return result;
     }
 
     std::optional<ReadyImage> PipelinedImageLoader::try_get_for(std::chrono::milliseconds timeout) {
         auto result = output_queue_.try_pop_for(timeout);
-        if (result)
+        if (result) {
+            release_output_ready_bytes(*result);
             in_flight_.fetch_sub(1, std::memory_order_acq_rel);
+        }
         return result;
     }
 
@@ -372,6 +417,7 @@ namespace lfs::io {
             std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
             pending_pairs_.clear();
         }
+        reset_pipeline_gpu_bytes();
         in_flight_ = 0;
     }
 
@@ -388,7 +434,21 @@ namespace lfs::io {
         s.hot_queue_size = hot_queue_.size();
         s.cold_queue_size = cold_queue_.size();
         s.output_queue_size = output_queue_.size();
+        const auto gpu_stats = get_gpu_memory_stats();
+        s.output_image_bytes = gpu_stats.output_image_bytes;
+        s.output_mask_bytes = gpu_stats.output_mask_bytes;
+        s.pending_image_bytes = gpu_stats.pending_image_bytes;
+        s.pending_mask_bytes = gpu_stats.pending_mask_bytes;
         return s;
+    }
+
+    PipelinedImageLoader::GpuMemoryStats PipelinedImageLoader::get_gpu_memory_stats() const {
+        return {
+            .output_image_bytes = output_image_bytes_.load(std::memory_order_acquire),
+            .output_mask_bytes = output_mask_bytes_.load(std::memory_order_acquire),
+            .pending_image_bytes = pending_image_bytes_.load(std::memory_order_acquire),
+            .pending_mask_bytes = pending_mask_bytes_.load(std::memory_order_acquire),
+        };
     }
 
     lfs::core::Tensor PipelinedImageLoader::load_image_immediate(
@@ -469,6 +529,7 @@ namespace lfs::io {
                 img_data, lfs::core::TensorShape({H, W, C}),
                 lfs::core::Device::CPU, lfs::core::DataType::UInt8);
             auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::CUDA);
+            gpu_uint8.set_name("io.image.gpu_staging");
             if (used_stbi)
                 stbi_image_free(img_data);
             else
@@ -478,6 +539,7 @@ namespace lfs::io {
                 decoded = lfs::core::Tensor::empty(
                     lfs::core::TensorShape({C, H, W}),
                     lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                decoded.set_name("io.image.gpu_uint8");
                 cuda::launch_uint8_hwc_to_uint8_chw(
                     reinterpret_cast<const uint8_t*>(gpu_uint8.data_ptr()),
                     reinterpret_cast<uint8_t*>(decoded.data_ptr()),
@@ -486,6 +548,7 @@ namespace lfs::io {
                 decoded = lfs::core::Tensor::zeros(
                     lfs::core::TensorShape({C, H, W}),
                     lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+                decoded.set_name("io.image.gpu_float");
                 cuda::launch_uint8_hwc_to_float32_chw(
                     reinterpret_cast<const uint8_t*>(gpu_uint8.data_ptr()),
                     reinterpret_cast<float*>(decoded.data_ptr()),
@@ -540,6 +603,7 @@ namespace lfs::io {
                 decoded = lfs::core::Tensor::zeros(
                     lfs::core::TensorShape({C, H, W}),
                     lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+                decoded.set_name("io.image.gpu_float");
                 cuda::launch_uint8_hwc_to_float32_chw(
                     reinterpret_cast<const uint8_t*>(gpu_uint8.data_ptr()),
                     reinterpret_cast<float*>(decoded.data_ptr()),
@@ -709,6 +773,51 @@ namespace lfs::io {
         files_being_written_.erase(cache_key);
     }
 
+    void PipelinedImageLoader::add_output_ready_bytes(const ReadyImage& ready) {
+        output_image_bytes_.fetch_add(tensor_reserved_bytes(ready.tensor), std::memory_order_acq_rel);
+        if (ready.mask) {
+            output_mask_bytes_.fetch_add(tensor_reserved_bytes(*ready.mask), std::memory_order_acq_rel);
+        }
+    }
+
+    void PipelinedImageLoader::release_output_ready_bytes(const ReadyImage& ready) {
+        subtract_clamped(output_image_bytes_, tensor_reserved_bytes(ready.tensor));
+        if (ready.mask) {
+            subtract_clamped(output_mask_bytes_, tensor_reserved_bytes(*ready.mask));
+        }
+    }
+
+    void PipelinedImageLoader::push_output_ready(ReadyImage ready) {
+        const size_t image_bytes = tensor_reserved_bytes(ready.tensor);
+        const size_t mask_bytes = ready.mask ? tensor_reserved_bytes(*ready.mask) : 0;
+        output_image_bytes_.fetch_add(image_bytes, std::memory_order_acq_rel);
+        if (mask_bytes > 0) {
+            output_mask_bytes_.fetch_add(mask_bytes, std::memory_order_acq_rel);
+        }
+        if (!output_queue_.push(std::move(ready))) {
+            subtract_clamped(output_image_bytes_, image_bytes);
+            subtract_clamped(output_mask_bytes_, mask_bytes);
+        }
+    }
+
+    void PipelinedImageLoader::erase_pending_pair_locked(
+        std::unordered_map<size_t, PendingPair>::iterator it) {
+        if (it == pending_pairs_.end()) {
+            return;
+        }
+
+        subtract_clamped(pending_image_bytes_, it->second.image_bytes);
+        subtract_clamped(pending_mask_bytes_, it->second.mask_bytes);
+        pending_pairs_.erase(it);
+    }
+
+    void PipelinedImageLoader::reset_pipeline_gpu_bytes() {
+        output_image_bytes_.store(0, std::memory_order_release);
+        output_mask_bytes_.store(0, std::memory_order_release);
+        pending_image_bytes_.store(0, std::memory_order_release);
+        pending_mask_bytes_.store(0, std::memory_order_release);
+    }
+
     void PipelinedImageLoader::try_complete_pair(
         size_t sequence_id,
         std::optional<lfs::core::Tensor> image,
@@ -716,12 +825,22 @@ namespace lfs::io {
         cudaStream_t stream) {
 
         std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
-        auto& pair = pending_pairs_[sequence_id];
+        auto insert_result = pending_pairs_.try_emplace(sequence_id);
+        auto it = insert_result.first;
+        auto& pair = it->second;
 
-        if (image)
+        if (image) {
+            subtract_clamped(pending_image_bytes_, pair.image_bytes);
             pair.image = std::move(*image);
-        if (mask)
+            pair.image_bytes = tensor_reserved_bytes(*pair.image);
+            pending_image_bytes_.fetch_add(pair.image_bytes, std::memory_order_acq_rel);
+        }
+        if (mask) {
+            subtract_clamped(pending_mask_bytes_, pair.mask_bytes);
             pair.mask = std::move(*mask);
+            pair.mask_bytes = tensor_reserved_bytes(*pair.mask);
+            pending_mask_bytes_.fetch_add(pair.mask_bytes, std::memory_order_acq_rel);
+        }
         if (stream)
             pair.stream = stream;
 
@@ -730,11 +849,12 @@ namespace lfs::io {
         const bool mask_ready = !pair.mask_expected || mask_has_value;
 
         if (image_ready && mask_ready) {
-            output_queue_.push({sequence_id,
-                                std::move(*pair.image),
-                                mask_has_value ? std::optional(std::move(*pair.mask)) : std::nullopt,
-                                pair.stream});
-            pending_pairs_.erase(sequence_id);
+            ReadyImage ready{sequence_id,
+                             std::move(*pair.image),
+                             mask_has_value ? std::optional(std::move(*pair.mask)) : std::nullopt,
+                             pair.stream};
+            erase_pending_pair_locked(it);
+            push_output_ready(std::move(ready));
 
             std::lock_guard<std::mutex> stats_lock(stats_mutex_);
             ++stats_.total_images_loaded;
@@ -762,7 +882,9 @@ namespace lfs::io {
             auto fail_image_request = [&] {
                 {
                     std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
-                    pending_pairs_.erase(request.sequence_id);
+                    if (auto it = pending_pairs_.find(request.sequence_id); it != pending_pairs_.end()) {
+                        erase_pending_pair_locked(it);
+                    }
                 }
                 in_flight_.fetch_sub(1, std::memory_order_acq_rel);
             };
@@ -772,11 +894,12 @@ namespace lfs::io {
                 if (auto it = pending_pairs_.find(request.sequence_id); it != pending_pairs_.end()) {
                     it->second.mask_expected = false;
                     if (it->second.image.has_value()) {
-                        output_queue_.push({request.sequence_id,
-                                            std::move(*it->second.image),
-                                            std::nullopt,
-                                            it->second.stream});
-                        pending_pairs_.erase(it);
+                        ReadyImage ready{request.sequence_id,
+                                         std::move(*it->second.image),
+                                         std::nullopt,
+                                         it->second.stream};
+                        erase_pending_pair_locked(it);
+                        push_output_ready(std::move(ready));
                     }
                 }
             };
@@ -961,6 +1084,7 @@ namespace lfs::io {
     }
 
     void PipelinedImageLoader::gpu_batch_decode_thread_func() {
+        LFS_VRAM_SCOPE("io.image_loader");
         std::vector<PrefetchedImage> batch;
         batch.reserve(config_.jpeg_batch_size);
 
@@ -1058,13 +1182,18 @@ namespace lfs::io {
                                     if (auto it = pending_pairs_.find(item.sequence_id); it != pending_pairs_.end()) {
                                         it->second.mask_expected = false;
                                         if (it->second.image.has_value()) {
-                                            output_queue_.push({item.sequence_id, std::move(*it->second.image),
-                                                                std::nullopt, it->second.stream});
-                                            pending_pairs_.erase(it);
+                                            ReadyImage ready{item.sequence_id,
+                                                             std::move(*it->second.image),
+                                                             std::nullopt,
+                                                             it->second.stream};
+                                            erase_pending_pair_locked(it);
+                                            push_output_ready(std::move(ready));
                                         }
                                     }
                                 } else {
-                                    pending_pairs_.erase(item.sequence_id);
+                                    if (auto it = pending_pairs_.find(item.sequence_id); it != pending_pairs_.end()) {
+                                        erase_pending_pair_locked(it);
+                                    }
                                     in_flight_.fetch_sub(1, std::memory_order_acq_rel);
                                 }
                                 continue;
@@ -1094,13 +1223,18 @@ namespace lfs::io {
                                 if (auto it = pending_pairs_.find(item.sequence_id); it != pending_pairs_.end()) {
                                     it->second.mask_expected = false;
                                     if (it->second.image.has_value()) {
-                                        output_queue_.push({item.sequence_id, std::move(*it->second.image),
-                                                            std::nullopt, it->second.stream});
-                                        pending_pairs_.erase(it);
+                                        ReadyImage ready{item.sequence_id,
+                                                         std::move(*it->second.image),
+                                                         std::nullopt,
+                                                         it->second.stream};
+                                        erase_pending_pair_locked(it);
+                                        push_output_ready(std::move(ready));
                                     }
                                 }
                             } else {
-                                pending_pairs_.erase(item.sequence_id);
+                                if (auto it = pending_pairs_.find(item.sequence_id); it != pending_pairs_.end()) {
+                                    erase_pending_pair_locked(it);
+                                }
                                 in_flight_.fetch_sub(1, std::memory_order_acq_rel);
                             }
                             continue;
@@ -1442,7 +1576,9 @@ namespace lfs::io {
                                   lfs::core::path_to_utf8(item.path),
                                   describe_current_exception("non-standard RGB fallback exception"));
                         std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
-                        pending_pairs_.erase(item.sequence_id);
+                        if (auto it = pending_pairs_.find(item.sequence_id); it != pending_pairs_.end()) {
+                            erase_pending_pair_locked(it);
+                        }
                         in_flight_.fetch_sub(1, std::memory_order_acq_rel);
                     }
                 } else if (item.is_mask) {
@@ -1454,11 +1590,12 @@ namespace lfs::io {
                         it->second.mask_expected = false;
                         // If image is already ready, deliver it now
                         if (it->second.image.has_value()) {
-                            output_queue_.push({item.sequence_id,
-                                                std::move(*it->second.image),
-                                                std::nullopt,
-                                                it->second.stream});
-                            pending_pairs_.erase(it);
+                            ReadyImage ready{item.sequence_id,
+                                             std::move(*it->second.image),
+                                             std::nullopt,
+                                             it->second.stream};
+                            erase_pending_pair_locked(it);
+                            push_output_ready(std::move(ready));
                         }
                     }
                 } else {
@@ -1467,7 +1604,9 @@ namespace lfs::io {
                     // Clean up pending_pairs_ to prevent memory leak
                     {
                         std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
-                        pending_pairs_.erase(item.sequence_id);
+                        if (auto it = pending_pairs_.find(item.sequence_id); it != pending_pairs_.end()) {
+                            erase_pending_pair_locked(it);
+                        }
                     }
                     in_flight_.fetch_sub(1, std::memory_order_acq_rel);
                 }

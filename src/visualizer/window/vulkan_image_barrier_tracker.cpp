@@ -4,7 +4,6 @@
 
 #include "vulkan_image_barrier_tracker.hpp"
 
-#ifdef LFS_VULKAN_VIEWER_ENABLED
 namespace lfs::vis {
 
     namespace {
@@ -149,4 +148,3 @@ namespace lfs::vis {
     }
 
 } // namespace lfs::vis
-#endif

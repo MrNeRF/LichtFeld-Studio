@@ -5,6 +5,7 @@
 #include "mcmc.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "kernels/mcmc_kernels.hpp"
 #include "strategy_utils.hpp"
 #include <algorithm>
@@ -133,13 +134,16 @@ namespace lfs::training {
             info.ndim() != 2 ||
             info.shape()[0] < 2 ||
             info.shape()[1] != n) {
-            _splat_data->_densification_info = lfs::core::Tensor::zeros({2, n}, _splat_data->means().device());
+            _splat_data->_densification_info =
+                lfs::core::Tensor::zeros({2, n}, _splat_data->means().device());
+            _splat_data->_densification_info.set_name("splat.densification_info");
         }
 
         if (!_error_score_max.is_valid() ||
             _error_score_max.ndim() != 1 ||
             _error_score_max.numel() != n) {
             _error_score_max = lfs::core::Tensor::zeros({n}, _splat_data->means().device());
+            _error_score_max.set_name("mcmc.error_score_max");
             _error_score_windows = 0;
         }
     }
@@ -159,6 +163,7 @@ namespace lfs::training {
 
     int MCMC::relocate_gs() {
         LOG_TIMER("MCMC::relocate_gs");
+        LFS_TRACE("kernel.mcmc.relocate");
         using namespace lfs::core;
 
         // Get opacities (handle both [N] and [N, 1] shapes)
@@ -354,6 +359,7 @@ namespace lfs::training {
 
     int MCMC::add_new_gs() {
         LOG_TIMER("MCMC::add_new_gs");
+        LFS_TRACE("kernel.densify.duplicate");
         using namespace lfs::core;
 
         if (!_optimizer) {
@@ -596,6 +602,7 @@ namespace lfs::training {
 
     void MCMC::inject_noise() {
         LOG_TIMER("MCMC::inject_noise");
+        LFS_TRACE("kernel.mcmc.add_noise");
         using namespace lfs::core;
 
         // Get current learning rate from optimizer (after scheduler has updated it)
@@ -673,11 +680,14 @@ namespace lfs::training {
             if (n_added > 0) {
                 LOG_DEBUG("MCMC: Added {} new Gaussians at iteration {} (total: {})",
                           n_added, iter, _splat_data->size());
+                LFS_COUNTER_ADD("strategy.mcmc.added", n_added);
             }
             // Release cached pool memory to avoid bloat (important after add_new_gs)
             lfs::core::Tensor::trim_memory_pool();
 
             const size_t n = static_cast<size_t>(_splat_data->size());
+            LFS_GAUGE("model.gaussians.live", n);
+            LFS_GAUGE("model.gaussians.capacity", deleted_mask_capacity(*_splat_data));
 
             if (_error_score_max.numel() < n) {
                 const size_t n_new = n - _error_score_max.numel();
@@ -689,10 +699,13 @@ namespace lfs::training {
             ++_error_score_windows;
             if (_error_score_windows >= 2) {
                 _error_score_max = lfs::core::Tensor::zeros({n}, _splat_data->means().device());
+                _error_score_max.set_name("mcmc.error_score_max");
                 _error_score_windows = 0;
             }
 
-            _splat_data->_densification_info = lfs::core::Tensor::zeros({2, n}, _splat_data->means().device());
+            _splat_data->_densification_info =
+                lfs::core::Tensor::zeros({2, n}, _splat_data->means().device());
+            _splat_data->_densification_info.set_name("splat.densification_info");
         }
 
         // Inject noise to positions every iteration
@@ -736,6 +749,7 @@ namespace lfs::training {
         }
 
         LOG_DEBUG("MCMC: Removing {} Gaussians", n_remove);
+        LFS_COUNTER_ADD("strategy.mcmc.pruned", n_remove);
 
         const Tensor prune_indices = mask.nonzero().squeeze(-1);
 

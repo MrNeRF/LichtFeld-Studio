@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "input/input_bindings.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include <algorithm>
@@ -11,6 +12,7 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <optional>
+#include <ranges>
 #include <unordered_map>
 
 #ifdef _WIN32
@@ -24,7 +26,7 @@ namespace lfs::vis::input {
 
     namespace {
 
-        constexpr int PROFILE_VERSION = 12; // Version 12 adds Shift+scroll as a second BRUSH_RESIZE trigger.
+        constexpr int PROFILE_VERSION = 13; // Version 13 adds CAMERA_SET_HOME action.
         constexpr std::array<ToolMode, 8> ALL_MODES = {
             ToolMode::GLOBAL,
             ToolMode::SELECTION,
@@ -230,7 +232,6 @@ namespace lfs::vis::input {
         const auto config_dir = getConfigDir();
         const auto path = config_dir / (name + ".json");
         if (std::filesystem::exists(path) && loadProfileFromFile(path)) {
-            notifyBindingsChanged();
             return;
         }
 
@@ -454,6 +455,7 @@ namespace lfs::vis::input {
                     saveProfileToFile(config_default);
                 }
             }
+            notifyBindingsChanged();
             return true;
         } catch (const std::exception& e) {
             LOG_ERROR("Failed to load profile: {}", e.what());
@@ -483,7 +485,8 @@ namespace lfs::vis::input {
                 (version < 7 && def.action == Action::BRUSH_RESIZE && !brush_resize_shift_scroll) ||
                 (version < 9 && def.action == Action::CONFIRM_POLYGON) ||
                 (version < 10 && def.action == Action::UNDO_POLYGON_VERTEX) ||
-                (version < 12 && brush_resize_shift_scroll);
+                (version < 12 && brush_resize_shift_scroll) ||
+                (version < 13 && def.action == Action::CAMERA_SET_HOME);
             if (!should_add) {
                 continue;
             }
@@ -823,7 +826,9 @@ namespace lfs::vis::input {
     }
 
     void InputBindings::setBinding(ToolMode mode, Action action, const InputTrigger& trigger) {
-        clearBinding(mode, action);
+        std::erase_if(bindings_, [mode, action](const Binding& b) {
+            return b.mode == mode && b.action == action;
+        });
         bindings_.push_back({mode, trigger, action, getActionName(action)});
         rebuildLookupMaps();
         notifyBindingsChanged();
@@ -870,6 +875,9 @@ namespace lfs::vis::input {
     }
 
     void InputBindings::notifyBindingsChanged() {
+        ++bindings_revision_;
+        if (bindings_revision_ == 0)
+            ++bindings_revision_;
         if (on_bindings_changed_) {
             on_bindings_changed_();
         }
@@ -932,7 +940,10 @@ namespace lfs::vis::input {
             {KeyTrigger{KEY_S, MODIFIER_NONE, true}, Action::CAMERA_MOVE_BACKWARD, "Backward"},
             {KeyTrigger{KEY_A, MODIFIER_NONE, true}, Action::CAMERA_MOVE_LEFT, "Left"},
             {KeyTrigger{KEY_D, MODIFIER_NONE, true}, Action::CAMERA_MOVE_RIGHT, "Right"},
+            {KeyTrigger{KEY_Q, MODIFIER_NONE, true}, Action::CAMERA_MOVE_UP, "Up"},
+            {KeyTrigger{KEY_E, MODIFIER_NONE, true}, Action::CAMERA_MOVE_DOWN, "Down"},
             {KeyTrigger{KEY_H, MODIFIER_NONE}, Action::CAMERA_RESET_HOME, "Home"},
+            {KeyTrigger{KEY_H, MODIFIER_SHIFT}, Action::CAMERA_SET_HOME, "Set home"},
             {KeyTrigger{KEY_F, MODIFIER_NONE}, Action::CAMERA_FOCUS_SELECTION, "Focus selection"},
             {KeyTrigger{KEY_RIGHT, MODIFIER_NONE, true}, Action::CAMERA_NEXT_VIEW, "Next view"},
             {KeyTrigger{KEY_LEFT, MODIFIER_NONE, true}, Action::CAMERA_PREV_VIEW, "Prev view"},
@@ -1076,6 +1087,7 @@ namespace lfs::vis::input {
         case Action::CAMERA_MOVE_UP: return "Move Up";
         case Action::CAMERA_MOVE_DOWN: return "Move Down";
         case Action::CAMERA_RESET_HOME: return "Go to Home";
+        case Action::CAMERA_SET_HOME: return "Set Home";
         case Action::CAMERA_FOCUS_SELECTION: return "Focus Selection";
         case Action::CAMERA_SET_PIVOT: return "Set Pivot";
         case Action::CAMERA_NEXT_VIEW: return "Next Camera View";
@@ -1135,6 +1147,177 @@ namespace lfs::vis::input {
         case Action::PIE_MENU: return "Pie Menu";
         default: return "Unknown";
         }
+    }
+
+    std::string_view actionNameKey(const Action action) {
+        switch (action) {
+        case Action::NONE: return "none";
+        case Action::CAMERA_ORBIT: return "camera_orbit";
+        case Action::CAMERA_PAN: return "camera_pan";
+        case Action::CAMERA_ZOOM: return "camera_zoom";
+        case Action::CAMERA_ROLL: return "camera_roll";
+        case Action::CAMERA_MOVE_FORWARD: return "camera_move_forward";
+        case Action::CAMERA_MOVE_BACKWARD: return "camera_move_backward";
+        case Action::CAMERA_MOVE_LEFT: return "camera_move_left";
+        case Action::CAMERA_MOVE_RIGHT: return "camera_move_right";
+        case Action::CAMERA_MOVE_UP: return "camera_move_up";
+        case Action::CAMERA_MOVE_DOWN: return "camera_move_down";
+        case Action::CAMERA_RESET_HOME: return "camera_reset_home";
+        case Action::CAMERA_SET_HOME: return "camera_set_home";
+        case Action::CAMERA_FOCUS_SELECTION: return "camera_focus_selection";
+        case Action::CAMERA_SET_PIVOT: return "camera_set_pivot";
+        case Action::CAMERA_NEXT_VIEW: return "camera_next_view";
+        case Action::CAMERA_PREV_VIEW: return "camera_prev_view";
+        case Action::CAMERA_SPEED_UP: return "camera_speed_up";
+        case Action::CAMERA_SPEED_DOWN: return "camera_speed_down";
+        case Action::ZOOM_SPEED_UP: return "zoom_speed_up";
+        case Action::ZOOM_SPEED_DOWN: return "zoom_speed_down";
+        case Action::TOGGLE_SPLIT_VIEW: return "toggle_split_view";
+        case Action::TOGGLE_INDEPENDENT_SPLIT_VIEW: return "toggle_independent_split_view";
+        case Action::TOGGLE_GT_COMPARISON: return "toggle_gt_comparison";
+        case Action::TOGGLE_DEPTH_MODE: return "toggle_depth_mode";
+        case Action::CYCLE_PLY: return "cycle_ply";
+        case Action::DELETE_SELECTED: return "delete_selected";
+        case Action::DELETE_NODE: return "delete_node";
+        case Action::UNDO: return "undo";
+        case Action::REDO: return "redo";
+        case Action::SELECT_ALL: return "select_all";
+        case Action::INVERT_SELECTION: return "invert_selection";
+        case Action::DESELECT_ALL: return "deselect_all";
+        case Action::COPY_SELECTION: return "copy_selection";
+        case Action::PASTE_SELECTION: return "paste_selection";
+        case Action::DEPTH_ADJUST_NEAR: return "depth_adjust_near";
+        case Action::DEPTH_ADJUST_FAR: return "depth_adjust_far";
+        case Action::DEPTH_ADJUST_SIDE: return "depth_adjust_side";
+        case Action::TOGGLE_SELECTION_DEPTH_FILTER: return "toggle_selection_depth_filter";
+        case Action::TOGGLE_SELECTION_CROP_FILTER: return "toggle_selection_crop_filter";
+        case Action::BRUSH_RESIZE: return "brush_resize";
+        case Action::CYCLE_BRUSH_MODE: return "cycle_brush_mode";
+        case Action::CONFIRM_POLYGON: return "confirm_polygon";
+        case Action::CANCEL_POLYGON: return "cancel_polygon";
+        case Action::UNDO_POLYGON_VERTEX: return "undo_polygon_vertex";
+        case Action::CYCLE_SELECTION_VIS: return "cycle_selection_vis";
+        case Action::SELECTION_REPLACE: return "selection_replace";
+        case Action::SELECTION_ADD: return "selection_add";
+        case Action::SELECTION_REMOVE: return "selection_remove";
+        case Action::SELECT_MODE_CENTERS: return "select_mode_centers";
+        case Action::SELECT_MODE_RECTANGLE: return "select_mode_rectangle";
+        case Action::SELECT_MODE_POLYGON: return "select_mode_polygon";
+        case Action::SELECT_MODE_LASSO: return "select_mode_lasso";
+        case Action::SELECT_MODE_RINGS: return "select_mode_rings";
+        case Action::SELECT_MODE_COLOR: return "select_mode_color";
+        case Action::APPLY_CROP_BOX: return "apply_crop_box";
+        case Action::NODE_PICK: return "node_pick";
+        case Action::NODE_RECT_SELECT: return "node_rect_select";
+        case Action::TOGGLE_UI: return "toggle_ui";
+        case Action::TOGGLE_FULLSCREEN: return "toggle_fullscreen";
+        case Action::SEQUENCER_ADD_KEYFRAME: return "sequencer_add_keyframe";
+        case Action::SEQUENCER_UPDATE_KEYFRAME: return "sequencer_update_keyframe";
+        case Action::SEQUENCER_PLAY_PAUSE: return "sequencer_play_pause";
+        case Action::TOOL_SELECT: return "tool_select";
+        case Action::TOOL_TRANSLATE: return "tool_translate";
+        case Action::TOOL_ROTATE: return "tool_rotate";
+        case Action::TOOL_SCALE: return "tool_scale";
+        case Action::TOOL_MIRROR: return "tool_mirror";
+        case Action::TOOL_BRUSH: return "tool_brush";
+        case Action::TOOL_ALIGN: return "tool_align";
+        case Action::PIE_MENU: return "pie_menu";
+        default: return {};
+        }
+    }
+
+    std::optional<Action> actionFromName(std::string_view name) {
+        static const auto table = [] {
+            std::unordered_map<std::string, Action> m;
+            for (int i = 0; i <= static_cast<int>(Action::PIE_MENU); ++i) {
+                const auto action = static_cast<Action>(i);
+                const auto key = actionNameKey(action);
+                if (!key.empty())
+                    m.emplace(key, action);
+            }
+            return m;
+        }();
+        std::string normalized(name);
+        std::ranges::transform(normalized, normalized.begin(),
+                               [](unsigned char c) { return std::tolower(c); });
+        const auto it = table.find(normalized);
+        return it == table.end() ? std::nullopt : std::optional<Action>(it->second);
+    }
+
+    namespace {
+        std::string lookupLocale(std::string_view key, std::string_view fallback) {
+            if (key.empty())
+                return std::string(fallback);
+            const std::string key_str(key);
+            const char* const localized = lfs::event::LocalizationManager::getInstance().get(key_str);
+            if (localized && std::string_view(localized) != key_str)
+                return localized;
+            return std::string(fallback);
+        }
+
+        struct ToolModeEntry {
+            ToolMode mode;
+            std::string_view suffix;
+            std::string_view english;
+        };
+        constexpr ToolModeEntry kToolModeEntries[] = {
+            {ToolMode::GLOBAL, "global", "Global"},
+            {ToolMode::SELECTION, "selection", "Selection"},
+            {ToolMode::BRUSH, "brush", "Brush"},
+            {ToolMode::TRANSLATE, "translate", "Translate"},
+            {ToolMode::ROTATE, "rotate", "Rotate"},
+            {ToolMode::SCALE, "scale", "Scale"},
+            {ToolMode::ALIGN, "align", "Align"},
+            {ToolMode::CROP_BOX, "crop_box", "Crop Box"},
+        };
+    } // namespace
+
+    std::string getLocalizedActionName(const Action action) {
+        const auto suffix = actionNameKey(action);
+        if (suffix.empty())
+            return getActionName(action);
+        return lookupLocale(
+            std::string("input_settings.action.").append(suffix),
+            getActionName(action));
+    }
+
+    std::string getLocalizedToolModeName(const ToolMode mode) {
+        for (const auto& [m, suffix, english] : kToolModeEntries) {
+            if (m == mode)
+                return lookupLocale(std::string("input_settings.mode.").append(suffix), english);
+        }
+        return lookupLocale("input_settings.mode.unknown", "Unknown");
+    }
+
+    std::string localizeTriggerDescription(std::string desc) {
+        if (desc.empty())
+            return desc;
+        if (desc == "Unbound")
+            return lookupLocale("input_settings.unbound", desc);
+        if (desc == "Unknown")
+            return lookupLocale("input_settings.trigger.unknown", desc);
+
+        static constexpr std::pair<std::string_view, std::string_view> kSubstitutions[] = {
+            {" Double-Click", "input_settings.trigger.double_click"},
+            {" Drag", "input_settings.trigger.drag"},
+            {"Scroll", "input_settings.trigger.scroll"},
+        };
+        auto& loc = lfs::event::LocalizationManager::getInstance();
+        for (const auto& [needle, key] : kSubstitutions) {
+            const auto pos = desc.find(needle);
+            if (pos == std::string::npos)
+                continue;
+            const std::string key_str(key);
+            const char* const localized = loc.get(key_str);
+            if (localized && std::string_view(localized) != key_str)
+                desc.replace(pos, needle.size(), localized);
+        }
+        return desc;
+    }
+
+    std::string InputBindings::getLocalizedTriggerDescription(const Action action,
+                                                              const ToolMode mode) const {
+        return localizeTriggerDescription(getTriggerDescription(action, mode));
     }
 
     std::string getKeyName(const int key) {
@@ -1642,6 +1825,7 @@ namespace lfs::vis::input {
             return d_movement;
 
         case Action::CAMERA_RESET_HOME:
+        case Action::CAMERA_SET_HOME:
         case Action::CAMERA_FOCUS_SELECTION:
         case Action::CAMERA_NEXT_VIEW:
         case Action::CAMERA_PREV_VIEW:
@@ -1777,6 +1961,7 @@ namespace lfs::vis::input {
         case Action::CAMERA_MOVE_UP:
         case Action::CAMERA_MOVE_DOWN:
         case Action::CAMERA_RESET_HOME:
+        case Action::CAMERA_SET_HOME:
         case Action::CAMERA_FOCUS_SELECTION:
         case Action::CAMERA_SET_PIVOT:
         case Action::CAMERA_NEXT_VIEW:

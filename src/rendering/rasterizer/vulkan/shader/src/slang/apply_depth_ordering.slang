@@ -16,6 +16,7 @@ struct Uniforms {
 layout(binding=0) StructuredBuffer<int32_t> primitive_sort_indices;
 layout(binding=1) StructuredBuffer<int32_t> tiles_touched_in;
 layout(binding=2) RWStructuredBuffer<int32_t> tiles_touched_out;
+layout(binding=3) StructuredBuffer<uint32_t> visible_count_in;
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
@@ -26,6 +27,12 @@ void main(
     uint32_t depth_rank = dispatchThreadID.x;
     if (depth_rank >= uniforms.num_splats)
         return;
+
+    uint32_t visible_count = min(visible_count_in[0], uniforms.num_splats);
+    if (depth_rank >= visible_count) {
+        tiles_touched_out[depth_rank] = 0;
+        return;
+    }
 
     int32_t primitive_idx = primitive_sort_indices[depth_rank];
     tiles_touched_out[depth_rank] = tiles_touched_in[primitive_idx];

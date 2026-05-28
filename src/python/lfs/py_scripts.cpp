@@ -24,7 +24,7 @@ namespace lfs::python {
             []() {
                 auto& state = ScriptState::getInstance();
                 nb::list result;
-                for (const auto& s : state.scripts()) {
+                for (const auto& s : state.scriptsSnapshot()) {
                     nb::dict d;
                     d["path"] = lfs::core::path_to_utf8(s.path);
                     d["enabled"] = s.enabled;
@@ -98,7 +98,7 @@ namespace lfs::python {
 
         scripts.def(
             "count",
-            []() { return ScriptState::getInstance().scripts().size(); },
+            []() { return ScriptState::getInstance().scriptsSnapshot().size(); },
             "Get number of loaded scripts");
     }
 

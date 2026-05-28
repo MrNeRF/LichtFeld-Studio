@@ -5,7 +5,9 @@
 from pathlib import Path
 
 import lichtfeld as lf
+from . import rml_widgets
 from .types import Panel
+from .ui import RuntimeState
 
 __lfs_panel_classes__ = ["ScriptsPanel"]
 __lfs_panel_ids__ = ["lfs.scripts"]
@@ -22,12 +24,13 @@ class ScriptsPanel(Panel):
     template = "rmlui/scripts_panel.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
     size = (520, 0)
-    update_interval_ms = 200
+    update_policy = "dirty"
 
     def __init__(self):
         self._handle = None
         self._has_scripts = False
         self._last_signature = None
+        self._reactive_unsubscribers = []
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("scripts_panel")
@@ -54,10 +57,36 @@ class ScriptsPanel(Panel):
             scripts_list.add_event_listener("change", self._on_scripts_change)
 
         self._refresh_scripts(force=True)
+        self._subscribe_reactive_state()
 
     def on_update(self, doc):
         del doc
         return self._refresh_scripts(force=False)
+
+    def on_unmount(self, doc):
+        self._unsubscribe_reactive_state()
+        doc.remove_data_model("scripts_panel")
+        self._handle = None
+
+    def _subscribe_reactive_state(self):
+        if self._reactive_unsubscribers:
+            return
+
+        self._reactive_unsubscribers = [
+            RuntimeState.scripts_generation.subscribe(lambda _value: self._request_reactive_update()),
+        ]
+
+    def _unsubscribe_reactive_state(self):
+        for unsubscribe in self._reactive_unsubscribers:
+            try:
+                unsubscribe()
+            except Exception:
+                pass
+        self._reactive_unsubscribers = []
+
+    def _request_reactive_update(self):
+        if self._handle:
+            rml_widgets.request_model_update(self._handle)
 
     def _dirty_model(self, *fields):
         if not self._handle:

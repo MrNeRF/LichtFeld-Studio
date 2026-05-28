@@ -79,6 +79,8 @@ namespace {
         EXPECT_TRUE(buffer.keys_pressed.empty());
         EXPECT_FALSE(buffer.mouse_clicked[0]);
         EXPECT_TRUE(buffer.text_codepoints.empty());
+        EXPECT_FALSE(buffer.had_event);
+        EXPECT_FALSE(buffer.mouse_moved);
     }
 
     TEST(FrameInputBufferTest, RecordsMatchingWindowEventsAndUtf8) {
@@ -108,6 +110,44 @@ namespace {
         EXPECT_TRUE(buffer.mouse_clicked[0]);
         ASSERT_EQ(buffer.text_codepoints.size(), 1u);
         EXPECT_EQ(buffer.text_codepoints.front(), 0xE9u);
+        EXPECT_TRUE(buffer.had_event);
+        EXPECT_FALSE(buffer.mouse_moved);
+    }
+
+    TEST(FrameInputBufferTest, TracksMouseWindowAndWakeEventsForRenderDemand) {
+        lfs::vis::FrameInputBuffer buffer;
+        buffer.beginFrame();
+
+        SDL_Event motion_event{};
+        motion_event.type = SDL_EVENT_MOUSE_MOTION;
+        motion_event.motion.windowID = 11;
+        buffer.processEvent(motion_event, 11);
+
+        EXPECT_TRUE(buffer.had_event);
+        EXPECT_TRUE(buffer.mouse_moved);
+        EXPECT_FALSE(buffer.window_event);
+        EXPECT_FALSE(buffer.user_event);
+
+        buffer.beginFrame();
+
+        SDL_Event window_event{};
+        window_event.type = SDL_EVENT_WINDOW_RESIZED;
+        window_event.window.windowID = 11;
+        buffer.processEvent(window_event, 11);
+
+        EXPECT_TRUE(buffer.had_event);
+        EXPECT_TRUE(buffer.window_event);
+        EXPECT_FALSE(buffer.mouse_moved);
+
+        buffer.beginFrame();
+
+        SDL_Event wake_event{};
+        wake_event.type = SDL_EVENT_USER;
+        buffer.processEvent(wake_event, 11);
+
+        EXPECT_TRUE(buffer.had_event);
+        EXPECT_TRUE(buffer.user_event);
+        EXPECT_FALSE(buffer.window_event);
     }
 
 } // namespace

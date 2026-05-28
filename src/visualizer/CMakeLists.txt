@@ -21,6 +21,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         # Core
         visualizer.cpp
         visualizer_impl.cpp
+        app_store.cpp
         core/main_loop.cpp
         core/data_loading_service.cpp
         core/editor_context.cpp
@@ -78,6 +79,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/rml_right_panel.cpp
         gui/rml_shell_frame.cpp
         gui/rml_viewport_overlay.cpp
+        gui/vram_hud_overlay.cpp
         gui/rml_status_bar.cpp
         gui/gpu_memory_query.cpp
         gui/line_renderer.cpp
@@ -215,6 +217,7 @@ target_include_directories(lfs_visualizer
 target_link_libraries(lfs_visualizer
         PRIVATE
         lfs_core
+        lfs_diagnostics
         lfs_video
         lfs_geometry
         lfs_io
@@ -245,66 +248,64 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET PkgConfig::LFS_GTK3)
     target_link_libraries(lfs_visualizer PRIVATE PkgConfig::LFS_GTK3)
 endif()
 
-if(ENABLE_VULKAN_VIEWER)
-    target_sources(lfs_visualizer
-            PRIVATE
-            gui/rmlui/rmlui_vk_backend.cpp
-            rendering/vksplat_input_packer.cpp
-            rendering/vksplat_input_packer_cuda.cu
-            rendering/vksplat_viewport_renderer.cpp
-            rendering/vulkan_external_tensor.cpp
-            rendering/point_cloud_vulkan_renderer.cpp)
-    set(glslang_DIR "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/share/glslang"
-        CACHE PATH "Path to vcpkg-installed glslang config" FORCE)
-    find_package(glslang CONFIG REQUIRED)
+target_sources(lfs_visualizer
+        PRIVATE
+        gui/rmlui/rmlui_vk_backend.cpp
+        rendering/vksplat_input_packer.cpp
+        rendering/vksplat_input_packer_cuda.cu
+        rendering/vksplat_viewport_renderer.cpp
+        rendering/vulkan_external_tensor.cpp
+        rendering/point_cloud_vulkan_renderer.cpp)
+set(glslang_DIR "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/share/glslang"
+    CACHE PATH "Path to vcpkg-installed glslang config" FORCE)
+find_package(glslang CONFIG REQUIRED)
 
-    add_executable(lfs_shader_compiler EXCLUDE_FROM_ALL
-            tools/shader_compiler.cpp)
-    target_compile_features(lfs_shader_compiler PRIVATE cxx_std_23)
-    target_link_libraries(lfs_shader_compiler
-            PRIVATE
-            glslang::glslang
-            glslang::SPIRV
-            glslang::glslang-default-resource-limits)
+add_executable(lfs_shader_compiler EXCLUDE_FROM_ALL
+        tools/shader_compiler.cpp)
+target_compile_features(lfs_shader_compiler PRIVATE cxx_std_23)
+target_link_libraries(lfs_shader_compiler
+        PRIVATE
+        glslang::glslang
+        glslang::SPIRV
+        glslang::glslang-default-resource-limits)
 
-    set(LFS_VIEWPORT_SHADER_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/rendering/resources/viewport")
-    set(LFS_VIEWPORT_SHADER_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/shaders/viewport")
-    target_include_directories(lfs_visualizer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/shaders")
-    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/screen_quad.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/screen_quad.vert.spv.h" kScreenQuadVertSpv)
-    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/scene.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/scene.frag.spv.h" kSceneFragSpv)
-    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/vignette.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/vignette.frag.spv.h" kVignetteFragSpv)
-    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/grid.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/grid.vert.spv.h" kGridVertSpv)
-    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/grid.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/grid.frag.spv.h" kGridFragSpv)
-    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/overlay.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/overlay.vert.spv.h" kOverlayVertSpv)
-    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/overlay.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/overlay.frag.spv.h" kOverlayFragSpv)
-    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/shape_overlay.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/shape_overlay.vert.spv.h" kShapeOverlayVertSpv)
-    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/shape_overlay.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/shape_overlay.frag.spv.h" kShapeOverlayFragSpv)
-    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/textured_overlay.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/textured_overlay.vert.spv.h" kTexturedOverlayVertSpv)
-    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/textured_overlay.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/textured_overlay.frag.spv.h" kTexturedOverlayFragSpv)
-    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/pivot.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/pivot.vert.spv.h" kPivotVertSpv)
-    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/pivot.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/pivot.frag.spv.h" kPivotFragSpv)
-    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/mesh.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/mesh.vert.spv.h" kMeshVertSpv)
-    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/mesh.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/mesh.frag.spv.h" kMeshFragSpv)
-    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/mesh_shadow.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/mesh_shadow.vert.spv.h" kMeshShadowVertSpv)
-    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/mesh_shadow.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/mesh_shadow.frag.spv.h" kMeshShadowFragSpv)
-    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/mesh_wireframe.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/mesh_wireframe.vert.spv.h" kMeshWireframeVertSpv)
-    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/mesh_wireframe.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/mesh_wireframe.frag.spv.h" kMeshWireframeFragSpv)
-    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/environment.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/environment.frag.spv.h" kEnvironmentFragSpv)
-    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/depth_blit.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/depth_blit.frag.spv.h" kDepthBlitFragSpv)
-    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/split_view.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/split_view.frag.spv.h" kSplitViewFragSpv)
-    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/vksplat_compose.comp" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/vksplat_compose.comp.spv.h" kVkSplatComposeCompSpv)
-    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/point_cloud.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/point_cloud.vert.spv.h" kPointCloudVertSpv)
-    compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/point_cloud.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/point_cloud.frag.spv.h" kPointCloudFragSpv)
+set(LFS_VIEWPORT_SHADER_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/rendering/resources/viewport")
+set(LFS_VIEWPORT_SHADER_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/shaders/viewport")
+target_include_directories(lfs_visualizer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/shaders")
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/screen_quad.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/screen_quad.vert.spv.h" kScreenQuadVertSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/scene.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/scene.frag.spv.h" kSceneFragSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/vignette.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/vignette.frag.spv.h" kVignetteFragSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/grid.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/grid.vert.spv.h" kGridVertSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/grid.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/grid.frag.spv.h" kGridFragSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/overlay.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/overlay.vert.spv.h" kOverlayVertSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/overlay.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/overlay.frag.spv.h" kOverlayFragSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/shape_overlay.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/shape_overlay.vert.spv.h" kShapeOverlayVertSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/shape_overlay.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/shape_overlay.frag.spv.h" kShapeOverlayFragSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/textured_overlay.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/textured_overlay.vert.spv.h" kTexturedOverlayVertSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/textured_overlay.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/textured_overlay.frag.spv.h" kTexturedOverlayFragSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/pivot.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/pivot.vert.spv.h" kPivotVertSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/pivot.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/pivot.frag.spv.h" kPivotFragSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/mesh.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/mesh.vert.spv.h" kMeshVertSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/mesh.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/mesh.frag.spv.h" kMeshFragSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/mesh_shadow.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/mesh_shadow.vert.spv.h" kMeshShadowVertSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/mesh_shadow.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/mesh_shadow.frag.spv.h" kMeshShadowFragSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/mesh_wireframe.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/mesh_wireframe.vert.spv.h" kMeshWireframeVertSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/mesh_wireframe.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/mesh_wireframe.frag.spv.h" kMeshWireframeFragSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/environment.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/environment.frag.spv.h" kEnvironmentFragSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/depth_blit.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/depth_blit.frag.spv.h" kDepthBlitFragSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/split_view.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/split_view.frag.spv.h" kSplitViewFragSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/vksplat_compose.comp" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/vksplat_compose.comp.spv.h" kVkSplatComposeCompSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/point_cloud.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/point_cloud.vert.spv.h" kPointCloudVertSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/point_cloud.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/point_cloud.frag.spv.h" kPointCloudFragSpv)
 
-    target_link_libraries(lfs_visualizer
-            PRIVATE
-            Vulkan::Vulkan
-            GPUOpen::VulkanMemoryAllocator
-            volk::volk_headers)
-    target_link_libraries(lfs_visualizer PRIVATE lfs_vulkan_rasterizer)
-    if(WIN32)
-        target_compile_definitions(lfs_visualizer PRIVATE VK_USE_PLATFORM_WIN32_KHR)
-    endif()
+target_link_libraries(lfs_visualizer
+        PRIVATE
+        Vulkan::Vulkan
+        GPUOpen::VulkanMemoryAllocator
+        volk::volk_headers)
+target_link_libraries(lfs_visualizer PRIVATE lfs_vulkan_rasterizer)
+if(WIN32)
+    target_compile_definitions(lfs_visualizer PRIVATE VK_USE_PLATFORM_WIN32_KHR)
 endif()
 
 # RmlUI: on Linux, lfs_visualizer is STATIC and gets linked into both the

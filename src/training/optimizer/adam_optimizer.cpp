@@ -7,6 +7,7 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cuda_runtime.h>
@@ -34,6 +35,7 @@ namespace lfs::training {
           splat_data_(splat_data) {}
 
     void AdamOptimizer::step(const int iteration) {
+        LFS_TRACE("kernel.adam.step");
         if (fused_step_iteration_ == iteration) {
             last_step_zeroed_gradients_ = true;
             return;
@@ -107,6 +109,8 @@ namespace lfs::training {
                 state.exp_avg = lfs::core::Tensor::zeros(param.shape(), param.device());
                 state.exp_avg_sq = lfs::core::Tensor::zeros(param.shape(), param.device());
             }
+            state.exp_avg.set_name("adam." + name + ".exp_avg");
+            state.exp_avg_sq.set_name("adam." + name + ".exp_avg_sq");
             state.grad = {};
             state.capacity = alloc_cap;
             state.size = param_size;
@@ -238,6 +242,7 @@ namespace lfs::training {
         state.grad = (alloc_cap > param_size)
                          ? lfs::core::Tensor::zeros_direct(param.shape(), alloc_cap)
                          : lfs::core::Tensor::zeros(param.shape(), param.device());
+        state.grad.set_name("adam." + name + ".grad");
         state.size = param_size;
         state.capacity = std::max(state.capacity, alloc_cap);
     }
@@ -670,7 +675,19 @@ namespace lfs::training {
         }
 
         const size_t n_new = new_values.shape()[0];
-        param = lfs::core::Tensor::cat({param, new_values}, 0);
+        if (n_new == 0) {
+            return;
+        }
+
+        const size_t old_size = param.shape()[0];
+        const size_t new_size = old_size + n_new;
+        if (param.capacity() >= new_size) {
+            param.append_zeros(n_new);
+            auto appended = param.slice(0, old_size, new_size);
+            appended.copy_from(new_values);
+        } else {
+            param = lfs::core::Tensor::cat({param, new_values}, 0);
+        }
         extend_state_for_new_params(type, n_new);
     }
 

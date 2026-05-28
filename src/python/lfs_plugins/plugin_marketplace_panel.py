@@ -20,6 +20,7 @@ from .marketplace import (
 )
 from .plugin import PluginInfo, PluginState
 from .types import Panel
+from .ui import RuntimeState
 
 __lfs_panel_classes__ = ["PluginMarketplacePanel"]
 __lfs_panel_ids__ = ["lfs.plugin_marketplace"]
@@ -77,7 +78,7 @@ class PluginMarketplacePanel(Panel):
     template = "rmlui/plugin_marketplace.rml"
     height_mode = lf.ui.PanelHeightMode.FILL
     size = (770, 560)
-    update_interval_ms = 100
+    update_policy = "dirty"
 
     def __init__(self):
         self._catalog = PluginMarketplaceCatalog()
@@ -114,6 +115,13 @@ class PluginMarketplacePanel(Panel):
         self._last_lang = ""
         self._last_grid_signature: Optional[Tuple] = None
         self._escape_revert = w.EscapeRevertController()
+        self._reactive_unsubscribers = []
+        self._model_update_scheduled = False
+        self._dismiss_timers = {}
+
+        set_catalog_on_change = getattr(self._catalog, "set_on_change", None)
+        if callable(set_catalog_on_change):
+            set_catalog_on_change(self._schedule_model_update)
 
     # ── Data model ────────────────────────────────────────────
 
@@ -159,6 +167,7 @@ class PluginMarketplacePanel(Panel):
             self._install_filter_idx = idx
             self._entries_dirty = True
             self._needs_resort = True
+            self._request_model_update()
 
     def _set_sort_idx(self, v):
         try:
@@ -169,6 +178,7 @@ class PluginMarketplacePanel(Panel):
             self._sort_idx = idx
             self._entries_dirty = True
             self._needs_resort = True
+            self._request_model_update()
 
     # ── Lifecycle ─────────────────────────────────────────────
 
@@ -211,6 +221,94 @@ class PluginMarketplacePanel(Panel):
                 self._restore_manual_url,
             )
         self._sync_view_mode_controls(doc)
+        self._subscribe_reactive_state()
+        self._request_model_update()
+
+    def on_unmount(self, doc):
+        self._unsubscribe_reactive_state()
+        self._cancel_dismiss_timers()
+        self._escape_revert.clear()
+        self._doc = None
+        self._handle = None
+        if doc:
+            doc.remove_data_model("plugin_marketplace")
+
+    def _subscribe_reactive_state(self):
+        if self._reactive_unsubscribers:
+            return
+
+        self._reactive_unsubscribers = [
+            RuntimeState.language_generation.subscribe(lambda _value: self._schedule_model_update()),
+        ]
+
+    def _unsubscribe_reactive_state(self):
+        for unsubscribe in self._reactive_unsubscribers:
+            try:
+                unsubscribe()
+            except Exception:
+                pass
+        self._reactive_unsubscribers = []
+
+    def _request_model_update(self):
+        if self._handle:
+            w.request_model_update(self._handle)
+
+    def _schedule_model_update(self):
+        with self._lock:
+            if self._model_update_scheduled:
+                return
+            self._model_update_scheduled = True
+
+        def run_update():
+            with self._lock:
+                self._model_update_scheduled = False
+            self._request_model_update()
+
+        scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
+        if not callable(scheduler):
+            scheduler = getattr(lf.ui, "_run_on_ui_thread", None)
+
+        if callable(scheduler):
+            try:
+                scheduler(run_update)
+                return
+            except Exception:
+                pass
+
+        with self._lock:
+            self._model_update_scheduled = False
+        if threading.current_thread() is threading.main_thread():
+            run_update()
+            return
+        request_redraw = getattr(lf.ui, "request_redraw", None)
+        if callable(request_redraw):
+            try:
+                request_redraw()
+            except Exception:
+                pass
+
+    def _schedule_card_dismiss(self, card_id: str, phase: CardOpPhase):
+        delay = SUCCESS_DISMISS_SEC if phase == CardOpPhase.SUCCESS else ERROR_DISMISS_SEC
+        key = (card_id, phase.value)
+
+        timer = threading.Timer(delay + 0.05, self._schedule_model_update)
+        timer.daemon = True
+        with self._lock:
+            previous = self._dismiss_timers.pop(key, None)
+            self._dismiss_timers[key] = timer
+        if previous is not None:
+            previous.cancel()
+        timer.start()
+
+    def _cancel_dismiss_timers(self):
+        with self._lock:
+            timers = list(self._dismiss_timers.values())
+            self._dismiss_timers.clear()
+        for timer in timers:
+            try:
+                timer.cancel()
+            except Exception:
+                pass
 
     def on_update(self, doc):
         from .manager import PluginManager
@@ -1051,6 +1149,7 @@ class PluginMarketplacePanel(Panel):
 
         prefs.set("load_on_startup", checked)
         self._entries_dirty = True
+        self._request_model_update()
 
     def _set_git_checkout_preference(self, element, card_id: str):
         cb_el = self._find_element_with_attr(element, "type", "checkbox")
@@ -1058,15 +1157,21 @@ class PluginMarketplacePanel(Panel):
         if self._git_checkout_selected.get(card_id, False) == checked:
             return
         self._git_checkout_selected[card_id] = checked
+        self._request_model_update()
 
     def _set_view_mode(self, view_mode: str):
-        if view_mode not in _VALID_VIEW_MODES or view_mode == self._view_mode:
+        if view_mode not in _VALID_VIEW_MODES:
+            return
+        if view_mode == self._view_mode:
+            if self._doc:
+                self._sync_view_mode_controls(self._doc)
             return
         self._view_mode = view_mode
         self._entries_dirty = True
         self._last_grid_signature = None
         if self._doc:
             self._sync_view_mode_controls(self._doc)
+        self._request_model_update()
 
     def _sync_view_mode_controls(self, doc):
         tr = lf.ui.tr
@@ -1152,6 +1257,7 @@ class PluginMarketplacePanel(Panel):
     def _invalidate_discover_cache(self):
         self._discover_cache = None
         self._entries_dirty = True
+        self._schedule_model_update()
 
     def _get_discovered_plugins(self, mgr) -> List[PluginInfo]:
         cache = self._discover_cache
@@ -1256,6 +1362,7 @@ class PluginMarketplacePanel(Panel):
                 return
             state = CardOpState(phase=CardOpPhase.IN_PROGRESS)
             self._card_ops[card_id] = state
+        self._schedule_model_update()
 
         def on_progress(msg: str):
             with self._lock:
@@ -1264,6 +1371,7 @@ class PluginMarketplacePanel(Panel):
                 state.output_lines.append(msg)
                 if len(state.output_lines) > MAX_OUTPUT_LINES:
                     state.output_lines = state.output_lines[-MAX_OUTPUT_LINES:]
+            self._schedule_model_update()
 
         def worker():
             try:
@@ -1278,6 +1386,8 @@ class PluginMarketplacePanel(Panel):
                         state.message = success_msg
                     state.phase = CardOpPhase.SUCCESS
                     state.finished_at = time.monotonic()
+                self._schedule_card_dismiss(card_id, CardOpPhase.SUCCESS)
+                self._schedule_model_update()
             except Exception as e:
                 detail = str(e).strip()
                 with self._lock:
@@ -1287,6 +1397,8 @@ class PluginMarketplacePanel(Panel):
                         state.message = error_prefix
                     state.phase = CardOpPhase.ERROR
                     state.finished_at = time.monotonic()
+                self._schedule_card_dismiss(card_id, CardOpPhase.ERROR)
+                self._schedule_model_update()
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1334,6 +1446,8 @@ class PluginMarketplacePanel(Panel):
                     message=tr("plugin_manager.error.enter_github_url"),
                     finished_at=time.monotonic(),
                 )
+            self._schedule_card_dismiss(card_id, CardOpPhase.ERROR)
+            self._schedule_model_update()
             return
 
         def do_install(on_progress):
@@ -1388,18 +1502,24 @@ class PluginMarketplacePanel(Panel):
                     state.phase = CardOpPhase.ERROR
                     state.message = tr("plugin_manager.status.unload_failed")
                     state.finished_at = time.monotonic()
+                self._schedule_card_dismiss(card_id, CardOpPhase.ERROR)
+                self._schedule_model_update()
                 return
             with self._lock:
                 state = self._card_ops.setdefault(card_id, CardOpState())
                 state.phase = CardOpPhase.SUCCESS
                 state.message = tr("plugin_manager.status.unloaded").format(name=name)
                 state.finished_at = time.monotonic()
+            self._schedule_card_dismiss(card_id, CardOpPhase.SUCCESS)
+            self._schedule_model_update()
         except Exception as e:
             with self._lock:
                 state = self._card_ops.setdefault(card_id, CardOpState())
                 state.phase = CardOpPhase.ERROR
                 state.message = f"{tr('plugin_manager.status.unload_failed')}: {e}"
                 state.finished_at = time.monotonic()
+            self._schedule_card_dismiss(card_id, CardOpPhase.ERROR)
+            self._schedule_model_update()
 
     def _reload_plugin(self, mgr, name: str, card_id: str):
         import lichtfeld as lf
@@ -1412,6 +1532,8 @@ class PluginMarketplacePanel(Panel):
                 state.phase = CardOpPhase.ERROR
                 state.message = tr("plugin_manager.status.unload_failed")
                 state.finished_at = time.monotonic()
+            self._schedule_card_dismiss(card_id, CardOpPhase.ERROR)
+            self._schedule_model_update()
             return
 
         def do_load(on_progress):

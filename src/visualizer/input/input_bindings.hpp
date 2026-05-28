@@ -13,6 +13,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -44,7 +45,7 @@ namespace lfs::vis::input {
         CAMERA_MOVE_RIGHT,
         CAMERA_MOVE_UP,
         CAMERA_MOVE_DOWN,
-        CAMERA_RESET_HOME,
+        CAMERA_SET_HOME,
         CAMERA_FOCUS_SELECTION,
         CAMERA_SET_PIVOT,
         CAMERA_NEXT_VIEW,
@@ -114,6 +115,8 @@ namespace lfs::vis::input {
         // Pie menu
         PIE_MENU,
         DEPTH_ADJUST_NEAR, // Deprecated: migrated to DEPTH_ADJUST_FAR on load
+        CAMERA_RESET_HOME,
+
     };
 
     enum class ShortcutScope : uint8_t {
@@ -258,6 +261,7 @@ namespace lfs::vis::input {
         bool saveProfileToFile(const std::filesystem::path& path) const;
         std::vector<std::string> getAvailableProfiles() const;
         const std::string& getCurrentProfileName() const { return current_profile_name_; }
+        std::uint64_t getBindingsRevision() const { return bindings_revision_; }
 
         static std::filesystem::path getConfigDir();
 
@@ -274,6 +278,8 @@ namespace lfs::vis::input {
         std::optional<InputTrigger> getTriggerForAction(Action action, ToolMode mode = ToolMode::GLOBAL) const;
         std::optional<InputTrigger> getEffectiveTriggerForAction(Action action, ToolMode mode = ToolMode::GLOBAL) const;
         std::string getTriggerDescription(Action action, ToolMode mode = ToolMode::GLOBAL) const;
+        [[nodiscard]] std::string getLocalizedTriggerDescription(
+            Action action, ToolMode mode = ToolMode::GLOBAL) const;
 
         // Get the key code for a continuous action (returns -1 if not a key binding)
         int getKeyForAction(Action action, ToolMode mode = ToolMode::GLOBAL) const;
@@ -317,6 +323,7 @@ namespace lfs::vis::input {
 
         std::string current_profile_name_;
         std::vector<Binding> bindings_;
+        std::uint64_t bindings_revision_ = 0;
 
         using KeyMapKey = std::tuple<ToolMode, int, int>;
         using MouseMapKey = std::tuple<ToolMode, MouseButton, int, bool>;
@@ -348,5 +355,11 @@ namespace lfs::vis::input {
     LFS_VIS_API std::string getMouseButtonName(MouseButton button);
     LFS_VIS_API std::string getModifierString(int modifiers);
     [[nodiscard]] LFS_VIS_API ShortcutScope shortcutScopeForAction(Action action);
+
+    [[nodiscard]] LFS_VIS_API std::string_view actionNameKey(Action action);
+    [[nodiscard]] LFS_VIS_API std::optional<Action> actionFromName(std::string_view name);
+    [[nodiscard]] LFS_VIS_API std::string getLocalizedActionName(Action action);
+    [[nodiscard]] LFS_VIS_API std::string getLocalizedToolModeName(ToolMode mode);
+    [[nodiscard]] LFS_VIS_API std::string localizeTriggerDescription(std::string description);
 
 } // namespace lfs::vis::input

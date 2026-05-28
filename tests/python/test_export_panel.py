@@ -114,6 +114,27 @@ class _HandleStub:
     def dirty_all(self):
         self.dirty_fields.append("__all__")
 
+    def request_update(self):
+        self.dirty_fields.append("__update__")
+
+
+class _SignalStub:
+    def __init__(self):
+        self.callbacks = []
+
+    def subscribe(self, callback):
+        self.callbacks.append(callback)
+
+        def unsubscribe():
+            if callback in self.callbacks:
+                self.callbacks.remove(callback)
+
+        return unsubscribe
+
+    def emit(self, value):
+        for callback in list(self.callbacks):
+            callback(value)
+
 
 def test_export_panel_builds_format_and_model_records(export_panel_module):
     module, state = export_panel_module
@@ -144,6 +165,8 @@ def test_export_panel_builds_format_and_model_records(export_panel_module):
         {"name": "House", "selected": False, "count_text": "(64)"},
     ]
     assert panel._has_models is True
+    assert panel.update_policy == "dirty"
+    assert "update_interval_ms" not in module.ExportPanel.__dict__
 
 
 def test_export_panel_seeds_selection_from_scene_nodes(export_panel_module):
@@ -185,6 +208,35 @@ def test_export_panel_progress_updates_bound_value(export_panel_module):
     ]
 
 
+def test_export_panel_progress_prefers_native_store(export_panel_module, monkeypatch):
+    module, state = export_panel_module
+    panel = module.ExportPanel()
+    panel._handle = _HandleStub()
+    state.export_state = {
+        "active": True,
+        "progress": 0.1,
+        "stage": "legacy",
+        "format": "legacy",
+    }
+    monkeypatch.setattr(
+        module,
+        "_native_store_value",
+        lambda field, fallback: {
+            "active": True,
+            "progress": 0.75,
+            "stage": "native",
+            "format": "SPZ",
+        }
+        if field == "export_progress_state"
+        else fallback,
+    )
+
+    assert panel._update_export_progress() is True
+    assert panel._progress_value == "0.75"
+    assert panel._cached_export_state["stage"] == "native"
+    assert panel._cached_export_state["format"] == "SPZ"
+
+
 def test_export_panel_closes_when_export_finishes(export_panel_module):
     module, state = export_panel_module
     panel = module.ExportPanel()
@@ -196,6 +248,69 @@ def test_export_panel_closes_when_export_finishes(export_panel_module):
     assert panel._exporting is False
     assert panel._selection_seeded is False
     assert state.set_panel_enabled_calls == [("lfs.export", False)]
+
+
+def test_export_panel_does_not_register_failed_export(export_panel_module):
+    module, state = export_panel_module
+    panel = module.ExportPanel()
+    panel._exporting = True
+    panel._last_export_path = "/tmp/failed.ply"
+    panel._last_export_format = module.ExportFormat.PLY
+    registered = []
+    panel._register_export = lambda path, fmt: registered.append((path, fmt))
+    state.export_state = {
+        "active": False,
+        "stage": "Failed",
+        "error": "disk full",
+        "format": "PLY",
+    }
+
+    assert panel._update_export_progress() is True
+    assert registered == []
+    assert panel._last_export_path is None
+    assert panel._last_export_format is None
+
+
+def test_export_panel_store_subscriptions_mark_panel_dirty(export_panel_module, monkeypatch):
+    module, _state = export_panel_module
+    scene_signal = _SignalStub()
+    export_signal = _SignalStub()
+    language_signal = _SignalStub()
+    monkeypatch.setattr(
+        module,
+        "RuntimeState",
+        SimpleNamespace(
+            scene_generation=scene_signal,
+            export_progress_state=export_signal,
+            language_generation=language_signal,
+        ),
+    )
+    panel = module.ExportPanel()
+    panel._handle = _HandleStub()
+    panel._last_node_key = ("stale",)
+    panel._last_colmap_key = ("stale",)
+    panel._last_colmap_source_path = "/old/sparse"
+
+    panel._subscribe_reactive_state()
+    export_signal.emit({"active": True})
+
+    assert panel._handle.dirty_fields == ["__update__"]
+
+    scene_signal.emit(1)
+
+    assert panel._last_node_key is None
+    assert panel._last_colmap_key is None
+    assert panel._last_colmap_source_path == ""
+    assert panel._handle.dirty_fields == ["__update__", "__update__"]
+
+    language_signal.emit(1)
+
+    assert panel._handle.dirty_fields == ["__update__", "__update__", "__update__"]
+
+    panel._unsubscribe_reactive_state()
+    assert scene_signal.callbacks == []
+    assert export_signal.callbacks == []
+    assert language_signal.callbacks == []
 
 
 def test_export_panel_uses_usd_dialog_and_format_id(export_panel_module):

@@ -5,6 +5,8 @@
 #pragma once
 
 #include "gui/panel_layout.hpp"
+#include "gui/rmlui/rmlui_manager.hpp"
+
 #include <RmlUi/Core/DataModelHandle.h>
 #include <chrono>
 #include <cstddef>
@@ -67,6 +69,7 @@ namespace lfs::vis::gui {
     };
 
     struct MenuDropdownRootView {
+        int index = -1;
         std::string label;
         std::string action;
         std::string operator_id;
@@ -77,6 +80,7 @@ namespace lfs::vis::gui {
         bool has_shortcut = false;
         bool show_checkmark = false;
         bool has_children = false;
+        bool submenu_open = false;
         int callback_index = -1;
         std::vector<MenuDropdownLeafView> children;
     };
@@ -102,6 +106,9 @@ namespace lfs::vis::gui {
         void openDropdown(int index);
         void closeDropdown();
         void rebuildDropdownDOM();
+        void setOpenSubmenu(int index);
+        Rml::Element* dropdownElementAtPoint(float x, float y) const;
+        int submenuIndexForElement(Rml::Element* element) const;
 
         RmlUIManager* rml_manager_ = nullptr;
         Rml::Context* rml_context_ = nullptr;
@@ -120,18 +127,23 @@ namespace lfs::vis::gui {
 
         Rml::Element* menu_items_ = nullptr;
         Rml::Element* dropdown_container_ = nullptr;
+        Rml::Element* dropdown_popup_ = nullptr;
         Rml::Element* dropdown_overlay_ = nullptr;
+        Rml::Element* brand_logo_ = nullptr;
 
         int open_menu_index_ = -1;
+        int open_submenu_index_ = -1;
         std::string open_menu_idname_;
         bool wants_input_ = false;
         bool render_needed_ = true;
         bool mouse_pos_valid_ = false;
         int last_mouse_x_ = 0;
         int last_mouse_y_ = 0;
+        int last_hovered_label_ = -1;
         int last_ctx_w_ = 0;
         int last_ctx_h_ = 0;
         int last_document_h_ = 0;
+        CachedVulkanContextRender direct_cache_;
 
         float bar_height_ = 30.0f;
     };

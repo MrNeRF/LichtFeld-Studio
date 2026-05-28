@@ -4,6 +4,10 @@
 
 #include "gui/rmlui/rml_tooltip.hpp"
 
+#include "core/event_bridge/localization_manager.hpp"
+#include "input/input_bindings.hpp"
+#include "python/python_runtime.hpp"
+
 #include <RmlUi/Core/Context.h>
 #include <RmlUi/Core/ElementDocument.h>
 #include <algorithm>
@@ -12,6 +16,44 @@
 #include <utility>
 
 namespace lfs::vis::gui {
+
+    namespace {
+        std::string actionShortcut(std::string_view action_name) {
+            if (action_name.empty())
+                return {};
+            const auto action = lfs::vis::input::actionFromName(action_name);
+            if (!action)
+                return {};
+            const auto* const bindings = lfs::python::get_keymap_bindings();
+            if (!bindings || !bindings->getEffectiveTriggerForAction(*action))
+                return {};
+            return bindings->getLocalizedTriggerDescription(*action);
+        }
+
+        std::string appendShortcut(Rml::Element* el, std::string text) {
+            auto shortcut = el->GetAttribute<Rml::String>("data-shortcut", "");
+            if (shortcut.empty())
+                shortcut = actionShortcut(el->GetAttribute<Rml::String>("data-action", ""));
+            if (!shortcut.empty())
+                text.append(" (").append(shortcut).append(")");
+            return text;
+        }
+    } // namespace
+
+    std::string resolveRmlTooltip(Rml::Element* hover) {
+        auto& loc = lfs::event::LocalizationManager::getInstance();
+        for (auto* el = hover; el; el = el->GetParentNode()) {
+            if (const auto key = el->GetAttribute<Rml::String>("data-tooltip", ""); !key.empty()) {
+                const char* const resolved = loc.get(key);
+                if (!resolved || resolved == key)
+                    return {};
+                return appendShortcut(el, resolved);
+            }
+            if (auto title = el->GetAttribute<Rml::String>("title", ""); !title.empty())
+                return appendShortcut(el, std::move(title));
+        }
+        return {};
+    }
 
     void RmlTooltipController::setHover(const std::string& text, const void* target) {
         seen_this_frame_ = true;

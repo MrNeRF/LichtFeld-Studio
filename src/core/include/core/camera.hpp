@@ -54,7 +54,8 @@ namespace lfs::core {
         void initialize_cuda_tensors();
 
         // Load image from disk and return it
-        Tensor load_and_get_image(int resize_factor = -1, int max_width = 0, bool output_uint8 = false);
+        Tensor load_and_get_image(int resize_factor = -1, int max_width = 0, bool output_uint8 = false,
+                                  bool update_dimensions = true);
 
         // Load mask from disk, process it, and return it (cached)
         Tensor load_and_get_mask(int resize_factor = -1, int max_width = 0,

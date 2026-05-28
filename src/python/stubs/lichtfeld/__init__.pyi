@@ -311,6 +311,12 @@ def trainer_total_iterations() -> int:
 def trainer_current_loss() -> float:
     """Get current loss"""
 
+def set_vram_profiler_enabled(enabled: bool) -> None:
+    """Enable or disable the live VRAM diagnostics profiler"""
+
+def get_vram_profiler_enabled() -> bool:
+    """Return whether the live VRAM diagnostics profiler is enabled"""
+
 def set_node_visibility(name: str, visible: bool) -> None:
     """Set visibility of a scene node by name"""
 
@@ -436,6 +442,11 @@ def is_fullscreen() -> bool:
 
 def toggle_ui() -> None:
     """Toggle UI overlay visibility"""
+
+def toggle_vram_hud() -> None:
+    """
+    Toggle the VRAM diagnostics HUD overlay (requires vram profiler enabled)
+    """
 
 def toggle_independent_split_view() -> None:
     """Toggle independent split view"""
@@ -1294,6 +1305,16 @@ def look_at(eye: tuple[float, float, float], target: tuple[float, float, float],
 def render_at(eye: tuple[float, float, float], target: tuple[float, float, float], width: int, height: int, fov: float = 60.0, up: tuple[float, float, float] = (0.0, 1.0, 0.0), bg_color: Tensor | None = None) -> Tensor | None:
     """
     Render scene from eye looking at target. Returns [H,W,3] RGB tensor or None.
+    """
+
+def render_asset_preview(path: str, width: int = 512, height: int = 224, focal_length_mm: float = 35.0) -> Tensor | None:
+    """
+    Render an asset from the framed home camera into an offscreen thumbnail without mutating the live scene.
+    """
+
+def render_asset_preview_from_camera(path: str, eye: tuple[float, float, float], target: tuple[float, float, float], width: int = 512, height: int = 224, focal_length_mm: float = 35.0, up: tuple[float, float, float] = (0.0, 1.0, 0.0)) -> Tensor | None:
+    """
+    Render an asset from a custom camera pose into an offscreen thumbnail without mutating the live scene.
     """
 
 def get_render_scene() -> scene.Scene | None:

@@ -32,6 +32,7 @@ def _install_lf_stub(monkeypatch):
         PanelHeightMode=panel_height_mode,
         PanelOption=panel_option,
         tr=tr,
+        request_redraw=lambda: None,
     )
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
     return state
@@ -53,7 +54,7 @@ def plugin_marketplace_module(monkeypatch):
         "PluginMarketplaceCatalog",
         lambda: SimpleNamespace(
             snapshot=lambda: ([], False, False),
-            refresh_async=lambda force=False: None,
+            refresh_async=lambda force=False, **_kwargs: None,
         ),
     )
     return module, state
@@ -62,9 +63,13 @@ def plugin_marketplace_module(monkeypatch):
 class _HandleStub:
     def __init__(self):
         self.dirty_fields = []
+        self.request_update_count = 0
 
     def dirty(self, name):
         self.dirty_fields.append(name)
+
+    def request_update(self):
+        self.request_update_count += 1
 
 
 class _ElementStub:
@@ -136,6 +141,26 @@ def test_plugin_marketplace_syncs_feedback_nodes(plugin_marketplace_module):
     assert doc.get_element_by_id("feedback-card-progress-text").text == "Installing plugin"
     assert doc.get_element_by_id("feedback-card-success").classes["hidden"] is True
     assert doc.get_element_by_id("feedback-card-error").classes["hidden"] is True
+
+
+def test_plugin_marketplace_uses_dirty_update_policy(plugin_marketplace_module):
+    module, _state = plugin_marketplace_module
+    assert module.PluginMarketplacePanel.update_policy == "dirty"
+    assert "update_interval_ms" not in module.PluginMarketplacePanel.__dict__
+
+
+def test_plugin_marketplace_requests_update_on_language_generation(plugin_marketplace_module):
+    module, _state = plugin_marketplace_module
+    panel = module.PluginMarketplacePanel()
+    panel._handle = _HandleStub()
+    module.RuntimeState.language_generation._fallback = 0
+
+    panel._subscribe_reactive_state()
+    module.RuntimeState.language_generation.value = 1
+
+    assert panel._handle.request_update_count == 1
+
+    panel._unsubscribe_reactive_state()
 
 
 def test_plugin_marketplace_manual_success_clears_url(plugin_marketplace_module):

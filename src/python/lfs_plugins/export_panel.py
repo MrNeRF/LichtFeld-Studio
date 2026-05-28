@@ -11,6 +11,7 @@ import lichtfeld as lf
 from . import rml_widgets
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
+from .ui import RuntimeState, native_value as _native_store_value
 
 # Asset Manager integration (optional)
 try:
@@ -78,7 +79,7 @@ class ExportPanel(Panel):
     template = "rmlui/export_panel.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
     size = (320, 0)
-    update_interval_ms = 100
+    update_policy = "dirty"
 
     def __init__(self):
         self._format = ExportFormat.PLY
@@ -111,6 +112,7 @@ class ExportPanel(Panel):
         self._doc = None  # Document reference for DOM access
         self._last_export_path = None  # Track last export path for Asset Manager
         self._last_export_format = None  # Track last export format for Asset Manager
+        self._reactive_unsubscribers = []
 
     # ── Data model ────────────────────────────────────────────
 
@@ -409,6 +411,35 @@ class ExportPanel(Panel):
         self._update_rad_lod_list()
         self._sync_rad_lod_section_state()
         self._scrub_fields.mount(doc)
+        self._subscribe_reactive_state()
+
+    def _subscribe_reactive_state(self):
+        if self._reactive_unsubscribers:
+            return
+
+        self._reactive_unsubscribers = [
+            RuntimeState.scene_generation.subscribe(lambda _value: self._request_scene_update()),
+            RuntimeState.export_progress_state.subscribe(lambda _value: self._request_reactive_update()),
+            RuntimeState.language_generation.subscribe(lambda _value: self._request_reactive_update()),
+        ]
+
+    def _unsubscribe_reactive_state(self):
+        for unsubscribe in self._reactive_unsubscribers:
+            try:
+                unsubscribe()
+            except Exception:
+                pass
+        self._reactive_unsubscribers = []
+
+    def _request_scene_update(self):
+        self._last_node_key = None
+        self._last_colmap_key = None
+        self._last_colmap_source_path = ""
+        self._request_reactive_update()
+
+    def _request_reactive_update(self):
+        if self._handle:
+            rml_widgets.request_model_update(self._handle)
 
     def on_update(self, doc):
         if self._exporting:
@@ -467,6 +498,7 @@ class ExportPanel(Panel):
         self._last_colmap_source_path = ""
 
     def on_unmount(self, doc):
+        self._unsubscribe_reactive_state()
         doc.remove_data_model("export")
         self._handle = None
         self._doc = None
@@ -854,8 +886,14 @@ class ExportPanel(Panel):
     def _get_progress_stage(self):
         return self._cached_export_state.get("stage", "")
 
+    def _export_state(self):
+        state = _native_store_value("export_progress_state", None)
+        if isinstance(state, dict):
+            return dict(state)
+        return lf.ui.get_export_state()
+
     def _update_export_progress(self):
-        state = lf.ui.get_export_state()
+        state = self._export_state()
         previous_format = self._cached_export_state.get("format")
         previous_stage = self._cached_export_state.get("stage")
         self._cached_export_state = state
@@ -863,10 +901,11 @@ class ExportPanel(Panel):
             self._exporting = False
             self._selection_seeded = False
             # Register export with Asset Manager if successful
-            if self._last_export_path and self._last_export_format is not None:
+            completed = state.get("stage") == "Complete" and not state.get("error")
+            if completed and self._last_export_path and self._last_export_format is not None:
                 self._register_export(self._last_export_path, self._last_export_format)
-                self._last_export_path = None
-                self._last_export_format = None
+            self._last_export_path = None
+            self._last_export_format = None
             lf.ui.set_panel_enabled("lfs.export", False)
             return True
 

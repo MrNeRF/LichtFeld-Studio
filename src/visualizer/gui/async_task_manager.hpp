@@ -45,6 +45,7 @@ namespace lfs::vis {
 
             void setupEvents();
             void pollImportCompletion();
+            [[nodiscard]] bool hasPendingMainThreadCompletions() const;
 
             // Export
             void performExport(lfs::core::ExportFormat format, const std::filesystem::path& path,
@@ -110,7 +111,7 @@ namespace lfs::vis {
                 auto elapsed = std::chrono::steady_clock::now() - import_state_.completion_time;
                 return std::chrono::duration<float>(elapsed).count();
             }
-            void dismissImport() { import_state_.show_completion.store(false); }
+            void dismissImport();
             void cancelImport();
 
             // Video export
@@ -190,6 +191,16 @@ namespace lfs::vis {
             void startVideoExport(const std::filesystem::path& path,
                                   const io::video::VideoExportOptions& options);
             void resetVideoExportEnvironmentState();
+            void cancelImportCompletionDismiss();
+            void scheduleImportCompletionDismiss();
+            void publishExportFailureState(lfs::core::ExportFormat format,
+                                           const std::filesystem::path& path,
+                                           std::string error);
+            void publishExportState();
+            void publishImportOverlayState();
+            void publishVideoExportOverlayState();
+            void publishMesh2SplatState();
+            void publishSplatSimplifyState();
 
             VisualizerImpl* viewer_;
 
@@ -238,10 +249,12 @@ namespace lfs::vis {
                 bool success{false};
                 bool is_mesh{false};
                 std::atomic<bool> apply_auto_crop{false};
+                std::atomic<std::uint64_t> completion_generation{0};
                 std::chrono::steady_clock::time_point completion_time;
                 std::optional<lfs::io::LoadResult> load_result;
                 lfs::core::param::TrainingParameters params;
                 std::optional<std::jthread> thread;
+                std::optional<std::jthread> completion_dismiss_thread;
             };
             ImportState import_state_;
 

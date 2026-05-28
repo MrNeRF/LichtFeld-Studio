@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Transform controls controller embedded into the Rendering panel."""
+"""Transform controls controller for the viewport numeric transform overlay."""
 
 import math
 import time
@@ -9,6 +9,12 @@ from typing import List
 import lichtfeld as lf
 
 from . import rml_widgets as w
+
+try:
+    from .ui import native_value as _native_store_value
+except Exception:
+    def _native_store_value(_field, fallback):
+        return fallback
 
 TRANSLATE_STEP = 0.01
 TRANSLATE_STEP_FAST = 0.1
@@ -36,18 +42,38 @@ _STEP_CONFIG = {
 }
 
 _AXIS_INDEX = {"x": 0, "y": 1, "z": 2}
-_TRANSFORM_TOOL_IDS = ("builtin.translate", "builtin.rotate", "builtin.scale")
+_NUMERIC_TRANSFORM_TOOL_IDS = ("builtin.translate", "builtin.rotate", "builtin.scale")
+_MIRROR_TOOL_ID = "builtin.mirror"
+_TRANSFORM_OVERLAY_TOOL_IDS = (*_NUMERIC_TRANSFORM_TOOL_IDS, _MIRROR_TOOL_ID)
 _SPACE_LOCAL = 0
 _SPACE_WORLD = 1
 _PIVOT_ORIGIN = 0
 _PIVOT_BOUNDS = 1
+_MISSING = object()
 
 
 def _ui_label(key: str, fallback: str) -> str:
-    value = lf.ui.tr(key)
+    tr = getattr(lf.ui, "tr", None)
+    if not callable(tr):
+        return fallback
+    try:
+        value = tr(key)
+    except Exception:
+        return fallback
     if value and value != key:
         return value
     return fallback
+
+
+def _format_ui_label(key: str, fallback: str, *args) -> str:
+    template = _ui_label(key, fallback).replace("%zu", "%d")
+    try:
+        return template % args
+    except (TypeError, ValueError):
+        try:
+            return template.format(*args)
+        except (IndexError, KeyError, ValueError):
+            return fallback % args
 
 
 def _quat_dot(a: List[float], b: List[float]) -> float:
@@ -112,26 +138,38 @@ class TransformControlsController:
 
         self._focus_active = False
         self._escape_revert = w.EscapeRevertController()
+        self._last_state_key = None
+        self._force_dirty = False
 
     def bind_model(self, model):
         model.bind_func("transform_tool_label", self._tool_label)
         model.bind_func(
             "transform_node_name",
-            lambda: f"Node: {self._selected[0]}" if self._selected else "",
+            lambda: _format_ui_label("transform.node", "Node: %s", self._selected[0])
+            if self._selected
+            else "",
         )
         model.bind_func(
             "transform_multi_label",
-            lambda: f"{len(self._selected)} nodes selected" if self._selected else "",
+            lambda: _format_ui_label("transform.nodes_selected", "%d nodes selected", len(self._selected))
+            if self._selected
+            else "",
         )
         model.bind_func(
             "transform_reset_label",
-            lambda: "Reset All" if len(self._selected) > 1 else "Reset Transform",
+            lambda: _ui_label("transform.reset_all_short", "Reset All")
+            if len(self._selected) > 1
+            else _ui_label("transform.reset_transform", "Reset Transform"),
         )
+        model.bind_func("transform_bake_label", lambda: _ui_label("transform.bake_transform", "Bake Transform"))
         model.bind_func("transform_is_single", lambda: len(self._selected) == 1)
         model.bind_func("transform_is_multi", lambda: len(self._selected) > 1)
         model.bind_func("transform_show_translate", lambda: self._active_tool == "builtin.translate")
         model.bind_func("transform_show_rotate", lambda: self._active_tool == "builtin.rotate")
         model.bind_func("transform_show_scale", lambda: self._active_tool == "builtin.scale")
+        model.bind_func("transform_show_actions", lambda: self._active_tool in _NUMERIC_TRANSFORM_TOOL_IDS)
+        model.bind_func("transform_submode_label", self._submode_label)
+        model.bind_func("transform_submode_tooltip_key", self._submode_tooltip_key)
         model.bind_func("transform_space_label", self._space_label)
         model.bind_func("transform_pivot_label", self._pivot_label)
 
@@ -166,9 +204,16 @@ class TransformControlsController:
 
     def mount(self, doc):
         self._doc = doc
+        self._visible = False
+        self._last_state_key = None
+        self._force_dirty = False
         self._escape_revert.clear()
 
-        body = doc.get_element_by_id("body")
+        wrap = doc.get_element_by_id("transform-block")
+        if wrap:
+            wrap.set_class("hidden", True)
+
+        body = doc.get_element_by_id("body") or doc.get_element_by_id("overlay-body")
         if body:
             body.add_event_listener("mouseup", self._on_step_mouseup)
 
@@ -201,7 +246,21 @@ class TransformControlsController:
         prev_space = self._transform_space
         prev_selected = tuple(self._selected)
 
-        self._active_tool = lf.ui.get_active_tool() or ""
+        active_tool = _native_store_value("active_tool", _MISSING)
+        if active_tool is _MISSING:
+            active_tool = lf.ui.get_active_tool() or ""
+        self._active_tool = active_tool or ""
+        active_transform_tool = self._active_tool in _TRANSFORM_OVERLAY_TOOL_IDS
+        wrap = doc.get_element_by_id("transform-block")
+        if not active_transform_tool and not self._visible:
+            if wrap:
+                wrap.set_class("hidden", True)
+            self._selected = []
+            self._step_repeat_prop = None
+            self._last_state_key = None
+            self._force_dirty = False
+            return False
+
         self._selected = lf.get_selected_node_names() or []
         self._transform_space = self._current_transform_space()
         self._pivot_mode = self._current_pivot_mode()
@@ -209,31 +268,40 @@ class TransformControlsController:
         if self._active_tool != prev_tool or self._transform_space != prev_space:
             self._commit_active_edit()
 
-        visible = self._active_tool in _TRANSFORM_TOOL_IDS and len(self._selected) > 0
+        visible = active_transform_tool and len(self._selected) > 0
+        if wrap:
+            wrap.set_class("hidden", not visible)
         if visible != self._visible:
             self._visible = visible
-            wrap = doc.get_element_by_id("transform-block")
-            if wrap:
-                wrap.set_class("hidden", not visible)
+            self._last_state_key = None
             dirty = True
 
         if not visible:
             self._commit_active_edit()
+            self._last_state_key = None
+            self._force_dirty = False
             return dirty
 
         if tuple(self._selected) != prev_selected:
             self._commit_active_edit()
+
+        if self._active_tool == _MIRROR_TOOL_ID:
+            self._step_repeat_prop = None
+            return self._dirty_if_display_state_changed(dirty)
 
         if len(self._selected) == 1:
             self._update_single_node()
         else:
             self._update_multi_selection()
 
-        self._process_step_repeat()
-        self._dirty_all()
-        return True
+        if self._process_step_repeat():
+            dirty = True
+            self._force_dirty = True
+        return self._dirty_if_display_state_changed(dirty)
 
     def scene_changed(self):
+        self._last_state_key = None
+        self._force_dirty = True
         self._dirty_all()
 
     def unmount(self):
@@ -247,19 +315,32 @@ class TransformControlsController:
         self._state.reset_multi_edit()
         self._step_repeat_prop = None
         self._focus_active = False
+        self._last_state_key = None
+        self._force_dirty = False
 
     def _tool_label(self):
         labels = {
             "builtin.translate": _ui_label("toolbar.translate", "Move"),
             "builtin.rotate": _ui_label("toolbar.rotate", "Rotate"),
             "builtin.scale": _ui_label("toolbar.scale", "Scale"),
+            _MIRROR_TOOL_ID: _ui_label("toolbar.mirror", "Mirror"),
         }
-        return labels.get(self._active_tool, "Transform")
+        return labels.get(self._active_tool, _ui_label("transform.tool", "Transform"))
 
     def _space_label(self):
         if self._transform_space == _SPACE_LOCAL:
             return _ui_label("toolbar.local_space", "Local")
         return _ui_label("toolbar.world_space", "World")
+
+    def _submode_label(self):
+        if self._active_tool == _MIRROR_TOOL_ID:
+            return _ui_label("transform.axis", "Axis")
+        return _ui_label("transform.space_plain", "Space")
+
+    def _submode_tooltip_key(self):
+        if self._active_tool == _MIRROR_TOOL_ID:
+            return "tooltip.transform_axis"
+        return "tooltip.transform_space"
 
     def _pivot_label(self):
         if self._pivot_mode == _PIVOT_BOUNDS:
@@ -267,6 +348,12 @@ class TransformControlsController:
         return _ui_label("toolbar.origin_pivot", "Origin")
 
     def _current_transform_space(self) -> int:
+        value = _native_store_value("transform_space", _MISSING)
+        if value is not _MISSING:
+            try:
+                return int(value)
+            except Exception:
+                return _SPACE_WORLD
         getter = getattr(lf.ui, "get_transform_space", None)
         if callable(getter):
             try:
@@ -276,6 +363,12 @@ class TransformControlsController:
         return _SPACE_WORLD
 
     def _current_pivot_mode(self) -> int:
+        value = _native_store_value("pivot_mode", _MISSING)
+        if value is not _MISSING:
+            try:
+                return int(value)
+            except Exception:
+                return _PIVOT_ORIGIN
         getter = getattr(lf.ui, "get_pivot_mode", None)
         if callable(getter):
             try:
@@ -348,6 +441,33 @@ class TransformControlsController:
             self._euler = self._state.display_euler
             self._scale = self._state.display_scale
 
+    def _display_state_key(self):
+        return (
+            self._active_tool,
+            tuple(self._selected),
+            self._transform_space,
+            self._pivot_mode,
+            f"{self._trans[0]:.3f}",
+            f"{self._trans[1]:.3f}",
+            f"{self._trans[2]:.3f}",
+            f"{self._euler[0]:.1f}",
+            f"{self._euler[1]:.1f}",
+            f"{self._euler[2]:.1f}",
+            f"{self._scale[0]:.3f}",
+            f"{self._scale[1]:.3f}",
+            f"{self._scale[2]:.3f}",
+            f"{sum(self._scale) / 3.0:.3f}",
+        )
+
+    def _dirty_if_display_state_changed(self, dirty=False):
+        state_key = self._display_state_key()
+        if self._force_dirty or state_key != self._last_state_key:
+            self._last_state_key = state_key
+            self._force_dirty = False
+            self._dirty_all()
+            return True
+        return dirty
+
     def _dirty_all(self):
         if not self._handle:
             return
@@ -360,11 +480,15 @@ class TransformControlsController:
         self._handle.dirty("transform_node_name")
         self._handle.dirty("transform_multi_label")
         self._handle.dirty("transform_reset_label")
+        self._handle.dirty("transform_bake_label")
         self._handle.dirty("transform_is_single")
         self._handle.dirty("transform_is_multi")
         self._handle.dirty("transform_show_translate")
         self._handle.dirty("transform_show_rotate")
         self._handle.dirty("transform_show_scale")
+        self._handle.dirty("transform_show_actions")
+        self._handle.dirty("transform_submode_label")
+        self._handle.dirty("transform_submode_tooltip_key")
         self._handle.dirty("transform_space_label")
         self._handle.dirty("transform_pivot_label")
 
@@ -420,6 +544,7 @@ class TransformControlsController:
             self._state.display_euler = self._euler
             self._state.display_scale = self._scale
             self._apply_multi_transform(self._active_tool)
+        self._force_dirty = True
 
     def _set_uniform_scale(self, value_str):
         try:
@@ -438,6 +563,7 @@ class TransformControlsController:
         else:
             self._state.display_scale = self._scale
             self._apply_multi_transform(self._active_tool)
+        self._force_dirty = True
 
     def _apply_single_transform(self):
         if not self._selected:
@@ -536,13 +662,15 @@ class TransformControlsController:
 
     def _process_step_repeat(self):
         if not self._step_repeat_prop:
-            return
+            return False
         now = time.monotonic()
         if now - self._step_repeat_start < STEP_REPEAT_DELAY:
-            return
+            return False
         if now - self._step_repeat_last >= STEP_REPEAT_INTERVAL:
             self._apply_step(self._step_repeat_prop, self._step_repeat_dir)
             self._step_repeat_last = now
+            return True
+        return False
 
     def _apply_step(self, prop, direction):
         cfg = _STEP_CONFIG.get(prop)
@@ -583,6 +711,7 @@ class TransformControlsController:
             self._state.display_euler = self._euler
             self._state.display_scale = self._scale
             self._apply_multi_transform(self._active_tool)
+        self._force_dirty = True
 
     def _on_action(self, handle, event, args):
         del handle, event
@@ -594,6 +723,9 @@ class TransformControlsController:
                 self._reset_single_transform()
             else:
                 self._reset_multi_transforms()
+            self._force_dirty = True
+        elif action == "bake":
+            self._commit_active_edit()
 
     def _on_input_focus(self, event):
         if self._focus_active:
@@ -620,6 +752,7 @@ class TransformControlsController:
             lf.set_node_transform(node_name, self._state.transforms_before_edit[0])
             self._state.reset_single_edit()
             self._update_single_node()
+            self._force_dirty = True
             return
 
         if self._state.multi_editing_active and self._state.multi_node_names and self._state.multi_transforms_before:
@@ -627,6 +760,7 @@ class TransformControlsController:
                 lf.set_node_transform(name, transform)
             self._state.reset_multi_edit()
             self._update_multi_selection()
+            self._force_dirty = True
 
     def _commit_active_edit(self):
         if self._state.editing_active:

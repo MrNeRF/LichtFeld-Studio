@@ -5,6 +5,8 @@
 
 #include "core/export.hpp"
 #include "core/logger.hpp"
+#include "diagnostics/vram_profiler.hpp"
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -21,7 +23,9 @@ namespace lfs::core {
         static constexpr size_t MIN_BLOCK_SIZE = 256;
         static constexpr size_t MAX_BLOCK_SIZE = 256 * 1024;
         static constexpr size_t NUM_SIZE_CLASSES = 11;
-        static constexpr size_t SLAB_SIZE = 32 * 1024 * 1024;      // 32 MB per slab
+        static constexpr size_t MIN_SLAB_SIZE = 256 * 1024;
+        static constexpr size_t MAX_SLAB_SIZE = 8 * 1024 * 1024;
+        static constexpr size_t TARGET_BLOCKS_PER_SLAB = 1024;
         static constexpr size_t MAX_BLOCKS_PER_CLASS = 512 * 1024; // Max blocks to track
 
         struct Stats {
@@ -116,6 +120,13 @@ namespace lfs::core {
             return MIN_BLOCK_SIZE << size_class;
         }
 
+        static size_t slab_size_for_class(size_t size_class) {
+            const size_t block_size = get_block_size(size_class);
+            const size_t target_bytes = block_size * TARGET_BLOCKS_PER_SLAB;
+            const size_t slab_size = std::clamp(target_bytes, MIN_SLAB_SIZE, MAX_SLAB_SIZE);
+            return (slab_size / block_size) * block_size;
+        }
+
         bool is_enabled() const {
             return enabled_.load(std::memory_order_acquire);
         }
@@ -163,7 +174,8 @@ namespace lfs::core {
             }
 
             for (size_t i = 0; i < NUM_SIZE_CLASSES; ++i) {
-                free_stacks_[i].stack.reserve(MAX_BLOCKS_PER_CLASS);
+                const size_t initial_blocks = slab_size_for_class(i) / get_block_size(i);
+                free_stacks_[i].stack.reserve(std::min(initial_blocks, MAX_BLOCKS_PER_CLASS));
             }
 
             enabled_.store(true, std::memory_order_release);
@@ -176,13 +188,14 @@ namespace lfs::core {
 
         bool allocate_slab(size_t size_class) {
             const size_t block_size = get_block_size(size_class);
+            const size_t slab_size = slab_size_for_class(size_class);
 
             void* slab_base = nullptr;
-            if (cudaMalloc(&slab_base, SLAB_SIZE) != cudaSuccess) {
+            if (cudaMalloc(&slab_base, slab_size) != cudaSuccess) {
                 return false;
             }
 
-            const size_t num_blocks = SLAB_SIZE / block_size;
+            const size_t num_blocks = slab_size / block_size;
             {
                 std::lock_guard<std::mutex> lock(free_stacks_[size_class].mutex);
                 for (size_t i = 0; i < num_blocks; ++i) {
@@ -194,11 +207,12 @@ namespace lfs::core {
 
             {
                 std::lock_guard<std::mutex> lock(slabs_mutex_);
-                slabs_.push_back({slab_base, SLAB_SIZE, size_class});
+                slabs_.push_back({slab_base, slab_size, size_class});
             }
 
-            stats_.total_slab_memory += SLAB_SIZE;
+            stats_.total_slab_memory += slab_size;
             stats_.blocks_per_class[size_class] += num_blocks;
+            publish_reserved_bytes();
 
             return true;
         }
@@ -219,6 +233,7 @@ namespace lfs::core {
             }
             slabs_.clear();
             stats_.total_slab_memory = 0;
+            publish_reserved_bytes();
         }
 
         void* pop_free_stack(size_t size_class) {
@@ -247,6 +262,14 @@ namespace lfs::core {
         Stats stats_;
         std::atomic<bool> enabled_{false};
         std::atomic<bool> shutdown_{false};
+
+        void publish_reserved_bytes() const {
+            try {
+                lfs::diagnostics::VramProfiler::instance().setCudaSlabReservedBytes(stats_.total_slab_memory);
+            } catch (...) {
+                // Diagnostics must never make allocator growth or shutdown fail.
+            }
+        }
     };
 
 } // namespace lfs::core

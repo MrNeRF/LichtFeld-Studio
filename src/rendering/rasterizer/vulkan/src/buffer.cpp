@@ -1,4 +1,108 @@
+#include "diagnostics/vram_profiler.hpp"
 #include "gs_renderer.h"
+#include <string>
+
+size_t VulkanGSPipelineBuffers::getTotalOwnedAllocSize() const {
+    size_t total = 0;
+#define ADD_OWNED(name)                                           \
+    do {                                                          \
+        if (this->name.deviceBuffer.allocation != VK_NULL_HANDLE) \
+            total += this->name.deviceBuffer.allocSize;           \
+    } while (false)
+
+    ADD_OWNED(xyz_ws);
+    ADD_OWNED(sh_coeffs);
+    ADD_OWNED(rotations);
+    ADD_OWNED(scales_opacs);
+    ADD_OWNED(sh0);
+    ADD_OWNED(shN);
+    ADD_OWNED(scaling_raw);
+    ADD_OWNED(opacity_raw);
+    ADD_OWNED(tiles_touched);
+    ADD_OWNED(rect_tile_space);
+    ADD_OWNED(radii);
+    ADD_OWNED(xy_vs);
+    ADD_OWNED(depths);
+    ADD_OWNED(inv_cov_vs_opacity);
+    ADD_OWNED(rgb);
+    ADD_OWNED(overlay_flags);
+    ADD_OWNED(primitive_depth_keys);
+    ADD_OWNED(primitive_sort_indices);
+    ADD_OWNED(tiles_touched_depth_ordered);
+    ADD_OWNED(visible_flags);
+    ADD_OWNED(visible_prefix);
+    ADD_OWNED(visible_count);
+    ADD_OWNED(visible_sort_dispatch_args);
+    ADD_OWNED(index_buffer_offset);
+    ADD_OWNED(sorting_keys_1);
+    ADD_OWNED(sorting_keys_2);
+    ADD_OWNED(sorting_gauss_idx_1);
+    ADD_OWNED(sorting_gauss_idx_2);
+    ADD_OWNED(tile_sort_count);
+    ADD_OWNED(tile_sort_dispatch_args);
+    ADD_OWNED(tile_ranges);
+    ADD_OWNED(pixel_state);
+    ADD_OWNED(pixel_depth);
+    ADD_OWNED(n_contributors);
+    ADD_OWNED(_cumsum_blockSums);
+    ADD_OWNED(_cumsum_blockSums2);
+    ADD_OWNED(_sorting_histogram);
+    ADD_OWNED(_sorting_histogram_cumsum);
+
+#undef ADD_OWNED
+    return total;
+}
+
+std::map<std::string, size_t> VulkanGSPipelineBuffers::getOwnedVramBreakdown() const {
+    std::map<std::string, size_t> breakdown;
+#define ADD_OWNED(name)                                            \
+    do {                                                           \
+        if (this->name.deviceBuffer.allocation != VK_NULL_HANDLE)  \
+            breakdown[#name] += this->name.deviceBuffer.allocSize; \
+    } while (false)
+
+    ADD_OWNED(xyz_ws);
+    ADD_OWNED(sh_coeffs);
+    ADD_OWNED(rotations);
+    ADD_OWNED(scales_opacs);
+    ADD_OWNED(sh0);
+    ADD_OWNED(shN);
+    ADD_OWNED(scaling_raw);
+    ADD_OWNED(opacity_raw);
+    ADD_OWNED(tiles_touched);
+    ADD_OWNED(rect_tile_space);
+    ADD_OWNED(radii);
+    ADD_OWNED(xy_vs);
+    ADD_OWNED(depths);
+    ADD_OWNED(inv_cov_vs_opacity);
+    ADD_OWNED(rgb);
+    ADD_OWNED(overlay_flags);
+    ADD_OWNED(primitive_depth_keys);
+    ADD_OWNED(primitive_sort_indices);
+    ADD_OWNED(tiles_touched_depth_ordered);
+    ADD_OWNED(visible_flags);
+    ADD_OWNED(visible_prefix);
+    ADD_OWNED(visible_count);
+    ADD_OWNED(visible_sort_dispatch_args);
+    ADD_OWNED(index_buffer_offset);
+    ADD_OWNED(sorting_keys_1);
+    ADD_OWNED(sorting_keys_2);
+    ADD_OWNED(sorting_gauss_idx_1);
+    ADD_OWNED(sorting_gauss_idx_2);
+    ADD_OWNED(tile_sort_count);
+    ADD_OWNED(tile_sort_dispatch_args);
+    ADD_OWNED(tile_ranges);
+    ADD_OWNED(pixel_state);
+    ADD_OWNED(pixel_depth);
+    ADD_OWNED(n_contributors);
+    ADD_OWNED(_cumsum_blockSums);
+    ADD_OWNED(_cumsum_blockSums2);
+    ADD_OWNED(_sorting_histogram);
+    ADD_OWNED(_sorting_histogram_cumsum);
+
+#undef ADD_OWNED
+    return breakdown;
+}
 
 void VulkanGSPipeline::allocStagingBuffer(size_t size) {
     if (stager.buffer != VK_NULL_HANDLE && stager.allocSize >= size)
@@ -8,6 +112,7 @@ void VulkanGSPipeline::allocStagingBuffer(size_t size) {
 
     if (stager.allocSize < size) {
         HOST_GUARD;
+        waitForPendingBatch();
         if (stager.buffer != VK_NULL_HANDLE) {
             vmaDestroyBuffer(allocator, stager.buffer, stager.allocation);
         }
@@ -59,22 +164,35 @@ void VulkanGSPipeline::createBuffer(size_t size, _VulkanBuffer& buffer) {
     current_vram += size;
     if (current_vram > peak_vram)
         peak_vram = current_vram;
+
+    // Publish per-buffer live bytes so the HUD can split the Vulkan footprint into
+    // named rows (xyz_ws / shN / sorting_keys / ...). nullptr label = no instrumentation.
+    if (buffer.label) {
+        lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+            std::string("vksplat.") + buffer.label, "device_buffer", size);
+    }
 }
 
 void VulkanGSPipeline::destroyBuffer(_VulkanBuffer& buffer) {
     if (commandBatchInProgress)
         _THROW_ERROR("destroyBuffer called when command batch in progress");
     if (buffer.buffer != VK_NULL_HANDLE && buffer.allocation != VK_NULL_HANDLE) {
+        waitForPendingBatch();
         vmaDestroyBuffer(allocator, buffer.buffer, buffer.allocation);
         if (current_vram < buffer.allocSize)
             _THROW_ERROR("Negative VRAM");
         current_vram -= buffer.allocSize;
+        if (buffer.label) {
+            lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                std::string("vksplat.") + buffer.label, "device_buffer", 0);
+        }
     }
     buffer.buffer = VK_NULL_HANDLE;
     buffer.allocation = VK_NULL_HANDLE;
     buffer.allocSize = 0;
     buffer.size = 0;
     buffer.offset = 0;
+    // Keep buffer.label intact so a subsequent resize re-establishes the recording.
 }
 
 void VulkanGSPipeline::resizeDeviceBuffer(_VulkanBuffer& deviceBuffer, size_t new_byte_size, bool no_shrink) {
@@ -101,10 +219,17 @@ _VulkanBuffer& VulkanGSPipeline::resizeDeviceBuffer(Buffer<T>& buffer, size_t ne
 template <typename T>
 _VulkanBuffer& VulkanGSPipeline::clearDeviceBuffer(Buffer<T>& buffer, size_t new_size) {
     auto& deviceBuffer = buffer.deviceBuffer;
-    if (deviceBuffer.size != new_size * sizeof(T)) {
-        HOST_GUARD;
-        resizeDeviceBuffer(buffer, new_size);
+    const size_t new_byte_size = new_size * sizeof(T);
+    // Clearing is a GPU operation; changing the active view size must not force a
+    // host-side submit/wait when the existing allocation is already large enough.
+    if (deviceBuffer.allocSize < new_byte_size) {
+        resizeDeviceBuffer(buffer, new_size, true);
+    } else {
+        deviceBuffer.size = new_byte_size;
     }
+
+    if (deviceBuffer.size == 0)
+        return deviceBuffer;
 
     {
         DEVICE_GUARD;

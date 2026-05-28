@@ -9,8 +9,8 @@ import lichtfeld as lf
 
 from . import rml_widgets as w
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
-from .transform_controls import TransformControlsController
 from .types import Panel
+from .ui import RuntimeState, PanelStateBinding, native_value as _native_store_value
 
 __lfs_panel_classes__ = ["RenderingPanel"]
 __lfs_panel_ids__ = ["lfs.rendering"]
@@ -128,7 +128,6 @@ COLOR_PROPS = [
 ]
 
 SECTION_NAMES = (
-    "transform",
     "viewport",
     "camera",
     "simplify",
@@ -231,11 +230,10 @@ class RenderingPanel(Panel):
     order = 10
     template = "rmlui/rendering.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
-    update_interval_ms = 16
+    update_policy = "dirty"
 
     def __init__(self):
         self._handle = None
-        self._transform_controls = TransformControlsController()
         self._color_edit_prop = None
         self._collapsed = {"selection", "mesh", "post_process", "ppisp_crf"}
         self._popup_el = None
@@ -264,6 +262,7 @@ class RenderingPanel(Panel):
             self._get_scrub_value,
             self._set_scrub_value,
         )
+        self._reactive_binding = PanelStateBinding()
 
     def _sync_panel_label(self):
         label = tr("window.rendering")
@@ -294,8 +293,31 @@ class RenderingPanel(Panel):
                 )
         self._refresh_simplify_source(force=True)
         self._scrub_fields.mount(doc)
-        self._transform_controls.mount(doc)
         self._sync_section_states()
+        self._subscribe_reactive_state()
+        self._request_reactive_update()
+
+    def _subscribe_reactive_state(self):
+        if self._reactive_binding.active:
+            return
+
+        native_signals = (
+            RuntimeState.scene_generation,
+            RuntimeState.selection_generation,
+            RuntimeState.active_tool,
+            RuntimeState.transform_space,
+            RuntimeState.pivot_mode,
+            RuntimeState.splat_simplify_state,
+            RuntimeState.language_generation,
+        )
+        self._reactive_binding.set_handle(self._handle).watch(*native_signals)
+
+    def _unsubscribe_reactive_state(self):
+        self._reactive_binding.close()
+
+    def _request_reactive_update(self):
+        if self._handle:
+            w.request_model_update(self._handle)
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("rendering")
@@ -303,8 +325,6 @@ class RenderingPanel(Panel):
             return
 
         s = lf.get_render_settings
-
-        self._transform_controls.bind_model(model)
 
         for prop_id in BOOL_PROPS:
             if prop_id == "equirectangular":
@@ -503,7 +523,6 @@ class RenderingPanel(Panel):
             return False
 
         dirty = False
-        dirty |= self._transform_controls.update(doc)
         dirty |= self._sync_environment_state()
         dirty |= self._sync_projection_state()
         for prop_id in COLOR_PROPS:
@@ -712,14 +731,18 @@ class RenderingPanel(Panel):
 
     def on_scene_changed(self, doc):
         del doc
-        self._transform_controls.scene_changed()
-        if self._handle:
-            self._handle.dirty_all()
+        if not self._handle:
+            return False
+
+        dirty = False
+        dirty |= self._refresh_simplify_source(force=False)
+        dirty |= self._sync_simplify_task_state(force=False)
+        return dirty
 
     def on_unmount(self, doc):
+        self._unsubscribe_reactive_state()
         doc.remove_data_model("rendering")
         self._handle = None
-        self._transform_controls.unmount()
         self._popup_el = None
         self._doc = None
         self._escape_revert.clear()
@@ -1123,12 +1146,24 @@ class RenderingPanel(Panel):
         except (TypeError, ValueError):
             return "0%"
 
+    def _simplify_task_state(self) -> dict[str, object]:
+        state = _native_store_value("splat_simplify_state", None)
+        if isinstance(state, dict):
+            return state
+        return {
+            "active": bool(getattr(lf, "is_splat_simplify_active", lambda: False)()),
+            "progress": getattr(lf, "get_splat_simplify_progress", lambda: 0.0)(),
+            "stage": getattr(lf, "get_splat_simplify_stage", lambda: "")() or "",
+            "error": getattr(lf, "get_splat_simplify_error", lambda: "")() or "",
+        }
+
     def _sync_simplify_task_state(self, force: bool) -> bool:
-        active = bool(getattr(lf, "is_splat_simplify_active", lambda: False)())
-        progress = max(0.0, min(1.0, float(getattr(lf, "get_splat_simplify_progress", lambda: 0.0)())))
+        state = self._simplify_task_state()
+        active = bool(state.get("active", False))
+        progress = max(0.0, min(1.0, float(state.get("progress", 0.0))))
         progress_value = f"{progress:.4f}".rstrip("0").rstrip(".") or "0"
-        stage = str(getattr(lf, "get_splat_simplify_stage", lambda: "")() or "")
-        error_text = str(getattr(lf, "get_splat_simplify_error", lambda: "")() or "")
+        stage = str(state.get("stage", "") or "")
+        error_text = str(state.get("error", "") or "")
 
         changed = force or (
             active != self._simplify_task_active or

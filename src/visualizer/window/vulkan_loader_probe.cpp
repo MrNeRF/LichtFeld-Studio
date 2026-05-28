@@ -4,33 +4,23 @@
 
 #include "vulkan_loader_probe.hpp"
 
-#include "config.h"
 #include "vulkan_result.hpp"
 
 #include <format>
-
-#ifdef LFS_VULKAN_VIEWER_ENABLED
 #include <vulkan/vulkan.h>
-#endif
 
 namespace lfs::vis {
 
     std::string formatVulkanApiVersion(const uint32_t api_version) {
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         return std::format("{}.{}.{}",
                            VK_API_VERSION_MAJOR(api_version),
                            VK_API_VERSION_MINOR(api_version),
                            VK_API_VERSION_PATCH(api_version));
-#else
-        (void)api_version;
-        return "disabled";
-#endif
     }
 
     VulkanLoaderInfo probeVulkanLoader() {
         VulkanLoaderInfo info{};
 
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         info.enabled = true;
         info.api_version = VK_API_VERSION_1_3;
 
@@ -49,10 +39,6 @@ namespace lfs::vis {
         }
 
         info.loader_available = true;
-#else
-        info.enabled = false;
-#endif
-
         return info;
     }
 

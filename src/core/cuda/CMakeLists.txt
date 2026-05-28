@@ -9,6 +9,7 @@
 
 set(LFS_CORE_CUDA_SOURCES
     memory_arena.cu
+    exportable_storage.cpp
     lanczos_resize/lanczos_resize.cu
     undistort/undistort.cu
     kernels/kmeans_new.cu
@@ -40,6 +41,7 @@ target_link_libraries(lfs_core_cuda
         CUDA::cudart
         CUDA::cuda_driver
         CUDA::curand
+        lfs_diagnostics
         spdlog::spdlog
         glm::glm
         OpenMP::OpenMP_CXX

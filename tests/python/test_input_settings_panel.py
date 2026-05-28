@@ -35,6 +35,7 @@ ACTION_NAMES = (
     "CAMERA_MOVE_UP",
     "CAMERA_MOVE_DOWN",
     "CAMERA_RESET_HOME",
+    "CAMERA_SET_HOME",
     "CAMERA_FOCUS_SELECTION",
     "CAMERA_SET_PIVOT",
     "CAMERA_NEXT_VIEW",
@@ -189,6 +190,7 @@ def _install_lf_stub(monkeypatch):
         PanelOption=panel_option,
         tr=tr,
         get_current_language=lambda: state.language[0],
+        request_redraw=lambda: None,
     )
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
     return state
@@ -213,6 +215,7 @@ class _HandleStub:
         self.records = {}
         self.dirty_fields = []
         self.dirty_all_calls = 0
+        self.request_update_count = 0
 
     def update_record_list(self, name, rows):
         self.records[name] = rows
@@ -222,6 +225,9 @@ class _HandleStub:
 
     def dirty_all(self):
         self.dirty_all_calls += 1
+
+    def request_update(self):
+        self.request_update_count += 1
 
 
 class _ElementStub:
@@ -245,6 +251,26 @@ class _DocStub:
 
     def get_element_by_id(self, element_id):
         return self.elements.get(element_id)
+
+
+def test_input_settings_uses_dirty_update_policy(input_settings_module):
+    module, _state = input_settings_module
+    assert module.InputSettingsPanel.update_policy == "dirty"
+    assert "update_interval_ms" not in module.InputSettingsPanel.__dict__
+
+
+def test_input_settings_requests_update_on_language_generation(input_settings_module):
+    module, _state = input_settings_module
+    panel = module.InputSettingsPanel()
+    panel._handle = _HandleStub()
+    module.RuntimeState.language_generation._fallback = 0
+
+    panel._subscribe_reactive_state()
+    module.RuntimeState.language_generation.value = 1
+
+    assert panel._handle.request_update_count == 1
+
+    panel._unsubscribe_reactive_state()
 
 
 def test_input_settings_builds_profile_and_mode_records(input_settings_module):

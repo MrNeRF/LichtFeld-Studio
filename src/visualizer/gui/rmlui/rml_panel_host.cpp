@@ -134,8 +134,10 @@ namespace lfs::vis::gui {
     }
 
     RmlPanelHost::~RmlPanelHost() {
-        if (manager_ && manager_->isInitialized())
+        if (manager_ && manager_->isInitialized()) {
+            manager_->releaseCachedVulkanContext(direct_cache_);
             manager_->destroyContext(context_name_);
+        }
         rml_context_ = nullptr;
         document_ = nullptr;
     }
@@ -190,6 +192,7 @@ namespace lfs::vis::gui {
 
         rml_theme::applyTheme(document_, base_rcss_, panel_theme);
         content_dirty_ = true;
+        direct_cache_dirty_ = true;
         return true;
     }
 
@@ -226,9 +229,14 @@ namespace lfs::vis::gui {
         has_theme_signature_ = false;
         render_needed_ = true;
         content_dirty_ = true;
+        direct_cache_dirty_ = true;
+        if (manager_ && manager_->isInitialized())
+            manager_->releaseCachedVulkanContext(direct_cache_);
         last_forwarded_mx_ = -1;
         last_forwarded_my_ = -1;
         last_hovered_ = false;
+        for (auto& captured : mouse_captured_)
+            captured = false;
 
         if (!loadDocument())
             return false;
@@ -399,6 +407,7 @@ namespace lfs::vis::gui {
                            size_dirty || animation_active_;
         if (!dirty)
             return;
+        direct_cache_dirty_ = true;
 
         const bool need_content_measure =
             height_mode_ == PanelHeightMode::Content &&
@@ -483,6 +492,7 @@ namespace lfs::vis::gui {
 
             if (std::abs(actual_content_h - prev_content_h) > 2.0f) {
                 content_dirty_ = true;
+                direct_cache_dirty_ = true;
                 last_measure_w_ = 0;
             }
         }
@@ -517,7 +527,6 @@ namespace lfs::vis::gui {
 
         if (forwardInput(pos_x, pos_y))
             render_needed_ = true;
-
         applyHoverTooltip(w, pos_y, display_h);
 
         renderIfDirty(w, h, display_h);
@@ -623,11 +632,30 @@ namespace lfs::vis::gui {
 
         if (forwardInput(x, y))
             render_needed_ = true;
-
         applyHoverTooltip(pw, y, display_h);
 
         renderIfDirty(pw, ph, display_h);
         compositeDirectToScreen(x, y, w, display_h);
+    }
+
+    bool RmlPanelHost::drawDirectCached(float x, float y, float w, float h) {
+        if (w <= 0 || h <= 0)
+            return false;
+        if (!document_ || !rml_context_ || last_fbo_w_ <= 0 || last_fbo_h_ <= 0)
+            return false;
+
+        const int pw = static_cast<int>(w);
+        if (pw != last_fbo_w_)
+            return false;
+
+        int ph = 0;
+        float display_h = 0.0f;
+        resolveDirectRenderHeight(h, ph, display_h);
+        if (ph <= 0 || display_h <= 0.0f || ph > last_fbo_h_)
+            return false;
+
+        compositeDirectToScreen(x, y, w, display_h);
+        return true;
     }
 
     std::optional<RmlPanelHost::ShadowRect> RmlPanelHost::collectVisibleColorPickerPopupShadow(
@@ -704,12 +732,18 @@ namespace lfs::vis::gui {
         if (clip_y_min_ >= 0.0f && clip_y_max_ > clip_y_min_)
             visible_h = std::min(visible_h, clip_y_max_ - panel_y);
         const int clamp_h = std::max(1, static_cast<int>(std::floor(visible_h)));
+        if (manager_)
+            manager_->setContextNeedsPassiveMouseMoveFrames(rml_context_,
+                                                            tooltip_.hasActiveState());
         if (tooltip_.apply(body, last_forwarded_mx_, last_forwarded_my_, pw, clamp_h))
             render_needed_ = true;
+        if (manager_)
+            manager_->setContextNeedsPassiveMouseMoveFrames(rml_context_,
+                                                            tooltip_.hasActiveState());
     }
 
     void RmlPanelHost::compositeDirectToScreen(const float x, const float y,
-                                               const float w, const float h) const {
+                                               const float w, const float h) {
         if (!input_ || !manager_ || !manager_->getVulkanRenderInterface() ||
             w <= 0.0f || h <= 0.0f)
             return;
@@ -733,10 +767,42 @@ namespace lfs::vis::gui {
         const float screen_clip_y1 = clip_y1 - input_->screen_y;
         const float screen_clip_x2 = clip_x2 - input_->screen_x;
         const float screen_clip_y2 = clip_y2 - input_->screen_y;
-        manager_->queueVulkanContext(rml_context_, screen_x, screen_y, foreground_,
-                                     true,
-                                     screen_clip_x1, screen_clip_y1,
-                                     screen_clip_x2, screen_clip_y2);
+        if (animation_active_) {
+            manager_->queueVulkanContext(rml_context_,
+                                         screen_x,
+                                         screen_y,
+                                         foreground_,
+                                         true,
+                                         screen_clip_x1,
+                                         screen_clip_y1,
+                                         screen_clip_x2,
+                                         screen_clip_y2);
+            direct_cache_dirty_ = true;
+        } else {
+            const float draw_w = last_fbo_w_ > 0 ? static_cast<float>(last_fbo_w_) : w;
+            const float draw_h = last_fbo_h_ > 0 ? static_cast<float>(last_fbo_h_) : h;
+            manager_->queueCachedVulkanContext({
+                .context = rml_context_,
+                .cache = &direct_cache_,
+                .cache_width = last_fbo_w_,
+                .cache_height = last_fbo_h_,
+                .offset_x = screen_x,
+                .offset_y = screen_y,
+                .draw_width = draw_w,
+                .draw_height = draw_h,
+                .refresh = direct_cache_dirty_,
+                .foreground = foreground_,
+                .clip_enabled = true,
+                .cache_visible_region = true,
+                .clip = {
+                    .x1 = screen_clip_x1,
+                    .y1 = screen_clip_y1,
+                    .x2 = screen_clip_x2,
+                    .y2 = screen_clip_y2,
+                },
+            });
+            direct_cache_dirty_ = false;
+        }
 
         if (const auto popover_shadow = collectVisibleColorPickerPopupShadow(screen_x, screen_y)) {
             const auto& shadow = *popover_shadow;
@@ -748,7 +814,7 @@ namespace lfs::vis::gui {
     }
 
     bool RmlPanelHost::hitTestPanelShape(const float local_x, const float local_y,
-                                         const float logical_w, const float logical_h) {
+                                         const float logical_w, const float logical_h) const {
         if (local_x < 0.0f || local_y < 0.0f || local_x >= logical_w || local_y >= logical_h)
             return false;
 
@@ -821,15 +887,16 @@ namespace lfs::vis::gui {
                     rml_context_->ProcessTextInput(static_cast<Rml::Character>(cp));
             }
         };
-        const auto blur_focused_element = [&]() {
+        const auto blur_focused_element = [&]() -> bool {
             auto* const focused = rml_context_->GetFocusElement();
             if (!focused)
-                return;
+                return false;
 
             if (rml_input::wantsTextInput(focused))
                 flush_pending_text_input();
             focused->Blur();
             sync_text_focus();
+            return true;
         };
 
         float local_x = mouse_x - panel_x;
@@ -845,11 +912,16 @@ namespace lfs::vis::gui {
                 hovered = false;
         }
 
-        const bool hover_changed = (hovered != last_hovered_);
+        // While a button is captured the panel stays active for input
+        // forwarding so an in-progress drag survives the cursor leaving.
+        const bool any_capture = mouse_captured_[0] || mouse_captured_[1] || mouse_captured_[2];
+        const bool effective_hovered = hovered || any_capture;
+
+        const bool hover_changed = (effective_hovered != last_hovered_);
         if (hover_changed) {
-            last_hovered_ = hovered;
+            last_hovered_ = effective_hovered;
             had_input = true;
-            if (!hovered) {
+            if (!effective_hovered) {
                 last_forwarded_mx_ = -1;
                 last_forwarded_my_ = -1;
                 rml_context_->ProcessMouseLeave();
@@ -858,43 +930,67 @@ namespace lfs::vis::gui {
 
         const int rml_mx = static_cast<int>(local_x);
         const int rml_my = static_cast<int>(local_y);
-        const bool mouse_moved = hovered &&
+        const bool mouse_moved = effective_hovered &&
                                  (rml_mx != last_forwarded_mx_ || rml_my != last_forwarded_my_);
-        if (mouse_moved) {
-            had_input = true;
-        }
 
-        if (input.mouse_clicked[0] || input.mouse_released[0] ||
+        const bool pointer_event =
+            input.mouse_clicked[0] || input.mouse_released[0] ||
             input.mouse_clicked[1] || input.mouse_released[1] ||
-            input.mouse_wheel != 0.0f)
+            input.mouse_wheel != 0.0f;
+        const bool pointer_active =
+            pointer_event ||
+            input.mouse_down[0] || input.mouse_down[1] || input.mouse_down[2];
+        if (effective_hovered && pointer_event)
             had_input = true;
 
         const int mods = sdlModsToRml(input.key_ctrl, input.key_shift,
                                       input.key_alt, input.key_super);
 
         if (mouse_moved) {
+            auto* const prev_hover = rml_context_->GetHoverElement();
             last_forwarded_mx_ = rml_mx;
             last_forwarded_my_ = rml_my;
             rml_context_->ProcessMouseMove(rml_mx, rml_my, mods);
+            auto* const next_hover = rml_context_->GetHoverElement();
+            if (pointer_active || next_hover != prev_hover)
+                had_input = true;
         }
+
+        const auto deliver_button_down = [&](const int button) {
+            rml_context_->ProcessMouseButtonDown(button, mods);
+            mouse_captured_[button] = true;
+        };
+        const auto deliver_button_up = [&](const int button) {
+            rml_context_->ProcessMouseButtonUp(button, mods);
+            mouse_captured_[button] = false;
+            had_input = true;
+        };
+
         if (hovered) {
             if (input.mouse_clicked[0])
-                rml_context_->ProcessMouseButtonDown(0, mods);
-            if (input.mouse_released[0])
-                rml_context_->ProcessMouseButtonUp(0, mods);
-
+                deliver_button_down(0);
             if (input.mouse_clicked[1])
-                rml_context_->ProcessMouseButtonDown(1, mods);
-            if (input.mouse_released[1])
-                rml_context_->ProcessMouseButtonUp(1, mods);
-
-            if (input.mouse_wheel != 0.0f)
+                deliver_button_down(1);
+            if (input.mouse_wheel != 0.0f) {
                 rml_context_->ProcessMouseWheel(Rml::Vector2f(0, -input.mouse_wheel), mods);
-
+                // Re-resolve hover against the new scroll offset so row text
+                // doesn't render against a stale layout for one frame.
+                rml_context_->ProcessMouseMove(rml_mx, rml_my, mods);
+                had_input = true;
+            }
             if (input.mouse_clicked[0])
                 sync_text_focus();
         } else if (input.mouse_clicked[0]) {
-            blur_focused_element();
+            had_input |= blur_focused_element();
+        }
+
+        // Forward release regardless of hover so a drag begun on the scrollbar
+        // ends when the user lets go anywhere on screen.
+        for (int button = 0; button < 2; ++button) {
+            if (mouse_captured_[button] &&
+                (input.mouse_released[button] || !input.mouse_down[button])) {
+                deliver_button_up(button);
+            }
         }
 
         if (hovered) {
@@ -902,9 +998,8 @@ namespace lfs::vis::gui {
                 tooltip_.setHover(resolveRmlTooltip(hover), hover);
         }
 
-        if (input.viewport_keyboard_focus) {
-            blur_focused_element();
-        }
+        if (input.viewport_keyboard_focus)
+            had_input |= blur_focused_element();
 
         bool forward_keys =
             rml_input::hasFocusedKeyboardTarget(rml_context_->GetFocusElement()) &&

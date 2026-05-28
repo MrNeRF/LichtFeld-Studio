@@ -25,6 +25,7 @@ namespace lfs::vis::op {
         using lfs::core::events::state::PLYRemoved;
         using lfs::core::events::state::SceneCleared;
         constexpr auto PROPERTY_COALESCE_WINDOW = std::chrono::milliseconds(500);
+        constexpr size_t DENSE_SELECTION_SNAPSHOT_THRESHOLD = 1u << 20;
 
         bool cropBoxesEqual(const lfs::core::CropBoxData& lhs, const lfs::core::CropBoxData& rhs) {
             return lhs.min == rhs.min &&
@@ -464,6 +465,36 @@ namespace lfs::vis::op {
                 storage.stored_values = std::move(before_tensor);
             }
 
+            return storage;
+        }
+
+        TensorSwapStorage buildDenseTensorSwapStorage(const std::shared_ptr<lfs::core::Tensor>& before,
+                                                      const lfs::core::Tensor* after,
+                                                      const size_t total_size,
+                                                      const lfs::core::Device fallback_device,
+                                                      const lfs::core::DataType dtype,
+                                                      const bool before_present,
+                                                      const bool after_present) {
+            TensorSwapStorage storage;
+            storage.mode = TensorSwapStorageMode::DENSE;
+            storage.total_size = total_size;
+            storage.device = fallback_device;
+            storage.dtype = dtype;
+            storage.before_present = before_present;
+            storage.after_present = after_present;
+
+            if (total_size == 0) {
+                storage.mode = TensorSwapStorageMode::NONE;
+                return storage;
+            }
+
+            const lfs::core::Device device =
+                (after && after->is_valid()) ? after->device()
+                                             : ((before && before->is_valid()) ? before->device() : fallback_device);
+            storage.device = device;
+            if (before_present) {
+                storage.stored_values = materializeMaskTensor(before, total_size, device, dtype);
+            }
             return storage;
         }
 
@@ -1156,6 +1187,12 @@ namespace lfs::vis::op {
         : scene_(scene),
           name_(std::move(name)) {}
 
+    void SceneSnapshot::setSelectionChangeHint(const bool changed, const bool prefer_dense_storage) {
+        selection_change_known_ = true;
+        selection_changed_ = changed;
+        prefer_dense_selection_storage_ = prefer_dense_storage;
+    }
+
     void SceneSnapshot::captureDeletedMasks(
         std::unordered_map<std::string, TensorPresenceSnapshot>& target) {
         target.clear();
@@ -1235,14 +1272,30 @@ namespace lfs::vis::op {
                 : ((selection_before_.mask && selection_before_.mask->is_valid())
                        ? selection_before_.mask->device()
                        : lfs::core::Device::CUDA);
-        selection_mask_storage_ = buildTensorSwapStorage(
-            selection_before_.mask,
-            selection_after.get(),
-            total_size,
-            fallback_device,
-            lfs::core::DataType::UInt8,
-            selection_before_.has_selection,
-            selection_after_metadata_.has_selection);
+        if (selection_change_known_ && !selection_changed_) {
+            selection_mask_storage_ = {};
+        } else if (selection_change_known_ &&
+                   selection_changed_ &&
+                   prefer_dense_selection_storage_ &&
+                   total_size >= DENSE_SELECTION_SNAPSHOT_THRESHOLD) {
+            selection_mask_storage_ = buildDenseTensorSwapStorage(
+                selection_before_.mask,
+                selection_after.get(),
+                total_size,
+                fallback_device,
+                lfs::core::DataType::UInt8,
+                selection_before_.has_selection,
+                selection_after_metadata_.has_selection);
+        } else {
+            selection_mask_storage_ = buildTensorSwapStorage(
+                selection_before_.mask,
+                selection_after.get(),
+                total_size,
+                fallback_device,
+                lfs::core::DataType::UInt8,
+                selection_before_.has_selection,
+                selection_after_metadata_.has_selection);
+        }
         selection_before_.mask.reset();
     }
 

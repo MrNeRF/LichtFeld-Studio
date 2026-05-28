@@ -367,7 +367,8 @@ namespace lfs::vis::vksplat {
     }
 
     std::expected<RawDeviceInputLayout, std::string> rawDeviceInputLayout(
-        const lfs::core::SplatData& splat_data) {
+        const lfs::core::SplatData& splat_data,
+        const int upload_sh_degree) {
         const std::size_t n = static_cast<std::size_t>(splat_data.size());
         if (n == 0) {
             return std::unexpected("VkSplat cannot render an empty model");
@@ -391,17 +392,29 @@ namespace lfs::vis::vksplat {
             return std::unexpected("VkSplat expected SH DC coefficients shaped [N, 1, 3] or [N, 3]");
         }
         const auto layout_rest = static_cast<std::uint32_t>(splat_data.max_sh_coeffs_rest());
-        const std::size_t layout_shN_bytes =
+        const int effective_upload_sh_degree =
+            upload_sh_degree < 0
+                ? splat_data.get_max_sh_degree()
+                : std::clamp(upload_sh_degree, 0, splat_data.get_max_sh_degree());
+        const auto upload_layout_rest = std::min<std::uint32_t>(
+            layout_rest,
+            lfs::core::sh_rest_coefficients_for_degree(effective_upload_sh_degree));
+        const bool omit_shN_upload = upload_layout_rest == 0;
+        const std::size_t resident_shN_bytes =
             lfs::core::sh_swizzled_float_count(n, layout_rest) * sizeof(float);
-        const std::size_t shN_bytes = layout_rest == 0 ? sizeof(float4) : layout_shN_bytes;
-        if (shN_raw.is_valid() && shN_raw.numel() > 0) {
+        const std::size_t upload_shN_bytes =
+            lfs::core::sh_swizzled_float_count(n, upload_layout_rest) * sizeof(float);
+        const std::size_t shN_bytes = omit_shN_upload
+                                          ? sizeof(float4)
+                                          : upload_shN_bytes;
+        if (!omit_shN_upload && shN_raw.is_valid() && shN_raw.numel() > 0) {
             if (shN_raw.ndim() != 1) {
                 return std::unexpected("VkSplat expected swizzled SH rest coefficients as a 1D tensor");
             }
-            if (static_cast<std::size_t>(shN_raw.numel()) * sizeof(float) < layout_shN_bytes) {
+            if (static_cast<std::size_t>(shN_raw.numel()) * sizeof(float) < resident_shN_bytes) {
                 return std::unexpected("VkSplat swizzled SH rest tensor is smaller than expected");
             }
-        } else if (splat_data.max_sh_coeffs_rest() > 0) {
+        } else if (!omit_shN_upload && splat_data.max_sh_coeffs_rest() > 0) {
             return std::unexpected("VkSplat expected swizzled SH rest coefficients for max SH degree");
         }
 
@@ -413,130 +426,37 @@ namespace lfs::vis::vksplat {
             .rotations_bytes = n * 4 * sizeof(float),
             .scaling_bytes = n * 3 * sizeof(float),
             .opacity_bytes = n * sizeof(float),
+            .shN_layout_rest = upload_layout_rest,
+            .omits_shN = omit_shN_upload,
         };
     }
 
-    std::expected<void, std::string> copyRawDeviceInputsToBuffer(
+    std::expected<void, std::string> copyRawOpacityToBuffer(
         const lfs::core::SplatData& splat_data,
-        void* const xyz_dst,
-        void* const sh0_dst,
-        void* const shN_dst,
-        void* const rotations_dst,
-        void* const scaling_dst,
         void* const opacity_dst,
         const cudaStream_t stream) {
-        auto layout = rawDeviceInputLayout(splat_data);
-        if (!layout) {
-            return std::unexpected(layout.error());
-        }
-        if (xyz_dst == nullptr || sh0_dst == nullptr || shN_dst == nullptr ||
-            rotations_dst == nullptr || scaling_dst == nullptr || opacity_dst == nullptr) {
-            return std::unexpected("VkSplat raw input copy received a null destination region");
+        if (opacity_dst == nullptr) {
+            return std::unexpected("VkSplat raw opacity copy received a null destination region");
         }
 
-        const Tensor& means_raw = splat_data.means_raw();
-        const Tensor& rotation_raw = splat_data.rotation_raw();
-        const Tensor& scaling_raw = splat_data.scaling_raw();
+        const auto n = static_cast<std::size_t>(splat_data.size());
+        if (n == 0) {
+            return std::unexpected("VkSplat raw opacity copy received an empty model");
+        }
+
         const Tensor& opacity_raw = splat_data.opacity_raw();
-        const Tensor& sh0_raw = splat_data.sh0_raw();
-        const Tensor& shN_raw = splat_data.shN_raw();
-
-        if (auto ok = requireCudaFloat32Contiguous(means_raw, "means"); !ok) {
-            return std::unexpected(ok.error());
-        }
-        if (auto ok = requireCudaFloat32Contiguous(rotation_raw, "rotation"); !ok) {
-            return std::unexpected(ok.error());
-        }
-        if (auto ok = requireCudaFloat32Contiguous(scaling_raw, "scaling"); !ok) {
-            return std::unexpected(ok.error());
+        if (!validOpacityShape(opacity_raw, n)) {
+            return std::unexpected("VkSplat opacity tensor must be shaped [N] or [N,1]");
         }
         if (auto ok = requireCudaFloat32Contiguous(opacity_raw, "opacity"); !ok) {
-            return std::unexpected(ok.error());
-        }
-        if (auto ok = requireCudaFloat32Contiguous(sh0_raw, "sh0"); !ok) {
-            return std::unexpected(ok.error());
-        }
-        const bool has_shN = shN_raw.is_valid() && shN_raw.numel() > 0;
-        if (has_shN) {
-            if (auto ok = requireCudaFloat32Contiguous(shN_raw, "shN"); !ok) {
-                return std::unexpected(ok.error());
-            }
-        }
-
-        if (auto ok = waitForInputStream(stream, means_raw, "means"); !ok) {
-            return std::unexpected(ok.error());
-        }
-        if (auto ok = waitForInputStream(stream, rotation_raw, "rotation"); !ok) {
-            return std::unexpected(ok.error());
-        }
-        if (auto ok = waitForInputStream(stream, scaling_raw, "scaling"); !ok) {
             return std::unexpected(ok.error());
         }
         if (auto ok = waitForInputStream(stream, opacity_raw, "opacity"); !ok) {
             return std::unexpected(ok.error());
         }
-        if (auto ok = waitForInputStream(stream, sh0_raw, "sh0"); !ok) {
-            return std::unexpected(ok.error());
-        }
-        if (has_shN) {
-            if (auto ok = waitForInputStream(stream, shN_raw, "shN"); !ok) {
-                return std::unexpected(ok.error());
-            }
-        }
 
-        const auto copy = [&](void* dst,
-                              const Tensor& src,
-                              const std::size_t bytes,
-                              const char* const label) -> std::expected<void, std::string> {
-            const cudaError_t status = cudaMemcpyAsync(
-                dst, src.data_ptr(), bytes, cudaMemcpyDeviceToDevice, stream);
-            if (status != cudaSuccess) {
-                return std::unexpected(cudaErrorMessage(label, status));
-            }
-            return {};
-        };
-
-        if (auto ok = copy(xyz_dst, means_raw, layout->xyz_bytes,
-                           "cudaMemcpyAsync(VkSplat raw means -> Vulkan input)");
-            !ok) {
-            return std::unexpected(ok.error());
-        }
-        if (auto ok = copy(sh0_dst, sh0_raw, layout->sh0_bytes,
-                           "cudaMemcpyAsync(VkSplat raw sh0 -> Vulkan input)");
-            !ok) {
-            return std::unexpected(ok.error());
-        }
-        if (has_shN) {
-            if (auto ok = copy(shN_dst, shN_raw, layout->shN_bytes,
-                               "cudaMemcpyAsync(VkSplat raw shN -> Vulkan input)");
-                !ok) {
-                return std::unexpected(ok.error());
-            }
-        } else {
-            const cudaError_t status = cudaMemsetAsync(shN_dst, 0, layout->shN_bytes, stream);
-            if (status != cudaSuccess) {
-                return std::unexpected(cudaErrorMessage("cudaMemsetAsync(VkSplat raw shN fallback)", status));
-            }
-        }
-        if (auto ok = copy(rotations_dst, rotation_raw, layout->rotations_bytes,
-                           "cudaMemcpyAsync(VkSplat raw rotation -> Vulkan input)");
-            !ok) {
-            return std::unexpected(ok.error());
-        }
-        if (auto ok = copy(scaling_dst, scaling_raw, layout->scaling_bytes,
-                           "cudaMemcpyAsync(VkSplat raw scaling -> Vulkan input)");
-            !ok) {
-            return std::unexpected(ok.error());
-        }
-        // Honor SplatData::deleted() in the rasterizer: where the legacy CUDA
-        // rasterizer skipped tombstoned gaussians inside the kernel, the
-        // VkSplat shader has no equivalent skip flag, so bake the mask into the
-        // uploaded opacity by writing a strongly-negative raw value (sigmoid →
-        // ~0) for deleted entries. Re-uploading whenever the mask changes is
-        // handled by ModelInputSnapshot tracking deleted().
         if (splat_data.has_deleted_mask()) {
             const Tensor& deleted = splat_data.deleted();
-            const auto n = static_cast<std::size_t>(splat_data.size());
             if (deleted.dtype() != DataType::Bool ||
                 deleted.device() != Device::CUDA ||
                 !deleted.is_contiguous() ||
@@ -556,12 +476,19 @@ namespace lfs::vis::vksplat {
             if (status != cudaSuccess) {
                 return std::unexpected(cudaErrorMessage("launchPackOpacityMaskingDeleted", status));
             }
-        } else if (auto ok = copy(opacity_dst, opacity_raw, layout->opacity_bytes,
-                                  "cudaMemcpyAsync(VkSplat raw opacity -> Vulkan input)");
-                   !ok) {
-            return std::unexpected(ok.error());
+            return {};
         }
 
+        const cudaError_t status = cudaMemcpyAsync(
+            opacity_dst,
+            opacity_raw.data_ptr(),
+            n * sizeof(float),
+            cudaMemcpyDeviceToDevice,
+            stream);
+        if (status != cudaSuccess) {
+            return std::unexpected(cudaErrorMessage(
+                "cudaMemcpyAsync(VkSplat raw opacity -> Vulkan opacity copy)", status));
+        }
         return {};
     }
 

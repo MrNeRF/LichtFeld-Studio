@@ -20,6 +20,8 @@ target_link_libraries(lfs_vulkan_rasterizer
         PUBLIC
         Vulkan::Vulkan
         GPUOpen::VulkanMemoryAllocator
+        PRIVATE
+        lfs_diagnostics
 )
 
 target_compile_features(lfs_vulkan_rasterizer PUBLIC cxx_std_23)
@@ -31,9 +33,11 @@ target_compile_definitions(lfs_vulkan_rasterizer PRIVATE
         $<$<PLATFORM_ID:Windows>:NOMINMAX>
 )
 
-set(LFS_VULKAN_RASTERIZER_SPV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shader")
+set(LFS_VULKAN_RASTERIZER_SPV_DIR "${CMAKE_CURRENT_BINARY_DIR}/shader")
+set_property(TARGET lfs_vulkan_rasterizer PROPERTY
+        LFS_VULKAN_RASTERIZER_SPV_DIR "${LFS_VULKAN_RASTERIZER_SPV_DIR}")
 target_compile_definitions(lfs_vulkan_rasterizer PUBLIC
-        LFS_VULKAN_RASTERIZER_SPV_DIR="${LFS_VULKAN_RASTERIZER_SPV_DIR}/"
+        LFS_VULKAN_RASTERIZER_DEV_SPV_DIR="${LFS_VULKAN_RASTERIZER_SPV_DIR}/"
 )
 
 # ---------------------------------------------------------------------------
@@ -62,8 +66,8 @@ message(STATUS "vulkan: slangc=${SLANGC}")
 message(STATUS "vulkan: glslang=${GLSLANG}")
 
 set(_VULKAN_SHADER_SRC ${CMAKE_CURRENT_SOURCE_DIR}/shader/src)
-set(_VULKAN_GENERATED_OUT ${CMAKE_CURRENT_SOURCE_DIR}/shader/generated)
-set(_VULKAN_RADIX_OUT ${CMAKE_CURRENT_SOURCE_DIR}/shader/radix_sort)
+set(_VULKAN_GENERATED_OUT ${LFS_VULKAN_RASTERIZER_SPV_DIR}/generated)
+set(_VULKAN_RADIX_OUT ${LFS_VULKAN_RASTERIZER_SPV_DIR}/radix_sort)
 
 file(MAKE_DIRECTORY ${_VULKAN_GENERATED_OUT})
 file(MAKE_DIRECTORY ${_VULKAN_RADIX_OUT})
@@ -105,12 +109,17 @@ function(_vulkan_add_slang_shader OUT_NAME SRC_FILE)
 endfunction()
 
 function(_vulkan_add_glsl_shader OUT_NAME SRC_FILE)
+        set(_defs "")
+        foreach(D ${ARGN})
+                list(APPEND _defs "-D${D}")
+        endforeach()
         set(_out ${_VULKAN_RADIX_OUT}/${OUT_NAME}.spv)
         add_custom_command(
                 OUTPUT ${_out}
                 COMMAND ${GLSLANG}
                         -V
                         --target-env vulkan1.2
+                        ${_defs}
                         ${_VULKAN_SHADER_SRC}/radix_sort/${SRC_FILE}
                         -o ${_out}
                 DEPENDS ${_VULKAN_SHADER_SRC}/radix_sort/${SRC_FILE} ${_VULKAN_RADIX_DEPS}
@@ -135,13 +144,21 @@ _vulkan_add_slang_shader(compute_tile_ranges       tile_shader.slang EXPORT_MODE
 # Two-stage sort helper shaders
 _vulkan_add_slang_shader(seed_primitive_indices    seed_primitive_indices.slang)
 _vulkan_add_slang_shader(apply_depth_ordering      apply_depth_ordering.slang)
+_vulkan_add_slang_shader(visible_flags             visible_flags.slang)
+_vulkan_add_slang_shader(prepare_visible_sort      prepare_visible_sort.slang)
+_vulkan_add_slang_shader(prepare_tile_sort         prepare_tile_sort.slang)
+_vulkan_add_slang_shader(compact_visible_primitives compact_visible_primitives.slang)
 
 # vertex_shader.slang → projection_forward variants
 _vulkan_add_slang_shader(projection_forward        vertex_shader.slang EXPORT_MODE=0)
 _vulkan_add_slang_shader(projection_forward_3dgut  vertex_shader.slang EXPORT_MODE=0 LFS_3DGUT_PROJECTION=1)
 
-# selection_mask.slang → compact 1-byte-per-splat brush/rectangle masks
+# selection_mask.slang → compact 1-byte-per-splat brush/rectangle/polygon masks
 _vulkan_add_slang_shader(selection_mask            selection_mask.slang)
+
+# selection_polygon_rasterize.slang → rasterizes a screen-space polygon into a
+# coverage mask consumed by selection_mask in POLYGON_MASK mode.
+_vulkan_add_slang_shader(selection_polygon_rasterize selection_polygon_rasterize.slang)
 
 # alphablend_shader.slang → forward variants
 _vulkan_add_slang_shader(rasterize_forward         alphablend_shader.slang EXPORT_MODE=0)
@@ -151,6 +168,9 @@ _vulkan_add_slang_shader(rasterize_forward_3dgut   alphablend_shader.slang EXPOR
 _vulkan_add_glsl_shader(upsweep    upsweep.comp)
 _vulkan_add_glsl_shader(spine      spine.comp)
 _vulkan_add_glsl_shader(downsweep  downsweep.comp)
+_vulkan_add_glsl_shader(upsweep_indirect    upsweep.comp   RADIX_SORT_COUNT_BUFFER=1)
+_vulkan_add_glsl_shader(spine_indirect      spine.comp     RADIX_SORT_COUNT_BUFFER=1)
+_vulkan_add_glsl_shader(downsweep_indirect  downsweep.comp RADIX_SORT_COUNT_BUFFER=1)
 
 add_custom_target(lfs_vulkan_rasterizer_shaders DEPENDS ${VULKAN_RASTERIZER_SHADER_OUTPUTS})
 add_dependencies(lfs_vulkan_rasterizer lfs_vulkan_rasterizer_shaders)

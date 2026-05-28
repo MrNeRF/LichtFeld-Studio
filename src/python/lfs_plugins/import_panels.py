@@ -69,6 +69,7 @@ from .asset_manager_integration import (
 from .asset_index import resolve_asset_manager_storage_path
 from .types import Panel
 from .rml_keys import KI_ESCAPE, KI_RETURN
+from .ui import RuntimeState
 from .url_downloader import (
     URLDownloadError,
     UnsupportedURLError,
@@ -342,7 +343,22 @@ def _register_discovered_assets(
         )
         if thumbnails is not None:
             try:
-                thumb_path = thumbnails.generate_placeholder(asset.type, asset.id)
+                thumb_path = None
+                if asset.type == "dataset" and hasattr(thumbnails, "generate_dataset_preview"):
+                    thumb_path = thumbnails.generate_dataset_preview(
+                        asset.type,
+                        asset.id,
+                        file_path,
+                        metadata.get("format_specific", {}) or {},
+                    )
+                elif hasattr(thumbnails, "generate_rendered_preview"):
+                    thumb_path = thumbnails.generate_rendered_preview(
+                        asset.type,
+                        asset.id,
+                        file_path,
+                    )
+                if thumb_path is None:
+                    thumb_path = thumbnails.generate_placeholder(asset.type, asset.id)
                 index.update_asset(asset.id, thumbnail_path=str(thumb_path))
             except Exception:
                 _watch_log(
@@ -360,7 +376,7 @@ def _register_discovered_assets(
 class _ImportDialogPanel(Panel):
     """Common behavior for retained import dialogs."""
 
-    update_interval_ms = 200
+    update_policy = "dirty"
     form_id = ""
 
     def on_mount(self, doc):
@@ -383,6 +399,31 @@ class _ImportDialogPanel(Panel):
                 lambda p=prop: self._capture_bound_input_value(p),
                 lambda snapshot, p=prop: self._restore_bound_input_value(p, snapshot),
             )
+        self._subscribe_reactive_state()
+
+    def on_unmount(self, _doc):
+        self._unsubscribe_reactive_state()
+
+    def _subscribe_reactive_state(self):
+        if getattr(self, "_reactive_unsubscribers", None):
+            return
+
+        self._reactive_unsubscribers = [
+            RuntimeState.language_generation.subscribe(lambda _value: self._request_reactive_update()),
+        ]
+
+    def _unsubscribe_reactive_state(self):
+        for unsubscribe in getattr(self, "_reactive_unsubscribers", []):
+            try:
+                unsubscribe()
+            except Exception:
+                pass
+        self._reactive_unsubscribers = []
+
+    def _request_reactive_update(self):
+        handle = getattr(self, "_handle", None)
+        if handle:
+            w.request_model_update(handle)
 
     def _on_keydown(self, event):
         key = int(event.get_parameter("key_identifier", "0"))
@@ -925,6 +966,7 @@ class URLImportPanel(_ImportDialogPanel):
         self._sync_formats_ui()
 
     def on_unmount(self, doc):
+        self._unsubscribe_reactive_state()
         # Cancel any in-progress download before unmounting
         if self._url_import_in_progress and not self._url_import_cancelled:
             self._url_import_cancelled = True
@@ -1345,7 +1387,7 @@ class WatchDirsDialogPanel(Panel):
     template = "rmlui/watch_dirs_dialog.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
     size = (520, 0)
-    update_interval_ms = 200
+    update_policy = "dirty"
 
     def __init__(self):
         global _watch_dirs_dialog_panel
@@ -1373,14 +1415,36 @@ class WatchDirsDialogPanel(Panel):
     def on_mount(self, doc):
         super().on_mount(doc)
         self._last_lang = lf.ui.get_current_language()
+        self._subscribe_reactive_state()
 
     def on_unmount(self, doc):
+        self._unsubscribe_reactive_state()
         self._scan_cancel_event.set()
         scan_thread = self._scan_thread
         self._scan_thread = None
         _join_thread(scan_thread, "AssetManagerWatch scan")
         self._handle = None
         doc.remove_data_model("watch_dirs_dialog")
+
+    def _subscribe_reactive_state(self):
+        if getattr(self, "_reactive_unsubscribers", None):
+            return
+
+        self._reactive_unsubscribers = [
+            RuntimeState.language_generation.subscribe(lambda _value: self._request_reactive_update()),
+        ]
+
+    def _unsubscribe_reactive_state(self):
+        for unsubscribe in getattr(self, "_reactive_unsubscribers", []):
+            try:
+                unsubscribe()
+            except Exception:
+                pass
+        self._reactive_unsubscribers = []
+
+    def _request_reactive_update(self):
+        if self._handle:
+            w.request_model_update(self._handle)
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("watch_dirs_dialog")

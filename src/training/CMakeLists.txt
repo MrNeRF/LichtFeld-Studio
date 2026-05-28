@@ -124,6 +124,7 @@ target_include_directories(lfs_training SYSTEM PUBLIC
 target_link_libraries(lfs_training
     PUBLIC
         lfs_core                # Depends on new core module (SplatData, Tensor)
+        lfs_diagnostics         # Live VRAM diagnostic accounting
         lfs_io                  # For CacheLoader, exporter, pipelined loader
         lfs_event_bridge        # Shared event bridge for cross-module singletons
         lfs_training_kernels    # LibTorch-free SSIM kernels

@@ -99,6 +99,7 @@ class _HandleStub:
         self.records = {}
         self.dirty_fields = []
         self.dirty_all_calls = 0
+        self.request_update_count = 0
 
     def update_record_list(self, name, rows):
         self.records[name] = rows
@@ -108,6 +109,9 @@ class _HandleStub:
 
     def dirty_all(self):
         self.dirty_all_calls += 1
+
+    def request_update(self):
+        self.request_update_count += 1
 
 
 class _ElementStub:
@@ -180,6 +184,29 @@ def test_scripts_panel_builds_retained_records(scripts_panel_module):
             "error_message": "boom",
         },
     ]
+
+
+def test_scripts_panel_uses_dirty_update_policy(scripts_panel_module):
+    module, _state = scripts_panel_module
+    assert module.ScriptsPanel.update_policy == "dirty"
+    assert "update_interval_ms" not in module.ScriptsPanel.__dict__
+
+
+def test_scripts_panel_requests_update_from_script_generation(scripts_panel_module):
+    module, _state = scripts_panel_module
+    panel = module.ScriptsPanel()
+    panel._handle = _HandleStub()
+    module.RuntimeState.scripts_generation._fallback = 0
+
+    panel._subscribe_reactive_state()
+    module.RuntimeState.scripts_generation.value = 1
+
+    assert panel._handle.request_update_count == 1
+    assert panel._handle.dirty_all_calls == 0
+
+    panel._unsubscribe_reactive_state()
+    module.RuntimeState.scripts_generation.value = 2
+    assert panel._handle.request_update_count == 1
 
 
 def test_scripts_panel_checkbox_change_updates_script_state(scripts_panel_module):

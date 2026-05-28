@@ -9,9 +9,12 @@
 #include "core/path_utils.hpp"
 #include "core/tensor.hpp"
 #include "cuda/image_format_kernels.cuh"
+#include "diagnostics/vram_profiler.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <condition_variable>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <cuda.h> // For CUcontext, cuCtxGetCurrent, cuCtxSetCurrent
@@ -21,6 +24,7 @@
 #include <nvimgcodec.h>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_map>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -369,9 +373,256 @@ namespace lfs::io {
             return false;
         }
 
+        bool cuda_used_bytes_now(size_t& used_bytes) {
+            size_t free_bytes = 0;
+            size_t total_bytes = 0;
+            const cudaError_t err = cudaMemGetInfo(&free_bytes, &total_bytes);
+            if (err != cudaSuccess || total_bytes < free_bytes) {
+                return false;
+            }
+            used_bytes = total_bytes - free_bytes;
+            return true;
+        }
+
+        bool cuda_default_pool_used_now(size_t& used_bytes) {
+#if CUDART_VERSION >= 12080
+            int device = 0;
+            cudaMemPool_t pool = nullptr;
+            std::uint64_t pool_used = 0;
+            if (cudaGetDevice(&device) == cudaSuccess &&
+                cudaDeviceGetDefaultMemPool(&pool, device) == cudaSuccess &&
+                cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemCurrent, &pool_used) == cudaSuccess) {
+                used_bytes = static_cast<size_t>(pool_used);
+                return true;
+            }
+#else
+            (void)used_bytes;
+#endif
+            return false;
+        }
+
+        struct CudaUsageSnapshot {
+            size_t total_used = 0;
+            size_t pool_used = 0;
+            bool total_valid = false;
+            bool pool_valid = false;
+        };
+
+        CudaUsageSnapshot cuda_usage_snapshot_now() {
+            CudaUsageSnapshot snapshot;
+            snapshot.total_valid = cuda_used_bytes_now(snapshot.total_used);
+            snapshot.pool_valid = cuda_default_pool_used_now(snapshot.pool_used);
+            return snapshot;
+        }
+
+        struct NvCodecVramBytes {
+            size_t driver_or_direct_bytes = 0;
+            size_t default_pool_bytes = 0;
+
+            [[nodiscard]] size_t total() const {
+                return driver_or_direct_bytes + default_pool_bytes;
+            }
+        };
+
+        std::mutex& nvcodec_vram_mutex() {
+            static std::mutex mutex;
+            return mutex;
+        }
+
+        std::unordered_map<const void*, NvCodecVramBytes>& nvcodec_vram_entries() {
+            static std::unordered_map<const void*, NvCodecVramBytes> entries;
+            return entries;
+        }
+
+        void publish_nvcodec_vram_bytes_locked() {
+            NvCodecVramBytes total_bytes;
+            for (const auto& [_, bytes] : nvcodec_vram_entries()) {
+                total_bytes.driver_or_direct_bytes += bytes.driver_or_direct_bytes;
+                total_bytes.default_pool_bytes += bytes.default_pool_bytes;
+            }
+
+            auto& profiler = lfs::diagnostics::VramProfiler::instance();
+            profiler.clearStaticScope("io.nvimagecodec");
+            if (total_bytes.driver_or_direct_bytes > 0) {
+                profiler.recordStaticBytes("io.nvimagecodec",
+                                           "driver_or_direct",
+                                           total_bytes.driver_or_direct_bytes,
+                                           lfs::diagnostics::VramAllocationMethod::External);
+            }
+            if (total_bytes.default_pool_bytes > 0) {
+                profiler.recordStaticBytes("io.nvimagecodec",
+                                           "default_pool",
+                                           total_bytes.default_pool_bytes,
+                                           lfs::diagnostics::VramAllocationMethod::Async);
+            }
+        }
+
+        void register_nvcodec_vram(const void* owner, const NvCodecVramBytes bytes) {
+            if (!owner || bytes.total() == 0) {
+                return;
+            }
+
+            std::lock_guard<std::mutex> lock(nvcodec_vram_mutex());
+            nvcodec_vram_entries()[owner] = bytes;
+            publish_nvcodec_vram_bytes_locked();
+        }
+
+        void unregister_nvcodec_vram(const void* owner) {
+            if (!owner) {
+                return;
+            }
+
+            std::lock_guard<std::mutex> lock(nvcodec_vram_mutex());
+            if (nvcodec_vram_entries().erase(owner) == 0) {
+                return;
+            }
+            publish_nvcodec_vram_bytes_locked();
+        }
+
+        class NvCodecVramAccount {
+        public:
+            const void* owner = nullptr;
+            mutable std::mutex mutex;
+            NvCodecVramBytes baseline_bytes;
+            NvCodecVramBytes max_lazy_delta_bytes;
+            size_t max_lazy_total_delta_bytes = 0;
+            std::atomic<int> probe_budget{32};
+
+            void set_owner(const void* new_owner) {
+                std::lock_guard<std::mutex> lock(mutex);
+                owner = new_owner;
+            }
+
+            bool begin_probe(CudaUsageSnapshot& before) {
+                int remaining = probe_budget.load(std::memory_order_relaxed);
+                while (remaining > 0) {
+                    if (probe_budget.compare_exchange_weak(
+                            remaining, remaining - 1, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+                        before = cuda_usage_snapshot_now();
+                        return before.total_valid;
+                    }
+                }
+                return false;
+            }
+
+            void end_probe(const CudaUsageSnapshot& before) {
+                const auto after = cuda_usage_snapshot_now();
+                if (!before.total_valid || !after.total_valid ||
+                    after.total_used <= before.total_used) {
+                    return;
+                }
+                observe_lazy_delta(delta_bytes(before, after));
+            }
+
+            void set_baseline_bytes(const NvCodecVramBytes bytes) {
+                const void* publish_owner = nullptr;
+                NvCodecVramBytes publish_bytes;
+                {
+                    std::lock_guard<std::mutex> lock(mutex);
+                    baseline_bytes = bytes;
+                    publish_owner = owner;
+                    publish_bytes = total_locked();
+                }
+                publish(publish_owner, publish_bytes);
+            }
+
+            void observe_lazy_delta(const NvCodecVramBytes bytes) {
+                const size_t total_bytes = bytes.total();
+                if (total_bytes == 0) {
+                    return;
+                }
+
+                const void* publish_owner = nullptr;
+                NvCodecVramBytes publish_bytes;
+                {
+                    std::lock_guard<std::mutex> lock(mutex);
+                    if (total_bytes <= max_lazy_total_delta_bytes) {
+                        return;
+                    }
+                    max_lazy_delta_bytes = bytes;
+                    max_lazy_total_delta_bytes = total_bytes;
+                    publish_owner = owner;
+                    publish_bytes = total_locked();
+                }
+                publish(publish_owner, publish_bytes);
+            }
+
+            void unregister() {
+                const void* old_owner = nullptr;
+                {
+                    std::lock_guard<std::mutex> lock(mutex);
+                    old_owner = owner;
+                    owner = nullptr;
+                    baseline_bytes = {};
+                    max_lazy_delta_bytes = {};
+                    max_lazy_total_delta_bytes = 0;
+                }
+                unregister_nvcodec_vram(old_owner);
+            }
+
+            static NvCodecVramBytes delta_bytes(const CudaUsageSnapshot& before,
+                                                const CudaUsageSnapshot& after) {
+                NvCodecVramBytes bytes;
+                const size_t total_delta = after.total_used - before.total_used;
+                size_t pool_delta = 0;
+                if (before.pool_valid && after.pool_valid && after.pool_used > before.pool_used) {
+                    pool_delta = std::min(after.pool_used - before.pool_used, total_delta);
+                }
+                bytes.default_pool_bytes = pool_delta;
+                bytes.driver_or_direct_bytes = total_delta - pool_delta;
+                return bytes;
+            }
+
+        private:
+            NvCodecVramBytes total_locked() const {
+                return NvCodecVramBytes{
+                    .driver_or_direct_bytes = baseline_bytes.driver_or_direct_bytes +
+                                              max_lazy_delta_bytes.driver_or_direct_bytes,
+                    .default_pool_bytes = baseline_bytes.default_pool_bytes +
+                                          max_lazy_delta_bytes.default_pool_bytes,
+                };
+            }
+
+            static void publish(const void* owner, const NvCodecVramBytes bytes) {
+                if (!owner) {
+                    return;
+                }
+                if (bytes.total() == 0) {
+                    unregister_nvcodec_vram(owner);
+                    return;
+                }
+                register_nvcodec_vram(owner, bytes);
+            }
+        };
+
+        class ScopedNvCodecVramProbe {
+        public:
+            explicit ScopedNvCodecVramProbe(NvCodecVramAccount& account)
+                : account_(account),
+                  active_(account_.begin_probe(before_)) {}
+
+            ~ScopedNvCodecVramProbe() {
+                if (active_) {
+                    account_.end_probe(before_);
+                }
+            }
+
+            ScopedNvCodecVramProbe(const ScopedNvCodecVramProbe&) = delete;
+            ScopedNvCodecVramProbe& operator=(const ScopedNvCodecVramProbe&) = delete;
+
+        private:
+            NvCodecVramAccount& account_;
+            CudaUsageSnapshot before_;
+            bool active_ = false;
+        };
+
     } // anonymous namespace
 
     struct NvCodecImageLoader::Impl {
+        Impl() {
+            vram_account.set_owner(this);
+        }
+
         nvimgcodecInstance_t instance = nullptr;
         std::vector<nvimgcodecDecoder_t> decoder_pool;
         std::vector<bool> decoder_available;
@@ -381,6 +632,7 @@ namespace lfs::io {
         std::mutex encoder_mutex;
         int device_id = 0;
         bool fallback_enabled = true;
+        NvCodecVramAccount vram_account;
 
         size_t acquire_decoder() {
             std::unique_lock<std::mutex> lock(pool_mutex);
@@ -408,33 +660,33 @@ namespace lfs::io {
             try {
                 CUcontext current_ctx = nullptr;
                 const CUresult ctx_result = cuCtxGetCurrent(&current_ctx);
-                if (ctx_result != CUDA_SUCCESS || current_ctx == nullptr) {
-                    return;
-                }
-
-                if (encoder) {
-                    nvimgcodecEncoderDestroy(encoder);
-                    encoder = nullptr;
-                }
-
-                for (auto& decoder : decoder_pool) {
-                    if (decoder) {
-                        nvimgcodecDecoderDestroy(decoder);
-                        decoder = nullptr;
+                if (ctx_result == CUDA_SUCCESS && current_ctx != nullptr) {
+                    if (encoder) {
+                        nvimgcodecEncoderDestroy(encoder);
+                        encoder = nullptr;
                     }
-                }
-                decoder_pool.clear();
-                decoder_available.clear();
 
-                if (instance) {
-                    nvimgcodecInstanceDestroy(instance);
-                    instance = nullptr;
+                    for (auto& decoder : decoder_pool) {
+                        if (decoder) {
+                            nvimgcodecDecoderDestroy(decoder);
+                            decoder = nullptr;
+                        }
+                    }
+                    decoder_pool.clear();
+                    decoder_available.clear();
+
+                    if (instance) {
+                        nvimgcodecInstanceDestroy(instance);
+                        instance = nullptr;
+                    }
                 }
             } catch (const std::exception& e) {
                 LOG_WARN("[NvCodecImageLoader] Ignoring nvImageCodec shutdown error: {}", e.what());
             } catch (...) {
                 LOG_WARN("[NvCodecImageLoader] Ignoring unknown nvImageCodec shutdown error");
             }
+
+            vram_account.unregister();
         }
     };
 
@@ -451,6 +703,9 @@ namespace lfs::io {
 
         impl_->device_id = options.device_id;
         impl_->fallback_enabled = options.enable_fallback;
+        const cudaError_t set_device_status = cudaSetDevice(impl_->device_id);
+        const auto init_vram_before =
+            set_device_status == cudaSuccess ? cuda_usage_snapshot_now() : CudaUsageSnapshot{};
 
         const auto extensions_dir = lfs::core::getExtensionsDir();
         std::string extensions_path_str;
@@ -497,6 +752,16 @@ namespace lfs::io {
         if (status != NVIMGCODEC_STATUS_SUCCESS) {
             LOG_WARN("[NvCodecImageLoader] Encoder unavailable: {}", nvimgcodec_status_to_string(status));
             impl_->encoder = nullptr;
+        }
+
+        const auto init_vram_after = cuda_usage_snapshot_now();
+        if (init_vram_before.total_valid && init_vram_after.total_valid &&
+            init_vram_after.total_used > init_vram_before.total_used) {
+            const auto baseline_bytes =
+                NvCodecVramAccount::delta_bytes(init_vram_before, init_vram_after);
+            impl_->vram_account.set_baseline_bytes(baseline_bytes);
+            LOG_INFO("[NvCodecImageLoader] Accounted nvImageCodec init VRAM: {:.1f} MiB",
+                     static_cast<double>(baseline_bytes.total()) / (1024.0 * 1024.0));
         }
     }
 
@@ -671,50 +936,54 @@ namespace lfs::io {
         output_info.buffer_size = decoded_size;
         output_info.cuda_stream = static_cast<cudaStream_t>(cuda_stream);
 
-        status = nvimgcodecImageCreate(impl_->instance, &nv_image, &output_info);
-        if (status != NVIMGCODEC_STATUS_SUCCESS) {
-            nvimgcodecCodeStreamDestroy(code_stream);
-            throw std::runtime_error("Failed to create image descriptor");
-        }
+        nvimgcodecProcessingStatus_t decode_status = NVIMGCODEC_PROCESSING_STATUS_UNKNOWN;
+        bool decode_success = false;
+        {
+            ScopedNvCodecVramProbe vram_probe(impl_->vram_account);
+            status = nvimgcodecImageCreate(impl_->instance, &nv_image, &output_info);
+            if (status != NVIMGCODEC_STATUS_SUCCESS) {
+                nvimgcodecCodeStreamDestroy(code_stream);
+                throw std::runtime_error("Failed to create image descriptor");
+            }
 
-        nvimgcodecDecodeParams_t decode_params{};
-        decode_params.struct_type = NVIMGCODEC_STRUCTURE_TYPE_DECODE_PARAMS;
-        decode_params.struct_size = sizeof(nvimgcodecDecodeParams_t);
-        decode_params.struct_next = nullptr;
-        decode_params.apply_exif_orientation = 0;
+            nvimgcodecDecodeParams_t decode_params{};
+            decode_params.struct_type = NVIMGCODEC_STRUCTURE_TYPE_DECODE_PARAMS;
+            decode_params.struct_size = sizeof(nvimgcodecDecodeParams_t);
+            decode_params.struct_next = nullptr;
+            decode_params.apply_exif_orientation = 0;
 
-        nvimgcodecFuture_t decode_future;
-        status = nvimgcodecDecoderDecode(
-            decoder,
-            &code_stream,
-            &nv_image,
-            1,
-            &decode_params,
-            &decode_future);
+            nvimgcodecFuture_t decode_future;
+            status = nvimgcodecDecoderDecode(
+                decoder,
+                &code_stream,
+                &nv_image,
+                1,
+                &decode_params,
+                &decode_future);
 
-        if (status != NVIMGCODEC_STATUS_SUCCESS) {
-            nvimgcodecImageDestroy(nv_image);
-            nvimgcodecCodeStreamDestroy(code_stream);
-            throw std::runtime_error("Failed to decode image from memory");
-        }
+            if (status != NVIMGCODEC_STATUS_SUCCESS) {
+                nvimgcodecImageDestroy(nv_image);
+                nvimgcodecCodeStreamDestroy(code_stream);
+                throw std::runtime_error("Failed to decode image from memory");
+            }
 
-        status = nvimgcodecFutureWaitForAll(decode_future);
-        if (status != NVIMGCODEC_STATUS_SUCCESS) {
+            status = nvimgcodecFutureWaitForAll(decode_future);
+            if (status != NVIMGCODEC_STATUS_SUCCESS) {
+                nvimgcodecFutureDestroy(decode_future);
+                nvimgcodecImageDestroy(nv_image);
+                nvimgcodecCodeStreamDestroy(code_stream);
+                throw std::runtime_error("Failed to wait for decode completion");
+            }
+
+            size_t status_size = 1;
+            nvimgcodecFutureGetProcessingStatus(decode_future, &decode_status, &status_size);
+
+            decode_success = (decode_status == NVIMGCODEC_PROCESSING_STATUS_SUCCESS);
+
             nvimgcodecFutureDestroy(decode_future);
             nvimgcodecImageDestroy(nv_image);
             nvimgcodecCodeStreamDestroy(code_stream);
-            throw std::runtime_error("Failed to wait for decode completion");
         }
-
-        nvimgcodecProcessingStatus_t decode_status;
-        size_t status_size = 1;
-        nvimgcodecFutureGetProcessingStatus(decode_future, &decode_status, &status_size);
-
-        const bool decode_success = (decode_status == NVIMGCODEC_PROCESSING_STATUS_SUCCESS);
-
-        nvimgcodecFutureDestroy(decode_future);
-        nvimgcodecImageDestroy(nv_image);
-        nvimgcodecCodeStreamDestroy(code_stream);
 
         if (!decode_success) {
             const char* status_str = processing_status_to_string(decode_status);
@@ -851,75 +1120,81 @@ namespace lfs::io {
         for (size_t i = 0; i < batch_size; ++i) {
             const int width = image_infos[i].plane_info[0].width;
             const int height = image_infos[i].plane_info[0].height;
-
             uint8_tensors[i] = Tensor::empty(
                 TensorShape({static_cast<size_t>(height), static_cast<size_t>(width), 3}),
                 Device::CUDA,
                 DataType::UInt8);
-
-            nvimgcodecImageInfo_t output_info{};
-            output_info.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
-            output_info.struct_size = sizeof(nvimgcodecImageInfo_t);
-            output_info.struct_next = nullptr;
-            output_info.sample_format = NVIMGCODEC_SAMPLEFORMAT_I_RGB;
-            output_info.color_spec = NVIMGCODEC_COLORSPEC_SRGB;
-            output_info.chroma_subsampling = NVIMGCODEC_SAMPLING_444;
-            output_info.num_planes = 1;
-            output_info.plane_info[0].height = height;
-            output_info.plane_info[0].width = width;
-            output_info.plane_info[0].row_stride = width * 3;
-            output_info.plane_info[0].num_channels = 3;
-            output_info.plane_info[0].sample_type = NVIMGCODEC_SAMPLE_DATA_TYPE_UINT8;
-            output_info.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
-            output_info.buffer = uint8_tensors[i].data_ptr();
-            output_info.buffer_size = static_cast<size_t>(height) * width * 3;
-            output_info.cuda_stream = static_cast<cudaStream_t>(cuda_stream);
-
-            const auto status = nvimgcodecImageCreate(impl_->instance, &nv_images[i], &output_info);
-            if (status != NVIMGCODEC_STATUS_SUCCESS) {
-                for (size_t j = 0; j < i; ++j) {
-                    nvimgcodecImageDestroy(nv_images[j]);
-                }
-                for (size_t j = 0; j < batch_size; ++j) {
-                    nvimgcodecCodeStreamDestroy(code_streams[j]);
-                }
-                throw std::runtime_error("Failed to create image descriptor for image " + std::to_string(i));
-            }
         }
 
-        nvimgcodecDecodeParams_t decode_params{};
-        decode_params.struct_type = NVIMGCODEC_STRUCTURE_TYPE_DECODE_PARAMS;
-        decode_params.struct_size = sizeof(nvimgcodecDecodeParams_t);
-        decode_params.struct_next = nullptr;
-        decode_params.apply_exif_orientation = 0;
+        std::vector<nvimgcodecProcessingStatus_t> decode_statuses(batch_size);
+        {
+            ScopedNvCodecVramProbe vram_probe(impl_->vram_account);
+            for (size_t i = 0; i < batch_size; ++i) {
+                const int width = image_infos[i].plane_info[0].width;
+                const int height = image_infos[i].plane_info[0].height;
+                nvimgcodecImageInfo_t output_info{};
+                output_info.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
+                output_info.struct_size = sizeof(nvimgcodecImageInfo_t);
+                output_info.struct_next = nullptr;
+                output_info.sample_format = NVIMGCODEC_SAMPLEFORMAT_I_RGB;
+                output_info.color_spec = NVIMGCODEC_COLORSPEC_SRGB;
+                output_info.chroma_subsampling = NVIMGCODEC_SAMPLING_444;
+                output_info.num_planes = 1;
+                output_info.plane_info[0].height = height;
+                output_info.plane_info[0].width = width;
+                output_info.plane_info[0].row_stride = width * 3;
+                output_info.plane_info[0].num_channels = 3;
+                output_info.plane_info[0].sample_type = NVIMGCODEC_SAMPLE_DATA_TYPE_UINT8;
+                output_info.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
+                output_info.buffer = uint8_tensors[i].data_ptr();
+                output_info.buffer_size = static_cast<size_t>(height) * width * 3;
+                output_info.cuda_stream = static_cast<cudaStream_t>(cuda_stream);
 
-        nvimgcodecFuture_t decode_future;
-        auto status = nvimgcodecDecoderDecode(
-            decoder,
-            code_streams.data(),
-            nv_images.data(),
-            static_cast<int>(batch_size),
-            &decode_params,
-            &decode_future);
+                const auto status = nvimgcodecImageCreate(impl_->instance, &nv_images[i], &output_info);
+                if (status != NVIMGCODEC_STATUS_SUCCESS) {
+                    for (size_t j = 0; j < i; ++j) {
+                        nvimgcodecImageDestroy(nv_images[j]);
+                    }
+                    for (size_t j = 0; j < batch_size; ++j) {
+                        nvimgcodecCodeStreamDestroy(code_streams[j]);
+                    }
+                    throw std::runtime_error("Failed to create image descriptor for image " + std::to_string(i));
+                }
+            }
 
-        if (status != NVIMGCODEC_STATUS_SUCCESS) {
+            nvimgcodecDecodeParams_t decode_params{};
+            decode_params.struct_type = NVIMGCODEC_STRUCTURE_TYPE_DECODE_PARAMS;
+            decode_params.struct_size = sizeof(nvimgcodecDecodeParams_t);
+            decode_params.struct_next = nullptr;
+            decode_params.apply_exif_orientation = 0;
+
+            nvimgcodecFuture_t decode_future;
+            auto status = nvimgcodecDecoderDecode(
+                decoder,
+                code_streams.data(),
+                nv_images.data(),
+                static_cast<int>(batch_size),
+                &decode_params,
+                &decode_future);
+
+            if (status != NVIMGCODEC_STATUS_SUCCESS) {
+                for (size_t i = 0; i < batch_size; ++i) {
+                    nvimgcodecImageDestroy(nv_images[i]);
+                    nvimgcodecCodeStreamDestroy(code_streams[i]);
+                }
+                throw std::runtime_error("Batch decode failed");
+            }
+
+            status = nvimgcodecFutureWaitForAll(decode_future);
+
+            size_t status_size = batch_size;
+            nvimgcodecFutureGetProcessingStatus(decode_future, decode_statuses.data(), &status_size);
+
+            nvimgcodecFutureDestroy(decode_future);
             for (size_t i = 0; i < batch_size; ++i) {
                 nvimgcodecImageDestroy(nv_images[i]);
                 nvimgcodecCodeStreamDestroy(code_streams[i]);
             }
-            throw std::runtime_error("Batch decode failed");
-        }
-
-        status = nvimgcodecFutureWaitForAll(decode_future);
-
-        std::vector<nvimgcodecProcessingStatus_t> decode_statuses(batch_size);
-        size_t status_size = batch_size;
-        nvimgcodecFutureGetProcessingStatus(decode_future, decode_statuses.data(), &status_size);
-
-        nvimgcodecFutureDestroy(decode_future);
-        for (size_t i = 0; i < batch_size; ++i) {
-            nvimgcodecImageDestroy(nv_images[i]);
-            nvimgcodecCodeStreamDestroy(code_streams[i]);
         }
 
         std::vector<Tensor> results;
@@ -1016,75 +1291,81 @@ namespace lfs::io {
         for (size_t i = 0; i < batch_size; ++i) {
             const int width = image_infos[i].plane_info[0].width;
             const int height = image_infos[i].plane_info[0].height;
-
             uint8_tensors[i] = Tensor::zeros(
                 TensorShape({static_cast<size_t>(height), static_cast<size_t>(width), 3}),
                 Device::CUDA,
                 DataType::UInt8);
-
-            nvimgcodecImageInfo_t out_info{};
-            out_info.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
-            out_info.struct_size = sizeof(nvimgcodecImageInfo_t);
-            out_info.sample_format = NVIMGCODEC_SAMPLEFORMAT_I_RGB;
-            out_info.color_spec = NVIMGCODEC_COLORSPEC_SRGB;
-            out_info.chroma_subsampling = NVIMGCODEC_SAMPLING_NONE;
-            out_info.num_planes = 1;
-            out_info.plane_info[0].width = width;
-            out_info.plane_info[0].height = height;
-            out_info.plane_info[0].num_channels = 3;
-            out_info.plane_info[0].sample_type = NVIMGCODEC_SAMPLE_DATA_TYPE_UINT8;
-            out_info.plane_info[0].precision = 0;
-            out_info.plane_info[0].row_stride = width * 3;
-            out_info.buffer = uint8_tensors[i].data_ptr();
-            out_info.buffer_size = uint8_tensors[i].bytes();
-            out_info.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
-            out_info.cuda_stream = static_cast<cudaStream_t>(cuda_stream);
-
-            const auto status = nvimgcodecImageCreate(impl_->instance, &nv_images[i], &out_info);
-            if (status != NVIMGCODEC_STATUS_SUCCESS) {
-                for (size_t j = 0; j < i; ++j) {
-                    nvimgcodecImageDestroy(nv_images[j]);
-                }
-                for (size_t j = 0; j < batch_size; ++j) {
-                    nvimgcodecCodeStreamDestroy(code_streams[j]);
-                }
-                throw std::runtime_error("Failed to create image descriptor for image " + std::to_string(i));
-            }
         }
 
-        nvimgcodecDecodeParams_t decode_params{};
-        decode_params.struct_type = NVIMGCODEC_STRUCTURE_TYPE_DECODE_PARAMS;
-        decode_params.struct_size = sizeof(nvimgcodecDecodeParams_t);
-        decode_params.struct_next = nullptr;
-        decode_params.apply_exif_orientation = 0;
+        std::vector<nvimgcodecProcessingStatus_t> decode_statuses(batch_size);
+        {
+            ScopedNvCodecVramProbe vram_probe(impl_->vram_account);
+            for (size_t i = 0; i < batch_size; ++i) {
+                const int width = image_infos[i].plane_info[0].width;
+                const int height = image_infos[i].plane_info[0].height;
+                nvimgcodecImageInfo_t out_info{};
+                out_info.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
+                out_info.struct_size = sizeof(nvimgcodecImageInfo_t);
+                out_info.sample_format = NVIMGCODEC_SAMPLEFORMAT_I_RGB;
+                out_info.color_spec = NVIMGCODEC_COLORSPEC_SRGB;
+                out_info.chroma_subsampling = NVIMGCODEC_SAMPLING_NONE;
+                out_info.num_planes = 1;
+                out_info.plane_info[0].width = width;
+                out_info.plane_info[0].height = height;
+                out_info.plane_info[0].num_channels = 3;
+                out_info.plane_info[0].sample_type = NVIMGCODEC_SAMPLE_DATA_TYPE_UINT8;
+                out_info.plane_info[0].precision = 0;
+                out_info.plane_info[0].row_stride = width * 3;
+                out_info.buffer = uint8_tensors[i].data_ptr();
+                out_info.buffer_size = uint8_tensors[i].bytes();
+                out_info.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
+                out_info.cuda_stream = static_cast<cudaStream_t>(cuda_stream);
 
-        nvimgcodecFuture_t decode_future;
-        auto status = nvimgcodecDecoderDecode(
-            decoder,
-            code_streams.data(),
-            nv_images.data(),
-            static_cast<int>(batch_size),
-            &decode_params,
-            &decode_future);
+                const auto status = nvimgcodecImageCreate(impl_->instance, &nv_images[i], &out_info);
+                if (status != NVIMGCODEC_STATUS_SUCCESS) {
+                    for (size_t j = 0; j < i; ++j) {
+                        nvimgcodecImageDestroy(nv_images[j]);
+                    }
+                    for (size_t j = 0; j < batch_size; ++j) {
+                        nvimgcodecCodeStreamDestroy(code_streams[j]);
+                    }
+                    throw std::runtime_error("Failed to create image descriptor for image " + std::to_string(i));
+                }
+            }
 
-        if (status != NVIMGCODEC_STATUS_SUCCESS) {
+            nvimgcodecDecodeParams_t decode_params{};
+            decode_params.struct_type = NVIMGCODEC_STRUCTURE_TYPE_DECODE_PARAMS;
+            decode_params.struct_size = sizeof(nvimgcodecDecodeParams_t);
+            decode_params.struct_next = nullptr;
+            decode_params.apply_exif_orientation = 0;
+
+            nvimgcodecFuture_t decode_future;
+            auto status = nvimgcodecDecoderDecode(
+                decoder,
+                code_streams.data(),
+                nv_images.data(),
+                static_cast<int>(batch_size),
+                &decode_params,
+                &decode_future);
+
+            if (status != NVIMGCODEC_STATUS_SUCCESS) {
+                for (size_t i = 0; i < batch_size; ++i) {
+                    nvimgcodecImageDestroy(nv_images[i]);
+                    nvimgcodecCodeStreamDestroy(code_streams[i]);
+                }
+                throw std::runtime_error("Batch decode failed");
+            }
+
+            status = nvimgcodecFutureWaitForAll(decode_future);
+
+            size_t status_size = batch_size;
+            nvimgcodecFutureGetProcessingStatus(decode_future, decode_statuses.data(), &status_size);
+
+            nvimgcodecFutureDestroy(decode_future);
             for (size_t i = 0; i < batch_size; ++i) {
                 nvimgcodecImageDestroy(nv_images[i]);
                 nvimgcodecCodeStreamDestroy(code_streams[i]);
             }
-            throw std::runtime_error("Batch decode failed");
-        }
-
-        status = nvimgcodecFutureWaitForAll(decode_future);
-
-        std::vector<nvimgcodecProcessingStatus_t> decode_statuses(batch_size);
-        size_t status_size = batch_size;
-        nvimgcodecFutureGetProcessingStatus(decode_future, decode_statuses.data(), &status_size);
-
-        nvimgcodecFutureDestroy(decode_future);
-        for (size_t i = 0; i < batch_size; ++i) {
-            nvimgcodecImageDestroy(nv_images[i]);
-            nvimgcodecCodeStreamDestroy(code_streams[i]);
         }
 
         std::vector<Tensor> results;

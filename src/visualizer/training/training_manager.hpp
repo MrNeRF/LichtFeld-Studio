@@ -7,6 +7,7 @@
 #include "core/camera.hpp"
 #include "core/export.hpp"
 #include "core/parameters.hpp"
+#include "core/splat_exportable_storage.hpp"
 #include "training/trainer.hpp"
 #include "training_state.hpp"
 #include <atomic>
@@ -122,6 +123,13 @@ namespace lfs::vis {
         lfs::training::Trainer* getTrainer() { return trainer_.get(); }
         const lfs::training::Trainer* getTrainer() const { return trainer_.get(); }
 
+        // Splat exportable storage — populated when training starts with a viewer
+        // active. The viewer's vksplat renderer imports the same physical block
+        // for zero-copy interop. nullptr if running headless or fallback.
+        const lfs::core::SplatExportableStorage* splatExportableStorage() const {
+            return splat_storage_.has_value() ? &*splat_storage_ : nullptr;
+        }
+
         // Wait for training to complete (blocking)
         void waitForCompletion();
 
@@ -162,6 +170,7 @@ namespace lfs::vis {
         std::unique_ptr<std::jthread> training_thread_;
         VisualizerImpl* viewer_ = nullptr;
         core::Scene* scene_ = nullptr;
+        std::optional<lfs::core::SplatExportableStorage> splat_storage_;
 
         // State machine (single source of truth for state)
         TrainingStateMachine state_machine_;

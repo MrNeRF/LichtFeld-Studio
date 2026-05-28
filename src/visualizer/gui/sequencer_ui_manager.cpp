@@ -321,6 +321,17 @@ namespace lfs::vis::gui {
         return overlay_ && (overlay_->isContextMenuOpen() || overlay_->isPopupOpen());
     }
 
+    bool SequencerUIManager::needsAnimationFrame() const {
+        return controller_.isPlaying() ||
+               controller_.state() == PlaybackState::SCRUBBING ||
+               keyframe_gizmo_active_ ||
+               viewport_keyframe_edit_snapshot_.has_value() ||
+               (ui_state_.show_pip_preview && pip_needs_update_) ||
+               (overlay_ && (overlay_->wantsInput() ||
+                             overlay_->isContextMenuOpen() ||
+                             overlay_->isPopupOpen()));
+    }
+
     void SequencerUIManager::renderSequencerPanel(const UIContext& /*ctx*/, const ViewportLayout& viewport,
                                                   const float panel_x, const float panel_y,
                                                   const float panel_width, const float panel_height,

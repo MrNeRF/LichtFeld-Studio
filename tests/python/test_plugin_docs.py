@@ -696,59 +696,62 @@ class TestSignalSystem:
 
 
 # ===========================================================================
-# 9. AppState verification
+# 9. RuntimeState verification
 # ===========================================================================
 
-class TestAppState:
-    """AppState signals match documented names."""
+class TestRuntimeState:
+    """RuntimeState signals match documented names."""
 
     def test_training_signals_exist(self):
-        from lfs_plugins.ui.state import AppState
-        from lfs_plugins.ui.signals import Signal
-        assert isinstance(AppState.is_training, Signal)
-        assert isinstance(AppState.trainer_state, Signal)
-        assert isinstance(AppState.has_trainer, Signal)
-        assert isinstance(AppState.iteration, Signal)
-        assert isinstance(AppState.max_iterations, Signal)
-        assert isinstance(AppState.loss, Signal)
-        assert isinstance(AppState.psnr, Signal)
-        assert isinstance(AppState.num_gaussians, Signal)
+        from lfs_plugins.ui import RuntimeState
+        from lfs_plugins.ui.signals import ComputedSignal
+        from lfs_plugins.ui.store import StateSignal
+        assert isinstance(RuntimeState.is_training, StateSignal)
+        assert isinstance(RuntimeState.trainer_state, StateSignal)
+        assert isinstance(RuntimeState.has_trainer, StateSignal)
+        assert isinstance(RuntimeState.iteration, StateSignal)
+        assert isinstance(RuntimeState.max_iterations, StateSignal)
+        assert isinstance(RuntimeState.loss, StateSignal)
+        assert isinstance(RuntimeState.psnr, ComputedSignal)
+        assert isinstance(RuntimeState.num_gaussians, StateSignal)
 
     def test_scene_signals_exist(self):
-        from lfs_plugins.ui.state import AppState
+        from lfs_plugins.ui import RuntimeState
         from lfs_plugins.ui.signals import Signal
-        assert isinstance(AppState.has_scene, Signal)
-        assert isinstance(AppState.scene_generation, Signal)
-        assert isinstance(AppState.scene_path, Signal)
+        from lfs_plugins.ui.store import StateSignal
+        assert isinstance(RuntimeState.has_scene, Signal)
+        assert isinstance(RuntimeState.scene_generation, StateSignal)
+        assert isinstance(RuntimeState.scene_path, Signal)
 
     def test_selection_signals_exist(self):
-        from lfs_plugins.ui.state import AppState
+        from lfs_plugins.ui import RuntimeState
         from lfs_plugins.ui.signals import Signal
-        assert isinstance(AppState.has_selection, Signal)
-        assert isinstance(AppState.selection_count, Signal)
-        assert isinstance(AppState.selection_generation, Signal)
+        from lfs_plugins.ui.store import StateSignal
+        assert isinstance(RuntimeState.has_selection, Signal)
+        assert isinstance(RuntimeState.selection_count, Signal)
+        assert isinstance(RuntimeState.selection_generation, StateSignal)
 
     def test_computed_signals_exist(self):
-        from lfs_plugins.ui.state import AppState
+        from lfs_plugins.ui import RuntimeState
         from lfs_plugins.ui.signals import ComputedSignal
-        assert isinstance(AppState.training_progress, ComputedSignal)
-        assert isinstance(AppState.can_start_training, ComputedSignal)
+        assert isinstance(RuntimeState.training_progress, ComputedSignal)
+        assert isinstance(RuntimeState.can_start_training, ComputedSignal)
 
     def test_training_progress_computed(self):
-        from lfs_plugins.ui.state import AppState
-        AppState.iteration.value = 15000
-        AppState.max_iterations.value = 30000
-        assert abs(AppState.training_progress.value - 0.5) < 1e-6
+        from lfs_plugins.ui import RuntimeState
+        RuntimeState.iteration.value = 15000
+        RuntimeState.max_iterations.value = 30000
+        assert abs(RuntimeState.training_progress.value - 0.5) < 1e-6
         # Restore
-        AppState.iteration.value = 0
-        AppState.max_iterations.value = 30000
+        RuntimeState.iteration.value = 0
+        RuntimeState.max_iterations.value = 0
 
     def test_reset(self):
-        from lfs_plugins.ui.state import AppState
-        AppState.iteration.value = 999
-        AppState.reset()
-        assert AppState.iteration.value == 0
-        assert AppState.is_training.value is False
+        from lfs_plugins.ui import RuntimeState
+        RuntimeState.iteration.value = 999
+        RuntimeState.reset()
+        assert RuntimeState.iteration.value == 0
+        assert RuntimeState.is_training.value is False
 
 
 # ===========================================================================
@@ -1027,6 +1030,16 @@ class TestMarkdownDocs:
         assert "ComputedSignal" in content
         assert "ThrottledSignal" in content
         assert "Batch" in content
+
+    def test_api_reference_covers_reactive_panel_store(self):
+        content = (PROJECT_ROOT / "docs" / "plugins" / "api-reference.md").read_text()
+        assert "PanelStateBinding" in content
+        assert "RuntimeState.scene_generation" in content
+        assert 'update_policy = "dirty"' in content
+        assert (
+            "`AppState`, `AppStore`, and `NativeAppStore` remain as compatibility aliases"
+            in content
+        )
 
     def test_api_reference_covers_layout_api(self):
         content = (PROJECT_ROOT / "docs" / "plugins" / "api-reference.md").read_text()

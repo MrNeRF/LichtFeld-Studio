@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/rml_menu_bar.hpp"
+#include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
 #include "gui/rmlui/rml_theme.hpp"
@@ -128,6 +129,7 @@ namespace lfs::vis::gui {
                     break;
                 case MenuItemDesc::Type::SubMenuBegin: {
                     MenuDropdownRootView view;
+                    view.index = static_cast<int>(result.size());
                     view.label = item.label;
                     view.has_children = true;
                     view.separator_before = separator_before;
@@ -142,6 +144,7 @@ namespace lfs::vis::gui {
                 case MenuItemDesc::Type::ShortcutItem:
                 case MenuItemDesc::Type::Item: {
                     MenuDropdownRootView view;
+                    view.index = static_cast<int>(result.size());
                     const auto leaf = makeLeafItemView(item);
                     view.label = leaf.label;
                     view.action = leaf.action;
@@ -205,6 +208,7 @@ namespace lfs::vis::gui {
         ctor.RegisterArray<std::vector<MenuDropdownLeafView>>();
         if (auto handle = ctor.RegisterStruct<MenuDropdownRootView>()) {
             handle.RegisterMember("label", &MenuDropdownRootView::label);
+            handle.RegisterMember("index", &MenuDropdownRootView::index);
             handle.RegisterMember("action", &MenuDropdownRootView::action);
             handle.RegisterMember("operator_id", &MenuDropdownRootView::operator_id);
             handle.RegisterMember("shortcut", &MenuDropdownRootView::shortcut);
@@ -214,6 +218,7 @@ namespace lfs::vis::gui {
             handle.RegisterMember("has_shortcut", &MenuDropdownRootView::has_shortcut);
             handle.RegisterMember("show_checkmark", &MenuDropdownRootView::show_checkmark);
             handle.RegisterMember("has_children", &MenuDropdownRootView::has_children);
+            handle.RegisterMember("submenu_open", &MenuDropdownRootView::submenu_open);
             handle.RegisterMember("callback_index", &MenuDropdownRootView::callback_index);
             handle.RegisterMember("children", &MenuDropdownRootView::children);
         }
@@ -238,6 +243,8 @@ namespace lfs::vis::gui {
         menu_items_ = document_->GetElementById("menu-items");
         dropdown_overlay_ = document_->GetElementById("dropdown-overlay");
         dropdown_container_ = document_->GetElementById("dropdown-container");
+        dropdown_popup_ = document_->GetElementById("dropdown-popup");
+        brand_logo_ = document_->GetElementById("brand-logo");
 
         render_needed_ = true;
         updateTheme();
@@ -248,13 +255,17 @@ namespace lfs::vis::gui {
         menu_labels_.clear();
         dropdown_items_.clear();
         open_menu_idname_.clear();
+        if (rml_manager_)
+            rml_manager_->releaseCachedVulkanContext(direct_cache_);
         if (rml_context_ && rml_manager_)
             rml_manager_->destroyContext("menu_bar");
         rml_context_ = nullptr;
         document_ = nullptr;
         menu_items_ = nullptr;
         dropdown_container_ = nullptr;
+        dropdown_popup_ = nullptr;
         dropdown_overlay_ = nullptr;
+        brand_logo_ = nullptr;
     }
 
     void RmlMenuBar::suspend() {
@@ -262,6 +273,7 @@ namespace lfs::vis::gui {
         mouse_pos_valid_ = false;
         last_mouse_x_ = 0;
         last_mouse_y_ = 0;
+        last_hovered_label_ = -1;
 
         if (open_menu_index_ >= 0)
             closeDropdown();
@@ -282,15 +294,20 @@ namespace lfs::vis::gui {
         document_ = nullptr;
         menu_items_ = nullptr;
         dropdown_container_ = nullptr;
+        dropdown_popup_ = nullptr;
         dropdown_overlay_ = nullptr;
+        brand_logo_ = nullptr;
         base_rcss_.clear();
         has_theme_signature_ = false;
         wants_input_ = false;
         render_needed_ = true;
         mouse_pos_valid_ = false;
+        last_hovered_label_ = -1;
         last_ctx_w_ = 0;
         last_ctx_h_ = 0;
         last_document_h_ = 0;
+        if (rml_manager_)
+            rml_manager_->releaseCachedVulkanContext(direct_cache_);
 
         try {
             const auto rml_path = lfs::vis::getAssetPath("rmlui/menubar.rml");
@@ -308,6 +325,8 @@ namespace lfs::vis::gui {
         menu_items_ = document_->GetElementById("menu-items");
         dropdown_overlay_ = document_->GetElementById("dropdown-overlay");
         dropdown_container_ = document_->GetElementById("dropdown-container");
+        dropdown_popup_ = document_->GetElementById("dropdown-popup");
+        brand_logo_ = document_->GetElementById("brand-logo");
 
         rebuildLabels();
         menu_model_.DirtyVariable("dropdown_items");
@@ -378,8 +397,22 @@ namespace lfs::vis::gui {
                                     last_mouse_y_ >= 0 && last_mouse_y_ < ctx_h;
         const bool is_in_context = rml_mx >= 0 && rml_mx < ctx_w &&
                                    rml_my >= 0 && rml_my < ctx_h;
-        if ((!mouse_pos_valid_ || rml_mx != last_mouse_x_ || rml_my != last_mouse_y_) &&
-            (is_open || was_in_context || is_in_context)) {
+        const bool mouse_moved =
+            !mouse_pos_valid_ || rml_mx != last_mouse_x_ || rml_my != last_mouse_y_;
+        const bool pointer_event =
+            input.mouse_clicked[0] || input.mouse_released[0] ||
+            input.mouse_clicked[1] || input.mouse_released[1] ||
+            input.mouse_clicked[2] || input.mouse_released[2] ||
+            input.mouse_wheel != 0.0f;
+        const bool pointer_down =
+            input.mouse_down[0] || input.mouse_down[1] || input.mouse_down[2];
+        const bool context_size_unchanged = ctx_w == last_ctx_w_ && ctx_h == last_ctx_h_;
+        if (mouse_pos_valid_ && !mouse_moved && !pointer_event && !pointer_down &&
+            context_size_unchanged && !render_needed_) {
+            wants_input_ = is_open || last_hovered_label_ >= 0;
+            return;
+        }
+        if (mouse_moved && (is_open || was_in_context || is_in_context)) {
             mouse_pos_valid_ = true;
             last_mouse_x_ = rml_mx;
             last_mouse_y_ = rml_my;
@@ -398,6 +431,7 @@ namespace lfs::vis::gui {
                 break;
             }
         }
+        last_hovered_label_ = hovered_label;
 
         if (is_open) {
             wants_input_ = true;
@@ -406,6 +440,11 @@ namespace lfs::vis::gui {
                 openDropdown(hovered_label);
                 return;
             }
+
+            Rml::Element* hit_element = nullptr;
+            if (hovered_label < 0 && dropdown_container_)
+                hit_element = dropdownElementAtPoint(mx, my);
+            setOpenSubmenu(submenuIndexForElement(hit_element));
 
             if (input.mouse_clicked[0]) {
                 if (hovered_label >= 0 && hovered_label == open_menu_index_) {
@@ -416,7 +455,8 @@ namespace lfs::vis::gui {
                 if (hovered_label < 0 && dropdown_container_) {
                     auto* hit = dropdown_container_;
                     {
-                        Rml::Element* clicked = rml_context_->GetElementAtPoint(Rml::Vector2f(mx, my));
+                        Rml::Element* clicked = hit_element ? hit_element : dropdownElementAtPoint(mx, my);
+                        const bool clicked_submenu = submenuIndexForElement(clicked) >= 0;
                         if (clicked) {
                             while (clicked && clicked != hit) {
                                 if (clicked->HasAttribute("data-action")) {
@@ -440,6 +480,8 @@ namespace lfs::vis::gui {
                                 clicked = clicked->GetParentNode();
                             }
                         }
+                        if (clicked_submenu)
+                            return;
                     }
 
                     closeDropdown();
@@ -464,6 +506,7 @@ namespace lfs::vis::gui {
         assert(index >= 0 && index < static_cast<int>(current_idnames_.size()));
 
         open_menu_index_ = index;
+        open_submenu_index_ = -1;
         open_menu_idname_ = current_idnames_[index];
 
         MenuDropdownContent content;
@@ -493,6 +536,7 @@ namespace lfs::vis::gui {
 
     void RmlMenuBar::closeDropdown() {
         open_menu_index_ = -1;
+        open_submenu_index_ = -1;
         open_menu_idname_.clear();
         dropdown_items_.clear();
         menu_model_.DirtyVariable("dropdown_items");
@@ -507,8 +551,58 @@ namespace lfs::vis::gui {
         render_needed_ = true;
     }
 
+    void RmlMenuBar::setOpenSubmenu(const int index) {
+        if (index == open_submenu_index_)
+            return;
+
+        open_submenu_index_ = index;
+        bool changed = false;
+        for (auto& item : dropdown_items_) {
+            const bool open = item.has_children && item.index == open_submenu_index_;
+            if (item.submenu_open != open) {
+                item.submenu_open = open;
+                changed = true;
+            }
+        }
+        if (!changed)
+            return;
+
+        menu_model_.DirtyVariable("dropdown_items");
+        render_needed_ = true;
+    }
+
+    Rml::Element* RmlMenuBar::dropdownElementAtPoint(const float x, const float y) const {
+        if (!dropdown_container_)
+            return nullptr;
+
+        const auto contains = [x, y](Rml::Element* element) {
+            const auto box = element->GetAbsoluteOffset(Rml::BoxArea::Border);
+            const auto size = element->GetBox().GetSize(Rml::BoxArea::Border);
+            return x >= box.x && x < box.x + size.x && y >= box.y && y < box.y + size.y;
+        };
+
+        const auto find_deepest = [&](const auto& self, Rml::Element* element) -> Rml::Element* {
+            for (int i = element->GetNumChildren() - 1; i >= 0; --i) {
+                if (auto* hit = self(self, element->GetChild(i)))
+                    return hit;
+            }
+            return contains(element) ? element : nullptr;
+        };
+
+        return find_deepest(find_deepest, dropdown_container_);
+    }
+
+    int RmlMenuBar::submenuIndexForElement(Rml::Element* element) const {
+        for (auto* el = element; el; el = el->GetParentNode()) {
+            if (!el->HasAttribute("data-root-index"))
+                continue;
+            return el->GetAttribute<int>("data-root-index", -1);
+        }
+        return -1;
+    }
+
     void RmlMenuBar::rebuildDropdownDOM() {
-        if (!dropdown_container_ || !dropdown_overlay_ || !menu_items_)
+        if (!dropdown_container_ || !dropdown_popup_ || !dropdown_overlay_ || !menu_items_)
             return;
 
         const int count = menu_items_->GetNumChildren();
@@ -520,8 +614,10 @@ namespace lfs::vis::gui {
         const auto label_size = label_el->GetBox().GetSize(Rml::BoxArea::Border);
 
         menu_model_.DirtyVariable("dropdown_items");
-        dropdown_container_->SetProperty("left", std::format("{}px", label_offset.x));
-        dropdown_container_->SetProperty("top", std::format("{}px", label_offset.y + label_size.y));
+        dropdown_container_->SetProperty("left", "0px");
+        dropdown_container_->SetProperty("top", "0px");
+        dropdown_popup_->SetProperty("left", std::format("{}px", label_offset.x));
+        dropdown_popup_->SetProperty("top", std::format("{}px", label_offset.y + label_size.y));
         dropdown_container_->SetClass("visible", true);
         dropdown_overlay_->SetClass("visible", true);
         render_needed_ = true;
@@ -541,6 +637,20 @@ namespace lfs::vis::gui {
             base_rcss_ = rml_theme::loadBaseRCSS("rmlui/menubar.rcss");
 
         rml_theme::applyTheme(document_, base_rcss_, rml_theme::loadBaseRCSS("rmlui/menubar.theme.rcss"));
+
+        if (brand_logo_) {
+            const bool is_light = theme().isLightTheme();
+            const auto logo_path = lfs::vis::getAssetPath(
+                is_light ? "lichtfeld-splash-logo-dark.png" : "lichtfeld-splash-logo.png");
+            brand_logo_->SetAttribute("src", rml_theme::pathToRmlImageSource(logo_path));
+            auto [w, h, c] = lfs::core::get_image_info(logo_path);
+            if (w > 0 && h > 0) {
+                constexpr float kTargetHeightDp = 18.0f;
+                const float scale = kTargetHeightDp / static_cast<float>(h);
+                brand_logo_->SetProperty("width", std::format("{:.0f}dp", w * scale));
+                brand_logo_->SetProperty("height", std::format("{:.0f}dp", kTargetHeightDp));
+            }
+        }
         return true;
     }
 
@@ -564,26 +674,36 @@ namespace lfs::vis::gui {
         }
 
         const bool size_changed = (ctx_w != last_ctx_w_ || ctx_h != last_ctx_h_);
-        const bool needs_render = render_needed_ || theme_changed || size_changed;
-        if (!needs_render) {
-            rml_manager_->queueVulkanContext(rml_context_, 0.0f, 0.0f, true,
-                                             true, 0.0f, 0.0f,
-                                             static_cast<float>(screen_w),
-                                             static_cast<float>(ctx_h));
-            return;
+        const bool refresh_cache = render_needed_ || theme_changed || size_changed || direct_cache_.texture == 0;
+
+        if (refresh_cache) {
+            rml_context_->SetDimensions(Rml::Vector2i(ctx_w, ctx_h));
+            if (ctx_h != last_document_h_) {
+                document_->SetProperty("height", std::format("{}px", ctx_h));
+                last_document_h_ = ctx_h;
+            }
+            rml_context_->Update();
         }
 
-        rml_context_->SetDimensions(Rml::Vector2i(ctx_w, ctx_h));
-        if (ctx_h != last_document_h_) {
-            document_->SetProperty("height", std::format("{}px", ctx_h));
-            last_document_h_ = ctx_h;
-        }
-        rml_context_->Update();
-
-        rml_manager_->queueVulkanContext(rml_context_, 0.0f, 0.0f, true,
-                                         true, 0.0f, 0.0f,
-                                         static_cast<float>(screen_w),
-                                         static_cast<float>(ctx_h));
+        rml_manager_->queueCachedVulkanContext({
+            .context = rml_context_,
+            .cache = &direct_cache_,
+            .cache_width = ctx_w,
+            .cache_height = ctx_h,
+            .offset_x = 0.0f,
+            .offset_y = 0.0f,
+            .draw_width = static_cast<float>(screen_w),
+            .draw_height = static_cast<float>(ctx_h),
+            .refresh = refresh_cache,
+            .foreground = true,
+            .clip_enabled = true,
+            .clip = {
+                .x1 = 0.0f,
+                .y1 = 0.0f,
+                .x2 = static_cast<float>(screen_w),
+                .y2 = static_cast<float>(ctx_h),
+            },
+        });
         last_ctx_w_ = ctx_w;
         last_ctx_h_ = ctx_h;
         render_needed_ = false;

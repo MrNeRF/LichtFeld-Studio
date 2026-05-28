@@ -40,6 +40,7 @@ namespace lfs::python {
 
         ExportCallback g_export_callback = nullptr;
         DrawPopupsCallback g_popup_draw_callback = nullptr;
+        HasPopupsCallback g_popup_has_callback = nullptr;
         EnsureInitializedCallback g_ensure_initialized_callback = nullptr;
 
         // Exit popup state for window close callback (thread-safe)
@@ -74,6 +75,7 @@ namespace lfs::python {
         // Menu bar UI callbacks
         ShowInputSettingsCallback g_show_input_settings_cb = nullptr;
         ShowPythonConsoleCallback g_show_python_console_cb = nullptr;
+        SceneGenerationCallback g_scene_generation_cb = nullptr;
 
         // Section drawing callbacks
         SectionDrawCallbacks g_section_draw_callbacks;
@@ -99,6 +101,7 @@ namespace lfs::python {
         // Viewport overlay callbacks
         HasViewportDrawHandlersCallback g_has_viewport_draw_handlers_cb = nullptr;
         InvokeViewportOverlayCallback g_invoke_viewport_overlay_cb = nullptr;
+        SyncViewportOverlayDocumentCallback g_sync_viewport_overlay_document_cb = nullptr;
 
         // Selection sub-mode (shared between C++ toolbar and Python operator)
         std::atomic<int> g_selection_submode{0};
@@ -541,7 +544,9 @@ namespace lfs::python {
     void ApplicationSceneContext::set(core::Scene* scene) {
         scene_.store(scene);
         mutation_flags_.store(0, std::memory_order_release);
-        generation_.fetch_add(1);
+        const uint64_t generation = generation_.fetch_add(1, std::memory_order_acq_rel) + 1;
+        if (g_scene_generation_cb)
+            g_scene_generation_cb(generation);
     }
 
     core::Scene* ApplicationSceneContext::get() const { return scene_.load(); }
@@ -556,7 +561,11 @@ namespace lfs::python {
         return mutation_flags_.exchange(0, std::memory_order_acq_rel);
     }
 
-    void ApplicationSceneContext::bump() { generation_.fetch_add(1); }
+    void ApplicationSceneContext::bump() {
+        const uint64_t generation = generation_.fetch_add(1, std::memory_order_acq_rel) + 1;
+        if (g_scene_generation_cb)
+            g_scene_generation_cb(generation);
+    }
 
     void ApplicationSceneContext::set_mutation_flags(const uint32_t flags) {
         mutation_flags_.fetch_or(flags, std::memory_order_acq_rel);
@@ -576,6 +585,10 @@ namespace lfs::python {
 
     void set_scene_mutation_flags(const uint32_t flags) {
         g_app_scene_context.set_mutation_flags(flags);
+    }
+
+    void set_scene_generation_callback(SceneGenerationCallback cb) {
+        g_scene_generation_cb = cb;
     }
 
     void set_gil_state_ready(const bool ready) { g_gil_state_ready.store(ready, std::memory_order_release); }
@@ -891,6 +904,11 @@ namespace lfs::python {
     const ModalEnqueueCallback& get_modal_enqueue_callback() { return g_modal_enqueue_callback; }
 
     void set_popup_draw_callback(DrawPopupsCallback cb) { g_popup_draw_callback = cb; }
+    void set_popup_has_callback(HasPopupsCallback cb) { g_popup_has_callback = cb; }
+
+    bool has_python_popups() {
+        return g_popup_draw_callback && g_popup_has_callback && g_popup_has_callback();
+    }
 
     void draw_python_popups(lfs::core::Scene* scene) {
         if (!g_popup_draw_callback)
@@ -1059,6 +1077,11 @@ namespace lfs::python {
         g_graphics_callbacks.push_back(std::move(fn));
     }
 
+    bool has_pending_graphics_callbacks() {
+        std::lock_guard lock(g_graphics_callbacks_mutex);
+        return !g_graphics_callbacks.empty();
+    }
+
     void flush_graphics_callbacks() {
         std::vector<std::function<void()>> pending;
         {
@@ -1160,9 +1183,9 @@ namespace lfs::python {
         }
     }
 
-    void update_trainer_loaded(bool has_trainer, int max_iterations) {
+    void update_trainer_loaded(bool has_trainer, int max_iterations, int initial_iteration) {
         if (g_signal_bridge_callbacks.trainer_loaded) {
-            g_signal_bridge_callbacks.trainer_loaded(has_trainer, max_iterations);
+            g_signal_bridge_callbacks.trainer_loaded(has_trainer, max_iterations, initial_iteration);
         }
     }
 
@@ -1197,8 +1220,17 @@ namespace lfs::python {
         g_invoke_viewport_overlay_cb = invoke_cb;
     }
 
+    void set_viewport_overlay_document_sync_callback(SyncViewportOverlayDocumentCallback sync_cb) {
+        g_sync_viewport_overlay_document_cb = sync_cb;
+    }
+
     bool has_viewport_draw_handlers() {
         return g_has_viewport_draw_handlers_cb && g_has_viewport_draw_handlers_cb();
+    }
+
+    bool sync_viewport_overlay_document(void* document) {
+        return document && g_sync_viewport_overlay_document_cb &&
+               g_sync_viewport_overlay_document_cb(document);
     }
 
     void invoke_viewport_overlay(const float* view_matrix, const float* proj_matrix,

@@ -104,6 +104,62 @@ def _install_lf_stub(monkeypatch):
     return state
 
 
+class _DataModelHandleStub:
+    def __init__(self):
+        self.dirty_calls = []
+
+    def dirty(self, name):
+        self.dirty_calls.append(name)
+
+
+class _DataModelStub:
+    def __init__(self):
+        self.bound_binds = {}
+        self.bound_funcs = {}
+        self.bound_events = {}
+        self.handle = _DataModelHandleStub()
+
+    def bind(self, name, getter, setter):
+        self.bound_binds[name] = (getter, setter)
+
+    def bind_func(self, name, getter):
+        self.bound_funcs[name] = getter
+
+    def bind_event(self, name, callback):
+        self.bound_events[name] = callback
+
+    def get_handle(self):
+        return self.handle
+
+
+class _ElementStub:
+    def __init__(self):
+        self.classes = set()
+        self.listeners = []
+
+    def set_class(self, name, active):
+        if active:
+            self.classes.add(name)
+        else:
+            self.classes.discard(name)
+
+    def add_event_listener(self, name, callback):
+        self.listeners.append((name, callback))
+
+
+class _DocumentStub:
+    def __init__(self):
+        self.body = _ElementStub()
+        self.wrap = _ElementStub()
+
+    def get_element_by_id(self, element_id):
+        if element_id in {"body", "overlay-body"}:
+            return self.body
+        if element_id == "transform-block":
+            return self.wrap
+        return None
+
+
 @pytest.fixture
 def transform_controls_module(monkeypatch):
     project_root = Path(__file__).parent.parent.parent
@@ -120,7 +176,7 @@ def transform_controls_module(monkeypatch):
 
 def test_transform_controls_single_node_reads_visualizer_world_transform(transform_controls_module):
     module, state = transform_controls_module
-    panel = module.TransformControlsPanel()
+    panel = module.TransformControlsController()
     panel._selected = ["target"]
 
     state.local_transforms["target"] = _translation_matrix(1.0, 2.0, 3.0)
@@ -133,7 +189,7 @@ def test_transform_controls_single_node_reads_visualizer_world_transform(transfo
 
 def test_transform_controls_single_node_writes_visualizer_world_transform(transform_controls_module):
     module, state = transform_controls_module
-    panel = module.TransformControlsPanel()
+    panel = module.TransformControlsController()
     panel._selected = ["target"]
     panel._active_tool = "builtin.translate"
     panel._trans = [4.0, -5.0, -6.0]
@@ -150,7 +206,7 @@ def test_transform_controls_single_node_writes_visualizer_world_transform(transf
 
 def test_transform_controls_multi_translate_uses_visualizer_world_space(transform_controls_module):
     module, state = transform_controls_module
-    panel = module.TransformControlsPanel()
+    panel = module.TransformControlsController()
     panel._selected = ["left", "right"]
     panel._active_tool = "builtin.translate"
 
@@ -171,3 +227,73 @@ def test_transform_controls_multi_translate_uses_visualizer_world_space(transfor
         ("left", _translation_matrix(11.0, -18.0, -29.0)),
         ("right", _translation_matrix(16.0, -22.0, -32.0)),
     ]
+
+
+def test_transform_controls_hide_overlay_when_tool_is_inactive(transform_controls_module):
+    module, state = transform_controls_module
+    panel = module.TransformControlsController()
+    state.active_tool = ""
+    state.selected_names = ["target"]
+
+    doc = _DocumentStub()
+
+    panel.mount(doc)
+    assert "hidden" in doc.wrap.classes
+
+    doc.wrap.classes.discard("hidden")
+    panel.update(doc)
+
+    assert "hidden" in doc.wrap.classes
+
+
+def test_transform_controls_mirror_keeps_overlay_for_axis_options(transform_controls_module):
+    module, state = transform_controls_module
+    panel = module.TransformControlsController()
+    model = _DataModelStub()
+    doc = _DocumentStub()
+
+    state.active_tool = "builtin.mirror"
+    state.selected_names = ["target"]
+
+    panel.bind_model(model)
+    panel.mount(doc)
+    assert "hidden" in doc.wrap.classes
+
+    panel.update(doc)
+
+    assert "hidden" not in doc.wrap.classes
+    assert model.bound_funcs["transform_tool_label"]() == "Mirror"
+    assert model.bound_funcs["transform_submode_label"]() == "Axis"
+    assert model.bound_funcs["transform_submode_tooltip_key"]() == "tooltip.transform_axis"
+    assert model.bound_funcs["transform_show_translate"]() is False
+    assert model.bound_funcs["transform_show_rotate"]() is False
+    assert model.bound_funcs["transform_show_scale"]() is False
+    assert model.bound_funcs["transform_show_actions"]() is False
+    assert "transform_show_actions" in model.handle.dirty_calls
+    assert "transform_submode_label" in model.handle.dirty_calls
+
+
+def test_transform_controls_bake_commits_active_edit(transform_controls_module):
+    module, state = transform_controls_module
+    panel = module.TransformControlsController()
+    panel._selected = ["target"]
+
+    old_transform = _translation_matrix(1.0, 2.0, 3.0)
+    new_transform = _translation_matrix(4.0, 5.0, 6.0)
+    state.local_transforms["target"] = new_transform
+    panel._state.editing_active = True
+    panel._state.editing_node_names = ["target"]
+    panel._state.transforms_before_edit = [old_transform]
+
+    panel._on_action(None, None, ["bake"])
+
+    assert state.op_calls == [
+        (
+            "transform.apply_batch",
+            {
+                "node_names": ["target"],
+                "old_transforms": [old_transform],
+            },
+        )
+    ]
+    assert panel._state.editing_active is False

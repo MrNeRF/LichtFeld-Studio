@@ -471,3 +471,12 @@ def icon_button(container, id, icon_src, selected=False,
         btn.set_attribute("title", tooltip)
 
     return btn
+
+
+def request_model_update(handle):
+    """Schedule a dirty-policy panel update without dirtying every model variable."""
+    request_update = getattr(handle, "request_update", None)
+    if callable(request_update):
+        request_update()
+    else:
+        handle.dirty_all()

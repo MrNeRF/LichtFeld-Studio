@@ -563,6 +563,37 @@ namespace lfs::core {
         return pool;
     }
 
+    namespace {
+        thread_local std::string g_pool_pending_label;
+    }
+
+    CudaMemoryPool::LabelGuard::LabelGuard(std::string_view label)
+        : previous_(std::move(g_pool_pending_label)),
+          active_(!label.empty()) {
+        if (active_) {
+            g_pool_pending_label.assign(label);
+        }
+    }
+
+    CudaMemoryPool::LabelGuard::~LabelGuard() {
+        g_pool_pending_label = std::move(previous_);
+    }
+
+    std::string_view CudaMemoryPool::current_label() noexcept {
+        return g_pool_pending_label;
+    }
+
+    void Tensor::relabel_allocation_for_profiler() {
+        if (device_ != Device::CUDA || data_ == nullptr || state_->name.empty()) {
+            return;
+        }
+        try {
+            lfs::diagnostics::VramProfiler::instance().relabelAllocation(data_, state_->name);
+        } catch (...) {
+            // Diagnostics must never throw out of tensor operations.
+        }
+    }
+
     void Tensor::trim_memory_pool() {
         CudaMemoryPool::instance().trim_cached_memory();
     }
@@ -1047,16 +1078,22 @@ namespace lfs::core {
             // This is needed for the stream-aware pinned memory allocator
             const_cast<Tensor*>(this)->set_stream(transfer_stream);
 
-            // If stream is provided, caller is responsible for sync
+            // If stream is provided, caller is responsible for sync.
+            // Otherwise wait only on transfer_stream — the H2D is the only work
+            // we submitted, and a full cudaDeviceSynchronize was draining
+            // unrelated GPU work (Vulkan compute, other CUDA streams), turning
+            // sub-KB uploads into multi-ms calls during concurrent rendering.
             if (!stream) {
-                CHECK_CUDA(cudaDeviceSynchronize()); // Ensure transfer completes before returning
+                CHECK_CUDA(cudaStreamSynchronize(transfer_stream));
             }
         } else if (device_ == Device::CUDA && device == Device::CPU) {
-            // API BOUNDARY: Sync before GPU→CPU transfer
+            // API BOUNDARY: Sync before GPU→CPU transfer so we see the latest
+            // writes to the source tensor. Sync only the source's stream — a
+            // full device sync was draining unrelated GPU work.
             if (stream) {
                 cudaStreamSynchronize(stream);
             } else {
-                cudaDeviceSynchronize();
+                cudaStreamSynchronize(this->stream());
             }
             // Async transfer for GPU→CPU as well (destination is pinned)
             cudaStream_t transfer_stream = stream ? stream : 0;
@@ -1066,7 +1103,7 @@ namespace lfs::core {
             CHECK_CUDA(cudaMemcpyAsync(t.data_, src, bytes(), cudaMemcpyDeviceToHost, transfer_stream));
 
             if (!stream) {
-                CHECK_CUDA(cudaDeviceSynchronize()); // Ensure transfer completes before returning
+                CHECK_CUDA(cudaStreamSynchronize(transfer_stream));
             }
         }
 

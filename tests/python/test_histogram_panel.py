@@ -118,6 +118,36 @@ class _MouseEventStub:
         self.stopped = True
 
 
+class _SignalStub:
+    def __init__(self):
+        self._callbacks = []
+
+    def subscribe(self, callback):
+        self._callbacks.append(callback)
+
+        def unsubscribe():
+            if callback in self._callbacks:
+                self._callbacks.remove(callback)
+
+        return unsubscribe
+
+    def emit(self, value):
+        for callback in list(self._callbacks):
+            callback(value)
+
+
+class _UpdateHandleStub:
+    def __init__(self):
+        self.request_update_count = 0
+        self.dirty_all_count = 0
+
+    def request_update(self):
+        self.request_update_count += 1
+
+    def dirty_all(self):
+        self.dirty_all_count += 1
+
+
 def _translation_matrix(tx: float, ty: float, tz: float) -> list[list[float]]:
     return [
         [1.0, 0.0, 0.0, tx],
@@ -132,6 +162,38 @@ def histogram_panel_module():
     from lfs_plugins import histogram_panel
 
     return histogram_panel
+
+
+def test_histogram_panel_uses_dirty_update_policy(histogram_panel_module):
+    assert histogram_panel_module.HistogramPanel.update_policy == "dirty"
+    assert "update_interval_ms" not in histogram_panel_module.HistogramPanel.__dict__
+
+
+def test_histogram_panel_requests_update_from_reactive_store(histogram_panel_module, monkeypatch):
+    module = histogram_panel_module
+    signals = SimpleNamespace(
+        scene_generation=_SignalStub(),
+        selection_generation=_SignalStub(),
+        training_state=_SignalStub(),
+        language_generation=_SignalStub(),
+    )
+    monkeypatch.setattr(module, "RuntimeState", signals)
+
+    panel = module.HistogramPanel()
+    panel._handle = _UpdateHandleStub()
+
+    panel._subscribe_reactive_state()
+    signals.scene_generation.emit(1)
+    signals.selection_generation.emit(2)
+    signals.training_state.emit("running")
+    signals.language_generation.emit(1)
+
+    assert panel._handle.request_update_count == 4
+
+    panel._unsubscribe_reactive_state()
+    signals.scene_generation.emit(3)
+
+    assert panel._handle.request_update_count == 4
 
 
 def test_histogram_metrics_include_positions_volume_anisotropy_and_erank(histogram_panel_module):

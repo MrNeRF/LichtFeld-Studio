@@ -125,12 +125,16 @@ class _HandleStub:
     def __init__(self):
         self.dirty_fields = []
         self.dirty_all_calls = 0
+        self.request_update_count = 0
 
     def dirty(self, name):
         self.dirty_fields.append(name)
 
     def dirty_all(self):
         self.dirty_all_calls += 1
+
+    def request_update(self):
+        self.request_update_count += 1
 
 
 class _ElementStub:
@@ -530,21 +534,38 @@ def test_resume_checkpoint_panel_preserves_unicode_paths(import_dialog_module, t
     assert state.panel_enabled_calls[-1] == ("lfs.resume_checkpoint", False)
 
 
-def test_import_dialogs_dirty_all_on_language_change(import_dialog_module):
-    module, state = import_dialog_module
+def test_import_dialogs_use_dirty_update_policy(import_dialog_module):
+    module, _state = import_dialog_module
+    assert module.DatasetImportPanel.update_policy == "dirty"
+    assert module.ResumeCheckpointPanel.update_policy == "dirty"
+    assert module.URLImportPanel.update_policy == "dirty"
+    assert module.WatchDirsDialogPanel.update_policy == "dirty"
+    assert "update_interval_ms" not in module.DatasetImportPanel.__dict__
+    assert "update_interval_ms" not in module.ResumeCheckpointPanel.__dict__
+    assert "update_interval_ms" not in module.URLImportPanel.__dict__
+    assert "update_interval_ms" not in module.WatchDirsDialogPanel.__dict__
+    assert "update_interval_ms" not in module._ImportDialogPanel.__dict__
+
+
+def test_import_dialogs_request_update_on_language_generation(import_dialog_module):
+    module, _state = import_dialog_module
     dataset_panel = module.DatasetImportPanel()
     resume_panel = module.ResumeCheckpointPanel()
     dataset_panel._handle = _HandleStub()
     resume_panel._handle = _HandleStub()
-    dataset_panel._last_lang = "en"
-    resume_panel._last_lang = "en"
+    module.RuntimeState.language_generation._fallback = 0
 
-    state.language[0] = "de"
+    dataset_panel._subscribe_reactive_state()
+    resume_panel._subscribe_reactive_state()
+    module.RuntimeState.language_generation.value = 1
 
-    assert dataset_panel.on_update(None) is True
-    assert resume_panel.on_update(None) is True
-    assert dataset_panel._handle.dirty_all_calls == 1
-    assert resume_panel._handle.dirty_all_calls == 1
+    assert dataset_panel._handle.request_update_count == 1
+    assert resume_panel._handle.request_update_count == 1
+    assert dataset_panel._handle.dirty_all_calls == 0
+    assert resume_panel._handle.dirty_all_calls == 0
+
+    dataset_panel._unsubscribe_reactive_state()
+    resume_panel._unsubscribe_reactive_state()
 
 
 def test_dataset_import_panel_binds_enter_and_escape(import_dialog_module):

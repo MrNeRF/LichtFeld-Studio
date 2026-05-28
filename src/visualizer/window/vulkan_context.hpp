@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "config.h"
+#include "vulkan_image_barrier_tracker.hpp"
 
 #include <array>
 #include <cstddef>
@@ -14,10 +14,8 @@
 #include <string_view>
 #include <type_traits>
 #include <vector>
-
-#ifdef LFS_VULKAN_VIEWER_ENABLED
-#include "vulkan_image_barrier_tracker.hpp"
 #include <vulkan/vulkan.h>
+
 #ifndef VMA_STATIC_VULKAN_FUNCTIONS
 #define VMA_STATIC_VULKAN_FUNCTIONS 1
 #endif
@@ -25,7 +23,6 @@
 #define VMA_DYNAMIC_VULKAN_FUNCTIONS 0
 #endif
 #include <vk_mem_alloc.h>
-#endif
 
 struct SDL_Window;
 
@@ -46,7 +43,6 @@ namespace lfs::vis {
         [[nodiscard]] bool presentBootstrapFrame(float r, float g, float b, float a);
         [[nodiscard]] const std::string& lastError() const { return last_error_; }
 
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         struct Frame {
             uint32_t image_index = 0;
             std::size_t frame_slot = 0;
@@ -72,6 +68,8 @@ namespace lfs::vis {
             VkExtent2D extent{};
             VkFormat format = VK_FORMAT_UNDEFINED;
             VkDeviceSize allocation_size = 0;
+            std::string diagnostic_scope;
+            std::string diagnostic_label;
             ExternalNativeHandle native_handle = kInvalidExternalNativeHandle;
         };
 
@@ -80,6 +78,8 @@ namespace lfs::vis {
             VkDeviceMemory memory = VK_NULL_HANDLE;
             VkDeviceSize size = 0;
             VkDeviceSize allocation_size = 0;
+            std::string diagnostic_scope;
+            std::string diagnostic_label;
             ExternalNativeHandle native_handle = kInvalidExternalNativeHandle;
         };
 
@@ -98,6 +98,7 @@ namespace lfs::vis {
         [[nodiscard]] uint32_t graphicsQueueFamily() const { return graphics_queue_family_; }
         [[nodiscard]] uint32_t presentQueueFamily() const { return present_queue_family_; }
         [[nodiscard]] VmaAllocator allocator() const { return allocator_; }
+        [[nodiscard]] std::size_t queryVmaUsedBytes() const;
         [[nodiscard]] VkPipelineCache pipelineCache() const { return pipeline_cache_; }
         [[nodiscard]] VkFormat swapchainFormat() const { return swapchain_format_; }
         [[nodiscard]] VkColorSpaceKHR swapchainColorSpace() const { return swapchain_color_space_; }
@@ -154,14 +155,31 @@ namespace lfs::vis {
                                   std::uint64_t value,
                                   VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 
-        [[nodiscard]] bool createExternalImage(VkExtent2D extent, VkFormat format, ExternalImage& out);
+        [[nodiscard]] bool createExternalImage(VkExtent2D extent,
+                                               VkFormat format,
+                                               ExternalImage& out,
+                                               std::string_view diagnostic_scope = "vulkan.external.image",
+                                               std::string_view diagnostic_label = {});
         void destroyExternalImage(ExternalImage& image);
         [[nodiscard]] ExternalNativeHandle releaseExternalImageNativeHandle(ExternalImage& image) const;
         [[nodiscard]] bool createExternalBuffer(VkDeviceSize size,
                                                 VkBufferUsageFlags usage,
-                                                ExternalBuffer& out);
+                                                ExternalBuffer& out,
+                                                std::string_view diagnostic_scope = "vulkan.external.buffer",
+                                                std::string_view diagnostic_label = {});
         void destroyExternalBuffer(ExternalBuffer& buffer);
         [[nodiscard]] ExternalNativeHandle releaseExternalBufferNativeHandle(ExternalBuffer& buffer) const;
+        // Import a foreign-allocated external memory handle (e.g. from CUDA's
+        // cuMemExportToShareableHandle) into Vulkan. The exporter retains ownership
+        // of the handle; this method dup()'s on Linux and the imported VkDeviceMemory
+        // is released by destroyExternalBuffer. The returned ExternalBuffer's
+        // native_handle stays kInvalidExternalNativeHandle (we are not the owner).
+        [[nodiscard]] bool importExternalBuffer(ExternalNativeHandle handle,
+                                                VkDeviceSize size,
+                                                VkBufferUsageFlags usage,
+                                                ExternalBuffer& out,
+                                                std::string_view diagnostic_scope = "vulkan.external.imported_buffer",
+                                                std::string_view diagnostic_label = {});
         [[nodiscard]] bool createExternalTimelineSemaphore(std::uint64_t initial_value, ExternalSemaphore& out);
         void destroyExternalSemaphore(ExternalSemaphore& semaphore);
         [[nodiscard]] ExternalNativeHandle releaseExternalSemaphoreNativeHandle(ExternalSemaphore& semaphore) const;
@@ -174,12 +192,10 @@ namespace lfs::vis {
                                                           VkSemaphore wait_semaphore = VK_NULL_HANDLE,
                                                           std::uint64_t wait_value = 0,
                                                           VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-#endif
 
     private:
         bool fail(std::string message);
 
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         struct QueueFamilies {
             std::optional<uint32_t> graphics;
             std::optional<uint32_t> present;
@@ -246,6 +262,7 @@ namespace lfs::vis {
         [[nodiscard]] VkFormat chooseDepthStencilFormat() const;
         [[nodiscard]] uint32_t findMemoryType(uint32_t type_filter, VkMemoryPropertyFlags properties) const;
         [[nodiscard]] VkImageAspectFlags depthStencilAspectMask() const;
+        [[nodiscard]] std::string makeAllocationDiagnosticLabel(std::string_view label);
         VkInstance instance_ = VK_NULL_HANDLE;
         VkDebugUtilsMessengerEXT debug_messenger_ = VK_NULL_HANDLE;
         VkSurfaceKHR surface_ = VK_NULL_HANDLE;
@@ -276,6 +293,7 @@ namespace lfs::vis {
         uint32_t min_image_count_ = 2;
         std::vector<VkImage> swapchain_images_;
         std::vector<VkImageView> swapchain_image_views_;
+        std::size_t swapchain_estimated_bytes_ = 0;
         VulkanImageBarrierTracker image_barriers_;
         VkFormat depth_stencil_format_ = VK_FORMAT_UNDEFINED;
         std::vector<DepthStencilResource> depth_stencil_resources_;
@@ -334,7 +352,7 @@ namespace lfs::vis {
         std::size_t active_frame_index_ = 0;
         int framebuffer_width_ = 0;
         int framebuffer_height_ = 0;
-#endif
+        std::uint64_t allocation_diagnostic_serial_ = 0;
 
         std::string last_error_;
     };

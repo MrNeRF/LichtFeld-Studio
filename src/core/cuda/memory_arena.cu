@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/logger.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "memory_arena.hpp"
 #include <algorithm>
 #include <cstring>
@@ -49,6 +50,8 @@ namespace lfs::core {
             std::lock_guard<std::mutex> chunk_lock(arena.chunks_mutex);
             for (auto& chunk : arena.chunks) {
                 if (chunk.is_mapped) {
+                    lfs::diagnostics::VramProfiler::instance().recordDeallocation(
+                        reinterpret_cast<void*>(arena.d_ptr + chunk.offset));
                     cuMemUnmap(arena.d_ptr + chunk.offset, chunk.size);
                     cuMemRelease(chunk.handle);
                 }
@@ -61,6 +64,7 @@ namespace lfs::core {
 
             // Free fallback buffer if exists
             if (arena.fallback_buffer) {
+                lfs::diagnostics::VramProfiler::instance().recordDeallocation(arena.fallback_buffer);
                 cudaFree(arena.fallback_buffer);
             }
         }
@@ -489,6 +493,10 @@ namespace lfs::core {
                 err = cudaMalloc(&arena.fallback_buffer, initial_size);
                 if (err == cudaSuccess) {
                     LOG_TRACE("Arena cudaMalloc: %zu MB", initial_size >> 20);
+                    lfs::diagnostics::VramProfiler::instance().recordAllocation(
+                        arena.fallback_buffer, initial_size,
+                        lfs::diagnostics::VramAllocationMethod::Direct,
+                        "rasterizer.arena.initial");
                     arena.capacity = initial_size;
                     arena.committed_size = initial_size;
                     arena.generation = generation_counter_.fetch_add(1, std::memory_order_relaxed);
@@ -600,6 +608,11 @@ namespace lfs::core {
                                 std::lock_guard<std::mutex> lock(arena.chunks_mutex);
                                 arena.chunks.push_back({chunk_handle, map_offset, chunk_size, true});
                             }
+                            lfs::diagnostics::VramProfiler::instance().recordAllocation(
+                                reinterpret_cast<void*>(arena.d_ptr + map_offset),
+                                chunk_size,
+                                lfs::diagnostics::VramAllocationMethod::Direct,
+                                "rasterizer.arena.vmm_chunk");
                             total_allocated += chunk_size;
                             LOG_TRACE("VMM chunk %d: %zu MB", i, chunk_size >> 20);
                         } else {
@@ -656,6 +669,11 @@ namespace lfs::core {
             std::lock_guard<std::mutex> lock(arena.chunks_mutex);
             arena.chunks.push_back({handle, map_offset, commit_size, true});
         }
+        lfs::diagnostics::VramProfiler::instance().recordAllocation(
+            reinterpret_cast<void*>(arena.d_ptr + map_offset),
+            commit_size,
+            lfs::diagnostics::VramAllocationMethod::Direct,
+            "rasterizer.arena.vmm");
 
         arena.committed_size = map_offset + commit_size;
         arena.capacity = arena.committed_size;
@@ -699,6 +717,8 @@ namespace lfs::core {
                     // Unmap the physical memory from virtual address space
                     CUresult result = cuMemUnmap(arena.d_ptr + chunk.offset, chunk.size);
                     if (result == CUDA_SUCCESS) {
+                        lfs::diagnostics::VramProfiler::instance().recordDeallocation(
+                            reinterpret_cast<void*>(arena.d_ptr + chunk.offset));
                         // Release the physical memory allocation
                         cuMemRelease(chunk.handle);
                         chunk.is_mapped = false;
@@ -910,6 +930,10 @@ namespace lfs::core {
             LOG_WARN("Growth allocation failed: %s", cudaGetErrorString(err));
             return false;
         }
+        lfs::diagnostics::VramProfiler::instance().recordAllocation(
+            new_buffer, new_capacity,
+            lfs::diagnostics::VramAllocationMethod::Direct,
+            "rasterizer.arena.grown");
 
         LOG_TRACE("Arena realloc: %zu MB", new_capacity >> 20);
 
@@ -917,6 +941,7 @@ namespace lfs::core {
         if (copy_size > 0 && arena.fallback_buffer) {
             err = cudaMemcpy(new_buffer, arena.fallback_buffer, copy_size, cudaMemcpyDeviceToDevice);
             if (err != cudaSuccess) {
+                lfs::diagnostics::VramProfiler::instance().recordDeallocation(new_buffer);
                 cudaFree(new_buffer);
                 LOG_ERROR("Copy failed during growth: %s", cudaGetErrorString(err));
                 return false;
@@ -924,6 +949,7 @@ namespace lfs::core {
         }
 
         if (arena.fallback_buffer) {
+            lfs::diagnostics::VramProfiler::instance().recordDeallocation(arena.fallback_buffer);
             cudaFree(arena.fallback_buffer);
         }
         arena.fallback_buffer = new_buffer;

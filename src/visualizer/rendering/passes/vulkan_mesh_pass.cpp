@@ -7,11 +7,15 @@
 #include "core/logger.hpp"
 #include "core/material.hpp"
 #include "core/mesh_data.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "window/vulkan_context.hpp"
 
 #include <array>
 #include <cstring>
+#include <format>
 #include <glm/gtc/matrix_transform.hpp>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 #include <vk_mem_alloc.h>
@@ -120,6 +124,7 @@ namespace lfs::vis {
             VkImage image = VK_NULL_HANDLE;
             VmaAllocation alloc = VK_NULL_HANDLE;
             VkImageView view = VK_NULL_HANDLE;
+            std::string vram_label;
         };
         GpuTexture white_pixel{};
 
@@ -143,6 +148,7 @@ namespace lfs::vis {
             VmaAllocation alloc = VK_NULL_HANDLE;
             VkImageView view = VK_NULL_HANDLE;
             int resolution = 0;
+            std::string vram_label;
         };
 
         struct GpuMesh {
@@ -455,9 +461,15 @@ namespace lfs::vis {
             img.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             VmaAllocationCreateInfo a{};
             a.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-            if (vmaCreateImage(allocator, &img, &a, &out.image, &out.alloc, nullptr) != VK_SUCCESS) {
+            VmaAllocationInfo allocation_info{};
+            if (vmaCreateImage(allocator, &img, &a, &out.image, &out.alloc, &allocation_info) != VK_SUCCESS) {
                 return false;
             }
+            out.vram_label = std::format("shadow:{}x{}@{}", resolution, resolution, static_cast<const void*>(&out));
+            lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                "vulkan.mesh.shadow_image",
+                out.vram_label,
+                static_cast<std::size_t>(allocation_info.size));
             VkImageViewCreateInfo vi{};
             vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
             vi.image = out.image;
@@ -467,8 +479,7 @@ namespace lfs::vis {
             vi.subresourceRange.levelCount = 1;
             vi.subresourceRange.layerCount = 1;
             if (vkCreateImageView(device, &vi, nullptr, &out.view) != VK_SUCCESS) {
-                vmaDestroyImage(allocator, out.image, out.alloc);
-                out = {};
+                destroyShadow(out);
                 return false;
             }
             out.resolution = resolution;
@@ -502,6 +513,12 @@ namespace lfs::vis {
                 vkDestroyImageView(device, t.view, nullptr);
             }
             if (t.image != VK_NULL_HANDLE) {
+                if (!t.vram_label.empty()) {
+                    lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                        "vulkan.mesh.shadow_image",
+                        t.vram_label,
+                        0);
+                }
                 vmaDestroyImage(allocator, t.image, t.alloc);
             }
             t = {};
@@ -518,7 +535,11 @@ namespace lfs::vis {
             return true;
         }
 
-        bool createTexture(const std::uint8_t* rgba, int w, int h, GpuTexture& out) {
+        bool createTexture(const std::uint8_t* rgba,
+                           int w,
+                           int h,
+                           GpuTexture& out,
+                           std::string_view label = "texture") {
             VkImageCreateInfo img{};
             img.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
             img.imageType = VK_IMAGE_TYPE_2D;
@@ -533,9 +554,15 @@ namespace lfs::vis {
             img.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             VmaAllocationCreateInfo a{};
             a.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-            if (vmaCreateImage(allocator, &img, &a, &out.image, &out.alloc, nullptr) != VK_SUCCESS) {
+            VmaAllocationInfo allocation_info{};
+            if (vmaCreateImage(allocator, &img, &a, &out.image, &out.alloc, &allocation_info) != VK_SUCCESS) {
                 return false;
             }
+            out.vram_label = std::format("{}:{}x{}@{}", label, w, h, static_cast<const void*>(&out));
+            lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                "vulkan.mesh.texture",
+                out.vram_label,
+                static_cast<std::size_t>(allocation_info.size));
 
             // Stage to upload buffer → copy via transient command.
             const VkDeviceSize bytes = static_cast<VkDeviceSize>(w) * h * 4u;
@@ -550,15 +577,13 @@ namespace lfs::vis {
             sa.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
             sa.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
             if (vmaCreateBuffer(allocator, &sb, &sa, &staging, &staging_alloc, nullptr) != VK_SUCCESS) {
-                vmaDestroyImage(allocator, out.image, out.alloc);
-                out = {};
+                destroyTexture(out);
                 return false;
             }
             void* mapped = nullptr;
             if (vmaMapMemory(allocator, staging_alloc, &mapped) != VK_SUCCESS) {
                 vmaDestroyBuffer(allocator, staging, staging_alloc);
-                vmaDestroyImage(allocator, out.image, out.alloc);
-                out = {};
+                destroyTexture(out);
                 return false;
             }
             std::memcpy(mapped, rgba, static_cast<std::size_t>(bytes));
@@ -568,8 +593,7 @@ namespace lfs::vis {
             VkCommandBuffer cb = beginSingleTimeCommands();
             if (cb == VK_NULL_HANDLE) {
                 vmaDestroyBuffer(allocator, staging, staging_alloc);
-                vmaDestroyImage(allocator, out.image, out.alloc);
-                out = {};
+                destroyTexture(out);
                 return false;
             }
 
@@ -613,8 +637,7 @@ namespace lfs::vis {
 
             if (!endSingleTimeCommands(cb)) {
                 vmaDestroyBuffer(allocator, staging, staging_alloc);
-                vmaDestroyImage(allocator, out.image, out.alloc);
-                out = {};
+                destroyTexture(out);
                 return false;
             }
             vmaDestroyBuffer(allocator, staging, staging_alloc);
@@ -628,8 +651,7 @@ namespace lfs::vis {
             vi.subresourceRange.levelCount = 1;
             vi.subresourceRange.layerCount = 1;
             if (vkCreateImageView(device, &vi, nullptr, &out.view) != VK_SUCCESS) {
-                vmaDestroyImage(allocator, out.image, out.alloc);
-                out = {};
+                destroyTexture(out);
                 return false;
             }
             return true;
@@ -637,7 +659,7 @@ namespace lfs::vis {
 
         bool createWhitePixel() {
             const std::uint8_t white[4] = {255, 255, 255, 255};
-            return createTexture(white, 1, 1, white_pixel);
+            return createTexture(white, 1, 1, white_pixel, "white_pixel");
         }
 
         void destroyTexture(GpuTexture& t) const {
@@ -645,6 +667,12 @@ namespace lfs::vis {
                 vkDestroyImageView(device, t.view, nullptr);
             }
             if (t.image != VK_NULL_HANDLE) {
+                if (!t.vram_label.empty()) {
+                    lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                        "vulkan.mesh.texture",
+                        t.vram_label,
+                        0);
+                }
                 vmaDestroyImage(allocator, t.image, t.alloc);
             }
             t = {};
@@ -1076,7 +1104,10 @@ namespace lfs::vis {
             return result == VK_SUCCESS;
         }
 
-        bool uploadTextureFromMesh(const lfs::core::MeshData& mesh, std::uint32_t tex_index, GpuTexture& out) {
+        bool uploadTextureFromMesh(const lfs::core::MeshData& mesh,
+                                   std::uint32_t tex_index,
+                                   GpuTexture& out,
+                                   std::string_view label) {
             if (tex_index == 0 || tex_index > mesh.texture_images.size()) {
                 return false;
             }
@@ -1096,7 +1127,11 @@ namespace lfs::vis {
                     rgba[dst + 3] = ch >= 4 ? img.pixels[src + 3] : 255;
                 }
             }
-            return createTexture(rgba.data(), img.width, img.height, out);
+            return createTexture(rgba.data(),
+                                 img.width,
+                                 img.height,
+                                 out,
+                                 std::format("{}.tex{}", label, tex_index));
         }
 
         bool uploadMaterial(const lfs::core::MeshData& mesh, std::size_t material_index, GpuMaterial& out) {
@@ -1116,9 +1151,9 @@ namespace lfs::vis {
                 return false;
             }
 
-            const bool has_albedo = uploadTextureFromMesh(mesh, mat.albedo_tex, out.albedo);
-            const bool has_normal = uploadTextureFromMesh(mesh, mat.normal_tex, out.normal);
-            const bool has_mr = uploadTextureFromMesh(mesh, mat.metallic_roughness_tex, out.metallic_roughness);
+            const bool has_albedo = uploadTextureFromMesh(mesh, mat.albedo_tex, out.albedo, "albedo");
+            const bool has_normal = uploadTextureFromMesh(mesh, mat.normal_tex, out.normal, "normal");
+            const bool has_mr = uploadTextureFromMesh(mesh, mat.metallic_roughness_tex, out.metallic_roughness, "metallic_roughness");
             const bool has_vc = mesh.has_colors();
 
             MaterialUbo ubo{};

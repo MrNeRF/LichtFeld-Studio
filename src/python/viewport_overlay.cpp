@@ -7,6 +7,7 @@
 #include "gil.hpp"
 #include "gui/line_renderer.hpp"
 #include "lfs/py_gizmo.hpp"
+#include "lfs/py_rml.hpp"
 #include "lfs/py_viewport.hpp"
 #include "python_runtime.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
@@ -24,6 +25,28 @@ namespace lfs::python {
         bool has_handlers_impl() {
             return PyViewportDrawRegistry::instance().has_handlers() ||
                    PyTransformGizmoRegistry::instance().has_attached();
+        }
+
+        bool sync_document_impl(void* document_ptr) {
+            if (!document_ptr)
+                return false;
+            if (!can_acquire_gil()) {
+                LOG_DEBUG("Viewport overlay document sync skipped: Python not ready");
+                return false;
+            }
+
+            const GilAcquire gil;
+            try {
+                auto overlays = nb::module_::import_("lfs_plugins.overlays");
+                auto result = overlays.attr("sync_document")(
+                    PyRmlDocument(static_cast<Rml::ElementDocument*>(document_ptr)));
+                if (result.is_none())
+                    return false;
+                return nb::cast<bool>(result);
+            } catch (const std::exception& e) {
+                LOG_ERROR("Viewport overlay document sync failed: {}", e.what());
+            }
+            return false;
         }
 
         void invoke_overlay_impl(const float* view_matrix, const float* proj_matrix,
@@ -127,6 +150,7 @@ namespace lfs::python {
 
     void register_viewport_overlay_bridge() {
         set_viewport_overlay_callbacks(has_handlers_impl, invoke_overlay_impl);
+        set_viewport_overlay_document_sync_callback(sync_document_impl);
     }
 
 } // namespace lfs::python

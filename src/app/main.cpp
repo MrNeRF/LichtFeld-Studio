@@ -8,11 +8,15 @@
 #include "core/executable_path.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "git_version.h"
+#include "gui/gpu_memory_query.hpp"
 #include "python/plugin_runner.hpp"
 #include "python/runner.hpp"
 
 #include <cstdlib>
+#include <cuda_runtime.h>
+#include <curand.h>
 #include <filesystem>
 #include <print>
 
@@ -27,6 +31,107 @@
 #endif
 
 namespace {
+    // Per-process GPU memory query. NVML on Linux / DXGI on Windows. Returns 0 if the
+    // query fails or no GPU activity is yet attributed to this PID.
+    std::size_t process_used_now() {
+        return lfs::vis::gui::queryGpuMemory().process_used;
+    }
+
+    // Apply CUDA driver-level VRAM-reduction knobs BEFORE the primary context exists.
+    // Setting these after cudaFree(nullptr) is too late — the driver has already
+    // committed defaults (1 KiB/thread stack reserve × SMs × max-threads = ~192 MiB on
+    // a 4090; eager module loading uploads all kernel cubins on first ctx-init).
+    void applyCudaContextTuning() {
+#ifdef _WIN32
+        _putenv_s("CUDA_MODULE_LOADING", "LAZY");
+#else
+        setenv("CUDA_MODULE_LOADING", "LAZY", /*overwrite=*/0);
+#endif
+    }
+
+    // Probe what the CUDA driver allocates during context creation, *attributed to this
+    // process* (NVML per-PID, not device-wide cudaMemGetInfo). Each phase is the delta
+    // against the previous probe so the sum reconstructs the total context cost.
+    void analyzeCudaContextDistribution() {
+        auto& p = lfs::diagnostics::VramProfiler::instance();
+
+        // Phase 0: pre-context. Should be 0 — no CUDA calls have run.
+        const std::size_t before_context = process_used_now();
+
+        // Phase 1: primary context creation. cudaFree(nullptr) is a documented idiom that
+        // forces the primary context to exist on device 0.
+        cudaFree(nullptr);
+
+        // Shrink the per-thread stack reserve from the 1 KiB default. Our kernels do not
+        // recurse and have small frames; 256 B is comfortable. Default reservation is
+        // per_thread_stack × num_SMs × max_threads_per_SM = ~192 MiB on a 4090. Driver
+        // accepts the request post-context but applies it on the *next* launch — well
+        // before any real kernel runs.
+        cudaDeviceSetLimit(cudaLimitStackSize, 256);
+        const std::size_t after_context = process_used_now();
+        const std::size_t primary_context =
+            after_context > before_context ? after_context - before_context : after_context;
+        p.recordCudaPhaseBytes("primary_context", primary_context);
+
+        // Phase 2: default cudaMallocAsync pool. Query its initial backing reservation.
+        std::size_t pool_reserved = 0;
+        int device = 0;
+        if (cudaGetDevice(&device) == cudaSuccess) {
+#if CUDART_VERSION >= 12080
+            cudaMemPool_t pool = nullptr;
+            if (cudaDeviceGetDefaultMemPool(&pool, device) == cudaSuccess) {
+                std::uint64_t reserved = 0;
+                if (cudaMemPoolGetAttribute(pool, cudaMemPoolAttrReservedMemCurrent, &reserved) ==
+                    cudaSuccess) {
+                    pool_reserved = static_cast<std::size_t>(reserved);
+                }
+            }
+#endif
+        }
+        p.recordCudaPhaseBytes("default_pool", pool_reserved);
+
+        // Phase 3: driver limits the user can query exactly.
+        std::size_t printf_fifo = 0;
+        std::size_t per_thread_stack = 0;
+        std::size_t malloc_heap = 0;
+        cudaDeviceGetLimit(&printf_fifo, cudaLimitPrintfFifoSize);
+        cudaDeviceGetLimit(&per_thread_stack, cudaLimitStackSize);
+        cudaDeviceGetLimit(&malloc_heap, cudaLimitMallocHeapSize);
+
+        // Stack is per-thread; total reservation = stack * max_threads_per_sm * num_sms.
+        cudaDeviceProp prop{};
+        std::size_t stack_total = 0;
+        if (cudaGetDeviceProperties(&prop, device) == cudaSuccess) {
+            stack_total = per_thread_stack *
+                          static_cast<std::size_t>(prop.multiProcessorCount) *
+                          static_cast<std::size_t>(prop.maxThreadsPerMultiProcessor);
+        }
+        p.recordCudaPhaseBytes("printf_fifo", printf_fifo);
+        p.recordCudaPhaseBytes("stack_reserve", stack_total);
+        p.recordCudaPhaseBytes("malloc_heap", malloc_heap);
+
+        // Phase 4: libcurand context. Create + destroy a generator so the library code
+        // is loaded into the process; the residual delta is the library overhead.
+        const std::size_t before_curand = process_used_now();
+        curandGenerator_t gen = nullptr;
+        if (curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_DEFAULT) == CURAND_STATUS_SUCCESS) {
+            curandDestroyGenerator(gen);
+        }
+        const std::size_t after_curand = process_used_now();
+        const std::size_t curand_load =
+            after_curand > before_curand ? after_curand - before_curand : 0;
+        p.recordCudaPhaseBytes("curand_load", curand_load);
+
+        // The per-PID baseline = current NVML reading. Used as the breakdown's anchor
+        // so cuda.context.residual = baseline − Σphases.
+        p.setCudaContextBaselineBytes(process_used_now());
+
+        // Device-wide (cudaMemGetInfo) baseline captured at the same point, so the
+        // later kernel-warmup delta is measured against a matching metric instead of
+        // the NVML per-PID anchor.
+        p.captureCudaDeviceBaseline();
+    }
+
     // Register OpenUSD plugin resources deployed beside the executable.
     // On Windows: <exe_dir>/usd/ — keeps relative LibraryPaths correct.
     // On Linux:   <exe_dir>/../lib/usd/ — conventional layout.
@@ -75,6 +180,14 @@ namespace {
 } // namespace
 
 int main(int argc, char* argv[]) {
+    // Driver-level tuning must precede *any* CUDA call, including the cudaFree(nullptr)
+    // inside analyzeCudaContextDistribution. Lazy module loading defers kernel cubin
+    // upload until first use, dropping the eager-load slice of cuda.primary_context.
+    applyCudaContextTuning();
+
+    // Probe and decompose the CUDA driver's context-creation cost before any other
+    // code touches the device. Surfaces per-phase byte values into the HUD breakdown.
+    analyzeCudaContextDistribution();
     configure_usd_plugins();
 
     auto result = lfs::core::args::parse_args(argc, argv);
@@ -102,6 +215,11 @@ int main(int argc, char* argv[]) {
         } else if constexpr (std::is_same_v<T, lfs::core::args::TrainingMode>) {
             LOG_INFO("LichtFeld Studio");
             LOG_INFO("version {} | tag {}", GIT_TAGGED_VERSION, GIT_COMMIT_HASH_SHORT);
+
+            // Probe and decompose the CUDA driver's context-creation cost only for the
+            // GPU app path. CLI-only modes such as --help, convert, plugin, and
+            // mesh2splat must not create a CUDA primary context just for HUD metrics.
+            analyzeCudaContextDistribution();
 
             if (mode.params->optimization.debug_python) {
                 lfs::python::start_debugpy(mode.params->optimization.debug_python_port);

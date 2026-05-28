@@ -111,6 +111,7 @@ namespace lfs::vis::gui {
         std::vector<python::MenuBarEntry> g_menu_entries;
         std::atomic<bool> g_menu_entries_ready{false};
         std::atomic<bool> g_menu_entries_loading{false};
+        std::atomic<std::uint64_t> g_menu_entries_version{0};
 
         void start_menu_entry_preload_once() {
             bool expected = false;
@@ -124,6 +125,7 @@ namespace lfs::vis::gui {
                     std::lock_guard lock(g_menu_entries_mutex);
                     g_menu_entries = std::move(entries);
                 }
+                g_menu_entries_version.fetch_add(1, std::memory_order_acq_rel);
                 g_menu_entries_ready.store(true, std::memory_order_release);
                 g_menu_entries_loading.store(false, std::memory_order_release);
             }).detach();
@@ -141,6 +143,10 @@ namespace lfs::vis::gui {
 
     std::vector<python::MenuBarEntry> MenuBar::getMenuEntries() const {
         return copy_menu_entries();
+    }
+
+    std::uint64_t MenuBar::menuEntriesVersion() const {
+        return g_menu_entries_version.load(std::memory_order_acquire);
     }
 
     void MenuBar::render() {

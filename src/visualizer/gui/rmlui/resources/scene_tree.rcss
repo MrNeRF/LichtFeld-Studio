@@ -170,6 +170,8 @@ scene-graph,
     right: 0;
     top: 0;
     height: 24dp;
+    margin: 0;
+    border-top-width: 0;
 }
 
 #history-container {

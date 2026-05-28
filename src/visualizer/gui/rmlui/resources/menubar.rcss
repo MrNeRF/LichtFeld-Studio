@@ -14,7 +14,7 @@ body {
     overflow: hidden;
 }
 
-#menu-items {
+#menu-row {
     display: flex;
     flex-direction: row;
     align-items: center;
@@ -22,6 +22,22 @@ body {
     height: 30dp;
     min-height: 30dp;
     max-height: 30dp;
+}
+
+#brand-logo {
+    flex: none;
+    margin-left: 16dp;
+    margin-right: 12dp;
+    height: 18dp;
+    decorator: none;
+}
+
+#menu-items {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    flex: 1;
+    height: 30dp;
 }
 
 .menu-label {
@@ -40,6 +56,7 @@ body {
     left: 0;
     width: 100%;
     height: 100%;
+    z-index: 1;
 }
 
 #dropdown-overlay.visible {
@@ -49,6 +66,12 @@ body {
 #dropdown-container {
     display: none;
     position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+    z-index: 2;
 }
 
 #dropdown-container.visible {
@@ -62,6 +85,11 @@ body {
     min-width: 140dp;
     border-width: 1dp;
     border-radius: 4dp;
+    overflow: visible;
+}
+
+#dropdown-popup {
+    position: absolute;
 }
 
 .menu-item {
@@ -115,6 +143,7 @@ body {
 
 .submenu-container {
     position: relative;
+    overflow: visible;
 }
 
 .submenu-popup {
@@ -127,8 +156,14 @@ body {
     min-width: 120dp;
     border-width: 1dp;
     border-radius: 4dp;
+    z-index: 3;
+    pointer-events: auto;
 }
 
-.submenu-container:hover > .submenu-popup {
+.submenu-container.open {
+    z-index: 4;
+}
+
+.submenu-container.open > .submenu-popup {
     display: flex;
 }

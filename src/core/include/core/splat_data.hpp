@@ -26,6 +26,11 @@ namespace lfs::core {
         struct TrainingParameters;
     }
 
+    using SplatTensorAllocator = std::function<Tensor(TensorShape shape,
+                                                      size_t capacity,
+                                                      DataType dtype,
+                                                      std::string_view name)>;
+
     /**
      * @brief Core data structure for Gaussian splat representation
      *
@@ -157,7 +162,7 @@ namespace lfs::core {
 
         // ========== Serialization ==========
         void serialize(std::ostream& os) const;
-        void deserialize(std::istream& is);
+        void deserialize(std::istream& is, SplatTensorAllocator tensor_allocator = {});
 
     public:
         // Holds the magnitude of the screen space gradient (used for densification)
@@ -185,11 +190,6 @@ namespace lfs::core {
         friend LFS_CORE_API SplatData extract_by_mask(const SplatData&, const Tensor&);
         friend LFS_CORE_API void random_choose(SplatData&, int, int);
     };
-
-    using SplatTensorAllocator = std::function<Tensor(TensorShape shape,
-                                                      size_t capacity,
-                                                      DataType dtype,
-                                                      std::string_view name)>;
 
     // ========== Free function: Factory ==========
 

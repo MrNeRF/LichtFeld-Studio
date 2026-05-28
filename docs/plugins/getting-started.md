@@ -9,10 +9,11 @@ Read the examples in this order:
 | Step | Goal | Example |
 |---|---|---|
 | 1 | Pure immediate-mode panel with `draw(ui)` only | [`examples/01_draw_only.py`](examples/01_draw_only.py) |
-| 2 | Add shell, styling, and periodic updates without rewriting `draw(ui)` | [`examples/02_status_bar_mixed.py`](examples/02_status_bar_mixed.py) |
-| 3 | Build a full hybrid panel with template, RCSS, data model, DOM hooks, and embedded `draw(ui)` | [`examples/03_hybrid_plugin/`](examples/03_hybrid_plugin/) |
-| 4 | Explore focused feature demos | [`examples/README.md`](examples/README.md) |
-| 5 | See an end-to-end multi-file plugin | [`examples/full_plugin/`](examples/full_plugin/) |
+| 2 | Add shell and styling without rewriting `draw(ui)`; use periodic updates only for animation-like UI | [`examples/02_status_bar_mixed.py`](examples/02_status_bar_mixed.py) |
+| 3 | Build a dirty-policy retained panel with an RML data model and `RuntimeState` subscriptions | [Reactive retained panels](#reactive-retained-panels) |
+| 4 | Build a full hybrid panel with template, RCSS, data model, DOM hooks, and embedded `draw(ui)` | [`examples/03_hybrid_plugin/`](examples/03_hybrid_plugin/) |
+| 5 | Explore focused feature demos | [`examples/README.md`](examples/README.md) |
+| 6 | See an end-to-end multi-file plugin | [`examples/full_plugin/`](examples/full_plugin/) |
 
 The key idea is that `lf.ui.Panel` is one public base class that scales from the smallest `draw(ui)` panel to full retained/hybrid UI. You do not need to switch APIs or rewrite the panel body when you add advanced features.
 
@@ -169,6 +170,7 @@ class MyPanel(lf.ui.Panel):
     template = ""
     style = ""
     height_mode = lf.ui.PanelHeightMode.FILL
+    update_policy = "interval"
     update_interval_ms = 100
 
     @classmethod
@@ -192,7 +194,8 @@ class MyPanel(lf.ui.Panel):
 | `template` | `str \| os.PathLike[str]` | `""` | Optional retained RML template. Use an absolute path for plugin-local files. |
 | `style` | `str` | `""` | Optional inline RCSS appended to the retained document. This is RCSS text, not a file path. |
 | `height_mode` | `lf.ui.PanelHeightMode` | `lf.ui.PanelHeightMode.FILL` | `FILL` or `CONTENT` for retained panels. |
-| `update_interval_ms` | `int` | `100` | Update cadence for retained/hybrid `on_update()` work. |
+| `update_policy` | `str` | `"interval"` | Set to `"dirty"` or `"reactive"` for retained panels that update from explicit invalidation. |
+| `update_interval_ms` | `int` | `100` | Fallback cadence for retained/hybrid `on_update()` work. Use this for animation-like UI; prefer `update_policy = "dirty"` for normal data panels. |
 
 The panel API is strict in v1: use the enum values above, not string literals.
 
@@ -234,12 +237,65 @@ What changes here:
 
 - `style` adds inline RCSS.
 - `height_mode` controls how the retained shell sizes itself.
-- `on_update()` adds periodic behavior.
+- `on_update()` adds periodic behavior for this status-bar animation example.
 - `draw(ui)` still renders the actual content.
 
-This is the normal upgrade path. You do not need to rewrite the panel as full DOM/RML just because you added styling or retained hooks.
+This is useful for UI that must advance on time, such as a progress animation. Most data-driven panels should not poll; use a dirty-policy retained panel instead.
 
 See the full version in [`examples/02_status_bar_mixed.py`](examples/02_status_bar_mixed.py).
+
+### Reactive retained panels
+
+For normal retained panels, make updates explicit. Set `update_policy = "dirty"` and use `PanelStateBinding` to connect runtime-state changes to model invalidation. This keeps subscription lifetime, refresh work, and RML dirtying in one place.
+
+```python
+from pathlib import Path
+import lichtfeld as lf
+from lfs_plugins.ui import RuntimeState, PanelStateBinding
+
+MODEL_NAME = "my_plugin_scene_summary"
+
+
+class SceneSummaryPanel(lf.ui.Panel):
+    id = "my_plugin.scene_summary"
+    label = "Scene Summary"
+    space = lf.ui.PanelSpace.MAIN_PANEL_TAB
+    template = str(Path(__file__).resolve().with_name("scene_summary.rml"))
+    height_mode = lf.ui.PanelHeightMode.CONTENT
+    update_policy = "dirty"
+
+    def __init__(self):
+        self._handle = None
+        self._store_binding = PanelStateBinding()
+        self._title = "No scene"
+
+    def on_bind_model(self, ctx):
+        model = ctx.create_data_model(MODEL_NAME)
+        if model is None:
+            return
+        model.bind_func("title", lambda: self._title)
+        self._handle = model.get_handle()
+
+    def on_mount(self, doc):
+        self._store_binding.set_handle(self._handle).watch(
+            RuntimeState.scene_generation,
+            RuntimeState.selection_generation,
+            refresh=self._refresh_summary,
+            dirty="title",
+            immediate=True,
+        )
+
+    def on_unmount(self, doc):
+        self._store_binding.close()
+        doc.remove_data_model(MODEL_NAME)
+        self._handle = None
+
+    def _refresh_summary(self):
+        scene = lf.get_scene()
+        self._title = getattr(scene, "name", "Scene") if scene else "No scene"
+```
+
+Use this pattern when panel content depends on scene, selection, training, language, task progress, or active tool state. The low-level `RuntimeState.<field>.subscribe(...)` API exists for non-panel code, but retained panels should normally use `PanelStateBinding`.
 
 ### Retained shells and template resolution
 
@@ -321,7 +377,7 @@ Key retained hooks:
 - `on_bind_model(ctx)`: create and bind a retained data model before the document loads.
 - `on_mount(doc)`: wire DOM listeners or build dynamic DOM content after the document mounts.
 - `on_unmount(doc)`: clean up document-local state.
-- `on_update(doc)`: periodic updates while the panel is visible. Return `True` to mark content dirty.
+- `on_update(doc)`: retained update hook. It is periodic for `update_policy = "interval"` and invalidation-driven for `update_policy = "dirty"`. Return `True` to mark content dirty.
 - `on_scene_changed(doc)`: respond to active scene generation changes.
 
 To mix retained and immediate content, include `<div id="im-root"></div>` somewhere in your template. `draw(ui)` will render into that node.
@@ -440,7 +496,7 @@ See [examples/README.md](examples/README.md) for the recommended progression thr
 
 ```python
 import lichtfeld as lf
-from lfs_plugins.ui.state import AppState
+from lfs_plugins.ui import RuntimeState
 
 
 class StatsOverlay(lf.ui.Panel):
@@ -450,10 +506,10 @@ class StatsOverlay(lf.ui.Panel):
 
     @classmethod
     def poll(cls, context) -> bool:
-        return AppState.has_scene.value
+        return RuntimeState.has_scene.value
 
     def draw(self, ui):
-        n = AppState.num_gaussians.value
+        n = RuntimeState.num_gaussians.value
         ui.draw_text(10, 10, f"Gaussians: {n:,}", (1.0, 1.0, 1.0, 0.8))
 ```
 
@@ -1126,47 +1182,47 @@ with Batch():
 # Subscribers notified once here, not three times
 ```
 
-### AppState
+### RuntimeState
 
 Pre-defined signals for application state:
 
 ```python
-from lfs_plugins.ui.state import AppState
+from lfs_plugins.ui import RuntimeState
 
 # Training
-AppState.is_training              # Signal[bool]
-AppState.trainer_state            # Signal[str] - "idle", "ready", "running", "paused", "stopping"
-AppState.has_trainer              # Signal[bool]
-AppState.iteration                # Signal[int]
-AppState.max_iterations           # Signal[int]
-AppState.loss                     # Signal[float]
-AppState.psnr                     # Signal[float]
-AppState.num_gaussians            # Signal[int]
+RuntimeState.is_training              # Signal[bool]
+RuntimeState.trainer_state            # Signal[str] - "idle", "ready", "running", "paused", "stopping"
+RuntimeState.has_trainer              # Signal[bool]
+RuntimeState.iteration                # Signal[int]
+RuntimeState.max_iterations           # Signal[int]
+RuntimeState.loss                     # Signal[float]
+RuntimeState.psnr                     # Signal[float]
+RuntimeState.num_gaussians            # Signal[int]
 
 # Scene
-AppState.has_scene                # Signal[bool]
-AppState.scene_generation         # Signal[int] - increments on scene change
-AppState.scene_path               # Signal[str]
+RuntimeState.has_scene                # Signal[bool]
+RuntimeState.scene_generation         # Signal[int] - increments on scene change
+RuntimeState.scene_path               # Signal[str]
 
 # Selection
-AppState.has_selection            # Signal[bool]
-AppState.selection_count          # Signal[int]
-AppState.selection_generation     # Signal[int]
+RuntimeState.has_selection            # Signal[bool]
+RuntimeState.selection_count          # Signal[int]
+RuntimeState.selection_generation     # Signal[int]
 
 # Viewport
-AppState.viewport_width           # Signal[int]
-AppState.viewport_height          # Signal[int]
+RuntimeState.viewport_width           # Signal[int]
+RuntimeState.viewport_height          # Signal[int]
 
 # Computed
-AppState.training_progress        # ComputedSignal[float] - 0.0 to 1.0
-AppState.can_start_training       # ComputedSignal[bool]
+RuntimeState.training_progress        # ComputedSignal[float] - 0.0 to 1.0
+RuntimeState.can_start_training       # ComputedSignal[bool]
 ```
 
 ### Example: reactive training monitor
 
 ```python
 import lichtfeld as lf
-from lfs_plugins.ui.state import AppState
+from lfs_plugins.ui import RuntimeState
 from lfs_plugins.ui.signals import Signal
 
 class TrainingMonitor(lf.ui.Panel):
@@ -1178,7 +1234,7 @@ class TrainingMonitor(lf.ui.Panel):
         self.best_loss = Signal(float("inf"), name="best_loss")
         self.loss_history = []
 
-        AppState.loss.subscribe_as("my_plugin", self._on_loss_change)
+        RuntimeState.loss.subscribe_as("my_plugin", self._on_loss_change)
 
     def _on_loss_change(self, loss: float):
         if loss > 0:
@@ -1188,20 +1244,20 @@ class TrainingMonitor(lf.ui.Panel):
 
     @classmethod
     def poll(cls, context) -> bool:
-        return AppState.has_trainer.value
+        return RuntimeState.has_trainer.value
 
     def draw(self, ui):
         ui.heading("Training Monitor")
 
-        state = AppState.trainer_state.value
+        state = RuntimeState.trainer_state.value
         ui.label(f"State: {state}")
-        ui.label(f"Iteration: {AppState.iteration.value}")
-        ui.label(f"Loss: {AppState.loss.value:.6f}")
+        ui.label(f"Iteration: {RuntimeState.iteration.value}")
+        ui.label(f"Loss: {RuntimeState.loss.value:.6f}")
         ui.label(f"Best Loss: {self.best_loss.value:.6f}")
-        ui.label(f"PSNR: {AppState.psnr.value:.2f}")
-        ui.label(f"Gaussians: {AppState.num_gaussians.value:,}")
+        ui.label(f"PSNR: {RuntimeState.psnr.value:.2f}")
+        ui.label(f"Gaussians: {RuntimeState.num_gaussians.value:,}")
 
-        progress = AppState.training_progress.value
+        progress = RuntimeState.training_progress.value
         ui.progress_bar(progress, f"{progress * 100:.1f}%")
 
         if self.loss_history:

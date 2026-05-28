@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor/internal/tensor_generic_ops.cuh"
+#include "diagnostics/vram_profiler.hpp"
 #include "mrnf_kernels.hpp"
 #include <algorithm>
 #include <cassert>
@@ -193,12 +194,24 @@ namespace lfs::training::mrnf_strategy {
         float* d_input = nullptr;
         float* d_sorted = nullptr;
         cudaMallocAsync(&d_input, N * sizeof(float), s);
+        lfs::diagnostics::VramProfiler::instance().recordAllocation(
+            d_input, N * sizeof(float),
+            lfs::diagnostics::VramAllocationMethod::Async,
+            "mrnf.percentile.input");
         cudaMallocAsync(&d_sorted, N * sizeof(float), s);
+        lfs::diagnostics::VramProfiler::instance().recordAllocation(
+            d_sorted, N * sizeof(float),
+            lfs::diagnostics::VramAllocationMethod::Async,
+            "mrnf.percentile.sorted");
 
         size_t temp_bytes = 0;
         cub::DeviceRadixSort::SortKeys(nullptr, temp_bytes, d_input, d_sorted, n_int, 0, 32, s);
         char* d_temp = nullptr;
         cudaMallocAsync(&d_temp, temp_bytes, s);
+        lfs::diagnostics::VramProfiler::instance().recordAllocation(
+            d_temp, temp_bytes,
+            lfs::diagnostics::VramAllocationMethod::Async,
+            "mrnf.percentile.cub_temp");
 
         constexpr int threads = 256;
         const int blocks = static_cast<int>((N + threads - 1) / threads);
@@ -217,8 +230,11 @@ namespace lfs::training::mrnf_strategy {
             extents[axis] = (h_high - h_low) * 0.5f;
         }
 
+        lfs::diagnostics::VramProfiler::instance().recordDeallocation(d_input);
         cudaFreeAsync(d_input, s);
+        lfs::diagnostics::VramProfiler::instance().recordDeallocation(d_sorted);
         cudaFreeAsync(d_sorted, s);
+        lfs::diagnostics::VramProfiler::instance().recordDeallocation(d_temp);
         cudaFreeAsync(d_temp, s);
 
         for (int i = 0; i < 3; ++i) {
@@ -317,9 +333,25 @@ namespace lfs::training::mrnf_strategy {
         float* d_keys_sorted = nullptr;
         int64_t* d_indices_sorted = nullptr;
         cudaMallocAsync(&d_keys, sort_count * sizeof(float), s);
+        lfs::diagnostics::VramProfiler::instance().recordAllocation(
+            d_keys, sort_count * sizeof(float),
+            lfs::diagnostics::VramAllocationMethod::Async,
+            "mrnf.gumbel.keys");
         cudaMallocAsync(&d_indices, sort_count * sizeof(int64_t), s);
+        lfs::diagnostics::VramProfiler::instance().recordAllocation(
+            d_indices, sort_count * sizeof(int64_t),
+            lfs::diagnostics::VramAllocationMethod::Async,
+            "mrnf.gumbel.indices");
         cudaMallocAsync(&d_keys_sorted, sort_count * sizeof(float), s);
+        lfs::diagnostics::VramProfiler::instance().recordAllocation(
+            d_keys_sorted, sort_count * sizeof(float),
+            lfs::diagnostics::VramAllocationMethod::Async,
+            "mrnf.gumbel.keys_sorted");
         cudaMallocAsync(&d_indices_sorted, sort_count * sizeof(int64_t), s);
+        lfs::diagnostics::VramProfiler::instance().recordAllocation(
+            d_indices_sorted, sort_count * sizeof(int64_t),
+            lfs::diagnostics::VramAllocationMethod::Async,
+            "mrnf.gumbel.indices_sorted");
 
         constexpr int threads = 256;
         const int blocks = static_cast<int>((sort_count + threads - 1) / threads);
@@ -355,6 +387,10 @@ namespace lfs::training::mrnf_strategy {
             sort_count_int, 0, 32, s);
         char* d_temp = nullptr;
         cudaMallocAsync(&d_temp, temp_bytes, s);
+        lfs::diagnostics::VramProfiler::instance().recordAllocation(
+            d_temp, temp_bytes,
+            lfs::diagnostics::VramAllocationMethod::Async,
+            "mrnf.gumbel.cub_temp");
         cub::DeviceRadixSort::SortPairsDescending(
             d_temp, temp_bytes,
             d_keys, d_keys_sorted,
@@ -363,10 +399,15 @@ namespace lfs::training::mrnf_strategy {
 
         cudaMemcpyAsync(output_indices, d_indices_sorted, K * sizeof(int64_t), cudaMemcpyDeviceToDevice, s);
 
+        lfs::diagnostics::VramProfiler::instance().recordDeallocation(d_temp);
         cudaFreeAsync(d_temp, s);
+        lfs::diagnostics::VramProfiler::instance().recordDeallocation(d_keys);
         cudaFreeAsync(d_keys, s);
+        lfs::diagnostics::VramProfiler::instance().recordDeallocation(d_indices);
         cudaFreeAsync(d_indices, s);
+        lfs::diagnostics::VramProfiler::instance().recordDeallocation(d_keys_sorted);
         cudaFreeAsync(d_keys_sorted, s);
+        lfs::diagnostics::VramProfiler::instance().recordDeallocation(d_indices_sorted);
         cudaFreeAsync(d_indices_sorted, s);
     }
 

@@ -77,6 +77,7 @@ namespace lfs::vis::cap {
         bool use = false;
     };
 
+    [[nodiscard]] LFS_VIS_API bool isTransformableNodeType(core::NodeType type);
     [[nodiscard]] LFS_VIS_API TransformComponents decomposeTransform(const glm::mat4& matrix);
     [[nodiscard]] LFS_VIS_API glm::mat4 composeTransform(const TransformComponents& components);
 

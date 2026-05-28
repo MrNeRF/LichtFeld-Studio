@@ -85,6 +85,7 @@ public:
     void ResetContextRenderState();
     void SetContextOffset(float offset_x, float offset_y);
     void SetContextClipRect(float x1, float y1, float x2, float y2);
+    void RenderTextureQuad(Rml::TextureHandle texture, float x, float y, float w, float h);
 
     void BeginFrame();
     void EndFrame();
@@ -152,11 +153,14 @@ private:
     };
 
     struct texture_data_t {
-        VkImage m_p_vk_image;
-        VkImageView m_p_vk_image_view;
-        VkSampler m_p_vk_sampler;
-        VkDescriptorSet m_p_vk_descriptor_set;
-        VmaAllocation m_p_vma_allocation;
+        VkImage m_p_vk_image = VK_NULL_HANDLE;
+        VkImageView m_p_vk_image_view = VK_NULL_HANDLE;
+        VkSampler m_p_vk_sampler = VK_NULL_HANDLE;
+        VkDescriptorSet m_p_vk_descriptor_set = VK_NULL_HANDLE;
+        VmaAllocation m_p_vma_allocation = VK_NULL_HANDLE;
+        std::string m_vram_scope;
+        std::string m_vram_label;
+        VkDeviceSize m_vram_allocation_size = 0;
     };
 
     struct async_preview_result_t {
@@ -197,6 +201,8 @@ private:
         texture_data_t m_depth_stencil{};
         VkImageLayout m_color_layout = VK_IMAGE_LAYOUT_UNDEFINED;
         VkImageLayout m_depth_stencil_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        int width = 0;
+        int height = 0;
     };
 
     enum class active_render_target_t { None,
@@ -687,6 +693,11 @@ private:
     Rml::Array<Rml::Vector<texture_data_t*>, kSwapchainBackBufferCount> m_pending_for_deletion_textures_by_frames;
     std::vector<std::shared_ptr<async_preview_state_t>> m_async_preview_textures;
     Rml::Vector<render_layer_t> m_render_layers;
+    Rml::CompiledGeometryHandle m_texture_quad_geometry = {};
+    float m_texture_quad_x = 0.0f;
+    float m_texture_quad_y = 0.0f;
+    float m_texture_quad_w = 0.0f;
+    float m_texture_quad_h = 0.0f;
     Rml::Array<Rml::Vector<VmaVirtualAllocation>, kSwapchainBackBufferCount> m_transient_shader_allocations_by_frame;
     VkImage m_external_swapchain_image = VK_NULL_HANDLE;
     VkImageView m_external_swapchain_image_view = VK_NULL_HANDLE;

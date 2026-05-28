@@ -226,6 +226,63 @@ def test_rendering_panel_projection_sync_updates_backend_dropdown(rendering_pane
     assert model.handle.dirty_fields == ["raster_backend", "equirectangular"]
 
 
+def test_rendering_panel_reacts_to_native_scene_generation(rendering_panel_module):
+    module = rendering_panel_module
+    model = _BindingModelStub()
+    panel = module.RenderingPanel()
+
+    assert module.RenderingPanel.update_policy == "dirty"
+    assert "update_interval_ms" not in module.RenderingPanel.__dict__
+
+    panel.on_bind_model(_BindingContextStub(model))
+    panel._subscribe_reactive_state()
+    model.handle.dirty_fields.clear()
+
+    module.RuntimeState.scene_generation.value = (
+        module.RuntimeState.scene_generation.value + 1
+    )
+
+    assert model.handle.dirty_fields == ["__all__"]
+    panel._unsubscribe_reactive_state()
+
+
+def test_rendering_panel_reacts_to_native_tool_state(rendering_panel_module):
+    module = rendering_panel_module
+    model = _BindingModelStub()
+    panel = module.RenderingPanel()
+
+    panel.on_bind_model(_BindingContextStub(model))
+    panel._subscribe_reactive_state()
+    model.handle.dirty_fields.clear()
+
+    next_tool = (
+        "builtin.move"
+        if module.RuntimeState.active_tool.value == "builtin.select"
+        else "builtin.select"
+    )
+    module.RuntimeState.active_tool.value = next_tool
+
+    assert model.handle.dirty_fields == ["__all__"]
+    panel._unsubscribe_reactive_state()
+
+
+def test_rendering_panel_reacts_to_native_language_generation(rendering_panel_module):
+    module = rendering_panel_module
+    model = _BindingModelStub()
+    panel = module.RenderingPanel()
+
+    panel.on_bind_model(_BindingContextStub(model))
+    panel._subscribe_reactive_state()
+    model.handle.dirty_fields.clear()
+
+    module.RuntimeState.language_generation.value = (
+        module.RuntimeState.language_generation.value + 1
+    )
+
+    assert model.handle.dirty_fields == ["__all__"]
+    panel._unsubscribe_reactive_state()
+
+
 def test_rendering_panel_custom_environment_map_appears_in_dropdown(rendering_panel_module):
     module = rendering_panel_module
     settings = SimpleNamespace(

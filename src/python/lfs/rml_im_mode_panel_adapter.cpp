@@ -167,6 +167,16 @@ namespace lfs::vis::gui {
         ops.draw_direct(host_, x, y, w, h);
     }
 
+    bool RmlImModePanelAdapter::drawDirectCached(float x, float y, float w, float h,
+                                                 const PanelDrawContext& ctx) {
+        (void)ctx;
+        if (!host_)
+            return false;
+
+        const auto& ops = lfs::python::get_rml_panel_host_ops();
+        return ops.draw_direct_cached ? ops.draw_direct_cached(host_, x, y, w, h) : false;
+    }
+
     float RmlImModePanelAdapter::getDirectDrawHeight() const {
         if (!host_)
             return 0.0f;

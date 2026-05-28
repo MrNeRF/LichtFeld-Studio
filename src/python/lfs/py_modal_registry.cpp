@@ -29,6 +29,7 @@ namespace lfs::python {
         modal.is_open = true;
         modal.needs_open = true;
         modals_.push_back(std::move(modal));
+        request_redraw();
     }
 
     void PyModalRegistry::show_confirm(const std::string& title, const std::string& message,
@@ -45,6 +46,7 @@ namespace lfs::python {
         modal.is_open = true;
         modal.needs_open = true;
         modals_.push_back(std::move(modal));
+        request_redraw();
     }
 
     void PyModalRegistry::show_input(const std::string& title, const std::string& message,
@@ -61,6 +63,7 @@ namespace lfs::python {
         modal.is_open = true;
         modal.needs_open = true;
         modals_.push_back(std::move(modal));
+        request_redraw();
     }
 
     void PyModalRegistry::show_message(const std::string& title, const std::string& message,
@@ -77,6 +80,7 @@ namespace lfs::python {
         modal.is_open = true;
         modal.needs_open = true;
         modals_.push_back(std::move(modal));
+        request_redraw();
     }
 
     bool PyModalRegistry::has_open_modals() const {

@@ -91,7 +91,7 @@ Splat_2D_Vertex project_gaussian_to_camera(Gaussian_3D g, Camera cam, uint activ
     float3x3 cov_ws = get_covariance_from_quat_scales(
         safe_quat_normalize(g.rotations), g.scales
     );
-    float4 cov_vs = covariance_3d_to_2d(cam, g.xyz_ws, cov_ws);
+    float4 cov_vs = covariance_3d_to_2d(cam, g.xyz_ws, cov_ws, false);
 
     float det = compute_det(cov_vs.xyz);
     float3 inv_cov_vs = compute_inverse(cov_vs.xyz);
@@ -107,7 +107,8 @@ Splat_2D_Vertex project_gaussian_to_camera_model(
     float3 mean_ws,
     StructuredBuffer<float4> model_transform_rows,
     uint model_transform_base,
-    bool model_transform_enabled) {
+    bool model_transform_enabled,
+    bool mip_filter) {
     float3 xyz_vs = project_point(mean_ws, cam);
     // Reject behind-camera, non-finite, and far off-screen means. The EWA
     // projection Jacobian degenerates as the mean moves outside the frustum
@@ -135,7 +136,7 @@ Splat_2D_Vertex project_gaussian_to_camera_model(
     if (model_transform_enabled) {
         cov_ws = transform_covariance_rows(model_transform_rows, model_transform_base, cov_ws);
     }
-    float4 cov_vs = covariance_3d_to_2d(cam, mean_ws, cov_ws);
+    float4 cov_vs = covariance_3d_to_2d(cam, mean_ws, cov_ws, mip_filter);
 
     float3 cov_clamped = clamp_covariance_2d_extent(cov_vs.xyz, g.opacities * cov_vs.w);
     float det = compute_det(cov_clamped);
@@ -168,7 +169,8 @@ Splat_2D_Vertex project_gaussian_to_camera_gut(
     float3 mean_ws,
     StructuredBuffer<float4> model_transform_rows,
     uint model_transform_base,
-    bool model_transform_enabled) {
+    bool model_transform_enabled,
+    bool mip_filter) {
     float3 mean_vs = project_point(mean_ws, cam);
     if (mean_vs.z <= NEAR_CLIP || !isfinite(dot(mean_vs, mean_vs))) {
         return { float3(0.0), float3(0.0), float3(0.0), float4(0.0), 0.0 };
@@ -231,7 +233,7 @@ Splat_2D_Vertex project_gaussian_to_camera_gut(
         cov2d += weight * float3(d.x * d.x, d.x * d.y, d.y * d.y);
     }
 
-    float4 cov_vs = add_blur_to_covariance2d(cov2d);
+    float4 cov_vs = add_blur_to_covariance2d(cov2d, mip_filter);
     float det = compute_det(cov_vs.xyz);
     if (!isfinite(det) || det <= 0.0f) {
         return { float3(0.0), float3(0.0), float3(0.0), float4(0.0), 0.0 };
@@ -558,7 +560,8 @@ void main(
         mean_ws,
         model_transforms,
         model_transform_base,
-        model_transform_enabled);
+        model_transform_enabled,
+        uniforms.mip_filter != 0u);
   #else
     Splat_2D_Vertex splat = project_gaussian_to_camera_model(
         gauss,
@@ -567,7 +570,8 @@ void main(
         mean_ws,
         model_transforms,
         model_transform_base,
-        model_transform_enabled);
+        model_transform_enabled,
+        uniforms.mip_filter != 0u);
   #endif
   #else
     // backward

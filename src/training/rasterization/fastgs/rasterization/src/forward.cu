@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "buffer_utils.h"
+#include "diagnostics/vram_profiler.hpp"
 #include "forward.h"
 #include "helper_math.h"
 #include "kernels_forward.cuh"
@@ -24,16 +25,15 @@ namespace {
     class StreamOrderedDeviceBuffer {
     public:
         StreamOrderedDeviceBuffer() = default;
-        explicit StreamOrderedDeviceBuffer(size_t size) {
-            allocate(size);
-        }
+        explicit StreamOrderedDeviceBuffer(const char* label) : label_(label) {}
 
         StreamOrderedDeviceBuffer(const StreamOrderedDeviceBuffer&) = delete;
         StreamOrderedDeviceBuffer& operator=(const StreamOrderedDeviceBuffer&) = delete;
 
         StreamOrderedDeviceBuffer(StreamOrderedDeviceBuffer&& other) noexcept
             : ptr_(other.ptr_),
-              size_(other.size_) {
+              size_(other.size_),
+              label_(other.label_) {
             other.ptr_ = nullptr;
             other.size_ = 0;
         }
@@ -60,12 +60,17 @@ namespace {
             }
             ptr_ = ptr;
             size_ = size;
+            lfs::diagnostics::VramProfiler::instance().recordAllocation(
+                ptr_, size_,
+                lfs::diagnostics::VramAllocationMethod::Async,
+                label_ ? label_ : "rasterizer.fastgs.scratch");
         }
 
         void reset() noexcept {
             if (!ptr_) {
                 return;
             }
+            lfs::diagnostics::VramProfiler::instance().recordDeallocation(ptr_);
 #if CUDART_VERSION >= 11020
             cudaFreeAsync(ptr_, nullptr);
 #else
@@ -94,6 +99,7 @@ namespace {
     private:
         void* ptr_ = nullptr;
         size_t size_ = 0;
+        const char* label_ = "rasterizer.fastgs.scratch";
     };
 
 } // namespace
@@ -236,11 +242,11 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     CHECK_CUDA(config::debug, "cudaMemcpy(n_instances)");
     const int n_instances = checked_fastgs_instance_count(n_instances_u64, static_cast<uint64_t>(n_primitives), n_tiles_u64);
 
-    StreamOrderedDeviceBuffer keys_current;
-    StreamOrderedDeviceBuffer keys_alternate;
-    StreamOrderedDeviceBuffer primitive_indices_current;
-    StreamOrderedDeviceBuffer primitive_indices_alternate;
-    StreamOrderedDeviceBuffer cub_workspace;
+    StreamOrderedDeviceBuffer keys_current("rasterizer.fastgs.sort_keys");
+    StreamOrderedDeviceBuffer keys_alternate("rasterizer.fastgs.sort_keys_alt");
+    StreamOrderedDeviceBuffer primitive_indices_current("rasterizer.fastgs.sort_indices");
+    StreamOrderedDeviceBuffer primitive_indices_alternate("rasterizer.fastgs.sort_indices_alt");
+    StreamOrderedDeviceBuffer cub_workspace("rasterizer.fastgs.cub_workspace");
 
     cub::DoubleBuffer<InstanceKey> keys;
     cub::DoubleBuffer<uint> primitive_indices;

@@ -43,9 +43,9 @@ namespace lfs::vis {
             void setSelectionSubMode(SelectionSubMode mode);
 
             [[nodiscard]] TransformSpace getTransformSpace() const { return transform_space_; }
-            void setTransformSpace(TransformSpace space) { transform_space_ = space; }
+            void setTransformSpace(TransformSpace space);
             [[nodiscard]] PivotMode getPivotMode() const { return pivot_mode_; }
-            void setPivotMode(PivotMode mode) { pivot_mode_ = mode; }
+            void setPivotMode(PivotMode mode);
             [[nodiscard]] GizmoOperation getCurrentOperation() const { return current_operation_; }
             void setCurrentOperation(GizmoOperation op) { current_operation_ = op; }
             [[nodiscard]] SelectionSubMode getSelectionSubMode() const { return selection_mode_; }
@@ -66,6 +66,22 @@ namespace lfs::vis {
             [[nodiscard]] bool isPieMenuOpen() const { return pie_menu_.isOpen(); }
 
         private:
+            struct ToolStateStamp {
+                bool valid = false;
+                bool ui_hidden = false;
+                bool has_scene_manager = false;
+                bool has_selected_node = false;
+                const void* brush_tool = nullptr;
+                const void* align_tool = nullptr;
+                const void* selection_tool = nullptr;
+                const void* rendering_manager = nullptr;
+                std::string active_tool_id;
+                std::string gizmo_type;
+                SelectionSubMode selection_mode = SelectionSubMode::Centers;
+
+                bool operator==(const ToolStateStamp&) const = default;
+            };
+
             VisualizerImpl* viewer_;
 
             // Transform gizmo settings
@@ -131,6 +147,7 @@ namespace lfs::vis {
             // Tool tracking
             std::string previous_tool_id_;
             SelectionSubMode previous_selection_mode_ = SelectionSubMode::Centers;
+            ToolStateStamp last_tool_state_stamp_;
 
             // Pie menu
             PieMenu pie_menu_;

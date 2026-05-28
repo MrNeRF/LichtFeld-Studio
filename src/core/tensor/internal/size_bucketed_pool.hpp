@@ -4,11 +4,13 @@
 #pragma once
 
 #include "core/logger.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
 #include <cuda_runtime.h>
+#include <limits>
 #include <mutex>
 #include <vector>
 
@@ -21,6 +23,8 @@ namespace lfs::core {
         static constexpr size_t MIN_BUCKET_SIZE = 256 * 1024;
         static constexpr size_t MAX_TRACKED_SIZE = 16ULL * 1024 * 1024 * 1024;
         static constexpr size_t CACHE_SIZE_PER_BUCKET = 4;
+        static constexpr size_t MIN_CACHE_BUDGET = 64ULL * 1024 * 1024;
+        static constexpr size_t MAX_CACHE_BUDGET = 256ULL * 1024 * 1024;
         static constexpr size_t NUM_BUCKETS = 128;
 
         struct Stats {
@@ -75,6 +79,22 @@ namespace lfs::core {
             return std::min(idx, NUM_BUCKETS - 1);
         }
 
+        static size_t max_cached_entries_for_bucket(size_t bucket_size) {
+            if (bucket_size <= 16ULL * 1024 * 1024)
+                return CACHE_SIZE_PER_BUCKET;
+            if (bucket_size <= 64ULL * 1024 * 1024)
+                return 3;
+            if (bucket_size <= 256ULL * 1024 * 1024)
+                return 2;
+            return 1;
+        }
+
+        static size_t cache_budget_for_total_memory(size_t total_bytes) {
+            if (total_bytes == 0)
+                return MAX_CACHE_BUDGET;
+            return std::clamp(total_bytes / 96, MIN_CACHE_BUDGET, MAX_CACHE_BUDGET);
+        }
+
         void* try_allocate_cached(size_t bytes) {
             const size_t bucket_size = get_bucket_size(bytes);
             const size_t bucket_idx = get_bucket_index(bucket_size);
@@ -83,38 +103,63 @@ namespace lfs::core {
 
             {
                 std::lock_guard<std::mutex> lock(buckets_[bucket_idx].mutex);
+                Bucket& bucket = buckets_[bucket_idx];
+                bucket.bucket_size = bucket_size;
                 if (!buckets_[bucket_idx].cache.empty()) {
-                    void* ptr = buckets_[bucket_idx].cache.back();
-                    buckets_[bucket_idx].cache.pop_back();
-                    buckets_[bucket_idx].cached_bytes -= bucket_size;
+                    void* ptr = bucket.cache.back();
+                    bucket.cache.pop_back();
+                    bucket.cached_bytes -= bucket_size;
+                    bucket.hits++;
+                    bucket.last_hit_epoch = reuse_epoch_.fetch_add(1, std::memory_order_relaxed) + 1;
                     stats_.cache_hits.fetch_add(1, std::memory_order_relaxed);
                     stats_.bytes_cached.fetch_sub(bucket_size, std::memory_order_relaxed);
                     stats_.bytes_wasted.fetch_add(bucket_size - bytes, std::memory_order_relaxed);
+                    publish_cache_bytes();
                     return ptr;
                 }
+                bucket.misses++;
             }
             stats_.cache_misses.fetch_add(1, std::memory_order_relaxed);
             return nullptr;
         }
 
-        bool cache_free(void* ptr, size_t bytes) {
+        bool cache_free(void* ptr, size_t bytes, cudaStream_t stream = nullptr) {
             const size_t bucket_size = get_bucket_size(bytes);
             const size_t bucket_idx = get_bucket_index(bucket_size);
             if (bucket_idx >= NUM_BUCKETS)
                 return false;
 
-            std::lock_guard<std::mutex> lock(buckets_[bucket_idx].mutex);
-            if (buckets_[bucket_idx].cache.size() >= CACHE_SIZE_PER_BUCKET) {
-                void* old_ptr = buckets_[bucket_idx].cache.front();
-                buckets_[bucket_idx].cache.erase(buckets_[bucket_idx].cache.begin());
-                buckets_[bucket_idx].cached_bytes -= bucket_size;
-                stats_.bytes_cached.fetch_sub(bucket_size, std::memory_order_relaxed);
-                cudaFreeAsync(old_ptr, nullptr);
+            {
+                std::lock_guard<std::mutex> lock(buckets_[bucket_idx].mutex);
+                Bucket& bucket = buckets_[bucket_idx];
+                bucket.bucket_size = bucket_size;
+
+                const size_t budget = current_cache_budget();
+                const bool large_probationary_buffer =
+                    bucket_size > budget / 2 && bucket.hits == 0 && bucket.misses < 2;
+                if (large_probationary_buffer) {
+                    cudaFreeAsync(ptr, stream);
+                    publish_cache_bytes();
+                    return true;
+                }
+
+                const size_t max_entries = max_cached_entries_for_bucket(bucket_size);
+                while (bucket.cache.size() >= max_entries) {
+                    void* old_ptr = bucket.cache.front();
+                    bucket.cache.erase(bucket.cache.begin());
+                    bucket.cached_bytes -= bucket_size;
+                    stats_.bytes_cached.fetch_sub(bucket_size, std::memory_order_relaxed);
+                    cudaFreeAsync(old_ptr, nullptr);
+                }
+
+                bucket.cache.push_back(ptr);
+                bucket.cached_bytes += bucket_size;
+                stats_.free_count.fetch_add(1, std::memory_order_relaxed);
+                stats_.bytes_cached.fetch_add(bucket_size, std::memory_order_relaxed);
             }
-            buckets_[bucket_idx].cache.push_back(ptr);
-            buckets_[bucket_idx].cached_bytes += bucket_size;
-            stats_.free_count.fetch_add(1, std::memory_order_relaxed);
-            stats_.bytes_cached.fetch_add(bucket_size, std::memory_order_relaxed);
+
+            enforce_cache_budget();
+            publish_cache_bytes();
             return true;
         }
 
@@ -142,7 +187,7 @@ namespace lfs::core {
         void deallocate(void* ptr, size_t bytes, cudaStream_t stream = nullptr) {
             if (!ptr)
                 return;
-            if (!cache_free(ptr, bytes)) {
+            if (!cache_free(ptr, bytes, stream)) {
                 cudaFreeAsync(ptr, stream);
             }
         }
@@ -157,6 +202,7 @@ namespace lfs::core {
                 buckets_[i].cached_bytes = 0;
             }
             stats_.bytes_cached.store(0, std::memory_order_relaxed);
+            publish_cache_bytes();
         }
 
         const Stats& stats() const { return stats_; }
@@ -183,10 +229,105 @@ namespace lfs::core {
         SizeBucketedPool& operator=(const SizeBucketedPool&) = delete;
 
     private:
+        // Publish the live reuse-cache size so the HUD can split it out of
+        // cuda.pool.untracked_used: these are freed-but-retained cudaMallocAsync
+        // buffers, still in the pool's UsedMemCurrent but dropped from the tensor
+        // allocator's live map. Reclaimable via trim_cache().
+        void publish_cache_bytes() const {
+            lfs::diagnostics::VramProfiler::instance().setCudaPoolBucketCacheBytes(
+                stats_.bytes_cached.load(std::memory_order_relaxed));
+        }
+
+        size_t current_cache_budget() {
+            const size_t cached = cache_budget_bytes_.load(std::memory_order_acquire);
+            if (cached != 0)
+                return cached;
+
+            size_t free_bytes = 0;
+            size_t total_bytes = 0;
+            size_t budget = MAX_CACHE_BUDGET;
+            if (cudaMemGetInfo(&free_bytes, &total_bytes) == cudaSuccess) {
+                budget = cache_budget_for_total_memory(total_bytes);
+            }
+
+            size_t expected = 0;
+            if (cache_budget_bytes_.compare_exchange_strong(expected, budget, std::memory_order_release)) {
+                return budget;
+            }
+            return cache_budget_bytes_.load(std::memory_order_acquire);
+        }
+
+        size_t cached_entry_count() {
+            size_t count = 0;
+            for (size_t i = 0; i < NUM_BUCKETS; ++i) {
+                std::lock_guard<std::mutex> lock(buckets_[i].mutex);
+                count += buckets_[i].cache.size();
+            }
+            return count;
+        }
+
+        size_t choose_eviction_bucket() {
+            size_t best = NUM_BUCKETS;
+            uint64_t best_epoch = std::numeric_limits<uint64_t>::max();
+            size_t best_bucket_size = 0;
+
+            for (size_t i = 0; i < NUM_BUCKETS; ++i) {
+                std::lock_guard<std::mutex> lock(buckets_[i].mutex);
+                const Bucket& bucket = buckets_[i];
+                if (bucket.cache.empty() || bucket.bucket_size == 0)
+                    continue;
+
+                const uint64_t epoch = bucket.last_hit_epoch;
+                if (best == NUM_BUCKETS ||
+                    epoch < best_epoch ||
+                    (epoch == best_epoch && bucket.bucket_size > best_bucket_size)) {
+                    best = i;
+                    best_epoch = epoch;
+                    best_bucket_size = bucket.bucket_size;
+                }
+            }
+
+            return best;
+        }
+
+        void enforce_cache_budget() {
+            const size_t budget = current_cache_budget();
+            while (stats_.bytes_cached.load(std::memory_order_relaxed) > budget) {
+                // Keep one oversized reusable buffer if it is the whole working set;
+                // otherwise the next iteration pays cudaMallocAsync every time.
+                if (cached_entry_count() <= 1)
+                    break;
+
+                const size_t victim_idx = choose_eviction_bucket();
+                if (victim_idx >= NUM_BUCKETS)
+                    break;
+
+                void* victim = nullptr;
+                size_t victim_size = 0;
+                {
+                    std::lock_guard<std::mutex> lock(buckets_[victim_idx].mutex);
+                    Bucket& bucket = buckets_[victim_idx];
+                    if (bucket.cache.empty() || bucket.bucket_size == 0)
+                        continue;
+                    victim = bucket.cache.front();
+                    bucket.cache.erase(bucket.cache.begin());
+                    victim_size = bucket.bucket_size;
+                    bucket.cached_bytes -= victim_size;
+                    stats_.bytes_cached.fetch_sub(victim_size, std::memory_order_relaxed);
+                }
+
+                cudaFreeAsync(victim, nullptr);
+            }
+        }
+
         struct Bucket {
             std::vector<void*> cache;
             std::mutex mutex;
             size_t cached_bytes{0};
+            size_t bucket_size{0};
+            uint64_t hits{0};
+            uint64_t misses{0};
+            uint64_t last_hit_epoch{0};
 
             Bucket() {
                 cache.reserve(CACHE_SIZE_PER_BUCKET);
@@ -201,6 +342,8 @@ namespace lfs::core {
 
         std::array<Bucket, NUM_BUCKETS> buckets_;
         std::atomic<bool> shutdown_{false};
+        std::atomic<size_t> cache_budget_bytes_{0};
+        std::atomic<uint64_t> reuse_epoch_{1};
         Stats stats_;
     };
 

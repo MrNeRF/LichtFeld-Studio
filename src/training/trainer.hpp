@@ -28,7 +28,9 @@
 #include <mutex>
 #include <shared_mutex>
 #include <stop_token>
+#include <string_view>
 #include <unordered_map>
+#include <utility>
 
 namespace lfs::core {
     class Scene;
@@ -163,6 +165,9 @@ namespace lfs::training {
 
         const lfs::core::param::TrainingParameters& getParams() const { return params_; }
         void setParams(const lfs::core::param::TrainingParameters& params);
+        void setSplatTensorAllocator(lfs::core::SplatTensorAllocator allocator) {
+            splat_tensor_allocator_ = std::move(allocator);
+        }
 
         void setOnIterationStart(std::function<void()> cb) { on_iteration_start_ = std::move(cb); }
 
@@ -334,6 +339,7 @@ namespace lfs::training {
                    !params_.optimization.ppisp_sidecar_path.empty();
         }
         [[nodiscard]] PPISPControllerPool* controller_pool_for_save(int iteration) const;
+        [[nodiscard]] lfs::core::param::TrainingParameters params_for_checkpoint_save() const;
         [[nodiscard]] TrainingProgress::Phase get_progress_phase(
             int iter,
             bool in_controller_phase = false) const;
@@ -383,6 +389,9 @@ namespace lfs::training {
 
         std::shared_ptr<CameraLossHeatmapState> getCameraLossHeatmap() const;
         void setCameraLossHeatmap(std::shared_ptr<CameraLossHeatmapState> heatmap);
+        std::expected<void, std::string> ensureModelTensorAllocatorStorage(
+            lfs::core::SplatData& model,
+            std::string_view reason);
 
         lfs::core::Scene* scene_ = nullptr;
         std::shared_ptr<CameraDataset> base_dataset_;
@@ -391,6 +400,7 @@ namespace lfs::training {
         std::shared_ptr<lfs::io::PipelinedImageLoader> active_image_loader_;
         std::unique_ptr<IStrategy> strategy_;
         lfs::core::param::TrainingParameters params_;
+        lfs::core::SplatTensorAllocator splat_tensor_allocator_;
         std::optional<std::tuple<std::vector<std::string>, std::vector<std::string>>> provided_splits_;
 
         lfs::core::Tensor background_{};

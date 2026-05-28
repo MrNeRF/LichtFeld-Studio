@@ -98,6 +98,8 @@ namespace lfs::vis::vksplat {
         std::size_t rotations_bytes = 0;
         std::size_t scaling_bytes = 0;
         std::size_t opacity_bytes = 0;
+        std::uint32_t shN_layout_rest = 0;
+        bool omits_shN = false;
     };
 
     // Raw split SplatData layout for the live Vulkan viewer. Unlike the packed
@@ -105,15 +107,14 @@ namespace lfs::vis::vksplat {
     // shaders can consume the training tensors directly when they are Vulkan
     // external buffers.
     LFS_VIS_API [[nodiscard]] std::expected<RawDeviceInputLayout, std::string> rawDeviceInputLayout(
-        const lfs::core::SplatData& splat_data);
-
-    LFS_VIS_API [[nodiscard]] std::expected<void, std::string> copyRawDeviceInputsToBuffer(
         const lfs::core::SplatData& splat_data,
-        void* xyz_dst,
-        void* sh0_dst,
-        void* shN_dst,
-        void* rotations_dst,
-        void* scaling_dst,
+        int upload_sh_degree = -1);
+
+    // Copy just raw opacity, baking SplatData::deleted() into the destination
+    // when present. This lets the live renderer borrow all other raw tensors
+    // directly instead of allocating a full raw-model copy only to honor deletes.
+    LFS_VIS_API [[nodiscard]] std::expected<void, std::string> copyRawOpacityToBuffer(
+        const lfs::core::SplatData& splat_data,
         void* opacity_dst,
         cudaStream_t stream);
 

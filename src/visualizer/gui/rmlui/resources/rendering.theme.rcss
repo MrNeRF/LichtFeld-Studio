@@ -9,21 +9,13 @@
     image-color: @{primary};
 }
 
-.rendering-transform-meta__primary,
-.rendering-transform-axis-label,
 .rendering-simplify-stat__value {
     color: @{text};
 }
 
-.rendering-transform-meta__secondary,
-.rendering-transform-group-label,
 .rendering-subsection-title,
 .rendering-simplify-stat__label {
     color: @{text_dim};
-}
-
-.rendering-transform-scale-separator {
-    border-color: @{alpha(border,0.30)};
 }
 
 .rendering-subsection-title {

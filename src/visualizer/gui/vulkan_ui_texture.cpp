@@ -7,21 +7,23 @@
 #include "config.h"
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "gui/rmlui/rmlui_vk_backend.hpp"
 #include "rendering/image_layout.hpp"
 #include "window/vulkan_context.hpp"
 #include "window/vulkan_image_barrier_tracker.hpp"
 
-#ifdef LFS_VULKAN_VIEWER_ENABLED
 #include "rendering/cuda_vulkan_interop.hpp"
+
 #include <vulkan/vulkan.h>
-#endif
 
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <format>
 #include <limits>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -30,7 +32,6 @@ namespace lfs::vis::gui {
     namespace {
         VulkanContext* g_texture_context = nullptr;
 
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         [[nodiscard]] std::vector<std::uint8_t> toRgba(const std::uint8_t* pixels,
                                                        const int width,
                                                        const int height,
@@ -108,7 +109,6 @@ namespace lfs::vis::gui {
             }
             return toRgba(formatted.ptr<std::uint8_t>(), width, height, channels, flip_y);
         }
-#endif
     } // namespace
 
     void setVulkanUiTextureContext(VulkanContext* const context) {
@@ -120,7 +120,6 @@ namespace lfs::vis::gui {
     }
 
     struct VulkanUiTexture::Impl {
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         enum class Mode : std::uint8_t {
             Uninitialized,
             Cpu,
@@ -139,6 +138,7 @@ namespace lfs::vis::gui {
         VkImage image = VK_NULL_HANDLE;
         VmaAllocation image_allocation = VK_NULL_HANDLE;
         VkImageView image_view = VK_NULL_HANDLE;
+        std::string image_vram_label;
         VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
         VkImageLayout image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
         VulkanImageBarrierTracker image_barriers;
@@ -402,12 +402,18 @@ namespace lfs::vis::gui {
 
             VmaAllocationCreateInfo allocation_info{};
             allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-            if (vmaCreateImage(allocator, &image_info, &allocation_info, &image, &image_allocation, nullptr) != VK_SUCCESS) {
+            VmaAllocationInfo created_allocation_info{};
+            if (vmaCreateImage(allocator, &image_info, &allocation_info, &image, &image_allocation, &created_allocation_info) != VK_SUCCESS) {
                 LOG_ERROR("Failed to create Vulkan UI texture image");
                 destroyImage();
                 return false;
             }
             vmaSetAllocationName(allocator, image_allocation, "Vulkan UI texture");
+            image_vram_label = std::format("cpu_upload_rgba8:{}x{}", new_width, new_height);
+            lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                "vulkan.ui_texture.image",
+                image_vram_label,
+                static_cast<std::size_t>(created_allocation_info.size));
 
             VkImageViewCreateInfo view_info{};
             view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -477,7 +483,11 @@ namespace lfs::vis::gui {
                 static_cast<std::uint32_t>(new_width),
                 static_cast<std::uint32_t>(new_height),
             };
-            if (!context->createExternalImage(extent, VK_FORMAT_R8G8B8A8_UNORM, interop_image) ||
+            if (!context->createExternalImage(extent,
+                                              VK_FORMAT_R8G8B8A8_UNORM,
+                                              interop_image,
+                                              "vulkan.ui_texture.interop_image",
+                                              "rgba8") ||
                 !context->createExternalTimelineSemaphore(0, interop_semaphore)) {
                 LOG_WARN("Vulkan UI texture interop setup failed: {}", context->lastError());
                 destroyImage();
@@ -747,6 +757,12 @@ namespace lfs::vis::gui {
                     image_view = VK_NULL_HANDLE;
                 }
                 if (image != VK_NULL_HANDLE) {
+                    if (!image_vram_label.empty()) {
+                        lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                            "vulkan.ui_texture.image",
+                            image_vram_label,
+                            0);
+                    }
                     image_barriers.forgetImage(image);
                     vmaDestroyImage(allocator, image, image_allocation);
                     image = VK_NULL_HANDLE;
@@ -754,6 +770,7 @@ namespace lfs::vis::gui {
                 }
             }
             image_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+            image_vram_label.clear();
             mode = Mode::Uninitialized;
             width = 0;
             height = 0;
@@ -790,12 +807,6 @@ namespace lfs::vis::gui {
             graphics_queue = VK_NULL_HANDLE;
             graphics_queue_family = 0;
         }
-#else
-        [[nodiscard]] bool upload(const std::uint8_t*, int, int, int) { return false; }
-        [[nodiscard]] bool uploadRegion(const std::uint8_t*, int, int, int, int, int, int, int) { return false; }
-        [[nodiscard]] bool uploadCudaTensorImpl(const lfs::core::Tensor&, int, int, bool) { return false; }
-        void reset() {}
-#endif
     };
 
     VulkanUiTexture::~VulkanUiTexture() {
@@ -846,10 +857,6 @@ namespace lfs::vis::gui {
         if (!impl_) {
             impl_ = new Impl();
         }
-#ifdef LFS_VULKAN_VIEWER_ENABLED
-        // Try the GPU-direct path first when the rasterizer left the tensor on CUDA. We bind
-        // the rasterizer's CUDA tensor straight into a Vulkan image via shared external memory,
-        // skipping a CUDA→host→staging-buffer roundtrip per upload.
         if (image.is_valid() && image.device() == lfs::core::Device::CUDA &&
             impl_->mode != Impl::Mode::Cpu) {
             if (impl_->uploadCudaTensorImpl(image, expected_width, expected_height, flip_y))
@@ -857,13 +864,6 @@ namespace lfs::vis::gui {
         }
         const std::vector<std::uint8_t> rgba = tensorToRgba(image, expected_width, expected_height, flip_y);
         return impl_->uploadRgba(rgba, expected_width, expected_height);
-#else
-        (void)image;
-        (void)expected_width;
-        (void)expected_height;
-        (void)flip_y;
-        return false;
-#endif
     }
 
     bool VulkanUiTexture::uploadCudaTensor(const lfs::core::Tensor& image,
@@ -873,45 +873,26 @@ namespace lfs::vis::gui {
         if (!impl_) {
             impl_ = new Impl();
         }
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         return impl_->uploadCudaTensorImpl(image, expected_width, expected_height, flip_y);
-#else
-        (void)image;
-        (void)expected_width;
-        (void)expected_height;
-        (void)flip_y;
-        return false;
-#endif
     }
 
     std::uintptr_t VulkanUiTexture::textureId() const {
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         if (!impl_) {
             return 0;
         }
         impl_->tryReleasePendingUpload();
         return reinterpret_cast<std::uintptr_t>(impl_->descriptor_set);
-#else
-        return 0;
-#endif
     }
 
     std::string VulkanUiTexture::rmlSrcUrl(const int width, const int height) const {
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         if (!impl_) {
             return {};
         }
         impl_->tryReleasePendingUpload();
         return RenderInterface_VK::MakeExternalTextureSource(impl_->image_view, impl_->sampler, width, height);
-#else
-        (void)width;
-        (void)height;
-        return {};
-#endif
     }
 
     bool VulkanUiTexture::valid() const {
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         if (!impl_) {
             return false;
         }
@@ -920,9 +901,6 @@ namespace lfs::vis::gui {
             return false;
         }
         return impl_->mode == Impl::Mode::CudaInterop || impl_->descriptor_set != VK_NULL_HANDLE;
-#else
-        return false;
-#endif
     }
 
     void VulkanUiTexture::reset() {

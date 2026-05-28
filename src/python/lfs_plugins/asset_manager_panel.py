@@ -10,6 +10,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Any
+from urllib.parse import quote
 
 import lichtfeld as lf
 
@@ -21,10 +22,12 @@ from .asset_manager_integration import (
 )
 from .import_panels import open_url_import_panel, open_watch_dirs_dialog
 from .types import Panel
+from .ui import RuntimeState
 
 _logger = logging.getLogger(__name__)
 
 PRECISE_SCROLL_STEP = 32.0
+RML_PATH_SAFE_CHARS = "/:._-~"
 
 # Import backend components (to be implemented)
 try:
@@ -58,12 +61,16 @@ def tr(key, **kwargs):
             return result
     return result
 
+
+def _encode_rml_image_path(path: str) -> str:
+    return quote(path, safe=RML_PATH_SAFE_CHARS)
+
 __lfs_panel_classes__ = ["AssetManagerPanel"]
 __lfs_panel_ids__ = ["lfs.asset_manager"]
 
 
 class AssetManagerPanel(Panel):
-    """Floating Asset Manager window for browsing splats, videos, and exports."""
+    """Floating Asset Manager window for browsing splats and exports."""
 
     SORT_MODES = ("name", "size", "type")
     LOADABLE_TYPES = {"ply_3dgs", "ply_pcl", "rad", "sog", "spz", "checkpoint", "dataset", "mesh", "usd"}
@@ -75,7 +82,7 @@ class AssetManagerPanel(Panel):
     template = "rmlui/asset_manager.rml"
     height_mode = lf.ui.PanelHeightMode.FILL
     size = (980, 620)
-    update_interval_ms = 500
+    update_policy = "dirty"
 
     # Storage path for asset manager data
     STORAGE_PATH = resolve_asset_manager_storage_path()
@@ -274,6 +281,9 @@ class AssetManagerPanel(Panel):
         self._library_mtime: float = 0.0
         self._updating_selection_details: bool = False
         self._pending_transform_applications: List[Dict[str, Any]] = []
+        self._reactive_unsubscribers = []
+        self._last_scene_generation: Optional[int] = None
+        self._last_language_generation: Optional[int] = None
 
         # New project menu state
         self._new_project_menu_open: bool = False
@@ -488,6 +498,7 @@ class AssetManagerPanel(Panel):
         model.bind_func("move_to_project_label", lambda: tr("asset_manager.action.move_to_project"))
         model.bind_func("new_project_label", lambda: tr("asset_manager.action.new_project"))
         model.bind_func("show_in_folder_label", lambda: tr("asset_manager.action.show_in_folder"))
+        model.bind_func("update_thumbnail_label", lambda: tr("asset_manager.action.update_thumbnail"))
         model.bind_func("remove_label", lambda: tr("asset_manager.action.remove"))
         model.bind_func("refresh_label", lambda: tr("asset_manager.action.refresh"))
         model.bind_func("clean_missing_label", lambda: tr("asset_manager.action.clean_missing"))
@@ -577,6 +588,7 @@ class AssetManagerPanel(Panel):
         model.bind_event("select_asset", self.select_asset_by_id)
         model.bind_event("on_load_asset", self.on_load_asset)
         model.bind_event("on_remove_asset", self.on_remove_asset)
+        model.bind_event("on_update_thumbnail", self.on_update_thumbnail)
         model.bind_event("on_pending_tag_change", self.on_pending_tag_change)
         model.bind_event("on_add_tag", self.on_add_tag)
         model.bind_event("on_remove_tag", self.on_remove_tag)
@@ -1003,6 +1015,18 @@ class AssetManagerPanel(Panel):
             return sorted(assets, key=lambda a: a.get("type", "").lower())
         return sorted(assets, key=lambda a: a.get("name", "").lower())
 
+    def _thumbnail_decorator(self, asset: Dict[str, Any]) -> str:
+        thumbnail_path = asset.get("thumbnail_path") or ""
+        if not thumbnail_path:
+            return "none"
+        try:
+            path = Path(str(thumbnail_path)).expanduser()
+            if not path.exists():
+                return "none"
+            return f"image({_encode_rml_image_path(path.as_posix())})"
+        except Exception:
+            return "none"
+
     def _format_asset_for_ui(self, asset: Dict[str, Any]) -> Dict[str, Any]:
         """Format asset data for UI display."""
         asset_id = asset.get("id", "")
@@ -1048,8 +1072,6 @@ class AssetManagerPanel(Panel):
             "sog": "asset-thumb-splat",
             "spz": "asset-thumb-splat",
             "checkpoint": "asset-thumb-checkpoint",
-            "mp4": "asset-thumb-video",
-            "mov": "asset-thumb-video",
             "dataset": "asset-thumb-dataset",
         }
         thumb_class = thumb_classes.get(asset_type, "asset-thumb-default")
@@ -1071,8 +1093,6 @@ class AssetManagerPanel(Panel):
             "dataset": tr("asset_manager.type.dataset"),
             "mesh": tr("asset_manager.type.mesh"),
             "usd": tr("asset_manager.type.usd"),
-            "mp4": tr("asset_manager.type.video"),
-            "mov": tr("asset_manager.type.video"),
         }
         type_label = type_labels.get(asset_type, asset_type.upper() if asset_type else "")
 
@@ -1094,6 +1114,7 @@ class AssetManagerPanel(Panel):
             "tags_label": ", ".join(asset.get("tags", [])) if asset.get("tags") else "",
             "thumb_class": thumb_class,
             "thumb_label": asset_type.upper() if asset_type else tr("asset_manager.type.asset"),
+            "thumbnail_decorator": self._thumbnail_decorator(asset),
             "pill_class": f"asset-pill-{asset_type}" if asset_type else "",
             "is_selected": asset_id in self._selected_asset_ids,
             "exists": asset.get("exists", True),
@@ -1503,8 +1524,6 @@ class AssetManagerPanel(Panel):
             "dataset": tr("asset_manager.type.dataset"),
             "mesh": tr("asset_manager.type.mesh"),
             "usd": tr("asset_manager.type.usd"),
-            "mp4": tr("asset_manager.type.video"),
-            "mov": tr("asset_manager.type.video"),
         }
         return type_labels.get(asset_type, asset_type.upper() if asset_type else "")
 
@@ -1632,23 +1651,163 @@ class AssetManagerPanel(Panel):
             "modified_at": metadata.get("modified"),
         }
 
-        if asset_type in ("ply_3dgs", "ply_pcl", "ply", "rad", "sog", "spz"):
+        if asset_type in ("ply_3dgs", "ply_pcl", "ply", "rad", "sog", "spz", "mesh"):
             kwargs["geometry_metadata"] = format_specific
         elif asset_type == "dataset":
             kwargs["dataset_metadata"] = format_specific
 
         return kwargs
 
-    def _generate_asset_thumbnail(self, asset: Any) -> None:
-        if not self._asset_thumbnails or not asset:
+    def _generate_asset_thumbnail_for_values(
+        self,
+        asset_id: str,
+        asset_type: str,
+        asset_path: str,
+        dataset_metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if not self._asset_thumbnails or not self._asset_index or not asset_id:
             return
         try:
-            thumb_path = self._asset_thumbnails.generate_placeholder(
-                asset.type, asset.id
-            )
-            self._asset_index.update_asset(asset.id, thumbnail_path=str(thumb_path))
+            thumb_path = None
+            if asset_type == "dataset":
+                generate_dataset_preview = getattr(
+                    self._asset_thumbnails,
+                    "generate_dataset_preview",
+                    None,
+                )
+                if callable(generate_dataset_preview):
+                    thumb_path = generate_dataset_preview(
+                        asset_type,
+                        asset_id,
+                        asset_path,
+                        dataset_metadata or {},
+                    )
+            else:
+                generate_rendered_preview = getattr(
+                    self._asset_thumbnails,
+                    "generate_rendered_preview",
+                    None,
+                )
+                if callable(generate_rendered_preview):
+                    thumb_path = generate_rendered_preview(
+                        asset_type,
+                        asset_id,
+                        asset_path,
+                    )
+
+            if thumb_path is None:
+                thumb_path = self._asset_thumbnails.generate_placeholder(
+                    asset_type,
+                    asset_id,
+                )
+            self._asset_index.update_asset(asset_id, thumbnail_path=str(thumb_path))
         except Exception as exc:
-            _logger.debug(f"Failed to generate thumbnail for {asset.id}: {exc}")
+            _logger.debug(f"Failed to generate thumbnail for {asset_id}: {exc}")
+
+    def _generate_asset_thumbnail(self, asset: Any) -> None:
+        if not asset:
+            return
+        asset_id = getattr(asset, "id", "")
+        asset_type = getattr(asset, "type", "")
+        asset_path = getattr(asset, "absolute_path", "") or getattr(asset, "path", "")
+        dataset_metadata = getattr(asset, "dataset_metadata", {}) or {}
+        self._generate_asset_thumbnail_for_values(
+            asset_id,
+            asset_type,
+            asset_path,
+            dataset_metadata,
+        )
+
+    def _is_managed_thumbnail_path(self, thumbnail_path: str) -> bool:
+        if not self._asset_thumbnails or not thumbnail_path:
+            return False
+
+        try:
+            thumbs_dir = (
+                Path(self._asset_thumbnails.thumbnails_dir)
+                .expanduser()
+                .resolve()
+            )
+            path = Path(str(thumbnail_path)).expanduser().resolve()
+            try:
+                return path.is_relative_to(thumbs_dir)
+            except AttributeError:
+                return path == thumbs_dir or thumbs_dir in path.parents
+        except Exception:
+            return False
+
+    def _asset_needs_thumbnail_refresh(self, asset: Dict[str, Any]) -> bool:
+        if not self._asset_thumbnails:
+            return False
+
+        asset_id = asset.get("id", "")
+        asset_type = asset.get("type", "")
+        if not asset_id:
+            return False
+
+        thumbnail_path = asset.get("thumbnail_path") or ""
+        thumbnail_exists = False
+        if thumbnail_path:
+            try:
+                thumbnail_exists = Path(str(thumbnail_path)).expanduser().exists()
+            except Exception:
+                thumbnail_exists = False
+
+        thumbnail_size_ok = True
+        matches_expected_size = getattr(
+            self._asset_thumbnails,
+            "thumbnail_matches_expected_size",
+            None,
+        )
+        if (
+            thumbnail_exists
+            and callable(matches_expected_size)
+            and self._is_managed_thumbnail_path(str(thumbnail_path))
+        ):
+            thumbnail_size_ok = matches_expected_size(thumbnail_path)
+
+        if asset_type == "dataset":
+            expected_path = getattr(
+                self._asset_thumbnails,
+                "get_dataset_thumbnail_path",
+                lambda _asset_id: None,
+            )(asset_id)
+            if (
+                expected_path
+                and str(thumbnail_path) == str(expected_path)
+                and thumbnail_exists
+                and thumbnail_size_ok
+            ):
+                return False
+            placeholder_path = self._asset_thumbnails.get_thumbnail_path(asset_id)
+            return (
+                (not thumbnail_exists)
+                or (not thumbnail_size_ok)
+                or str(thumbnail_path) == str(placeholder_path)
+            )
+
+        if asset_type in {
+            "checkpoint",
+            "mesh",
+            "ply_3dgs",
+            "ply_pcl",
+            "ply",
+            "rad",
+            "sog",
+            "spz",
+        }:
+            has_rendered = getattr(
+                self._asset_thumbnails,
+                "has_rendered_thumbnail",
+                lambda _aid: False,
+            )(asset_id)
+            return (
+                not has_rendered
+                or not thumbnail_exists
+                or not thumbnail_size_ok
+            )
+
+        return (not thumbnail_exists) or (not thumbnail_size_ok)
 
     def _asset_needs_metadata_sync(self, asset: Dict[str, Any]) -> bool:
         asset_type = asset.get("type", "")
@@ -1666,7 +1825,7 @@ class AssetManagerPanel(Panel):
                 or "image_root" not in dataset_meta
             )
 
-        if asset_type in ("ply_3dgs", "ply_pcl", "ply", "rad", "sog", "spz"):
+        if asset_type in ("ply_3dgs", "ply_pcl", "ply", "rad", "sog", "spz", "mesh"):
             geom_meta = asset.get("geometry_metadata", {}) or {}
             # Need sync if empty or if gaussian_count is not present
             return not geom_meta or geom_meta.get("gaussian_count") is None
@@ -1678,31 +1837,40 @@ class AssetManagerPanel(Panel):
 
         updated_any = False
         for asset_id, asset in list(self._asset_index.assets.items()):
-            if not self._asset_needs_metadata_sync(asset):
-                continue
+            if self._asset_needs_metadata_sync(asset):
+                file_path = asset.get("absolute_path") or asset.get("path", "")
+                try:
+                    metadata = self._asset_scanner.scan_file(file_path)
+                except Exception as exc:
+                    _logger.debug(f"Failed to rescan asset metadata for {file_path}: {exc}")
+                    metadata = None
 
-            file_path = asset.get("absolute_path") or asset.get("path", "")
-            try:
-                metadata = self._asset_scanner.scan_file(file_path)
-            except Exception as exc:
-                _logger.debug(f"Failed to rescan asset metadata for {file_path}: {exc}")
-                continue
+                if metadata:
+                    update_kwargs = self._metadata_to_asset_kwargs(metadata)
+                    size_bytes = metadata.get("size_bytes")
+                    if size_bytes is not None and size_bytes != asset.get("file_size_bytes", 0):
+                        update_kwargs["file_size_bytes"] = size_bytes
 
-            update_kwargs = self._metadata_to_asset_kwargs(metadata)
-            size_bytes = metadata.get("size_bytes")
-            if size_bytes is not None and size_bytes != asset.get("file_size_bytes", 0):
-                update_kwargs["file_size_bytes"] = size_bytes
+                    modified_at = metadata.get("modified")
+                    if modified_at and modified_at != asset.get("modified_at"):
+                        update_kwargs["modified_at"] = modified_at
 
-            modified_at = metadata.get("modified")
-            if modified_at and modified_at != asset.get("modified_at"):
-                update_kwargs["modified_at"] = modified_at
+                    created_at = metadata.get("created")
+                    if created_at and not asset.get("created_at"):
+                        update_kwargs["created_at"] = created_at
 
-            created_at = metadata.get("created")
-            if created_at and not asset.get("created_at"):
-                update_kwargs["created_at"] = created_at
+                    if update_kwargs:
+                        self._asset_index.update_asset(asset_id, **update_kwargs)
+                        updated_any = True
 
-            if update_kwargs:
-                self._asset_index.update_asset(asset_id, **update_kwargs)
+            asset = self._asset_index.assets.get(asset_id, asset)
+            if self._asset_needs_thumbnail_refresh(asset):
+                self._generate_asset_thumbnail_for_values(
+                    asset_id,
+                    asset.get("type", ""),
+                    asset.get("absolute_path") or asset.get("path", ""),
+                    asset.get("dataset_metadata", {}) or {},
+                )
                 updated_any = True
 
         return updated_any
@@ -2529,6 +2697,7 @@ class AssetManagerPanel(Panel):
                 "pending_subtree_nodes": set(),
             }
         )
+        self._request_model_update()
 
     def _resolve_loaded_asset_root_name(self, scene, pending: Dict[str, Any]) -> Optional[str]:
         geometry_metadata = pending.get("geometry_metadata", {}) or {}
@@ -2839,6 +3008,67 @@ class AssetManagerPanel(Panel):
             self._log_info("Opened file location: %s", file_path)
         except Exception as e:
             self._log_error("Failed to open file location: %s", e)
+
+    def on_update_thumbnail(self, _handle, _ev, args):
+        """Update asset thumbnail from current camera pose."""
+        asset_id = self._resolve_event_value(args, _ev, "data-asset-id")
+        if not asset_id:
+            return
+
+        if _ev:
+            try:
+                _ev.stop_propagation()
+            except Exception:
+                pass
+
+        if not self._asset_index or not hasattr(self._asset_index, "assets"):
+            return
+
+        asset = self._asset_index.assets.get(asset_id)
+        if not asset:
+            return
+
+        # Close the menu
+        self._open_menu_asset_id = None
+        self._dirty_model("assets")
+
+        asset_path = asset.get("absolute_path") or asset.get("path")
+        if not asset_path:
+            self._log_warn("Asset has no file path: %s", asset_id)
+            return
+
+        asset_type = asset.get("type", "")
+        if asset_type.lower() not in self.LOADABLE_TYPES:
+            self._log_warn("Asset type not renderable: %s", asset_type)
+            return
+
+        try:
+            camera = lf.get_camera("main")
+            if camera is None:
+                self._log_warn("No camera available for thumbnail update")
+                return
+
+            if not self._asset_thumbnails or not hasattr(self._asset_thumbnails, "generate_rendered_preview_from_camera"):
+                self._log_warn("Thumbnail generator not available")
+                return
+
+            thumb_path = self._asset_thumbnails.generate_rendered_preview_from_camera(
+                asset_type,
+                asset_id,
+                asset_path,
+                eye=camera.eye,
+                target=camera.target,
+                up=camera.up,
+            )
+            if thumb_path is not None:
+                self._asset_index.update_asset(asset_id, thumbnail_path=str(thumb_path))
+                self._asset_index.save()
+                self._log_info("Updated thumbnail for %s from current camera", asset_id)
+                self.refresh_catalog()
+            else:
+                self._log_warn("Failed to render thumbnail from camera for %s", asset_id)
+        except Exception as e:
+            self._log_error("Failed to update thumbnail: %s", e)
 
     def on_move_to_project(self, _handle, _ev, args):
         """Move asset to a different project."""
@@ -3257,17 +3487,40 @@ class AssetManagerPanel(Panel):
 
         # Initial refresh must dirty scalar bindings after catalog load.
         self.refresh_catalog()
+        self._last_scene_generation = RuntimeState.scene_generation.value
+        self._last_language_generation = RuntimeState.language_generation.value
+        self._subscribe_reactive_state()
 
     def on_scene_changed(self, doc):
         self._flush_pending_transform_applications()
         self._sync_runtime_scene_catalog(select_current=True)
+        self._last_scene_generation = RuntimeState.scene_generation.value
         self.refresh_catalog()
 
     def on_update(self, doc):
-        """Periodic update - check for missing files."""
+        """Dirty-policy update for catalog and deferred scene work."""
+        changed = False
+
+        language_generation = RuntimeState.language_generation.value
+        if language_generation != self._last_language_generation:
+            self._last_language_generation = language_generation
+            if self._handle:
+                self._handle.dirty_all()
+            changed = True
+
         if not self._asset_index:
-            return False
+            return changed
+
         self._flush_pending_transform_applications()
+        if self._pending_transform_applications:
+            self._request_model_update()
+
+        scene_generation = RuntimeState.scene_generation.value
+        if scene_generation != self._last_scene_generation:
+            self._last_scene_generation = scene_generation
+            self._sync_runtime_scene_catalog(select_current=True)
+            self.refresh_catalog(request_update=False)
+            changed = True
 
         try:
             library_path = self._asset_index.library_path
@@ -3278,8 +3531,8 @@ class AssetManagerPanel(Panel):
                     if self._sync_existing_asset_metadata() and library_path.exists():
                         current_mtime = library_path.stat().st_mtime
                     self._library_mtime = current_mtime
-                    self.refresh_catalog()
-                    return False
+                    self.refresh_catalog(request_update=False)
+                    changed = True
 
             if hasattr(self._asset_index, "mark_missing_files"):
                 previous_missing = sum(
@@ -3291,14 +3544,16 @@ class AssetManagerPanel(Panel):
                 if current_missing != previous_missing:
                     if library_path.exists():
                         self._library_mtime = library_path.stat().st_mtime
-                    self.refresh_catalog()
+                    self.refresh_catalog(request_update=False)
+                    changed = True
         except Exception:
             pass
 
-        return False
+        return changed
 
     def on_unmount(self, doc):
         """Save index on unmount."""
+        self._unsubscribe_reactive_state()
         clear_active_asset_manager_panel(self)
         if self._asset_index and hasattr(self._asset_index, "save"):
             try:
@@ -3309,6 +3564,31 @@ class AssetManagerPanel(Panel):
         doc.remove_data_model("asset_manager")
         self._handle = None
         self._doc = None
+
+    def _subscribe_reactive_state(self):
+        if self._reactive_unsubscribers:
+            return
+
+        native_signals = (
+            RuntimeState.scene_generation,
+            RuntimeState.language_generation,
+        )
+        self._reactive_unsubscribers = [
+            signal.subscribe(lambda _value: self._request_model_update())
+            for signal in native_signals
+        ]
+
+    def _unsubscribe_reactive_state(self):
+        for unsubscribe in self._reactive_unsubscribers:
+            try:
+                unsubscribe()
+            except Exception:
+                pass
+        self._reactive_unsubscribers = []
+
+    def _request_model_update(self):
+        if self._handle:
+            rml_widgets.request_model_update(self._handle)
 
     def _bind_dom_event_listeners(self, doc) -> None:
         """Bind stable DOM listeners for dynamic Asset Manager rows.
@@ -3402,6 +3682,10 @@ class AssetManagerPanel(Panel):
                 return
             elif action == "show_in_folder":
                 self.on_show_in_folder(None, event, [asset_id])
+                self._stop_event(event)
+                return
+            elif action == "update_thumbnail":
+                self.on_update_thumbnail(None, event, [asset_id])
                 self._stop_event(event)
                 return
             elif action == "move_to_project":
@@ -3761,12 +4045,14 @@ class AssetManagerPanel(Panel):
 
     # ── Helper Methods ─────────────────────────────────────────
 
-    def refresh_catalog(self):
+    def refresh_catalog(self, *, request_update: bool = True):
         """Refresh all catalog data in the UI."""
         self._reconcile_selection()
         self._update_all_record_lists()
         if self._handle:
             self._handle.dirty_all()
+            if request_update:
+                self._request_model_update()
 
     def refresh_catalog_scan(self, _handle=None, _ev=None, _args=None):
         """Rescan all known asset directories and refresh the catalog."""
