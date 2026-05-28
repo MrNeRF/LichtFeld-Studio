@@ -9,10 +9,11 @@ Read the examples in this order:
 | Step | Goal | Example |
 |---|---|---|
 | 1 | Pure immediate-mode panel with `draw(ui)` only | [`examples/01_draw_only.py`](examples/01_draw_only.py) |
-| 2 | Add shell, styling, and periodic updates without rewriting `draw(ui)` | [`examples/02_status_bar_mixed.py`](examples/02_status_bar_mixed.py) |
-| 3 | Build a full hybrid panel with template, RCSS, data model, DOM hooks, and embedded `draw(ui)` | [`examples/03_hybrid_plugin/`](examples/03_hybrid_plugin/) |
-| 4 | Explore focused feature demos | [`examples/README.md`](examples/README.md) |
-| 5 | See an end-to-end multi-file plugin | [`examples/full_plugin/`](examples/full_plugin/) |
+| 2 | Add shell and styling without rewriting `draw(ui)`; use periodic updates only for animation-like UI | [`examples/02_status_bar_mixed.py`](examples/02_status_bar_mixed.py) |
+| 3 | Build a dirty-policy retained panel with an RML data model and `AppStore` subscriptions | [Reactive retained panels](#reactive-retained-panels) |
+| 4 | Build a full hybrid panel with template, RCSS, data model, DOM hooks, and embedded `draw(ui)` | [`examples/03_hybrid_plugin/`](examples/03_hybrid_plugin/) |
+| 5 | Explore focused feature demos | [`examples/README.md`](examples/README.md) |
+| 6 | See an end-to-end multi-file plugin | [`examples/full_plugin/`](examples/full_plugin/) |
 
 The key idea is that `lf.ui.Panel` is one public base class that scales from the smallest `draw(ui)` panel to full retained/hybrid UI. You do not need to switch APIs or rewrite the panel body when you add advanced features.
 
@@ -169,6 +170,7 @@ class MyPanel(lf.ui.Panel):
     template = ""
     style = ""
     height_mode = lf.ui.PanelHeightMode.FILL
+    update_policy = "interval"
     update_interval_ms = 100
 
     @classmethod
@@ -192,7 +194,8 @@ class MyPanel(lf.ui.Panel):
 | `template` | `str \| os.PathLike[str]` | `""` | Optional retained RML template. Use an absolute path for plugin-local files. |
 | `style` | `str` | `""` | Optional inline RCSS appended to the retained document. This is RCSS text, not a file path. |
 | `height_mode` | `lf.ui.PanelHeightMode` | `lf.ui.PanelHeightMode.FILL` | `FILL` or `CONTENT` for retained panels. |
-| `update_interval_ms` | `int` | `100` | Update cadence for retained/hybrid `on_update()` work. |
+| `update_policy` | `str` | `"interval"` | Set to `"dirty"` or `"reactive"` for retained panels that update from explicit invalidation. |
+| `update_interval_ms` | `int` | `100` | Fallback cadence for retained/hybrid `on_update()` work. Use this for animation-like UI; prefer `update_policy = "dirty"` for normal data panels. |
 
 The panel API is strict in v1: use the enum values above, not string literals.
 
@@ -234,12 +237,65 @@ What changes here:
 
 - `style` adds inline RCSS.
 - `height_mode` controls how the retained shell sizes itself.
-- `on_update()` adds periodic behavior.
+- `on_update()` adds periodic behavior for this status-bar animation example.
 - `draw(ui)` still renders the actual content.
 
-This is the normal upgrade path. You do not need to rewrite the panel as full DOM/RML just because you added styling or retained hooks.
+This is useful for UI that must advance on time, such as a progress animation. Most data-driven panels should not poll; use a dirty-policy retained panel instead.
 
 See the full version in [`examples/02_status_bar_mixed.py`](examples/02_status_bar_mixed.py).
+
+### Reactive retained panels
+
+For normal retained panels, make updates explicit. Set `update_policy = "dirty"` and use `PanelStoreBinding` to connect app-store changes to model invalidation. This keeps subscription lifetime, refresh work, and RML dirtying in one place.
+
+```python
+from pathlib import Path
+import lichtfeld as lf
+from lfs_plugins.ui import AppStore, PanelStoreBinding
+
+MODEL_NAME = "my_plugin_scene_summary"
+
+
+class SceneSummaryPanel(lf.ui.Panel):
+    id = "my_plugin.scene_summary"
+    label = "Scene Summary"
+    space = lf.ui.PanelSpace.MAIN_PANEL_TAB
+    template = str(Path(__file__).resolve().with_name("scene_summary.rml"))
+    height_mode = lf.ui.PanelHeightMode.CONTENT
+    update_policy = "dirty"
+
+    def __init__(self):
+        self._handle = None
+        self._store_binding = PanelStoreBinding()
+        self._title = "No scene"
+
+    def on_bind_model(self, ctx):
+        model = ctx.create_data_model(MODEL_NAME)
+        if model is None:
+            return
+        model.bind_func("title", lambda: self._title)
+        self._handle = model.get_handle()
+
+    def on_mount(self, doc):
+        self._store_binding.set_handle(self._handle).watch(
+            AppStore.scene_generation,
+            AppStore.selection_generation,
+            refresh=self._refresh_summary,
+            dirty="title",
+            immediate=True,
+        )
+
+    def on_unmount(self, doc):
+        self._store_binding.close()
+        doc.remove_data_model(MODEL_NAME)
+        self._handle = None
+
+    def _refresh_summary(self):
+        scene = lf.get_scene()
+        self._title = getattr(scene, "name", "Scene") if scene else "No scene"
+```
+
+Use this pattern when panel content depends on scene, selection, training, language, task progress, or active tool state. The low-level `AppStore.<field>.subscribe(...)` API exists for non-panel code, but retained panels should normally use `PanelStoreBinding`.
 
 ### Retained shells and template resolution
 
@@ -321,7 +377,7 @@ Key retained hooks:
 - `on_bind_model(ctx)`: create and bind a retained data model before the document loads.
 - `on_mount(doc)`: wire DOM listeners or build dynamic DOM content after the document mounts.
 - `on_unmount(doc)`: clean up document-local state.
-- `on_update(doc)`: periodic updates while the panel is visible. Return `True` to mark content dirty.
+- `on_update(doc)`: retained update hook. It is periodic for `update_policy = "interval"` and invalidation-driven for `update_policy = "dirty"`. Return `True` to mark content dirty.
 - `on_scene_changed(doc)`: respond to active scene generation changes.
 
 To mix retained and immediate content, include `<div id="im-root"></div>` somewhere in your template. `draw(ui)` will render into that node.

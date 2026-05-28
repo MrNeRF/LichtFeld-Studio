@@ -1028,6 +1028,13 @@ class TestMarkdownDocs:
         assert "ThrottledSignal" in content
         assert "Batch" in content
 
+    def test_api_reference_covers_reactive_panel_store(self):
+        content = (PROJECT_ROOT / "docs" / "plugins" / "api-reference.md").read_text()
+        assert "PanelStoreBinding" in content
+        assert "AppStore.scene_generation" in content
+        assert 'update_policy = "dirty"' in content
+        assert "`NativeAppStore` remains as a compatibility alias" in content
+
     def test_api_reference_covers_layout_api(self):
         content = (PROJECT_ROOT / "docs" / "plugins" / "api-reference.md").read_text()
         for widget in [

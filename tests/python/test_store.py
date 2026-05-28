@@ -48,6 +48,14 @@ def test_app_store_exposes_panel_reactive_signals():
     assert isinstance(AppStore.language_generation, StoreSignal)
 
 
+def test_ui_package_exports_preferred_store_names():
+    from lfs_plugins.ui import AppStore as PublicAppStore, NativeAppStore, PanelStoreBinding as PublicBinding
+
+    assert PublicAppStore is AppStore
+    assert NativeAppStore is AppStore
+    assert PublicBinding is PanelStoreBinding
+
+
 def test_native_value_helper_does_not_read_fallback_signal_without_native_store(monkeypatch):
     monkeypatch.setattr(AppStore.active_tool, "_fallback", "fallback-only")
 

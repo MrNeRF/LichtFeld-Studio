@@ -82,7 +82,8 @@ import lichtfeld as lf
 | `template` | `str \| os.PathLike[str]` | `""` | Retained RML template. Use an absolute path for plugin-local files |
 | `style` | `str` | `""` | Inline RCSS appended to the retained document |
 | `height_mode` | `lf.ui.PanelHeightMode` | `lf.ui.PanelHeightMode.FILL` | `FILL` or `CONTENT` for retained panels |
-| `update_interval_ms` | `int` | `100` | Cadence for retained/hybrid `on_update()` work |
+| `update_policy` | `str` | `"interval"` | Set to `"dirty"` or `"reactive"` for retained panels that update from explicit model/store invalidation |
+| `update_interval_ms` | `int` | `100` | Fallback cadence for retained/hybrid `on_update()` work. Prefer `update_policy = "dirty"` for data-driven panels |
 
 | Method | Returns | Description |
 |---|---|---|
@@ -91,7 +92,7 @@ import lichtfeld as lf
 | `on_bind_model(self, ctx)` | `None` | Bind retained data models before document load |
 | `on_mount(self, doc)` | `None` | Called once after the retained document mounts |
 | `on_unmount(self, doc)` | `None` | Called before the retained document is destroyed |
-| `on_update(self, doc)` | `None \| bool` | Periodic retained update. Return `True` to mark content dirty |
+| `on_update(self, doc)` | `None \| bool` | Retained update hook. With `update_policy = "interval"` it runs on the interval; with `"dirty"` it runs only after explicit invalidation, scene changes, or update requests. Return `True` to mark content dirty |
 | `on_scene_changed(self, doc)` | `None` | Called when the active scene generation changes |
 
 Registering a panel with the same `id` as an existing panel replaces it (see [Panel replacement](getting-started.md#panel-replacement)).
@@ -101,6 +102,99 @@ Registering a panel with the same `id` as an existing panel replaces it (see [Pa
 Panel definitions are validated during `lf.register_class()`. Invalid enum values, removed legacy field names, unsupported retained features on `VIEWPORT_OVERLAY`, or conflicting embedded-panel fields raise `ValueError`, `TypeError`, or `AttributeError`.
 
 The panel API is strict in v1: use the enum values above, not string literals.
+
+### Reactive retained panels
+
+For retained RML panels, prefer dirty-policy updates over timer polling. A dirty-policy panel runs `on_update()` only when scene state changes, document/model state is marked dirty, or an explicit update is requested.
+
+```python
+import lichtfeld as lf
+from lfs_plugins.ui import AppStore, PanelStoreBinding
+
+
+class MyPanel(lf.ui.Panel):
+    id = "my_plugin.panel"
+    label = "My Panel"
+    template = "/absolute/path/to/main_panel.rml"
+    update_policy = "dirty"
+
+    def __init__(self):
+        self._handle = None
+        self._store_binding = PanelStoreBinding()
+        self._title = "No scene"
+
+    def on_bind_model(self, ctx):
+        model = ctx.create_data_model("my_plugin_panel")
+        if model is None:
+            return
+        model.bind_func("title", lambda: self._title)
+        self._handle = model.get_handle()
+
+    def on_mount(self, doc):
+        self._store_binding.set_handle(self._handle).watch(
+            AppStore.scene_generation,
+            AppStore.selection_generation,
+            refresh=self._refresh_title,
+            dirty="title",
+            immediate=True,
+        )
+
+    def on_unmount(self, doc):
+        self._store_binding.close()
+        doc.remove_data_model("my_plugin_panel")
+        self._handle = None
+
+    def _refresh_title(self):
+        scene = lf.get_scene()
+        self._title = getattr(scene, "name", "Scene") if scene else "No scene"
+```
+
+Use `PanelStoreBinding` for normal panel subscriptions. It keeps subscription lifetime and RML invalidation together:
+
+| API | Purpose |
+|---|---|
+| `AppStore.<field>.value` | Read or publish a current app value |
+| `AppStore.<field>.subscribe(callback)` | Low-level subscription, mostly for non-panel code |
+| `PanelStoreBinding(handle).watch(...)` | Preferred retained-panel subscription helper |
+| `dirty=None` | Request `on_update()` without dirtying every bound variable |
+| `dirty="field"` | Dirty one data-model variable |
+| `dirty=("a", "b")` | Dirty several data-model variables |
+| `dirty="*"` | Dirty the full data model |
+| `batch_updates()` | Publish several store fields atomically |
+
+Store fields currently exposed to plugins:
+
+```python
+AppStore.iteration
+AppStore.total_iterations
+AppStore.loss
+AppStore.num_gaussians
+AppStore.max_gaussians
+AppStore.training_running
+AppStore.training_state
+AppStore.trainer_loaded
+AppStore.eval_psnr
+AppStore.eval_ssim
+AppStore.scene_generation
+AppStore.selection_generation
+AppStore.fps
+AppStore.mode_text
+AppStore.active_tool
+AppStore.active_submode
+AppStore.transform_space
+AppStore.pivot_mode
+AppStore.import_overlay_state
+AppStore.video_export_overlay_state
+AppStore.export_progress_state
+AppStore.mesh2splat_state
+AppStore.splat_simplify_state
+AppStore.scripts_generation
+AppStore.language_generation
+```
+
+`NativeAppStore` remains as a compatibility alias for older in-tree code. New plugin code should import `AppStore`.
+
+Old Python UI hooks still compile, but hook registration is deprecated for external plugins. Use retained RML data models plus `AppStore` subscriptions for new UI.
 
 ### Panel spaces
 
