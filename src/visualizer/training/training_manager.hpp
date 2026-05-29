@@ -11,6 +11,7 @@
 #include "training/trainer.hpp"
 #include "training_state.hpp"
 #include <atomic>
+#include <cstddef>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -164,6 +165,9 @@ namespace lfs::vis {
         // Resource cleanup (called by state machine)
         void cleanupTrainingResources(const TrainingResources& resources);
         void updateResourceTracking();
+        [[nodiscard]] lfs::core::SplatTensorAllocator createTrainingSplatTensorAllocator(
+            const lfs::core::param::TrainingParameters& params,
+            std::size_t min_capacity = 0);
 
         // Member variables
         std::unique_ptr<lfs::training::Trainer> trainer_;

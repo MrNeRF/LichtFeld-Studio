@@ -1522,6 +1522,7 @@ namespace lfs::core {
                 scene_scale,
                 capacity > 0 ? SplatData::ShNLayout::Swizzled
                              : SplatData::ShNLayout::Canonical);
+            result.set_tensor_allocator(std::move(tensor_allocator));
 
             return result;
 
