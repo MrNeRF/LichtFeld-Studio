@@ -1151,6 +1151,23 @@ namespace lfs::vis {
             }
         }
 
+        // Split-view panels borrow the trainer's shared rasterizer arena while
+        // training. When the trainer holds it the panel render reports a retryable
+        // "shared scratch busy" error; collapsing to the full-frame fallback would
+        // drop the ground-truth panel for as long as the arena stays contended.
+        // Keep the last good split frame instead, mirroring the single-view path,
+        // and retry next frame once the arena frees.
+        if (split_view_service_.isActive(settings_) && !pending_split_view.enabled &&
+            synchronize_vksplat_input_upload && has_cached_viewport_output &&
+            isRetryableSharedScratchUnavailable(render_error)) {
+            dirty_mask_.fetch_or(frame_dirty != 0 ? frame_dirty : DirtyFlag::SPLATS,
+                                 std::memory_order_relaxed);
+            render_lock.reset();
+            LOG_DEBUG("Split-view shared scratch unavailable ({}); returning cached split image",
+                      render_error);
+            return cached_frame_result();
+        }
+
         const bool render_point_cloud = settings_.point_cloud_mode || !has_visible_gaussian_model;
 
         if (rendered_image || pending_split_view.enabled) {
