@@ -23,6 +23,7 @@
 #include <shared_mutex>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -38,6 +39,12 @@ namespace lfs::vis {
                 }
             }
             return lock;
+        }
+
+        [[nodiscard]] bool isRetryableSharedScratchUnavailable(const std::string_view error) {
+            return error.find("shared scratch") != std::string_view::npos &&
+                   (error.find("busy") != std::string_view::npos ||
+                    error.find("capacity insufficient") != std::string_view::npos);
         }
 
         [[nodiscard]] std::vector<ViewportInteractionPanel> buildVulkanInteractionPanels(
@@ -1476,9 +1483,7 @@ namespace lfs::vis {
                         return publish_vksplat_result(*render_result);
                     }
                     const bool shared_scratch_retryable =
-                        render_result.error().find("shared scratch") != std::string::npos &&
-                        (render_result.error().find("busy") != std::string::npos ||
-                         render_result.error().find("capacity insufficient") != std::string::npos);
+                        isRetryableSharedScratchUnavailable(render_result.error());
                     if (synchronize_vksplat_input_upload &&
                         has_cached_viewport_output &&
                         shared_scratch_retryable) {
@@ -1639,6 +1644,24 @@ namespace lfs::vis {
         }
 
         if (!rendered_image) {
+            const bool shared_scratch_retryable =
+                synchronize_vksplat_input_upload &&
+                isRetryableSharedScratchUnavailable(render_error);
+            if (shared_scratch_retryable) {
+                dirty_mask_.fetch_or(frame_dirty != 0 ? frame_dirty : DirtyFlag::SPLATS,
+                                     std::memory_order_relaxed);
+                render_lock.reset();
+                if (has_cached_viewport_output) {
+                    LOG_DEBUG("VkSplat shared scratch unavailable ({}); returning cached viewport image",
+                              render_error);
+                    return cached_frame_result();
+                }
+
+                LOG_DEBUG("VkSplat shared scratch unavailable ({}); skipping viewport frame until arena is free",
+                          render_error);
+                return {};
+            }
+
             vulkan_gt_comparison_content_size_ = {0, 0};
             LOG_ERROR("Failed to render Vulkan viewport image: {}",
                       render_error.empty() ? "missing image payload" : render_error);
