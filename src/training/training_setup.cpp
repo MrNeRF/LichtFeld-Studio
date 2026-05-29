@@ -200,7 +200,8 @@ namespace lfs::training {
         std::expected<void, std::string> migrateTrainingModelToAllocatorImpl(
             const lfs::core::param::TrainingParameters& params,
             lfs::core::SplatData& model,
-            const lfs::core::SplatTensorAllocator& tensor_allocator) {
+            const lfs::core::SplatTensorAllocator& tensor_allocator,
+            const bool force_reallocation) {
             if (!tensor_allocator) {
                 return {};
             }
@@ -222,7 +223,8 @@ namespace lfs::training {
                 isAllocatorBackedTrainingTensorReady(model.opacity_raw(), target_capacity) &&
                 (target_shN_capacity == 0 ||
                  isAllocatorBackedTrainingTensorReady(model.shN_raw(), target_shN_capacity));
-            if (already_allocator_backed) {
+            if (already_allocator_backed && !force_reallocation) {
+                model.set_tensor_allocator(tensor_allocator);
                 return {};
             }
 
@@ -288,6 +290,7 @@ namespace lfs::training {
                     migrated._densification_info = std::move(densification_info);
                 }
                 model = std::move(migrated);
+                model.set_tensor_allocator(tensor_allocator);
                 lfs::core::Tensor::trim_memory_pool();
 
                 LOG_INFO("Migrated training SplatData tensors to Vulkan-external storage "
@@ -308,8 +311,9 @@ namespace lfs::training {
     std::expected<void, std::string> migrateTrainingModelToAllocator(
         const lfs::core::param::TrainingParameters& params,
         lfs::core::SplatData& model,
-        const lfs::core::SplatTensorAllocator& tensor_allocator) {
-        return migrateTrainingModelToAllocatorImpl(params, model, tensor_allocator);
+        const lfs::core::SplatTensorAllocator& tensor_allocator,
+        const bool force_reallocation) {
+        return migrateTrainingModelToAllocatorImpl(params, model, tensor_allocator, force_reallocation);
     }
 
     std::expected<void, std::string> loadTrainingDataIntoScene(

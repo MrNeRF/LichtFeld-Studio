@@ -1073,7 +1073,8 @@ static const uint OVERLAY_PARAM_CURSOR_FLAGS = 21;
 static const uint OVERLAY_PARAM_MARKER_FLAGS = 22;
 static const uint OVERLAY_PARAM_SELECTION_CURSOR = 23;
 static const uint OVERLAY_PARAM_SELECTION_FLAGS = 24;
-static const uint OVERLAY_PARAM_COUNT = 25;
+static const uint OVERLAY_PARAM_VISIBILITY_FLAGS = 25;
+static const uint OVERLAY_PARAM_COUNT = 26;
 
 [ForceInline]
 bool overlay_enabled(float value)

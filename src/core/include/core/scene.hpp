@@ -16,6 +16,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <shared_mutex>
 #include <string>
@@ -247,6 +248,9 @@ namespace lfs::core {
         [[nodiscard]] std::vector<RenderableEllipsoid> getVisibleEllipsoids() const;
 
         const lfs::core::SplatData* getCombinedModel() const;
+
+        void setCombinedModelAllocator(SplatTensorAllocator allocator);
+
         size_t consolidateNodeModels();
         [[nodiscard]] bool isConsolidated() const { return consolidated_; }
         [[nodiscard]] std::vector<bool> getNodeVisibilityMask() const;
@@ -334,6 +338,7 @@ namespace lfs::core {
 
         [[nodiscard]] lfs::core::SplatData* getTrainingModel();
         [[nodiscard]] const lfs::core::SplatData* getTrainingModel() const;
+        [[nodiscard]] bool isTrainingModelEffectivelyVisible() const;
         [[nodiscard]] size_t getTrainingModelGaussianCount() const;
         [[nodiscard]] size_t getVisibleGaussianCount() const;
         [[nodiscard]] std::unordered_map<NodeId, size_t> getActiveGaussianCountsByNode() const;
@@ -391,6 +396,9 @@ namespace lfs::core {
         mutable std::shared_ptr<lfs::core::Tensor> cached_visible_selection_indices_;
         mutable std::atomic<bool> model_cache_valid_{false};
         mutable const lfs::core::SplatData* single_node_model_ = nullptr;
+
+        mutable std::mutex combined_model_mutex_;
+        SplatTensorAllocator combined_model_allocator_;
 
         mutable std::vector<glm::mat4> cached_transforms_;
         mutable std::atomic<bool> transform_cache_valid_{false};

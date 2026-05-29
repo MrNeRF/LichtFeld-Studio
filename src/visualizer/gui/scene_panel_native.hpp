@@ -68,6 +68,8 @@ namespace lfs::vis::gui {
             uint64_t scene_generation = 0;
             uint64_t selection_generation = 0;
             int64_t num_gaussians = 0;
+            bool training_running = false;
+            std::string training_state;
             int eval_psnr_milli = 0;
             int eval_ssim_milli = 0;
             uint64_t history_generation = 0;

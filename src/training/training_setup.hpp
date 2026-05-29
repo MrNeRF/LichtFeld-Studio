@@ -64,7 +64,8 @@ namespace lfs::training {
     std::expected<void, std::string> migrateTrainingModelToAllocator(
         const lfs::core::param::TrainingParameters& params,
         lfs::core::SplatData& model,
-        const lfs::core::SplatTensorAllocator& tensor_allocator);
+        const lfs::core::SplatTensorAllocator& tensor_allocator,
+        bool force_reallocation = false);
 
     /**
      * @brief Validate dataset path without loading data

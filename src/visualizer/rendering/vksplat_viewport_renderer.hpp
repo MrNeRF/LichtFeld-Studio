@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/exportable_storage.hpp"
 #include "core/splat_data.hpp"
 #include "rendering/cuda_vulkan_interop.hpp"
 #include "rendering/rasterizer/vulkan/src/gs_renderer.h"
@@ -19,6 +20,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace lfs::vis {
@@ -151,7 +153,7 @@ namespace lfs::vis {
             _VulkanBuffer model_transforms{};
             bool overlays_active = true;
         };
-        [[nodiscard]] std::expected<OverlayBindingViews, std::string> uploadSelectionOverlay(
+        [[nodiscard]] std::expected<OverlayBindingViews, std::string> uploadOverlayBindings(
             VulkanContext& context,
             const lfs::rendering::ViewportRenderRequest& request,
             std::size_t num_splats,
@@ -256,6 +258,36 @@ namespace lfs::vis {
         void releaseInputSlot(VulkanContext& context, std::size_t ring_slot);
         void releaseOpacityCopySlot(VulkanContext& context, std::size_t ring_slot);
         void logVramBreakdownIfChanged(std::string_view reason);
+        [[nodiscard]] std::expected<void, std::string> ensureSharedScratchArena(
+            VulkanContext& context,
+            std::size_t required_bytes);
+        // Re-imports the shared block if training grew it in place. Must be called
+        // while the render owns the arena frame (training excluded) so the block is
+        // stable, avoiding a cross-thread grow/re-import race.
+        [[nodiscard]] std::expected<void, std::string> reimportSharedScratchIfGrown(VulkanContext& context);
+        [[nodiscard]] std::size_t estimateSharedScratchBytes(std::size_t num_splats,
+                                                             std::size_t sort_capacity,
+                                                             std::size_t num_pixels,
+                                                             std::size_t num_tiles) const;
+        void bindSharedScratchBuffers(std::size_t num_splats,
+                                      std::size_t sort_capacity,
+                                      std::size_t num_pixels,
+                                      std::size_t num_tiles);
+        void releasePrivateScratchBuffers();
+        void detachSharedScratchBuffers();
+        void releaseSharedScratchImportOnly();
+        void releaseSharedScratchArena();
+        // Queues a no-longer-current shared-scratch import for destruction once
+        // the GPU submission that last referenced it has retired. The old VkBuffer
+        // may still be read by in-flight graphics/compute submissions (the resize
+        // path only fences the graphics queue), so freeing it immediately is a
+        // use-after-free that surfaces as VK_ERROR_DEVICE_LOST. The timeline value
+        // the batch submit signals covers the async-compute work too.
+        void retireSharedScratchBuffer(VulkanContext::ExternalBuffer&& old);
+        // Destroys retired imports whose retirement timeline value has been
+        // reached. force=true destroys all of them unconditionally and is only
+        // safe after vkDeviceWaitIdle (reset/teardown).
+        void drainRetiredScratchBuffers(bool force);
 
         VulkanContext* context_ = nullptr;
         bool initialized_ = false;
@@ -299,6 +331,20 @@ namespace lfs::vis {
         std::array<ModelInputSnapshot, kInputRingSize> ring_uploaded_{};
         int current_input_sh_degree_ = -1;
         std::size_t last_vram_report_signature_ = 0;
+
+        struct SharedScratchArena {
+            std::shared_ptr<lfs::core::ExportableBlock> block;
+            VulkanContext::ExternalBuffer imported_buffer{};
+            std::size_t bytes = 0;
+            std::uint64_t generation = 0;
+            bool installed_in_training_arena = false;
+        };
+        SharedScratchArena shared_scratch_{};
+
+        // Old shared-scratch imports awaiting GPU retirement, keyed by the
+        // render-complete timeline value at which they become safe to free.
+        std::vector<std::pair<std::uint64_t, VulkanContext::ExternalBuffer>>
+            retired_scratch_buffers_;
 
         // Per-ring-slot timeline semaphore used to gate Vulkan compute on the
         // CUDA upload completing; eliminates the per-frame

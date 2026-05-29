@@ -23,6 +23,7 @@
 #include <shared_mutex>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -38,6 +39,12 @@ namespace lfs::vis {
                 }
             }
             return lock;
+        }
+
+        [[nodiscard]] bool isRetryableSharedScratchUnavailable(const std::string_view error) {
+            return error.find("shared scratch") != std::string_view::npos &&
+                   (error.find("busy") != std::string_view::npos ||
+                    error.find("capacity insufficient") != std::string_view::npos);
         }
 
         [[nodiscard]] std::vector<ViewportInteractionPanel> buildVulkanInteractionPanels(
@@ -538,13 +545,15 @@ namespace lfs::vis {
             scene_state = scene_manager->buildRenderState();
         }
         const bool has_renderable_model = hasRenderableGaussians(model);
+        const bool has_visible_gaussian_model =
+            has_renderable_model && scene_state.visible_splat_count > 0;
         const bool has_point_cloud =
             scene_state.point_cloud != nullptr && scene_state.point_cloud->size() > 0;
         const bool has_meshes = std::any_of(scene_state.meshes.begin(),
                                             scene_state.meshes.end(),
                                             [](const auto& mesh) { return mesh.mesh != nullptr; });
         const bool has_environment = environmentBackgroundEnabled(settings_);
-        const bool has_render_content = has_renderable_model || has_point_cloud || has_meshes || has_environment;
+        const bool has_render_content = has_visible_gaussian_model || has_point_cloud || has_meshes || has_environment;
         const size_t model_ptr = reinterpret_cast<size_t>(model);
 
         if (const auto model_change = frame_lifecycle_service_.handleModelChange(model_ptr, viewport_artifact_service_);
@@ -693,6 +702,7 @@ namespace lfs::vis {
             .render_size = render_size,
             .viewport_pos = {0, 0},
             .frame_dirty = frame_dirty,
+            .training_active = is_training,
             .cursor_preview = viewport_overlay_service_.cursorPreview(),
             .gizmo = viewport_overlay_service_.makeFrameGizmoState(),
             .hovered_camera_id = camera_interaction_service_.hoveredCameraId(),
@@ -757,11 +767,14 @@ namespace lfs::vis {
                 const lfs::rendering::ViewportRenderRequest* request_override = nullptr)
             -> std::expected<RenderedPanel, std::string> {
             const lfs::core::SplatData* const panel_model = model_override ? model_override : model;
+            const bool panel_has_visible_gaussian_model =
+                hasRenderableGaussians(panel_model) &&
+                (model_override != nullptr || panel_model != model || has_visible_gaussian_model);
             if (panel_size.x <= 0 || panel_size.y <= 0) {
                 return std::unexpected("Invalid split-view panel size");
             }
 
-            if ((settings_.point_cloud_mode || !hasRenderableGaussians(panel_model)) && has_point_cloud && !panel_model) {
+            if ((settings_.point_cloud_mode || !panel_has_visible_gaussian_model) && has_point_cloud && !panel_model) {
                 const std::vector<glm::mat4> point_cloud_transforms = {frame_ctx.scene_state.point_cloud_transform};
                 const auto state = buildSplitViewPointCloudPanelRenderState(frame_ctx, panel_size, &source_viewport);
                 lfs::rendering::PointCloudRenderRequest request{
@@ -789,7 +802,7 @@ namespace lfs::vis {
                                      .flip_y = flip_y};
             }
 
-            if (!hasRenderableGaussians(panel_model)) {
+            if (!panel_has_visible_gaussian_model) {
                 return std::unexpected("No renderable model for split-view panel");
             }
 
@@ -904,7 +917,7 @@ namespace lfs::vis {
             };
 
         if (splitViewUsesGTComparison(settings_.split_view_mode) && scene_manager &&
-            (has_renderable_model || has_point_cloud)) {
+            (has_visible_gaussian_model || has_point_cloud)) {
             std::shared_ptr<lfs::core::Camera> camera;
             const auto cameras = scene_manager->getScene().getAllCameras();
             if (frame_ctx.current_camera_id >= 0) {
@@ -957,8 +970,8 @@ namespace lfs::vis {
                             std::string compare_error;
 
                             const bool use_point_cloud_compare =
-                                settings_.point_cloud_mode || !has_renderable_model;
-                            if (use_point_cloud_compare && has_renderable_model) {
+                                settings_.point_cloud_mode || !has_visible_gaussian_model;
+                            if (use_point_cloud_compare && has_visible_gaussian_model) {
                                 auto point_request = buildPointCloudRenderRequest(
                                     frame_ctx, gt_size, frame_ctx.scene_state.model_transforms);
                                 point_request.frame_view = request.frame_view;
@@ -996,7 +1009,7 @@ namespace lfs::vis {
                                 } else {
                                     compare_error = auxiliary_engine.error();
                                 }
-                            } else if (has_renderable_model) {
+                            } else if (has_visible_gaussian_model) {
                                 auto rendered = render_panel_image(
                                     context.viewport,
                                     gt_size,
@@ -1090,7 +1103,7 @@ namespace lfs::vis {
                     render_error = left ? right.error() : left.error();
                 }
             }
-        } else if (splitViewUsesPLYComparison(settings_.split_view_mode) && scene_manager && has_renderable_model) {
+        } else if (splitViewUsesPLYComparison(settings_.split_view_mode) && scene_manager && has_visible_gaussian_model) {
             const auto visible_nodes = scene_manager->getScene().getVisibleNodes();
             if (visible_nodes.size() >= 2) {
                 const size_t left_idx = settings_.split_view_offset % visible_nodes.size();
@@ -1138,13 +1151,31 @@ namespace lfs::vis {
             }
         }
 
-        const bool render_point_cloud = settings_.point_cloud_mode || !has_renderable_model;
+        // Split-view panels borrow the trainer's shared rasterizer arena while
+        // training. When the trainer holds it the panel render reports a retryable
+        // "shared scratch busy" error; collapsing to the full-frame fallback would
+        // drop the ground-truth panel for as long as the arena stays contended.
+        // Keep the last good split frame instead, mirroring the single-view path,
+        // and retry next frame once the arena frees.
+        if (split_view_service_.isActive(settings_) && !pending_split_view.enabled &&
+            synchronize_vksplat_input_upload && has_cached_viewport_output &&
+            isRetryableSharedScratchUnavailable(render_error)) {
+            dirty_mask_.fetch_or(frame_dirty != 0 ? frame_dirty : DirtyFlag::SPLATS,
+                                 std::memory_order_relaxed);
+            render_lock.reset();
+            LOG_DEBUG("Split-view shared scratch unavailable ({}); returning cached split image",
+                      render_error);
+            return cached_frame_result();
+        }
+
+        const bool render_point_cloud = settings_.point_cloud_mode || !has_visible_gaussian_model;
 
         if (rendered_image || pending_split_view.enabled) {
             // Split-view paths populate pending_split_view directly; skip the
             // full-viewport fallback that would set rendered_image to a wrong-
             // sized tensor and squash the left panel through the scene interop.
-        } else if (render_point_cloud && (has_renderable_model || has_point_cloud)) {
+        } else if (render_point_cloud &&
+                   ((settings_.point_cloud_mode && has_visible_gaussian_model) || has_point_cloud)) {
             // Brush edits mutate sh0 in place — same tensor pointer but new
             // contents. Invalidate the derived-colors cache so the next frame
             // re-derives + re-uploads.
@@ -1155,7 +1186,7 @@ namespace lfs::vis {
             }
             std::vector<glm::mat4> point_cloud_transforms_storage;
             const std::vector<glm::mat4>* transforms_for_request = nullptr;
-            if (has_renderable_model) {
+            if (settings_.point_cloud_mode && has_visible_gaussian_model) {
                 transforms_for_request = &frame_ctx.scene_state.model_transforms;
             } else {
                 point_cloud_transforms_storage = {frame_ctx.scene_state.point_cloud_transform};
@@ -1180,7 +1211,7 @@ namespace lfs::vis {
                 lfs::core::Tensor splat_positions;
                 const lfs::core::Tensor* positions_ptr = nullptr;
                 const lfs::core::Tensor* colors_ptr = nullptr;
-                if (has_renderable_model) {
+                if (settings_.point_cloud_mode && has_visible_gaussian_model) {
                     constexpr float SH_C0 = 0.28209479177387814f;
                     const auto& sh0 = model->sh0_raw();
                     const void* sh0_key = sh0.is_valid() ? sh0.ptr<float>() : nullptr;
@@ -1329,7 +1360,7 @@ namespace lfs::vis {
             } else {
                 render_error = "Point-cloud Vulkan render failed";
             }
-        } else if (has_renderable_model) {
+        } else if (has_visible_gaussian_model) {
             auto request = buildViewportRenderRequest(frame_ctx, render_size);
             request.raster_backend =
                 lfs::rendering::normalizeViewerRasterBackend(request.raster_backend, request.gut);
@@ -1421,6 +1452,7 @@ namespace lfs::vis {
                     };
 
                     const bool can_rerender_selection_overlay =
+                        !is_training &&
                         frame_dirty == DirtyFlag::SELECTION &&
                         vulkan_external_viewport_image_ != VK_NULL_HANDLE &&
                         vulkan_viewport_image_size_ == render_size &&
@@ -1466,6 +1498,17 @@ namespace lfs::vis {
                     }
                     if (render_result) {
                         return publish_vksplat_result(*render_result);
+                    }
+                    const bool shared_scratch_retryable =
+                        isRetryableSharedScratchUnavailable(render_result.error());
+                    if (synchronize_vksplat_input_upload &&
+                        has_cached_viewport_output &&
+                        shared_scratch_retryable) {
+                        dirty_mask_.fetch_or(frame_dirty, std::memory_order_relaxed);
+                        LOG_DEBUG("VkSplat shared scratch unavailable ({}); returning cached viewport image",
+                                  render_result.error());
+                        render_lock.reset();
+                        return cached_frame_result();
                     }
                     render_error = render_result.error();
                 }
@@ -1618,6 +1661,24 @@ namespace lfs::vis {
         }
 
         if (!rendered_image) {
+            const bool shared_scratch_retryable =
+                synchronize_vksplat_input_upload &&
+                isRetryableSharedScratchUnavailable(render_error);
+            if (shared_scratch_retryable) {
+                dirty_mask_.fetch_or(frame_dirty != 0 ? frame_dirty : DirtyFlag::SPLATS,
+                                     std::memory_order_relaxed);
+                render_lock.reset();
+                if (has_cached_viewport_output) {
+                    LOG_DEBUG("VkSplat shared scratch unavailable ({}); returning cached viewport image",
+                              render_error);
+                    return cached_frame_result();
+                }
+
+                LOG_DEBUG("VkSplat shared scratch unavailable ({}); skipping viewport frame until arena is free",
+                          render_error);
+                return {};
+            }
+
             vulkan_gt_comparison_content_size_ = {0, 0};
             LOG_ERROR("Failed to render Vulkan viewport image: {}",
                       render_error.empty() ? "missing image payload" : render_error);

@@ -269,6 +269,18 @@ namespace lfs::python {
         EXPECT_EQ(dummy_scene_.getTrainingModelGaussianCount(), 6u);
     }
 
+    TEST_F(SceneValidityTest, TrainingModelAccessDoesNotDependOnSceneVisibility) {
+        constexpr size_t count = 4;
+        dummy_scene_.addNode("Model", make_test_splat(count));
+        dummy_scene_.setTrainingModelNode("Model");
+
+        dummy_scene_.setNodeVisibility("Model", false);
+
+        EXPECT_NE(dummy_scene_.getTrainingModel(), nullptr);
+        EXPECT_FALSE(dummy_scene_.isTrainingModelEffectivelyVisible());
+        EXPECT_EQ(dummy_scene_.getTrainingModelGaussianCount(), count);
+    }
+
     TEST_F(SceneValidityTest, SplatDataSetSHDegreeSupportsAllDegrees) {
         constexpr size_t count = 4;
 
@@ -463,6 +475,58 @@ namespace lfs::python {
 
         ASSERT_TRUE(result.has_value()) << result.error();
         EXPECT_EQ(allocation_calls, 0);
+    }
+
+    TEST_F(SceneValidityTest, MigrateTrainingModelCanForceRehomeAllocatorBackedModel) {
+        constexpr size_t count = 4;
+        constexpr size_t capacity = 16;
+        constexpr int sh_degree = 1;
+        const auto rest_coeffs = core::sh_rest_coefficients_for_degree(sh_degree);
+        std::vector<std::shared_ptr<std::vector<float>>> owners;
+
+        auto model = std::make_unique<core::SplatData>(
+            sh_degree,
+            make_external_float_tensor(owners, {count, size_t{3}}, capacity, "vulkan_external_buffer"),
+            make_external_float_tensor(owners, {count, size_t{1}, size_t{3}}, capacity, "vulkan_external_buffer"),
+            make_external_float_tensor(owners,
+                                       {core::sh_swizzled_float_count(count, rest_coeffs)},
+                                       core::sh_swizzled_float_count(capacity, rest_coeffs),
+                                       "vulkan_external_buffer"),
+            make_external_float_tensor(owners, {count, size_t{3}}, capacity, "vulkan_external_buffer"),
+            make_external_float_tensor(owners, {count, size_t{4}}, capacity, "vulkan_external_buffer"),
+            make_external_float_tensor(owners, {count, size_t{1}}, capacity, "vulkan_external_buffer"),
+            1.0f,
+            core::SplatData::ShNLayout::Swizzled);
+        dummy_scene_.addNode("Model", std::move(model));
+        dummy_scene_.setTrainingModelNode("Model");
+
+        core::param::TrainingParameters params;
+        params.optimization.sh_degree = sh_degree;
+        params.optimization.max_cap = static_cast<int>(capacity);
+
+        int allocation_calls = 0;
+        core::SplatTensorAllocator allocator =
+            [&allocation_calls](core::TensorShape shape,
+                                const size_t requested_capacity,
+                                const core::DataType,
+                                const std::string_view name) {
+                ++allocation_calls;
+                auto tensor = core::Tensor::zeros_direct(std::move(shape), requested_capacity, core::Device::CUDA);
+                tensor.set_name(std::string{name});
+                return tensor;
+            };
+
+        auto* training_model = dummy_scene_.getTrainingModel();
+        ASSERT_NE(training_model, nullptr);
+        const auto result =
+            lfs::training::migrateTrainingModelToAllocator(params, *training_model, allocator, true);
+
+        ASSERT_TRUE(result.has_value()) << result.error();
+        EXPECT_EQ(allocation_calls, 6);
+        EXPECT_EQ(training_model->means_raw().capacity(), capacity);
+        EXPECT_EQ(training_model->shN_raw().capacity(),
+                  core::sh_swizzled_float_count(capacity, rest_coeffs));
+        EXPECT_FALSE(training_model->means_raw().is_external_storage());
     }
 
     TEST_F(SceneValidityTest, AdamAddNewParamsPreservesExportableStorage) {

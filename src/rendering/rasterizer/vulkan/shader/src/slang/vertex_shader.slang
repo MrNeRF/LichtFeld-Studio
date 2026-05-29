@@ -535,6 +535,13 @@ void main(
         }
     }
 
+    float4 visibility_flags = overlay_params[OVERLAY_PARAM_VISIBILITY_FLAGS];
+    if (active && overlay_enabled(visibility_flags.x) && node_data_enabled && node_idx >= 0 && node_idx < node_count) {
+        if (read_byte(node_mask, uint(node_idx)) == 0) {
+            active = false;
+        }
+    }
+
     if (!active) {
         out_overlay_flags[g_idx] = overlay_flags;
         out_radii[g_idx] = 0;

@@ -502,6 +502,12 @@ namespace lfs::vis::gui {
                                             const float w, const float h,
                                             const PanelDrawContext& ctx) {
         (void)ctx;
+        if (!ensureInitialized())
+            return false;
+
+        if (tree_el_)
+            tree_el_->setPanelScreenOffset(x, y);
+
         // A context-menu result is normally consumed in syncPanel(), which only
         // runs on the live draw paths. Under render-on-demand an idle panel uses
         // this cached path, so poll the result here too — otherwise a menu action
@@ -514,6 +520,10 @@ namespace lfs::vis::gui {
                 return false; // fall back to a live draw so the panel reflects the change
             }
         }
+
+        if (shouldSyncPanel(nullptr))
+            return false;
+
         return host_.drawDirectCached(x, y, w, h);
     }
 
@@ -680,6 +690,8 @@ namespace lfs::vis::gui {
                 stamp.invert_masks = params->getActiveParams().invert_masks;
 
             stamp.num_gaussians = store.num_gaussians.get();
+            stamp.training_running = store.training_running.get();
+            stamp.training_state = store.training_state.get();
             stamp.eval_psnr_milli = optionalMetricMilli(store.eval_psnr.get());
             stamp.eval_ssim_milli = optionalMetricMilli(store.eval_ssim.get());
         } else if (active_tab_ == Tab::History) {

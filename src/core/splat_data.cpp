@@ -494,11 +494,13 @@ namespace lfs::core {
           _opacity(std::move(other._opacity)),
           _densification_info(std::move(other._densification_info)),
           _deleted(std::move(other._deleted)),
+          _deleted_count(other._deleted_count.load(std::memory_order_relaxed)),
           _tensor_allocator(std::move(other._tensor_allocator)) {
         // Reset the moved-from object
         other._active_sh_degree = 0;
         other._max_sh_degree = 0;
         other._scene_scale = 0.0f;
+        other._deleted_count.store(0, std::memory_order_relaxed);
     }
 
     SplatData& SplatData::operator=(SplatData&& other) noexcept {
@@ -517,7 +519,10 @@ namespace lfs::core {
             _opacity = std::move(other._opacity);
             _densification_info = std::move(other._densification_info);
             _deleted = std::move(other._deleted);
+            _deleted_count.store(other._deleted_count.load(std::memory_order_relaxed),
+                                 std::memory_order_relaxed);
             _tensor_allocator = std::move(other._tensor_allocator);
+            other._deleted_count.store(0, std::memory_order_relaxed);
         }
         return *this;
     }
@@ -741,6 +746,15 @@ namespace lfs::core {
         return size() - static_cast<unsigned long>(_deleted.sum_scalar());
     }
 
+    void SplatData::refresh_deleted_count() {
+        // sum_scalar() reduces + syncs, so this must run on the thread that owns the
+        // mask (the trainer), never the render thread. Re-deriving from the live mask
+        // each call keeps the cache correct regardless of which path mutated _deleted.
+        _deleted_count.store(
+            _deleted.is_valid() ? static_cast<std::size_t>(_deleted.sum_scalar()) : 0,
+            std::memory_order_relaxed);
+    }
+
     Tensor SplatData::soft_delete(const Tensor& mask) {
         if (!_means.is_valid() || _means.size(0) == 0) {
             LOG_WARN("soft_delete: invalid or empty SplatData");
@@ -781,6 +795,7 @@ namespace lfs::core {
         if (_deleted.is_valid()) {
             _deleted = Tensor();
         }
+        _deleted_count.store(0, std::memory_order_relaxed);
     }
 
     size_t SplatData::apply_deleted() {
@@ -1507,6 +1522,7 @@ namespace lfs::core {
                 scene_scale,
                 capacity > 0 ? SplatData::ShNLayout::Swizzled
                              : SplatData::ShNLayout::Canonical);
+            result.set_tensor_allocator(std::move(tensor_allocator));
 
             return result;
 

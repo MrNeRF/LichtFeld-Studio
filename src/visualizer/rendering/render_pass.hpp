@@ -72,6 +72,7 @@ namespace lfs::vis {
         glm::ivec2 render_size;
         glm::ivec2 viewport_pos;
         DirtyMask frame_dirty = 0;
+        bool training_active = false;
 
         CursorPreviewState cursor_preview;
         GizmoState gizmo;
