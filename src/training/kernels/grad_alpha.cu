@@ -33,6 +33,21 @@ namespace lfs::training::kernels {
             return float4_index * 4 + component;
         }
 
+        // Device mirror of lfs::core::sh_float4_slots_for_rest. That host helper is not __device__
+        // (it routes through std::min), so calling it from a kernel under --expt-relaxed-constexpr
+        // emits a host call that traps at runtime with a runtime argument.
+        __device__ __forceinline__ int sh_layout_slots(const uint32_t coeffs_rest) {
+            if (coeffs_rest == 0u)
+                return 0;
+            const uint32_t clamped = coeffs_rest > lfs::core::kShMaxCoeffsRest
+                                         ? lfs::core::kShMaxCoeffsRest
+                                         : coeffs_rest;
+            const uint32_t slots = (clamped * lfs::core::kShChannels + 3u) / 4u;
+            return static_cast<int>(slots > lfs::core::kShRestFloat4PerPrimitive
+                                        ? lfs::core::kShRestFloat4PerPrimitive
+                                        : slots);
+        }
+
         template <bool kUseImage, bool kSubtract>
         __global__ void fused_background_compose_kernel(
             const float* __restrict__ image,
@@ -406,8 +421,7 @@ namespace lfs::training::kernels {
         const int64_t max_rest = K_src - 1 < lfs::core::kShMaxCoeffsRest
                                      ? K_src - 1
                                      : lfs::core::kShMaxCoeffsRest;
-        const int64_t slots_per_primitive =
-            static_cast<int64_t>(lfs::core::sh_float4_slots_for_rest(shN_layout_rest));
+        const int64_t slots_per_primitive = sh_layout_slots(shN_layout_rest);
         if (slots_per_primitive == 0)
             return;
         for (int64_t k = 0; k < max_rest; ++k) {
