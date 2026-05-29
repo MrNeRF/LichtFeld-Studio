@@ -28,8 +28,10 @@ namespace lfs::core {
 
 #ifdef _WIN32
         constexpr CUmemAllocationHandleType kCudaHandleType = CU_MEM_HANDLE_TYPE_WIN32;
+        constexpr const char* kCudaHandleTypeName = "WIN32";
 #else
         constexpr CUmemAllocationHandleType kCudaHandleType = CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
+        constexpr const char* kCudaHandleTypeName = "POSIX_FILE_DESCRIPTOR";
 #endif
 
         std::string cu_error(CUresult r) {
@@ -55,6 +57,19 @@ namespace lfs::core {
             return r == CUDA_SUCCESS && supported != 0;
         }
 
+        bool export_handle_supported(int device) {
+            int supported = 0;
+#ifdef _WIN32
+            constexpr CUdevice_attribute handle_attribute =
+                CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_WIN32_HANDLE_SUPPORTED;
+#else
+            constexpr CUdevice_attribute handle_attribute =
+                CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR_SUPPORTED;
+#endif
+            const CUresult r = cuDeviceGetAttribute(&supported, handle_attribute, device);
+            return r == CUDA_SUCCESS && supported != 0;
+        }
+
         // Owns a CUDA VMM allocation: a fixed virtual reservation (va,
         // reserved_size) with `mapped_size` physical committed under it. The
         // virtual address is stable for the lifetime of the allocation; only the
@@ -72,6 +87,9 @@ namespace lfs::core {
             bool reserved = false;
             ExportNativeHandle native = ExportNativeHandle{};
             bool native_valid = false;
+#ifdef _WIN32
+            SECURITY_ATTRIBUTES security_attributes{};
+#endif
         };
 
         void close_native(OwnedAllocation& a) {
@@ -175,6 +193,12 @@ namespace lfs::core {
                 "allocateExportableDeviceBlock: device {} does not support virtual memory management",
                 device));
         }
+        if (!export_handle_supported(device)) {
+            return std::unexpected(std::format(
+                "allocateExportableDeviceBlock: device {} does not support CUDA VMM export handle type {}",
+                device,
+                kCudaHandleTypeName));
+        }
 
         // CUDA VMM allocations require a current context. cudaSetDevice ensures one exists.
         if (const auto err = cudaSetDevice(device); err != cudaSuccess) {
@@ -189,6 +213,15 @@ namespace lfs::core {
         owned->prop.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
         owned->prop.location.id = device;
         owned->prop.requestedHandleTypes = kCudaHandleType;
+#ifdef _WIN32
+        // CUDA requires explicit security attributes for WIN32-exportable VMM
+        // allocations. Keep the object inside OwnedAllocation because the same
+        // CUmemAllocationProp is reused when growing the block.
+        owned->security_attributes.nLength = sizeof(SECURITY_ATTRIBUTES);
+        owned->security_attributes.lpSecurityDescriptor = nullptr;
+        owned->security_attributes.bInheritHandle = FALSE;
+        owned->prop.win32HandleMetaData = &owned->security_attributes;
+#endif
 
         if (const auto r = cuMemGetAllocationGranularity(&owned->granularity, &owned->prop,
                                                          CU_MEM_ALLOC_GRANULARITY_MINIMUM);
