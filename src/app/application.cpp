@@ -377,11 +377,11 @@ namespace lfs::app {
                 params->optimization.no_splash;
 #endif
 
-            if (params->import_cameras_path || params->resume_checkpoint) {
-                warmupCudaAsync();
-            } else {
-                checkCudaDriverVersion();
-            }
+            // Warm up on every path, not just import/resume: warmup_kernels forces the
+            // lazily-loaded cubins to upload so captureCudaWarmupDelta can attribute that
+            // module memory (the cuda.modules row). Without it the modules land in the
+            // unattributed NVML residual. warmupCudaAsync runs checkCudaDriverVersion itself.
+            warmupCudaAsync();
 
             lfs::event::CommandCenterBridge::instance().set(&lfs::training::CommandCenter::instance());
 

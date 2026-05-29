@@ -1446,6 +1446,7 @@ namespace lfs::vis {
             shared_scratch_.imported_buffer.buffer != VK_NULL_HANDLE) {
             if (shared_scratch_.installed_in_training_arena || try_install_existing()) {
                 shared_scratch_.installed_in_training_arena = true;
+                publish_capacity();
                 return {};
             }
             return std::unexpected("VkSplat shared scratch training rasterizer arena is busy");
