@@ -467,6 +467,25 @@ namespace lfs::vis {
                   lfs::rendering::dataWorldTransformToVisualizerWorld(glm::mat4(1.0f)));
     }
 
+    TEST_F(SceneManagerRenderStateTest, HiddenDatasetTrainingModelStaysResidentAndIsCulledByMask) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::Dataset);
+
+        auto& scene = manager.getScene();
+        scene.addSplat("Model", makeTestSplat(0.0f));
+        scene.setTrainingModelNode("Model");
+
+        scene.setNodeVisibility("Model", false);
+
+        const auto state = manager.buildRenderState();
+        ASSERT_NE(state.combined_model, nullptr);
+        EXPECT_EQ(state.combined_model->size(), 1u);
+        EXPECT_EQ(state.visible_splat_count, 0u);
+        ASSERT_EQ(state.node_visibility_mask.size(), 1u);
+        EXPECT_FALSE(state.node_visibility_mask[0]);
+        EXPECT_EQ(manager.getModelForRendering(), state.combined_model);
+    }
+
     TEST_F(SceneManagerRenderStateTest, PointCloudTransformIsTrackedSeparatelyFromModelTransforms) {
         SceneManager manager;
         auto& scene = manager.getScene();

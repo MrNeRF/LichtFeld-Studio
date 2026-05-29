@@ -2449,10 +2449,14 @@ namespace lfs::vis {
         SceneRenderState state;
 
         // Get combined model or point cloud
+        bool hidden_dataset_training_model = false;
         if (content_type_ == ContentType::SplatFiles) {
             state.combined_model = scene_.getCombinedModel();
         } else if (content_type_ == ContentType::Dataset) {
             state.combined_model = scene_.getTrainingModel();
+            hidden_dataset_training_model =
+                state.combined_model != nullptr &&
+                !scene_.isTrainingModelEffectivelyVisible();
         }
 
         // Fall back to the visible point cloud whenever the active splat model is absent or empty.
@@ -2478,24 +2482,40 @@ namespace lfs::vis {
             vm.is_selected = selection_.isNodeSelected(vm.node_id);
         }
 
-        // Get transforms and indices
-        state.model_transforms = scene_.getVisibleNodeTransforms();
-        for (auto& transform : state.model_transforms) {
-            transform = rendering::dataWorldTransformToVisualizerWorld(transform);
+        // Get transforms and indices. A hidden dataset training model may still
+        // be owned by the trainer; cull it through the render-state node mask
+        // instead of letting the model pointer disappear.
+        if (hidden_dataset_training_model) {
+            const auto* const training_node = scene_.getNode(scene_.getTrainingModelNodeName());
+            const glm::mat4 transform = training_node
+                                            ? scene_.getWorldTransform(training_node->id)
+                                            : glm::mat4(1.0f);
+            state.model_transforms = {
+                rendering::dataWorldTransformToVisualizerWorld(transform)};
+            state.transform_indices.reset();
+            state.visible_splat_count = 0;
+            state.node_visibility_mask = {false};
+        } else {
+            state.model_transforms = scene_.getVisibleNodeTransforms();
+            for (auto& transform : state.model_transforms) {
+                transform = rendering::dataWorldTransformToVisualizerWorld(transform);
+            }
+            state.transform_indices = scene_.getTransformIndices();
+            state.visible_splat_count = state.model_transforms.size();
+
+            // Get node visibility mask (for consolidated models)
+            state.node_visibility_mask = scene_.getNodeVisibilityMask();
         }
         state.camera_scene_transforms = scene_.getVisibleCameraSceneTransforms();
         for (auto& transform : state.camera_scene_transforms) {
             transform = rendering::dataWorldTransformToVisualizerWorld(transform);
         }
-        state.transform_indices = scene_.getTransformIndices();
-        state.visible_splat_count = state.model_transforms.size();
-
-        // Get node visibility mask (for consolidated models)
-        state.node_visibility_mask = scene_.getNodeVisibilityMask();
 
         // Renderers consume masks in visible-model order. Scene selection state remains full-scene
         // so hidden-node selections survive visibility toggles.
-        state.selection_mask = scene_.getVisibleSelectionMask();
+        if (!hidden_dataset_training_model) {
+            state.selection_mask = scene_.getVisibleSelectionMask();
+        }
         const size_t render_splat_count = state.combined_model
                                               ? static_cast<size_t>(state.combined_model->size())
                                               : scene_.getTotalGaussianCount();

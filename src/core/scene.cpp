@@ -2728,7 +2728,7 @@ namespace lfs::core {
         if (name_it == name_to_id_.end())
             return nullptr;
         SceneNode* node = getNodeById(name_it->second);
-        if (!node || !isNodeEffectivelyVisible(node->id))
+        if (!node)
             return nullptr;
         return node->model.get();
     }
@@ -2737,9 +2737,17 @@ namespace lfs::core {
         if (training_model_node_.empty())
             return nullptr;
         const auto* node = getNode(training_model_node_);
-        if (!node || !isNodeEffectivelyVisible(node->id))
+        if (!node)
             return nullptr;
         return node->model.get();
+    }
+
+    bool Scene::isTrainingModelEffectivelyVisible() const {
+        if (training_model_node_.empty())
+            return false;
+
+        const auto* node = getNode(training_model_node_);
+        return node && node->model && isNodeEffectivelyVisible(node->id);
     }
 
     size_t Scene::getTrainingModelGaussianCount() const {
@@ -2747,7 +2755,7 @@ namespace lfs::core {
             return 0;
 
         const auto* node = getNode(training_model_node_);
-        if (!node || !node->model || !isNodeEffectivelyVisible(node->id))
+        if (!node || !node->model)
             return 0;
 
         // UI/status polling must not touch the live training SplatData while the
