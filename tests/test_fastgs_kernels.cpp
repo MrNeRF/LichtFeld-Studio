@@ -10,6 +10,7 @@
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 #include <cuda_runtime.h>
+#include <cstdint>
 #include <filesystem>
 #include <gtest/gtest.h>
 #include <limits>
@@ -25,12 +26,54 @@ namespace {
     constexpr int W = 640, H = 480;
     constexpr float FX = 500.0f, FY = 500.0f;
 
-    const Tensor& adam_moment(const AdamOptimizer& opt, ParamType type) {
+    const AdamParamState& adam_state(const AdamOptimizer& opt, ParamType type) {
         const auto* state = opt.get_state(type);
         if (!state || !state->exp_avg.is_valid()) {
             throw std::runtime_error("Missing Adam moment state");
         }
-        return state->exp_avg;
+        return *state;
+    }
+
+    Tensor adam_moment(const AdamOptimizer& opt, ParamType type) {
+        const auto& state = adam_state(opt, type);
+        if (state.exp_avg.dtype() == DataType::Float32) {
+            return state.exp_avg;
+        }
+
+        auto q_cpu = state.exp_avg.to(Device::CPU);
+        auto scale_cpu = state.exp_avg_scale.to(Device::CPU);
+        const auto& shape = state.exp_avg.shape();
+        const size_t rows = shape[0];
+        const size_t row_size = rows == 0 ? 0 : state.exp_avg.numel() / rows;
+        const auto* q = q_cpu.ptr<std::uint8_t>();
+        const auto* scales = scale_cpu.ptr<float>();
+        std::vector<float> dequant(state.exp_avg.numel(), 0.0f);
+        for (size_t row = 0; row < rows; ++row) {
+            const float scale = scales[row];
+            for (size_t col = 0; col < row_size; ++col) {
+                const size_t idx = row * row_size + col;
+                dequant[idx] = scale == 0.0f ? 0.0f : (static_cast<int>(q[idx]) - 128) * scale;
+            }
+        }
+        return Tensor::from_blob(dequant.data(), shape, Device::CPU, DataType::Float32).clone().to(state.exp_avg.device());
+    }
+
+    void expect_adam_state_finite(const AdamOptimizer& opt, ParamType type) {
+        const auto& state = adam_state(opt, type);
+        if (state.exp_avg_scale.is_valid()) {
+            auto scales = state.exp_avg_scale.to(Device::CPU);
+            auto* ptr = scales.ptr<float>();
+            for (size_t i = 0; i < scales.numel(); ++i) {
+                EXPECT_TRUE(std::isfinite(ptr[i]));
+            }
+        }
+        if (state.exp_avg_sq_scale.is_valid()) {
+            auto scales = state.exp_avg_sq_scale.to(Device::CPU);
+            auto* ptr = scales.ptr<float>();
+            for (size_t i = 0; i < scales.numel(); ++i) {
+                EXPECT_TRUE(std::isfinite(ptr[i]));
+            }
+        }
     }
 
     Tensor recovered_fused_grad(const AdamOptimizer& opt, ParamType type, float beta1 = 0.9f) {

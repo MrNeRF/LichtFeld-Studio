@@ -160,41 +160,39 @@ namespace lfs::training {
                 return;
             }
 
-            // shN state is swizzled — zero by primitive index via the swizzle-aware kernel.
+            // Quantised moments: zeroing a primitive's per-primitive scales dequantises its
+            // moments to zero, so we reset the scales (works for both contiguous and swizzled
+            // shN layouts). The fp32 grad buffer is still zeroed in its native layout.
+            if (!state->exp_avg_scale.is_valid() || state->exp_avg_scale.numel() == 0) {
+                return;
+            }
+            auto scale_zeros = lfs::core::Tensor::zeros(
+                lfs::core::TensorShape({indices.numel()}), state->exp_avg_scale.device());
+            state->exp_avg_scale.index_put_(indices, scale_zeros);
+            state->exp_avg_sq_scale.index_put_(indices, scale_zeros);
+
             if (param_type == ParamType::ShN) {
                 const auto layout_rest = shN_layout_rest;
-                if (layout_rest == 0)
-                    return;
-                if (!state->exp_avg.is_valid() || state->exp_avg.numel() == 0)
-                    return;
-                auto idx_i32 = indices.dtype() == lfs::core::DataType::Int32
-                                   ? indices
-                                   : indices.to(lfs::core::DataType::Int32);
-                lfs::core::shN_swizzled_zero_at_indices(
-                    state->exp_avg.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
-                lfs::core::shN_swizzled_zero_at_indices(
-                    state->exp_avg_sq.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
-                if (state->grad.is_valid() && state->grad.numel() > 0) {
+                if (layout_rest != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
+                    auto idx_i32 = indices.dtype() == lfs::core::DataType::Int32
+                                       ? indices
+                                       : indices.to(lfs::core::DataType::Int32);
                     lfs::core::shN_swizzled_zero_at_indices(
                         state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
                 }
                 return;
             }
 
-            const auto& shape = state->exp_avg.shape();
-            if (has_zero_dimension(shape)) {
-                return;
-            }
-
-            std::vector<size_t> dims = {indices.numel()};
-            for (size_t i = 1; i < shape.rank(); ++i) {
-                dims.push_back(shape[i]);
-            }
-            auto zeros = lfs::core::Tensor::zeros(lfs::core::TensorShape(dims), state->exp_avg.device());
-
-            state->exp_avg.index_put_(indices, zeros);
-            state->exp_avg_sq.index_put_(indices, zeros);
-            if (state->grad.is_valid()) {
+            if (state->grad.is_valid() && state->grad.numel() > 0) {
+                const auto& shape = state->grad.shape();
+                if (has_zero_dimension(shape)) {
+                    return;
+                }
+                std::vector<size_t> dims = {indices.numel()};
+                for (size_t i = 1; i < shape.rank(); ++i) {
+                    dims.push_back(shape[i]);
+                }
+                auto zeros = lfs::core::Tensor::zeros(lfs::core::TensorShape(dims), state->grad.device());
                 state->grad.index_put_(indices, zeros);
             }
         }
@@ -962,7 +960,7 @@ namespace lfs::training {
 
         // shN is swizzled — compact via block-aware gather.
         const auto layout_rest_u32 = static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
-        auto compact_shN_swizzled = [&](Tensor& t, size_t cap_rows) {
+        auto compact_shN_swizzled = [&](Tensor& t, size_t cap_rows, int uint8_fill = -1) {
             if (!t.is_valid() || t.numel() == 0)
                 return;
             if (layout_rest_u32 == 0)
@@ -973,10 +971,30 @@ namespace lfs::training {
             const size_t cap_floats = cap_rows > 0 ? lfs::core::sh_swizzled_float_count(cap_rows, layout_rest_u32)
                                                    : lfs::core::sh_swizzled_float_count(new_size, layout_rest_u32);
             const size_t logical_floats = lfs::core::sh_swizzled_float_count(new_size, layout_rest_u32);
-            auto fresh = Tensor::zeros_direct(TensorShape({logical_floats}), cap_floats, Device::CUDA);
-            lfs::core::shN_swizzled_gather_self(
-                t.ptr<float>(), fresh.ptr<float>(),
-                idx_i32.ptr<int>(), new_size, 0, layout_rest_u32);
+            auto fresh = Tensor::zeros_direct(TensorShape({logical_floats}), cap_floats, t.device(), t.dtype());
+            if (t.dtype() == DataType::Float32) {
+                lfs::core::shN_swizzled_gather_self(
+                    t.ptr<float>(), fresh.ptr<float>(),
+                    idx_i32.ptr<int>(), new_size, 0, layout_rest_u32);
+            } else if (t.dtype() == DataType::UInt8 || t.dtype() == DataType::Bool) {
+                if (uint8_fill >= 0 && cap_floats > 0) {
+                    const cudaError_t err = cudaMemsetAsync(
+                        fresh.ptr<uint8_t>(),
+                        static_cast<unsigned char>(uint8_fill),
+                        cap_floats * sizeof(uint8_t),
+                        fresh.stream());
+                    if (err != cudaSuccess) {
+                        throw std::runtime_error(
+                            std::string("MRNF::compact_splats: cudaMemsetAsync failed: ") +
+                            cudaGetErrorString(err));
+                    }
+                }
+                lfs::core::shN_swizzled_gather_self_u8(
+                    t.ptr<uint8_t>(), fresh.ptr<uint8_t>(),
+                    idx_i32.ptr<int>(), new_size, 0, layout_rest_u32);
+            } else {
+                throw std::runtime_error("MRNF::compact_splats: unsupported swizzled shN dtype");
+            }
             t = std::move(fresh);
         };
 
@@ -997,14 +1015,18 @@ namespace lfs::training {
             if (!state)
                 continue;
             if (pt == ParamType::ShN) {
-                compact_shN_swizzled(state->exp_avg, cap);
+                compact_shN_swizzled(state->exp_avg, cap, 128);
                 compact_shN_swizzled(state->exp_avg_sq, cap);
+                compact(state->exp_avg_scale);
+                compact(state->exp_avg_sq_scale);
                 state->size = lfs::core::sh_swizzled_float_count(new_size, layout_rest_u32);
                 state->capacity = cap > 0 ? lfs::core::sh_swizzled_float_count(cap, layout_rest_u32)
                                           : lfs::core::sh_swizzled_float_count(new_size, layout_rest_u32);
             } else {
                 compact(state->exp_avg);
                 compact(state->exp_avg_sq);
+                compact(state->exp_avg_scale);
+                compact(state->exp_avg_sq_scale);
                 state->size = new_size;
                 state->capacity = cap;
             }

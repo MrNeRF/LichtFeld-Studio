@@ -610,31 +610,40 @@ namespace fast_lfs::rasterization {
             0.01f, 100.0f);
 
         if (ctx.success) {
-            // Allocate image/alpha gradients plus Adam moments. Gaussian gradients are fused.
+            // Allocate image/alpha gradients plus quantised Adam moments (uint8 m/v + per-primitive
+            // fp32 scales). Gaussian gradients are fused.
             constexpr int PARAM_ELEMENTS = NUM_GAUSSIANS * (3 + 3 + 4 + 1 + 3);
+            constexpr int PARAM_ROWS = NUM_GAUSSIANS * 5; // means,scaling,rotation,opacity,sh0
             constexpr size_t GRAD_SIZE = IMG_WIDTH * IMG_HEIGHT * 4 * sizeof(float);
-            constexpr size_t MOMENT_SIZE = PARAM_ELEMENTS * 2 * sizeof(float);
+            constexpr size_t MOMENT_Q_SIZE = PARAM_ELEMENTS * 2 * sizeof(std::uint8_t);
+            constexpr size_t SCALE_SIZE = PARAM_ROWS * 2 * sizeof(float);
             char* grad_buffer;
-            cudaMalloc(&grad_buffer, GRAD_SIZE + MOMENT_SIZE);
-            cudaMemset(grad_buffer, 0, GRAD_SIZE + MOMENT_SIZE);
+            cudaMalloc(&grad_buffer, GRAD_SIZE + MOMENT_Q_SIZE + SCALE_SIZE);
+            cudaMemset(grad_buffer, 0, GRAD_SIZE + MOMENT_Q_SIZE + SCALE_SIZE);
 
             float* const grad_image = reinterpret_cast<float*>(grad_buffer);
             float* const grad_alpha = grad_image + IMG_WIDTH * IMG_HEIGHT * 3;
-            float* const exp_avg = grad_alpha + IMG_WIDTH * IMG_HEIGHT;
-            float* const exp_avg_sq = exp_avg + PARAM_ELEMENTS;
+            std::uint8_t* const exp_avg_q = reinterpret_cast<std::uint8_t*>(grad_buffer + GRAD_SIZE);
+            std::uint8_t* const exp_avg_sq_q = exp_avg_q + PARAM_ELEMENTS;
+            float* const exp_avg_scale = reinterpret_cast<float*>(grad_buffer + GRAD_SIZE + MOMENT_Q_SIZE);
+            float* const exp_avg_sq_scale = exp_avg_scale + PARAM_ROWS;
 
             int moment_offset = 0;
+            int scale_offset = 0;
             auto make_param = [&](float* param, const int n_elements, const int n_attributes) {
                 FusedAdamParam adam_param;
                 adam_param.param = param;
-                adam_param.exp_avg = exp_avg + moment_offset;
-                adam_param.exp_avg_sq = exp_avg_sq + moment_offset;
+                adam_param.exp_avg_q = exp_avg_q + moment_offset;
+                adam_param.exp_avg_sq_q = exp_avg_sq_q + moment_offset;
+                adam_param.exp_avg_scale = exp_avg_scale + scale_offset;
+                adam_param.exp_avg_sq_scale = exp_avg_sq_scale + scale_offset;
                 adam_param.n_elements = n_elements;
                 adam_param.n_attributes = n_attributes;
                 adam_param.step_size = 0.0f;
                 adam_param.bias_correction2_sqrt_rcp = 1.0f;
                 adam_param.enabled = true;
                 moment_offset += n_elements;
+                scale_offset += n_elements / n_attributes;
                 return adam_param;
             };
 

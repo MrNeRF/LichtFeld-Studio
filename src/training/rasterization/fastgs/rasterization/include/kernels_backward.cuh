@@ -63,45 +63,34 @@ namespace fast_lfs::rasterization::kernels::backward {
         // SH-backward work and only apply Adam momentum decay (with regulariser grads for
         // scaling / opacity). Eliminates the separate adam_step_invisible kernel launches.
         if (primitive_n_touched_tiles[primitive_idx] == 0) {
-            // means: grad = 0
-            adam_step_helper(0.0f, fused_adam.means, primitive_idx, 0, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-            adam_step_helper(0.0f, fused_adam.means, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-            adam_step_helper(0.0f, fused_adam.means, primitive_idx, 2, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+            // means / rotation / sh0: grad = 0 (pure momentum decay)
+            const float zero3[3] = {0.0f, 0.0f, 0.0f};
+            const float zero4[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+            adam_step_row(zero3, fused_adam.means, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+            adam_step_row(zero4, fused_adam.rotation, primitive_idx, 4, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+            adam_step_row(zero3, fused_adam.sh0, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
 
             // scaling: grad = scale_regularization_grad per channel
-            for (uint c = 0; c < 3u; ++c) {
-                const uint elt = static_cast<uint>(primitive_idx) * 3u + c;
-                const float g = scale_regularization_grad(fused_adam, fused_adam.scaling, elt);
-                adam_step_helper(g, fused_adam.scaling, primitive_idx, c, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-            }
-
-            // rotation: grad = 0
-            adam_step_helper(0.0f, fused_adam.rotation, primitive_idx, 0, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-            adam_step_helper(0.0f, fused_adam.rotation, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-            adam_step_helper(0.0f, fused_adam.rotation, primitive_idx, 2, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-            adam_step_helper(0.0f, fused_adam.rotation, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+            const uint scale_base = static_cast<uint>(primitive_idx) * 3u;
+            const float scaling_grads[3] = {
+                scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base),
+                scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 1),
+                scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 2)};
+            adam_step_row(scaling_grads, fused_adam.scaling, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
 
             // opacity: grad = opacity_extra_grad
-            {
-                const float g = opacity_extra_grad(fused_adam, fused_adam.opacity, static_cast<uint>(primitive_idx));
-                adam_step_helper(g, fused_adam.opacity, primitive_idx, 0, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-            }
+            const float opacity_grads[1] = {opacity_extra_grad(fused_adam, fused_adam.opacity, static_cast<uint>(primitive_idx))};
+            adam_step_row(opacity_grads, fused_adam.opacity, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
 
-            // sh0: grad = 0
-            adam_step_helper(0.0f, fused_adam.sh0, primitive_idx, 0, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-            adam_step_helper(0.0f, fused_adam.sh0, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-            adam_step_helper(0.0f, fused_adam.sh0, primitive_idx, 2, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-
-            // shN: grad = 0, all active float4 slots via swizzle-aware indexing (matches the
-            // packed-grad path used in the visible branch).
+            // shN: grad = 0, swizzle-aware momentum decay over the active slots.
             if constexpr (ACTIVE_SH_BASES > 1) {
-                const float4 zero = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+                float3 zero_g[15];
+#pragma unroll
+                for (int i = 0; i < 15; ++i)
+                    zero_g[i] = make_float3(0.0f, 0.0f, 0.0f);
                 constexpr uint N_SLOTS = (ACTIVE_SH_BASES > 9) ? 12u : (ACTIVE_SH_BASES > 4) ? 6u
                                                                                              : 3u;
-                for (uint k = 0; k < N_SLOTS; ++k) {
-                    adam_step_f4(zero, fused_adam.shN, shAt(primitive_idx, k, sh_layout_slots),
-                                 fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-                }
+                apply_shN_grads_packed(fused_adam, primitive_idx, zero_g, N_SLOTS, sh_layout_slots);
             }
             return;
         }
@@ -222,14 +211,8 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float sigmoid_derivative = original_opacity * (1.0f - original_opacity);
         const float opacity_grad = grad_compensated_opacity * opacity_compensation * sigmoid_derivative +
                                    opacity_extra_grad(fused_adam, fused_adam.opacity, primitive_idx);
-        adam_step_helper(
-            opacity_grad,
-            fused_adam.opacity,
-            primitive_idx,
-            0,
-            fused_adam.beta1,
-            fused_adam.beta2,
-            fused_adam.eps);
+        const float opacity_grads[1] = {opacity_grad};
+        adam_step_row(opacity_grads, fused_adam.opacity, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
 
         // 3d covariance gradient
         const mat3x3_triu dL_dcov3d = {
@@ -296,9 +279,8 @@ namespace fast_lfs::rasterization::kernels::backward {
 
         const float3 dL_dmean3d = dL_dmean3d_from_splatting + dL_dmean3d_from_color;
         const float3 clamped_mean = clamp_grad3(dL_dmean3d);
-        adam_step_helper(clamped_mean.x, fused_adam.means, primitive_idx, 0, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-        adam_step_helper(clamped_mean.y, fused_adam.means, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-        adam_step_helper(clamped_mean.z, fused_adam.means, primitive_idx, 2, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+        const float mean_grads[3] = {clamped_mean.x, clamped_mean.y, clamped_mean.z};
+        adam_step_row(mean_grads, fused_adam.means, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
 
         // raw scale gradient (zero gradient for clamped scales)
         const float dL_dvariance_x = rotation.m11 * rotation.m11 * dL_dcov3d.m11 + rotation.m21 * rotation.m21 * dL_dcov3d.m22 + rotation.m31 * rotation.m31 * dL_dcov3d.m33 +
@@ -313,9 +295,11 @@ namespace fast_lfs::rasterization::kernels::backward {
             (raw_scale.z < config::max_raw_scale) ? 2.0f * variance.z * dL_dvariance_z : 0.0f);
         const float3 clamped_scale_grad = clamp_grad3(dL_draw_scale);
         const uint scale_base = primitive_idx * 3;
-        adam_step_helper(clamped_scale_grad.x + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base), fused_adam.scaling, primitive_idx, 0, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-        adam_step_helper(clamped_scale_grad.y + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 1), fused_adam.scaling, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-        adam_step_helper(clamped_scale_grad.z + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 2), fused_adam.scaling, primitive_idx, 2, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+        const float scale_grads[3] = {
+            clamped_scale_grad.x + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base),
+            clamped_scale_grad.y + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 1),
+            clamped_scale_grad.z + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 2)};
+        adam_step_row(scale_grads, fused_adam.scaling, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
 
         // raw rotation gradient
         const mat3x3 dL_drotation = {
@@ -340,71 +324,13 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float dL_dq_norm_helper = qxx * dL_dqxx + qyy * dL_dqyy + qzz * dL_dqzz + qxy * dL_dqxy + qxz * dL_dqxz + qyz * dL_dqyz + qrx * dL_dqrx + qry * dL_dqry + qrz * dL_dqrz;
         const float4 dL_draw_rotation = 2.0f * make_float4(qx * dL_dqrx + qy * dL_dqry + qz * dL_dqrz - qr * dL_dq_norm_helper, 2.0f * qx * dL_dqxx + qy * dL_dqxy + qz * dL_dqxz + qr * dL_dqrx - qx * dL_dq_norm_helper, 2.0f * qy * dL_dqyy + qx * dL_dqxy + qz * dL_dqyz + qr * dL_dqry - qy * dL_dq_norm_helper, 2.0f * qz * dL_dqzz + qx * dL_dqxz + qy * dL_dqyz + qr * dL_dqrz - qz * dL_dq_norm_helper) / q_norm_sq_safe;
         const float4 clamped_rotation = clamp_grad4(dL_draw_rotation);
-        adam_step_helper(clamped_rotation.x, fused_adam.rotation, primitive_idx, 0, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-        adam_step_helper(clamped_rotation.y, fused_adam.rotation, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-        adam_step_helper(clamped_rotation.z, fused_adam.rotation, primitive_idx, 2, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-        adam_step_helper(clamped_rotation.w, fused_adam.rotation, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+        const float rotation_grads[4] = {clamped_rotation.x, clamped_rotation.y, clamped_rotation.z, clamped_rotation.w};
+        adam_step_row(rotation_grads, fused_adam.rotation, primitive_idx, 4, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
 
         // TODO: only needed for adaptive density control from the original 3dgs
         if (densification_info != nullptr) {
             densification_info[primitive_idx] += 1.0f;
             densification_info[n_primitives + primitive_idx] += length(dL_dmean2d * make_float2(0.5f * w, 0.5f * h));
-        }
-    }
-
-    __global__ void adam_step_invisible(
-        const std::uint64_t* __restrict__ primitive_n_touched_tiles,
-        FusedAdamParam param,
-        FusedAdamSettings fused_adam,
-        const int extra_grad_kind,
-        const float beta1,
-        const float beta2,
-        const float eps) {
-        const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (!param.enabled || idx >= param.n_elements || param.n_attributes <= 0)
-            return;
-
-        const uint primitive_idx = static_cast<uint>(idx / param.n_attributes);
-        if (primitive_n_touched_tiles[primitive_idx] != 0)
-            return;
-
-        float grad = 0.0f;
-        if (extra_grad_kind == 1) {
-            grad = scale_regularization_grad(fused_adam, param, static_cast<uint>(idx));
-        } else if (extra_grad_kind == 2) {
-            grad = opacity_extra_grad(fused_adam, param, static_cast<uint>(idx));
-        }
-
-        const float moment1 = fmaf(beta1, param.exp_avg[idx] - grad, grad);
-        const float moment2 = fmaf(beta2, param.exp_avg_sq[idx] - grad * grad, grad * grad);
-        const float denom = sqrtf(moment2) * param.bias_correction2_sqrt_rcp + eps;
-        param.param[idx] -= param.step_size * moment1 / denom;
-        param.exp_avg[idx] = moment1;
-        param.exp_avg_sq[idx] = moment2;
-    }
-
-    // Swizzle-aware Adam decay for shN's invisible primitives. One thread per primitive;
-    // if invisible, iterate over the active compact float4 slots via shAt indexing.
-    __global__ void adam_step_invisible_shN(
-        const std::uint64_t* __restrict__ primitive_n_touched_tiles,
-        FusedAdamParam param,
-        const uint n_primitives,
-        const uint n_slots,
-        const float beta1,
-        const float beta2,
-        const float eps) {
-        const uint primitive_idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (primitive_idx >= n_primitives || !param.enabled)
-            return;
-        if (primitive_n_touched_tiles[primitive_idx] != 0)
-            return;
-
-        const float4 zero = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
-#pragma unroll
-        for (uint k = 0; k < 12u; ++k) {
-            if (k >= n_slots)
-                break;
-            adam_step_f4(zero, param, shAt(primitive_idx, k, n_slots), beta1, beta2, eps);
         }
     }
 

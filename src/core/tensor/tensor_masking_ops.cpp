@@ -1963,11 +1963,8 @@ namespace lfs::core {
 
         // Launch kernel to append gathered rows directly to the end
         if (device_ == Device::CUDA) {
-            // Calculate output pointer (write starts at current_size rows)
-            float* output_ptr = ptr<float>() + write_offset_elements;
-
-            LOG_DEBUG("  Launching index_select kernel: write_offset_elements={}, output_ptr_offset={}, n_gather={}",
-                      write_offset_elements, write_offset_elements * sizeof(float), n_gather);
+            LOG_DEBUG("  Launching index_select kernel: write_offset_elements={}, output_offset_bytes={}, n_gather={}",
+                      write_offset_elements, write_offset_elements * dtype_size(dtype_), n_gather);
 
             // IMPORTANT: Pass the INPUT shape to the kernel, not the output shape!
             // The kernel needs to know the source tensor dimensions to validate indices
@@ -1975,25 +1972,28 @@ namespace lfs::core {
 
             // Use index_select kernel to gather into the output location
             if (dtype_ == DataType::Float32) {
-                LOG_DEBUG("  Calling index_select: src_shape[0]={}, n_gather={}, row_size={}",
-                          shape_[0], n_gather, row_size);
-
+                float* output_ptr = ptr<float>() + write_offset_elements;
                 tensor_ops::launch_index_select(ptr<float>(), idx_ptr,
                                                 output_ptr, input_shape,
                                                 shape_.rank(), 0, n_gather,
                                                 0 /*BoundaryMode::Assert*/, stream());
-
-                // IMPORTANT: Synchronize to ensure kernel completes
                 CHECK_CUDA(cudaStreamSynchronize(stream()));
-                LOG_DEBUG("  index_select kernel completed");
+            } else if (dtype_ == DataType::UInt8 || dtype_ == DataType::Bool) {
+                uint8_t* output_ptr = ptr<uint8_t>() + write_offset_elements;
+                tensor_ops::launch_index_select(ptr<uint8_t>(), idx_ptr,
+                                                output_ptr, input_shape,
+                                                shape_.rank(), 0, n_gather,
+                                                0 /*BoundaryMode::Assert*/, stream());
+                CHECK_CUDA(cudaStreamSynchronize(stream()));
             } else {
-                LOG_ERROR("append_gather: only Float32 dtype supported for now");
+                LOG_ERROR("append_gather: unsupported dtype {}", dtype_name(dtype_));
                 return *this;
             }
         } else {
-            // CPU implementation
-            const float* src = ptr<float>();
-            float* dst = ptr<float>() + write_offset_elements;
+            // CPU implementation (byte-wise; works for any dtype)
+            const size_t elem = dtype_size(dtype_);
+            const uint8_t* src = static_cast<const uint8_t*>(data_);
+            uint8_t* dst = static_cast<uint8_t*>(data_) + write_offset_elements * elem;
 
             for (size_t i = 0; i < n_gather; i++) {
                 int sel = idx_ptr[i];
@@ -2006,10 +2006,9 @@ namespace lfs::core {
                     return *this;
                 }
 
-                // Copy entire row
-                std::memcpy(dst + i * row_size,
-                            src + sel * row_size,
-                            row_size * sizeof(float));
+                std::memcpy(dst + i * row_size * elem,
+                            src + static_cast<size_t>(sel) * row_size * elem,
+                            row_size * elem);
             }
         }
 

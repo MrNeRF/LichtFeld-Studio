@@ -119,10 +119,10 @@ namespace lfs::core {
             }
         }
 
-        template <typename IndexT>
+        template <typename IndexT, typename ElemT = float4>
         __global__ void gather_self_kernel(
-            const float4* __restrict__ src,
-            float4* __restrict__ dst,
+            const ElemT* __restrict__ src,
+            ElemT* __restrict__ dst,
             const IndexT* __restrict__ src_indices,
             std::uint32_t n_dst,
             std::uint32_t dst_offset,
@@ -387,6 +387,44 @@ namespace lfs::core {
         gather_self_kernel<int><<<grid, BLOCK, 0, stream>>>(
             reinterpret_cast<const float4*>(src_swizzled),
             reinterpret_cast<float4*>(dst_swizzled), src_indices,
+            static_cast<std::uint32_t>(n_dst),
+            static_cast<std::uint32_t>(dst_offset), slots);
+    }
+
+    void shN_swizzled_gather_self_u8(
+        const std::uint8_t* src_swizzled,
+        std::uint8_t* dst_swizzled,
+        const int* src_indices,
+        std::size_t n_dst,
+        std::size_t dst_offset,
+        std::uint32_t active_coeffs_rest,
+        cudaStream_t stream) {
+        const auto slots = sh_float4_slots_for_rest(active_coeffs_rest);
+        if (n_dst == 0 || slots == 0)
+            return;
+        const int grid = static_cast<int>((n_dst + BLOCK - 1) / BLOCK);
+        gather_self_kernel<int, uchar4><<<grid, BLOCK, 0, stream>>>(
+            reinterpret_cast<const uchar4*>(src_swizzled),
+            reinterpret_cast<uchar4*>(dst_swizzled), src_indices,
+            static_cast<std::uint32_t>(n_dst),
+            static_cast<std::uint32_t>(dst_offset), slots);
+    }
+
+    void shN_swizzled_gather_self_u8_i64(
+        const std::uint8_t* src_swizzled,
+        std::uint8_t* dst_swizzled,
+        const std::int64_t* src_indices,
+        std::size_t n_dst,
+        std::size_t dst_offset,
+        std::uint32_t active_coeffs_rest,
+        cudaStream_t stream) {
+        const auto slots = sh_float4_slots_for_rest(active_coeffs_rest);
+        if (n_dst == 0 || slots == 0)
+            return;
+        const int grid = static_cast<int>((n_dst + BLOCK - 1) / BLOCK);
+        gather_self_kernel<std::int64_t, uchar4><<<grid, BLOCK, 0, stream>>>(
+            reinterpret_cast<const uchar4*>(src_swizzled),
+            reinterpret_cast<uchar4*>(dst_swizzled), src_indices,
             static_cast<std::uint32_t>(n_dst),
             static_cast<std::uint32_t>(dst_offset), slots);
     }

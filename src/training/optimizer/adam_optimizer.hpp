@@ -6,6 +6,7 @@
 
 #include "core/splat_data.hpp"
 #include <array>
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 
@@ -41,9 +42,11 @@ namespace lfs::training {
     };
 
     struct AdamParamState {
-        lfs::core::Tensor grad;       // Gradient (transient)
-        lfs::core::Tensor exp_avg;    // First moment (m)
-        lfs::core::Tensor exp_avg_sq; // Second moment (v)
+        lfs::core::Tensor grad;             // Gradient (transient, fp32)
+        lfs::core::Tensor exp_avg;          // Quantised first moment (m), uint8
+        lfs::core::Tensor exp_avg_sq;       // Quantised second moment (sqrt(v)), uint8
+        lfs::core::Tensor exp_avg_scale;    // Per-primitive m scale, fp32
+        lfs::core::Tensor exp_avg_sq_scale; // Per-primitive sqrt(v) scale, fp32
         int64_t step_count = 0;
         size_t capacity = 0; // Allocated capacity
         size_t size = 0;     // Used size
@@ -60,8 +63,10 @@ namespace lfs::training {
 
     struct FastGSFusedAdamParam {
         float* param = nullptr;
-        float* exp_avg = nullptr;
-        float* exp_avg_sq = nullptr;
+        uint8_t* exp_avg_q = nullptr;
+        uint8_t* exp_avg_sq_q = nullptr;
+        float* exp_avg_scale = nullptr;
+        float* exp_avg_sq_scale = nullptr;
         int n_elements = 0;
         int n_attributes = 0;
         float step_size = 0.0f;
@@ -162,6 +167,16 @@ namespace lfs::training {
         void ensure_grad(ParamType type);
         void step_param(ParamType type, int iteration);
         size_t compute_new_capacity(size_t current_capacity, size_t required_size) const;
+
+        // Quantized-moment helpers. Moments are uint8 (m signed @ zero-point 128, v as
+        // quantised sqrt(v)) with per-primitive fp32 scales. shN moments are swizzled, so the
+        // byte buffer length is the swizzled float count while the scale count is per-primitive.
+        // A zero scale dequantises to a zero moment regardless of the stored byte, so fresh /
+        // reset rows only need their scale zeroed.
+        void alloc_quantized_state(ParamType type, AdamParamState& state, const lfs::core::Tensor& param,
+                                   size_t moment_capacity, size_t prim_capacity);
+        void quantize_float_moments(ParamType type, AdamParamState& state, lfs::core::Tensor&& exp_avg, lfs::core::Tensor&& exp_avg_sq);
+        size_t scale_row_count(ParamType type) const;
 
         // Translate a primitive-row delta into the actual tensor growth along dim 0.
         // shN (1D swizzled): delta = swizzled_float_count(N + n_new) - swizzled_float_count(N).

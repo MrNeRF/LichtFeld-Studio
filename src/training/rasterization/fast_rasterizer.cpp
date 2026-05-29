@@ -548,8 +548,10 @@ namespace lfs::training {
         auto convert_param = [](const FastGSFusedAdamParam& src) {
             fast_lfs::rasterization::FusedAdamParam dst;
             dst.param = src.param;
-            dst.exp_avg = src.exp_avg;
-            dst.exp_avg_sq = src.exp_avg_sq;
+            dst.exp_avg_q = src.exp_avg_q;
+            dst.exp_avg_sq_q = src.exp_avg_sq_q;
+            dst.exp_avg_scale = src.exp_avg_scale;
+            dst.exp_avg_sq_scale = src.exp_avg_sq_scale;
             dst.n_elements = src.n_elements;
             dst.n_attributes = src.n_attributes;
             dst.step_size = src.step_size;

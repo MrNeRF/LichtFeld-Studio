@@ -554,10 +554,18 @@ void VulkanGSRenderer::executeCumsum(
     const size_t block_limit = deviceInfo.subgroupSize * deviceInfo.subgroupSize * deviceInfo.subgroupSize;
     const size_t block = std::min(block_0, block_limit);
 
-    uint32_t uniforms[2] = {
-        (uint32_t)num_elements, 1};
-    // int uniform_size = 2*sizeof(uint32_t);
-    int uniform_size = 1 * sizeof(uint32_t);
+    auto execute_cumsum_phase = [&](size_t active_elements,
+                                    size_t threads_per_group,
+                                    _ComputePipeline& pipeline,
+                                    const std::vector<_VulkanBuffer>& phase_buffers) {
+        uint32_t phase_uniforms[1] = {static_cast<uint32_t>(active_elements)};
+        executeCompute(
+            {{active_elements, threads_per_group}},
+            phase_uniforms,
+            sizeof(uint32_t),
+            pipeline,
+            phase_buffers);
+    };
 
     bufferMemoryBarrier({
                             {input_buffer.deviceBuffer, COMPUTE_SHADER_WRITE},
@@ -567,9 +575,8 @@ void VulkanGSRenderer::executeCumsum(
     resizeDeviceBuffer(output_buffer, num_elements);
 
     if (num_elements <= block_0) {
-        executeCompute(
-            {{num_elements, block_0}},
-            uniforms, uniform_size,
+        execute_cumsum_phase(
+            num_elements, block_0,
             pipeline_cumsum.single_pass,
             {
                 input_buffer.deviceBuffer,
@@ -578,11 +585,11 @@ void VulkanGSRenderer::executeCumsum(
     }
 
     else if (num_elements <= block * block) {
-        resizeDeviceBuffer(buffers._cumsum_blockSums, _CEIL_DIV(num_elements, block), true);
+        const size_t num_blocks = _CEIL_DIV(num_elements, block);
+        resizeDeviceBuffer(buffers._cumsum_blockSums, num_blocks, true);
 
-        executeCompute(
-            {{num_elements, block}},
-            uniforms, uniform_size,
+        execute_cumsum_phase(
+            num_elements, block,
             pipeline_cumsum.block_scan,
             {
                 input_buffer.deviceBuffer,
@@ -594,9 +601,8 @@ void VulkanGSRenderer::executeCumsum(
                                 {buffers._cumsum_blockSums.deviceBuffer, COMPUTE_SHADER_WRITE},
                             },
                             COMPUTE_SHADER_READ_WRITE);
-        executeCompute(
-            {{num_elements / block, block}},
-            uniforms, uniform_size,
+        execute_cumsum_phase(
+            num_blocks, block,
             pipeline_cumsum.scan_block_sums,
             {
                 input_buffer.deviceBuffer,
@@ -609,9 +615,8 @@ void VulkanGSRenderer::executeCumsum(
                                 {buffers._cumsum_blockSums.deviceBuffer, COMPUTE_SHADER_READ_WRITE},
                             },
                             COMPUTE_SHADER_READ_WRITE);
-        executeCompute(
-            {{num_elements, block}},
-            uniforms, uniform_size,
+        execute_cumsum_phase(
+            num_elements, block,
             pipeline_cumsum.add_block_offsets,
             {
                 input_buffer.deviceBuffer,
@@ -621,13 +626,13 @@ void VulkanGSRenderer::executeCumsum(
     }
 
     else if (num_elements <= block * block * block) {
-        size_t num_elements_1 = _CEIL_DIV(num_elements, block);
+        const size_t num_elements_1 = _CEIL_DIV(num_elements, block);
+        const size_t num_elements_2 = _CEIL_DIV(num_elements_1, block);
         resizeDeviceBuffer(buffers._cumsum_blockSums, num_elements_1, true);
-        resizeDeviceBuffer(buffers._cumsum_blockSums2, _CEIL_DIV(num_elements_1, block), true);
+        resizeDeviceBuffer(buffers._cumsum_blockSums2, num_elements_2, true);
 
-        executeCompute(
-            {{num_elements, block}},
-            uniforms, uniform_size,
+        execute_cumsum_phase(
+            num_elements, block,
             pipeline_cumsum.block_scan,
             {
                 input_buffer.deviceBuffer,
@@ -639,9 +644,8 @@ void VulkanGSRenderer::executeCumsum(
                                 {buffers._cumsum_blockSums.deviceBuffer, COMPUTE_SHADER_WRITE},
                             },
                             COMPUTE_SHADER_READ_WRITE);
-        executeCompute(
-            {{num_elements / block, block}},
-            uniforms, uniform_size,
+        execute_cumsum_phase(
+            num_elements_1, block,
             pipeline_cumsum.block_scan,
             {
                 buffers._cumsum_blockSums.deviceBuffer,
@@ -654,9 +658,8 @@ void VulkanGSRenderer::executeCumsum(
                                 {buffers._cumsum_blockSums2.deviceBuffer, COMPUTE_SHADER_WRITE},
                             },
                             COMPUTE_SHADER_READ_WRITE);
-        executeCompute(
-            {{num_elements_1 / block, block}},
-            uniforms, uniform_size,
+        execute_cumsum_phase(
+            num_elements_2, block,
             pipeline_cumsum.scan_block_sums,
             {
                 buffers._cumsum_blockSums.deviceBuffer,
@@ -668,9 +671,8 @@ void VulkanGSRenderer::executeCumsum(
                                 {buffers._cumsum_blockSums2.deviceBuffer, COMPUTE_SHADER_READ_WRITE},
                             },
                             COMPUTE_SHADER_READ_WRITE);
-        executeCompute(
-            {{num_elements / block, block}},
-            uniforms, uniform_size,
+        execute_cumsum_phase(
+            num_elements_1, block,
             pipeline_cumsum.add_block_offsets,
             {
                 buffers._cumsum_blockSums.deviceBuffer,
@@ -683,9 +685,8 @@ void VulkanGSRenderer::executeCumsum(
                                 {buffers._cumsum_blockSums.deviceBuffer, COMPUTE_SHADER_READ_WRITE},
                             },
                             COMPUTE_SHADER_READ_WRITE);
-        executeCompute(
-            {{num_elements, block}},
-            uniforms, uniform_size,
+        execute_cumsum_phase(
+            num_elements, block,
             pipeline_cumsum.add_block_offsets,
             {
                 input_buffer.deviceBuffer,

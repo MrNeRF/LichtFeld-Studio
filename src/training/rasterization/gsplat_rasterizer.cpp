@@ -723,29 +723,37 @@ namespace lfs::training {
             // This avoids any tensor operations that might allocate from memory pool
 
             // Means: [N, 3] -> [N, 3]
+            auto& means_grad = optimizer.get_grad(ParamType::Means);
+            means_grad.set_stream(stream);
             kernels::launch_grad_accumulate(
-                optimizer.get_grad(ParamType::Means).ptr<float>(),
+                means_grad.ptr<float>(),
                 v_means_ptr,
                 N * 3,
                 stream);
 
             // Scales: [N, 3] -> [N, 3]
+            auto& scaling_grad = optimizer.get_grad(ParamType::Scaling);
+            scaling_grad.set_stream(stream);
             kernels::launch_grad_accumulate(
-                optimizer.get_grad(ParamType::Scaling).ptr<float>(),
+                scaling_grad.ptr<float>(),
                 v_scales_ptr,
                 N * 3,
                 stream);
 
             // Rotations: [N, 4] -> [N, 4]
+            auto& rotation_grad = optimizer.get_grad(ParamType::Rotation);
+            rotation_grad.set_stream(stream);
             kernels::launch_grad_accumulate(
-                optimizer.get_grad(ParamType::Rotation).ptr<float>(),
+                rotation_grad.ptr<float>(),
                 v_quats_ptr,
                 N * 4,
                 stream);
 
             // Opacities: [N] -> [N, 1] (same memory layout)
+            auto& opacity_grad = optimizer.get_grad(ParamType::Opacity);
+            opacity_grad.set_stream(stream);
             kernels::launch_grad_accumulate_unsqueeze(
-                optimizer.get_grad(ParamType::Opacity).ptr<float>(),
+                opacity_grad.ptr<float>(),
                 v_opacities_ptr,
                 N,
                 stream);
@@ -755,11 +763,13 @@ namespace lfs::training {
             if (K > 1) {
                 auto& shN_grad = optimizer.get_grad(ParamType::ShN);
                 if (shN_grad.is_valid() && shN_grad.numel() > 0) {
+                    shN_grad.set_stream(stream);
                     dst_shN = shN_grad.ptr<float>();
                 }
             }
 
             auto& sh0_grad = optimizer.get_grad(ParamType::Sh0);
+            sh0_grad.set_stream(stream);
             kernels::launch_grad_accumulate_sh_swizzled(
                 sh0_grad.ptr<float>(),
                 dst_shN,
@@ -771,6 +781,7 @@ namespace lfs::training {
 
             // Accumulate gradient norms when pixel-error map is not provided
             if (update_densification_info && pixel_error_map_ptr == nullptr) {
+                gaussian_model._densification_info.set_stream(stream);
                 kernels::launch_grad_norm_accumulate(
                     gaussian_model._densification_info.ptr<float>(),
                     v_means_ptr,

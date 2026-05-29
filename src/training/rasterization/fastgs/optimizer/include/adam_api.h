@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <cuda_runtime.h>
+#include <cstdint>
+
 namespace fast_lfs::optimizer {
 
     // Pure CUDA interface - no torch dependencies
@@ -18,7 +21,66 @@ namespace fast_lfs::optimizer {
         const float beta2,
         const float eps,
         const float bias_correction1_rcp,
-        const float bias_correction2_sqrt_rcp);
+        const float bias_correction2_sqrt_rcp,
+        cudaStream_t stream = nullptr);
+
+    // Quantized step over contiguous [n_rows, row_size] moments (non-shN).
+    void adam_step_quantized_raw(
+        float* param,
+        std::uint8_t* exp_avg_q,
+        float* exp_avg_scale,
+        std::uint8_t* exp_avg_sq_q,
+        float* exp_avg_sq_scale,
+        const float* param_grad,
+        const int n_rows,
+        const int row_size,
+        const float lr,
+        const float beta1,
+        const float beta2,
+        const float eps,
+        const float bias_correction1_rcp,
+        const float bias_correction2_sqrt_rcp,
+        cudaStream_t stream = nullptr);
+
+    // Quantized step over swizzled shN moments (1 thread per primitive).
+    void adam_step_quantized_swizzled_raw(
+        float* param,
+        std::uint8_t* exp_avg_q,
+        float* exp_avg_scale,
+        std::uint8_t* exp_avg_sq_q,
+        float* exp_avg_sq_scale,
+        const float* param_grad,
+        const int n_primitives,
+        const int slots_per_primitive,
+        const float lr,
+        const float beta1,
+        const float beta2,
+        const float eps,
+        const float bias_correction1_rcp,
+        const float bias_correction2_sqrt_rcp,
+        cudaStream_t stream = nullptr);
+
+    // Quantise existing float moments into uint8 (legacy checkpoint load / set_state).
+    void quantize_adam_moments_raw(
+        const float* exp_avg,
+        const float* exp_avg_sq,
+        std::uint8_t* exp_avg_q,
+        float* exp_avg_scale,
+        std::uint8_t* exp_avg_sq_q,
+        float* exp_avg_sq_scale,
+        const int n_rows,
+        const int row_size);
+
+    // Swizzled (shN) variant of quantize_adam_moments_raw.
+    void quantize_adam_moments_swizzled_raw(
+        const float* exp_avg,
+        const float* exp_avg_sq,
+        std::uint8_t* exp_avg_q,
+        float* exp_avg_scale,
+        std::uint8_t* exp_avg_sq_q,
+        float* exp_avg_sq_scale,
+        const int n_primitives,
+        const int slots_per_primitive);
 
     // Batched zero operation for MCMC relocation (much faster than CPU loop)
     void zero_rows_at_indices(
@@ -26,5 +88,14 @@ namespace fast_lfs::optimizer {
         const int64_t* indices_device, // Must be on device!
         const int n_indices,
         const int row_size);
+
+    // Reset quantised rows: moment bytes -> zero_point, scale -> 0. Contiguous layout.
+    void zero_quantized_rows_at_indices(
+        std::uint8_t* tensor_q,
+        float* scales,
+        const int64_t* indices_device, // Must be on device!
+        const int n_indices,
+        const int row_size,
+        const std::uint8_t zero_point);
 
 } // namespace fast_lfs::optimizer

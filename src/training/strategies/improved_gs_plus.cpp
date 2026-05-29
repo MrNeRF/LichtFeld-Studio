@@ -462,37 +462,35 @@ namespace lfs::training {
             if (!state)
                 return;
 
-            // shN state is swizzled — zero out by primitive index via the dedicated kernel.
+            // Quantised moments: reset a primitive by zeroing its per-primitive scales (a zero
+            // scale dequantises every moment to zero), for both contiguous and swizzled layouts.
+            if (!state->exp_avg_scale.is_valid() || state->exp_avg_scale.numel() == 0)
+                return;
+            auto scale_zeros = lfs::core::Tensor::zeros(
+                lfs::core::TensorShape({sampled_idxs.numel()}), state->exp_avg_scale.device());
+            state->exp_avg_scale.index_put_(sampled_idxs, scale_zeros);
+            state->exp_avg_sq_scale.index_put_(sampled_idxs, scale_zeros);
+
             if (param_type == ParamType::ShN) {
-                if (layout_rest_u32 == 0 || !state->exp_avg.is_valid() || state->exp_avg.numel() == 0)
-                    return;
-                auto idx_i32 = sampled_idxs.dtype() == lfs::core::DataType::Int32
-                                   ? sampled_idxs
-                                   : sampled_idxs.to(lfs::core::DataType::Int32);
-                lfs::core::shN_swizzled_zero_at_indices(
-                    state->exp_avg.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest_u32);
-                lfs::core::shN_swizzled_zero_at_indices(
-                    state->exp_avg_sq.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest_u32);
-                if (state->grad.is_valid() && state->grad.numel() > 0) {
+                if (layout_rest_u32 != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
+                    auto idx_i32 = sampled_idxs.dtype() == lfs::core::DataType::Int32
+                                       ? sampled_idxs
+                                       : sampled_idxs.to(lfs::core::DataType::Int32);
                     lfs::core::shN_swizzled_zero_at_indices(
                         state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest_u32);
                 }
                 return;
             }
 
-            const auto& shape = state->exp_avg.shape();
-            if (has_zero_dimension(shape))
-                return;
-
-            std::vector<size_t> dims = {static_cast<size_t>(budget_for_alloc)};
-            for (size_t i = 1; i < shape.rank(); ++i) {
-                dims.push_back(shape[i]);
-            }
-            auto zeros = lfs::core::Tensor::zeros(lfs::core::TensorShape(dims), state->exp_avg.device());
-
-            state->exp_avg.index_put_(sampled_idxs, zeros);
-            state->exp_avg_sq.index_put_(sampled_idxs, zeros);
-            if (state->grad.is_valid()) {
+            if (state->grad.is_valid() && state->grad.numel() > 0) {
+                const auto& shape = state->grad.shape();
+                if (has_zero_dimension(shape))
+                    return;
+                std::vector<size_t> dims = {static_cast<size_t>(budget_for_alloc)};
+                for (size_t i = 1; i < shape.rank(); ++i) {
+                    dims.push_back(shape[i]);
+                }
+                auto zeros = lfs::core::Tensor::zeros(lfs::core::TensorShape(dims), state->grad.device());
                 state->grad.index_put_(sampled_idxs, zeros);
             }
         };
@@ -864,39 +862,36 @@ namespace lfs::training {
             if (!state)
                 return;
 
-            // shN state is swizzled — use the swizzle-aware zero kernel.
+            // Quantised moments: zero per-primitive scales to reset moments to zero (both
+            // contiguous and swizzled layouts). grad keeps its native-layout zeroing.
+            if (!state->exp_avg_scale.is_valid() || state->exp_avg_scale.numel() == 0)
+                return;
+            auto scale_zeros = lfs::core::Tensor::zeros(
+                lfs::core::TensorShape({prune_indices.numel()}), state->exp_avg_scale.device());
+            state->exp_avg_scale.index_put_(prune_indices, scale_zeros);
+            state->exp_avg_sq_scale.index_put_(prune_indices, scale_zeros);
+
             if (param_type == ParamType::ShN) {
                 const auto layout_rest = static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
-                if (layout_rest == 0 || !state->exp_avg.is_valid() || state->exp_avg.numel() == 0)
-                    return;
-                auto idx_i32 = prune_indices.dtype() == lfs::core::DataType::Int32
-                                   ? prune_indices
-                                   : prune_indices.to(lfs::core::DataType::Int32);
-                lfs::core::shN_swizzled_zero_at_indices(
-                    state->exp_avg.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
-                lfs::core::shN_swizzled_zero_at_indices(
-                    state->exp_avg_sq.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
-                if (state->grad.is_valid() && state->grad.numel() > 0) {
+                if (layout_rest != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
+                    auto idx_i32 = prune_indices.dtype() == lfs::core::DataType::Int32
+                                       ? prune_indices
+                                       : prune_indices.to(lfs::core::DataType::Int32);
                     lfs::core::shN_swizzled_zero_at_indices(
                         state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
                 }
                 return;
             }
 
-            const auto& shape = state->exp_avg.shape();
-            if (has_zero_dimension(shape))
-                return;
-
-            std::vector<size_t> dims = {static_cast<size_t>(num_pruned)};
-            for (size_t i = 1; i < shape.rank(); ++i) {
-                dims.push_back(shape[i]);
-            }
-            auto zeros = lfs::core::Tensor::zeros(lfs::core::TensorShape(dims), state->exp_avg.device());
-
-            // Modify in-place to preserve capacity
-            state->exp_avg.index_put_(prune_indices, zeros);
-            state->exp_avg_sq.index_put_(prune_indices, zeros);
-            if (state->grad.is_valid()) {
+            if (state->grad.is_valid() && state->grad.numel() > 0) {
+                const auto& shape = state->grad.shape();
+                if (has_zero_dimension(shape))
+                    return;
+                std::vector<size_t> dims = {static_cast<size_t>(num_pruned)};
+                for (size_t i = 1; i < shape.rank(); ++i) {
+                    dims.push_back(shape[i]);
+                }
+                auto zeros = lfs::core::Tensor::zeros(lfs::core::TensorShape(dims), state->grad.device());
                 state->grad.index_put_(prune_indices, zeros);
             }
         };
@@ -978,37 +973,34 @@ namespace lfs::training {
             if (!state)
                 return;
 
-            // shN state is swizzled — zero by primitive index via the dedicated kernel.
+            // Quantised moments: zero per-primitive scales to reset moments (contiguous + shN).
+            if (!state->exp_avg_scale.is_valid() || state->exp_avg_scale.numel() == 0)
+                return;
+            auto scale_zeros = lfs::core::Tensor::zeros(
+                lfs::core::TensorShape({target_indices.numel()}), state->exp_avg_scale.device());
+            state->exp_avg_scale.index_put_(target_indices, scale_zeros);
+            state->exp_avg_sq_scale.index_put_(target_indices, scale_zeros);
+
             if (param_type == ParamType::ShN) {
-                if (layout_rest == 0 || !state->exp_avg.is_valid() || state->exp_avg.numel() == 0)
-                    return;
-                auto idx_i32 = target_indices.dtype() == lfs::core::DataType::Int32
-                                   ? target_indices
-                                   : target_indices.to(lfs::core::DataType::Int32);
-                lfs::core::shN_swizzled_zero_at_indices(
-                    state->exp_avg.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
-                lfs::core::shN_swizzled_zero_at_indices(
-                    state->exp_avg_sq.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
-                if (state->grad.is_valid() && state->grad.numel() > 0) {
+                if (layout_rest != 0 && state->grad.is_valid() && state->grad.numel() > 0) {
+                    auto idx_i32 = target_indices.dtype() == lfs::core::DataType::Int32
+                                       ? target_indices
+                                       : target_indices.to(lfs::core::DataType::Int32);
                     lfs::core::shN_swizzled_zero_at_indices(
                         state->grad.ptr<float>(), idx_i32.ptr<int>(), idx_i32.numel(), layout_rest);
                 }
                 return;
             }
 
-            const auto& shape = state->exp_avg.shape();
-            if (has_zero_dimension(shape))
-                return;
-
-            std::vector<size_t> dims = {static_cast<size_t>(slots_to_fill)};
-            for (size_t i = 1; i < shape.rank(); ++i) {
-                dims.push_back(shape[i]);
-            }
-            auto zeros = lfs::core::Tensor::zeros(lfs::core::TensorShape(dims), state->exp_avg.device());
-
-            state->exp_avg.index_put_(target_indices, zeros);
-            state->exp_avg_sq.index_put_(target_indices, zeros);
-            if (state->grad.is_valid()) {
+            if (state->grad.is_valid() && state->grad.numel() > 0) {
+                const auto& shape = state->grad.shape();
+                if (has_zero_dimension(shape))
+                    return;
+                std::vector<size_t> dims = {static_cast<size_t>(slots_to_fill)};
+                for (size_t i = 1; i < shape.rank(); ++i) {
+                    dims.push_back(shape[i]);
+                }
+                auto zeros = lfs::core::Tensor::zeros(lfs::core::TensorShape(dims), state->grad.device());
                 state->grad.index_put_(target_indices, zeros);
             }
         };

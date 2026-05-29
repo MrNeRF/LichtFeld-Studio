@@ -2740,7 +2740,7 @@ namespace lfs::core {
         : std::runtime_error(msg),
           tensor_info_(t ? t->str() : "") {}
 
-    Tensor Tensor::zeros_direct(TensorShape shape, size_t capacity, Device device) {
+    Tensor Tensor::zeros_direct(TensorShape shape, size_t capacity, Device device, DataType dtype) {
         if (device != Device::CUDA) {
             throw TensorError("zeros_direct only supports CUDA device");
         }
@@ -2755,7 +2755,7 @@ namespace lfs::core {
             t.strides_ = {};
             t.storage_offset_ = 0;
             t.device_ = device;
-            t.dtype_ = DataType::Float32;
+            t.dtype_ = dtype;
             t.state_->capacity = 0;
             t.state_->logical_size = 0;
             t.id_ = next_id_++;
@@ -2769,7 +2769,7 @@ namespace lfs::core {
         }
 
         const size_t total_elements = capacity * row_size;
-        const size_t total_bytes = total_elements * sizeof(float);
+        const size_t total_bytes = total_elements * dtype_size(dtype);
 
         if (total_bytes == 0) {
             Tensor t;
@@ -2780,7 +2780,7 @@ namespace lfs::core {
             t.strides_ = shape.strides();
             t.storage_offset_ = 0;
             t.device_ = device;
-            t.dtype_ = DataType::Float32;
+            t.dtype_ = dtype;
             t.state_->capacity = capacity;
             t.state_->logical_size = current_size;
             t.id_ = next_id_++;
@@ -2820,7 +2820,7 @@ namespace lfs::core {
         t.strides_ = shape.strides();
         t.storage_offset_ = 0;
         t.device_ = device;
-        t.dtype_ = DataType::Float32;
+        t.dtype_ = dtype;
         t.state_->capacity = capacity;
         t.state_->logical_size = current_size;
         t.id_ = next_id_++;

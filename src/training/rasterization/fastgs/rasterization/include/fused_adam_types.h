@@ -4,12 +4,18 @@
 
 #pragma once
 
+#include <cstdint>
+
 namespace fast_lfs::rasterization {
 
+    // Optimizer moments are quantised: m (first) as signed int8 around zero-point 128,
+    // v (second) as quantised sqrt(v); both with per-primitive fp32 scales. param stays fp32.
     struct FusedAdamParam {
         float* param = nullptr;
-        float* exp_avg = nullptr;
-        float* exp_avg_sq = nullptr;
+        std::uint8_t* exp_avg_q = nullptr;
+        std::uint8_t* exp_avg_sq_q = nullptr;
+        float* exp_avg_scale = nullptr;
+        float* exp_avg_sq_scale = nullptr;
         int n_elements = 0;
         int n_attributes = 0;
         float step_size = 0.0f;

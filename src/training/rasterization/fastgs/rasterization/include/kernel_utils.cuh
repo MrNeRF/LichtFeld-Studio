@@ -130,27 +130,95 @@ namespace fast_lfs::rasterization::kernels {
         return result;
     }
 
-    __device__ inline void adam_step_helper(
-        const float grad,
+    // Quantised Adam moment helpers (see fast_lfs::optimizer::kernels::adam for the rationale).
+    //   m: signed int8 around zero-point 128, scale = max|m| / 127.
+    //   v: quantised sqrt(v), scale = sqrt(max v) / 255.
+    constexpr int FUSED_MOMENT_ZERO_POINT = 128;
+    // Max contiguous (non-shN) attributes per primitive (rotation = 4 is the largest).
+    constexpr int MAX_FUSED_ADAM_ATTRIBUTES = 4;
+
+    __device__ inline float dequant_m(const std::uint8_t q, const float scale) {
+        return scale == 0.0f ? 0.0f : (static_cast<int>(q) - FUSED_MOMENT_ZERO_POINT) * scale;
+    }
+
+    __device__ inline std::uint8_t quantize_m(const float value, const float scale) {
+        if (scale == 0.0f)
+            return static_cast<std::uint8_t>(FUSED_MOMENT_ZERO_POINT);
+        const int q = static_cast<int>(roundf(value / scale)) + FUSED_MOMENT_ZERO_POINT;
+        return static_cast<std::uint8_t>(min(255, max(0, q)));
+    }
+
+    __device__ inline float dequant_sqrt_v(const std::uint8_t q, const float scale) {
+        return scale == 0.0f ? 0.0f : static_cast<float>(q) * scale;
+    }
+
+    __device__ inline std::uint8_t quantize_sqrt_v(const float v, const float scale) {
+        if (scale == 0.0f)
+            return 0;
+        const float s = sqrtf(fmaxf(v, 0.0f));
+        const int q = static_cast<int>(roundf(s / scale));
+        if (v > 0.0f && q == 0)
+            return 1;
+        return static_cast<std::uint8_t>(min(255, max(0, q)));
+    }
+
+    // Two-pass quantised Adam step over a contiguous [n_attributes] row of one primitive
+    // (means / sh0 / scaling / rotation / opacity). Pass 1 derives the per-primitive scales
+    // from max|m| / max(v); pass 2 writes the param update and requantises. `grads` holds
+    // `row_elements` values; any resident attributes beyond that get pure momentum decay.
+    __device__ inline void adam_step_row(
+        const float* grads,
         const FusedAdamParam& param,
         const uint primitive_idx,
-        const uint offset,
+        const uint row_elements,
         const float beta1,
         const float beta2,
         const float eps) {
-        const uint element_idx = primitive_idx * static_cast<uint>(param.n_attributes) + offset;
-        if (!param.enabled || element_idx >= static_cast<uint>(param.n_elements))
+        if (!param.enabled || param.n_attributes <= 0)
             return;
+        const uint n_attr = static_cast<uint>(param.n_attributes);
+        const uint base = primitive_idx * n_attr;
+        if (base >= static_cast<uint>(param.n_elements))
+            return;
+        const uint row = min(n_attr, static_cast<uint>(param.n_elements) - base);
+        const uint active = min(row_elements, row);
 
-        const float moment1_prev = param.exp_avg[element_idx];
-        const float moment2_prev = param.exp_avg_sq[element_idx];
-        const float grad_sq = grad * grad;
-        const float moment1 = fmaf(beta1, moment1_prev - grad, grad);
-        const float moment2 = fmaf(beta2, moment2_prev - grad_sq, grad_sq);
-        const float denom = sqrtf(moment2) * param.bias_correction2_sqrt_rcp + eps;
-        param.param[element_idx] -= param.step_size * moment1 / denom;
-        param.exp_avg[element_idx] = moment1;
-        param.exp_avg_sq[element_idx] = moment2;
+        const float old_m_scale = param.exp_avg_scale[primitive_idx];
+        const float old_v_scale = param.exp_avg_sq_scale[primitive_idx];
+
+        float max_abs_m = 0.0f;
+        float max_v = 0.0f;
+        for (uint i = 0; i < row; ++i) {
+            const float old_m = dequant_m(param.exp_avg_q[base + i], old_m_scale);
+            const float sqrt_old_v = dequant_sqrt_v(param.exp_avg_sq_q[base + i], old_v_scale);
+            const float old_v = sqrt_old_v * sqrt_old_v;
+            const float grad = (i < active) ? grads[i] : 0.0f;
+            const float m = beta1 * old_m + (1.0f - beta1) * grad;
+            const float v = beta2 * old_v + (1.0f - beta2) * grad * grad;
+            max_abs_m = fmaxf(max_abs_m, fabsf(m));
+            max_v = fmaxf(max_v, v);
+        }
+
+        const float new_m_scale = max_abs_m > 0.0f ? max_abs_m / 127.0f : 0.0f;
+        const float new_v_scale = max_v > 0.0f ? sqrtf(max_v) / 255.0f : 0.0f;
+
+        for (uint i = 0; i < row; ++i) {
+            const float old_m = dequant_m(param.exp_avg_q[base + i], old_m_scale);
+            const float sqrt_old_v = dequant_sqrt_v(param.exp_avg_sq_q[base + i], old_v_scale);
+            const float old_v = sqrt_old_v * sqrt_old_v;
+            const float grad = (i < active) ? grads[i] : 0.0f;
+            const float m = beta1 * old_m + (1.0f - beta1) * grad;
+            const float v = beta2 * old_v + (1.0f - beta2) * grad * grad;
+            if (i < active) {
+                const float denom = sqrtf(v) * param.bias_correction2_sqrt_rcp + eps;
+                param.param[base + i] -= param.step_size * m / denom;
+            }
+            param.exp_avg_q[base + i] = quantize_m(m, new_m_scale);
+            param.exp_avg_sq_q[base + i] = quantize_sqrt_v(v, new_v_scale);
+        }
+
+        param.exp_avg_scale[primitive_idx] = new_m_scale;
+        param.exp_avg_sq_scale[primitive_idx] = new_v_scale;
     }
 
     __device__ inline float sigmoid(const float x) {
@@ -190,56 +258,32 @@ namespace fast_lfs::rasterization::kernels {
         return grad;
     }
 
-    // Single float4 Adam step. Reads/writes one float4 slot in each of param/exp_avg/exp_avg_sq.
-    // Used by the shN packed-grad path so that 32 warp lanes hit 32 consecutive float4 slots
-    // (perfectly coalesced 16B vector accesses, vs the old per-channel 4B scalar accesses).
-    __device__ inline void adam_step_f4(
-        const float4 grad,
-        const FusedAdamParam& param,
-        const uint float4_slot,
-        const float beta1,
-        const float beta2,
-        const float eps) {
-        const uint float_idx = float4_slot * 4u;
-        if (!param.enabled || float_idx + 3u >= static_cast<uint>(param.n_elements))
-            return;
-        float4* p_f4 = reinterpret_cast<float4*>(param.param);
-        float4* m1_f4 = reinterpret_cast<float4*>(param.exp_avg);
-        float4* m2_f4 = reinterpret_cast<float4*>(param.exp_avg_sq);
-
-        const float4 m1_prev = m1_f4[float4_slot];
-        const float4 m2_prev = m2_f4[float4_slot];
-        const float4 p_prev = p_f4[float4_slot];
-        const float4 grad_sq = make_float4(grad.x * grad.x, grad.y * grad.y, grad.z * grad.z, grad.w * grad.w);
-        const float4 m1 = make_float4(
-            fmaf(beta1, m1_prev.x - grad.x, grad.x),
-            fmaf(beta1, m1_prev.y - grad.y, grad.y),
-            fmaf(beta1, m1_prev.z - grad.z, grad.z),
-            fmaf(beta1, m1_prev.w - grad.w, grad.w));
-        const float4 m2 = make_float4(
-            fmaf(beta2, m2_prev.x - grad_sq.x, grad_sq.x),
-            fmaf(beta2, m2_prev.y - grad_sq.y, grad_sq.y),
-            fmaf(beta2, m2_prev.z - grad_sq.z, grad_sq.z),
-            fmaf(beta2, m2_prev.w - grad_sq.w, grad_sq.w));
-        const float4 p_new = make_float4(
-            p_prev.x - param.step_size * m1.x / (sqrtf(m2.x) * param.bias_correction2_sqrt_rcp + eps),
-            p_prev.y - param.step_size * m1.y / (sqrtf(m2.y) * param.bias_correction2_sqrt_rcp + eps),
-            p_prev.z - param.step_size * m1.z / (sqrtf(m2.z) * param.bias_correction2_sqrt_rcp + eps),
-            p_prev.w - param.step_size * m1.w / (sqrtf(m2.w) * param.bias_correction2_sqrt_rcp + eps));
-        p_f4[float4_slot] = p_new;
-        m1_f4[float4_slot] = m1;
-        m2_f4[float4_slot] = m2;
+    // Shuffle the 15 float3 grad coefficients (c0..c14) into float4 slot k, matching the
+    // swizzled load_shN_coeffs packing. Slot 11's tail lanes are padding (0 grad).
+    __device__ inline float4 shN_grad_for_slot(const float3 (&g)[15], const uint k) {
+        switch (k) {
+        case 0: return make_float4(g[0].x, g[0].y, g[0].z, g[1].x);
+        case 1: return make_float4(g[1].y, g[1].z, g[2].x, g[2].y);
+        case 2: return make_float4(g[2].z, g[3].x, g[3].y, g[3].z);
+        case 3: return make_float4(g[4].x, g[4].y, g[4].z, g[5].x);
+        case 4: return make_float4(g[5].y, g[5].z, g[6].x, g[6].y);
+        case 5: return make_float4(g[6].z, g[7].x, g[7].y, g[7].z);
+        case 6: return make_float4(g[8].x, g[8].y, g[8].z, g[9].x);
+        case 7: return make_float4(g[9].y, g[9].z, g[10].x, g[10].y);
+        case 8: return make_float4(g[10].z, g[11].x, g[11].y, g[11].z);
+        case 9: return make_float4(g[12].x, g[12].y, g[12].z, g[13].x);
+        case 10: return make_float4(g[13].y, g[13].z, g[14].x, g[14].y);
+        case 11: return make_float4(g[14].z, 0.0f, 0.0f, 0.0f);
+        default: return make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+        }
     }
 
-    // Apply 15 float3 grad coefficients (c0..c14) to the swizzled shN Adam state.
-    // Packs the 15 float3 grads into 12 float4 grads using the same shuffle as the read path,
-    // then runs adam_step_f4 on each slot. Adam decay on the 3 tail-padding floats of slot 11
-    // is mathematically a no-op (their state stays at zero from initialisation).
-    // n_slots_to_update controls how many of the 12 slots to write, derived from active SH:
-    //     active_sh_bases <= 1 : 0 slots (caller must skip)
-    //     active_sh_bases <= 4 : 3 slots  (covers c0..c3.x grads; slot 2's c3 lane is 0 grad)
-    //     active_sh_bases <= 9 : 6 slots  (covers c0..c7 grads)
-    //     active_sh_bases > 9  : 12 slots (covers c0..c14 grads)
+    // Quantised two-pass Adam step over the swizzled shN moments of one primitive. moments are
+    // uchar4 at the same swizzled float4 slots as the fp32 param (32 warp lanes -> 32 consecutive
+    // uchar4 = coalesced 128B loads). Pass 1 derives the per-primitive scales over the active
+    // slots; pass 2 updates param and requantises. n_slots_to_update is derived from active SH:
+    //     active_sh_bases <= 1 : 0 slots (caller skips)   <= 4 : 3 slots
+    //     active_sh_bases <= 9 : 6 slots                   > 9 : 12 slots
     __device__ inline void apply_shN_grads_packed(
         const FusedAdamSettings& fused_adam,
         const uint primitive_idx,
@@ -250,30 +294,73 @@ namespace fast_lfs::rasterization::kernels {
         if (!p.enabled || n_slots_to_update == 0u || sh_layout_slots == 0u)
             return;
 
+        float4* param4 = reinterpret_cast<float4*>(p.param);
+        uchar4* m4 = reinterpret_cast<uchar4*>(p.exp_avg_q);
+        uchar4* v4 = reinterpret_cast<uchar4*>(p.exp_avg_sq_q);
+        const float beta1 = fused_adam.beta1, beta2 = fused_adam.beta2, eps = fused_adam.eps;
+        const float old_m_scale = p.exp_avg_scale[primitive_idx];
+        const float old_v_scale = p.exp_avg_sq_scale[primitive_idx];
+
+        float max_abs_m = 0.0f;
+        float max_v = 0.0f;
 #pragma unroll
         for (uint k = 0; k < 12u; ++k) {
             if (k >= n_slots_to_update)
                 break;
-            float4 gk;
-            // Same shuffle as load_shN_coeffs, but for write.
-            switch (k) {
-            case 0: gk = make_float4(g[0].x, g[0].y, g[0].z, g[1].x); break;
-            case 1: gk = make_float4(g[1].y, g[1].z, g[2].x, g[2].y); break;
-            case 2: gk = make_float4(g[2].z, g[3].x, g[3].y, g[3].z); break;
-            case 3: gk = make_float4(g[4].x, g[4].y, g[4].z, g[5].x); break;
-            case 4: gk = make_float4(g[5].y, g[5].z, g[6].x, g[6].y); break;
-            case 5: gk = make_float4(g[6].z, g[7].x, g[7].y, g[7].z); break;
-            case 6: gk = make_float4(g[8].x, g[8].y, g[8].z, g[9].x); break;
-            case 7: gk = make_float4(g[9].y, g[9].z, g[10].x, g[10].y); break;
-            case 8: gk = make_float4(g[10].z, g[11].x, g[11].y, g[11].z); break;
-            case 9: gk = make_float4(g[12].x, g[12].y, g[12].z, g[13].x); break;
-            case 10: gk = make_float4(g[13].y, g[13].z, g[14].x, g[14].y); break;
-            case 11: gk = make_float4(g[14].z, 0.0f, 0.0f, 0.0f); break;
-            default: gk = make_float4(0.0f, 0.0f, 0.0f, 0.0f); break;
+            const uint slot = shAt(primitive_idx, k, sh_layout_slots);
+            const float4 gk = shN_grad_for_slot(g, k);
+            const uchar4 qm = m4[slot];
+            const uchar4 qv = v4[slot];
+            const float gc[4] = {gk.x, gk.y, gk.z, gk.w};
+            const std::uint8_t mc[4] = {qm.x, qm.y, qm.z, qm.w};
+            const std::uint8_t vc[4] = {qv.x, qv.y, qv.z, qv.w};
+#pragma unroll
+            for (int c = 0; c < 4; ++c) {
+                const float sqrt_old_v = dequant_sqrt_v(vc[c], old_v_scale);
+                const float old_v = sqrt_old_v * sqrt_old_v;
+                const float m = beta1 * dequant_m(mc[c], old_m_scale) + (1.0f - beta1) * gc[c];
+                const float v = beta2 * old_v + (1.0f - beta2) * gc[c] * gc[c];
+                max_abs_m = fmaxf(max_abs_m, fabsf(m));
+                max_v = fmaxf(max_v, v);
             }
-            adam_step_f4(gk, p, shAt(primitive_idx, k, sh_layout_slots),
-                         fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
         }
+
+        const float new_m_scale = max_abs_m > 0.0f ? max_abs_m / 127.0f : 0.0f;
+        const float new_v_scale = max_v > 0.0f ? sqrtf(max_v) / 255.0f : 0.0f;
+
+#pragma unroll
+        for (uint k = 0; k < 12u; ++k) {
+            if (k >= n_slots_to_update)
+                break;
+            const uint slot = shAt(primitive_idx, k, sh_layout_slots);
+            const float4 gk = shN_grad_for_slot(g, k);
+            const uchar4 qm = m4[slot];
+            const uchar4 qv = v4[slot];
+            const float gc[4] = {gk.x, gk.y, gk.z, gk.w};
+            const std::uint8_t mc[4] = {qm.x, qm.y, qm.z, qm.w};
+            const std::uint8_t vc[4] = {qv.x, qv.y, qv.z, qv.w};
+            float4 pv = param4[slot];
+            float pc[4] = {pv.x, pv.y, pv.z, pv.w};
+            std::uint8_t nm[4];
+            std::uint8_t nv[4];
+#pragma unroll
+            for (int c = 0; c < 4; ++c) {
+                const float sqrt_old_v = dequant_sqrt_v(vc[c], old_v_scale);
+                const float old_v = sqrt_old_v * sqrt_old_v;
+                const float m = beta1 * dequant_m(mc[c], old_m_scale) + (1.0f - beta1) * gc[c];
+                const float v = beta2 * old_v + (1.0f - beta2) * gc[c] * gc[c];
+                const float denom = sqrtf(v) * p.bias_correction2_sqrt_rcp + eps;
+                pc[c] -= p.step_size * m / denom;
+                nm[c] = quantize_m(m, new_m_scale);
+                nv[c] = quantize_sqrt_v(v, new_v_scale);
+            }
+            param4[slot] = make_float4(pc[0], pc[1], pc[2], pc[3]);
+            m4[slot] = make_uchar4(nm[0], nm[1], nm[2], nm[3]);
+            v4[slot] = make_uchar4(nv[0], nv[1], nv[2], nv[3]);
+        }
+
+        p.exp_avg_scale[primitive_idx] = new_m_scale;
+        p.exp_avg_sq_scale[primitive_idx] = new_v_scale;
     }
 
     template <int ACTIVE_SH_BASES>
@@ -288,9 +375,8 @@ namespace fast_lfs::rasterization::kernels {
         // computation adapted from https://github.com/NVlabs/tiny-cuda-nn/blob/212104156403bd87616c1a4f73a1c5f2c2e172a9/include/tiny-cuda-nn/common_device.h#L340
         const float3 grad_color = grad_color_helper[primitive_idx];
         const float3 dL_dsh0 = 0.28209479177387814f * grad_color;
-        adam_step_helper(dL_dsh0.x, fused_adam.sh0, primitive_idx, 0, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-        adam_step_helper(dL_dsh0.y, fused_adam.sh0, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-        adam_step_helper(dL_dsh0.z, fused_adam.sh0, primitive_idx, 2, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+        const float sh0_grads[3] = {dL_dsh0.x, dL_dsh0.y, dL_dsh0.z};
+        adam_step_row(sh0_grads, fused_adam.sh0, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
         float3 dcolor_dposition = make_float3(0.0f);
         if constexpr (ACTIVE_SH_BASES > 1) {
             auto [x_raw, y_raw, z_raw] = position - cam_position;

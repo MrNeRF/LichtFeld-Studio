@@ -848,7 +848,8 @@ namespace lfs::core {
         static Tensor empty_unpinned(TensorShape shape, DataType dtype = DataType::Float32);
         static Tensor zeros(TensorShape shape, Device device = Device::CUDA,
                             DataType dtype = DataType::Float32);
-        static Tensor zeros_direct(TensorShape shape, size_t capacity, Device device = Device::CUDA);
+        static Tensor zeros_direct(TensorShape shape, size_t capacity, Device device = Device::CUDA,
+                                   DataType dtype = DataType::Float32);
         static Tensor ones(TensorShape shape, Device device = Device::CUDA,
                            DataType dtype = DataType::Float32);
         static Tensor full(TensorShape shape, float value, Device device = Device::CUDA,

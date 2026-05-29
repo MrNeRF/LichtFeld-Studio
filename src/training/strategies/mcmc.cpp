@@ -84,20 +84,27 @@ namespace lfs::training {
                 return;
             }
 
-            const auto& shape = state->exp_avg.shape();
-            if (has_zero_dimension(shape)) {
+            // Quantised moments: zero the per-primitive scales (a zero scale dequantises every
+            // moment of that primitive to zero) — correct for both contiguous and swizzled shN.
+            if (!state->exp_avg_scale.is_valid() || state->exp_avg_scale.numel() == 0) {
                 return;
             }
+            auto scale_zeros = lfs::core::Tensor::zeros(
+                lfs::core::TensorShape({indices.numel()}), state->exp_avg_scale.device());
+            state->exp_avg_scale.index_put_(indices, scale_zeros);
+            state->exp_avg_sq_scale.index_put_(indices, scale_zeros);
 
-            std::vector<size_t> dims = {static_cast<size_t>(indices.numel())};
-            for (size_t i = 1; i < shape.rank(); ++i) {
-                dims.push_back(shape[i]);
-            }
-
-            auto zeros = lfs::core::Tensor::zeros(lfs::core::TensorShape(dims), state->exp_avg.device());
-            state->exp_avg.index_put_(indices, zeros);
-            state->exp_avg_sq.index_put_(indices, zeros);
-            if (state->grad.is_valid()) {
+            // grad is transient (re-zeroed each step); only the contiguous case is handled here.
+            if (param_type != ParamType::ShN && state->grad.is_valid() && state->grad.numel() > 0) {
+                const auto& shape = state->grad.shape();
+                if (has_zero_dimension(shape)) {
+                    return;
+                }
+                std::vector<size_t> dims = {static_cast<size_t>(indices.numel())};
+                for (size_t i = 1; i < shape.rank(); ++i) {
+                    dims.push_back(shape[i]);
+                }
+                auto zeros = lfs::core::Tensor::zeros(lfs::core::TensorShape(dims), state->grad.device());
                 state->grad.index_put_(indices, zeros);
             }
         }
