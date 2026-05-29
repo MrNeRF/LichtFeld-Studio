@@ -501,6 +501,7 @@ namespace lfs::vis::gui {
     bool NativeScenePanel::drawDirectCached(const float x, const float y,
                                             const float w, const float h,
                                             const PanelDrawContext& ctx) {
+        (void)ctx;
         if (!ensureInitialized())
             return false;
 
@@ -520,10 +521,8 @@ namespace lfs::vis::gui {
             }
         }
 
-        if (shouldSyncPanel(nullptr)) {
-            syncPanel(ctx);
-            return false; // fall back to a live draw so the new tree state is rendered
-        }
+        if (shouldSyncPanel(nullptr))
+            return false;
 
         return host_.drawDirectCached(x, y, w, h);
     }

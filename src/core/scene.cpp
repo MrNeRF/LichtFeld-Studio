@@ -604,7 +604,17 @@ namespace lfs::core {
         return (it != name_to_id_.end()) ? it->second : NULL_NODE;
     }
 
+    void Scene::setCombinedModelAllocator(SplatTensorAllocator allocator) {
+        std::lock_guard<std::mutex> lock(combined_model_mutex_);
+        combined_model_allocator_ = std::move(allocator);
+        model_cache_valid_.store(false, std::memory_order_release);
+    }
+
     void Scene::rebuildModelCacheIfNeeded() const {
+        if (model_cache_valid_.load(std::memory_order_acquire))
+            return;
+
+        std::lock_guard<std::mutex> lock(combined_model_mutex_);
         if (model_cache_valid_.load(std::memory_order_acquire))
             return;
 
@@ -712,17 +722,34 @@ namespace lfs::core {
         const size_t shN_swizzled_floats = lfs::core::sh_swizzled_float_count(stats.total_gaussians, dst_layout_rest);
 
         using lfs::core::Tensor;
-        Tensor means = Tensor::empty({static_cast<size_t>(stats.total_gaussians), 3}, device);
-        Tensor sh0 = Tensor::empty({static_cast<size_t>(stats.total_gaussians), static_cast<size_t>(SH0_COEFFS), 3}, device);
-        Tensor shN = shN_swizzled_floats > 0
-                         ? Tensor::zeros_direct(
-                               TensorShape({shN_swizzled_floats}),
-                               shN_swizzled_floats,
-                               lfs::core::Device::CUDA)
-                         : Tensor::zeros({0}, lfs::core::Device::CUDA);
-        Tensor opacity = Tensor::empty({static_cast<size_t>(stats.total_gaussians), 1}, device);
-        Tensor scaling = Tensor::empty({static_cast<size_t>(stats.total_gaussians), 3}, device);
-        Tensor rotation = Tensor::empty({static_cast<size_t>(stats.total_gaussians), 4}, device);
+        const size_t total = stats.total_gaussians;
+        const auto& alloc = combined_model_allocator_;
+        const auto alloc_param = [&](TensorShape shape, const size_t rows, const std::string_view name) -> Tensor {
+            return alloc ? alloc(std::move(shape), rows, lfs::core::DataType::Float32, name)
+                         : Tensor::empty(std::move(shape), device);
+        };
+        Tensor means = alloc_param(TensorShape({total, 3}), total, "SplatData.means");
+        Tensor sh0 = alloc_param(TensorShape({total, static_cast<size_t>(SH0_COEFFS), 3}), total, "SplatData.sh0");
+        // shN needs zeroing: copy_contiguous leaves the swizzled block-padding lanes untouched.
+        Tensor shN;
+        if (shN_swizzled_floats > 0) {
+            if (alloc) {
+                shN = alloc(TensorShape({shN_swizzled_floats}),
+                            shN_swizzled_floats,
+                            lfs::core::DataType::Float32,
+                            "SplatData.shN");
+                shN.zero_();
+            } else {
+                shN = Tensor::zeros_direct(TensorShape({shN_swizzled_floats}),
+                                           shN_swizzled_floats,
+                                           lfs::core::Device::CUDA);
+            }
+        } else {
+            shN = Tensor::zeros({0}, lfs::core::Device::CUDA);
+        }
+        Tensor opacity = alloc_param(TensorShape({total, 1}), total, "SplatData.opacity");
+        Tensor scaling = alloc_param(TensorShape({total, 3}), total, "SplatData.scaling");
+        Tensor rotation = alloc_param(TensorShape({total, 4}), total, "SplatData.rotation");
 
         const bool has_any_deleted = std::any_of(visible_nodes.begin(), visible_nodes.end(),
                                                  [](const SceneNode* node) { return node->model->has_deleted_mask(); });
@@ -799,6 +826,7 @@ namespace lfs::core {
             stats.total_scene_scale / visible_nodes.size(),
             lfs::core::SplatData::ShNLayout::Swizzled);
         cached_combined_->set_active_sh_degree(stats.max_active_sh_degree);
+        cached_combined_->set_tensor_allocator(combined_model_allocator_);
 
         if (has_any_deleted) {
             cached_combined_->deleted() = std::move(deleted);
