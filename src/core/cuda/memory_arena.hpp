@@ -12,6 +12,8 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -64,6 +66,24 @@ namespace lfs::core {
             float utilization_percent = 0.0f;
         };
 
+        struct ExternalBacking {
+            void* device_ptr = nullptr;
+            size_t size = 0;
+            int device = -1;
+            std::shared_ptr<void> owner;
+            std::string label;
+            // Grows the committed physical to >= the requested bytes in place (the
+            // base pointer must stay constant), returning the new committed size or
+            // 0 on failure. Invoked by the arena when training's scratch demand
+            // outgrows the current capacity. Optional; if unset the arena cannot
+            // grow and an over-capacity request fails.
+            std::function<size_t(size_t)> grow;
+
+            [[nodiscard]] bool valid() const noexcept {
+                return device_ptr != nullptr && size > 0 && device >= 0 && static_cast<bool>(owner);
+            }
+        };
+
     private:
         struct PhysicalChunk {
             CUmemGenericAllocationHandle handle = 0;
@@ -83,8 +103,13 @@ namespace lfs::core {
 
             // Traditional allocation fallback
             void* fallback_buffer = nullptr; // Raw CUDA memory for non-VMM
-            std::atomic<size_t> offset{0};   // Current allocation offset
-            size_t capacity = 0;             // Same as committed_size for compatibility
+            bool owns_fallback_buffer = true;
+            bool external_backing = false;
+            std::shared_ptr<void> external_owner;
+            std::string external_label;
+            std::function<size_t(size_t)> external_grow;
+            std::atomic<size_t> offset{0}; // Current allocation offset
+            size_t capacity = 0;           // Same as committed_size for compatibility
             uint64_t generation = 0;
             int device = -1;
 
@@ -110,7 +135,8 @@ namespace lfs::core {
         std::atomic<size_t> total_frames_processed_{0};
 
         // The arena uses a single offset per device, so only one live frame can own it safely.
-        // Pending render requests are counted so training does not cut in front of queued renders.
+        // Pending render requests cover the queued-before-active window; active_frames_ covers
+        // the actual lifetime once begin_frame succeeds.
         mutable std::mutex sync_mutex_;
         mutable std::condition_variable sync_cv_;
         uint64_t active_frames_ = 0;
@@ -132,12 +158,24 @@ namespace lfs::core {
         RasterizerMemoryArena& operator=(RasterizerMemoryArena&&) noexcept;
 
         uint64_t begin_frame(bool from_rendering = false);
+        std::optional<uint64_t> try_begin_frame(bool from_rendering = false);
         void end_frame(uint64_t frame_id, bool from_rendering = false);
         std::function<char*(size_t)> get_allocator(uint64_t frame_id);
         std::vector<BufferHandle> get_frame_buffers(uint64_t frame_id) const;
         void reset_frame(uint64_t frame_id); // Keeps allocation, resets offset
         void cleanup_frames(int keep_recent = 3);
         void full_reset();
+        bool install_external_backing(ExternalBacking backing);
+        bool try_install_external_backing(ExternalBacking backing);
+        // Grows the committed size of an already-installed external backing whose
+        // base pointer is `device_ptr` (which must stay constant). The arena
+        // drains all frames and the device, then invokes `commit(new_size)` — which
+        // performs the physical grow + Vulkan re-import — inside that safe window;
+        // on success the arena's committed capacity is bumped to new_size.
+        bool grow_external_backing(const void* device_ptr, size_t new_size,
+                                   const std::function<bool(size_t)>& commit);
+        void clear_external_backing(const void* device_ptr = nullptr);
+        [[nodiscard]] bool using_external_backing() const;
 
         Statistics get_statistics() const;
         MemoryInfo get_memory_info() const;
@@ -152,7 +190,10 @@ namespace lfs::core {
 
     private:
         Arena& get_or_create_arena(int device);
+        std::optional<uint64_t> begin_frame_impl(bool from_rendering, bool wait);
+        bool install_external_backing_impl(ExternalBacking backing, bool wait);
         char* allocate_internal(Arena& arena, size_t size, uint64_t frame_id);
+        void release_arena_storage(Arena& arena);
         bool grow_arena(Arena& arena, size_t required_size);
         size_t align_size(size_t size) const;
         void record_allocation(uint64_t frame_id, const BufferHandle& handle);
@@ -167,6 +208,11 @@ namespace lfs::core {
         static GlobalArenaManager& instance();
         RasterizerMemoryArena& get_arena();
         RasterizerMemoryArena* try_get_arena();
+        bool install_external_backing(RasterizerMemoryArena::ExternalBacking backing);
+        bool try_install_external_backing(RasterizerMemoryArena::ExternalBacking backing);
+        bool grow_external_backing(const void* device_ptr, size_t new_size,
+                                   const std::function<bool(size_t)>& commit);
+        void clear_external_backing(const void* device_ptr = nullptr);
         void reset();
 
     private:

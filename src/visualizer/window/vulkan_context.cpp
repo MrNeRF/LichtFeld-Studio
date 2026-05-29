@@ -2828,6 +2828,13 @@ namespace lfs::vis {
             framebuffer_resized_ = true;
             return false;
         }
+        // waitForFrameFences only drains the graphics queue's per-frame fences. The
+        // viewport's shared-scratch rasterizer submits on the async-compute queue,
+        // whose work is not covered by those fences; tearing down swapchain-tied
+        // resources while that work is still in flight loses the device (Xid 109).
+        // vkDeviceWaitIdle drains all queue work (it does not touch presentation, so
+        // it cannot deadlock on the compositor the way vkQueueWaitIdle(present) can).
+        vkDeviceWaitIdle(device_);
         destroySwapchain();
         const bool created = createSwapchain(framebuffer_width_, framebuffer_height_) &&
                              createImageViews() &&

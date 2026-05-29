@@ -1026,6 +1026,63 @@ namespace lfs::vis {
         EXPECT_TRUE(right_request.overlay.cursor.enabled);
     }
 
+    TEST(ViewportRequestBuilderTest, TrainingSuppressesSelectionOverlayState) {
+        using lfs::core::DataType;
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+
+        Viewport viewport(640, 480);
+        SceneRenderState scene_state;
+        scene_state.selection_mask = std::make_shared<Tensor>(
+            Tensor::zeros({size_t{2}}, Device::CPU, DataType::UInt8));
+        scene_state.selected_node_mask = {true, false};
+
+        Tensor preview_selection =
+            Tensor::zeros({size_t{2}}, Device::CPU, DataType::UInt8);
+
+        RenderSettings settings;
+        settings.show_rings = true;
+        settings.show_center_markers = true;
+        settings.desaturate_unselected = true;
+
+        const FrameContext ctx{
+            .viewport = viewport,
+            .scene_state = scene_state,
+            .settings = settings,
+            .render_size = {640, 480},
+            .viewport_pos = {0, 0},
+            .training_active = true,
+            .cursor_preview =
+                {.active = true,
+                 .x = 120.0f,
+                 .y = 80.0f,
+                 .radius = 24.0f,
+                 .add_mode = true,
+                 .preview_selection = &preview_selection,
+                 .focused_gaussian_id = 1,
+                 .selection_mode = SelectionPreviewMode::Rings},
+            .selection_flash_intensity = 0.75f,
+        };
+
+        const auto request = buildViewportRenderRequest(ctx, {640, 480});
+
+        EXPECT_FALSE(request.overlay.markers.show_rings);
+        EXPECT_FALSE(request.overlay.markers.show_center_markers);
+        EXPECT_FALSE(request.overlay.cursor.enabled);
+        EXPECT_EQ(request.overlay.emphasis.mask, nullptr);
+        EXPECT_EQ(request.overlay.emphasis.transient_mask.mask, nullptr);
+        EXPECT_FALSE(request.overlay.emphasis.transient_mask.additive);
+        EXPECT_TRUE(request.overlay.emphasis.emphasized_node_mask.empty());
+        EXPECT_FALSE(request.overlay.emphasis.dim_non_emphasized);
+        EXPECT_FLOAT_EQ(request.overlay.emphasis.flash_intensity, 0.0f);
+        EXPECT_EQ(request.overlay.emphasis.focused_gaussian_id, -1);
+
+        const std::vector<glm::mat4> transforms{glm::mat4(1.0f)};
+        const auto point_cloud_request = buildPointCloudRenderRequest(ctx, {640, 480}, transforms);
+        EXPECT_EQ(point_cloud_request.overlay.selection_mask, nullptr);
+        EXPECT_EQ(point_cloud_request.overlay.transient_mask.mask, nullptr);
+    }
+
     TEST_F(RenderingManagerEventsTest, SceneLoadedDisablesGtComparison) {
         RenderingManager manager;
         lfs::core::events::cmd::ToggleGTComparison{}.emit();

@@ -693,6 +693,7 @@ namespace lfs::vis {
             .render_size = render_size,
             .viewport_pos = {0, 0},
             .frame_dirty = frame_dirty,
+            .training_active = is_training,
             .cursor_preview = viewport_overlay_service_.cursorPreview(),
             .gizmo = viewport_overlay_service_.makeFrameGizmoState(),
             .hovered_camera_id = camera_interaction_service_.hoveredCameraId(),
@@ -1421,6 +1422,7 @@ namespace lfs::vis {
                     };
 
                     const bool can_rerender_selection_overlay =
+                        !is_training &&
                         frame_dirty == DirtyFlag::SELECTION &&
                         vulkan_external_viewport_image_ != VK_NULL_HANDLE &&
                         vulkan_viewport_image_size_ == render_size &&
@@ -1466,6 +1468,19 @@ namespace lfs::vis {
                     }
                     if (render_result) {
                         return publish_vksplat_result(*render_result);
+                    }
+                    const bool shared_scratch_retryable =
+                        render_result.error().find("shared scratch") != std::string::npos &&
+                        (render_result.error().find("busy") != std::string::npos ||
+                         render_result.error().find("capacity insufficient") != std::string::npos);
+                    if (synchronize_vksplat_input_upload &&
+                        has_cached_viewport_output &&
+                        shared_scratch_retryable) {
+                        dirty_mask_.fetch_or(frame_dirty, std::memory_order_relaxed);
+                        LOG_DEBUG("VkSplat shared scratch unavailable ({}); returning cached viewport image",
+                                  render_result.error());
+                        render_lock.reset();
+                        return cached_frame_result();
                     }
                     render_error = render_result.error();
                 }

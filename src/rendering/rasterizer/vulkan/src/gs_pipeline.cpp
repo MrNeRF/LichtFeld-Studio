@@ -982,7 +982,7 @@ void VulkanGSPipeline::executeComputeIndirect(
             0, (uint32_t)uniformSize, uniformsPtr);
     }
 
-    vkCmdDispatchIndirect(command_buffer, indirect_buffer.buffer, indirect_offset);
+    vkCmdDispatchIndirect(command_buffer, indirect_buffer.buffer, indirect_buffer.offset + indirect_offset);
 }
 
 void VulkanGSPipeline::destroyComputePipeline(_ComputePipeline& pipeline) {

@@ -2894,7 +2894,17 @@ namespace lfs::training {
                 LOG_VRAM_DIFF("train.strategy.fastgs_pre_step");
                 strategy_->pre_step(iter, r_output);
 
-                std::unique_lock<std::shared_mutex> lock(render_mutex_);
+                // Only exclude the render thread when this step actually mutates model
+                // topology (grow/prune → tensor reallocation, moving pointers). In-place
+                // parameter updates are ordered against the viewer's reads by the
+                // CUDA↔Vulkan interop semaphore, so render_mutex_ is redundant there.
+                // Holding it every iteration deadlocks at startup: the render holds a
+                // read-lock across its synchronous GPU readback while waiting for the
+                // first step's output, which this write-lock — taken before that step —
+                // blocks. See trainer.cpp step() lock below; both must be gated.
+                std::unique_lock<std::shared_mutex> lock(render_mutex_, std::defer_lock);
+                if (strategy_->is_refining(iter))
+                    lock.lock();
                 auto& model = strategy_->get_model();
                 const size_t model_size_before = static_cast<size_t>(model.size());
                 strategy_->post_backward(iter, r_output);
@@ -3536,7 +3546,13 @@ namespace lfs::training {
                         } else {
                             tile_context_guard.release();
                             if (run_fastgs_gaussian_backward) {
-                                std::unique_lock<std::shared_mutex> model_write_lock(render_mutex_);
+                                // Topology-only locking (see post_backward/step above): the
+                                // fused backward updates params in place; the interop
+                                // semaphore orders those against the viewer's reads, so the
+                                // render thread is only excluded on reallocation iterations.
+                                std::unique_lock<std::shared_mutex> model_write_lock(render_mutex_, std::defer_lock);
+                                if (strategy_->is_refining(iter))
+                                    model_write_lock.lock();
                                 fast_rasterize_backward(*fast_ctx, raster_grad, strategy_->get_model(),
                                                         strategy_->get_optimizer(), tile_grad_alpha,
                                                         use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{},
@@ -3715,7 +3731,14 @@ namespace lfs::training {
             {
                 DeferredEvents deferred;
                 {
-                    std::unique_lock<std::shared_mutex> lock(render_mutex_);
+                    // Same rationale as the post_backward lock above: only block the
+                    // render thread when topology actually changes this iteration. The
+                    // optimizer step's in-place writes are ordered against the viewer by
+                    // the interop semaphore (the render waits for the step's signal before
+                    // reading), so the CPU write-lock is needed only for reallocation.
+                    std::unique_lock<std::shared_mutex> lock(render_mutex_, std::defer_lock);
+                    if (strategy_->is_refining(iter))
+                        lock.lock();
                     LFS_VRAM_SCOPE("train.optimizer.strategy_step");
                     LOG_VRAM_DIFF("train.optimizer.strategy_step");
                     auto& model = strategy_->get_model();
