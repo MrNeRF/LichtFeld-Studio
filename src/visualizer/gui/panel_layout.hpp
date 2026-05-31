@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "gui/layout_state.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/ui_context.hpp"
@@ -65,7 +66,7 @@ namespace lfs::vis::gui {
         bool active_tab_live = true;
     };
 
-    class PanelLayoutManager {
+    class LFS_VIS_API PanelLayoutManager {
     public:
         PanelLayoutManager();
 

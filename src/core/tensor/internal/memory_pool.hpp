@@ -32,7 +32,7 @@ namespace lfs::core {
     public:
         static CudaMemoryPool& instance();
 
-        class LabelGuard {
+        class LFS_CORE_API LabelGuard {
         public:
             explicit LabelGuard(std::string_view label);
             ~LabelGuard();
