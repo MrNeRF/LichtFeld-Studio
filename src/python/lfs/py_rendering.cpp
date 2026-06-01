@@ -269,6 +269,7 @@ namespace lfs::python {
                 options.max_width = 0;
                 options.images_folder = "images";
                 options.validate_only = false;
+                options.splat_tensor_allocator = rendering_manager->makeSplatTensorAllocator();
 
                 const auto asset_path = core::utf8_to_path(path);
                 std::error_code file_size_error;
@@ -285,7 +286,9 @@ namespace lfs::python {
                 auto ext = asset_path.extension().string();
                 std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
                 if (ext == ".ckpt" || ext == ".resume") {
-                    auto checkpoint_result = core::load_checkpoint_splat_data(asset_path);
+                    auto checkpoint_result = core::load_checkpoint_splat_data(
+                        asset_path,
+                        rendering_manager->makeSplatTensorAllocator());
                     if (!checkpoint_result) {
                         LOG_DEBUG(
                             "Checkpoint asset preview load failed for '{}': {}",

@@ -16,6 +16,7 @@
 #include "viewport_region_utils.hpp"
 #include "viewport_request_builder.hpp"
 #include "vksplat_viewport_renderer.hpp"
+#include "vulkan_external_tensor.hpp"
 #include <algorithm>
 #include <cmath>
 #include <expected>
@@ -1739,6 +1740,34 @@ namespace lfs::vis {
                 .image_generation = vulkan_viewport_image_generation_,
                 .size = vulkan_viewport_image_size_,
                 .flip_y = vulkan_viewport_image_flip_y_};
+    }
+
+    lfs::io::SplatTensorAllocator RenderingManager::makeSplatTensorAllocator() const {
+        if (!last_vulkan_context_ || !last_vulkan_context_->externalMemoryInteropEnabled()) {
+            return {};
+        }
+        return [context = last_vulkan_context_](lfs::core::TensorShape shape,
+                                                 const size_t capacity,
+                                                 const lfs::core::DataType dtype,
+                                                 const std::string_view name) -> lfs::core::Tensor {
+            const std::string debug_name{name};
+            auto tensor = makeVulkanExternalTensor(
+                *context,
+                std::move(shape),
+                dtype,
+                capacity,
+                debug_name.c_str(),
+                nullptr,
+                false);
+            if (!tensor) {
+                throw lfs::core::TensorError(std::format(
+                    "Vulkan-external thumbnail splat tensor allocation failed for '{}': {}",
+                    debug_name,
+                    tensor.error()));
+            }
+            tensor->set_name(debug_name);
+            return std::move(*tensor);
+        };
     }
 
 } // namespace lfs::vis
