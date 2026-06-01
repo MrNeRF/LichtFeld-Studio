@@ -133,19 +133,9 @@
     color: @{background};
 }
 
-.asset-pill-ply {
-    background-color: @{alpha(success,0.25)};
-    color: @{success};
-}
-
 .asset-pill-mp4 {
     background-color: @{alpha(warning,0.25)};
     color: @{warning};
-}
-
-.asset-pill-rad {
-    background-color: @{alpha(primary_dim,0.35)};
-    color: @{primary_dim};
 }
 
 .asset-video-duration {

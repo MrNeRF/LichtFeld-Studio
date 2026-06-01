@@ -1121,7 +1121,7 @@ class AssetManagerPanel(Panel):
             "thumb_class": thumb_class,
             "thumb_label": asset_type.upper() if asset_type else tr("asset_manager.type.asset"),
             "thumbnail_decorator": self._thumbnail_decorator(asset),
-            "pill_class": f"asset-pill-{asset_type}" if asset_type else "",
+            "pill_class": f"asset-pill-{asset_type.replace('_', '-')}" if asset_type else "",
             "is_selected": asset_id in self._selected_asset_ids,
             "exists": asset.get("exists", True),
             "status_label": tr("asset_manager.status.missing") if not asset.get("exists", True) else tr("asset_manager.status.available"),

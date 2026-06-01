@@ -535,9 +535,12 @@
 }
 
 .asset-pill-ply,
+.asset-pill-ply-3dgs,
+.asset-pill-ply-pcl,
 .asset-pill-rad,
 .asset-pill-sog,
-.asset-pill-spz {
+.asset-pill-spz,
+.asset-pill-mesh {
     background-color: #36564b;
     color: #9be0ca;
 }
