@@ -81,7 +81,8 @@ public:
                             VkDevice external_device,
                             VkQueue external_queue,
                             uint32_t external_queue_family_index,
-                            VmaAllocator external_allocator);
+                            VmaAllocator external_allocator,
+                            VkPipelineCache external_pipeline_cache = VK_NULL_HANDLE);
     void cleanup();
 
     void tagDeferredVisibleCountReadback(VkSemaphore semaphore, std::uint64_t value);

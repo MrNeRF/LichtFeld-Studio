@@ -97,7 +97,7 @@ void VulkanGSRenderer::ensureVisibleCountReadback() {
                         &alloc_info) != VK_SUCCESS) {
         visible_count_readback_buffer_.buffer = VK_NULL_HANDLE;
         visible_count_readback_buffer_.allocation = VK_NULL_HANDLE;
-        _THROW_ERROR("Failed to allocate visible_count readback buffer");
+        _CHECK_FATAL("Failed to allocate visible_count readback buffer");
     }
     visible_count_readback_buffer_.allocSize = sizeof(uint32_t);
     visible_count_readback_buffer_.size = sizeof(uint32_t);
@@ -185,7 +185,8 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
                                           VkDevice external_device,
                                           VkQueue external_queue,
                                           uint32_t external_queue_family_index,
-                                          VmaAllocator external_allocator) {
+                                          VmaAllocator external_allocator,
+                                          VkPipelineCache external_pipeline_cache) {
     destroyVisibleCountReadback();
     VulkanGSPipeline::initializeExternal(
         external_instance,
@@ -193,7 +194,8 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
         external_device,
         external_queue,
         external_queue_family_index,
-        external_allocator);
+        external_allocator,
+        external_pipeline_cache);
 
     createComputePipeline(pipeline_projection_forward, spirv_paths.at("projection_forward"));
     createComputePipeline(pipeline_projection_forward_3dgut, spirv_paths.at("projection_forward_3dgut"));

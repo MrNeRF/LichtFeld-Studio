@@ -37,7 +37,8 @@ public:
                             VkDevice external_device,
                             VkQueue external_queue,
                             uint32_t external_queue_family_index,
-                            VmaAllocator external_allocator);
+                            VmaAllocator external_allocator,
+                            VkPipelineCache external_pipeline_cache = VK_NULL_HANDLE);
     void cleanup();
     void cleanupBuffers(VulkanGSPipelineBuffers& buffers);
     void assignBufferLabels(VulkanGSPipelineBuffers& buffers);
@@ -166,6 +167,9 @@ protected:
     VkFence fence;
     VkQueryPool timestamp_query_pool;
     VmaAllocator allocator = VK_NULL_HANDLE;
+    // Persisted, on-disk pipeline cache owned by the host VulkanContext. Optional —
+    // VK_NULL_HANDLE simply skips the cache. Shared with the rest of the app's pipelines.
+    VkPipelineCache pipeline_cache = VK_NULL_HANDLE;
     PFN_vkCmdPushDescriptorSetKHR vk_cmd_push_descriptor_set_ = nullptr;
 
     struct DeviceInfo {

@@ -50,5 +50,10 @@ typedef int32_t sortingKey_t;
     } while (0)
 #endif
 
-#define _CEIL_DIV(x, m)   (((x) + (m) - 1) / (m))
+// Always-on guard, NOT compiled out in release. Use only for conditions that would
+// otherwise feed undefined behavior into the Vulkan driver (e.g. a VK_NULL_HANDLE
+// buffer reaching vkCmdDispatch). Logic-only invariants stay on _THROW_ERROR.
+#define _CHECK_FATAL(...) _THROW_ERROR_ALWAYS(__VA_ARGS__)
+
+#define _CEIL_DIV(x, m)   (((x) + (m)-1) / (m))
 #define _CEIL_ROUND(x, m) (_CEIL_DIV(x, m) * (m))

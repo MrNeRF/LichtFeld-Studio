@@ -126,7 +126,8 @@ void VulkanGSPipeline::initializeExternal(VkInstance external_instance,
                                           VkDevice external_device,
                                           VkQueue external_queue,
                                           uint32_t external_queue_family_index,
-                                          VmaAllocator external_allocator) {
+                                          VmaAllocator external_allocator,
+                                          VkPipelineCache external_pipeline_cache) {
     cleanup();
     if (external_instance == VK_NULL_HANDLE ||
         external_physical_device == VK_NULL_HANDLE ||
@@ -143,6 +144,7 @@ void VulkanGSPipeline::initializeExternal(VkInstance external_instance,
     command_queue = external_queue;
     queue_family_index = external_queue_family_index;
     allocator = external_allocator;
+    pipeline_cache = external_pipeline_cache;
 
     vk_cmd_push_descriptor_set_ = reinterpret_cast<PFN_vkCmdPushDescriptorSetKHR>(
         vkGetDeviceProcAddr(device, "vkCmdPushDescriptorSetKHR"));
@@ -849,7 +851,7 @@ void VulkanGSPipeline::createComputePipeline(_ComputePipeline& pipeline, const s
     pipeline_info.layout = pipeline.pipeline_layout;
     pipeline_info.stage = compute_shader_stage_info;
 
-    if (vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipeline_info, nullptr, &pipeline.pipeline) != VK_SUCCESS)
+    if (vkCreateComputePipelines(device, pipeline_cache, 1, &pipeline_info, nullptr, &pipeline.pipeline) != VK_SUCCESS)
         _THROW_ERROR("Failed to create compute pipeline");
 
     all_compute_pipelines.push_back(&pipeline);
@@ -873,7 +875,7 @@ void VulkanGSPipeline::executeCompute(
     for (std::size_t idx = 0; idx < num_buffers; ++idx) {
         const int binding = pipeline.buffer_layouts[idx];
         if (buffers[binding].buffer == VK_NULL_HANDLE)
-            _THROW_ERROR("Buffer " + std::to_string(binding) + " is NULL");
+            _CHECK_FATAL("Buffer " + std::to_string(binding) + " is NULL");
         buffer_infos[idx].buffer = buffers[binding].buffer;
         buffer_infos[idx].offset = buffers[binding].offset;
         // Bind the in-use [offset, offset+size) range. For owned buffers size
@@ -937,7 +939,7 @@ void VulkanGSPipeline::executeComputeIndirect(
     if (uniformSize > MAX_UNIFORM_SIZE)
         _THROW_ERROR("Maximum uniform size exceeded");
     if (indirect_buffer.buffer == VK_NULL_HANDLE)
-        _THROW_ERROR("Indirect dispatch buffer is NULL");
+        _CHECK_FATAL("Indirect dispatch buffer is NULL");
 
     DEVICE_GUARD;
 
@@ -949,7 +951,7 @@ void VulkanGSPipeline::executeComputeIndirect(
     for (std::size_t idx = 0; idx < num_buffers; ++idx) {
         const int binding = pipeline.buffer_layouts[idx];
         if (buffers[binding].buffer == VK_NULL_HANDLE)
-            _THROW_ERROR("Buffer " + std::to_string(binding) + " is NULL");
+            _CHECK_FATAL("Buffer " + std::to_string(binding) + " is NULL");
         buffer_infos[idx].buffer = buffers[binding].buffer;
         buffer_infos[idx].offset = buffers[binding].offset;
         // Bind the in-use [offset, offset+size) range. For owned buffers size
