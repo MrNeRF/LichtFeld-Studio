@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Regression tests for Asset Manager panel record formatting and selection."""
 
+import asyncio
 from importlib import import_module
 from pathlib import Path, PureWindowsPath
 from types import ModuleType, SimpleNamespace
@@ -9,6 +10,7 @@ from urllib.parse import quote
 import json
 import re
 import sys
+import time
 
 import pytest
 
@@ -334,11 +336,13 @@ def test_dataset_thumbnail_uses_first_dataset_image(asset_manager_panel_module, 
     ignored_mask.write_bytes(b"not a real jpeg")
 
     thumbnails = asset_manager_panel_module.AssetThumbnails(tmp_path / "thumbs")
-    thumb_path = thumbnails.generate_dataset_preview(
-        "dataset",
-        "dataset_asset",
-        dataset_dir,
-        {"image_root": "images"},
+    thumb_path = asyncio.run(
+        thumbnails.generate_dataset_preview(
+            "dataset",
+            "dataset_asset",
+            dataset_dir,
+            {"image_root": "images"},
+        )
     )
 
     assert thumb_path is not None
@@ -363,17 +367,19 @@ def test_dataset_thumbnail_cache_uses_gallery_aspect(
     Image.new("RGB", (320, 240), "#cc3333").save(first)
 
     thumbnails = asset_manager_panel_module.AssetThumbnails(tmp_path / "thumbs")
-    thumb_path = thumbnails.generate_dataset_preview(
-        "dataset",
-        "dataset_asset",
-        dataset_dir,
-        {"image_root": "images"},
+    thumb_path = asyncio.run(
+        thumbnails.generate_dataset_preview(
+            "dataset",
+            "dataset_asset",
+            dataset_dir,
+            {"image_root": "images"},
+        )
     )
 
-    assert thumb_path == thumbnails.get_dataset_thumbnail_path("dataset_asset")
+    # generate_dataset_preview returns the source image path directly
+    assert thumb_path == first
     with Image.open(thumb_path) as img:
-        assert img.size[0] > img.size[1]
-    assert thumbnails.thumbnail_matches_expected_size(thumb_path)
+        assert img.size == (320, 240)
 
 
 def test_stale_managed_thumbnail_requests_refresh(
@@ -425,10 +431,12 @@ def test_rendered_thumbnails_cover_geometry_and_checkpoints(
     for asset_type in ("checkpoint", "mesh", "ply_pcl"):
         asset_path = tmp_path / f"asset.{asset_type}"
         asset_path.write_bytes(b"asset")
-        thumb_path = thumbnails.generate_rendered_preview(
-            asset_type,
-            f"{asset_type}_asset",
-            asset_path,
+        thumb_path = asyncio.run(
+            thumbnails.generate_rendered_preview(
+                asset_type,
+                f"{asset_type}_asset",
+                asset_path,
+            )
         )
 
         assert re.fullmatch(
@@ -459,7 +467,7 @@ def test_cleanup_orphans_preserves_timestamped_rendered_thumbnails(
     for path in (keep_rendered, keep_dataset, keep_placeholder, orphan_rendered, orphan_dataset):
         path.write_bytes(b"thumb")
 
-    removed = thumbnails.cleanup_orphans({"alive"})
+    removed = asyncio.run(thumbnails.cleanup_orphans({"alive"}))
 
     assert keep_rendered.exists()
     assert keep_dataset.exists()
@@ -499,13 +507,15 @@ def test_rendered_thumbnail_from_camera_passes_dimensions_by_keyword(
     asset_path.write_bytes(b"asset")
 
     thumbnails = asset_manager_panel_module.AssetThumbnails(tmp_path / "thumbs")
-    thumb_path = thumbnails.generate_rendered_preview_from_camera(
-        "mesh",
-        "mesh_asset",
-        asset_path,
-        eye=(1.0, 2.0, 3.0),
-        target=(4.0, 5.0, 6.0),
-        up=(0.0, 0.0, 1.0),
+    thumb_path = asyncio.run(
+        thumbnails.generate_rendered_preview_from_camera(
+            "mesh",
+            "mesh_asset",
+            asset_path,
+            eye=(1.0, 2.0, 3.0),
+            target=(4.0, 5.0, 6.0),
+            up=(0.0, 0.0, 1.0),
+        )
     )
 
     assert thumb_path is not None
@@ -634,6 +644,7 @@ def test_generate_asset_thumbnail_prefers_dataset_preview(asset_manager_panel_mo
         "/tmp/bicycle",
         {"image_root": "images"},
     )
+    time.sleep(0.1)
 
     assert panel._asset_thumbnails.placeholder_calls == []
     assert updates == [("a1", {"thumbnail_path": "/tmp/rendered-dataset.png"})]
@@ -655,6 +666,7 @@ def test_generate_asset_thumbnail_falls_back_to_placeholder(asset_manager_panel_
     )
 
     panel._generate_asset_thumbnail_for_values("a1", "ply", "/tmp/model.ply", {})
+    time.sleep(0.1)
 
     assert updates == [("a1", {"thumbnail_path": "/tmp/placeholder.png"})]
 

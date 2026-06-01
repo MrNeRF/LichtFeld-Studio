@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Retained RmlUI panels for dataset, checkpoint, and URL import flows."""
 
+import asyncio
 import logging
 import os
 import shutil
@@ -342,23 +343,32 @@ def _register_discovered_assets(
             file_path,
         )
         if thumbnails is not None:
+            def _maybe_await(coro_or_result):
+                if asyncio.iscoroutine(coro_or_result):
+                    return asyncio.run(coro_or_result)
+                return coro_or_result
+
             try:
                 thumb_path = None
                 if asset.type == "dataset" and hasattr(thumbnails, "generate_dataset_preview"):
-                    thumb_path = thumbnails.generate_dataset_preview(
-                        asset.type,
-                        asset.id,
-                        file_path,
-                        metadata.get("format_specific", {}) or {},
+                    thumb_path = _maybe_await(
+                        thumbnails.generate_dataset_preview(
+                            asset.type,
+                            asset.id,
+                            file_path,
+                            metadata.get("format_specific", {}) or {},
+                        )
                     )
                 elif hasattr(thumbnails, "generate_rendered_preview"):
-                    thumb_path = thumbnails.generate_rendered_preview(
-                        asset.type,
-                        asset.id,
-                        file_path,
+                    thumb_path = _maybe_await(
+                        thumbnails.generate_rendered_preview(
+                            asset.type,
+                            asset.id,
+                            file_path,
+                        )
                     )
                 if thumb_path is None:
-                    thumb_path = thumbnails.generate_placeholder(asset.type, asset.id)
+                    thumb_path = _maybe_await(thumbnails.generate_placeholder(asset.type, asset.id))
                 index.update_asset(asset.id, thumbnail_path=str(thumb_path))
             except Exception:
                 _watch_log(

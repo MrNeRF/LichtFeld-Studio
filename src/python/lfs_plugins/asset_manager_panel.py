@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Asset Manager panel for browsing and managing Gaussian Splatting assets."""
 
+import asyncio
 import logging
 import math
 import os
 import shutil
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Any
@@ -1668,6 +1670,16 @@ class AssetManagerPanel(Panel):
 
         return kwargs
 
+    @staticmethod
+    def _maybe_await(coro_or_result):
+        """Await if the value is a coroutine, otherwise return it directly.
+
+        This lets the panel work with both async and sync thumbnail generators.
+        """
+        if asyncio.iscoroutine(coro_or_result):
+            return asyncio.run(coro_or_result)
+        return coro_or_result
+
     def _generate_asset_thumbnail_for_values(
         self,
         asset_id: str,
@@ -1691,87 +1703,96 @@ class AssetManagerPanel(Panel):
             _logger.error("Thumbnail generation skipped: asset_id is empty")
             return
 
-        try:
-            thumb_path = None
-            if asset_type == "dataset":
-                generate_dataset_preview = getattr(
-                    self._asset_thumbnails,
-                    "generate_dataset_preview",
-                    None,
-                )
-                if callable(generate_dataset_preview):
-                    thumb_path = generate_dataset_preview(
-                        asset_type,
-                        asset_id,
-                        asset_path,
-                        dataset_metadata or {},
+        def _do_generate() -> None:
+            try:
+                thumb_path = None
+                if asset_type == "dataset":
+                    generate_dataset_preview = getattr(
+                        self._asset_thumbnails,
+                        "generate_dataset_preview",
+                        None,
                     )
-                    if thumb_path is None:
+                    if callable(generate_dataset_preview):
+                        thumb_path = self._maybe_await(
+                            generate_dataset_preview(
+                                asset_type,
+                                asset_id,
+                                asset_path,
+                                dataset_metadata or {},
+                            )
+                        )
+                        if thumb_path is None:
+                            _logger.error(
+                                "Dataset thumbnail generation returned None for %s (path=%s)",
+                                asset_id,
+                                asset_path,
+                            )
+                    else:
                         _logger.error(
-                            "Dataset thumbnail generation returned None for %s (path=%s)",
+                            "Dataset thumbnail generation unavailable for %s: generate_dataset_preview is not callable",
                             asset_id,
-                            asset_path,
                         )
                 else:
-                    _logger.error(
-                        "Dataset thumbnail generation unavailable for %s: generate_dataset_preview is not callable",
-                        asset_id,
+                    generate_rendered_preview = getattr(
+                        self._asset_thumbnails,
+                        "generate_rendered_preview",
+                        None,
                     )
-            else:
-                generate_rendered_preview = getattr(
-                    self._asset_thumbnails,
-                    "generate_rendered_preview",
-                    None,
-                )
-                if callable(generate_rendered_preview):
-                    thumb_path = generate_rendered_preview(
-                        asset_type,
+                    if callable(generate_rendered_preview):
+                        thumb_path = self._maybe_await(
+                            generate_rendered_preview(
+                                asset_type,
+                                asset_id,
+                                asset_path,
+                            )
+                        )
+                        if thumb_path is None:
+                            _logger.error(
+                                "Rendered thumbnail generation returned None for %s (type=%s, path=%s). "
+                                "This usually means the renderer (lichtfeld.render_asset_preview) is missing or could not render the file.",
+                                asset_id,
+                                asset_type,
+                                asset_path,
+                            )
+                    else:
+                        _logger.error(
+                            "Rendered thumbnail generation unavailable for %s: generate_rendered_preview is not callable",
+                            asset_id,
+                        )
+
+                if thumb_path is None:
+                    _logger.error(
+                        "Falling back to placeholder thumbnail for %s (type=%s, path=%s)",
                         asset_id,
+                        asset_type,
                         asset_path,
+                    )
+                    thumb_path = self._maybe_await(
+                        self._asset_thumbnails.generate_placeholder(
+                            asset_type,
+                            asset_id,
+                        )
                     )
                     if thumb_path is None:
                         _logger.error(
-                            "Rendered thumbnail generation returned None for %s (type=%s, path=%s). "
-                            "This usually means the renderer (lichtfeld.render_asset_preview) is missing or could not render the file.",
+                            "Placeholder thumbnail generation also failed for %s (type=%s)",
                             asset_id,
                             asset_type,
-                            asset_path,
                         )
-                else:
-                    _logger.error(
-                        "Rendered thumbnail generation unavailable for %s: generate_rendered_preview is not callable",
-                        asset_id,
-                    )
+                        return
 
-            if thumb_path is None:
+                self._asset_index.update_asset(asset_id, thumbnail_path=str(thumb_path))
+            except Exception as exc:
                 _logger.error(
-                    "Falling back to placeholder thumbnail for %s (type=%s, path=%s)",
+                    "Thumbnail generation failed for %s (type=%s, path=%s): %s: %s",
                     asset_id,
                     asset_type,
                     asset_path,
+                    type(exc).__name__,
+                    exc,
                 )
-                thumb_path = self._asset_thumbnails.generate_placeholder(
-                    asset_type,
-                    asset_id,
-                )
-                if thumb_path is None:
-                    _logger.error(
-                        "Placeholder thumbnail generation also failed for %s (type=%s)",
-                        asset_id,
-                        asset_type,
-                    )
-                    return
 
-            self._asset_index.update_asset(asset_id, thumbnail_path=str(thumb_path))
-        except Exception as exc:
-            _logger.error(
-                "Thumbnail generation failed for %s (type=%s, path=%s): %s: %s",
-                asset_id,
-                asset_type,
-                asset_path,
-                type(exc).__name__,
-                exc,
-            )
+        threading.Thread(target=_do_generate, daemon=True).start()
 
     def _generate_asset_thumbnail(self, asset: Any) -> None:
         if not asset:
@@ -3121,21 +3142,28 @@ class AssetManagerPanel(Panel):
                 self._log_warn("Thumbnail generator not available")
                 return
 
-            thumb_path = self._asset_thumbnails.generate_rendered_preview_from_camera(
-                asset_type,
-                asset_id,
-                asset_path,
-                eye=camera.eye,
-                target=camera.target,
-                up=camera.up,
-            )
-            if thumb_path is not None:
-                self._asset_index.update_asset(asset_id, thumbnail_path=str(thumb_path))
-                self._asset_index.save()
-                self._log_info("Updated thumbnail for %s from current camera", asset_id)
-                self.refresh_catalog()
-            else:
-                self._log_warn("Failed to render thumbnail from camera for %s", asset_id)
+            def _do_update() -> None:
+                try:
+                    thumb_path = self._maybe_await(
+                        self._asset_thumbnails.generate_rendered_preview_from_camera(
+                            asset_type,
+                            asset_id,
+                            asset_path,
+                            eye=camera.eye,
+                            target=camera.target,
+                            up=camera.up,
+                        )
+                    )
+                    if thumb_path is not None:
+                        self._asset_index.update_asset(asset_id, thumbnail_path=str(thumb_path))
+                        self._asset_index.save()
+                        self._log_info("Updated thumbnail for %s from current camera", asset_id)
+                    else:
+                        self._log_warn("Failed to render thumbnail from camera for %s", asset_id)
+                except Exception as exc:
+                    self._log_error("Failed to update thumbnail: %s", exc)
+
+            threading.Thread(target=_do_update, daemon=True).start()
         except Exception as e:
             self._log_error("Failed to update thumbnail: %s", e)
 

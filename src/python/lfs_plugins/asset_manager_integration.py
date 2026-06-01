@@ -8,8 +8,10 @@ Asset Manager panel renders from.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Any, Optional
 
@@ -92,6 +94,13 @@ def metadata_to_asset_kwargs(metadata: dict[str, Any]) -> dict[str, Any]:
     return kwargs
 
 
+def _maybe_await(coro_or_result):
+    """Await if the value is a coroutine, otherwise return it directly."""
+    if asyncio.iscoroutine(coro_or_result):
+        return asyncio.run(coro_or_result)
+    return coro_or_result
+
+
 def _generate_thumbnail(
     index: AssetIndex,
     asset,
@@ -99,27 +108,35 @@ def _generate_thumbnail(
 ) -> None:
     if thumbnails is None or asset is None:
         return
-    try:
-        thumb_path = None
-        asset_path = getattr(asset, "absolute_path", "") or getattr(asset, "path", "")
-        if asset.type == "dataset" and hasattr(thumbnails, "generate_dataset_preview"):
-            thumb_path = thumbnails.generate_dataset_preview(
-                asset.type,
-                asset.id,
-                asset_path,
-                getattr(asset, "dataset_metadata", {}) or {},
-            )
-        elif hasattr(thumbnails, "generate_rendered_preview"):
-            thumb_path = thumbnails.generate_rendered_preview(
-                asset.type,
-                asset.id,
-                asset_path,
-            )
-        if thumb_path is None:
-            thumb_path = thumbnails.generate_placeholder(asset.type, asset.id)
-        index.update_asset(asset.id, thumbnail_path=str(thumb_path))
-    except Exception as exc:
-        _logger.debug("Failed to generate thumbnail for %s: %s", asset.id, exc)
+
+    def _do_generate() -> None:
+        try:
+            thumb_path = None
+            asset_path = getattr(asset, "absolute_path", "") or getattr(asset, "path", "")
+            if asset.type == "dataset" and hasattr(thumbnails, "generate_dataset_preview"):
+                thumb_path = _maybe_await(
+                    thumbnails.generate_dataset_preview(
+                        asset.type,
+                        asset.id,
+                        asset_path,
+                        getattr(asset, "dataset_metadata", {}) or {},
+                    )
+                )
+            elif hasattr(thumbnails, "generate_rendered_preview"):
+                thumb_path = _maybe_await(
+                    thumbnails.generate_rendered_preview(
+                        asset.type,
+                        asset.id,
+                        asset_path,
+                    )
+                )
+            if thumb_path is None:
+                thumb_path = _maybe_await(thumbnails.generate_placeholder(asset.type, asset.id))
+            index.update_asset(asset.id, thumbnail_path=str(thumb_path))
+        except Exception as exc:
+            _logger.debug("Failed to generate thumbnail for %s: %s", asset.id, exc)
+
+    threading.Thread(target=_do_generate, daemon=True).start()
 
 
 def derive_project_scene_names(dataset_path: str) -> tuple[str, str]:

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import struct
@@ -83,12 +84,14 @@ class AssetThumbnails:
     This class handles creation of placeholder thumbnails for different asset types,
     storage management, and retrieval of thumbnail paths.
 
+    All generation and I/O methods are async so callers never block the UI thread.
+
     Args:
         thumbnails_dir: Directory path where thumbnails will be stored.
 
     Example:
         >>> thumbnails = AssetThumbnails(Path("/path/to/thumbnails"))
-        >>> thumb_path = thumbnails.generate_placeholder("ply", "model_01")
+        >>> thumb_path = await thumbnails.generate_placeholder("ply", "model_01")
         >>> print(thumbnails.get_thumbnail_path("model_01"))
     """
 
@@ -224,7 +227,7 @@ class AssetThumbnails:
         """
         return self._create_png_data(width, height, color, label)
 
-    def generate_placeholder(self, asset_type: str, asset_id: str) -> Path:
+    async def generate_placeholder(self, asset_type: str, asset_id: str) -> Path:
         """Generate a placeholder thumbnail for an asset.
 
         Creates a color-coded placeholder image based on the asset type.
@@ -260,7 +263,7 @@ class AssetThumbnails:
 
         # Write to file
         try:
-            thumb_path.write_bytes(image_data)
+            await asyncio.to_thread(thumb_path.write_bytes, image_data)
         except Exception as exc:
             _logger.error(
                 "Placeholder thumbnail write failed for %s (type=%s): cannot write to %s: %s",
@@ -282,16 +285,22 @@ class AssetThumbnails:
         timestamp = int(time.time())
         return self._thumbnails_dir / f"{asset_id}.render.{timestamp}.png"
 
-    def _cleanup_old_rendered_thumbnails(self, asset_id: str, keep: Path | None = None) -> None:
+    async def _cleanup_old_rendered_thumbnails(
+        self, asset_id: str, keep: Path | None = None
+    ) -> None:
         """Remove stale rendered thumbnails for an asset, optionally keeping one."""
         pattern = f"{asset_id}.render.*.png"
-        for old in self._thumbnails_dir.glob(pattern):
-            if keep is not None and old == keep:
-                continue
-            try:
-                old.unlink()
-            except Exception as exc:
-                _logger.debug("Failed to remove stale thumbnail %s: %s", old, exc)
+
+        def _do_cleanup() -> None:
+            for old in self._thumbnails_dir.glob(pattern):
+                if keep is not None and old == keep:
+                    continue
+                try:
+                    old.unlink()
+                except Exception as exc:
+                    _logger.debug("Failed to remove stale thumbnail %s: %s", old, exc)
+
+        await asyncio.to_thread(_do_cleanup)
 
     def has_rendered_thumbnail(self, asset_id: str) -> bool:
         """Return whether any rendered thumbnail exists for this asset."""
@@ -302,44 +311,48 @@ class AssetThumbnails:
         """Get the cached dataset-image thumbnail path for a dataset asset."""
         return self._thumbnails_dir / f"{asset_id}.dataset.png"
 
-    def _find_first_dataset_image(
+    async def _find_first_dataset_image(
         self,
         dataset_path: Path,
         dataset_metadata: dict[str, Any] | None = None,
     ) -> Path | None:
         """Find the first real image in a dataset using AssetScanner-compatible rules."""
-        if not dataset_path.is_dir():
-            return None
 
-        image_root_value = (dataset_metadata or {}).get("image_root", "")
-        image_root = None
-        if image_root_value:
-            candidate = Path(str(image_root_value)).expanduser()
-            image_root = candidate if candidate.is_absolute() else dataset_path / candidate
-        if image_root is None or not image_root.is_dir():
-            images_dir = dataset_path / "images"
-            image_root = images_dir if images_dir.is_dir() else dataset_path
+        def _do_find() -> Path | None:
+            if not dataset_path.is_dir():
+                return None
 
-        image_paths: dict[str, Path] = {}
-        try:
-            for item in image_root.rglob("*"):
-                if not item.is_file() or item.suffix.lower() not in DATASET_IMAGE_EXTENSIONS:
-                    continue
-                try:
-                    rel_parent_parts = item.relative_to(image_root).parts[:-1]
-                except ValueError:
-                    rel_parent_parts = item.parts[:-1]
-                if any(part.lower() in DATASET_EXCLUDED_DIRS for part in rel_parent_parts):
-                    continue
-                image_paths[str(item.resolve())] = item
-        except (OSError, PermissionError):
-            return None
+            image_root_value = (dataset_metadata or {}).get("image_root", "")
+            image_root = None
+            if image_root_value:
+                candidate = Path(str(image_root_value)).expanduser()
+                image_root = candidate if candidate.is_absolute() else dataset_path / candidate
+            if image_root is None or not image_root.is_dir():
+                images_dir = dataset_path / "images"
+                image_root = images_dir if images_dir.is_dir() else dataset_path
 
-        if not image_paths:
-            return None
-        return sorted(image_paths.values(), key=lambda item: str(item))[0]
+            image_paths: dict[str, Path] = {}
+            try:
+                for item in image_root.rglob("*"):
+                    if not item.is_file() or item.suffix.lower() not in DATASET_IMAGE_EXTENSIONS:
+                        continue
+                    try:
+                        rel_parent_parts = item.relative_to(image_root).parts[:-1]
+                    except ValueError:
+                        rel_parent_parts = item.parts[:-1]
+                    if any(part.lower() in DATASET_EXCLUDED_DIRS for part in rel_parent_parts):
+                        continue
+                    image_paths[str(item.resolve())] = item
+            except (OSError, PermissionError):
+                return None
 
-    def generate_dataset_preview(
+            if not image_paths:
+                return None
+            return sorted(image_paths.values(), key=lambda item: str(item))[0]
+
+        return await asyncio.to_thread(_do_find)
+
+    async def generate_dataset_preview(
         self,
         asset_type: str,
         asset_id: str,
@@ -355,7 +368,7 @@ class AssetThumbnails:
         if asset_type.lower() != "dataset" or not dataset_path:
             return None
 
-        first_image = self._find_first_dataset_image(
+        first_image = await self._find_first_dataset_image(
             Path(dataset_path).expanduser(),
             dataset_metadata,
         )
@@ -364,7 +377,7 @@ class AssetThumbnails:
 
         return first_image if first_image.exists() else None
 
-    def _generate_rendered_preview(
+    async def _generate_rendered_preview(
         self,
         asset_type: str,
         asset_id: str,
@@ -418,7 +431,8 @@ class AssetThumbnails:
             return None
 
         try:
-            image = render_preview(
+            image = await asyncio.to_thread(
+                render_preview,
                 str(path),
                 width=THUMB_WIDTH,
                 height=THUMB_HEIGHT,
@@ -444,7 +458,7 @@ class AssetThumbnails:
 
         thumb_path = self._get_timestamped_rendered_thumbnail_path(asset_id)
         try:
-            save_image(str(thumb_path), image)
+            await asyncio.to_thread(save_image, str(thumb_path), image)
         except Exception as exc:
             _logger.error(
                 "Thumbnail render failed for %s: save_image(%s) raised %s: %s",
@@ -456,7 +470,7 @@ class AssetThumbnails:
             return None
 
         if thumb_path.exists():
-            self._cleanup_old_rendered_thumbnails(asset_id, keep=thumb_path)
+            await self._cleanup_old_rendered_thumbnails(asset_id, keep=thumb_path)
             return thumb_path
 
         _logger.error(
@@ -466,7 +480,7 @@ class AssetThumbnails:
         )
         return None
 
-    def generate_rendered_preview(
+    async def generate_rendered_preview(
         self,
         asset_type: str,
         asset_id: str,
@@ -475,6 +489,7 @@ class AssetThumbnails:
         """Generate a rendered thumbnail for a splat asset using the app renderer."""
         try:
             import lichtfeld as lf
+
             render_fn = getattr(lf, "render_asset_preview", None)
             save_fn = getattr(getattr(lf, "io", None), "save_image", None)
             if render_fn is None:
@@ -487,8 +502,10 @@ class AssetThumbnails:
                     "Thumbnail render unavailable for %s: lichtfeld.io.save_image is not exposed in the Python API",
                     asset_id,
                 )
-            return self._generate_rendered_preview(
-                asset_type, asset_id, asset_path,
+            return await self._generate_rendered_preview(
+                asset_type,
+                asset_id,
+                asset_path,
                 render_fn,
                 save_fn,
             )
@@ -501,7 +518,7 @@ class AssetThumbnails:
             )
             return None
 
-    def generate_rendered_preview_from_camera(
+    async def generate_rendered_preview_from_camera(
         self,
         asset_type: str,
         asset_id: str,
@@ -513,6 +530,7 @@ class AssetThumbnails:
         """Generate a rendered thumbnail from a custom camera pose."""
         try:
             import lichtfeld as lf
+
             render_fn = getattr(lf, "render_asset_preview_from_camera", None)
             save_fn = getattr(getattr(lf, "io", None), "save_image", None)
             if render_fn is None:
@@ -525,11 +543,15 @@ class AssetThumbnails:
                     "Thumbnail render from camera unavailable for %s: lichtfeld.io.save_image is not exposed",
                     asset_id,
                 )
-            return self._generate_rendered_preview(
-                asset_type, asset_id, asset_path,
+            return await self._generate_rendered_preview(
+                asset_type,
+                asset_id,
+                asset_path,
                 render_fn,
                 save_fn,
-                eye=eye, target=target, up=up,
+                eye=eye,
+                target=target,
+                up=up,
             )
         except Exception as exc:
             _logger.error(
@@ -551,7 +573,7 @@ class AssetThumbnails:
         """
         return self._thumbnails_dir / f"{asset_id}.png"
 
-    def get_missing_thumbnail(self) -> Path:
+    async def get_missing_thumbnail(self) -> Path:
         """Get the path to the fallback thumbnail for missing/corrupt thumbnails.
 
         Creates the missing thumbnail if it doesn't exist.
@@ -566,7 +588,7 @@ class AssetThumbnails:
                 image_data = self._create_thumbnail(
                     THUMB_WIDTH, THUMB_HEIGHT, DEFAULT_COLOR, "?"
                 )
-                missing_path.write_bytes(image_data)
+                await asyncio.to_thread(missing_path.write_bytes, image_data)
             self._missing_thumbnail_path = missing_path
 
         return self._missing_thumbnail_path
@@ -582,7 +604,7 @@ class AssetThumbnails:
         """
         return self.get_thumbnail_path(asset_id).exists()
 
-    def invalidate(self, asset_id: str) -> None:
+    async def invalidate(self, asset_id: str) -> None:
         """Invalidate (remove) a thumbnail for the given asset.
 
         This removes the existing thumbnail file. A new placeholder can be
@@ -593,9 +615,9 @@ class AssetThumbnails:
         """
         thumb_path = self.get_thumbnail_path(asset_id)
         if thumb_path.exists():
-            thumb_path.unlink()
+            await asyncio.to_thread(thumb_path.unlink)
 
-    def cleanup_orphans(self, known_asset_ids: Set[str]) -> list[Path]:
+    async def cleanup_orphans(self, known_asset_ids: Set[str]) -> list[Path]:
         """Remove thumbnails for assets that no longer exist.
 
         Args:
@@ -606,28 +628,32 @@ class AssetThumbnails:
         """
         removed: list[Path] = []
 
-        for thumb_file in self._thumbnails_dir.glob("*.png"):
-            # Skip special files
-            if thumb_file.name.startswith("_"):
-                continue
+        def _do_cleanup() -> list[Path]:
+            _removed: list[Path] = []
+            for thumb_file in self._thumbnails_dir.glob("*.png"):
+                # Skip special files
+                if thumb_file.name.startswith("_"):
+                    continue
 
-            stem = thumb_file.stem
-            rendered_match = _RENDERED_STEM_RE.match(stem)
-            dataset_match = _DATASET_STEM_RE.match(stem)
-            if rendered_match:
-                asset_id = rendered_match.group("asset_id")
-            elif dataset_match:
-                asset_id = dataset_match.group("asset_id")
-            else:
-                asset_id = stem
+                stem = thumb_file.stem
+                rendered_match = _RENDERED_STEM_RE.match(stem)
+                dataset_match = _DATASET_STEM_RE.match(stem)
+                if rendered_match:
+                    asset_id = rendered_match.group("asset_id")
+                elif dataset_match:
+                    asset_id = dataset_match.group("asset_id")
+                else:
+                    asset_id = stem
 
-            if asset_id not in known_asset_ids:
-                thumb_file.unlink()
-                removed.append(thumb_file)
+                if asset_id not in known_asset_ids:
+                    thumb_file.unlink()
+                    _removed.append(thumb_file)
+            return _removed
 
+        removed = await asyncio.to_thread(_do_cleanup)
         return removed
 
-    def get_thumbnail_for_type(self, asset_type: str) -> Path:
+    async def get_thumbnail_for_type(self, asset_type: str) -> Path:
         """Get a generic thumbnail for a specific asset type.
 
         This creates or returns a shared thumbnail that represents the type
@@ -646,7 +672,7 @@ class AssetThumbnails:
             image_data = self._create_thumbnail(
                 THUMB_WIDTH, THUMB_HEIGHT, color, asset_type.upper()
             )
-            type_thumb_path.write_bytes(image_data)
+            await asyncio.to_thread(type_thumb_path.write_bytes, image_data)
 
         return type_thumb_path
 
@@ -663,14 +689,19 @@ class AssetThumbnails:
         """
         return list(self._thumbnails_dir.glob("*.png"))
 
-    def clear_all(self) -> int:
+    async def clear_all(self) -> int:
         """Remove all thumbnails from the directory.
 
         Returns:
             Number of thumbnails removed
         """
         count = 0
-        for thumb_file in self._thumbnails_dir.glob("*.png"):
-            thumb_file.unlink()
-            count += 1
-        return count
+
+        def _do_clear() -> int:
+            _count = 0
+            for thumb_file in self._thumbnails_dir.glob("*.png"):
+                thumb_file.unlink()
+                _count += 1
+            return _count
+
+        return await asyncio.to_thread(_do_clear)
