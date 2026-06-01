@@ -169,6 +169,13 @@ namespace lfs::vis {
             ShadowTarget shadow{};
             glm::mat4 cached_light_vp{1.0f};
             bool cached_light_vp_valid = false;
+
+            // Inputs the rendered shadow map depends on. The shadow is re-rendered (a
+            // blocking GPU submit) only when one of these changes.
+            glm::mat4 shadow_key_model{0.0f};
+            glm::vec3 shadow_key_light_dir{0.0f};
+            int shadow_key_resolution = -1;
+            std::uint32_t shadow_key_generation = std::numeric_limits<std::uint32_t>::max();
         };
 
         // Placeholder 1x1 shadow image bound when shadow_enabled=false; satisfies the
@@ -1550,9 +1557,25 @@ namespace lfs::vis {
                 if (!ensureShadowTarget(gpu, item.shadow_map_resolution)) {
                     continue;
                 }
+                // recordShadowPass does a blocking GPU submit; only pay it when an input
+                // the shadow map depends on actually changed. A static shadowed mesh then
+                // renders its shadow once instead of every frame.
+                const bool shadow_dirty =
+                    !gpu.cached_light_vp_valid ||
+                    gpu.shadow_key_generation != gpu.generation ||
+                    gpu.shadow_key_resolution != item.shadow_map_resolution ||
+                    gpu.shadow_key_model != item.model ||
+                    gpu.shadow_key_light_dir != item.light_dir;
+                if (!shadow_dirty) {
+                    continue;
+                }
                 const glm::mat4 light_vp = computeLightVp(gpu, item.model, item.light_dir);
                 gpu.cached_light_vp = light_vp;
                 gpu.cached_light_vp_valid = true;
+                gpu.shadow_key_generation = gpu.generation;
+                gpu.shadow_key_resolution = item.shadow_map_resolution;
+                gpu.shadow_key_model = item.model;
+                gpu.shadow_key_light_dir = item.light_dir;
                 recordShadowPass(gpu, light_vp * item.model);
             }
 

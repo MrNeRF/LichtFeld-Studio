@@ -334,18 +334,23 @@ namespace lfs::vis {
         framebuffer_width_ = framebuffer_width;
         framebuffer_height_ = framebuffer_height;
 
-        return createInstance() &&
-               createSurface(window) &&
-               pickPhysicalDevice() &&
-               createDevice() &&
-               createAllocator() &&
-               createPipelineCache() &&
-               createSwapchain(framebuffer_width, framebuffer_height) &&
-               createImageViews() &&
-               createDepthStencilResources() &&
-               createCommandPool() &&
-               createCommandBuffers() &&
-               createSyncObjects();
+        // Per-step timing so the one-time Vulkan bring-up cost is attributable in the perf log.
+        const auto timed = [](const char* name, auto&& fn) {
+            LOG_TIMER(name);
+            return fn();
+        };
+        return timed("vulkan_init.createInstance", [&] { return createInstance(); }) &&
+               timed("vulkan_init.createSurface", [&] { return createSurface(window); }) &&
+               timed("vulkan_init.pickPhysicalDevice", [&] { return pickPhysicalDevice(); }) &&
+               timed("vulkan_init.createDevice", [&] { return createDevice(); }) &&
+               timed("vulkan_init.createAllocator", [&] { return createAllocator(); }) &&
+               timed("vulkan_init.createPipelineCache", [&] { return createPipelineCache(); }) &&
+               timed("vulkan_init.createSwapchain", [&] { return createSwapchain(framebuffer_width, framebuffer_height); }) &&
+               timed("vulkan_init.createImageViews", [&] { return createImageViews(); }) &&
+               timed("vulkan_init.createDepthStencilResources", [&] { return createDepthStencilResources(); }) &&
+               timed("vulkan_init.createCommandPool", [&] { return createCommandPool(); }) &&
+               timed("vulkan_init.createCommandBuffers", [&] { return createCommandBuffers(); }) &&
+               timed("vulkan_init.createSyncObjects", [&] { return createSyncObjects(); });
     }
 
     void VulkanContext::shutdown() {

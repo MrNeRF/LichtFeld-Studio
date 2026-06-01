@@ -981,8 +981,11 @@ namespace lfs::vis {
 
         // Initialize window first and ensure it has proper size
         if (!window_initialized_) {
-            if (!window_manager_->init()) {
-                return false;
+            {
+                LOG_TIMER("startup.window_manager.init"); // wraps Vulkan instance/device/swapchain bring-up
+                if (!window_manager_->init()) {
+                    return false;
+                }
             }
             window_initialized_ = true;
 
@@ -1005,6 +1008,7 @@ namespace lfs::vis {
 
         // Initialize GUI (sets up ImGui, builds font atlas)
         if (!gui_initialized_) {
+            LOG_TIMER("startup.gui_manager.init");
             gui_manager_->init();
             gui_initialized_ = true;
         }
@@ -1029,11 +1033,22 @@ namespace lfs::vis {
         if (scene_manager_)
             scene_manager_->initSelectionService();
 
-        python::ensure_initialized();
-        python::ensure_builtin_ui_registered();
-        python::preload_user_plugins_async();
-
-        window_manager_->showWindow();
+        {
+            LOG_TIMER("startup.python.ensure_initialized");
+            python::ensure_initialized();
+        }
+        {
+            LOG_TIMER("startup.python.builtin_ui_registered");
+            python::ensure_builtin_ui_registered();
+        }
+        {
+            LOG_TIMER("startup.python.preload_plugins_async");
+            python::preload_user_plugins_async();
+        }
+        {
+            LOG_TIMER("startup.window.showWindow");
+            window_manager_->showWindow();
+        }
 
         fully_initialized_ = true;
         return true;
