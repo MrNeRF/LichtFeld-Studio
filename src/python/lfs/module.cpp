@@ -1541,10 +1541,15 @@ NB_MODULE(lichtfeld, m) {
             if (!rm)
                 return;
             auto settings = rm->getSettings();
-            settings.point_cloud_mode = (mode == RenderMode::Points);
+            const bool enable_point_cloud_mode = mode == RenderMode::Points;
+            const bool point_cloud_mode_changed = settings.point_cloud_mode != enable_point_cloud_mode;
+            settings.point_cloud_mode = enable_point_cloud_mode;
             settings.show_rings = (mode == RenderMode::Rings);
             settings.show_center_markers = (mode == RenderMode::Centers);
-            rm->updateSettings(settings);
+            rm->updateSettings(settings,
+                               point_cloud_mode_changed && enable_point_cloud_mode
+                                   ? lfs::vis::DirtyFlag::ALL
+                                   : lfs::vis::DirtyFlag::SELECTION);
         },
         nb::arg("mode"), "Set the render mode (Splats, Points, Rings, Centers)");
 
@@ -1569,7 +1574,7 @@ NB_MODULE(lichtfeld, m) {
                 return;
             auto settings = rm->getSettings();
             settings.depth_view = enabled;
-            rm->updateSettings(settings);
+            rm->updateSettings(settings, lfs::vis::DirtyFlag::SELECTION);
         },
         nb::arg("enabled"), "Enable or disable depth-map view");
 

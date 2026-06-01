@@ -1090,6 +1090,7 @@ namespace lfs::vis {
     }
 
     void VksplatViewportRenderer::reset() {
+        std::lock_guard<std::mutex> readback_lock(readback_mutex_);
         if (context_ && context_->device() != VK_NULL_HANDLE) {
             const VkDevice device = context_->device();
             vkDeviceWaitIdle(device);
@@ -3167,6 +3168,7 @@ namespace lfs::vis {
 
     std::expected<std::shared_ptr<lfs::core::Tensor>, std::string>
     VksplatViewportRenderer::readOutputImage(VulkanContext& context, const OutputSlot output_slot) const {
+        std::lock_guard<std::mutex> readback_lock(readback_mutex_);
         if (!context_) {
             return std::unexpected("VkSplat output readback requested before renderer initialization");
         }
@@ -3336,6 +3338,7 @@ namespace lfs::vis {
         const int x,
         const int y,
         const OutputSlot output_slot) const {
+        std::lock_guard<std::mutex> readback_lock(readback_mutex_);
         if (!context_) {
             return std::unexpected("VkSplat depth sample requested before renderer initialization");
         }

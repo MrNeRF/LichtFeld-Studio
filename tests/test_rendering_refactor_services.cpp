@@ -1045,7 +1045,7 @@ namespace lfs::vis {
         EXPECT_TRUE(right_request.overlay.cursor.enabled);
     }
 
-    TEST(ViewportRequestBuilderTest, TrainingSuppressesSelectionOverlayState) {
+    TEST(ViewportRequestBuilderTest, TrainingSuppressesInteractiveSelectionOverlayButKeepsRenderMarkers) {
         using lfs::core::DataType;
         using lfs::core::Device;
         using lfs::core::Tensor;
@@ -1063,6 +1063,7 @@ namespace lfs::vis {
         settings.show_rings = true;
         settings.show_center_markers = true;
         settings.desaturate_unselected = true;
+        settings.selection_color_center_marker = glm::vec3(0.25f, 0.5f, 0.75f);
 
         const FrameContext ctx{
             .viewport = viewport,
@@ -1085,8 +1086,9 @@ namespace lfs::vis {
 
         const auto request = buildViewportRenderRequest(ctx, {640, 480});
 
-        EXPECT_FALSE(request.overlay.markers.show_rings);
-        EXPECT_FALSE(request.overlay.markers.show_center_markers);
+        EXPECT_TRUE(request.overlay.markers.show_rings);
+        EXPECT_TRUE(request.overlay.markers.show_center_markers);
+        EXPECT_EQ(request.overlay.selection_colors[0], glm::vec4(settings.selection_color_center_marker, 1.0f));
         EXPECT_FALSE(request.overlay.cursor.enabled);
         EXPECT_EQ(request.overlay.emphasis.mask, nullptr);
         EXPECT_EQ(request.overlay.emphasis.transient_mask.mask, nullptr);

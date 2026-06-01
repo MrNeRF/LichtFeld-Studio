@@ -161,6 +161,7 @@ namespace lfs::vis {
 
         // Settings management
         void updateSettings(const RenderSettings& settings);
+        void updateSettings(const RenderSettings& settings, DirtyMask dirty_flags);
         RenderSettings getSettings() const;
 
         // Toggle orthographic mode, calculating ortho_scale to preserve size at pivot
@@ -496,6 +497,7 @@ namespace lfs::vis {
         lfs::core::Tensor point_cloud_colors_cache_;
         const void* point_cloud_colors_cache_key_ = nullptr;
         std::size_t point_cloud_colors_cache_size_ = 0;
+        std::uint64_t point_cloud_data_revision_ = 0;
         std::uint64_t point_cloud_preview_selection_revision_ = 0;
         VulkanContext* last_vulkan_context_ = nullptr;
         VkImage vulkan_external_viewport_image_ = VK_NULL_HANDLE;

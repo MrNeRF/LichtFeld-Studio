@@ -18,6 +18,7 @@
 #include <expected>
 #include <glm/glm.hpp>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -298,6 +299,7 @@ namespace lfs::vis {
         bool initialized_ = false;
         // Persistent readback transfer resources (see ensureReadbackContext). Mutable
         // because the readback samplers are const but reuse these across calls.
+        mutable std::mutex readback_mutex_;
         mutable VkCommandPool readback_pool_ = VK_NULL_HANDLE;
         mutable VkCommandBuffer readback_cmd_ = VK_NULL_HANDLE;
         mutable VkFence readback_fence_ = VK_NULL_HANDLE;

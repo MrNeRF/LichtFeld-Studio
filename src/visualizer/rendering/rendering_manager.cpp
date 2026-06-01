@@ -132,6 +132,11 @@ namespace lfs::vis {
     }
 
     void RenderingManager::updateSettings(const RenderSettings& new_settings) {
+        updateSettings(new_settings, DirtyFlag::ALL);
+    }
+
+    void RenderingManager::updateSettings(const RenderSettings& new_settings,
+                                          const DirtyMask dirty_flags) {
         bool clear_metrics = false;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
@@ -177,7 +182,7 @@ namespace lfs::vis {
             } else {
                 syncGridPlanesLocked(settings_.grid_plane);
             }
-            markDirty();
+            markDirty(dirty_flags);
         }
 
         if (clear_metrics) {

@@ -167,11 +167,11 @@ namespace lfs::vis {
             pc.crop_min[0] = crop_min.x;
             pc.crop_min[1] = crop_min.y;
             pc.crop_min[2] = crop_min.z;
-            pc.crop_min[3] = 0.0f;
+            pc.crop_min[3] = req.depth_view_min;
             pc.crop_max[0] = crop_max.x;
             pc.crop_max[1] = crop_max.y;
             pc.crop_max[2] = crop_max.z;
-            pc.crop_max[3] = 0.0f;
+            pc.crop_max[3] = req.depth_view_max;
 
             const float voxel = req.voxel_size * req.scaling_modifier;
             const float ortho_pixels_per_world = req.ortho_scale > 1e-5f
@@ -180,7 +180,7 @@ namespace lfs::vis {
             pc.voxel_focal_ortho[0] = voxel;
             pc.voxel_focal_ortho[1] = req.focal_y;
             pc.voxel_focal_ortho[2] = ortho_pixels_per_world;
-            pc.voxel_focal_ortho[3] = 0.0f;
+            pc.voxel_focal_ortho[3] = req.depth_view ? 1.0f : 0.0f;
 
             int flags = 0;
             if (req.crop) {
@@ -271,9 +271,11 @@ namespace lfs::vis {
 
             const void* cached_positions_ptr = nullptr;
             std::size_t cached_positions_count = 0;
+            std::uint64_t cached_positions_revision = 0;
             const void* cached_colors_ptr = nullptr;
             std::size_t cached_colors_count = 0;
             lfs::core::DataType cached_colors_dtype = lfs::core::DataType::Float32;
+            std::uint64_t cached_colors_revision = 0;
             std::size_t cached_n_transforms = 0;
             std::size_t cached_n_visibility = 0;
             const void* cached_transform_indices_ptr = nullptr;
@@ -424,7 +426,7 @@ namespace lfs::vis {
             }
 
             VkPushConstantRange push{};
-            push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+            push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
             push.size = sizeof(PushConstants);
 
             VkPipelineLayoutCreateInfo pli{};
@@ -797,6 +799,7 @@ namespace lfs::vis {
             // positions
             const void* pos_key = req.positions->ptr<float>();
             if (pos_key != cache.cached_positions_ptr || cache.cached_positions_count != n_points ||
+                cache.cached_positions_revision != req.positions_revision ||
                 cache.positions.buffer == VK_NULL_HANDLE) {
                 std::vector<float> host;
                 if (!tensorToHost(*req.positions, host)) {
@@ -810,6 +813,7 @@ namespace lfs::vis {
                 }
                 cache.cached_positions_ptr = pos_key;
                 cache.cached_positions_count = n_points;
+                cache.cached_positions_revision = req.positions_revision;
             }
 
             // colors (handle uint8 / float alike via Tensor::to). Key on the *source*
@@ -819,6 +823,7 @@ namespace lfs::vis {
             const void* col_key = req.colors->data_ptr();
             const lfs::core::DataType col_dtype = req.colors->dtype();
             if (col_key != cache.cached_colors_ptr || cache.cached_colors_count != n_points ||
+                cache.cached_colors_revision != req.colors_revision ||
                 cache.cached_colors_dtype != col_dtype || cache.colors.buffer == VK_NULL_HANDLE) {
                 const lfs::core::Tensor colors_f32 =
                     col_dtype == lfs::core::DataType::Float32
@@ -839,6 +844,7 @@ namespace lfs::vis {
                 cache.cached_colors_ptr = col_key;
                 cache.cached_colors_count = n_points;
                 cache.cached_colors_dtype = col_dtype;
+                cache.cached_colors_revision = req.colors_revision;
             }
 
             // model_transforms (CPU vector of mat4)
@@ -1231,7 +1237,8 @@ namespace lfs::vis {
                                cache.cached_transform_indices_count > 0,
                                cache.cached_selection_mask_count > 0,
                                cache.cached_preview_selection_mask_count > 0);
-            vkCmdPushConstants(command_buffer, pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT,
+            vkCmdPushConstants(command_buffer, pipeline_layout,
+                               VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                                0, sizeof(push), &push);
 
             const std::uint32_t vertex_count =

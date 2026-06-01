@@ -1570,13 +1570,16 @@ namespace lfs::vis {
                     continue;
                 }
                 const glm::mat4 light_vp = computeLightVp(gpu, item.model, item.light_dir);
+                if (!recordShadowPass(gpu, light_vp * item.model)) {
+                    gpu.cached_light_vp_valid = false;
+                    continue;
+                }
                 gpu.cached_light_vp = light_vp;
                 gpu.cached_light_vp_valid = true;
                 gpu.shadow_key_generation = gpu.generation;
                 gpu.shadow_key_resolution = item.shadow_map_resolution;
                 gpu.shadow_key_model = item.model;
                 gpu.shadow_key_light_dir = item.light_dir;
-                recordShadowPass(gpu, light_vp * item.model);
             }
 
             constexpr std::uint64_t kEvictAfter = 120;

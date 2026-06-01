@@ -52,9 +52,12 @@ namespace lfs::vis {
 
         struct RenderRequest {
             // Positions/colors are float [N, 3] tensors. Either CUDA or CPU; we
-            // copy to Vulkan device-local on first use and cache by pointer.
+            // copy to Vulkan device-local on first use and cache by pointer plus
+            // caller-provided content revisions for in-place tensor mutations.
             const lfs::core::Tensor* positions = nullptr;
             const lfs::core::Tensor* colors = nullptr;
+            std::uint64_t positions_revision = 0;
+            std::uint64_t colors_revision = 0;
 
             // Optional model_transforms[K, 16] + per-point transform_indices[N];
             // empty/null disables the transform path.
@@ -87,6 +90,9 @@ namespace lfs::vis {
             float focal_y = 1.0f;
             float voxel_size = 0.01f;
             float scaling_modifier = 1.0f;
+            bool depth_view = false;
+            float depth_view_min = lfs::rendering::DEFAULT_NEAR_PLANE;
+            float depth_view_max = lfs::rendering::DEFAULT_FAR_PLANE;
         };
 
         enum class OutputSlot : std::size_t {

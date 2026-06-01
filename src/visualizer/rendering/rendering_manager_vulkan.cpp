@@ -1183,6 +1183,7 @@ namespace lfs::vis {
                 point_cloud_colors_cache_key_ = nullptr;
                 point_cloud_colors_cache_size_ = 0;
                 point_cloud_colors_cache_ = lfs::core::Tensor{};
+                ++point_cloud_data_revision_;
             }
             std::vector<glm::mat4> point_cloud_transforms_storage;
             const std::vector<glm::mat4>* transforms_for_request = nullptr;
@@ -1261,6 +1262,8 @@ namespace lfs::vis {
                 PointCloudVulkanRenderer::RenderRequest vk_req{};
                 vk_req.positions = positions_ptr;
                 vk_req.colors = colors_ptr;
+                vk_req.positions_revision = point_cloud_data_revision_;
+                vk_req.colors_revision = point_cloud_data_revision_;
                 vk_req.model_transforms = pc_request.scene.model_transforms;
                 vk_req.transform_indices = pc_request.scene.transform_indices.get();
                 vk_req.node_visibility_mask = &pc_request.scene.node_visibility_mask;
@@ -1289,6 +1292,11 @@ namespace lfs::vis {
                 vk_req.focal_y = focal_y;
                 vk_req.voxel_size = pc_request.render.voxel_size;
                 vk_req.scaling_modifier = pc_request.render.scaling_modifier;
+                vk_req.depth_view = settings_.depth_view;
+                vk_req.depth_view_min = pc_request.frame_view.near_plane;
+                vk_req.depth_view_max = settings_.depth_clip_far > pc_request.frame_view.near_plane
+                                            ? settings_.depth_clip_far
+                                            : pc_request.frame_view.far_plane;
 
                 LOG_TIMER("renderVulkanFrame.point_cloud_vulkan");
                 auto render_result = point_cloud_vulkan_renderer_->render(
@@ -1451,9 +1459,11 @@ namespace lfs::vis {
                                 .flip_y = vulkan_viewport_image_flip_y_};
                     };
 
+                    const DirtyMask non_overlay_dirty = frame_dirty & ~DirtyFlag::SELECTION;
                     const bool can_rerender_selection_overlay =
-                        !is_training &&
-                        frame_dirty == DirtyFlag::SELECTION &&
+                        (frame_dirty & DirtyFlag::SELECTION) != 0 &&
+                        (frame_dirty == DirtyFlag::SELECTION ||
+                         (is_training && (non_overlay_dirty & ~DirtyFlag::SPLATS) == 0)) &&
                         vulkan_external_viewport_image_ != VK_NULL_HANDLE &&
                         vulkan_viewport_image_size_ == render_size &&
                         !split_view_service_.isActive(settings_);
@@ -1474,6 +1484,9 @@ namespace lfs::vis {
                             lfs::core::Tensor::trim_memory_pool();
                         }
                         if (overlay_result) {
+                            if (is_training && non_overlay_dirty != 0) {
+                                dirty_mask_.fetch_or(non_overlay_dirty, std::memory_order_relaxed);
+                            }
                             return publish_vksplat_result(*overlay_result);
                         }
                         LOG_DEBUG("VkSplat selection overlay fast path unavailable: {}",

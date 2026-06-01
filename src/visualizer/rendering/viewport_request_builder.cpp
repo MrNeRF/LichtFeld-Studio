@@ -153,9 +153,9 @@ namespace lfs::vis {
             .filters = {},
             .overlay =
                 {.markers =
-                     {.show_rings = selection_overlay_enabled && ctx.settings.show_rings,
+                     {.show_rings = ctx.settings.show_rings,
                       .ring_width = ctx.settings.ring_width,
-                      .show_center_markers = selection_overlay_enabled && ctx.settings.show_center_markers},
+                      .show_center_markers = ctx.settings.show_center_markers},
                  .cursor =
                      {.enabled = ctx.cursor_preview.active && overlay_visible,
                       .cursor = {ctx.cursor_preview.x, ctx.cursor_preview.y},
@@ -187,7 +187,9 @@ namespace lfs::vis {
             .depth_view_min = frame_view.near_plane,
             .depth_view_max = depth_view_max};
 
-        if (selection_overlay_enabled) {
+        if (selection_overlay_enabled ||
+            request.overlay.markers.show_rings ||
+            request.overlay.markers.show_center_markers) {
             populateSelectionColors(request.overlay.selection_colors, ctx);
         }
 
