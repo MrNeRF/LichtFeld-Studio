@@ -289,8 +289,18 @@ namespace lfs::vis {
         // safe after vkDeviceWaitIdle (reset/teardown).
         void drainRetiredScratchBuffers(bool force);
 
+        // Lazily creates a persistent transfer command pool + buffer + fence reused by
+        // readOutputImage / sampleDepthAtPixel instead of allocating a fresh pool/fence
+        // per call. Torn down in reset() while the device is still valid.
+        [[nodiscard]] std::expected<void, std::string> ensureReadbackContext() const;
+
         VulkanContext* context_ = nullptr;
         bool initialized_ = false;
+        // Persistent readback transfer resources (see ensureReadbackContext). Mutable
+        // because the readback samplers are const but reuse these across calls.
+        mutable VkCommandPool readback_pool_ = VK_NULL_HANDLE;
+        mutable VkCommandBuffer readback_cmd_ = VK_NULL_HANDLE;
+        mutable VkFence readback_fence_ = VK_NULL_HANDLE;
         // Dedicated non-blocking CUDA stream for overlay-source H2D uploads.
         // Created with cudaStreamNonBlocking so it does NOT implicitly
         // serialize with the legacy default (NULL) stream where the rest of

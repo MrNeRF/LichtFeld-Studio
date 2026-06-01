@@ -1091,7 +1091,17 @@ namespace lfs::vis {
 
     void VksplatViewportRenderer::reset() {
         if (context_ && context_->device() != VK_NULL_HANDLE) {
-            vkDeviceWaitIdle(context_->device());
+            const VkDevice device = context_->device();
+            vkDeviceWaitIdle(device);
+            if (readback_fence_ != VK_NULL_HANDLE) {
+                vkDestroyFence(device, readback_fence_, nullptr);
+                readback_fence_ = VK_NULL_HANDLE;
+            }
+            if (readback_pool_ != VK_NULL_HANDLE) {
+                vkDestroyCommandPool(device, readback_pool_, nullptr);
+                readback_pool_ = VK_NULL_HANDLE;
+                readback_cmd_ = VK_NULL_HANDLE;
+            }
         }
         releaseSharedScratchArena();
         drainRetiredScratchBuffers(true);
@@ -2250,7 +2260,8 @@ namespace lfs::vis {
                                                            : context.graphicsQueue(),
                                          use_async_compute ? context.computeQueueFamily()
                                                            : context.graphicsQueueFamily(),
-                                         context.allocator());
+                                         context.allocator(),
+                                         context.pipelineCache());
             renderer_.assignBufferLabels(buffers_);
             renderer_.setCpuTimerCallback([](const std::string_view name, const double ms) {
                 LOG_PERF("{} took {:.2f}ms", name, ms);
@@ -3115,6 +3126,45 @@ namespace lfs::vis {
         return {};
     }
 
+    std::expected<void, std::string> VksplatViewportRenderer::ensureReadbackContext() const {
+        if (!context_ || context_->device() == VK_NULL_HANDLE) {
+            return std::unexpected("VkSplat readback context requested before device initialization");
+        }
+        if (readback_pool_ != VK_NULL_HANDLE) {
+            return {};
+        }
+        const VkDevice device = context_->device();
+        VkCommandPoolCreateInfo pool_info{};
+        pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+        pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+        pool_info.queueFamilyIndex = context_->graphicsQueueFamily();
+        if (const VkResult r = vkCreateCommandPool(device, &pool_info, nullptr, &readback_pool_);
+            r != VK_SUCCESS) {
+            return std::unexpected(vkError("vkCreateCommandPool(VkSplat readback)", r));
+        }
+        VkCommandBufferAllocateInfo command_info{};
+        command_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        command_info.commandPool = readback_pool_;
+        command_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        command_info.commandBufferCount = 1;
+        if (const VkResult r = vkAllocateCommandBuffers(device, &command_info, &readback_cmd_);
+            r != VK_SUCCESS) {
+            vkDestroyCommandPool(device, readback_pool_, nullptr);
+            readback_pool_ = VK_NULL_HANDLE;
+            return std::unexpected(vkError("vkAllocateCommandBuffers(VkSplat readback)", r));
+        }
+        VkFenceCreateInfo fence_info{};
+        fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        if (const VkResult r = vkCreateFence(device, &fence_info, nullptr, &readback_fence_);
+            r != VK_SUCCESS) {
+            vkDestroyCommandPool(device, readback_pool_, nullptr);
+            readback_pool_ = VK_NULL_HANDLE;
+            readback_cmd_ = VK_NULL_HANDLE;
+            return std::unexpected(vkError("vkCreateFence(VkSplat readback)", r));
+        }
+        return {};
+    }
+
     std::expected<std::shared_ptr<lfs::core::Tensor>, std::string>
     VksplatViewportRenderer::readOutputImage(VulkanContext& context, const OutputSlot output_slot) const {
         if (!context_) {
@@ -3184,25 +3234,13 @@ namespace lfs::vis {
             return std::unexpected("VkSplat readback staging buffer is not host-mapped");
         }
 
-        ScopedCommandPool command_pool{.device = device};
-        VkCommandPoolCreateInfo pool_info{};
-        pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-        pool_info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-        pool_info.queueFamilyIndex = context.graphicsQueueFamily();
-        result = vkCreateCommandPool(device, &pool_info, nullptr, &command_pool.pool);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkCreateCommandPool(VkSplat readback)", result));
+        if (const auto ready = ensureReadbackContext(); !ready) {
+            return std::unexpected(ready.error());
         }
-
-        VkCommandBuffer command_buffer = VK_NULL_HANDLE;
-        VkCommandBufferAllocateInfo command_info{};
-        command_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        command_info.commandPool = command_pool.pool;
-        command_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        command_info.commandBufferCount = 1;
-        result = vkAllocateCommandBuffers(device, &command_info, &command_buffer);
+        const VkCommandBuffer command_buffer = readback_cmd_;
+        result = vkResetCommandBuffer(command_buffer, 0);
         if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkAllocateCommandBuffers(VkSplat readback)", result));
+            return std::unexpected(vkError("vkResetCommandBuffer(VkSplat readback)", result));
         }
 
         VkCommandBufferBeginInfo begin_info{};
@@ -3248,23 +3286,20 @@ namespace lfs::vis {
             return std::unexpected(vkError("vkEndCommandBuffer(VkSplat readback)", result));
         }
 
-        ScopedFence fence{.device = device};
-        VkFenceCreateInfo fence_info{};
-        fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        result = vkCreateFence(device, &fence_info, nullptr, &fence.fence);
+        result = vkResetFences(device, 1, &readback_fence_);
         if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkCreateFence(VkSplat readback)", result));
+            return std::unexpected(vkError("vkResetFences(VkSplat readback)", result));
         }
 
         VkSubmitInfo submit_info{};
         submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         submit_info.commandBufferCount = 1;
         submit_info.pCommandBuffers = &command_buffer;
-        result = vkQueueSubmit(context.graphicsQueue(), 1, &submit_info, fence.fence);
+        result = vkQueueSubmit(context.graphicsQueue(), 1, &submit_info, readback_fence_);
         if (result != VK_SUCCESS) {
             return std::unexpected(vkError("vkQueueSubmit(VkSplat readback)", result));
         }
-        result = vkWaitForFences(device, 1, &fence.fence, VK_TRUE, UINT64_MAX);
+        result = vkWaitForFences(device, 1, &readback_fence_, VK_TRUE, UINT64_MAX);
         if (result != VK_SUCCESS) {
             return std::unexpected(vkError("vkWaitForFences(VkSplat readback)", result));
         }
@@ -3364,25 +3399,13 @@ namespace lfs::vis {
             return std::unexpected("VkSplat depth sample staging buffer is not host-mapped");
         }
 
-        ScopedCommandPool command_pool{.device = device};
-        VkCommandPoolCreateInfo pool_info{};
-        pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-        pool_info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-        pool_info.queueFamilyIndex = context.graphicsQueueFamily();
-        result = vkCreateCommandPool(device, &pool_info, nullptr, &command_pool.pool);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkCreateCommandPool(VkSplat depth sample)", result));
+        if (const auto ready = ensureReadbackContext(); !ready) {
+            return std::unexpected(ready.error());
         }
-
-        VkCommandBuffer command_buffer = VK_NULL_HANDLE;
-        VkCommandBufferAllocateInfo command_info{};
-        command_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-        command_info.commandPool = command_pool.pool;
-        command_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        command_info.commandBufferCount = 1;
-        result = vkAllocateCommandBuffers(device, &command_info, &command_buffer);
+        const VkCommandBuffer command_buffer = readback_cmd_;
+        result = vkResetCommandBuffer(command_buffer, 0);
         if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkAllocateCommandBuffers(VkSplat depth sample)", result));
+            return std::unexpected(vkError("vkResetCommandBuffer(VkSplat depth sample)", result));
         }
 
         VkCommandBufferBeginInfo begin_info{};
@@ -3426,23 +3449,20 @@ namespace lfs::vis {
             return std::unexpected(vkError("vkEndCommandBuffer(VkSplat depth sample)", result));
         }
 
-        ScopedFence fence{.device = device};
-        VkFenceCreateInfo fence_info{};
-        fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        result = vkCreateFence(device, &fence_info, nullptr, &fence.fence);
+        result = vkResetFences(device, 1, &readback_fence_);
         if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkCreateFence(VkSplat depth sample)", result));
+            return std::unexpected(vkError("vkResetFences(VkSplat depth sample)", result));
         }
 
         VkSubmitInfo submit_info{};
         submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         submit_info.commandBufferCount = 1;
         submit_info.pCommandBuffers = &command_buffer;
-        result = vkQueueSubmit(context.graphicsQueue(), 1, &submit_info, fence.fence);
+        result = vkQueueSubmit(context.graphicsQueue(), 1, &submit_info, readback_fence_);
         if (result != VK_SUCCESS) {
             return std::unexpected(vkError("vkQueueSubmit(VkSplat depth sample)", result));
         }
-        result = vkWaitForFences(device, 1, &fence.fence, VK_TRUE, UINT64_MAX);
+        result = vkWaitForFences(device, 1, &readback_fence_, VK_TRUE, UINT64_MAX);
         if (result != VK_SUCCESS) {
             return std::unexpected(vkError("vkWaitForFences(VkSplat depth sample)", result));
         }
