@@ -38,37 +38,37 @@
       <div id="asset-sidebar" data-style-width="sidebar_width">
         <div class="asset-sidebar-inner">
         <div class="asset-sidebar-section">
-          <div class="asset-sidebar-title" style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;" data-event-click="toggle_projects_collapsed">
+          <div class="asset-sidebar-title" style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;" data-event-click="toggle_folders_collapsed">
             <div style="display: flex; align-items: center; gap: 4dp;">
-              <span class="section-arrow" data-class-is-expanded="!projects_collapsed">&#x25B6;</span>
-              <span>{{projects_title}}</span>
+              <span class="section-arrow" data-class-is-expanded="!folders_collapsed">&#x25B6;</span>
+              <span>{{folders_title}}</span>
             </div>
             <div style="position: relative;">
-              <button class="asset-project-menu" data-event-click="toggle_new_project_menu"><svg width="10" height="10" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 1V11M1 6H11" stroke="#d8d0c3" stroke-width="2" stroke-linecap="round"/></svg></button>
-              <div class="asset-project-dropdown" data-class-is-visible="new_project_menu_open" style="position: absolute; top: 100%; right: 0; z-index: 100; margin-top: 4px; min-width: 140px; white-space: nowrap;">
-                <div class="asset-dropdown-item" data-event-click="on_create_project_dialog">{{create_new_project_label}}</div>
+              <button class="asset-folder-menu" data-event-click="toggle_new_folder_menu"><svg width="10" height="10" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 1V11M1 6H11" stroke="#d8d0c3" stroke-width="2" stroke-linecap="round"/></svg></button>
+              <div class="asset-folder-dropdown" data-class-is-visible="new_folder_menu_open" style="position: absolute; top: 100%; right: 0; z-index: 100; margin-top: 4px; min-width: 140px; white-space: nowrap;">
+                <div class="asset-dropdown-item" data-event-click="on_create_folder_dialog">{{create_new_folder_label}}</div>
               </div>
             </div>
           </div>
-          <div class="section-content" data-visible="projects_expanded">
-            <div data-for="project : projects">
-              <div class="asset-filter-row" data-class-is-active="project.id == selected_project_id" data-attr-data-project-id="project.id">
-                <span class="asset-row-label">{{project.name}}</span>
-                <div class="asset-project-row-right">
-                  <span class="asset-row-count">{{project.scene_count}}</span>
-                  <button class="asset-project-menu" data-attr-data-project-id="project.id" data-project-action="menu"><img src="../icon/more-horizontal.png" /></button>
+          <div class="section-content" data-visible="folders_expanded">
+            <div data-for="folder : folders">
+              <div class="asset-filter-row" data-class-is-active="folder.id == selected_folder_id" data-attr-data-folder-id="folder.id">
+                <span class="asset-row-label">{{folder.name}}</span>
+                <div class="asset-folder-row-right">
+                  <span class="asset-row-count">{{folder.scene_count}}</span>
+                  <button class="asset-folder-menu" data-attr-data-folder-id="folder.id" data-folder-action="menu"><img src="../icon/more-horizontal.png" /></button>
                 </div>
               </div>
-              <div class="asset-project-dropdown" data-class-is-visible="project.menu_open">
-                <div class="asset-dropdown-item" data-attr-data-project-id="project.id" data-project-action="watch_dirs">{{edit_watch_dirs_label}}</div>
-                <div class="asset-dropdown-item" data-attr-data-project-id="project.id" data-project-action="rename">{{rename_project_label}}</div>
-                <div class="asset-dropdown-item is-danger" data-attr-data-project-id="project.id" data-project-action="delete">{{delete_project_label}}</div>
+              <div class="asset-folder-dropdown" data-class-is-visible="folder.menu_open">
+                <div class="asset-dropdown-item" data-attr-data-folder-id="folder.id" data-folder-action="watch_dirs">{{edit_watch_dirs_label}}</div>
+                <div class="asset-dropdown-item" data-attr-data-folder-id="folder.id" data-folder-action="rename">{{rename_folder_label}}</div>
+                <div class="asset-dropdown-item is-danger" data-attr-data-folder-id="folder.id" data-folder-action="delete">{{delete_folder_label}}</div>
               </div>
             </div>
           </div>
         </div>
 
-        <div class="asset-sidebar-section" data-if="selected_project_id">
+        <div class="asset-sidebar-section" data-if="selected_folder_id">
           <div class="asset-sidebar-title">{{scenes_title}}</div>
           <div data-for="scene : scenes">
             <div class="asset-filter-row" data-class-is-active="scene.id == selected_scene_id" data-attr-data-scene-id="scene.id">
@@ -145,13 +145,13 @@
                   </div>
                   <div class="asset-dropdown-item" data-attr-data-asset-id="asset.id" data-asset-action="rename">{{rename_label}}</div>
                   <div class="asset-dropdown-item has-submenu" data-attr-data-asset-id="asset.id">
-                    <span>{{move_to_project_label}}</span>
+                    <span>{{move_to_folder_label}}</span>
                     <span class="submenu-arrow">&#x203A;</span>
                     <div class="asset-dropdown-submenu">
-                      <div class="asset-dropdown-item" data-attr-data-asset-id="asset.id" data-asset-action="create_project">{{new_project_label}}</div>
+                      <div class="asset-dropdown-item" data-attr-data-asset-id="asset.id" data-asset-action="create_folder">{{new_folder_label}}</div>
                       <div class="asset-submenu-divider"></div>
-                      <div data-for="proj : move_menu_projects">
-                        <div class="asset-dropdown-item project-option" data-attr-data-asset-id="asset.id" data-attr-data-project-id="proj.id" data-asset-action="move_to_existing_project">{{proj.name}}</div>
+                      <div data-for="folder : move_menu_folders">
+                        <div class="asset-dropdown-item folder-option" data-attr-data-asset-id="asset.id" data-attr-data-folder-id="folder.id" data-asset-action="move_to_existing_folder">{{folder.name}}</div>
                       </div>
                     </div>
                   </div>
@@ -166,7 +166,7 @@
           <div class="asset-list-header">
             <span class="asset-col asset-col-name">{{col_name_label}}</span>
             <span class="asset-col asset-col-type">{{col_type_label}}</span>
-            <span class="asset-col asset-col-project">{{col_project_label}}</span>
+            <span class="asset-col asset-col-folder">{{col_folder_label}}</span>
             <span class="asset-col asset-col-size">{{col_size_label}}</span>
             <span class="asset-col asset-col-modified">{{col_modified_label}}</span>
           </div>
@@ -177,7 +177,7 @@
                   <span class="asset-list-secondary">{{asset.display_subtitle}}</span>
                 </span>
                 <span class="asset-col asset-col-type">{{asset.type_label}}</span>
-                <span class="asset-col asset-col-project">{{asset.project_name}}</span>
+                <span class="asset-col asset-col-folder">{{asset.folder_name}}</span>
                 <span class="asset-col asset-col-size">{{asset.size_label}}</span>
                 <span class="asset-col asset-col-modified">{{asset.modified_label}}</span>
                 <div class="asset-load-menu" data-class-is-visible="asset.load_menu_open">
@@ -218,9 +218,9 @@
 
             <div class="asset-info-section">
               <div class="asset-info-section-title">{{asset_details_title}}</div>
-              <div class="parameter-row" data-if="selected_asset_project_name">
-                <span class="parameter-label">{{prop_project_label}}</span>
-                <span class="parameter-value">{{selected_asset_project_name}}</span>
+              <div class="parameter-row" data-if="selected_asset_folder_name">
+                <span class="parameter-label">{{prop_folder_label}}</span>
+                <span class="parameter-value">{{selected_asset_folder_name}}</span>
               </div>
               <div class="parameter-row" data-if="selected_asset_scene_name">
                 <span class="parameter-label">{{prop_scene_label}}</span>
@@ -335,8 +335,8 @@
             <div class="asset-info-section">
               <div class="asset-info-section-title">{{scene_details_title}}</div>
               <div class="parameter-row">
-                <span class="parameter-label">{{prop_project_label}}</span>
-                <span class="parameter-value">{{selected_scene_project_name}}</span>
+                <span class="parameter-label">{{prop_folder_label}}</span>
+                <span class="parameter-value">{{selected_scene_folder_name}}</span>
               </div>
               <div class="parameter-row">
                 <span class="parameter-label">{{prop_assets_label}}</span>
@@ -363,21 +363,21 @@
             </div>
           </div>
 
-          <div data-if="show_selection_project">
+          <div data-if="show_selection_folder">
             <div class="asset-info-header">
-              <span class="asset-info-name">{{selected_project_name}}</span>
-              <span class="asset-pill asset-pill-project">{{project_pill_label}}</span>
+              <span class="asset-info-name">{{selected_folder_name}}</span>
+              <span class="asset-pill asset-pill-folder">{{folder_pill_label}}</span>
             </div>
 
             <div class="asset-info-section">
-              <div class="asset-info-section-title">{{project_details_title}}</div>
+              <div class="asset-info-section-title">{{folder_details_title}}</div>
               <div class="parameter-row">
                 <span class="parameter-label">{{prop_created_label}}</span>
-                <span class="parameter-value">{{selected_project_created}}</span>
+                <span class="parameter-value">{{selected_folder_created}}</span>
               </div>
               <div class="parameter-row">
                 <span class="parameter-label">{{prop_modified_label}}</span>
-                <span class="parameter-value">{{selected_project_modified}}</span>
+                <span class="parameter-value">{{selected_folder_modified}}</span>
               </div>
             </div>
 

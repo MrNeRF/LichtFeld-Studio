@@ -150,8 +150,8 @@ def resolve_asset_manager_library_path() -> Path:
 
 
 @dataclass
-class Project:
-    """A project container for scenes and assets."""
+class Folder:
+    """A folder container for scenes and assets."""
 
     id: str
     name: str
@@ -169,7 +169,7 @@ class Project:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Project":
+    def from_dict(cls, data: Dict[str, Any]) -> "Folder":
         """Create from dictionary."""
         return cls(
             id=data["id"],
@@ -187,10 +187,10 @@ class Project:
 
 @dataclass
 class Scene:
-    """A scene within a project."""
+    """A scene within a folder."""
 
     id: str
-    project_id: str
+    folder_id: str
     name: str
     description: str = ""
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
@@ -209,7 +209,7 @@ class Scene:
         """Create from dictionary."""
         return cls(
             id=data["id"],
-            project_id=data["project_id"],
+            folder_id=data["folder_id"],
             name=data["name"],
             description=data.get("description", ""),
             created_at=data.get("created_at", datetime.now().isoformat()),
@@ -226,12 +226,12 @@ class Asset:
     """An asset file (dataset, checkpoint, etc.)."""
 
     id: str
-    project_id: Optional[str] = None
+    folder_id: Optional[str] = None
     scene_id: Optional[str] = None
     name: str = ""
     type: str = ""  # dataset, checkpoint, image, mesh, etc.
     role: str = ""  # source, output, intermediate, thumbnail, etc.
-    path: str = ""  # Relative path within project
+    path: str = ""  # Relative path within folder
     absolute_path: str = ""  # Absolute path on filesystem
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     modified_at: str = field(default_factory=lambda: datetime.now().isoformat())
@@ -252,7 +252,7 @@ class Asset:
         """Create from dictionary."""
         return cls(
             id=data["id"],
-            project_id=data.get("project_id"),
+            folder_id=data.get("folder_id"),
             scene_id=data.get("scene_id"),
             name=data.get("name", ""),
             type=data.get("type", ""),
@@ -287,7 +287,7 @@ class AssetIndex:
         self._version: str = LIBRARY_VERSION
         self._created_at: str = datetime.now().isoformat()
         self._modified_at: str = datetime.now().isoformat()
-        self._projects: Dict[str, Project] = {}
+        self._folders: Dict[str, Folder] = {}
         self._scenes: Dict[str, Scene] = {}
         self._assets: Dict[str, Asset] = {}
         self._collections: Dict[str, Dict[str, Any]] = {}
@@ -299,9 +299,9 @@ class AssetIndex:
         return self._library_path
 
     @property
-    def projects(self) -> Dict[str, Dict[str, Any]]:
-        """Return projects as dictionaries for backward compatibility."""
-        return {pid: p.to_dict() for pid, p in self._projects.items()}
+    def folders(self) -> Dict[str, Dict[str, Any]]:
+        """Return folders as dictionaries for backward compatibility."""
+        return {fid: f.to_dict() for fid, f in self._folders.items()}
 
     @property
     def scenes(self) -> Dict[str, Dict[str, Any]]:
@@ -344,9 +344,9 @@ class AssetIndex:
             self._created_at = data.get("created_at", datetime.now().isoformat())
             self._modified_at = data.get("modified_at", datetime.now().isoformat())
 
-            # Load projects
-            self._projects = {
-                pid: Project.from_dict(p) for pid, p in data.get("projects", {}).items()
+            # Load folders
+            self._folders = {
+                fid: Folder.from_dict(f) for fid, f in data.get("folders", {}).items()
             }
 
             # Load scenes
@@ -365,8 +365,8 @@ class AssetIndex:
             self.rebuild_tag_index(save=False)
 
             _log.info(
-                "Loaded library with %d projects, %d scenes, %d assets",
-                len(self._projects),
+                "Loaded library with %d folders, %d scenes, %d assets",
+                len(self._folders),
                 len(self._scenes),
                 len(self._assets),
             )
@@ -392,7 +392,7 @@ class AssetIndex:
                 "version": self._version,
                 "created_at": self._created_at,
                 "modified_at": self._modified_at,
-                "projects": {pid: p.to_dict() for pid, p in self._projects.items()},
+                "folders": {fid: f.to_dict() for fid, f in self._folders.items()},
                 "scenes": {sid: s.to_dict() for sid, s in self._scenes.items()},
                 "assets": {aid: a.to_dict() for aid, a in self._assets.items()},
                 "collections": self._collections,
@@ -424,7 +424,7 @@ class AssetIndex:
         self._version = LIBRARY_VERSION
         self._created_at = datetime.now().isoformat()
         self._modified_at = datetime.now().isoformat()
-        self._projects = {}
+        self._folders = {}
         self._scenes = {}
         self._assets = {}
         self._collections = {}
@@ -432,68 +432,68 @@ class AssetIndex:
         _log.debug("Initialized default catalog")
 
     # -------------------------------------------------------------------------
-    # Project CRUD
+    # Folder CRUD
     # -------------------------------------------------------------------------
 
-    def create_project(
+    def create_folder(
         self, name: str, description: str = "", tags: Optional[List[str]] = None
-    ) -> Project:
-        """Create a new project.
+    ) -> Folder:
+        """Create a new folder.
 
         Args:
-            name: Project name
-            description: Project description
+            name: Folder name
+            description: Folder description
             tags: Optional list of tags
 
         Returns:
-            The created Project instance
+            The created Folder instance
         """
-        project = Project(
+        folder = Folder(
             id=str(uuid.uuid4()),
             name=name,
             description=description,
             tags=tags or [],
         )
-        self._projects[project.id] = project
+        self._folders[folder.id] = folder
         self.save()
-        return project
+        return folder
 
-    def update_project(self, project_id: str, **kwargs) -> Optional[Project]:
-        """Update a project.
+    def update_folder(self, folder_id: str, **kwargs) -> Optional[Folder]:
+        """Update a folder.
 
         Args:
-            project_id: Project ID to update
+            folder_id: Folder ID to update
             **kwargs: Fields to update
 
         Returns:
-            Updated Project or None if not found
+            Updated Folder or None if not found
         """
-        if project_id not in self._projects:
+        if folder_id not in self._folders:
             return None
 
-        project = self._projects[project_id]
+        folder = self._folders[folder_id]
         for key, value in kwargs.items():
-            if hasattr(project, key):
-                setattr(project, key, value)
-        project.modified_at = datetime.now().isoformat()
+            if hasattr(folder, key):
+                setattr(folder, key, value)
+        folder.modified_at = datetime.now().isoformat()
         self.save()
-        return project
+        return folder
 
-    def delete_project(self, project_id: str) -> bool:
-        """Delete a project and all associated scenes and assets.
+    def delete_folder(self, folder_id: str) -> bool:
+        """Delete a folder and all associated scenes and assets.
 
         Args:
-            project_id: Project ID to delete
+            folder_id: Folder ID to delete
 
         Returns:
             True if deleted, False if not found
         """
-        if project_id not in self._projects:
+        if folder_id not in self._folders:
             return False
 
         # Delete associated scenes
         scenes_to_delete = [
-            sid for sid, s in self._scenes.items() if s.project_id == project_id
+            sid for sid, s in self._scenes.items() if s.folder_id == folder_id
         ]
         for sid in scenes_to_delete:
             self.delete_scene(sid)
@@ -502,84 +502,84 @@ class AssetIndex:
         assets_to_delete = [
             aid
             for aid, a in self._assets.items()
-            if a.project_id == project_id and a.scene_id is None
+            if a.folder_id == folder_id and a.scene_id is None
         ]
         for aid in assets_to_delete:
             del self._assets[aid]
 
-        del self._projects[project_id]
+        del self._folders[folder_id]
         self.save()
         return True
 
-    def get_project(self, project_id: str) -> Optional[Project]:
-        """Get a project by ID.
+    def get_folder(self, folder_id: str) -> Optional[Folder]:
+        """Get a folder by ID.
 
         Args:
-            project_id: Project ID
+            folder_id: Folder ID
 
         Returns:
-            Project or None if not found
+            Folder or None if not found
         """
-        return self._projects.get(project_id)
+        return self._folders.get(folder_id)
 
-    def get_watch_dirs(self, project_id: str) -> List[str]:
-        """Get watched directories for a project.
+    def get_watch_dirs(self, folder_id: str) -> List[str]:
+        """Get watched directories for a folder.
 
         Args:
-            project_id: Project ID
+            folder_id: Folder ID
 
         Returns:
             List of watched directory paths
         """
-        project = self._projects.get(project_id)
-        if project is None:
+        folder = self._folders.get(folder_id)
+        if folder is None:
             return []
-        return list(project.watch_directories)
+        return list(folder.watch_directories)
 
-    def set_watch_dirs(self, project_id: str, paths: List[str]) -> bool:
-        """Set watched directories for a project.
+    def set_watch_dirs(self, folder_id: str, paths: List[str]) -> bool:
+        """Set watched directories for a folder.
 
         Args:
-            project_id: Project ID
+            folder_id: Folder ID
             paths: List of directory paths to watch
 
         Returns:
-            True if updated, False if project not found
+            True if updated, False if folder not found
         """
-        if project_id not in self._projects:
+        if folder_id not in self._folders:
             return False
-        project = self._projects[project_id]
-        previous_paths = list(project.watch_directories)
-        previous_modified_at = project.modified_at
-        project.watch_directories = list(paths)
-        project.modified_at = datetime.now().isoformat()
+        folder = self._folders[folder_id]
+        previous_paths = list(folder.watch_directories)
+        previous_modified_at = folder.modified_at
+        folder.watch_directories = list(paths)
+        folder.modified_at = datetime.now().isoformat()
         if not self.save():
-            project.watch_directories = previous_paths
-            project.modified_at = previous_modified_at
+            folder.watch_directories = previous_paths
+            folder.modified_at = previous_modified_at
             return False
         return True
 
-    def list_projects(self) -> List[Project]:
-        """List all projects.
+    def list_folders(self) -> List[Folder]:
+        """List all folders.
 
         Returns:
-            List of all projects
+            List of all folders
         """
-        return list(self._projects.values())
+        return list(self._folders.values())
 
-    def find_or_create_project(self, name: str) -> Project:
-        """Find a project by name or create a new one.
+    def find_or_create_folder(self, name: str) -> Folder:
+        """Find a folder by name or create a new one.
 
         Args:
-            name: Project name to find or create
+            name: Folder name to find or create
 
         Returns:
-            Existing or newly created Project instance
+            Existing or newly created Folder instance
         """
-        for project in self._projects.values():
-            if project.name == name:
-                return project
-        return self.create_project(name=name)
+        for folder in self._folders.values():
+            if folder.name == name:
+                return folder
+        return self.create_folder(name=name)
 
     # -------------------------------------------------------------------------
     # Scene CRUD
@@ -587,40 +587,40 @@ class AssetIndex:
 
     def create_scene(
         self,
-        project_id: str,
+        folder_id: str,
         name: str,
         description: str = "",
         tags: Optional[List[str]] = None,
     ) -> Optional[Scene]:
-        """Create a new scene within a project.
+        """Create a new scene within a folder.
 
         Args:
-            project_id: Parent project ID
+            folder_id: Parent folder ID
             name: Scene name
             description: Scene description
             tags: Optional list of tags
 
         Returns:
-            The created Scene instance or None if project not found
+            The created Scene instance or None if folder not found
         """
-        if project_id not in self._projects:
+        if folder_id not in self._folders:
             return None
 
         scene = Scene(
             id=str(uuid.uuid4()),
-            project_id=project_id,
+            folder_id=folder_id,
             name=name,
             description=description,
             tags=tags or [],
         )
         self._scenes[scene.id] = scene
-        self._projects[project_id].scene_ids.append(scene.id)
-        self._projects[project_id].modified_at = datetime.now().isoformat()
+        self._folders[folder_id].scene_ids.append(scene.id)
+        self._folders[folder_id].modified_at = datetime.now().isoformat()
         if not self.save():
             _log.error("Failed to save library during scene creation for %s", scene.id)
             # Clean up in-memory state
             del self._scenes[scene.id]
-            self._projects[project_id].scene_ids.remove(scene.id)
+            self._folders[folder_id].scene_ids.remove(scene.id)
             return None
         return scene
 
@@ -668,12 +668,12 @@ class AssetIndex:
         for aid in assets_to_delete:
             del self._assets[aid]
 
-        # Remove from project
-        if scene.project_id in self._projects:
-            project = self._projects[scene.project_id]
-            if scene_id in project.scene_ids:
-                project.scene_ids.remove(scene_id)
-                project.modified_at = datetime.now().isoformat()
+        # Remove from folder
+        if scene.folder_id in self._folders:
+            folder = self._folders[scene.folder_id]
+            if scene_id in folder.scene_ids:
+                folder.scene_ids.remove(scene_id)
+                folder.modified_at = datetime.now().isoformat()
 
         del self._scenes[scene_id]
         self.save()
@@ -690,36 +690,36 @@ class AssetIndex:
         """
         return self._scenes.get(scene_id)
 
-    def list_scenes(self, project_id: Optional[str] = None) -> List[Scene]:
-        """List scenes, optionally filtered by project.
+    def list_scenes(self, folder_id: Optional[str] = None) -> List[Scene]:
+        """List scenes, optionally filtered by folder.
 
         Args:
-            project_id: Optional project ID to filter by
+            folder_id: Optional folder ID to filter by
 
         Returns:
             List of scenes
         """
         scenes = list(self._scenes.values())
-        if project_id:
-            scenes = [s for s in scenes if s.project_id == project_id]
+        if folder_id:
+            scenes = [s for s in scenes if s.folder_id == folder_id]
         return scenes
 
-    def find_or_create_scene(self, project_id: str, name: str) -> Optional[Scene]:
-        """Find a scene by name within a project or create a new one.
+    def find_or_create_scene(self, folder_id: str, name: str) -> Optional[Scene]:
+        """Find a scene by name within a folder or create a new one.
 
         Args:
-            project_id: Parent project ID
+            folder_id: Parent folder ID
             name: Scene name to find or create
 
         Returns:
-            Existing or newly created Scene instance, or None if project not found
+            Existing or newly created Scene instance, or None if folder not found
         """
-        if project_id not in self._projects:
+        if folder_id not in self._folders:
             return None
         for scene in self._scenes.values():
-            if scene.project_id == project_id and scene.name == name:
+            if scene.folder_id == folder_id and scene.name == name:
                 return scene
-        return self.create_scene(project_id=project_id, name=name)
+        return self.create_scene(folder_id=folder_id, name=name)
 
     # -------------------------------------------------------------------------
     # Asset CRUD
@@ -727,7 +727,7 @@ class AssetIndex:
 
     def create_asset(
         self,
-        project_id: Optional[str],
+        folder_id: Optional[str],
         name: str,
         type: str,
         path: str,
@@ -747,10 +747,10 @@ class AssetIndex:
         """Create a new asset.
 
         Args:
-            project_id: Parent project ID
+            folder_id: Parent folder ID
             name: Asset name
             type: Asset type (dataset, checkpoint, etc.)
-            path: Relative path within project
+            path: Relative path within folder
             absolute_path: Absolute path on filesystem
             scene_id: Optional parent scene ID
             role: Asset role (source, output, etc.)
@@ -758,10 +758,10 @@ class AssetIndex:
             file_size_bytes: File size in bytes
 
         Returns:
-            The created Asset instance or None if project not found
+            The created Asset instance or None if folder not found
         """
-        if project_id is not None and project_id not in self._projects:
-            _log.error("Cannot create asset: project_id %s not found", project_id)
+        if folder_id is not None and folder_id not in self._folders:
+            _log.error("Cannot create asset: folder_id %s not found", folder_id)
             return None
         if scene_id is not None and scene_id not in self._scenes:
             _log.error("Cannot create asset: scene_id %s not found", scene_id)
@@ -770,7 +770,7 @@ class AssetIndex:
         normalized_abs_path = os.path.abspath(absolute_path or path)
         existing_asset = self.find_asset_by_path(
             normalized_abs_path,
-            project_id=project_id,
+            folder_id=folder_id,
         )
         if existing_asset is not None:
             merged_tags = list(
@@ -778,9 +778,9 @@ class AssetIndex:
             )
             updated = self.update_asset(
                 existing_asset.id,
-                project_id=project_id
-                if project_id is not None
-                else existing_asset.project_id,
+                folder_id=folder_id
+                if folder_id is not None
+                else existing_asset.folder_id,
                 scene_id=scene_id if scene_id is not None else existing_asset.scene_id,
                 name=name or existing_asset.name,
                 type=type or existing_asset.type,
@@ -807,7 +807,7 @@ class AssetIndex:
 
         asset = Asset(
             id=str(uuid.uuid4()),
-            project_id=project_id,
+            folder_id=folder_id,
             scene_id=scene_id,
             name=name,
             type=type,
@@ -877,7 +877,7 @@ class AssetIndex:
 
         asset = self._assets[asset_id]
         asset_scene_id = asset.scene_id
-        asset_project_id = asset.project_id
+        asset_folder_id = asset.folder_id
         is_dataset = asset.type == "dataset" or asset.role == "source_dataset"
 
         for scene in self._scenes.values():
@@ -896,19 +896,19 @@ class AssetIndex:
                 not scene_has_assets
                 and scene.dataset_asset_id is None
             ):
-                project = self._projects.get(scene.project_id)
-                if project and asset_scene_id in project.scene_ids:
-                    project.scene_ids.remove(asset_scene_id)
-                    project.modified_at = datetime.now().isoformat()
+                folder = self._folders.get(scene.folder_id)
+                if folder and asset_scene_id in folder.scene_ids:
+                    folder.scene_ids.remove(asset_scene_id)
+                    folder.modified_at = datetime.now().isoformat()
                 del self._scenes[asset_scene_id]
 
-        if asset_project_id in self._projects:
-            project_has_scenes = bool(self._projects[asset_project_id].scene_ids)
-            project_has_assets = any(
-                a.project_id == asset_project_id for a in self._assets.values()
+        if asset_folder_id in self._folders:
+            folder_has_scenes = bool(self._folders[asset_folder_id].scene_ids)
+            folder_has_assets = any(
+                a.folder_id == asset_folder_id for a in self._assets.values()
             )
-            if not project_has_scenes and not project_has_assets:
-                del self._projects[asset_project_id]
+            if not folder_has_scenes and not folder_has_assets:
+                del self._folders[asset_folder_id]
 
         self.rebuild_tag_index(save=False)
         if not self.save():
@@ -934,20 +934,20 @@ class AssetIndex:
     def find_asset_by_path(
         self,
         absolute_path: str,
-        project_id: Optional[str] = None,
+        folder_id: Optional[str] = None,
     ) -> Optional[Asset]:
         """Find an asset by its absolute path.
 
         Args:
             absolute_path: Absolute file path
-            project_id: Optional project ID to scope the lookup
+            folder_id: Optional folder ID to scope the lookup
 
         Returns:
             Asset or None if not found
         """
         normalized = os.path.abspath(absolute_path)
         for asset in self._assets.values():
-            if project_id is not None and asset.project_id != project_id:
+            if folder_id is not None and asset.folder_id != folder_id:
                 continue
             if os.path.abspath(asset.absolute_path) == normalized:
                 return asset
@@ -971,8 +971,8 @@ class AssetIndex:
                 )
                 entry["count"] += 1
 
-        for project in self._projects.values():
-            _accumulate(project.tags)
+        for folder in self._folders.values():
+            _accumulate(folder.tags)
         for scene in self._scenes.values():
             _accumulate(scene.tags)
         for asset in self._assets.values():
@@ -1017,7 +1017,7 @@ class AssetIndex:
 
     def list_assets(
         self,
-        project_id: Optional[str] = None,
+        folder_id: Optional[str] = None,
         scene_id: Optional[str] = None,
         type: Optional[str] = None,
         role: Optional[str] = None,
@@ -1026,7 +1026,7 @@ class AssetIndex:
         """List assets with optional filters.
 
         Args:
-            project_id: Optional project ID to filter by
+            folder_id: Optional folder ID to filter by
             scene_id: Optional scene ID to filter by
             type: Optional asset type to filter by
             role: Optional asset role to filter by
@@ -1036,8 +1036,8 @@ class AssetIndex:
             List of assets
         """
         assets = list(self._assets.values())
-        if project_id:
-            assets = [a for a in assets if a.project_id == project_id]
+        if folder_id:
+            assets = [a for a in assets if a.folder_id == folder_id]
         if scene_id:
             assets = [a for a in assets if a.scene_id == scene_id]
         if type:
@@ -1077,40 +1077,40 @@ class AssetIndex:
     # Search/Filter Methods
     # -------------------------------------------------------------------------
 
-    def search_projects(self, query: str) -> List[Project]:
-        """Search projects by name, description, or tags.
+    def search_folders(self, query: str) -> List[Folder]:
+        """Search folders by name, description, or tags.
 
         Args:
             query: Search query string
 
         Returns:
-            List of matching projects
+            List of matching folders
         """
         query_lower = query.lower()
         results = []
-        for project in self._projects.values():
+        for folder in self._folders.values():
             searchable = (
-                f"{project.name} {project.description} {' '.join(project.tags)}".lower()
+                f"{folder.name} {folder.description} {' '.join(folder.tags)}".lower()
             )
             if query_lower in searchable:
-                results.append(project)
+                results.append(folder)
         return results
 
     def search_scenes(
-        self, query: str, project_id: Optional[str] = None
+        self, query: str, folder_id: Optional[str] = None
     ) -> List[Scene]:
         """Search scenes by name, description, or tags.
 
         Args:
             query: Search query string
-            project_id: Optional project ID to filter by
+            folder_id: Optional folder ID to filter by
 
         Returns:
             List of matching scenes
         """
         query_lower = query.lower()
         results = []
-        scenes = self.list_scenes(project_id)
+        scenes = self.list_scenes(folder_id)
         for scene in scenes:
             searchable = (
                 f"{scene.name} {scene.description} {' '.join(scene.tags)}".lower()
@@ -1122,14 +1122,14 @@ class AssetIndex:
     def search_assets(
         self,
         query: str,
-        project_id: Optional[str] = None,
+        folder_id: Optional[str] = None,
         type: Optional[str] = None,
     ) -> List[Asset]:
         """Search assets by name, path, or tags.
 
         Args:
             query: Search query string
-            project_id: Optional project ID to filter by
+            folder_id: Optional folder ID to filter by
             type: Optional asset type to filter by
 
         Returns:
@@ -1137,7 +1137,7 @@ class AssetIndex:
         """
         query_lower = query.lower()
         results = []
-        assets = self.list_assets(project_id=project_id, type=type)
+        assets = self.list_assets(folder_id=folder_id, type=type)
         for asset in assets:
             searchable = f"{asset.name} {asset.path} {' '.join(asset.tags)}".lower()
             if query_lower in searchable:
@@ -1173,7 +1173,7 @@ class AssetIndex:
             "version": self._version,
             "created_at": self._created_at,
             "modified_at": self._modified_at,
-            "project_count": len(self._projects),
+            "folder_count": len(self._folders),
             "scene_count": len(self._scenes),
             "asset_count": len(self._assets),
             "total_size_bytes": total_size,

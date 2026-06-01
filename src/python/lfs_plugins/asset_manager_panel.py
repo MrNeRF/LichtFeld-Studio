@@ -33,7 +33,7 @@ RML_PATH_SAFE_CHARS = "/:._-~"
 try:
     from .asset_index import (
         AssetIndex,
-        Project,
+        Folder,
         Scene,
         Asset,
         resolve_asset_manager_storage_path,
@@ -257,7 +257,7 @@ class AssetManagerPanel(Panel):
 
         # UI state
         self._selected_asset_ids: Set[str] = set()
-        self._selected_project_id: Optional[str] = None
+        self._selected_folder_id: Optional[str] = None
         self._selected_scene_id: Optional[str] = None
         self._active_filters: Set[str] = set()  # Multi-select: empty = show all
         self._view_mode: str = "list"  # gallery, list
@@ -269,11 +269,11 @@ class AssetManagerPanel(Panel):
         self._open_menu_asset_id: Optional[str] = None
         self._load_menu_asset_id: Optional[str] = None
 
-        # Track which project has its dropdown menu open
-        self._open_menu_project_id: Optional[str] = None
+        # Track which folder has its dropdown menu open
+        self._open_menu_folder_id: Optional[str] = None
 
         # Selection type for info panel display
-        self._selection_type: str = "none"  # none, asset, scene, project, multiple
+        self._selection_type: str = "none"  # none, asset, scene, folder, multiple
 
         # Import menu state
         self._import_menu_open: bool = False
@@ -285,11 +285,11 @@ class AssetManagerPanel(Panel):
         self._last_scene_generation: Optional[int] = None
         self._last_language_generation: Optional[int] = None
 
-        # New project menu state
-        self._new_project_menu_open: bool = False
+        # New folder menu state
+        self._new_folder_menu_open: bool = False
 
         # Collapse state for sidebar sections
-        self._projects_collapsed: bool = True
+        self._folders_collapsed: bool = True
         self._filters_collapsed: bool = True
 
         # Panel resize drag state
@@ -352,7 +352,7 @@ class AssetManagerPanel(Panel):
         model.bind_func("show_selection_asset", lambda: self._selection_type == "asset")
         model.bind_func("show_selection_scene", lambda: self._selection_type == "scene")
         model.bind_func(
-            "show_selection_project", lambda: self._selection_type == "project"
+            "show_selection_folder", lambda: self._selection_type == "folder"
         )
         model.bind_func(
             "show_selection_multiple", lambda: self._selection_type == "multiple"
@@ -369,15 +369,15 @@ class AssetManagerPanel(Panel):
         model.bind_event("on_import_from_url", self.on_import_from_url)
 
 
-        # New project menu state
-        model.bind_func("new_project_menu_open", self.get_new_project_menu_open)
-        model.bind_func("create_new_project_label", lambda: tr("asset_manager.action.create_new_project"))
+        # New folder menu state
+        model.bind_func("new_folder_menu_open", self.get_new_folder_menu_open)
+        model.bind_func("create_new_folder_label", lambda: tr("asset_manager.action.create_new_folder"))
 
-        # Move menu projects list (for hover submenu)
-        model.bind_record_list("move_menu_projects")
+        # Move menu folders list (for hover submenu)
+        model.bind_record_list("move_menu_folders")
 
         # Selected IDs for UI conditionals
-        model.bind_func("selected_project_id", self.get_selected_project_id)
+        model.bind_func("selected_folder_id", self.get_selected_folder_id)
         model.bind_func("selected_scene_id", self.get_selected_scene_id)
 
         # Selection count and state
@@ -390,7 +390,7 @@ class AssetManagerPanel(Panel):
         model.bind_func("selected_asset_name", self.get_selected_asset_name)
         model.bind_func("selected_asset_type", self.get_selected_asset_type)
         model.bind_func(
-            "selected_asset_project_name", self.get_selected_asset_project_name
+            "selected_asset_folder_name", self.get_selected_asset_folder_name
         )
         model.bind_func("selected_asset_scene_name", self.get_selected_asset_scene_name)
         model.bind_func("selected_asset_path", self.get_selected_asset_path)
@@ -459,7 +459,7 @@ class AssetManagerPanel(Panel):
         # Selected scene properties (flattened)
         model.bind_func("selected_scene_name", self.get_selected_scene_name)
         model.bind_func(
-            "selected_scene_project_name", self.get_selected_scene_project_name
+            "selected_scene_folder_name", self.get_selected_scene_folder_name
         )
         model.bind_func(
             "selected_scene_asset_count", self.get_selected_scene_asset_count
@@ -467,10 +467,10 @@ class AssetManagerPanel(Panel):
         model.bind_func("selected_scene_created", self.get_selected_scene_created)
         model.bind_func("selected_scene_modified", self.get_selected_scene_modified)
 
-        # Selected project properties (flattened)
-        model.bind_func("selected_project_name", self.get_selected_project_name)
-        model.bind_func("selected_project_created", self.get_selected_project_created)
-        model.bind_func("selected_project_modified", self.get_selected_project_modified)
+        # Selected folder properties (flattened)
+        model.bind_func("selected_folder_name", self.get_selected_folder_name)
+        model.bind_func("selected_folder_created", self.get_selected_folder_created)
+        model.bind_func("selected_folder_modified", self.get_selected_folder_modified)
 
         # UI Labels (for i18n)
         model.bind_func("search_icon_label", lambda: tr("asset_manager.toolbar.search_icon"))
@@ -483,20 +483,20 @@ class AssetManagerPanel(Panel):
         model.bind_func("import_dataset_label", lambda: tr("asset_manager.import_menu.import_dataset"))
         model.bind_func("import_checkpoint_label", lambda: tr("asset_manager.import_menu.import_checkpoint"))
 
-        model.bind_func("projects_title", lambda: tr("asset_manager.sidebar.projects"))
+        model.bind_func("folders_title", lambda: tr("asset_manager.sidebar.folders"))
         model.bind_func("scenes_title", lambda: tr("asset_manager.sidebar.scenes"))
         model.bind_func("filters_title", lambda: tr("asset_manager.sidebar.filters"))
         model.bind_func("gallery_title", lambda: tr("asset_manager.toolbar.view_gallery"))
         model.bind_func("list_title", lambda: tr("asset_manager.toolbar.view_list"))
         model.bind_func("edit_watch_dirs_label", lambda: tr("asset_manager.action.edit_watch_dirs"))
-        model.bind_func("rename_project_label", lambda: tr("asset_manager.action.rename_project"))
-        model.bind_func("delete_project_label", lambda: tr("asset_manager.action.delete_project"))
+        model.bind_func("rename_folder_label", lambda: tr("asset_manager.action.rename_folder"))
+        model.bind_func("delete_folder_label", lambda: tr("asset_manager.action.delete_folder"))
         model.bind_func("load_button_label", lambda: tr("asset_manager.action.load"))
         model.bind_func("load_new_label", lambda: tr("asset_manager.action.load_new"))
         model.bind_func("add_to_scene_label", lambda: tr("asset_manager.action.add_to_scene"))
         model.bind_func("rename_label", lambda: tr("asset_manager.action.rename"))
-        model.bind_func("move_to_project_label", lambda: tr("asset_manager.action.move_to_project"))
-        model.bind_func("new_project_label", lambda: tr("asset_manager.action.new_project"))
+        model.bind_func("move_to_folder_label", lambda: tr("asset_manager.action.move_to_folder"))
+        model.bind_func("new_folder_label", lambda: tr("asset_manager.action.new_folder"))
         model.bind_func("show_in_folder_label", lambda: tr("asset_manager.action.show_in_folder"))
         model.bind_func("update_thumbnail_label", lambda: tr("asset_manager.action.update_thumbnail"))
         model.bind_func("remove_label", lambda: tr("asset_manager.action.remove"))
@@ -506,13 +506,13 @@ class AssetManagerPanel(Panel):
         model.bind_func("clean_missing_tooltip", lambda: tr("asset_manager.tooltip.clean_missing"))
         model.bind_func("col_name_label", lambda: tr("asset_manager.property.name"))
         model.bind_func("col_type_label", lambda: tr("asset_manager.property.type"))
-        model.bind_func("col_project_label", lambda: tr("asset_manager.property.project"))
+        model.bind_func("col_folder_label", lambda: tr("asset_manager.property.folder"))
         model.bind_func("col_size_label", lambda: tr("asset_manager.property.size"))
         model.bind_func("col_modified_label", lambda: tr("asset_manager.property.modified"))
         model.bind_func("info_tab_label", lambda: tr("asset_manager.info_panel.info"))
         model.bind_func("select_item_hint", lambda: tr("asset_manager.status.select_item"))
         model.bind_func("asset_details_title", lambda: tr("asset_manager.info_panel.asset_details"))
-        model.bind_func("prop_project_label", lambda: tr("asset_manager.property.project"))
+        model.bind_func("prop_folder_label", lambda: tr("asset_manager.property.folder"))
         model.bind_func("prop_scene_label", lambda: tr("asset_manager.property.scene"))
         model.bind_func("prop_role_label", lambda: tr("asset_manager.property.role"))
         model.bind_func("prop_points_label", lambda: tr("asset_manager.property.points"))
@@ -549,13 +549,13 @@ class AssetManagerPanel(Panel):
         model.bind_func("scene_details_title", lambda: tr("asset_manager.info_panel.scene_details"))
         model.bind_func("prop_assets_label", lambda: tr("asset_manager.property.assets"))
         model.bind_func("scene_assets_title", lambda: tr("asset_manager.info_panel.scenes"))
-        model.bind_func("project_pill_label", lambda: tr("asset_manager.type.project"))
-        model.bind_func("project_details_title", lambda: tr("asset_manager.info_panel.project_details"))
+        model.bind_func("folder_pill_label", lambda: tr("asset_manager.type.folder"))
+        model.bind_func("folder_details_title", lambda: tr("asset_manager.info_panel.folder_details"))
         model.bind_func("prop_scenes_label", lambda: tr("asset_manager.property.scenes"))
         model.bind_func("scenes_list_title", lambda: tr("asset_manager.sidebar.scenes"))
 
         # Record lists for data-for loops (main lists)
-        model.bind_record_list("projects")
+        model.bind_record_list("folders")
         model.bind_record_list("scenes")
         model.bind_record_list("filters")
         model.bind_record_list("assets")
@@ -580,7 +580,7 @@ class AssetManagerPanel(Panel):
         model.bind_event("on_import_dataset", self.on_import_dataset)
         model.bind_event("on_load_selected", self.on_load_selected)
         model.bind_event("on_remove_from_catalog", self.on_remove_from_catalog)
-        model.bind_event("select_project", self.select_project)
+        model.bind_event("select_folder", self.select_folder)
         model.bind_event("select_scene", self.select_scene)
         model.bind_event("toggle_import_menu", self.toggle_import_menu)
         model.bind_event("on_import_checkpoint", self.on_import_checkpoint)
@@ -597,18 +597,18 @@ class AssetManagerPanel(Panel):
         model.bind_event("on_sidebar_resize_start", self.on_sidebar_resize_start)
         model.bind_event("on_right_panel_resize_start", self.on_right_panel_resize_start)
 
-        # New project event handlers
-        model.bind_event("toggle_new_project_menu", self.toggle_new_project_menu)
-        model.bind_event("on_create_project_dialog", self.on_create_project_dialog)
+        # New folder event handlers
+        model.bind_event("toggle_new_folder_menu", self.toggle_new_folder_menu)
+        model.bind_event("on_create_folder_dialog", self.on_create_folder_dialog)
         model.bind_event("refresh_catalog", self.refresh_catalog_scan)
         model.bind_event("clean_missing", self.clean_missing)
 
         # Collapse state bindings
-        model.bind_func("projects_collapsed", self.get_projects_collapsed)
+        model.bind_func("folders_collapsed", self.get_folders_collapsed)
         model.bind_func("filters_collapsed", self.get_filters_collapsed)
-        model.bind_func("projects_expanded", self.get_projects_expanded)
+        model.bind_func("folders_expanded", self.get_folders_expanded)
         model.bind_func("filters_expanded", self.get_filters_expanded)
-        model.bind_event("toggle_projects_collapsed", self.toggle_projects_collapsed)
+        model.bind_event("toggle_folders_collapsed", self.toggle_folders_collapsed)
         model.bind_event("toggle_filters_collapsed", self.toggle_filters_collapsed)
 
     # ── Data Retrieval Methods ─────────────────────────────────
@@ -638,33 +638,33 @@ class AssetManagerPanel(Panel):
     def get_import_menu_open(self) -> bool:
         return self._import_menu_open
 
-    def get_new_project_menu_open(self) -> bool:
-        return self._new_project_menu_open
+    def get_new_folder_menu_open(self) -> bool:
+        return self._new_folder_menu_open
 
-    def get_projects_collapsed(self) -> bool:
-        return self._projects_collapsed
+    def get_folders_collapsed(self) -> bool:
+        return self._folders_collapsed
 
     def get_filters_collapsed(self) -> bool:
         return self._filters_collapsed
 
-    def get_projects_expanded(self) -> bool:
-        return not self._projects_collapsed
+    def get_folders_expanded(self) -> bool:
+        return not self._folders_collapsed
 
     def get_filters_expanded(self) -> bool:
         return not self._filters_collapsed
 
-    def toggle_projects_collapsed(self, _handle=None, _ev=None, _args=None):
-        self._projects_collapsed = not self._projects_collapsed
-        self._dirty_model("projects_collapsed")
-        self._dirty_model("projects_expanded")
+    def toggle_folders_collapsed(self, _handle=None, _ev=None, _args=None):
+        self._folders_collapsed = not self._folders_collapsed
+        self._dirty_model("folders_collapsed")
+        self._dirty_model("folders_expanded")
 
     def toggle_filters_collapsed(self, _handle=None, _ev=None, _args=None):
         self._filters_collapsed = not self._filters_collapsed
         self._dirty_model("filters_collapsed")
         self._dirty_model("filters_expanded")
 
-    def get_move_menu_projects(self) -> List[Dict[str, str]]:
-        """Get projects for the currently open move menu."""
+    def get_move_menu_folders(self) -> List[Dict[str, str]]:
+        """Get folders for the currently open move menu."""
         if not self._open_menu_asset_id or not self._asset_index:
             return []
 
@@ -672,10 +672,10 @@ class AssetManagerPanel(Panel):
         if not asset:
             return []
 
-        return self._get_available_projects_for_asset(asset)
+        return self._get_available_folders_for_asset(asset)
 
-    def get_selected_project_id(self) -> Optional[str]:
-        return self._selected_project_id
+    def get_selected_folder_id(self) -> Optional[str]:
+        return self._selected_folder_id
 
     def get_selected_scene_id(self) -> Optional[str]:
         return self._selected_scene_id
@@ -750,16 +750,16 @@ class AssetManagerPanel(Panel):
     def _reconcile_selection(self) -> None:
         if not self._asset_index or not hasattr(self._asset_index, "assets"):
             self._selected_asset_ids.clear()
-            self._selected_project_id = None
+            self._selected_folder_id = None
             self._selected_scene_id = None
             self._update_selection_type()
             return
         if (
-            self._selected_project_id
-            and self._selected_project_id
-            not in getattr(self._asset_index, "projects", {})
+            self._selected_folder_id
+            and self._selected_folder_id
+            not in getattr(self._asset_index, "folders", {})
         ):
-            self._selected_project_id = None
+            self._selected_folder_id = None
         if (
             self._selected_scene_id
             and self._selected_scene_id not in getattr(self._asset_index, "scenes", {})
@@ -772,7 +772,7 @@ class AssetManagerPanel(Panel):
         if not self._selected_asset_ids:
             if self._selection_type == "scene" and not self._selected_scene_id:
                 self._selection_type = "none"
-            elif self._selection_type == "project" and not self._selected_project_id:
+            elif self._selection_type == "folder" and not self._selected_folder_id:
                 self._selection_type = "none"
 
     @staticmethod
@@ -791,33 +791,33 @@ class AssetManagerPanel(Panel):
             if asset.get("scene_id") == scene_id and self._asset_file_exists(asset)
         )
 
-    def _project_asset_count(self, project_id: str) -> int:
-        """Count assets in a project whose backing file is present on disk."""
+    def _folder_asset_count(self, folder_id: str) -> int:
+        """Count assets in a folder whose backing file is present on disk."""
         if not self._asset_index or not hasattr(self._asset_index, "assets"):
             return 0
         return sum(
             1
             for asset in self._asset_index.assets.values()
-            if asset.get("project_id") == project_id and self._asset_file_exists(asset)
+            if asset.get("folder_id") == folder_id and self._asset_file_exists(asset)
         )
 
-    def _ensure_default_project(self) -> None:
-        """Ensure a 'Default' project always exists."""
-        if not self._asset_index or not hasattr(self._asset_index, "projects"):
+    def _ensure_default_folder(self) -> None:
+        """Ensure a 'Default' folder always exists."""
+        if not self._asset_index or not hasattr(self._asset_index, "folders"):
             return
 
-        # Check if Default project exists
-        default_project_name = tr("asset_manager.default_project_name")
+        # Check if Default folder exists
+        default_folder_name = tr("asset_manager.default_folder_name")
         has_default = any(
-            proj.get("name") == default_project_name
-            for proj in self._asset_index.projects.values()
+            folder.get("name") == default_folder_name
+            for folder in self._asset_index.folders.values()
         )
 
         if not has_default:
-            if not hasattr(self._asset_index, "create_project"):
+            if not hasattr(self._asset_index, "create_folder"):
                 return
             try:
-                self._asset_index.create_project(name=default_project_name)
+                self._asset_index.create_folder(name=default_folder_name)
                 self._log_info(tr("asset_manager.msg.created_default"))
             except Exception as e:
                 self._log_error(
@@ -833,19 +833,19 @@ class AssetManagerPanel(Panel):
         return name
 
     def _get_asset_relationship_names(self, asset: Dict[str, Any]):
-        project_name = ""
+        folder_name = ""
         scene_name = ""
 
-        if self._asset_index and hasattr(self._asset_index, "projects"):
-            project_name = self._asset_index.projects.get(
-                asset.get("project_id"), {}
+        if self._asset_index and hasattr(self._asset_index, "folders"):
+            folder_name = self._asset_index.folders.get(
+                asset.get("folder_id"), {}
             ).get("name", "")
         if self._asset_index and hasattr(self._asset_index, "scenes"):
             scene_name = self._asset_index.scenes.get(asset.get("scene_id"), {}).get(
                 "name", ""
             )
 
-        return project_name, scene_name
+        return folder_name, scene_name
 
     def _asset_display_title(self, asset: Dict[str, Any]) -> str:
         # Prioritize custom name if set by user
@@ -868,7 +868,7 @@ class AssetManagerPanel(Panel):
     def _get_asset_display_fields(
         self,
         asset: Dict[str, Any],
-        project_name: str,
+        folder_name: str,
         scene_name: str,
     ) -> Dict[str, str]:
         asset_name = asset.get("name", "Unnamed")
@@ -877,16 +877,16 @@ class AssetManagerPanel(Panel):
 
         if scene_name and scene_name != display_name:
             display_subtitle = scene_name
-        elif project_name:
-            display_subtitle = project_name
+        elif folder_name:
+            display_subtitle = folder_name
         elif asset_name and asset_name != display_name:
             display_subtitle = asset_name
         else:
             display_subtitle = role_label
 
         context_parts = []
-        if project_name and project_name != display_subtitle:
-            context_parts.append(project_name)
+        if folder_name and folder_name != display_subtitle:
+            context_parts.append(folder_name)
 
         context_label = " / ".join(context_parts)
         if role_label:
@@ -928,8 +928,8 @@ class AssetManagerPanel(Panel):
                 continue
 
             if (
-                self._selected_project_id
-                and asset.get("project_id") != self._selected_project_id
+                self._selected_folder_id
+                and asset.get("folder_id") != self._selected_folder_id
             ):
                 continue
             if (
@@ -1082,9 +1082,9 @@ class AssetManagerPanel(Panel):
         }
         thumb_class = thumb_classes.get(asset_type, "asset-thumb-default")
 
-        project_name, scene_name = self._get_asset_relationship_names(asset)
+        folder_name, scene_name = self._get_asset_relationship_names(asset)
         display_fields = self._get_asset_display_fields(
-            asset, project_name, scene_name
+            asset, folder_name, scene_name
         )
 
         # Format type label for display
@@ -1126,9 +1126,9 @@ class AssetManagerPanel(Panel):
             "exists": asset.get("exists", True),
             "status_label": tr("asset_manager.status.missing") if not asset.get("exists", True) else tr("asset_manager.status.available"),
             "can_load": asset_type in self.LOADABLE_TYPES and asset.get("exists", True),
-            "project_id": asset.get("project_id"),
+            "folder_id": asset.get("folder_id"),
             "scene_id": asset.get("scene_id"),
-            "project_name": project_name,
+            "folder_name": folder_name,
             "scene_name": scene_name,
             "modified_at": asset.get("modified_at", ""),
             "modified_label": self._format_timestamp(asset.get("modified_at", "")),
@@ -1137,45 +1137,45 @@ class AssetManagerPanel(Panel):
             "load_menu_open": asset_id == self._load_menu_asset_id,
         }
 
-    def get_project_list(self) -> List[Dict[str, Any]]:
-        """Return list of projects with asset counts for UI."""
-        if not self._asset_index or not hasattr(self._asset_index, "projects"):
+    def get_folder_list(self) -> List[Dict[str, Any]]:
+        """Return list of folders with asset counts for UI."""
+        if not self._asset_index or not hasattr(self._asset_index, "folders"):
             return []
 
-        # Ensure Default project always exists
-        self._ensure_default_project()
+        # Ensure Default folder always exists
+        self._ensure_default_folder()
 
-        projects = []
-        for project_id, project in self._asset_index.projects.items():
-            # Show all projects, even empty ones (user must manually delete)
-            asset_count = self._project_asset_count(project_id)
-            display_name = self._format_display_name(project.get("name", tr("asset_manager.unnamed_project")))
-            projects.append(
+        folders = []
+        for folder_id, folder in self._asset_index.folders.items():
+            # Show all folders, even empty ones (user must manually delete)
+            asset_count = self._folder_asset_count(folder_id)
+            display_name = self._format_display_name(folder.get("name", tr("asset_manager.unnamed_folder")))
+            folders.append(
                 {
-                    "id": project_id,
+                    "id": folder_id,
                     "name": display_name,
-                    "full_name": project.get("name", tr("asset_manager.unnamed_project")),
-                    "description": project.get("description", ""),
+                    "full_name": folder.get("name", tr("asset_manager.unnamed_folder")),
+                    "description": folder.get("description", ""),
                     "scene_count": asset_count,  # Now shows asset count instead of scene count
-                    "is_selected": project_id == self._selected_project_id,
-                    "thumbnail_asset_id": project.get("thumbnail_asset_id"),
-                    "menu_open": project_id == self._open_menu_project_id,
+                    "is_selected": folder_id == self._selected_folder_id,
+                    "thumbnail_asset_id": folder.get("thumbnail_asset_id"),
+                    "menu_open": folder_id == self._open_menu_folder_id,
                 }
             )
 
-        return sorted(projects, key=lambda p: p["name"].lower())
+        return sorted(folders, key=lambda f: f["name"].lower())
 
     def get_scene_list(self) -> List[Dict[str, Any]]:
-        """Return list of scenes for selected project."""
+        """Return list of scenes for selected folder."""
         if not self._asset_index or not hasattr(self._asset_index, "scenes"):
             return []
 
-        if not self._selected_project_id:
+        if not self._selected_folder_id:
             return []
 
         scenes = []
         for scene_id, scene in self._asset_index.scenes.items():
-            if scene.get("project_id") != self._selected_project_id:
+            if scene.get("folder_id") != self._selected_folder_id:
                 continue
             # Show all scenes, even empty ones (user must manually delete)
             asset_count = self._scene_asset_count(scene_id)
@@ -1273,18 +1273,18 @@ class AssetManagerPanel(Panel):
         asset_type = asset.get("type", "") if asset else ""
         return asset_type.upper() if asset_type else ""
 
-    def get_selected_asset_project_name(self) -> str:
+    def get_selected_asset_folder_name(self) -> str:
         asset = self._get_selected_asset()
         if not asset:
             return ""
-        project_name, _scene_name = self._get_asset_relationship_names(asset)
-        return self._format_display_name(project_name)
+        folder_name, _scene_name = self._get_asset_relationship_names(asset)
+        return self._format_display_name(folder_name)
 
     def get_selected_asset_scene_name(self) -> str:
         asset = self._get_selected_asset()
         if not asset:
             return ""
-        _project_name, scene_name = self._get_asset_relationship_names(asset)
+        _folder_name, scene_name = self._get_asset_relationship_names(asset)
         return scene_name
 
     def get_selected_asset_path(self) -> str:
@@ -1551,15 +1551,15 @@ class AssetManagerPanel(Panel):
         scene = self._get_selected_scene()
         return scene.get("name", "") if scene else ""
 
-    def get_selected_scene_project_name(self) -> str:
+    def get_selected_scene_folder_name(self) -> str:
         scene = self._get_selected_scene()
         if not scene:
             return ""
-        project_id = scene.get("project_id", "")
-        if not project_id or not self._asset_index:
+        folder_id = scene.get("folder_id", "")
+        if not folder_id or not self._asset_index:
             return ""
-        project = getattr(self._asset_index, "projects", {}).get(project_id)
-        name = project.get("name", "") if project else ""
+        folder = getattr(self._asset_index, "folders", {}).get(folder_id)
+        name = folder.get("name", "") if folder else ""
         return self._format_display_name(name)
 
     def get_selected_scene_asset_count(self) -> int:
@@ -1589,33 +1589,33 @@ class AssetManagerPanel(Panel):
         modified_at = scene.get("modified_at", "")
         return self._format_timestamp(modified_at) if modified_at else ""
 
-    # ── Flattened Selected Project Getters ─────────────────────
+    # ── Flattened Selected Folder Getters ─────────────────────
 
-    def _get_selected_project(self) -> Optional[Dict[str, Any]]:
-        """Get the currently selected project, if any."""
-        if not self._selected_project_id:
+    def _get_selected_folder(self) -> Optional[Dict[str, Any]]:
+        """Get the currently selected folder, if any."""
+        if not self._selected_folder_id:
             return None
-        if not self._asset_index or not hasattr(self._asset_index, "projects"):
+        if not self._asset_index or not hasattr(self._asset_index, "folders"):
             return None
-        return self._asset_index.projects.get(self._selected_project_id)
+        return self._asset_index.folders.get(self._selected_folder_id)
 
-    def get_selected_project_name(self) -> str:
-        project = self._get_selected_project()
-        name = project.get("name", "") if project else ""
+    def get_selected_folder_name(self) -> str:
+        folder = self._get_selected_folder()
+        name = folder.get("name", "") if folder else ""
         return self._format_display_name(name)
 
-    def get_selected_project_created(self) -> str:
-        project = self._get_selected_project()
-        if not project:
+    def get_selected_folder_created(self) -> str:
+        folder = self._get_selected_folder()
+        if not folder:
             return ""
-        created_at = project.get("created_at", "")
+        created_at = folder.get("created_at", "")
         return self._format_timestamp(created_at) if created_at else ""
 
-    def get_selected_project_modified(self) -> str:
-        project = self._get_selected_project()
-        if not project:
+    def get_selected_folder_modified(self) -> str:
+        folder = self._get_selected_folder()
+        if not folder:
             return ""
-        modified_at = project.get("modified_at", "")
+        modified_at = folder.get("modified_at", "")
         return self._format_timestamp(modified_at) if modified_at else ""
 
     def _format_timestamp(self, timestamp: str) -> str:
@@ -1630,24 +1630,24 @@ class AssetManagerPanel(Panel):
         except Exception:
             return timestamp
 
-    def _ensure_import_project(
+    def _ensure_import_folder(
         self, default_name: str = "Default"
     ) -> Optional[str]:
-        # Import to currently selected project if one is selected, otherwise use Default
+        # Import to currently selected folder if one is selected, otherwise use Default
         if not self._asset_index:
             return None
         
-        # If a project is currently selected, use that
-        if self._selected_project_id:
-            project = self._asset_index.projects.get(self._selected_project_id)
-            if project:
-                return self._selected_project_id
+        # If a folder is currently selected, use that
+        if self._selected_folder_id:
+            folder = self._asset_index.folders.get(self._selected_folder_id)
+            if folder:
+                return self._selected_folder_id
         
-        # Fall back to Default project
-        self._ensure_default_project()
-        for pid, proj in self._asset_index.projects.items():
-            if proj.get("name") == "Default":
-                return pid
+        # Fall back to Default folder
+        self._ensure_default_folder()
+        for fid, fldr in self._asset_index.folders.items():
+            if fldr.get("name") == "Default":
+                return fid
         return None
 
     def _metadata_to_asset_kwargs(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
@@ -1889,7 +1889,7 @@ class AssetManagerPanel(Panel):
         self,
         path: str,
         *,
-        project_id: Optional[str],
+        folder_id: Optional[str],
         scene_id: Optional[str],
         fallback_role: str = "reference",
         override_type: Optional[str] = None,
@@ -1908,7 +1908,7 @@ class AssetManagerPanel(Panel):
         asset_kwargs.pop("role", None)
 
         asset = self._asset_index.create_asset(
-            project_id=project_id,
+            folder_id=folder_id,
             name=Path(path).name,
             type=asset_type,
             path=path,
@@ -1998,7 +1998,7 @@ class AssetManagerPanel(Panel):
             "show_selection_none",
             "show_selection_asset",
             "show_selection_scene",
-            "show_selection_project",
+            "show_selection_folder",
             "show_selection_multiple",
             "has_selection",
             "has_multi_selection",
@@ -2090,44 +2090,44 @@ class AssetManagerPanel(Panel):
         self.refresh_catalog()
         self._dirty_model("assets", "selected_asset_tags")
 
-    # ── New Project Handlers ──────────────────────────────────
+    # ── New Folder Handlers ──────────────────────────────────
 
-    def toggle_new_project_menu(self, _handle, _ev, _args):
-        """Toggle the new project dropdown menu visibility."""
-        self._new_project_menu_open = not self._new_project_menu_open
-        self._dirty_model("new_project_menu_open")
+    def toggle_new_folder_menu(self, _handle, _ev, _args):
+        """Toggle the new folder dropdown menu visibility."""
+        self._new_folder_menu_open = not self._new_folder_menu_open
+        self._dirty_model("new_folder_menu_open")
 
-    def on_create_project_dialog(self, _handle, _ev, _args):
-        """Open system dialog to create a new project."""
+    def on_create_folder_dialog(self, _handle, _ev, _args):
+        """Open system dialog to create a new folder."""
         # Close the dropdown menu
-        self._new_project_menu_open = False
-        self._dirty_model("new_project_menu_open")
+        self._new_folder_menu_open = False
+        self._dirty_model("new_folder_menu_open")
 
-        def _on_project_name_entered(name):
+        def _on_folder_name_entered(name):
             if not name or not name.strip():
                 return
 
             name = name.strip()
 
             try:
-                # Create new project
-                project = self._asset_index.create_project(name=name)
-                if not project:
-                    self._log_error("Failed to create project")
+                # Create new folder
+                folder = self._asset_index.create_folder(name=name)
+                if not folder:
+                    self._log_error("Failed to create folder")
                     return
 
-                # Refresh the catalog to show the new project
+                # Refresh the catalog to show the new folder
                 self.refresh_catalog()
-                self._log_info("Created new project: %s", name)
+                self._log_info("Created new folder: %s", name)
 
             except Exception as e:
-                self._log_error("Failed to create new project: %s", e)
+                self._log_error("Failed to create new folder: %s", e)
 
         lf.ui.input_dialog(
-            tr("asset_manager.dialog.create_new_project"),
-            tr("asset_manager.dialog.enter_project_name"),
+            tr("asset_manager.dialog.create_new_folder"),
+            tr("asset_manager.dialog.enter_folder_name"),
             "",
-            _on_project_name_entered
+            _on_folder_name_entered
         )
 
     # ── Panel Resize Handlers ─────────────────────────────────
@@ -2191,7 +2191,7 @@ class AssetManagerPanel(Panel):
             return
 
         try:
-            project_id = self._ensure_import_project()
+            folder_id = self._ensure_import_folder()
 
             path_lower = file_path.lower()
             if path_lower.endswith('.ply'):
@@ -2217,7 +2217,7 @@ class AssetManagerPanel(Panel):
 
             asset = self._scan_and_register_asset(
                 file_path,
-                project_id=project_id,
+                folder_id=folder_id,
                 scene_id=self._selected_scene_id,
                 fallback_role=fallback_role,
                 override_type=asset_type,
@@ -2248,11 +2248,11 @@ class AssetManagerPanel(Panel):
             return
 
         try:
-            project_id = self._ensure_import_project()
+            folder_id = self._ensure_import_folder()
 
             asset = self._scan_and_register_asset(
                 file_path,
-                project_id=project_id,
+                folder_id=folder_id,
                 scene_id=self._selected_scene_id,
                 fallback_role="reference",
                 override_type="mesh",
@@ -2298,7 +2298,7 @@ class AssetManagerPanel(Panel):
                 scanner=self._asset_scanner,
                 thumbnails=self._asset_thumbnails,
             )
-            project_id = context.get("project_id")
+            folder_id = context.get("folder_id")
             scene_id = context.get("scene_id")
             asset_id = context.get("asset_id")
             asset = self._asset_index.get_asset(asset_id) if asset_id else None
@@ -2308,7 +2308,7 @@ class AssetManagerPanel(Panel):
                 # Auto-select the newly imported dataset to show its info
                 # Add to selection instead of replacing (allow multiple imports)
                 self._selected_asset_ids.add(asset.id)
-                # Preserve user's existing project/scene filters - don't change them
+                # Preserve user's existing folder/scene filters - don't change them
                 # The dataset will appear in the catalog based on current filters
                 self._update_selection_type()
             self._import_menu_open = False
@@ -2396,29 +2396,29 @@ class AssetManagerPanel(Panel):
 
         _logger.info(f"Removed {removed_count} assets from catalog")
 
-    def select_project(self, _handle, _ev, args):
-        """Select a project to filter scenes and assets."""
-        project_id = self._resolve_event_value(args, _ev, "data-project-id")
-        self._select_project_id(project_id)
+    def select_folder(self, _handle, _ev, args):
+        """Select a folder to filter scenes and assets."""
+        folder_id = self._resolve_event_value(args, _ev, "data-folder-id")
+        self._select_folder_id(folder_id)
 
-    def _select_project_id(self, project_id: str) -> bool:
-        if not project_id:
+    def _select_folder_id(self, folder_id: str) -> bool:
+        if not folder_id:
             return False
-        self._selected_project_id = project_id if project_id != "all" else None
-        self._selected_scene_id = None  # Clear scene selection when project changes
+        self._selected_folder_id = folder_id if folder_id != "all" else None
+        self._selected_scene_id = None  # Clear scene selection when folder changes
         self._selected_asset_ids.clear()
-        self._selection_type = "project" if self._selected_project_id else "none"
+        self._selection_type = "folder" if self._selected_folder_id else "none"
 
         self._dirty_model(
-            "projects",
+            "folders",
             "scenes",
             "assets",
             "selected_count",
             "selected_total_size",
             "selection_type",
-            "selected_project_name",
-            "selected_project_created",
-            "selected_project_modified",
+            "selected_folder_name",
+            "selected_folder_created",
+            "selected_folder_modified",
             *self._selection_visibility_fields(),
         )
         return True
@@ -2443,7 +2443,7 @@ class AssetManagerPanel(Panel):
             "selected_total_size",
             "selection_type",
             "selected_scene_name",
-            "selected_scene_project_name",
+            "selected_scene_folder_name",
             "selected_scene_asset_count",
             "selected_scene_created",
             "selected_scene_modified",
@@ -2472,7 +2472,7 @@ class AssetManagerPanel(Panel):
         try:
             asset = self._scan_and_register_asset(
                 file_path,
-                project_id=self._ensure_import_project(),
+                folder_id=self._ensure_import_folder(),
                 scene_id=self._selected_scene_id,
                 fallback_role="training_checkpoint",
                 override_type="checkpoint",
@@ -2882,23 +2882,23 @@ class AssetManagerPanel(Panel):
 
         return removed_asset_ids
 
-    def _get_available_projects_for_asset(self, asset: Dict[str, Any]) -> List[Dict[str, str]]:
-        """Get list of projects this asset can be moved to."""
-        if not self._asset_index or not hasattr(self._asset_index, "projects"):
+    def _get_available_folders_for_asset(self, asset: Dict[str, Any]) -> List[Dict[str, str]]:
+        """Get list of folders this asset can be moved to."""
+        if not self._asset_index or not hasattr(self._asset_index, "folders"):
             return []
 
-        current_project_id = asset.get("project_id", "")
-        projects = []
+        current_folder_id = asset.get("folder_id", "")
+        folders = []
 
-        for proj_id, proj in self._asset_index.projects.items():
-            if proj_id != current_project_id:
-                projects.append({
-                    "id": proj_id,
-                    "name": proj.get("name", tr("asset_manager.unnamed_project")),
+        for fld_id, fld in self._asset_index.folders.items():
+            if fld_id != current_folder_id:
+                folders.append({
+                    "id": fld_id,
+                    "name": fld.get("name", tr("asset_manager.unnamed_folder")),
                 })
 
         # Sort by name
-        return sorted(projects, key=lambda p: p["name"].lower())
+        return sorted(folders, key=lambda f: f["name"].lower())
 
     def on_toggle_asset_menu(self, _handle, _ev, args):
         """Toggle dropdown menu for an asset."""
@@ -2919,14 +2919,14 @@ class AssetManagerPanel(Panel):
         else:
             self._open_menu_asset_id = asset_id
 
-        # Always reload projects when menu opens to ensure fresh data
+        # Always reload folders when menu opens to ensure fresh data
         if self._handle:
             if self._open_menu_asset_id:
-                projects = self.get_move_menu_projects()
-                self._log_info("Loading %d projects for move menu", len(projects))
-                self._handle.update_record_list("move_menu_projects", projects)
+                folders = self.get_move_menu_folders()
+                self._log_info("Loading %d folders for move menu", len(folders))
+                self._handle.update_record_list("move_menu_folders", folders)
             else:
-                self._handle.update_record_list("move_menu_projects", [])
+                self._handle.update_record_list("move_menu_folders", [])
 
         self._dirty_model("assets")
 
@@ -3080,8 +3080,8 @@ class AssetManagerPanel(Panel):
         except Exception as e:
             self._log_error("Failed to update thumbnail: %s", e)
 
-    def on_move_to_project(self, _handle, _ev, args):
-        """Move asset to a different project."""
+    def on_move_to_folder(self, _handle, _ev, args):
+        """Move asset to a different folder."""
         asset_id = self._resolve_event_value(args, _ev, "data-asset-id")
         if not asset_id:
             return
@@ -3104,79 +3104,79 @@ class AssetManagerPanel(Panel):
         self._open_menu_asset_id = None
         self._dirty_model("assets")
 
-        # Get list of available projects
-        if not hasattr(self._asset_index, "projects"):
-            self._log_warn("No projects available")
+        # Get list of available folders
+        if not hasattr(self._asset_index, "folders"):
+            self._log_warn("No folders available")
             return
 
-        projects = []
-        for proj_id, proj in self._asset_index.projects.items():
-            if proj_id != asset.get("project_id"):  # Exclude current project
-                projects.append((proj_id, proj.get("name", "Unnamed")))
+        folders = []
+        for fld_id, fld in self._asset_index.folders.items():
+            if fld_id != asset.get("folder_id"):  # Exclude current folder
+                folders.append((proj_id, proj.get("name", "Unnamed")))
 
-        if not projects:
-            self._log_info("No other projects available to move to")
+        if not folders:
+            self._log_info("No other folders available to move to")
             return
 
-        # Build project list string
-        project_names = [f"{i+1}. {name}" for i, (_, name) in enumerate(projects)]
-        project_list = "\n".join(project_names)
-        current_project = self._asset_index.projects.get(asset.get("project_id", ""), {}).get("name", "Unknown")
+        # Build folder list string
+        folder_names = [f"{i+1}. {name}" for i, (_, name) in enumerate(folders)]
+        folder_list = "\n".join(folder_names)
+        current_folder = self._asset_index.folders.get(asset.get("folder_id", ""), {}).get("name", "Unknown")
 
-        def _on_project_selected(result):
+        def _on_folder_selected(result):
             if not result or not result.strip():
                 return
 
             try:
                 # Parse selection (number or name)
                 selection = result.strip()
-                selected_project_id = None
-                selected_project_name = None
+                selected_folder_id = None
+                selected_folder_name = None
 
                 # Try to parse as number first
                 try:
                     idx = int(selection.split(".")[0]) - 1
-                    if 0 <= idx < len(projects):
-                        selected_project_id, selected_project_name = projects[idx]
+                    if 0 <= idx < len(folders):
+                        selected_folder_id, selected_folder_name = folders[idx]
                 except (ValueError, IndexError):
                     # Try to match by name
-                    for proj_id, proj_name in projects:
-                        if selection.lower() in proj_name.lower():
-                            selected_project_id = proj_id
-                            selected_project_name = proj_name
+                    for fld_id, fld_name in folders:
+                        if selection.lower() in fld_name.lower():
+                            selected_folder_id = proj_id
+                            selected_folder_name = proj_name
                             break
 
-                if not selected_project_id:
-                    self._log_warn("Invalid project selection: %s", selection)
+                if not selected_folder_id:
+                    self._log_warn("Invalid folder selection: %s", selection)
                     return
 
-                # Update asset's project
+                # Update asset's folder
                 self._asset_index.update_asset(
                     asset_id,
-                    project_id=selected_project_id,
-                    scene_id=None  # Clear scene since scenes are project-specific
+                    folder_id=selected_folder_id,
+                    scene_id=None  # Clear scene since scenes are folder-specific
                 )
                 self._asset_index.save()
                 self.refresh_catalog()
-                self._log_info("Moved asset to project: %s", selected_project_name)
+                self._log_info("Moved asset to folder: %s", selected_folder_name)
 
             except Exception as e:
                 self._log_error("Failed to move asset: %s", e)
 
-        prompt = tr("asset_manager.dialog.current_project", name=current_project) + "\n\n"
-        prompt += tr("asset_manager.dialog.available_projects") + "\n"
-        prompt += project_list + "\n\n"
+        prompt = tr("asset_manager.dialog.current_folder", name=current_folder) + "\n\n"
+        prompt += tr("asset_manager.dialog.available_folders") + "\n"
+        prompt += folder_list + "\n\n"
         prompt += tr("asset_manager.dialog.enter_number_or_name")
         lf.ui.input_dialog(
-            tr("asset_manager.dialog.move_to_project"),
+            tr("asset_manager.dialog.move_to_folder"),
             prompt,
             "",
-            _on_project_selected
+            _on_folder_selected
         )
 
-    def _move_asset_to_project(self, asset_id: str, project_id: str) -> None:
-        """Move asset to a specific project."""
-        self._log_info("Attempting to move asset %s to project %s", asset_id, project_id)
+    def _move_asset_to_folder(self, asset_id: str, folder_id: str) -> None:
+        """Move asset to a specific folder."""
+        self._log_info("Attempting to move asset %s to folder %s", asset_id, folder_id)
 
         if not self._asset_index or not hasattr(self._asset_index, "assets"):
             self._log_warn("Asset index not available")
@@ -3187,25 +3187,25 @@ class AssetManagerPanel(Panel):
             self._log_warn("Asset not found: %s", asset_id)
             return
 
-        project = self._asset_index.projects.get(project_id)
-        if not project:
-            self._log_warn("Project not found: %s", project_id)
+        folder = self._asset_index.folders.get(folder_id)
+        if not folder:
+            self._log_warn("Folder not found: %s", folder_id)
             return
 
         try:
             self._asset_index.update_asset(
                 asset_id,
-                project_id=project_id,
-                scene_id=None  # Clear scene since scenes are project-specific
+                folder_id=folder_id,
+                scene_id=None  # Clear scene since scenes are folder-specific
             )
             self._asset_index.save()
             self.refresh_catalog()
-            self._log_info("Moved asset to project: %s", project.get("name", "Unnamed"))
+            self._log_info("Moved asset to folder: %s", folder.get("name", "Unnamed"))
         except Exception as e:
             self._log_error("Failed to move asset: %s", e)
 
-    def on_create_project_and_move(self, _handle, _ev, args):
-        """Create a new project and move asset to it."""
+    def on_create_folder_and_move(self, _handle, _ev, args):
+        """Create a new folder and move asset to it."""
         asset_id = self._resolve_event_value(args, _ev, "data-asset-id")
         if not asset_id:
             return
@@ -3226,47 +3226,47 @@ class AssetManagerPanel(Panel):
 
         # Close menu
         self._open_menu_asset_id = None
-        self._dirty_model("assets", "move_menu_projects")
+        self._dirty_model("assets", "move_menu_folders")
         if self._handle:
-            self._handle.update_record_list("move_menu_projects", [])
+            self._handle.update_record_list("move_menu_folders", [])
 
-        def _on_project_name_entered(name):
+        def _on_folder_name_entered(name):
             if not name or not name.strip():
                 return
 
             name = name.strip()
 
             try:
-                # Create new project
-                project = self._asset_index.create_project(name=name)
-                if not project:
-                    self._log_error("Failed to create project")
+                # Create new folder
+                folder = self._asset_index.create_folder(name=name)
+                if not folder:
+                    self._log_error("Failed to create folder")
                     return
 
-                # Move asset to new project
+                # Move asset to new folder
                 self._asset_index.update_asset(
                     asset_id,
-                    project_id=project.id,
+                    folder_id=folder.id,
                     scene_id=None
                 )
                 self._asset_index.save()
                 self.refresh_catalog()
-                self._log_info("Created project '%s' and moved asset to it", name)
+                self._log_info("Created folder '%s' and moved asset to it", name)
 
             except Exception as e:
-                self._log_error("Failed to create project and move asset: %s", e)
+                self._log_error("Failed to create folder and move asset: %s", e)
 
         lf.ui.input_dialog(
-            tr("asset_manager.dialog.new_project"),
-            tr("asset_manager.dialog.enter_project_name"),
+            tr("asset_manager.dialog.new_folder"),
+            tr("asset_manager.dialog.enter_folder_name"),
             "",
-            _on_project_name_entered
+            _on_folder_name_entered
         )
 
-    def on_toggle_project_menu(self, _handle, _ev, args):
-        """Toggle dropdown menu for a project."""
-        project_id = self._resolve_event_value(args, _ev, "data-project-id")
-        if not project_id:
+    def on_toggle_folder_menu(self, _handle, _ev, args):
+        """Toggle dropdown menu for a folder."""
+        folder_id = self._resolve_event_value(args, _ev, "data-folder-id")
+        if not folder_id:
             return
 
         # Stop event propagation to prevent row selection
@@ -3276,18 +3276,18 @@ class AssetManagerPanel(Panel):
             except Exception:
                 pass
 
-        # Toggle: if already open for this project, close it; otherwise open for this project
-        if self._open_menu_project_id == project_id:
-            self._open_menu_project_id = None
+        # Toggle: if already open for this folder, close it; otherwise open for this folder
+        if self._open_menu_folder_id == folder_id:
+            self._open_menu_folder_id = None
         else:
-            self._open_menu_project_id = project_id
+            self._open_menu_folder_id = folder_id
 
-        self._dirty_model("projects")
+        self._dirty_model("folders")
 
     def on_edit_watch_dirs(self, _handle, _ev, args):
-        """Open the watched directories dialog for a project."""
-        project_id = self._resolve_event_value(args, _ev, "data-project-id")
-        if not project_id:
+        """Open the watched directories dialog for a folder."""
+        folder_id = self._resolve_event_value(args, _ev, "data-folder-id")
+        if not folder_id:
             return
 
         if _ev:
@@ -3297,18 +3297,18 @@ class AssetManagerPanel(Panel):
                 pass
 
         # Close the menu. Editing watch directories must not depend on or mutate
-        # the current project selection; the clicked row is the source of truth.
-        self._open_menu_project_id = None
-        self._dirty_model("projects")
+        # the current folder selection; the clicked row is the source of truth.
+        self._open_menu_folder_id = None
+        self._dirty_model("folders")
 
-        ok = open_watch_dirs_dialog(project_id)
+        ok = open_watch_dirs_dialog(folder_id)
         if not ok:
-            self._log_warn("Failed to open watch dirs dialog for project %s", project_id)
+            self._log_warn("Failed to open watch dirs dialog for folder %s", folder_id)
 
-    def on_rename_project(self, _handle, _ev, args):
-        """Open rename dialog for a project."""
-        project_id = self._resolve_event_value(args, _ev, "data-project-id")
-        if not project_id:
+    def on_rename_folder(self, _handle, _ev, args):
+        """Open rename dialog for a folder."""
+        folder_id = self._resolve_event_value(args, _ev, "data-folder-id")
+        if not folder_id:
             return
 
         # Stop event propagation
@@ -3318,42 +3318,42 @@ class AssetManagerPanel(Panel):
             except Exception:
                 pass
 
-        if not self._asset_index or not hasattr(self._asset_index, "projects"):
+        if not self._asset_index or not hasattr(self._asset_index, "folders"):
             return
 
-        project = self._asset_index.projects.get(project_id)
-        if not project:
+        folder = self._asset_index.folders.get(folder_id)
+        if not folder:
             return
 
         # Close the menu
-        self._open_menu_project_id = None
-        self._dirty_model("projects")
+        self._open_menu_folder_id = None
+        self._dirty_model("folders")
 
         # Prompt for rename using input dialog
-        current_name = project.get("name", "Unnamed Project")
+        current_name = folder.get("name", "Unnamed Folder")
 
         def _on_rename_result(new_name):
             if new_name and new_name.strip() and new_name.strip() != current_name:
                 new_name = new_name.strip()
                 try:
-                    self._asset_index.update_project(project_id, name=new_name)
+                    self._asset_index.update_folder(folder_id, name=new_name)
                     self._asset_index.save()
                     self.refresh_catalog()
-                    self._log_info("Renamed project to: %s", new_name)
+                    self._log_info("Renamed folder to: %s", new_name)
                 except Exception as e:
-                    self._log_error("Failed to rename project: %s", e)
+                    self._log_error("Failed to rename folder: %s", e)
 
         lf.ui.input_dialog(
-            tr("asset_manager.dialog.rename_project"),
+            tr("asset_manager.dialog.rename_folder"),
             tr("asset_manager.dialog.enter_new_name", name=current_name),
             current_name,
             _on_rename_result
         )
 
-    def on_delete_project(self, _handle, _ev, args):
-        """Delete a project after moving its assets to Default."""
-        project_id = self._resolve_event_value(args, _ev, "data-project-id")
-        if not project_id:
+    def on_delete_folder(self, _handle, _ev, args):
+        """Delete a folder after moving its assets to Default."""
+        folder_id = self._resolve_event_value(args, _ev, "data-folder-id")
+        if not folder_id:
             return
 
         # Stop event propagation
@@ -3363,97 +3363,97 @@ class AssetManagerPanel(Panel):
             except Exception:
                 pass
 
-        if not self._asset_index or not hasattr(self._asset_index, "projects"):
+        if not self._asset_index or not hasattr(self._asset_index, "folders"):
             return
 
-        project = self._asset_index.projects.get(project_id)
-        if not project:
+        folder = self._asset_index.folders.get(folder_id)
+        if not folder:
             return
 
-        # Prevent deletion of the Default project
-        project_name = project.get("name", "")
-        if project_name.lower() == "default":
-            self._log_warn("Cannot delete the Default project")
+        # Prevent deletion of the Default folder
+        folder_name = folder.get("name", "")
+        if folder_name.lower() == "default":
+            self._log_warn("Cannot delete the Default folder")
             return
 
-        # Prevent deletion of the Default project
-        project_name = project.get("name", "")
-        if project_name.lower() == "default":
-            self._log_warn("Cannot delete the Default project")
+        # Prevent deletion of the Default folder
+        folder_name = folder.get("name", "")
+        if folder_name.lower() == "default":
+            self._log_warn("Cannot delete the Default folder")
             return
 
         # Close the menu
-        self._open_menu_project_id = None
-        self._dirty_model("projects")
+        self._open_menu_folder_id = None
+        self._dirty_model("folders")
 
-        project_name = project.get("name", "Unnamed Project")
+        folder_name = folder.get("name", "Unnamed Folder")
 
-        # Find or create Default project
-        default_project = None
-        default_project_id = None
-        for pid, proj in self._asset_index.projects.items():
-            if proj.get("name", "").lower() == "default":
-                default_project_id = pid
-                default_project = proj
+        # Find or create Default folder
+        default_folder = None
+        default_folder_id = None
+        for fid, fldr in self._asset_index.folders.items():
+            if fld.get("name", "").lower() == "default":
+                default_folder_id = fid
+                default_folder = fld
                 break
 
-        # Create Default project if it doesn't exist
-        if not default_project_id:
+        # Create Default folder if it doesn't exist
+        if not default_folder_id:
             try:
-                default_project = self._asset_index.create_project(name="Default")
-                if default_project:
-                    default_project_id = default_project.id
-                    self._log_info("Created Default project for asset migration")
+                default_folder = self._asset_index.create_folder(name="Default")
+                if default_folder:
+                    default_folder_id = default_folder.id
+                    self._log_info("Created Default folder for asset migration")
             except Exception as e:
-                self._log_error("Failed to create Default project: %s", e)
+                self._log_error("Failed to create Default folder: %s", e)
                 return
 
-        if not default_project_id:
-            self._log_error("Cannot delete project: Default project not available")
+        if not default_folder_id:
+            self._log_error("Cannot delete folder: Default folder not available")
             return
 
-        # Move all assets from this project to Default
+        # Move all assets from this folder to Default
         moved_count = 0
         if hasattr(self._asset_index, "assets"):
             for asset_id, asset in list(self._asset_index.assets.items()):
-                if asset.get("project_id") == project_id:
+                if asset.get("folder_id") == folder_id:
                     try:
                         self._asset_index.update_asset(
                             asset_id,
-                            project_id=default_project_id,
-                            scene_id=None  # Clear scene since scenes are project-specific
+                            folder_id=default_folder_id,
+                            scene_id=None  # Clear scene since scenes are folder-specific
                         )
                         moved_count += 1
                     except Exception as e:
                         self._log_warn("Failed to move asset %s to Default: %s", asset_id, e)
 
-        # Delete the project
+        # Delete the folder
         try:
-            if hasattr(self._asset_index, "delete_project"):
-                self._asset_index.delete_project(project_id)
-            elif hasattr(self._asset_index, "remove_project"):
-                self._asset_index.remove_project(project_id)
+            if hasattr(self._asset_index, "delete_folder"):
+                self._asset_index.delete_folder(folder_id)
+            elif hasattr(self._asset_index, "remove_folder"):
+                self._asset_index.remove_folder(folder_id)
             else:
-                # Fallback: remove from projects dict directly
-                if hasattr(self._asset_index, "projects"):
-                    del self._asset_index.projects[project_id]
+                # Fallback: remove from folders dict directly
+                if hasattr(self._asset_index, "folders"):
+                    del self._asset_index.folders[folder_id]
 
             self._asset_index.save()
 
-            # Clear selection if the deleted project was selected
-            if self._selected_project_id == project_id:
-                self._selected_project_id = None
+            # Clear selection if the deleted folder was selected
+            if self._selected_folder_id == folder_id:
+                self._selected_folder_id = None
                 self._selected_scene_id = None
                 self._selected_asset_ids.clear()
                 self._selection_type = "none"
 
             self.refresh_catalog()
             self._log_info(
-                "Deleted project '%s' and moved %d assets to Default",
-                project_name, moved_count
+                "Deleted folder '%s' and moved %d assets to Default",
+                folder_name, moved_count
             )
         except Exception as e:
-            self._log_error("Failed to delete project: %s", e)
+            self._log_error("Failed to delete folder: %s", e)
 
     # ── Lifecycle ─────────────────────────────────────────────
 
@@ -3490,7 +3490,7 @@ class AssetManagerPanel(Panel):
         has_existing_selection = bool(self._selected_asset_ids)
         self._sync_runtime_scene_catalog(select_current=not has_existing_selection)
 
-        # Clear scene filter on reopen to show all assets in the project
+        # Clear scene filter on reopen to show all assets in the folder
         # (respecting active filters like Splat/PCL/Dataset/Checkpoint)
         if has_existing_selection:
             self._selected_scene_id = None
@@ -3603,7 +3603,7 @@ class AssetManagerPanel(Panel):
     def _bind_dom_event_listeners(self, doc) -> None:
         """Bind stable DOM listeners for dynamic Asset Manager rows.
 
-        The generated asset/project/scene rows are replaced by data-for updates.
+        The generated asset/folder/scene rows are replaced by data-for updates.
         Binding once to a stable parent mirrors the working popup panels and
         avoids relying on per-row data-event callbacks for card selection.
         """
@@ -3698,44 +3698,44 @@ class AssetManagerPanel(Panel):
                 self.on_update_thumbnail(None, event, [asset_id])
                 self._stop_event(event)
                 return
-            elif action == "move_to_project":
-                self.on_move_to_project(None, event, [asset_id])
+            elif action == "move_to_folder":
+                self.on_move_to_folder(None, event, [asset_id])
                 self._stop_event(event)
                 return
             elif action == "remove_from_menu":
                 self.on_remove_asset(None, event, [asset_id])
                 self._stop_event(event)
                 return
-            elif action == "create_project":
-                self.on_create_project_and_move(None, event, [asset_id])
-                # Close menu after creating project
+            elif action == "create_folder":
+                self.on_create_folder_and_move(None, event, [asset_id])
+                # Close menu after creating folder
                 self._open_menu_asset_id = None
-                self._dirty_model("assets", "move_menu_projects")
+                self._dirty_model("assets", "move_menu_folders")
                 if self._handle:
-                    self._handle.update_record_list("move_menu_projects", [])
+                    self._handle.update_record_list("move_menu_folders", [])
                 self._stop_event(event)
                 return
-            elif action == "move_to_existing_project":
-                project_id = action_el.get_attribute("data-project-id", "")
-                self._log_info("Move to existing project clicked: asset=%s, project=%s", asset_id, project_id)
-                if project_id:
-                    self._move_asset_to_project(asset_id, project_id)
+            elif action == "move_to_existing_folder":
+                folder_id = action_el.get_attribute("data-folder-id", "")
+                self._log_info("Move to existing folder clicked: asset=%s, folder=%s", asset_id, folder_id)
+                if folder_id:
+                    self._move_asset_to_folder(asset_id, folder_id)
                     # Close menu after move
                     self._open_menu_asset_id = None
-                    self._dirty_model("assets", "move_menu_projects")
+                    self._dirty_model("assets", "move_menu_folders")
                     if self._handle:
-                        self._handle.update_record_list("move_menu_projects", [])
+                        self._handle.update_record_list("move_menu_folders", [])
                 else:
-                    self._log_warn("No project_id found on action element")
+                    self._log_warn("No folder_id found on action element")
                 self._stop_event(event)
                 return
             elif action in ("select", "scene_asset"):
                 # Close any open menu when selecting an asset
                 if self._open_menu_asset_id:
                     self._open_menu_asset_id = None
-                    self._dirty_model("assets", "move_menu_projects")
+                    self._dirty_model("assets", "move_menu_folders")
                     if self._handle:
-                        self._handle.update_record_list("move_menu_projects", [])
+                        self._handle.update_record_list("move_menu_folders", [])
                 if self._load_menu_asset_id:
                     self._load_menu_asset_id = None
                     self._dirty_model("assets")
@@ -3747,42 +3747,42 @@ class AssetManagerPanel(Panel):
             self._stop_event(event)
             return
 
-        project_el = rml_widgets.find_ancestor_with_attribute(
-            target, "data-project-id", container
+        folder_el = rml_widgets.find_ancestor_with_attribute(
+            target, "data-folder-id", container
         )
-        if project_el is not None:
-            # Check if this is a project action (menu, rename, delete)
-            project_action_el = rml_widgets.find_ancestor_with_attribute(
-                target, "data-project-action", container
+        if folder_el is not None:
+            # Check if this is a folder action (menu, rename, delete)
+            folder_action_el = rml_widgets.find_ancestor_with_attribute(
+                target, "data-folder-action", container
             )
-            if project_action_el is not None:
-                action = project_action_el.get_attribute("data-project-action", "")
-                project_id = project_action_el.get_attribute("data-project-id", "")
+            if folder_action_el is not None:
+                action = folder_action_el.get_attribute("data-folder-action", "")
+                folder_id = folder_action_el.get_attribute("data-folder-id", "")
 
                 if action == "menu":
-                    self.on_toggle_project_menu(None, event, [project_id])
+                    self.on_toggle_folder_menu(None, event, [folder_id])
                     self._stop_event(event)
                     return
                 elif action == "watch_dirs":
-                    self.on_edit_watch_dirs(None, event, [project_id])
+                    self.on_edit_watch_dirs(None, event, [folder_id])
                     self._stop_event(event)
                     return
                 elif action == "rename":
-                    self.on_rename_project(None, event, [project_id])
+                    self.on_rename_folder(None, event, [folder_id])
                     self._stop_event(event)
                     return
                 elif action == "delete":
-                    self.on_delete_project(None, event, [project_id])
+                    self.on_delete_folder(None, event, [folder_id])
                     self._stop_event(event)
                     return
 
-            # Regular project selection (not an action button)
-            project_id = project_el.get_attribute("data-project-id", "")
-            # Close any open project menu when selecting a project
-            if self._open_menu_project_id:
-                self._open_menu_project_id = None
-                self._dirty_model("projects")
-            if self._select_project_id(project_id):
+            # Regular folder selection (not an action button)
+            folder_id = folder_el.get_attribute("data-folder-id", "")
+            # Close any open folder menu when selecting a folder
+            if self._open_menu_folder_id:
+                self._open_menu_folder_id = None
+                self._dirty_model("folders")
+            if self._select_folder_id(folder_id):
                 self._stop_event(event)
             return
 
@@ -3798,18 +3798,18 @@ class AssetManagerPanel(Panel):
         # Close open asset menu when clicking elsewhere
         if self._open_menu_asset_id:
             self._open_menu_asset_id = None
-            self._dirty_model("assets", "move_menu_projects")
+            self._dirty_model("assets", "move_menu_folders")
             if self._handle:
-                self._handle.update_record_list("move_menu_projects", [])
+                self._handle.update_record_list("move_menu_folders", [])
 
         if self._load_menu_asset_id:
             self._load_menu_asset_id = None
             self._dirty_model("assets")
 
-        # Close open project menu when clicking elsewhere
-        if self._open_menu_project_id:
-            self._open_menu_project_id = None
-            self._dirty_model("projects")
+        # Close open folder menu when clicking elsewhere
+        if self._open_menu_folder_id:
+            self._open_menu_folder_id = None
+            self._dirty_model("folders")
 
     def _on_asset_manager_mousedown(self, event) -> None:
         if self._input_capture_active():
@@ -3844,8 +3844,8 @@ class AssetManagerPanel(Panel):
         if self._select_asset_id(asset_id):
             self._load_menu_asset_id = asset_id
             self._open_menu_asset_id = None
-            self._open_menu_project_id = None
-            self._dirty_model("assets", "projects")
+            self._open_menu_folder_id = None
+            self._dirty_model("assets", "folders")
         self._stop_event(event)
 
     def _on_asset_manager_double_click(self, event) -> None:
@@ -3921,9 +3921,9 @@ class AssetManagerPanel(Panel):
     # ── Integration Hooks (Stubs) ─────────────────────────────
 
     def on_training_started(
-        self, project_name: str, scene_name: str, parameters: Dict[str, Any]
+        self, folder_name: str, scene_name: str, parameters: Dict[str, Any]
     ) -> Optional[str]:
-        """Called when training starts - create project/scene context.
+        """Called when training starts - create folder/scene context.
 
         Returns:
             Scene ID if created, None otherwise.
@@ -3932,18 +3932,18 @@ class AssetManagerPanel(Panel):
             return None
 
         try:
-            # Create or get project
-            project = self._asset_index.find_or_create_project(project_name)
-            project_id = project.id
+            # Create or get folder
+            folder = self._asset_index.find_or_create_folder(folder_name)
+            folder_id = folder.id
 
             # Create or get scene
-            scene = self._asset_index.find_or_create_scene(project_id, scene_name)
+            scene = self._asset_index.find_or_create_scene(folder_id, scene_name)
             scene_id = scene.id
 
             self._asset_index.save()
 
             # Update UI if panel is open
-            self._selected_project_id = project_id
+            self._selected_folder_id = folder_id
             self._selected_scene_id = scene_id
             self.refresh_catalog()
 
@@ -3975,7 +3975,7 @@ class AssetManagerPanel(Panel):
 
             asset = self._scan_and_register_asset(
                 checkpoint_path,
-                project_id=scene.get("project_id"),
+                folder_id=scene.get("folder_id"),
                 scene_id=scene_id,
                 fallback_role="training_checkpoint",
                 override_type="checkpoint",
@@ -4015,7 +4015,7 @@ class AssetManagerPanel(Panel):
         self,
         file_path: str,
         export_type: str,
-        project_id: Optional[str] = None,
+        folder_id: Optional[str] = None,
         scene_id: Optional[str] = None,
     ) -> Optional[str]:
         """Called when export is generated - register export asset.
@@ -4023,7 +4023,7 @@ class AssetManagerPanel(Panel):
         Args:
             file_path: Path to exported file
             export_type: Type of export (ply, rad, sog, spz, mp4, etc.)
-            project_id: Optional associated project
+            folder_id: Optional associated folder
             scene_id: Optional associated scene
 
         Returns:
@@ -4034,7 +4034,7 @@ class AssetManagerPanel(Panel):
 
         try:
             asset = self._scan_and_register_asset(
-                project_id=project_id,
+                folder_id=folder_id,
                 path=file_path,
                 scene_id=scene_id,
                 fallback_role="export",
@@ -4124,7 +4124,7 @@ class AssetManagerPanel(Panel):
             )
             if select_current and context.get("asset_id"):
                 self._selected_asset_ids = {context["asset_id"]}
-                # Preserve user's existing project/scene filters - don't change them
+                # Preserve user's existing folder/scene filters - don't change them
                 self._update_selection_type()
         except Exception as exc:
             _logger.debug("Failed to sync runtime scene catalog: %s", exc)
@@ -4134,7 +4134,7 @@ class AssetManagerPanel(Panel):
         if not self._handle:
             return
 
-        self._handle.update_record_list("projects", self.get_project_list())
+        self._handle.update_record_list("folders", self.get_folder_list())
         self._handle.update_record_list("scenes", self.get_scene_list())
         self._handle.update_record_list("filters", self.get_filter_list())
         # Note: "tags" record list removed - not bound in on_bind_model
@@ -4144,7 +4144,7 @@ class AssetManagerPanel(Panel):
         self._update_selection_details()
 
     def _update_selection_details(self):
-        """Update record lists for selected scene and project."""
+        """Update record lists for selected scene and folder."""
         if not self._handle or self._updating_selection_details:
             return
         self._updating_selection_details = True
@@ -4167,10 +4167,10 @@ class AssetManagerPanel(Panel):
             else:
                 self._handle.update_record_list("selected_scene_assets", [])
 
-            project = self._get_selected_project()
-            if project:
-                scene_ids = project.get("scene_ids", [])
-                project_scenes = []
+            folder = self._get_selected_folder()
+            if folder:
+                scene_ids = folder.get("scene_ids", [])
+                folder_scenes = []
                 if self._asset_index and hasattr(self._asset_index, "scenes"):
                     for scene_id in scene_ids:
                         scene_data = self._asset_index.scenes.get(scene_id)
@@ -4182,7 +4182,7 @@ class AssetManagerPanel(Panel):
                             for asset in self._asset_index.assets.values():
                                 if asset.get("scene_id") == scene_id:
                                     scene_asset_count += 1
-                        project_scenes.append(
+                        folder_scenes.append(
                             {
                                 "id": scene_id,
                                 "name": scene_data.get(
@@ -4191,8 +4191,8 @@ class AssetManagerPanel(Panel):
                                 "asset_count": scene_asset_count,
                             }
                         )
-                # Note: selected_project_scenes record list removed - not used in UI
-            # Note: selected_project_scenes record list removed - not used in UI
+                # Note: selected_folder_scenes record list removed - not used in UI
+            # Note: selected_folder_scenes record list removed - not used in UI
 
             selected_asset = self._get_selected_asset()
             if selected_asset:
@@ -4226,16 +4226,16 @@ class AssetManagerPanel(Panel):
             "selected_asset_path",
             "selected_scene",
             "selected_scene_name",
-            "selected_scene_project_name",
+            "selected_scene_folder_name",
             "selected_scene_asset_count",
             "selected_scene_assets",
-            "selected_project",
-            "selected_project_name",
+            "selected_folder",
+            "selected_folder_name",
             "selected_asset_tags",
             "show_selection_none",
             "show_selection_asset",
             "show_selection_scene",
-            "show_selection_project",
+            "show_selection_folder",
             "show_selection_multiple",
         }
         needs_selection_update = any(f in selection_fields for f in fields)
@@ -4244,14 +4244,14 @@ class AssetManagerPanel(Panel):
             self._handle.dirty(field)
             # Update record lists when they change
             if field in (
-                "projects",
+                "folders",
                 "scenes",
                 "filters",
                 "assets",
                 "selected_asset_tags",
             ):
                 list_map = {
-                    "projects": self.get_project_list,
+                    "folders": self.get_folder_list,
                     "scenes": self.get_scene_list,
                     "filters": self.get_filter_list,
                     "assets": self.get_filtered_assets,

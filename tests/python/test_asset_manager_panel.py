@@ -42,8 +42,8 @@ def _install_lf_stub(monkeypatch):
 
 @pytest.fixture
 def asset_manager_panel_module(monkeypatch):
-    project_root = Path(__file__).parent.parent.parent
-    source_python = project_root / "src" / "python"
+    folder_root = Path(__file__).parent.parent.parent
+    source_python = folder_root / "src" / "python"
     if str(source_python) not in sys.path:
         sys.path.insert(0, str(source_python))
 
@@ -175,7 +175,7 @@ def _make_asset():
             "image_root": "images",
         },
         "geometry_metadata": {},
-        "project_id": "p1",
+        "folder_id": "p1",
         "scene_id": "s1",
         "created_at": "2026-02-15T21:52:45.881056",
         "modified_at": "2026-04-28T14:48:57.606369",
@@ -270,7 +270,7 @@ def test_asset_card_title_uses_asset_path_leaf(asset_manager_panel_module):
     asset["absolute_path"] = "/data/tandt/truck/train"
     fields = panel._get_asset_display_fields(
         asset,
-        project_name="tandt",
+        folder_name="tandt",
         scene_name="truck",
     )
 
@@ -279,9 +279,9 @@ def test_asset_card_title_uses_asset_path_leaf(asset_manager_panel_module):
 
 
 def test_asset_manager_rml_uses_text_interpolation_for_display_values():
-    project_root = Path(__file__).parent.parent.parent
+    folder_root = Path(__file__).parent.parent.parent
     rml_path = (
-        project_root
+        folder_root
         / "src"
         / "visualizer"
         / "gui"
@@ -305,9 +305,9 @@ def test_asset_manager_rml_uses_text_interpolation_for_display_values():
 
 
 def test_asset_manager_card_thumbs_do_not_use_gradient_placeholders():
-    project_root = Path(__file__).parent.parent.parent
+    folder_root = Path(__file__).parent.parent.parent
     rcss_path = (
-        project_root
+        folder_root
         / "src"
         / "visualizer"
         / "gui"
@@ -534,8 +534,8 @@ def test_mesh_extension_detects_as_mesh(asset_manager_panel_module, tmp_path):
 
 
 def test_asset_manager_load_context_actions_are_localized():
-    project_root = Path(__file__).parent.parent.parent
-    locale_dir = project_root / "src" / "visualizer" / "gui" / "resources" / "locales"
+    folder_root = Path(__file__).parent.parent.parent
+    locale_dir = folder_root / "src" / "visualizer" / "gui" / "resources" / "locales"
     required_keys = (
         "action.load_new",
         "action.add_to_scene",
@@ -565,8 +565,8 @@ def test_asset_selection_dirties_info_fields(asset_manager_panel_module):
     panel._handle = _HandleStub()
     panel._asset_index = SimpleNamespace(
         assets={"a1": _make_asset()},
-        projects={"p1": {"id": "p1", "name": "Imported Datasets", "scene_ids": ["s1"]}},
-        scenes={"s1": {"id": "s1", "name": "bicycle", "project_id": "p1"}},
+        folders={"p1": {"id": "p1", "name": "Imported Datasets", "scene_ids": ["s1"]}},
+        scenes={"s1": {"id": "s1", "name": "bicycle", "folder_id": "p1"}},
         tags={},
         collections={},
     )
@@ -586,8 +586,8 @@ def test_asset_selection_resolves_asset_id_from_clicked_element(asset_manager_pa
     panel._handle = _HandleStub()
     panel._asset_index = SimpleNamespace(
         assets={"a1": _make_asset()},
-        projects={"p1": {"id": "p1", "name": "Imported Datasets", "scene_ids": ["s1"]}},
-        scenes={"s1": {"id": "s1", "name": "bicycle", "project_id": "p1"}},
+        folders={"p1": {"id": "p1", "name": "Imported Datasets", "scene_ids": ["s1"]}},
+        scenes={"s1": {"id": "s1", "name": "bicycle", "folder_id": "p1"}},
         tags={},
         collections={},
     )
@@ -664,8 +664,8 @@ def test_dom_card_click_selects_asset_from_stable_parent(asset_manager_panel_mod
     panel._handle = _HandleStub()
     panel._asset_index = SimpleNamespace(
         assets={"a1": _make_asset()},
-        projects={"p1": {"id": "p1", "name": "Imported Datasets", "scene_ids": ["s1"]}},
-        scenes={"s1": {"id": "s1", "name": "bicycle", "project_id": "p1"}},
+        folders={"p1": {"id": "p1", "name": "Imported Datasets", "scene_ids": ["s1"]}},
+        scenes={"s1": {"id": "s1", "name": "bicycle", "folder_id": "p1"}},
         tags={},
         collections={},
     )
@@ -695,8 +695,8 @@ def test_dom_card_ctrl_click_adds_to_multi_selection(asset_manager_panel_module)
     second["absolute_path"] = "/tmp/garden"
     panel._asset_index = SimpleNamespace(
         assets={"a1": first, "a2": second},
-        projects={"p1": {"id": "p1", "name": "Imported Datasets", "scene_ids": ["s1"]}},
-        scenes={"s1": {"id": "s1", "name": "bicycle", "project_id": "p1"}},
+        folders={"p1": {"id": "p1", "name": "Imported Datasets", "scene_ids": ["s1"]}},
+        scenes={"s1": {"id": "s1", "name": "bicycle", "folder_id": "p1"}},
         tags={},
         collections={},
     )
@@ -729,10 +729,10 @@ def test_dom_card_double_click_loads_asset(asset_manager_panel_module, monkeypat
     panel._handle = _HandleStub()
     panel._asset_index = SimpleNamespace(
         assets={"a1": _make_asset()},
-        projects={
+        folders={
             "p1": {"id": "p1", "name": "Imported Datasets", "scene_ids": ["s1"]}
         },
-        scenes={"s1": {"id": "s1", "name": "bicycle", "project_id": "p1"}},
+        scenes={"s1": {"id": "s1", "name": "bicycle", "folder_id": "p1"}},
         tags={},
         collections={},
     )
@@ -775,10 +775,10 @@ def test_dom_card_double_click_ignored_during_input_capture(
     panel._handle = _HandleStub()
     panel._asset_index = SimpleNamespace(
         assets={"a1": _make_asset()},
-        projects={
+        folders={
             "p1": {"id": "p1", "name": "Imported Datasets", "scene_ids": ["s1"]}
         },
-        scenes={"s1": {"id": "s1", "name": "bicycle", "project_id": "p1"}},
+        scenes={"s1": {"id": "s1", "name": "bicycle", "folder_id": "p1"}},
         tags={},
         collections={},
     )
@@ -809,10 +809,10 @@ def test_dataset_remove_deletes_catalog_json_entry(asset_manager_panel_module, t
     index = asset_manager_panel_module.AssetIndex(
         library_path=tmp_path / "library.json"
     )
-    project = index.create_project("truck")
-    scene = index.create_scene(project.id, "train")
+    folder = index.create_folder("truck")
+    scene = index.create_scene(folder.id, "train")
     asset = index.create_asset(
-        project_id=project.id,
+        folder_id=folder.id,
         scene_id=scene.id,
         name="train",
         type="dataset",
@@ -834,11 +834,11 @@ def test_dataset_remove_deletes_catalog_json_entry(asset_manager_panel_module, t
     data = json.loads((tmp_path / "library.json").read_text(encoding="utf-8"))
     assert asset.id not in data["assets"]
     assert scene.id not in data["scenes"]
-    assert project.id not in data["projects"]
+    assert folder.id not in data["folders"]
     assert panel.get_selected_count() == 0
 
 
-def test_edit_watch_dirs_uses_clicked_project_without_selecting_it(
+def test_edit_watch_dirs_uses_clicked_folder_without_selecting_it(
     asset_manager_panel_module,
     monkeypatch,
 ):
@@ -846,7 +846,7 @@ def test_edit_watch_dirs_uses_clicked_project_without_selecting_it(
     panel._handle = _HandleStub()
     panel._asset_index = SimpleNamespace(
         assets={},
-        projects={
+        folders={
             "default": {"id": "default", "name": "Default", "scene_ids": []},
             "target": {"id": "target", "name": "Target", "scene_ids": []},
         },
@@ -854,18 +854,18 @@ def test_edit_watch_dirs_uses_clicked_project_without_selecting_it(
         tags={},
         collections={},
     )
-    panel._selected_project_id = "default"
+    panel._selected_folder_id = "default"
     opened = []
 
     monkeypatch.setattr(
         asset_manager_panel_module,
         "open_watch_dirs_dialog",
-        lambda project_id: opened.append(project_id) or True,
+        lambda folder_id: opened.append(folder_id) or True,
     )
 
     panel.on_edit_watch_dirs(None, None, ["target"])
 
-    assert panel._selected_project_id == "default"
+    assert panel._selected_folder_id == "default"
     assert opened == ["target"]
 
 
@@ -906,7 +906,7 @@ def test_gallery_precise_scroll_moves_scroll_container(asset_manager_panel_modul
     assert event.stopped is True
 
 
-def test_project_count_matches_visible_list(asset_manager_panel_module, tmp_path):
+def test_folder_count_matches_visible_list(asset_manager_panel_module, tmp_path):
     present_file = tmp_path / "present.ply"
     present_file.write_bytes(b"ply")
 
@@ -915,7 +915,7 @@ def test_project_count_matches_visible_list(asset_manager_panel_module, tmp_path
         asset["id"] = asset_id
         asset["absolute_path"] = str(path)
         asset["path"] = str(path)
-        asset["project_id"] = "p1"
+        asset["folder_id"] = "p1"
         asset["scene_id"] = "s1"
         return asset
 
@@ -926,8 +926,8 @@ def test_project_count_matches_visible_list(asset_manager_panel_module, tmp_path
             "present": _asset("present", present_file),
             "missing": _asset("missing", tmp_path / "deleted.ply"),
         },
-        projects={"p1": {"id": "p1", "name": "Default", "scene_ids": ["s1"]}},
-        scenes={"s1": {"id": "s1", "name": "scene", "project_id": "p1"}},
+        folders={"p1": {"id": "p1", "name": "Default", "scene_ids": ["s1"]}},
+        scenes={"s1": {"id": "s1", "name": "scene", "folder_id": "p1"}},
         tags={},
         collections={},
     )
@@ -936,5 +936,5 @@ def test_project_count_matches_visible_list(asset_manager_panel_module, tmp_path
 
     assert len(panel._asset_index.assets) == 2
     assert [asset["id"] for asset in visible] == ["present"]
-    assert panel._project_asset_count("p1") == len(visible)
+    assert panel._folder_asset_count("p1") == len(visible)
     assert panel._scene_asset_count("s1") == 1

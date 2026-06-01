@@ -86,8 +86,8 @@ _resume_checkpoint_panel = None
 _url_import_panel = None
 _watch_dirs_dialog_panel = None
 _watch_dirs_dialog_state = {
-    "project_id": None,
-    "project_name": "",
+    "folder_id": None,
+    "folder_name": "",
     "watch_dirs": [],
     "version": 0,
 }
@@ -127,10 +127,10 @@ def open_url_import_panel() -> bool:
     return _url_import_panel.show()
 
 
-def open_watch_dirs_dialog(project_id: str) -> bool:
-    """Open the watched directories dialog for the given project."""
+def open_watch_dirs_dialog(folder_id: str) -> bool:
+    """Open the watched directories dialog for the given folder."""
     global _watch_dirs_dialog_panel
-    if not project_id:
+    if not folder_id:
         return False
     if _watch_dirs_dialog_panel is None:
         try:
@@ -140,11 +140,11 @@ def open_watch_dirs_dialog(project_id: str) -> bool:
     try:
         _watch_log(
             "info",
-            "open dialog requested project_id=%s panel_object_id=%s",
-            project_id,
+            "open dialog requested folder_id=%s panel_object_id=%s",
+            folder_id,
             id(_watch_dirs_dialog_panel) if _watch_dirs_dialog_panel is not None else "None",
         )
-        if not _load_watch_dirs_dialog_state(project_id):
+        if not _load_watch_dirs_dialog_state(folder_id):
             return False
         lf.ui.set_panel_enabled(WatchDirsDialogPanel.id, True)
         if _watch_dirs_dialog_panel is not None:
@@ -157,39 +157,39 @@ def open_watch_dirs_dialog(project_id: str) -> bool:
 
 
 def _set_watch_dirs_dialog_state(
-    project_id: Optional[str],
-    project_name: str = "",
+    folder_id: Optional[str],
+    folder_name: str = "",
     watch_dirs: Optional[list[str]] = None,
 ) -> None:
-    _watch_dirs_dialog_state["project_id"] = project_id
-    _watch_dirs_dialog_state["project_name"] = project_name
+    _watch_dirs_dialog_state["folder_id"] = folder_id
+    _watch_dirs_dialog_state["folder_name"] = folder_name
     _watch_dirs_dialog_state["watch_dirs"] = list(watch_dirs or [])
     _watch_dirs_dialog_state["version"] = int(_watch_dirs_dialog_state.get("version") or 0) + 1
 
 
-def _load_watch_dirs_dialog_state(project_id: str) -> bool:
+def _load_watch_dirs_dialog_state(folder_id: str) -> bool:
     index = load_asset_index()
     if index is None:
         _watch_log("error", "catalog load failed")
         return False
-    project = index.get_project(project_id)
-    if project is None:
+    folder = index.get_folder(folder_id)
+    if folder is None:
         _watch_log(
             "error",
-            "show aborted: project not found project_id=%s available=%s library=%s",
-            project_id,
-            list(getattr(index, "projects", {}).keys()),
+            "show aborted: folder not found folder_id=%s available=%s library=%s",
+            folder_id,
+            list(getattr(index, "folders", {}).keys()),
             _index_library_path(index),
         )
         return False
-    project_name = getattr(project, "name", "Unnamed Project")
-    watch_dirs = index.get_watch_dirs(project_id)
-    _set_watch_dirs_dialog_state(project_id, project_name, watch_dirs)
+    folder_name = getattr(folder, "name", "Unnamed Folder")
+    watch_dirs = index.get_watch_dirs(folder_id)
+    _set_watch_dirs_dialog_state(folder_id, folder_name, watch_dirs)
     _watch_log(
         "info",
-        "show loaded project_id=%s project_name=%s watch_dirs=%s library=%s",
-        project_id,
-        project_name,
+        "show loaded folder_id=%s folder_name=%s watch_dirs=%s library=%s",
+        folder_id,
+        folder_name,
         watch_dirs,
         _index_library_path(index),
     )
@@ -269,7 +269,7 @@ def _register_discovered_assets(
     thumbnails,
     metadata_list: list[dict[str, Any]],
     *,
-    project_id: Optional[str],
+    folder_id: Optional[str],
     scene_id: Optional[str] = None,
     name_override: Optional[str] = None,
 ) -> list[Any]:
@@ -278,9 +278,9 @@ def _register_discovered_assets(
     single_asset_override = name_override if len(metadata_list) == 1 else None
     _watch_log(
         "info",
-        "register start library=%s project_id=%s scene_id=%s metadata_count=%d",
+        "register start library=%s folder_id=%s scene_id=%s metadata_count=%d",
         _index_library_path(index),
-        project_id,
+        folder_id,
         scene_id,
         len(metadata_list),
     )
@@ -296,13 +296,13 @@ def _register_discovered_assets(
                 metadata.get("type"),
             )
             continue
-        existing = index.find_asset_by_path(file_path, project_id=project_id)
+        existing = index.find_asset_by_path(file_path, folder_id=folder_id)
         if existing is not None:
             _watch_log(
                 "info",
-                "register skipped existing project asset path=%s project_id=%s asset_id=%s",
+                "register skipped existing folder asset path=%s folder_id=%s asset_id=%s",
                 file_path,
-                project_id,
+                folder_id,
                 getattr(existing, "id", "<unknown>"),
             )
             continue
@@ -313,7 +313,7 @@ def _register_discovered_assets(
             or Path(file_path).name
         )
         asset = index.create_asset(
-            project_id=project_id,
+            folder_id=folder_id,
             name=asset_name,
             type=metadata.get("type", "unknown"),
             path=file_path,
@@ -1129,26 +1129,26 @@ class URLImportPanel(_ImportDialogPanel):
             pass
 
     def _resolve_catalog_context(self, index) -> tuple[Optional[str], Optional[str]]:
-        project_id = None
+        folder_id = None
         scene_id = None
 
         panel = get_asset_manager_panel()
         if panel is not None:
-            candidate_project = getattr(panel, "_selected_project_id", None)
+            candidate_folder = getattr(panel, "_selected_folder_id", None)
             candidate_scene = getattr(panel, "_selected_scene_id", None)
-            if candidate_project and candidate_project in index.projects:
-                project_id = candidate_project
+            if candidate_folder and candidate_folder in index.folders:
+                folder_id = candidate_folder
             if candidate_scene and candidate_scene in index.scenes:
                 scene = index.scenes[candidate_scene]
-                if project_id is None or scene.project_id == project_id:
+                if folder_id is None or scene.folder_id == folder_id:
                     scene_id = candidate_scene
-                    project_id = project_id or scene.project_id
+                    folder_id = folder_id or scene.folder_id
 
-        if project_id is None:
-            project = index.find_or_create_project("Default")
-            project_id = project.id if project is not None else None
+        if folder_id is None:
+            folder = index.find_or_create_folder("Default")
+            folder_id = folder.id if folder is not None else None
 
-        return project_id, scene_id
+        return folder_id, scene_id
 
     def _strip_archive_suffix(self, name: str) -> str:
         for suffix in (".tar.gz", ".tar.bz2", ".tar.xz", ".zip", ".tar"):
@@ -1163,13 +1163,13 @@ class URLImportPanel(_ImportDialogPanel):
 
         scanner = load_scanner()
         thumbnails = load_thumbnails()
-        project_id, scene_id = self._resolve_catalog_context(index)
+        folder_id, scene_id = self._resolve_catalog_context(index)
         metadata_list = _discover_asset_metadata(scanner, path)
         created_assets = _register_discovered_assets(
             index,
             thumbnails,
             metadata_list,
-            project_id=project_id,
+            folder_id=folder_id,
             scene_id=scene_id,
             name_override=self._strip_archive_suffix(name) if name else None,
         )
@@ -1179,7 +1179,7 @@ class URLImportPanel(_ImportDialogPanel):
             if panel is not None:
                 select_asset_in_active_panel(
                     first_asset.id,
-                    project_id=first_asset.project_id,
+                    folder_id=first_asset.folder_id,
                     scene_id=first_asset.scene_id,
                 )
             else:
@@ -1378,7 +1378,7 @@ class URLImportPanel(_ImportDialogPanel):
 
 
 class WatchDirsDialogPanel(Panel):
-    """Floating panel for editing watched directories per project."""
+    """Floating panel for editing watched directories per folder."""
 
     id = "lfs.watch_dirs_dialog"
     label = "Watched Directories"
@@ -1394,8 +1394,8 @@ class WatchDirsDialogPanel(Panel):
         _watch_dirs_dialog_panel = self
 
         self._handle = None
-        self._project_id: Optional[str] = None
-        self._project_name: str = ""
+        self._folder_id: Optional[str] = None
+        self._folder_name: str = ""
         self._watch_dirs: list[str] = []
         self._shared_state_version: int = -1
         self._last_lang: str = ""
@@ -1403,13 +1403,13 @@ class WatchDirsDialogPanel(Panel):
         self._scan_cancel_event = threading.Event()
 
     def _sync_from_shared_state(self) -> None:
-        self._project_id = _watch_dirs_dialog_state.get("project_id")
-        self._project_name = str(_watch_dirs_dialog_state.get("project_name") or "")
+        self._folder_id = _watch_dirs_dialog_state.get("folder_id")
+        self._folder_name = str(_watch_dirs_dialog_state.get("folder_name") or "")
         self._watch_dirs = list(_watch_dirs_dialog_state.get("watch_dirs") or [])
         self._shared_state_version = int(_watch_dirs_dialog_state.get("version") or 0)
 
     def _publish_shared_state(self) -> None:
-        _set_watch_dirs_dialog_state(self._project_id, self._project_name, self._watch_dirs)
+        _set_watch_dirs_dialog_state(self._folder_id, self._folder_name, self._watch_dirs)
         self._shared_state_version = int(_watch_dirs_dialog_state.get("version") or 0)
 
     def on_mount(self, doc):
@@ -1487,10 +1487,10 @@ class WatchDirsDialogPanel(Panel):
 
         _watch_log(
             "info",
-            "using fresh AssetIndex object_id=%s library=%s projects=%d assets=%d",
+            "using fresh AssetIndex object_id=%s library=%s folders=%d assets=%d",
             id(index),
             _index_library_path(index),
-            _safe_count(getattr(index, "projects", {})),
+            _safe_count(getattr(index, "folders", {})),
             _safe_count(getattr(index, "assets", {})),
         )
         return index
@@ -1525,18 +1525,18 @@ class WatchDirsDialogPanel(Panel):
         )
         return thumbnails
 
-    def show(self, project_id: str) -> bool:
+    def show(self, folder_id: str) -> bool:
         try:
-            _watch_log("info", "show requested project_id=%s", project_id)
-            if not _load_watch_dirs_dialog_state(project_id):
+            _watch_log("info", "show requested folder_id=%s", folder_id)
+            if not _load_watch_dirs_dialog_state(folder_id):
                 return False
             self._sync_from_shared_state()
             _watch_log(
                 "info",
-                "show synced object_id=%s project_id=%s project_name=%s watch_dirs=%s",
+                "show synced object_id=%s folder_id=%s folder_name=%s watch_dirs=%s",
                 id(self),
-                self._project_id,
-                self._project_name,
+                self._folder_id,
+                self._folder_name,
                 self._watch_dirs,
             )
             lf.ui.set_panel_enabled(self.id, True)
@@ -1547,7 +1547,7 @@ class WatchDirsDialogPanel(Panel):
             return False
 
     def _panel_label(self) -> str:
-        return f"Watched Directories — {self._project_name}"
+        return f"Watched Directories — {self._folder_name}"
 
     def _dirty_model(self, *fields):
         if not self._handle:
@@ -1599,49 +1599,49 @@ class WatchDirsDialogPanel(Panel):
         self._sync_from_shared_state()
         _watch_log(
             "info",
-            "save clicked object_id=%s project_id=%s watch_dirs=%s",
+            "save clicked object_id=%s folder_id=%s watch_dirs=%s",
             id(self),
-            self._project_id,
+            self._folder_id,
             self._watch_dirs,
         )
         index = self._catalog_index()
-        if index is None or self._project_id is None:
+        if index is None or self._folder_id is None:
             _watch_log(
                 "error",
-                "save aborted index_is_none=%s project_id=%s",
+                "save aborted index_is_none=%s folder_id=%s",
                 index is None,
-                self._project_id,
+                self._folder_id,
             )
             lf.ui.set_panel_enabled(self.id, False)
             return
 
-        project = index.get_project(self._project_id)
-        if project is None:
+        folder = index.get_folder(self._folder_id)
+        if folder is None:
             _watch_log(
                 "error",
-                "save aborted: project missing project_id=%s available=%s library=%s",
-                self._project_id,
-                list(getattr(index, "projects", {}).keys()),
+                "save aborted: folder missing folder_id=%s available=%s library=%s",
+                self._folder_id,
+                list(getattr(index, "folders", {}).keys()),
                 _index_library_path(index),
             )
             return
 
         _watch_log(
             "info",
-            "persist start object_id=%s library=%s mtime=%s project_id=%s dirs=%s",
+            "persist start object_id=%s library=%s mtime=%s folder_id=%s dirs=%s",
             id(index),
             _index_library_path(index),
             _library_mtime(index),
-            self._project_id,
+            self._folder_id,
             self._watch_dirs,
         )
 
         # Persist watch directories
-        if not index.set_watch_dirs(self._project_id, self._watch_dirs):
+        if not index.set_watch_dirs(self._folder_id, self._watch_dirs):
             _watch_log(
                 "error",
-                "persist failed project_id=%s library=%s mtime=%s",
-                self._project_id,
+                "persist failed folder_id=%s library=%s mtime=%s",
+                self._folder_id,
                 _index_library_path(index),
                 _library_mtime(index),
             )
@@ -1653,7 +1653,7 @@ class WatchDirsDialogPanel(Panel):
             id(index),
             _index_library_path(index),
             _library_mtime(index),
-            index.get_watch_dirs(self._project_id),
+            index.get_watch_dirs(self._folder_id),
         )
         refresh_active_panel()
         _watch_log("info", "active panel refresh requested after watch-dir save")
@@ -1670,7 +1670,7 @@ class WatchDirsDialogPanel(Panel):
                 index,
                 scanner,
                 thumbnails,
-                self._project_id,
+                self._folder_id,
                 list(self._watch_dirs),
                 self._scan_cancel_event,
             ),
@@ -1692,19 +1692,19 @@ class WatchDirsDialogPanel(Panel):
         index,
         scanner,
         thumbnails,
-        project_id: str,
+        folder_id: str,
         watch_dirs: list[str],
         cancel_event: Optional[threading.Event] = None,
     ):
         """Background thread: scan watched directories and import new assets."""
         _watch_log(
             "info",
-            "scan worker start index_object_id=%s library=%s scanner=%s thumbnails=%s project_id=%s dirs=%s",
+            "scan worker start index_object_id=%s library=%s scanner=%s thumbnails=%s folder_id=%s dirs=%s",
             id(index) if index is not None else "None",
             _index_library_path(index) if index is not None else "<none>",
             id(scanner) if scanner is not None else "None",
             id(thumbnails) if thumbnails is not None else "None",
-            project_id,
+            folder_id,
             watch_dirs,
         )
         if index is None:
@@ -1724,9 +1724,9 @@ class WatchDirsDialogPanel(Panel):
             if cancel_event is not None and cancel_event.is_set():
                 _watch_log(
                     "info",
-                    "scan worker cancelled before path=%s project_id=%s",
+                    "scan worker cancelled before path=%s folder_id=%s",
                     path,
-                    project_id,
+                    folder_id,
                 )
                 return
             try:
@@ -1739,7 +1739,7 @@ class WatchDirsDialogPanel(Panel):
                     index,
                     thumbnails,
                     metadata_list,
-                    project_id=project_id,
+                    folder_id=folder_id,
                 )
                 added += len(created_assets)
             except Exception as e:
@@ -1755,8 +1755,8 @@ class WatchDirsDialogPanel(Panel):
             if cancel_event is not None and cancel_event.is_set():
                 _watch_log(
                     "info",
-                    "scan worker cancelled before final save project_id=%s discovered=%d added=%d",
-                    project_id,
+                    "scan worker cancelled before final save folder_id=%s discovered=%d added=%d",
+                    folder_id,
                     discovered,
                     added,
                 )

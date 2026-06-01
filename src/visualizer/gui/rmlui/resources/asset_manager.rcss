@@ -342,14 +342,14 @@
     color: #a9a093;
 }
 
-.asset-project-row-right {
+.asset-folder-row-right {
     display: flex;
     flex-direction: row;
     align-items: center;
     gap: 4dp;
 }
 
-.asset-project-menu {
+.asset-folder-menu {
     width: 20dp;
     height: 20dp;
     padding: 0;
@@ -361,21 +361,21 @@
     justify-content: center;
 }
 
-.asset-project-menu img {
+.asset-folder-menu img {
     width: 14dp;
     height: 14dp;
     image-color: rgba(216, 208, 195, 230);
 }
 
-.asset-project-menu:hover {
+.asset-folder-menu:hover {
     background-color: rgba(72, 67, 61, 0.95);
 }
 
-.asset-project-menu:hover img {
+.asset-folder-menu:hover img {
     image-color: rgba(255, 255, 255, 255);
 }
 
-.asset-project-dropdown {
+.asset-folder-dropdown {
     position: relative;
     background-color: #302d29;
     border-width: 1dp;
@@ -389,7 +389,7 @@
     box-shadow: 0 2dp 8dp rgba(0, 0, 0, 0.5);
 }
 
-.asset-project-dropdown.is-visible {
+.asset-folder-dropdown.is-visible {
     display: block;
 }
 
@@ -561,7 +561,7 @@
 
 .asset-pill-run,
 .asset-pill-scene,
-.asset-pill-project {
+.asset-pill-folder {
     background-color: #38342f;
     color: #d8d0c3;
 }
@@ -760,7 +760,7 @@
     color: #ffb5a8;
 }
 
-.asset-dropdown-item.project-option {
+.asset-dropdown-item.folder-option {
     cursor: pointer;
     pointer-events: auto;
 }
@@ -906,7 +906,7 @@
     flex-shrink: 0;
 }
 
-.asset-col-project {
+.asset-col-folder {
     width: 80dp;
     flex-shrink: 0;
 }
