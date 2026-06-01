@@ -273,6 +273,7 @@ namespace lfs::vis {
             std::size_t cached_positions_count = 0;
             const void* cached_colors_ptr = nullptr;
             std::size_t cached_colors_count = 0;
+            lfs::core::DataType cached_colors_dtype = lfs::core::DataType::Float32;
             std::size_t cached_n_transforms = 0;
             std::size_t cached_n_visibility = 0;
             const void* cached_transform_indices_ptr = nullptr;
@@ -811,15 +812,20 @@ namespace lfs::vis {
                 cache.cached_positions_count = n_points;
             }
 
-            // colors (handle uint8 / float alike via Tensor::to)
-            const lfs::core::Tensor colors_f32 = (req.colors->dtype() == lfs::core::DataType::Float32)
-                                                     ? *req.colors
-                                                     : (req.colors->dtype() == lfs::core::DataType::UInt8
-                                                            ? req.colors->to(lfs::core::DataType::Float32) / 255.0f
-                                                            : req.colors->to(lfs::core::DataType::Float32));
-            const void* col_key = colors_f32.ptr<float>();
+            // colors (handle uint8 / float alike via Tensor::to). Key on the *source*
+            // tensor like positions above — keying on the converted temporary's pointer
+            // compares a fresh per-frame allocation each time, which both dangles and
+            // defeats the cache (forcing a full re-upload every frame for uint8 colors).
+            const void* col_key = req.colors->data_ptr();
+            const lfs::core::DataType col_dtype = req.colors->dtype();
             if (col_key != cache.cached_colors_ptr || cache.cached_colors_count != n_points ||
-                cache.colors.buffer == VK_NULL_HANDLE) {
+                cache.cached_colors_dtype != col_dtype || cache.colors.buffer == VK_NULL_HANDLE) {
+                const lfs::core::Tensor colors_f32 =
+                    col_dtype == lfs::core::DataType::Float32
+                        ? *req.colors
+                        : (col_dtype == lfs::core::DataType::UInt8
+                               ? req.colors->to(lfs::core::DataType::Float32) / 255.0f
+                               : req.colors->to(lfs::core::DataType::Float32));
                 std::vector<float> host;
                 if (!tensorToHost(colors_f32, host)) {
                     return std::unexpected<std::string>("Failed to read colors to CPU");
@@ -832,6 +838,7 @@ namespace lfs::vis {
                 }
                 cache.cached_colors_ptr = col_key;
                 cache.cached_colors_count = n_points;
+                cache.cached_colors_dtype = col_dtype;
             }
 
             // model_transforms (CPU vector of mat4)
