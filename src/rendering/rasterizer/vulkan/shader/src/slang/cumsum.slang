@@ -68,25 +68,33 @@ void blockScan(
     uniform Uniforms uniforms
 ) {
     uint tid = localId.x;
-    if (tid >= BLOCK_SIZE)
-        return;
+    // The workgroup always launches BLOCK_SIZE_0 threads (numthreads is compile-time),
+    // but only BLOCK_SIZE of them do work. Every launched thread must reach each
+    // GroupMemoryBarrierWithGroupSync — a barrier hit by only a subset of the workgroup
+    // is undefined behavior. So gate the shared-memory/wave work with `active` instead of
+    // returning early. BLOCK_SIZE is always a whole multiple of SUBGROUP_SIZE, so each
+    // subgroup is uniformly active or inactive and the wave ops keep their semantics.
+    const bool active = (tid < BLOCK_SIZE);
     uint blockId = groupId.x;
     uint gid = blockId * BLOCK_SIZE + tid;
 
     // Load data into shared memory
-    s_data[tid] = (gid < uniforms.numElements) ? g_input[gid] : 0;
+    if (active)
+        s_data[tid] = (gid < uniforms.numElements) ? g_input[gid] : 0;
     GroupMemoryBarrierWithGroupSync();
 
     // Subgroup-level scan
     uint subgroupId = tid / SUBGROUP_SIZE;
     uint laneId = tid % SUBGROUP_SIZE;
 
-    int32_t subgroupSum = subgroupScan(s_data[tid], laneId);
-    s_data[tid] = subgroupSum;
+    if (active) {
+        int32_t subgroupSum = subgroupScan(s_data[tid], laneId);
+        s_data[tid] = subgroupSum;
+    }
     GroupMemoryBarrierWithGroupSync();
 
     // Block-level scan of subgroup sums
-    if (tid < (BLOCK_SIZE / SUBGROUP_SIZE)) {
+    if (active && tid < (BLOCK_SIZE / SUBGROUP_SIZE)) {
         int32_t subgroupSumVal = s_data[tid * SUBGROUP_SIZE + SUBGROUP_SIZE - 1];
         int32_t blockScanResult = subgroupSumVal + WavePrefixSum(subgroupSumVal);
         s_data[tid * SUBGROUP_SIZE + SUBGROUP_SIZE - 1] = blockScanResult;
@@ -94,19 +102,19 @@ void blockScan(
     GroupMemoryBarrierWithGroupSync();
 
     // Distribute block scan results back to subgroups
-    if (subgroupId > 0 && laneId != SUBGROUP_SIZE - 1) {
+    if (active && subgroupId > 0 && laneId != SUBGROUP_SIZE - 1) {
         int32_t subgroupOffset = s_data[subgroupId * SUBGROUP_SIZE - 1];
         s_data[tid] += subgroupOffset;
     }
     GroupMemoryBarrierWithGroupSync();
 
     // Write results and block sum
-    if (gid < uniforms.numElements) {
+    if (active && gid < uniforms.numElements) {
         g_output[gid] = s_data[tid];
     }
 
     // Store block sum for next phase
-    if (tid == BLOCK_SIZE - 1) {
+    if (active && tid == BLOCK_SIZE - 1) {
         g_blockSums[blockId] = s_data[tid];
     }
 }
@@ -120,38 +128,41 @@ void scanBlockSums(
     uniform Uniforms uniforms
 ) {
     uint tid = localId.x;
-    if (tid >= BLOCK_SIZE)
-        return;
+    // See blockScan: gate work with `active` so all launched threads reach every barrier.
+    const bool active = (tid < BLOCK_SIZE);
     uint blockId = groupId.x;
     uint gid = blockId * BLOCK_SIZE + tid;
 
     // Load block sums
-    s_data[tid] = (gid < uniforms.numElements) ? g_blockSums[gid] : 0;
+    if (active)
+        s_data[tid] = (gid < uniforms.numElements) ? g_blockSums[gid] : 0;
     GroupMemoryBarrierWithGroupSync();
 
     // Perform scan similar to blockScan
     uint subgroupId = tid / SUBGROUP_SIZE;
     uint laneId = tid % SUBGROUP_SIZE;
 
-    int32_t subgroupSum = subgroupScan(s_data[tid], laneId);
-    s_data[tid] = subgroupSum;
+    if (active) {
+        int32_t subgroupSum = subgroupScan(s_data[tid], laneId);
+        s_data[tid] = subgroupSum;
+    }
     GroupMemoryBarrierWithGroupSync();
 
-    if (tid < (BLOCK_SIZE / SUBGROUP_SIZE)) {
+    if (active && tid < (BLOCK_SIZE / SUBGROUP_SIZE)) {
         int32_t subgroupSumVal = s_data[tid * SUBGROUP_SIZE + SUBGROUP_SIZE - 1];
         int32_t blockScanResult = subgroupSumVal + WavePrefixSum(subgroupSumVal);
         s_data[tid * SUBGROUP_SIZE + SUBGROUP_SIZE - 1] = blockScanResult;
     }
     GroupMemoryBarrierWithGroupSync();
 
-    if (subgroupId > 0 && laneId != SUBGROUP_SIZE-1) {
+    if (active && subgroupId > 0 && laneId != SUBGROUP_SIZE-1) {
         int32_t subgroupOffset = s_data[subgroupId * SUBGROUP_SIZE - 1];
         s_data[tid] += subgroupOffset;
     }
     GroupMemoryBarrierWithGroupSync();
 
     // Write scanned block sums back
-    if (gid < uniforms.numElements) {
+    if (active && gid < uniforms.numElements) {
         g_blockSums[gid] = s_data[tid];
     }
 }
