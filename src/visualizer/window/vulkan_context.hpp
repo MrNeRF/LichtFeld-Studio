@@ -226,7 +226,8 @@ namespace lfs::vis {
         bool pickPhysicalDevice();
         bool createDevice();
         bool createAllocator();
-        bool createSwapchain(int framebuffer_width, int framebuffer_height);
+        bool createSwapchain(int framebuffer_width, int framebuffer_height,
+                             VkSwapchainKHR old_swapchain = VK_NULL_HANDLE);
         bool createImageViews();
         bool createDepthStencilResources();
         bool createCommandPool();

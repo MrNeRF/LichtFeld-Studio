@@ -1819,9 +1819,19 @@ namespace lfs::vis {
         out.diagnostic_scope = diagnostic_scope.empty() ? "vulkan.external.buffer" : std::string(diagnostic_scope);
         out.diagnostic_label = makeAllocationDiagnosticLabel(diagnostic_label);
 
+        // Mirror createExternalImage: when dedicated allocation is enabled the CUDA side
+        // is told the import is dedicated (cudaExternalMemoryDedicated), so the Vulkan
+        // allocation must actually be dedicated to this buffer or the two disagree.
+        VkMemoryDedicatedAllocateInfo dedicated_info{};
+        dedicated_info.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
+        dedicated_info.buffer = out.buffer;
+
         VkExportMemoryAllocateInfo export_info{};
         export_info.sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO;
         export_info.handleTypes = kExternalMemoryHandleType;
+        if (external_memory_dedicated_allocation_enabled_) {
+            export_info.pNext = &dedicated_info;
+        }
 
         VkMemoryAllocateInfo allocate_info{};
         allocate_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
@@ -2292,7 +2302,8 @@ namespace lfs::vis {
         return true;
     }
 
-    bool VulkanContext::createSwapchain(const int framebuffer_width, const int framebuffer_height) {
+    bool VulkanContext::createSwapchain(const int framebuffer_width, const int framebuffer_height,
+                                        VkSwapchainKHR old_swapchain) {
         const SwapchainSupport support = querySwapchainSupport(physical_device_);
         if (support.formats.empty() || support.present_modes.empty()) {
             return fail("Vulkan swapchain support is incomplete");
@@ -2338,9 +2349,14 @@ namespace lfs::vis {
         create_info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
         create_info.presentMode = present_mode;
         create_info.clipped = VK_TRUE;
-        create_info.oldSwapchain = VK_NULL_HANDLE;
+        create_info.oldSwapchain = old_swapchain;
 
-        const VkResult result = vkCreateSwapchainKHR(device_, &create_info, nullptr, &swapchain_);
+        VkResult result;
+        {
+            // First real GPU use on NVIDIA triggers lazy driver init here — measure it.
+            LOG_TIMER("vulkan_init.swapchain.vkCreateSwapchainKHR");
+            result = vkCreateSwapchainKHR(device_, &create_info, nullptr, &swapchain_);
+        }
         if (result != VK_SUCCESS) {
             return fail(std::format("vkCreateSwapchainKHR failed: {}", vkResultToString(result)));
         }
@@ -2854,10 +2870,20 @@ namespace lfs::vis {
             LOG_TIMER_THRESHOLD("frame_pacing.vulkan_recreateSwapchain.device_wait_idle", 1.0);
             vkDeviceWaitIdle(device_);
         }
+        // Keep the old swapchain alive across the teardown of its dependent resources so it
+        // can be handed to vkCreateSwapchainKHR as oldSwapchain — letting the driver reuse
+        // images and present-engine state instead of allocating a fresh swapchain cold.
+        // destroySwapchain() skips the handle while swapchain_ is null; we destroy it after
+        // the new one is created (the spec requires the old handle stay valid until then).
+        const VkSwapchainKHR old_swapchain = swapchain_;
+        swapchain_ = VK_NULL_HANDLE;
         destroySwapchain();
-        const bool created = createSwapchain(framebuffer_width_, framebuffer_height_) &&
+        const bool created = createSwapchain(framebuffer_width_, framebuffer_height_, old_swapchain) &&
                              createImageViews() &&
                              createDepthStencilResources();
+        if (old_swapchain != VK_NULL_HANDLE) {
+            vkDestroySwapchainKHR(device_, old_swapchain, nullptr);
+        }
         if (!created) {
             const std::string error = last_error_;
             destroySwapchain();
