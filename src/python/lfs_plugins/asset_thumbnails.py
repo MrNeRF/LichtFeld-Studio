@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import io
 import logging
 import re
 import struct
@@ -209,54 +208,10 @@ class AssetThumbnails:
                 crc = crc_table[(crc ^ byte) & 0xFF] ^ (crc >> 8)
             return crc ^ 0xFFFFFFFF
 
-    def _create_thumbnail_with_pil(
-        self, width: int, height: int, color: str, label: str
-    ) -> bytes:
-        """Create a thumbnail using PIL/Pillow if available.
-
-        Args:
-            width: Image width in pixels
-            height: Image height in pixels
-            color: Hex color string
-            label: Text label to display on the image
-
-        Returns:
-            PNG image data as bytes
-        """
-        from PIL import Image, ImageDraw, ImageFont
-
-        img = Image.new("RGB", (width, height), color)
-        draw = ImageDraw.Draw(img)
-
-        # Try to draw text label
-        try:
-            # Try to use a default font
-            font = ImageFont.load_default()
-
-            # Calculate text position (centered)
-            bbox = draw.textbbox((0, 0), label.upper(), font=font)
-            text_width = bbox[2] - bbox[0]
-            text_height = bbox[3] - bbox[1]
-            x = (width - text_width) // 2
-            y = (height - text_height) // 2
-
-            # Draw text with slight shadow for readability
-            shadow_color = "#333333"
-            draw.text((x + 1, y + 1), label.upper(), fill=shadow_color, font=font)
-            draw.text((x, y), label.upper(), fill="white", font=font)
-        except Exception:
-            # If text rendering fails, just return the colored rectangle
-            pass
-
-        # Save to bytes
-        buffer = io.BytesIO()
-        img.save(buffer, format="PNG")
-        return buffer.getvalue()
-
     def _create_thumbnail(
         self, width: int, height: int, color: str, label: str
     ) -> bytes:
-        """Create thumbnail image data, using PIL if available.
+        """Create thumbnail image data using the pure-Python PNG encoder.
 
         Args:
             width: Image width in pixels
@@ -267,10 +222,7 @@ class AssetThumbnails:
         Returns:
             PNG image data as bytes
         """
-        try:
-            return self._create_thumbnail_with_pil(width, height, color, label)
-        except ImportError:
-            return self._create_png_data(width, height, color, label)
+        return self._create_png_data(width, height, color, label)
 
     def generate_placeholder(self, asset_type: str, asset_id: str) -> Path:
         """Generate a placeholder thumbnail for an asset.
@@ -292,12 +244,32 @@ class AssetThumbnails:
         thumb_path = self._thumbnails_dir / f"{asset_id}.png"
 
         # Generate thumbnail image data
-        image_data = self._create_thumbnail(
-            THUMB_WIDTH, THUMB_HEIGHT, color, asset_type.upper()
-        )
+        try:
+            image_data = self._create_thumbnail(
+                THUMB_WIDTH, THUMB_HEIGHT, color, asset_type.upper()
+            )
+        except Exception as exc:
+            _logger.error(
+                "Placeholder thumbnail creation failed for %s (type=%s): _create_thumbnail raised %s: %s",
+                asset_id,
+                asset_type,
+                type(exc).__name__,
+                exc,
+            )
+            raise
 
         # Write to file
-        thumb_path.write_bytes(image_data)
+        try:
+            thumb_path.write_bytes(image_data)
+        except Exception as exc:
+            _logger.error(
+                "Placeholder thumbnail write failed for %s (type=%s): cannot write to %s: %s",
+                asset_id,
+                asset_type,
+                thumb_path,
+                exc,
+            )
+            raise
 
         return thumb_path
 
@@ -329,19 +301,6 @@ class AssetThumbnails:
     def get_dataset_thumbnail_path(self, asset_id: str) -> Path:
         """Get the cached dataset-image thumbnail path for a dataset asset."""
         return self._thumbnails_dir / f"{asset_id}.dataset.png"
-
-    def thumbnail_matches_expected_size(self, path: str | Path) -> bool:
-        """Return whether a cached thumbnail matches the current gallery size."""
-        try:
-            from PIL import Image
-        except ImportError:
-            return True
-
-        try:
-            with Image.open(Path(path).expanduser()) as img:
-                return img.size == (THUMB_WIDTH, THUMB_HEIGHT)
-        except Exception:
-            return False
 
     def _find_first_dataset_image(
         self,
@@ -389,8 +348,9 @@ class AssetThumbnails:
     ) -> Path | None:
         """Generate a thumbnail from the first dataset image.
 
-        If Pillow is unavailable or cannot decode the source image, returns the
-        source image path directly so the UI can still show a real dataset image.
+        Returns the source image path directly so the UI can still show a real
+        dataset image. PIL is not available in this environment, so no resizing
+        or format conversion is performed.
         """
         if asset_type.lower() != "dataset" or not dataset_path:
             return None
@@ -402,33 +362,7 @@ class AssetThumbnails:
         if first_image is None:
             return None
 
-        thumb_path = self.get_dataset_thumbnail_path(asset_id)
-        try:
-            from PIL import Image, ImageOps
-
-            with Image.open(first_image) as img:
-                img = ImageOps.exif_transpose(img).convert("RGB")
-                try:
-                    resample = Image.Resampling.LANCZOS
-                except AttributeError:
-                    resample = Image.LANCZOS
-                img = ImageOps.fit(
-                    img,
-                    (THUMB_WIDTH, THUMB_HEIGHT),
-                    method=resample,
-                    centering=(0.5, 0.5),
-                )
-                img.save(thumb_path, format="PNG")
-            return thumb_path
-        except ImportError:
-            return first_image
-        except Exception as exc:
-            _logger.debug(
-                "Failed to generate dataset thumbnail for %s: %s",
-                asset_id,
-                exc,
-            )
-            return first_image if first_image.exists() else None
+        return first_image if first_image.exists() else None
 
     def _generate_rendered_preview(
         self,
@@ -440,37 +374,96 @@ class AssetThumbnails:
         **render_kwargs: Any,
     ) -> Path | None:
         """Shared helper for rendered thumbnail generation."""
-        if asset_type.lower() not in RENDERABLE_PREVIEW_TYPES or not asset_path:
+        if asset_type.lower() not in RENDERABLE_PREVIEW_TYPES:
+            _logger.error(
+                "Thumbnail render skipped for %s: asset type '%s' is not in RENDERABLE_PREVIEW_TYPES (%s)",
+                asset_id,
+                asset_type,
+                RENDERABLE_PREVIEW_TYPES,
+            )
             return None
-        if not callable(render_preview) or not callable(save_image):
+        if not asset_path:
+            _logger.error("Thumbnail render skipped for %s: asset_path is empty", asset_id)
+            return None
+        if not callable(render_preview):
+            _logger.error(
+                "Thumbnail render skipped for %s: render_preview function is not available (lichtfeld.render_asset_preview may be missing)",
+                asset_id,
+            )
+            return None
+        if not callable(save_image):
+            _logger.error(
+                "Thumbnail render skipped for %s: save_image function is not available (lichtfeld.io.save_image may be missing)",
+                asset_id,
+            )
             return None
 
         path = Path(asset_path).expanduser()
         try:
             if path.is_file() and path.stat().st_size > MAX_RENDERED_PREVIEW_FILE_BYTES:
-                _logger.debug(
-                    "Skipping rendered thumbnail for %s: file exceeds %d MiB budget",
+                _logger.error(
+                    "Thumbnail render skipped for %s: file size %d bytes exceeds %d MiB budget",
                     asset_id,
+                    path.stat().st_size,
                     MAX_RENDERED_PREVIEW_FILE_BYTES // (1024 * 1024),
                 )
                 return None
-        except OSError:
-            pass
+        except OSError as exc:
+            _logger.error(
+                "Thumbnail render skipped for %s: cannot stat file %s: %s",
+                asset_id,
+                path,
+                exc,
+            )
+            return None
 
-        image = render_preview(
-            str(path),
-            width=THUMB_WIDTH,
-            height=THUMB_HEIGHT,
-            **render_kwargs,
-        )
+        try:
+            image = render_preview(
+                str(path),
+                width=THUMB_WIDTH,
+                height=THUMB_HEIGHT,
+                **render_kwargs,
+            )
+        except Exception as exc:
+            _logger.error(
+                "Thumbnail render failed for %s: render_preview(%s) raised %s: %s",
+                asset_id,
+                path,
+                type(exc).__name__,
+                exc,
+            )
+            return None
+
         if image is None:
+            _logger.error(
+                "Thumbnail render failed for %s: render_preview(%s) returned None (renderer could not load or render the file)",
+                asset_id,
+                path,
+            )
             return None
 
         thumb_path = self._get_timestamped_rendered_thumbnail_path(asset_id)
-        save_image(str(thumb_path), image)
+        try:
+            save_image(str(thumb_path), image)
+        except Exception as exc:
+            _logger.error(
+                "Thumbnail render failed for %s: save_image(%s) raised %s: %s",
+                asset_id,
+                thumb_path,
+                type(exc).__name__,
+                exc,
+            )
+            return None
+
         if thumb_path.exists():
             self._cleanup_old_rendered_thumbnails(asset_id, keep=thumb_path)
             return thumb_path
+
+        _logger.error(
+            "Thumbnail render failed for %s: save_image wrote to %s but file does not exist after save",
+            asset_id,
+            thumb_path,
+        )
         return None
 
     def generate_rendered_preview(
@@ -482,13 +475,30 @@ class AssetThumbnails:
         """Generate a rendered thumbnail for a splat asset using the app renderer."""
         try:
             import lichtfeld as lf
+            render_fn = getattr(lf, "render_asset_preview", None)
+            save_fn = getattr(getattr(lf, "io", None), "save_image", None)
+            if render_fn is None:
+                _logger.error(
+                    "Thumbnail render unavailable for %s: lichtfeld.render_asset_preview is not exposed in the Python API",
+                    asset_id,
+                )
+            if save_fn is None:
+                _logger.error(
+                    "Thumbnail render unavailable for %s: lichtfeld.io.save_image is not exposed in the Python API",
+                    asset_id,
+                )
             return self._generate_rendered_preview(
                 asset_type, asset_id, asset_path,
-                getattr(lf, "render_asset_preview", None),
-                getattr(getattr(lf, "io", None), "save_image", None),
+                render_fn,
+                save_fn,
             )
         except Exception as exc:
-            _logger.debug("Failed to render thumbnail for %s: %s", asset_id, exc)
+            _logger.error(
+                "Thumbnail render failed for %s: unexpected error in generate_rendered_preview: %s: %s",
+                asset_id,
+                type(exc).__name__,
+                exc,
+            )
             return None
 
     def generate_rendered_preview_from_camera(
@@ -503,14 +513,31 @@ class AssetThumbnails:
         """Generate a rendered thumbnail from a custom camera pose."""
         try:
             import lichtfeld as lf
+            render_fn = getattr(lf, "render_asset_preview_from_camera", None)
+            save_fn = getattr(getattr(lf, "io", None), "save_image", None)
+            if render_fn is None:
+                _logger.error(
+                    "Thumbnail render from camera unavailable for %s: lichtfeld.render_asset_preview_from_camera is not exposed",
+                    asset_id,
+                )
+            if save_fn is None:
+                _logger.error(
+                    "Thumbnail render from camera unavailable for %s: lichtfeld.io.save_image is not exposed",
+                    asset_id,
+                )
             return self._generate_rendered_preview(
                 asset_type, asset_id, asset_path,
-                getattr(lf, "render_asset_preview_from_camera", None),
-                getattr(getattr(lf, "io", None), "save_image", None),
+                render_fn,
+                save_fn,
                 eye=eye, target=target, up=up,
             )
         except Exception as exc:
-            _logger.debug("Failed to render thumbnail from camera for %s: %s", asset_id, exc)
+            _logger.error(
+                "Thumbnail render from camera failed for %s: unexpected error: %s: %s",
+                asset_id,
+                type(exc).__name__,
+                exc,
+            )
             return None
 
     def get_thumbnail_path(self, asset_id: str) -> Path:

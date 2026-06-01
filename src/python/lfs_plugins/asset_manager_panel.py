@@ -1675,8 +1675,22 @@ class AssetManagerPanel(Panel):
         asset_path: str,
         dataset_metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
-        if not self._asset_thumbnails or not self._asset_index or not asset_id:
+        if not self._asset_thumbnails:
+            _logger.error(
+                "Thumbnail generation skipped for %s: _asset_thumbnails is not initialized",
+                asset_id,
+            )
             return
+        if not self._asset_index:
+            _logger.error(
+                "Thumbnail generation skipped for %s: _asset_index is not initialized",
+                asset_id,
+            )
+            return
+        if not asset_id:
+            _logger.error("Thumbnail generation skipped: asset_id is empty")
+            return
+
         try:
             thumb_path = None
             if asset_type == "dataset":
@@ -1692,6 +1706,17 @@ class AssetManagerPanel(Panel):
                         asset_path,
                         dataset_metadata or {},
                     )
+                    if thumb_path is None:
+                        _logger.error(
+                            "Dataset thumbnail generation returned None for %s (path=%s)",
+                            asset_id,
+                            asset_path,
+                        )
+                else:
+                    _logger.error(
+                        "Dataset thumbnail generation unavailable for %s: generate_dataset_preview is not callable",
+                        asset_id,
+                    )
             else:
                 generate_rendered_preview = getattr(
                     self._asset_thumbnails,
@@ -1704,15 +1729,49 @@ class AssetManagerPanel(Panel):
                         asset_id,
                         asset_path,
                     )
+                    if thumb_path is None:
+                        _logger.error(
+                            "Rendered thumbnail generation returned None for %s (type=%s, path=%s). "
+                            "This usually means the renderer (lichtfeld.render_asset_preview) is missing or could not render the file.",
+                            asset_id,
+                            asset_type,
+                            asset_path,
+                        )
+                else:
+                    _logger.error(
+                        "Rendered thumbnail generation unavailable for %s: generate_rendered_preview is not callable",
+                        asset_id,
+                    )
 
             if thumb_path is None:
+                _logger.error(
+                    "Falling back to placeholder thumbnail for %s (type=%s, path=%s)",
+                    asset_id,
+                    asset_type,
+                    asset_path,
+                )
                 thumb_path = self._asset_thumbnails.generate_placeholder(
                     asset_type,
                     asset_id,
                 )
+                if thumb_path is None:
+                    _logger.error(
+                        "Placeholder thumbnail generation also failed for %s (type=%s)",
+                        asset_id,
+                        asset_type,
+                    )
+                    return
+
             self._asset_index.update_asset(asset_id, thumbnail_path=str(thumb_path))
         except Exception as exc:
-            _logger.debug(f"Failed to generate thumbnail for {asset_id}: {exc}")
+            _logger.error(
+                "Thumbnail generation failed for %s (type=%s, path=%s): %s: %s",
+                asset_id,
+                asset_type,
+                asset_path,
+                type(exc).__name__,
+                exc,
+            )
 
     def _generate_asset_thumbnail(self, asset: Any) -> None:
         if not asset:
