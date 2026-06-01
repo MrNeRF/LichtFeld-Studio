@@ -399,24 +399,61 @@ class AssetIndex:
                 "tags": self._tags,
             }
 
-            # Write to temp file first
-            temp_path = self._library_path.with_suffix(".tmp")
-            with open(temp_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
+            # Ensure parent directory exists
+            self._library_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # Rotate: move current to backup if exists
+            # Write to a temp file in the same directory (same filesystem guarantees
+            # atomic rename).  Use tempfile so we never collide with an existing
+            # file and we get a guaranteed unique name.
+            import tempfile as _tf
+
+            fd, temp_path_str = _tf.mkstemp(
+                suffix=".tmp",
+                prefix=self._library_path.stem + ".",
+                dir=str(self._library_path.parent),
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2, ensure_ascii=False)
+                    f.flush()
+                    os.fsync(f.fileno())
+            except Exception:
+                # Clean up the temp file if writing failed
+                try:
+                    os.unlink(temp_path_str)
+                except Exception:
+                    pass
+                raise
+
+            # Rotate: move current to backup if it still exists.
+            # Use a try/except to tolerate the race where the file disappears
+            # between the exists() check and the move.
             backup_path = self._library_path.with_suffix(".json.bak")
-            if self._library_path.exists():
-                shutil.move(str(self._library_path), str(backup_path))
+            try:
+                if self._library_path.exists():
+                    shutil.move(str(self._library_path), str(backup_path))
+            except FileNotFoundError:
+                pass  # Nothing to back up — proceed with the new file
 
-            # Move temp to final
-            shutil.move(str(temp_path), str(self._library_path))
+            # Atomic rename temp -> final
+            os.rename(temp_path_str, str(self._library_path))
 
-            _log.debug("Saved library to %s", self._library_path)
+            _log.info(
+                "Saved library to %s (%d folders, %d scenes, %d assets)",
+                self._library_path,
+                len(self._folders),
+                len(self._scenes),
+                len(self._assets),
+            )
             return True
 
         except Exception as exc:
-            _log.error("Failed to save library: %s", exc)
+            _log.error(
+                "Failed to save library to %s: %s",
+                self._library_path,
+                exc,
+                exc_info=True,
+            )
             return False
 
     def ensure_default_catalog(self) -> None:

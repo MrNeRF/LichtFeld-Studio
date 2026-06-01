@@ -104,6 +104,19 @@ class AssetThumbnails:
         self._thumbnails_dir = Path(thumbnails_dir)
         self._ensure_directory_exists()
         self._missing_thumbnail_path: Path | None = None
+        self._warned_once: Set[str] = set()
+
+    def _warn_once(self, asset_id: str, level: str, msg: str, *args) -> None:
+        """Log a message only once per asset to avoid console spam."""
+        if asset_id in self._warned_once:
+            return
+        self._warned_once.add(asset_id)
+        if level == "error":
+            _logger.error(msg, *args)
+        elif level == "warning":
+            _logger.warning(msg, *args)
+        else:
+            _logger.info(msg, *args)
 
     def _ensure_directory_exists(self) -> None:
         """Create the thumbnails directory if it doesn't exist."""
@@ -388,7 +401,8 @@ class AssetThumbnails:
     ) -> Path | None:
         """Shared helper for rendered thumbnail generation."""
         if asset_type.lower() not in RENDERABLE_PREVIEW_TYPES:
-            _logger.error(
+            self._warn_once(
+                asset_id, "error",
                 "Thumbnail render skipped for %s: asset type '%s' is not in RENDERABLE_PREVIEW_TYPES (%s)",
                 asset_id,
                 asset_type,
@@ -396,16 +410,18 @@ class AssetThumbnails:
             )
             return None
         if not asset_path:
-            _logger.error("Thumbnail render skipped for %s: asset_path is empty", asset_id)
+            self._warn_once(asset_id, "error", "Thumbnail render skipped for %s: asset_path is empty", asset_id)
             return None
         if not callable(render_preview):
-            _logger.error(
+            self._warn_once(
+                asset_id, "error",
                 "Thumbnail render skipped for %s: render_preview function is not available (lichtfeld.render_asset_preview may be missing)",
                 asset_id,
             )
             return None
         if not callable(save_image):
-            _logger.error(
+            self._warn_once(
+                asset_id, "error",
                 "Thumbnail render skipped for %s: save_image function is not available (lichtfeld.io.save_image may be missing)",
                 asset_id,
             )
@@ -414,7 +430,8 @@ class AssetThumbnails:
         path = Path(asset_path).expanduser()
         try:
             if path.is_file() and path.stat().st_size > MAX_RENDERED_PREVIEW_FILE_BYTES:
-                _logger.error(
+                self._warn_once(
+                    asset_id, "error",
                     "Thumbnail render skipped for %s: file size %d bytes exceeds %d MiB budget",
                     asset_id,
                     path.stat().st_size,
@@ -422,7 +439,8 @@ class AssetThumbnails:
                 )
                 return None
         except OSError as exc:
-            _logger.error(
+            self._warn_once(
+                asset_id, "error",
                 "Thumbnail render skipped for %s: cannot stat file %s: %s",
                 asset_id,
                 path,
@@ -439,7 +457,8 @@ class AssetThumbnails:
                 **render_kwargs,
             )
         except Exception as exc:
-            _logger.error(
+            self._warn_once(
+                asset_id, "error",
                 "Thumbnail render failed for %s: render_preview(%s) raised %s: %s",
                 asset_id,
                 path,
@@ -449,7 +468,8 @@ class AssetThumbnails:
             return None
 
         if image is None:
-            _logger.error(
+            self._warn_once(
+                asset_id, "error",
                 "Thumbnail render failed for %s: render_preview(%s) returned None (renderer could not load or render the file)",
                 asset_id,
                 path,
@@ -460,7 +480,8 @@ class AssetThumbnails:
         try:
             await asyncio.to_thread(save_image, str(thumb_path), image)
         except Exception as exc:
-            _logger.error(
+            self._warn_once(
+                asset_id, "error",
                 "Thumbnail render failed for %s: save_image(%s) raised %s: %s",
                 asset_id,
                 thumb_path,
@@ -470,10 +491,12 @@ class AssetThumbnails:
             return None
 
         if thumb_path.exists():
+            self._warned_once.discard(asset_id)
             await self._cleanup_old_rendered_thumbnails(asset_id, keep=thumb_path)
             return thumb_path
 
-        _logger.error(
+        self._warn_once(
+            asset_id, "error",
             "Thumbnail render failed for %s: save_image wrote to %s but file does not exist after save",
             asset_id,
             thumb_path,

@@ -3,6 +3,7 @@
 """Asset Manager panel for browsing and managing Gaussian Splatting assets."""
 
 import asyncio
+import atexit
 import logging
 import math
 import os
@@ -286,6 +287,26 @@ class AssetManagerPanel(Panel):
         self._reactive_unsubscribers = []
         self._last_scene_generation: Optional[int] = None
         self._last_language_generation: Optional[int] = None
+
+        # Track background thumbnail generation threads for clean shutdown
+        self._pending_thumbnail_threads: Set[threading.Thread] = set()
+        self._pending_thumbnail_lock = threading.Lock()
+
+        # Auto-save state
+        self._auto_save_interval_sec: float = 30.0
+        self._last_auto_save_time: float = 0.0
+
+        # Deduplicate thumbnail-failure logs per asset
+        self._thumbnail_warned_once: Set[str] = set()
+
+        # Prevent spawning multiple concurrent thumbnail threads for the same
+        # asset (e.g. when on_update() fires repeatedly while a thread is still
+        # running).
+        self._thumbnail_in_flight: Set[str] = set()
+
+        # Track assets whose rendered thumbnail generation already failed so we
+        # do not keep retrying on every on_update() cycle.
+        self._thumbnail_render_failed: Set[str] = set()
 
         # New folder menu state
         self._new_folder_menu_open: bool = False
@@ -1703,6 +1724,11 @@ class AssetManagerPanel(Panel):
             _logger.error("Thumbnail generation skipped: asset_id is empty")
             return
 
+        def _warn_once(msg: str, *args) -> None:
+            if asset_id not in self._thumbnail_warned_once:
+                self._thumbnail_warned_once.add(asset_id)
+                _logger.error(msg, *args)
+
         def _do_generate() -> None:
             try:
                 thumb_path = None
@@ -1722,13 +1748,13 @@ class AssetManagerPanel(Panel):
                             )
                         )
                         if thumb_path is None:
-                            _logger.error(
+                            _warn_once(
                                 "Dataset thumbnail generation returned None for %s (path=%s)",
                                 asset_id,
                                 asset_path,
                             )
                     else:
-                        _logger.error(
+                        _warn_once(
                             "Dataset thumbnail generation unavailable for %s: generate_dataset_preview is not callable",
                             asset_id,
                         )
@@ -1747,7 +1773,7 @@ class AssetManagerPanel(Panel):
                             )
                         )
                         if thumb_path is None:
-                            _logger.error(
+                            _warn_once(
                                 "Rendered thumbnail generation returned None for %s (type=%s, path=%s). "
                                 "This usually means the renderer (lichtfeld.render_asset_preview) is missing or could not render the file.",
                                 asset_id,
@@ -1755,13 +1781,16 @@ class AssetManagerPanel(Panel):
                                 asset_path,
                             )
                     else:
-                        _logger.error(
+                        _warn_once(
                             "Rendered thumbnail generation unavailable for %s: generate_rendered_preview is not callable",
                             asset_id,
                         )
 
                 if thumb_path is None:
-                    _logger.error(
+                    # Remember that rendered preview failed so we don't retry
+                    # automatically on every on_update() cycle.
+                    self._thumbnail_render_failed.add(asset_id)
+                    _warn_once(
                         "Falling back to placeholder thumbnail for %s (type=%s, path=%s)",
                         asset_id,
                         asset_type,
@@ -1774,16 +1803,18 @@ class AssetManagerPanel(Panel):
                         )
                     )
                     if thumb_path is None:
-                        _logger.error(
+                        _warn_once(
                             "Placeholder thumbnail generation also failed for %s (type=%s)",
                             asset_id,
                             asset_type,
                         )
                         return
 
+                # Success — clear the warning so future legitimate failures are reported
+                self._thumbnail_warned_once.discard(asset_id)
                 self._asset_index.update_asset(asset_id, thumbnail_path=str(thumb_path))
             except Exception as exc:
-                _logger.error(
+                _warn_once(
                     "Thumbnail generation failed for %s (type=%s, path=%s): %s: %s",
                     asset_id,
                     asset_type,
@@ -1792,7 +1823,37 @@ class AssetManagerPanel(Panel):
                     exc,
                 )
 
-        threading.Thread(target=_do_generate, daemon=True).start()
+        # Skip if a thumbnail thread for this asset is already running.
+        with self._pending_thumbnail_lock:
+            if asset_id in self._thumbnail_in_flight:
+                return
+            self._thumbnail_in_flight.add(asset_id)
+
+        def _tracked_generate() -> None:
+            with self._pending_thumbnail_lock:
+                self._pending_thumbnail_threads.add(threading.current_thread())
+            try:
+                _do_generate()
+            finally:
+                with self._pending_thumbnail_lock:
+                    self._pending_thumbnail_threads.discard(threading.current_thread())
+                    self._thumbnail_in_flight.discard(asset_id)
+
+        thread = threading.Thread(target=_tracked_generate, daemon=True)
+        with self._pending_thumbnail_lock:
+            self._pending_thumbnail_threads.add(thread)
+        thread.start()
+
+    def _join_pending_thumbnail_threads(self, timeout: float = 2.0) -> None:
+        """Wait for background thumbnail generation threads to finish."""
+        with self._pending_thumbnail_lock:
+            threads = list(self._pending_thumbnail_threads)
+        for thread in threads:
+            if thread.is_alive():
+                thread.join(timeout=timeout / max(len(threads), 1))
+        with self._pending_thumbnail_lock:
+            self._pending_thumbnail_threads.clear()
+            self._thumbnail_in_flight.clear()
 
     def _generate_asset_thumbnail(self, asset: Any) -> None:
         if not asset:
@@ -1886,6 +1947,8 @@ class AssetManagerPanel(Panel):
             "sog",
             "spz",
         }:
+            if asset_id in self._thumbnail_render_failed:
+                return False
             has_rendered = getattr(
                 self._asset_thumbnails,
                 "has_rendered_thumbnail",
@@ -3118,6 +3181,10 @@ class AssetManagerPanel(Panel):
         if not asset:
             return
 
+        # Allow re-logging and re-attempt on explicit user refresh
+        self._thumbnail_warned_once.discard(asset_id)
+        self._thumbnail_render_failed.discard(asset_id)
+
         # Close the menu
         self._open_menu_asset_id = None
         self._dirty_model("assets")
@@ -3163,7 +3230,26 @@ class AssetManagerPanel(Panel):
                 except Exception as exc:
                     self._log_error("Failed to update thumbnail: %s", exc)
 
-            threading.Thread(target=_do_update, daemon=True).start()
+            # Skip if a thumbnail thread for this asset is already running.
+            with self._pending_thumbnail_lock:
+                if asset_id in self._thumbnail_in_flight:
+                    return
+                self._thumbnail_in_flight.add(asset_id)
+
+            def _tracked_update() -> None:
+                with self._pending_thumbnail_lock:
+                    self._pending_thumbnail_threads.add(threading.current_thread())
+                try:
+                    _do_update()
+                finally:
+                    with self._pending_thumbnail_lock:
+                        self._pending_thumbnail_threads.discard(threading.current_thread())
+                        self._thumbnail_in_flight.discard(asset_id)
+
+            thread = threading.Thread(target=_tracked_update, daemon=True)
+            with self._pending_thumbnail_lock:
+                self._pending_thumbnail_threads.add(thread)
+            thread.start()
         except Exception as e:
             self._log_error("Failed to update thumbnail: %s", e)
 
@@ -3587,6 +3673,7 @@ class AssetManagerPanel(Panel):
         self._last_scene_generation = RuntimeState.scene_generation.value
         self._last_language_generation = RuntimeState.language_generation.value
         self._subscribe_reactive_state()
+        _ensure_atexit_registered()
 
     def on_scene_changed(self, doc):
         self._flush_pending_transform_applications()
@@ -3646,17 +3733,44 @@ class AssetManagerPanel(Panel):
         except Exception:
             pass
 
+        # Auto-save: periodically persist catalog to disk so data survives
+        # crashes or force-quits where on_unmount() is not called.
+        try:
+            now = time.time()
+            if now - self._last_auto_save_time > self._auto_save_interval_sec:
+                if self._asset_index and hasattr(self._asset_index, "save"):
+                    saved = self._asset_index.save()
+                    if saved and self._asset_index.library_path.exists():
+                        self._library_mtime = self._asset_index.library_path.stat().st_mtime
+                    self._last_auto_save_time = now
+        except Exception:
+            pass
+
         return changed
 
     def on_unmount(self, doc):
         """Save index on unmount."""
         self._unsubscribe_reactive_state()
         clear_active_asset_manager_panel(self)
+
+        # Wait for any pending thumbnail generation threads to finish
+        self._join_pending_thumbnail_threads(timeout=2.0)
+
         if self._asset_index and hasattr(self._asset_index, "save"):
             try:
-                self._asset_index.save()
+                saved = self._asset_index.save()
+                if not saved:
+                    _logger.error(
+                        "Asset index save returned False during unmount (path=%s)",
+                        getattr(self._asset_index, "library_path", "unknown"),
+                    )
             except Exception as e:
-                _logger.warning(f"Failed to save asset index: {e}")
+                _logger.error(
+                    "Failed to save asset index during unmount (path=%s): %s",
+                    getattr(self._asset_index, "library_path", "unknown"),
+                    e,
+                    exc_info=True,
+                )
 
         doc.remove_data_model("asset_manager")
         self._handle = None
@@ -4393,3 +4507,33 @@ class AssetManagerPanel(Panel):
         self._import_menu_open = False
         self._dirty_model("import_menu_open")
         open_url_import_panel()
+
+
+# ── atexit backup ─────────────────────────────────────────
+
+_atexit_registered = False
+
+
+def _atexit_save_asset_manager() -> None:
+    """Last-resort save when the process exits without on_unmount()."""
+    try:
+        from .asset_manager_integration import get_asset_manager_panel
+
+        panel = get_asset_manager_panel()
+        if panel is None:
+            return
+        index = getattr(panel, "_asset_index", None)
+        if index is not None and hasattr(index, "save"):
+            _logger.info("atexit: saving asset manager catalog to %s", index.library_path)
+            saved = index.save()
+            if not saved:
+                _logger.error("atexit: asset manager save failed")
+    except Exception:
+        pass
+
+
+def _ensure_atexit_registered() -> None:
+    global _atexit_registered
+    if not _atexit_registered:
+        atexit.register(_atexit_save_asset_manager)
+        _atexit_registered = True
