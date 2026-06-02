@@ -15,10 +15,12 @@
 #include "sequencer/rml_sequencer_panel.hpp"
 #include "sequencer/sequencer_controller.hpp"
 #include <chrono>
+#include <filesystem>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <memory>
 #include <optional>
+#include <vector>
 
 namespace lfs::vis::gui {
     class RmlSequencerOverlay;
@@ -61,6 +63,10 @@ namespace lfs::vis {
             void renderCameraPath(const ViewportLayout& viewport);
             void renderKeyframeGizmo(const UIContext& ctx, const ViewportLayout& viewport);
             void handleOverlayActions();
+            void loadPlySequenceFromDirectory(const std::filesystem::path& directory);
+            bool ensurePlySequenceFrameLoaded(size_t frame_index);
+            void applyPlySequenceFrame();
+            void prunePlySequenceFrameCache(size_t keep_frame_index);
             void renderKeyframeEditOverlay(const ViewportLayout& viewport);
             void initPipPreview();
             void renderKeyframePreview(const UIContext& ctx);
@@ -95,6 +101,8 @@ namespace lfs::vis {
             std::optional<size_t> pip_last_keyframe_;
             bool pip_needs_update_ = true;
             bool last_equirectangular_ = false;
+            std::optional<size_t> last_ply_sequence_frame_;
+            std::vector<size_t> loaded_ply_sequence_frames_;
             std::chrono::steady_clock::time_point pip_last_render_time_ = std::chrono::steady_clock::now();
             std::optional<sequencer::Keyframe> viewport_keyframe_edit_snapshot_;
         };

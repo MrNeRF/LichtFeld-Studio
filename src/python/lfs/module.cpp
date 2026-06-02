@@ -1855,6 +1855,7 @@ NB_MODULE(lichtfeld, m) {
                     case lfs::core::NodeType::SPLAT: type_name = "SPLAT"; break;
                     case lfs::core::NodeType::POINTCLOUD: type_name = "POINTCLOUD"; break;
                     case lfs::core::NodeType::GROUP: type_name = "GROUP"; break;
+                    case lfs::core::NodeType::PLY_SEQUENCE: type_name = "PLY_SEQUENCE"; break;
                     case lfs::core::NodeType::CROPBOX: type_name = "CROPBOX"; break;
                     case lfs::core::NodeType::ELLIPSOID: type_name = "ELLIPSOID"; break;
                     case lfs::core::NodeType::DATASET: type_name = "DATASET"; break;

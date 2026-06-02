@@ -220,6 +220,8 @@ namespace lfs::app {
                 return "pointcloud";
             case core::NodeType::GROUP:
                 return "group";
+            case core::NodeType::PLY_SEQUENCE:
+                return "ply_sequence";
             case core::NodeType::CROPBOX:
                 return "crop_box";
             case core::NodeType::ELLIPSOID:

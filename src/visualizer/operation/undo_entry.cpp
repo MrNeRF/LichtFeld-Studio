@@ -994,7 +994,8 @@ namespace lfs::vis::op {
                     .total_gaussians = scene_manager.getScene().getTotalGaussianCount(),
                     .is_visible = node->visible,
                     .parent_name = snapshot.parent_name,
-                    .is_group = node->type == lfs::core::NodeType::GROUP,
+                    .is_group = node->type == lfs::core::NodeType::GROUP ||
+                                node->type == lfs::core::NodeType::PLY_SEQUENCE,
                     .node_type = static_cast<int>(node->type),
                     .from_history = true}
                     .emit();
@@ -1050,6 +1051,9 @@ namespace lfs::vis::op {
                 break;
             case lfs::core::NodeType::DATASET:
                 node_id = scene.addDataset(snapshot.name);
+                break;
+            case lfs::core::NodeType::PLY_SEQUENCE:
+                node_id = scene.addPlySequence(snapshot.name, parent_id, snapshot.gaussian_count);
                 break;
             case lfs::core::NodeType::CAMERA_GROUP:
                 node_id = scene.addCameraGroup(snapshot.name, parent_id, snapshot.gaussian_count);

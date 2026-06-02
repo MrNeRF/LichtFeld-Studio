@@ -279,6 +279,7 @@ namespace lfs::vis::gui {
             switch (type) {
             case core::NodeType::SPLAT: return "splat";
             case core::NodeType::GROUP: return "group";
+            case core::NodeType::PLY_SEQUENCE: return "ply_sequence";
             case core::NodeType::DATASET: return "dataset";
             case core::NodeType::CAMERA: return "camera";
             case core::NodeType::CAMERA_GROUP: return "camera_group";
@@ -299,6 +300,7 @@ namespace lfs::vis::gui {
             case core::NodeType::SPLAT: return "icon-splat";
             case core::NodeType::POINTCLOUD: return "icon-pointcloud";
             case core::NodeType::GROUP: return "icon-group";
+            case core::NodeType::PLY_SEQUENCE: return "icon-group";
             case core::NodeType::DATASET: return "icon-dataset";
             case core::NodeType::CAMERA:
             case core::NodeType::CAMERA_GROUP: return "icon-camera";
@@ -337,6 +339,7 @@ namespace lfs::vis::gui {
             case core::NodeType::POINTCLOUD:
             case core::NodeType::MESH:
             case core::NodeType::GROUP:
+            case core::NodeType::PLY_SEQUENCE:
             case core::NodeType::DATASET:
                 return true;
             default:
@@ -350,6 +353,7 @@ namespace lfs::vis::gui {
             switch (type) {
             case core::NodeType::SPLAT:
             case core::NodeType::GROUP:
+            case core::NodeType::PLY_SEQUENCE:
             case core::NodeType::POINTCLOUD:
             case core::NodeType::MESH:
             case core::NodeType::CROPBOX:
@@ -755,6 +759,13 @@ namespace lfs::vis::gui {
                                                    formatWithThousands(node->mesh->face_count()))
                                      : node->name;
                 break;
+            case core::NodeType::PLY_SEQUENCE: {
+                const size_t frame_count = node->gaussian_count.load(std::memory_order_acquire);
+                snapshot.label = std::format("{}  ({} frames)",
+                                             node->name,
+                                             formatWithThousands(frame_count > 0 ? frame_count : node->children.size()));
+                break;
+            }
             case core::NodeType::KEYFRAME:
                 if (node->keyframe)
                     snapshot.label = std::format("Keyframe {}  ({:.2f}s)",

@@ -25,6 +25,7 @@ namespace lfs::vis::op {
             case core::NodeType::SPLAT:
             case core::NodeType::POINTCLOUD:
             case core::NodeType::GROUP:
+            case core::NodeType::PLY_SEQUENCE:
             case core::NodeType::DATASET:
             case core::NodeType::MESH:
                 return true;

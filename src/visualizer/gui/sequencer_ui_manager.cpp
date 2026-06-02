@@ -26,9 +26,12 @@
 #include "visualizer_impl.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <filesystem>
 #include <format>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 namespace lfs::vis::gui {
@@ -207,9 +210,12 @@ namespace lfs::vis::gui {
         // and film-strip thumbs by wiping the timeline; the keyframes belong to the old scene.
         state::SceneCleared::when([this](const auto&) {
             if (controller_.timeline().realKeyframeCount() == 0 &&
-                !controller_.timeline().hasAnimationClip())
+                !controller_.timeline().hasAnimationClip() &&
+                !controller_.hasPlySequence())
                 return;
             controller_.clear();
+            last_ply_sequence_frame_ = std::nullopt;
+            loaded_ply_sequence_frames_.clear();
             film_strip_.invalidateAll();
             state::KeyframeListChanged{.count = 0}.emit();
         });
@@ -420,6 +426,12 @@ namespace lfs::vis::gui {
             }
         }
 
+        if (panel_->consumeLoadSequenceRequest()) {
+            const auto path = gui::PickFolderDialog();
+            if (!path.empty())
+                loadPlySequenceFromDirectory(path);
+        }
+
         if (panel_->consumeDockToggleRequest()) {
             const PanelSpace target = panel_->isFloating() ? PanelSpace::BottomDock : PanelSpace::Floating;
             if (!PanelRegistry::instance().set_panel_space("native.sequencer", target)) {
@@ -451,10 +463,13 @@ namespace lfs::vis::gui {
         }
 
         if (panel_->consumeClearRequest() &&
-            (controller_.timeline().realKeyframeCount() > 0 || controller_.timeline().hasAnimationClip())) {
+            (controller_.timeline().realKeyframeCount() > 0 || controller_.timeline().hasAnimationClip() ||
+             controller_.hasPlySequence())) {
             controller_.clear();
+            last_ply_sequence_frame_ = std::nullopt;
+            loaded_ply_sequence_frames_.clear();
             lfs::core::events::state::KeyframeListChanged{.count = 0}.emit();
-            LOG_INFO("All keyframes cleared");
+            LOG_INFO("Sequencer cleared");
         }
 
         auto ctx_req = panel_->consumeTransportContextMenu();
@@ -537,10 +552,13 @@ namespace lfs::vis::gui {
                                    break;
                                case Target::CLEAR:
                                    if (action == "clear_confirm" &&
-                                       (controller_.timeline().realKeyframeCount() > 0 || controller_.timeline().hasAnimationClip())) {
+                                       (controller_.timeline().realKeyframeCount() > 0 || controller_.timeline().hasAnimationClip() ||
+                                        controller_.hasPlySequence())) {
                                        controller_.clear();
+                                       last_ply_sequence_frame_ = std::nullopt;
+                                       loaded_ply_sequence_frames_.clear();
                                        lfs::core::events::state::KeyframeListChanged{.count = 0}.emit();
-                                       LOG_INFO("All keyframes cleared");
+                                       LOG_INFO("Sequencer cleared");
                                    }
                                    break;
                                case Target::NONE:
@@ -549,6 +567,8 @@ namespace lfs::vis::gui {
                            });
             }
         }
+
+        applyPlySequenceFrame();
     }
 
     void SequencerUIManager::renderCameraPath(const ViewportLayout& viewport) {
@@ -1104,6 +1124,197 @@ namespace lfs::vis::gui {
         }
 
         draw_list.PopClipRect();
+    }
+
+    void SequencerUIManager::loadPlySequenceFromDirectory(const std::filesystem::path& directory) {
+        auto* const scene_manager = viewer_->getSceneManager();
+        if (!scene_manager)
+            return;
+
+        std::error_code ec;
+        if (!std::filesystem::is_directory(directory, ec)) {
+            LOG_ERROR("PLY sequence path is not a directory: {}", lfs::core::path_to_utf8(directory));
+            return;
+        }
+
+        std::vector<std::filesystem::path> paths;
+        const std::filesystem::directory_iterator entries(directory, ec);
+        if (ec) {
+            LOG_ERROR("Failed to read PLY sequence directory {}: {}",
+                      lfs::core::path_to_utf8(directory),
+                      ec.message());
+            return;
+        }
+        for (const auto& entry : entries) {
+            if (ec) {
+                LOG_ERROR("Failed to read PLY sequence directory {}: {}",
+                          lfs::core::path_to_utf8(directory),
+                          ec.message());
+                return;
+            }
+            if (!entry.is_regular_file(ec))
+                continue;
+            auto ext = entry.path().extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(),
+                           [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (ext == ".ply")
+                paths.push_back(entry.path());
+        }
+
+        std::sort(paths.begin(), paths.end());
+        if (paths.empty()) {
+            LOG_WARN("No PLY files found in sequence directory: {}", lfs::core::path_to_utf8(directory));
+            return;
+        }
+
+        if (scene_manager->getContentType() != SceneManager::ContentType::Empty &&
+            scene_manager->getContentType() != SceneManager::ContentType::SplatFiles) {
+            if (!scene_manager->clear())
+                return;
+        }
+
+        const std::string sequence_prefix = lfs::core::path_to_utf8(directory.filename().empty()
+                                                                        ? directory.parent_path().filename()
+                                                                        : directory.filename());
+        const std::string sequence_name = sequence_prefix.empty() ? "PLY Sequence" : sequence_prefix;
+        const std::string sequence_node = scene_manager->addPlySequenceNode(sequence_name, "", paths.size());
+        if (sequence_node.empty()) {
+            LOG_ERROR("Failed to create PLY sequence node for {}",
+                      lfs::core::path_to_utf8(directory));
+            return;
+        }
+
+        std::vector<std::filesystem::path> loaded_paths;
+        std::vector<std::string> node_names;
+        loaded_paths.reserve(paths.size());
+        node_names.reserve(paths.size());
+
+        for (size_t i = 0; i < paths.size(); ++i) {
+            const std::string stem = lfs::core::path_to_utf8(paths[i].stem());
+            loaded_paths.push_back(paths[i]);
+            node_names.push_back(std::format("{}_{:04}_{}", sequence_node, i, stem));
+        }
+
+        ui_state_.sequence_fps = std::clamp(ui_state_.sequence_fps, MIN_SEQUENCE_FPS, MAX_SEQUENCE_FPS);
+        controller_.setPlySequence(directory, sequence_node, std::move(loaded_paths), std::move(node_names), ui_state_.sequence_fps);
+        ui_state_.sequence_fps = controller_.plySequenceFps();
+        last_ply_sequence_frame_ = std::nullopt;
+        loaded_ply_sequence_frames_.clear();
+        applyPlySequenceFrame();
+
+        if (const auto* sequence = controller_.plySequence()) {
+            scene_manager->selectNode(sequence->node_name);
+            LOG_INFO("Registered PLY sequence '{}' with {} frames at {} fps",
+                     lfs::core::path_to_utf8(directory),
+                     sequence->frames.size(),
+                     sequence->fps);
+        }
+
+        lfs::core::events::state::KeyframeListChanged{
+            .count = controller_.timeline().realKeyframeCount()}
+            .emit();
+    }
+
+    bool SequencerUIManager::ensurePlySequenceFrameLoaded(const size_t frame_index) {
+        auto* const scene_manager = viewer_->getSceneManager();
+        const auto* const sequence = controller_.plySequence();
+        if (!scene_manager || !sequence || frame_index >= sequence->frames.size())
+            return false;
+
+        auto& scene = scene_manager->getScene();
+        const auto& frame = sequence->frames[frame_index];
+        if (!frame.node_name.empty() && scene.getNode(frame.node_name)) {
+            std::erase(loaded_ply_sequence_frames_, frame_index);
+            loaded_ply_sequence_frames_.push_back(frame_index);
+            return true;
+        }
+
+        try {
+            const std::string name_hint = frame.node_name.empty()
+                                              ? lfs::core::path_to_utf8(frame.path.stem())
+                                              : frame.node_name;
+            const std::string node_name = scene_manager->addSplatFile(frame.path, name_hint, false);
+            const core::NodeId sequence_id = scene.getNodeIdByName(sequence->node_name);
+            const core::NodeId frame_id = scene.getNodeIdByName(node_name);
+            if (sequence_id != core::NULL_NODE && frame_id != core::NULL_NODE)
+                scene.reparent(frame_id, sequence_id);
+            scene.setNodeVisibility(node_name, false);
+            controller_.setPlySequenceFrameNodeName(frame_index, node_name);
+
+            std::erase(loaded_ply_sequence_frames_, frame_index);
+            loaded_ply_sequence_frames_.push_back(frame_index);
+            return true;
+        } catch (const std::exception& e) {
+            LOG_ERROR("Failed to load PLY sequence frame {}: {}",
+                      lfs::core::path_to_utf8(frame.path),
+                      e.what());
+            return false;
+        }
+    }
+
+    void SequencerUIManager::prunePlySequenceFrameCache(const size_t keep_frame_index) {
+        static constexpr size_t MAX_RESIDENT_SEQUENCE_FRAMES = 1;
+
+        auto* const scene_manager = viewer_->getSceneManager();
+        const auto* const sequence = controller_.plySequence();
+        if (!scene_manager || !sequence)
+            return;
+
+        while (loaded_ply_sequence_frames_.size() > MAX_RESIDENT_SEQUENCE_FRAMES) {
+            auto victim_it = std::find_if(
+                loaded_ply_sequence_frames_.begin(),
+                loaded_ply_sequence_frames_.end(),
+                [keep_frame_index](const size_t frame_index) { return frame_index != keep_frame_index; });
+            if (victim_it == loaded_ply_sequence_frames_.end())
+                return;
+
+            const size_t victim = *victim_it;
+            loaded_ply_sequence_frames_.erase(victim_it);
+            if (victim >= sequence->frames.size())
+                continue;
+
+            const std::string node_name = sequence->frames[victim].node_name;
+            if (!node_name.empty() && scene_manager->getScene().getNode(node_name))
+                scene_manager->removePLY(node_name);
+        }
+    }
+
+    void SequencerUIManager::applyPlySequenceFrame() {
+        auto* const scene_manager = viewer_->getSceneManager();
+        const auto* const sequence = controller_.plySequence();
+        const auto frame_index = controller_.currentPlySequenceFrameIndex();
+        if (!scene_manager || !sequence || !frame_index.has_value()) {
+            last_ply_sequence_frame_ = std::nullopt;
+            return;
+        }
+
+        if (last_ply_sequence_frame_ == frame_index)
+            return;
+
+        if (!ensurePlySequenceFrameLoaded(*frame_index))
+            return;
+
+        auto& scene = scene_manager->getScene();
+        if (last_ply_sequence_frame_.has_value() &&
+            *last_ply_sequence_frame_ < sequence->frames.size()) {
+            const std::string& previous = sequence->frames[*last_ply_sequence_frame_].node_name;
+            if (scene.getNode(previous))
+                scene.setNodeVisibility(previous, false);
+        } else {
+            for (const size_t loaded_frame : loaded_ply_sequence_frames_) {
+                if (loaded_frame == *frame_index || loaded_frame >= sequence->frames.size())
+                    continue;
+                const std::string& loaded_name = sequence->frames[loaded_frame].node_name;
+                if (scene.getNode(loaded_name))
+                    scene.setNodeVisibility(loaded_name, false);
+            }
+        }
+
+        const std::string& active = sequence->frames[*frame_index].node_name;
+        if (scene.getNode(active))
+            scene.setNodeVisibility(active, true);
+        last_ply_sequence_frame_ = frame_index;
+        prunePlySequenceFrameCache(*frame_index);
     }
 
     void SequencerUIManager::handleOverlayActions() {

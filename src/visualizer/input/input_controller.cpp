@@ -2266,7 +2266,8 @@ namespace lfs::vis {
         if (selected.empty()) {
             // Focus on entire scene (skip group nodes)
             for (const auto* node : scene.getNodes()) {
-                if (node->type == core::NodeType::GROUP || node->type == core::NodeType::CAMERA_GROUP ||
+                if (node->type == core::NodeType::GROUP || node->type == core::NodeType::PLY_SEQUENCE ||
+                    node->type == core::NodeType::CAMERA_GROUP ||
                     node->type == core::NodeType::IMAGE_GROUP)
                     continue;
                 accumulateBounds(node);

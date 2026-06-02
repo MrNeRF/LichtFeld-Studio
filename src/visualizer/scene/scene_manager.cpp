@@ -118,6 +118,49 @@ namespace lfs::vis {
             };
         }
 
+        [[nodiscard]] const char* sceneNodeUiType(const core::NodeType type) {
+            switch (type) {
+            case core::NodeType::SPLAT:
+                return "PLY";
+            case core::NodeType::POINTCLOUD:
+                return "PointCloud";
+            case core::NodeType::GROUP:
+                return "Group";
+            case core::NodeType::PLY_SEQUENCE:
+                return "Sequence";
+            case core::NodeType::DATASET:
+                return "Dataset";
+            case core::NodeType::CAMERA_GROUP:
+                return "CameraGroup";
+            case core::NodeType::CAMERA:
+                return "Camera";
+            case core::NodeType::MESH:
+                return "Mesh";
+            case core::NodeType::CROPBOX:
+                return "CropBox";
+            case core::NodeType::ELLIPSOID:
+                return "Ellipsoid";
+            case core::NodeType::IMAGE_GROUP:
+                return "ImageGroup";
+            case core::NodeType::IMAGE:
+                return "Image";
+            case core::NodeType::KEYFRAME_GROUP:
+                return "KEYFRAME_GROUP";
+            case core::NodeType::KEYFRAME:
+                return "KEYFRAME";
+            }
+            return "Unknown";
+        }
+
+        [[nodiscard]] bool isContainerNodeType(const core::NodeType type) {
+            return type == core::NodeType::GROUP ||
+                   type == core::NodeType::PLY_SEQUENCE ||
+                   type == core::NodeType::DATASET ||
+                   type == core::NodeType::CAMERA_GROUP ||
+                   type == core::NodeType::IMAGE_GROUP ||
+                   type == core::NodeType::KEYFRAME_GROUP;
+        }
+
         [[nodiscard]] bool hasActiveSelectionFilter(const RenderingManager* const rendering_manager) {
             if (!rendering_manager) {
                 return false;
@@ -397,8 +440,9 @@ namespace lfs::vis {
                 return;
             }
 
-            if (event.type == "PLY" || event.type == "Group" || event.type == "Dataset" ||
-                event.type == "PointCloud" || event.type == "CameraGroup" || event.type == "Camera") {
+            if (event.type == "PLY" || event.type == "Group" || event.type == "Sequence" ||
+                event.type == "Dataset" || event.type == "PointCloud" ||
+                event.type == "CameraGroup" || event.type == "Camera") {
                 const core::NodeId id = scene_.getNodeIdByName(event.path);
                 if (id == core::NULL_NODE)
                     return;
@@ -730,6 +774,7 @@ namespace lfs::vis {
             auto* mesh_data = std::get_if<std::shared_ptr<lfs::core::MeshData>>(&load_result->data);
             if (mesh_data && *mesh_data) {
                 scene_.addMesh(name, *mesh_data, core::NULL_NODE);
+                scene_.setNodeVisibility(name, is_visible);
                 {
                     std::lock_guard<std::mutex> lock(state_mutex_);
                     splat_paths_[name] = path;
@@ -745,7 +790,8 @@ namespace lfs::vis {
                     .node_type = static_cast<int>(core::NodeType::MESH)}
                     .emit();
 
-                selectNode(name);
+                if (is_visible)
+                    selectNode(name);
 
                 LOG_INFO("Added mesh '{}' ({} vertices, {} faces)", name,
                          (*mesh_data)->vertex_count(), (*mesh_data)->face_count());
@@ -759,6 +805,7 @@ namespace lfs::vis {
 
             const size_t gaussian_count = (*splat_data)->size();
             scene_.addNode(name, std::make_unique<lfs::core::SplatData>(std::move(**splat_data)));
+            scene_.setNodeVisibility(name, is_visible);
 
             {
                 std::lock_guard<std::mutex> lock(state_mutex_);
@@ -775,7 +822,8 @@ namespace lfs::vis {
                 .node_type = static_cast<int>(core::NodeType::SPLAT)}
                 .emit();
 
-            selectNode(name);
+            if (is_visible)
+                selectNode(name);
 
             auto ppisp_path = lfs::training::find_ppisp_companion(path);
             if (!ppisp_path.empty()) {
@@ -988,7 +1036,7 @@ namespace lfs::vis {
 
         ui::NodeSelected{
             .path = name,
-            .type = "PLY",
+            .type = sceneNodeUiType(node->type),
             .metadata = {
                 {"name", name},
                 {"gaussians", std::to_string(node->model ? node->model->size() : 0)},
@@ -3041,10 +3089,46 @@ namespace lfs::vis {
             .is_visible = true,
             .parent_name = parent_name,
             .is_group = true,
-            .node_type = 1 // GROUP
-        }
+            .node_type = static_cast<int>(core::NodeType::GROUP)}
             .emit();
         pushSceneGraphHistoryEntry(*this, "Add Group", std::move(history_before), {unique_name}, history_options);
+        return unique_name;
+    }
+
+    std::string SceneManager::addPlySequenceNode(const std::string& name, const std::string& parent_name, const size_t frame_count) {
+        core::NodeId parent_id = core::NULL_NODE;
+        if (!parent_name.empty()) {
+            const auto* parent = scene_.getNode(parent_name);
+            if (!parent)
+                return {};
+            parent_id = parent->id;
+        }
+
+        std::string unique_name = name.empty() ? "PLY Sequence" : name;
+        const std::string base_name = unique_name;
+        for (int i = 1; scene_.getNode(unique_name); ++i) {
+            unique_name = std::format("{} {}", base_name, i);
+        }
+
+        const core::NodeId sequence_id = scene_.addPlySequence(unique_name, parent_id, frame_count);
+        if (sequence_id == core::NULL_NODE)
+            return {};
+
+        if (getContentType() == ContentType::Empty) {
+            changeContentType(ContentType::SplatFiles);
+            python::set_application_scene(&scene_);
+        }
+
+        selection_.invalidateNodeMask();
+        state::PLYAdded{
+            .name = unique_name,
+            .node_gaussians = frame_count,
+            .total_gaussians = scene_.getTotalGaussianCount(),
+            .is_visible = true,
+            .parent_name = parent_name,
+            .is_group = true,
+            .node_type = static_cast<int>(core::NodeType::PLY_SEQUENCE)}
+            .emit();
         return unique_name;
     }
 
@@ -3157,7 +3241,7 @@ namespace lfs::vis {
                     .total_gaussians = scene_.getTotalGaussianCount(),
                     .is_visible = node->visible,
                     .parent_name = pn,
-                    .is_group = node->type == core::NodeType::GROUP,
+                    .is_group = isContainerNodeType(node->type),
                     .node_type = static_cast<int>(node->type)}
                     .emit();
 

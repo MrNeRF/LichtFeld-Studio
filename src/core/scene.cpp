@@ -1485,6 +1485,31 @@ namespace lfs::core {
         return id;
     }
 
+    NodeId Scene::addPlySequence(const std::string& name, const NodeId parent, const size_t frame_count) {
+        const NodeId id = next_node_id_++;
+        auto node = std::make_unique<SceneNode>();
+        node->id = id;
+        node->parent_id = parent;
+        node->type = NodeType::PLY_SEQUENCE;
+        node->name = name;
+        node->gaussian_count.store(frame_count, std::memory_order_release);
+
+        if (parent != NULL_NODE) {
+            if (auto* p = getNodeById(parent)) {
+                p->children.push_back(id);
+            }
+        }
+
+        id_to_index_[id] = nodes_.size();
+        name_to_id_[name] = id;
+        node->initObservables(this);
+        nodes_.push_back(std::move(node));
+        notifyMutation(MutationType::NODE_ADDED);
+
+        LOG_DEBUG("Added PLY sequence node '{}' (id={})", name, id);
+        return id;
+    }
+
     NodeId Scene::addSplat(const std::string& name, std::unique_ptr<lfs::core::SplatData> model, const NodeId parent) {
         if (consolidated_) {
             LOG_DEBUG("Adding splat invalidates consolidation");
@@ -1888,6 +1913,8 @@ namespace lfs::core {
             NodeId new_id = NULL_NODE;
             if (src_type == NodeType::GROUP) {
                 new_id = addGroup(new_name, parent_id);
+            } else if (src_type == NodeType::PLY_SEQUENCE) {
+                new_id = addPlySequence(new_name, parent_id, src->gaussian_count.load(std::memory_order_acquire));
             } else if (src_type == NodeType::CROPBOX) {
                 const auto* src_for_cropbox = getNodeById(src_id);
                 if (src_for_cropbox && src_for_cropbox->cropbox && parent_id != NULL_NODE) {

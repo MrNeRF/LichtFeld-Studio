@@ -497,6 +497,7 @@ scene-graph,
 /* Colored dot — replaces type icons for a cleaner row */
 .row-icon.type-icon.splat        { image-color: rgba(153, 204, 255, 230); }
 .row-icon.type-icon.group        { image-color: rgba(178, 178, 178, 204); }
+.row-icon.type-icon.ply_sequence { image-color: rgba(105, 175, 255, 220); }
 .row-icon.type-icon.dataset      { image-color: rgba(127, 178, 255, 230); }
 .row-icon.type-icon.camera       { image-color: rgba(127, 153, 204, 200); }
 .row-icon.type-icon.camera_group { image-color: rgba(153, 178, 230, 204); }

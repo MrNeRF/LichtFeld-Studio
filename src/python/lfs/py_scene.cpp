@@ -986,6 +986,7 @@ namespace lfs::python {
             .value("SPLAT", core::NodeType::SPLAT)
             .value("POINTCLOUD", core::NodeType::POINTCLOUD)
             .value("GROUP", core::NodeType::GROUP)
+            .value("PLY_SEQUENCE", core::NodeType::PLY_SEQUENCE)
             .value("CROPBOX", core::NodeType::CROPBOX)
             .value("ELLIPSOID", core::NodeType::ELLIPSOID)
             .value("DATASET", core::NodeType::DATASET)
@@ -1299,12 +1300,14 @@ Returns:
             .def("get_node_bounds", &PyScene::get_node_bounds, nb::arg("id"), "Get axis-aligned bounding box as ((min_x, min_y, min_z), (max_x, max_y, max_z))")
             .def("get_node_bounds_center", &PyScene::get_node_bounds_center, nb::arg("id"), "Get center of the node bounding box as (x, y, z)")
             // Bounds (by name)
-            .def("get_node_bounds", [](PyScene& self, const std::string& name) {
+            .def(
+                "get_node_bounds", [](PyScene& self, const std::string& name) {
                     auto node = self.get_node(name);
                     if (!node)
                         return decltype(self.get_node_bounds(0)){std::nullopt};
                     return self.get_node_bounds(node->id()); }, nb::arg("name"), "Get axis-aligned bounding box by node name")
-            .def("get_node_bounds_center", [](PyScene& self, const std::string& name) {
+            .def(
+                "get_node_bounds_center", [](PyScene& self, const std::string& name) {
                     auto node = self.get_node(name);
                     if (!node)
                         throw std::runtime_error("Node not found: " + name);

@@ -142,7 +142,7 @@ namespace lfs::core {
             EVENT(SetSelectionSubMode, int selection_mode;);
             EVENT(ExecuteMirror, int axis;); // 0=X, 1=Y, 2=Z
             EVENT(CancelActiveOperator, );   // Cancel and revert current operator
-        } // namespace tools
+        }                                    // namespace tools
 
         // ============================================================================
         // State - Notifications about what has happened (broadcasts)
@@ -167,7 +167,7 @@ namespace lfs::core {
             EVENT(ModelUpdated, int iteration; size_t num_gaussians;);
             EVENT(SceneChanged, uint32_t mutation_flags = 0;);
             EVENT(SelectionChanged, bool has_selection; int count;);
-            // node_type: 0=SPLAT, 1=GROUP, 2=CROPBOX
+            // node_type stores core::NodeType as int.
             EVENT(PLYAdded, std::string name; size_t node_gaussians; size_t total_gaussians; bool is_visible; std::string parent_name; bool is_group; int node_type; bool from_history = false;);
             EVENT(PLYRemoved, std::string name; bool children_kept = false; std::string parent_of_removed; bool from_history = false;);
             EVENT(NodeReparented, std::string name; std::string old_parent; std::string new_parent; bool from_history = false;);
@@ -288,8 +288,8 @@ namespace lfs::core {
             EVENT(WindowFocusLost, );
             EVENT(DisplayScaleChanged, float scale;);
             EVENT(UiScaleChangeRequested, float scale;); // 0 = auto (from OS)
-        } // namespace internal
-    } // namespace events
+        }                                                // namespace internal
+    }                                                    // namespace events
 
     // ============================================================================
     // Convenience functions

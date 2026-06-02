@@ -470,6 +470,7 @@ namespace lfs::python {
         float pip_preview_scale = 1.0f;
         bool show_film_strip = true;
         bool equirectangular = false;
+        float sequence_fps = 24.0f;
         int preset = 0;
         int custom_width = 1920;
         int custom_height = 1080;

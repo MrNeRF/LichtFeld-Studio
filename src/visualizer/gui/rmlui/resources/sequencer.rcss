@@ -301,6 +301,71 @@ body {
     margin-left: 2dp;
 }
 
+.sequence-fps-field {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    width: 58dp;
+    min-height: 22dp;
+    padding: 0 6dp;
+    box-sizing: border-box;
+    border-width: 1dp;
+    border-color: transparent;
+    border-radius: 4dp;
+    cursor: pointer;
+    transition: border-color 0.12s quadratic-out, background-color 0.12s quadratic-out;
+}
+
+.sequence-fps-field:hover,
+.sequence-fps-field.active,
+.sequence-fps-field.is-editing {
+    border-color: #45475a;
+    background-color: #313244;
+}
+
+.sequence-fps-field.is-editing {
+    cursor: text;
+}
+
+#sequence-fps-display,
+#sequence-fps-input {
+    width: 100%;
+    text-align: right;
+    font-family: "JetBrains Mono";
+    font-size: 12dp;
+    color: #cdd6f4;
+}
+
+#sequence-fps-display {
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+#sequence-fps-input {
+    display: none;
+    padding: 0;
+    margin: 0;
+    min-height: 0;
+    background-color: transparent;
+    border-width: 0;
+    box-shadow: none;
+}
+
+.sequence-fps-field.is-editing #sequence-fps-display {
+    display: none;
+}
+
+.sequence-fps-field.is-editing #sequence-fps-input {
+    display: block;
+}
+
+#sequence-fps-input:focus,
+#sequence-fps-input:focus-visible {
+    border-width: 0;
+    box-shadow: none;
+}
+
 .snap-check {
     width: 10dp;
     height: 10dp;
@@ -408,6 +473,55 @@ body {
     margin-top: -6dp;
     text-align: center;
     font-size: 12dp;
+}
+
+#sequence-strip {
+    display: block;
+    position: absolute;
+    left: 0;
+    top: 50%;
+    width: 100%;
+    height: 22dp;
+    margin-top: -11dp;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.sequence-clip {
+    display: block;
+    position: absolute;
+    top: 2dp;
+    height: 18dp;
+    min-width: 2dp;
+    box-sizing: border-box;
+    border-width: 1dp;
+    border-color: rgba(105, 175, 255, 190);
+    border-radius: 4dp;
+    background-color: rgba(70, 120, 190, 95);
+}
+
+.sequence-clip-label {
+    display: block;
+    position: absolute;
+    left: 8dp;
+    right: 8dp;
+    top: 2dp;
+    height: 14dp;
+    font-size: 11dp;
+    line-height: 14dp;
+    color: rgba(230, 238, 255, 230);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.sequence-frame-tick {
+    display: block;
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1dp;
+    background-color: rgba(230, 238, 255, 95);
 }
 
 #keyframes {

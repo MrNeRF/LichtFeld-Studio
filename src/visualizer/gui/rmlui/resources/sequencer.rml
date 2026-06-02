@@ -58,6 +58,10 @@
                     <span class="speed-text">Speed</span>
                     <span class="dropdown-arrow">&#x25be;</span>
                 </div>
+                <div id="sequence-fps-field" class="sequence-fps-field" data-tooltip="tooltip.seq_sequence_fps">
+                    <span id="sequence-fps-display">24 fps</span>
+                    <input id="sequence-fps-input" type="text" />
+                </div>
                 <div id="btn-snap" class="transport-btn toggle text snap-toggle" data-tooltip="tooltip.seq_snap">
                     <div class="snap-check"></div>
                     <span class="transport-label">Snap</span>
@@ -84,6 +88,9 @@
                 </div>
                 <div id="btn-load-path" class="transport-btn text" data-tooltip="tooltip.seq_load_path">
                     <span class="transport-label">Load Path&#x2026;</span>
+                </div>
+                <div id="btn-load-sequence" class="transport-btn text" data-tooltip="tooltip.seq_load_sequence">
+                    <span class="transport-label">Load Seq&#x2026;</span>
                 </div>
                 <div class="transport-sep"></div>
                 <div id="btn-format" class="transport-btn text wide format-badge" data-tooltip="tooltip.seq_format">
@@ -122,6 +129,7 @@
                     <div id="track-bar">
                         <span id="hint"></span>
                     </div>
+                    <div id="sequence-strip"></div>
                     <div id="keyframes"></div>
                     <div id="playhead">
                         <div id="playhead-handle"></div>

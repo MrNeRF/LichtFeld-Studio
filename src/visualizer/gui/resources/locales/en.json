@@ -913,6 +913,8 @@
     "seq_pip_preview": "Show picture-in-picture preview (right-click for options)",
     "seq_save_path": "Save camera path to file",
     "seq_load_path": "Load camera path from file",
+    "seq_load_sequence": "Load a folder of PLY frames as a sequencer clip",
+    "seq_sequence_fps": "PLY sequence playback FPS (click to edit)",
     "seq_format": "Export format preset (right-click for options)",
     "seq_quality": "CRF quality (lower = better quality, larger file)",
     "seq_export": "Export video from camera path",

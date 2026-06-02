@@ -115,8 +115,9 @@ namespace lfs::app {
 
         json sequencer_state_json(const SequencerToolBackend& backend, const vis::SequencerController& controller) {
             const auto& timeline = controller.timeline();
+            const bool has_ply_sequence = controller.hasPlySequence();
             const bool has_any_timeline_state =
-                timeline.realKeyframeCount() > 0 || timeline.hasAnimationClip();
+                timeline.realKeyframeCount() > 0 || timeline.hasAnimationClip() || has_ply_sequence;
             json keyframe_list = json::array();
             int64_t visible_index = 0;
             for (const auto& keyframe : timeline.keyframes()) {
@@ -132,6 +133,10 @@ namespace lfs::app {
                 {"visible", backend.is_visible ? backend.is_visible() : false},
                 {"has_keyframes", has_any_timeline_state},
                 {"playback_speed", controller.playbackSpeed()},
+                {"has_ply_sequence", has_ply_sequence},
+                {"ply_sequence_node", has_ply_sequence ? controller.plySequence()->node_name : ""},
+                {"ply_sequence_fps", controller.plySequenceFps()},
+                {"ply_sequence_frame_count", has_ply_sequence ? controller.plySequence()->frames.size() : 0},
                 {"show_camera_path", ui_state ? ui_state->show_camera_path : true},
                 {"follow_playback", ui_state ? ui_state->follow_playback : false},
                 {"keyframe_count", keyframe_list.size()},
@@ -140,6 +145,9 @@ namespace lfs::app {
             result["selected_keyframe_id"] = controller.selectedKeyframeId()
                                                  ? json(*controller.selectedKeyframeId())
                                                  : json(nullptr);
+            result["ply_sequence_current_frame"] = controller.currentPlySequenceFrameIndex()
+                                                       ? json(*controller.currentPlySequenceFrameIndex())
+                                                       : json(nullptr);
             return result;
         }
 
