@@ -65,13 +65,8 @@
 #define MAX_RAW_SCALE 20.0f
 
 // subtile culling in rasterization
-#if TILE_HEIGHT >= 16 && TILE_WIDTH >= 16
-    #define SUBTILE_HEIGHT 4
-    #define SUBTILE_WIDTH 8
-#else
-    #define SUBTILE_HEIGHT 0
-    #define SUBTILE_WIDTH 0
-#endif
+#define SUBTILE_HEIGHT 0
+#define SUBTILE_WIDTH 0
 #define SUBTILE_SIZE (SUBTILE_HEIGHT*SUBTILE_WIDTH)
 
 

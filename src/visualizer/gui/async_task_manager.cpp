@@ -18,7 +18,6 @@
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
-#include "rendering/image_layout.hpp"
 #include "rendering/mesh2splat.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
@@ -321,15 +320,7 @@ namespace lfs::vis::gui {
         if (!image.is_valid() || image.ndim() != 3) {
             return image;
         }
-
-        const auto layout = lfs::rendering::detectImageLayout(image);
-        if (layout == lfs::rendering::ImageLayout::Unknown) {
-            return image.contiguous();
-        }
-
-        // Match the viewport preview path, which presents rendered frames through
-        // a bottom-left texture origin before the user sees them.
-        return lfs::rendering::flipImageVertical(image, layout);
+        return image.contiguous();
     }
 
     void applyVideoExportPointCloudFilters(rendering::PointCloudFilterState& filters,

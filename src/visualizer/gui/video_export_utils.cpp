@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/video_export_utils.hpp"
+#include "io/loader.hpp"
+#include "rendering/vulkan_external_tensor.hpp"
 #include "scene/scene_manager.hpp"
 #include "training/training_manager.hpp"
 #include <optional>
@@ -94,6 +96,13 @@ namespace lfs::vis::gui {
         if (const auto* const model = scene_manager.getModelForRendering();
             model && model->size() > 0) {
             snapshot.combined_model = std::shared_ptr<lfs::core::SplatData>(cloneSplatData(*model).release());
+            if (auto allocator = lfs::vis::makeViewerSplatTensorAllocator()) {
+                if (auto migrated = lfs::io::migrateSplatTensorsToAllocator(*snapshot.combined_model, allocator);
+                    !migrated) {
+                    return std::unexpected("Failed to prepare splat tensors for video export: " +
+                                           migrated.error().format());
+                }
+            }
             snapshot.model_transforms = render_state.model_transforms;
             snapshot.transform_indices = cloneOptionalTensor(render_state.transform_indices);
             snapshot.selection_mask = cloneOptionalTensor(render_state.selection_mask);

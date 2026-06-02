@@ -475,7 +475,7 @@ namespace lfs::vis {
             render_lock_held,
             std::move(intrinsics_override));
         if (!rendered) {
-            LOG_TRACE("Gaussian preview image render failed: {}", rendered.error());
+            LOG_ERROR("DEBUG_VIDEO Gaussian preview image render failed: {}", rendered.error());
             return {};
         }
 
@@ -487,7 +487,7 @@ namespace lfs::vis {
                                *last_vulkan_context_,
                                VksplatViewportRenderer::OutputSlot::Preview);
         if (!image) {
-            LOG_TRACE("Gaussian preview image readback failed: {}", image.error());
+            LOG_ERROR("DEBUG_VIDEO Gaussian preview image readback failed: {}", image.error());
             return {};
         }
         return std::move(*image);

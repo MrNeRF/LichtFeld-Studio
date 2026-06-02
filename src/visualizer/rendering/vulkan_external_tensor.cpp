@@ -4,6 +4,9 @@
 
 #include "vulkan_external_tensor.hpp"
 
+#include "core/services.hpp"
+#include "window/window_manager.hpp"
+
 #include <algorithm>
 #include <cuda_runtime.h>
 #include <format>
@@ -278,6 +281,29 @@ namespace lfs::vis {
                 capacity,
                 /*stream=*/nullptr,
                 "vulkan_external_buffer");
+        };
+    }
+
+    lfs::core::SplatTensorAllocator makeViewerSplatTensorAllocator() {
+        auto* const window_manager = services().windowOrNull();
+        auto* const context = window_manager ? window_manager->getVulkanContext() : nullptr;
+        if (!context || !context->externalMemoryInteropEnabled()) {
+            return {};
+        }
+
+        return [context](lfs::core::TensorShape shape,
+                         const size_t capacity,
+                         const lfs::core::DataType dtype,
+                         const std::string_view name) -> lfs::core::Tensor {
+            const std::string debug_name{name};
+            auto tensor = makeVulkanExternalTensor(
+                *context, std::move(shape), dtype, capacity, debug_name.c_str(), nullptr, false);
+            if (!tensor) {
+                throw lfs::core::TensorError(std::format(
+                    "Vulkan-external splat tensor allocation failed for '{}': {}", debug_name, tensor.error()));
+            }
+            tensor->set_name(debug_name);
+            return std::move(*tensor);
         };
     }
 

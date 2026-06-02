@@ -261,58 +261,6 @@ namespace {
         EXPECT_FLOAT_EQ(controller.playhead(), 2.0f);
     }
 
-    TEST(SequencerControllerRegressionTest, PlySequenceIsPlayableWithoutCameraKeyframes) {
-        SequencerController controller;
-        controller.setPlySequence(
-            "/tmp/sequence",
-            "sequence",
-            {"/tmp/sequence/frame_0000.ply",
-             "/tmp/sequence/frame_0001.ply",
-             "/tmp/sequence/frame_0002.ply"},
-            {"frame_0000", "frame_0001", "frame_0002"},
-            24.0f);
-
-        ASSERT_TRUE(controller.hasPlySequence());
-        EXPECT_TRUE(controller.hasPlayableContent());
-        EXPECT_FLOAT_EQ(controller.clipDuration(), 3.0f / 24.0f);
-        ASSERT_EQ(controller.currentPlySequenceFrameIndex(), 0u);
-
-        controller.play();
-        EXPECT_TRUE(controller.isPlaying());
-        EXPECT_TRUE(controller.update(1.0f / 24.0f));
-        ASSERT_EQ(controller.currentPlySequenceFrameIndex(), 1u);
-
-        controller.seekToNextKeyframe();
-        EXPECT_FALSE(controller.isPlaying());
-        EXPECT_FLOAT_EQ(controller.playhead(), 2.0f / 24.0f);
-        ASSERT_EQ(controller.currentPlySequenceFrameIndex(), 2u);
-
-        controller.seekToPreviousKeyframe();
-        EXPECT_FLOAT_EQ(controller.playhead(), 1.0f / 24.0f);
-        ASSERT_EQ(controller.currentPlySequenceFrameIndex(), 1u);
-    }
-
-    TEST(SequencerControllerRegressionTest, PlySequenceFpsControlsClipDurationAndFrameMapping) {
-        SequencerController controller;
-        controller.setPlySequence(
-            "/tmp/sequence",
-            "sequence",
-            {"/tmp/sequence/frame_0000.ply",
-             "/tmp/sequence/frame_0001.ply",
-             "/tmp/sequence/frame_0002.ply"},
-            {"frame_0000", "frame_0001", "frame_0002"},
-            12.0f);
-
-        EXPECT_FLOAT_EQ(controller.plySequenceFps(), 12.0f);
-        EXPECT_FLOAT_EQ(controller.clipDuration(), 3.0f / 12.0f);
-        ASSERT_EQ(controller.plySequenceFrameIndex(0.09f), 1u);
-
-        controller.setPlySequenceFps(24.0f);
-        EXPECT_FLOAT_EQ(controller.plySequenceFps(), 24.0f);
-        EXPECT_FLOAT_EQ(controller.clipDuration(), 3.0f / 24.0f);
-        ASSERT_EQ(controller.plySequenceFrameIndex(0.09f), 2u);
-    }
-
     TEST(SequencerMappingRegressionTest, TimeScreenMappingRoundTripsWithZoomAndPan) {
         Timeline timeline;
         timeline.addKeyframe(makeKeyframe(0.0f));

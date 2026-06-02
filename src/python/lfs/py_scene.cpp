@@ -8,10 +8,12 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
+#include "io/loader.hpp"
 #include "python/python_runtime.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/operation/undo_entry.hpp"
 #include "visualizer/operation/undo_history.hpp"
+#include "visualizer/rendering/vulkan_external_tensor.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/training/training_manager.hpp"
 #include "visualizer/training/training_state.hpp"
@@ -73,6 +75,7 @@ namespace lfs::python {
                             0.0f, 1.0f, "Flash effect intensity")
                 .build();
         }
+
     } // namespace
 
     // Helper to convert glm::mat4 to nb::tuple (row-major for NumPy compatibility)
@@ -383,6 +386,14 @@ namespace lfs::python {
             rotation.tensor().clone(),
             opacity.tensor().clone(),
             scene_scale);
+
+        if (auto allocator = vis::makeViewerSplatTensorAllocator()) {
+            if (auto migrated = io::migrateSplatTensorsToAllocator(*splat, allocator); !migrated) {
+                throw std::runtime_error("Failed to prepare splat tensors for rendering: " +
+                                         migrated.error().format());
+            }
+            scene_->setCombinedModelAllocator(std::move(allocator));
+        }
 
         const size_t gaussian_count = splat->size();
         const int32_t node_id = scene_->addSplat(name, std::move(splat), parent);

@@ -87,37 +87,6 @@ namespace lfs::vis {
             return nodes;
         }
 
-        [[nodiscard]] lfs::io::SplatTensorAllocator makeViewerSplatTensorAllocator() {
-            auto* const window_manager = services().windowOrNull();
-            auto* const context = window_manager ? window_manager->getVulkanContext() : nullptr;
-            if (!context || !context->externalMemoryInteropEnabled()) {
-                return {};
-            }
-
-            return [context](lfs::core::TensorShape shape,
-                             const size_t capacity,
-                             const lfs::core::DataType dtype,
-                             const std::string_view name) -> lfs::core::Tensor {
-                const std::string debug_name{name};
-                auto tensor = makeVulkanExternalTensor(
-                    *context,
-                    std::move(shape),
-                    dtype,
-                    capacity,
-                    debug_name.c_str(),
-                    nullptr,
-                    false);
-                if (!tensor) {
-                    throw lfs::core::TensorError(std::format(
-                        "Vulkan-external loaded splat tensor allocation failed for '{}': {}",
-                        debug_name,
-                        tensor.error()));
-                }
-                tensor->set_name(debug_name);
-                return std::move(*tensor);
-            };
-        }
-
         [[nodiscard]] const char* sceneNodeUiType(const core::NodeType type) {
             switch (type) {
             case core::NodeType::SPLAT:
