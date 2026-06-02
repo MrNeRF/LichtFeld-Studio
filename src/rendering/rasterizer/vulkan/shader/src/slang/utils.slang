@@ -983,8 +983,8 @@ float2 ellipse_range_bound(
     float bv0 = -b*v0, bv1 = -b*v1;
 
     float inv_a = 1.0f / a;
-    float x0 = inv_a * (bv0 - sqrt(bv0*bv0 - a*(c*v0*v0-1.f)));
-    float x1 = inv_a * (bv1 + sqrt(bv1*bv1 - a*(c*v1*v1-1.f)));
+    float x0 = inv_a * (bv0 - sqrt(max(bv0*bv0 - a*(c*v0*v0-1.f), 0.0f)));
+    float x1 = inv_a * (bv1 + sqrt(max(bv1*bv1 - a*(c*v1*v1-1.f), 0.0f)));
 
     return float2(x0, x1);
 
