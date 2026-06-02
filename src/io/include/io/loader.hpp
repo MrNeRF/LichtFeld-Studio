@@ -42,6 +42,12 @@ namespace lfs::io {
     using ProgressCallback = std::function<void(float percentage, const std::string& message)>;
     using CancelCallback = std::function<bool()>;
 
+    // Re-home a model's parameter tensors into the given allocator (Vulkan-external interop)
+    // so the splat renderer can bind them. No-op when tensors are already allocator-backed or
+    // when the allocator is empty. Used by the loader and by Scene::add_splat (plugin inserts).
+    [[nodiscard]] Result<void> migrateSplatTensorsToAllocator(SplatData& model,
+                                                              const SplatTensorAllocator& allocator);
+
     // Dataset type enum
     enum class DatasetType {
         Unknown,

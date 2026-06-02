@@ -384,6 +384,18 @@ namespace lfs::python {
             opacity.tensor().clone(),
             scene_scale);
 
+        // The Vulkan splat renderer only binds tensors in Vulkan-external storage; the cloned
+        // tensors above land in plain CUDA storage, so without this the inserted splat won't
+        // render (the file loader performs the same migration on load). Re-home them before
+        // handing off to the scene.
+        if (auto* const scene_manager = get_scene_manager()) {
+            if (auto migrated = scene_manager->migrateSplatToRendererStorage(*splat); !migrated) {
+                LOG_WARN("add_splat: could not migrate '{}' to Vulkan-external storage; "
+                         "it may not render: {}",
+                         name, migrated.error());
+            }
+        }
+
         const size_t gaussian_count = splat->size();
         const int32_t node_id = scene_->addSplat(name, std::move(splat), parent);
 

@@ -247,6 +247,18 @@ namespace lfs::vis {
 
     using namespace lfs::core::events;
 
+    std::expected<void, std::string> SceneManager::migrateSplatToRendererStorage(lfs::core::SplatData& model) {
+        auto allocator = makeViewerSplatTensorAllocator();
+        if (!allocator) {
+            // No Vulkan-external interop available (e.g. headless) — nothing to migrate.
+            return {};
+        }
+        if (auto migrated = lfs::io::migrateSplatTensorsToAllocator(model, allocator); !migrated) {
+            return std::unexpected(migrated.error().message);
+        }
+        return {};
+    }
+
     SceneManager::SceneManager() {
         core::prop::set_undo_callback(
             [](const std::string& property_path,

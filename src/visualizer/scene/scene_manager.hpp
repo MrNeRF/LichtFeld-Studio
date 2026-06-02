@@ -48,6 +48,12 @@ namespace lfs::vis {
         SceneManager(const SceneManager&) = delete;
         SceneManager& operator=(const SceneManager&) = delete;
 
+        // Re-home a plugin-inserted splat's tensors into Vulkan-external storage so the splat
+        // renderer can bind them. scene.add_splat otherwise lands in plain CUDA storage, which
+        // the Vulkan renderer rejects (refuses the input-copy fallback). No-op if external
+        // interop is unavailable. Returns true when the model is renderer-ready afterward.
+        [[nodiscard]] std::expected<void, std::string> migrateSplatToRendererStorage(lfs::core::SplatData& model);
+
         // Content queries - direct, no events
         ContentType getContentType() const {
             std::lock_guard<std::mutex> lock(state_mutex_);
