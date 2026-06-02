@@ -1528,6 +1528,38 @@ namespace lfs::core {
         return id;
     }
 
+    NodeId Scene::addSplatPlaceholder(const std::string& name, const NodeId parent) {
+        if (consolidated_) {
+            LOG_DEBUG("Adding splat placeholder invalidates consolidation");
+            consolidated_ = false;
+            consolidated_node_ids_.clear();
+            cached_combined_.reset();
+        }
+
+        const NodeId id = next_node_id_++;
+        auto node = std::make_unique<SceneNode>();
+        node->id = id;
+        node->parent_id = parent;
+        node->type = NodeType::SPLAT;
+        node->name = name;
+        node->gaussian_count.store(0, std::memory_order_release);
+
+        if (parent != NULL_NODE) {
+            if (auto* p = getNodeById(parent)) {
+                p->children.push_back(id);
+            }
+        }
+
+        id_to_index_[id] = nodes_.size();
+        name_to_id_[name] = id;
+        node->initObservables(this);
+        nodes_.push_back(std::move(node));
+        notifyMutation(MutationType::NODE_ADDED);
+
+        LOG_DEBUG("Added splat placeholder node '{}' (id={})", name, id);
+        return id;
+    }
+
     NodeId Scene::addSplat(const std::string& name, std::unique_ptr<lfs::core::SplatData> model, const NodeId parent) {
         if (consolidated_) {
             LOG_DEBUG("Adding splat invalidates consolidation");

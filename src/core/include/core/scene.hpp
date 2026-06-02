@@ -201,6 +201,7 @@ namespace lfs::core {
 
         NodeId addGroup(const std::string& name, NodeId parent = NULL_NODE);
         NodeId addPlySequence(const std::string& name, NodeId parent = NULL_NODE, size_t frame_count = 0);
+        NodeId addSplatPlaceholder(const std::string& name, NodeId parent = NULL_NODE);
         NodeId addSplat(const std::string& name, std::unique_ptr<lfs::core::SplatData> model, NodeId parent = NULL_NODE);
         NodeId addPointCloud(const std::string& name, std::shared_ptr<lfs::core::PointCloud> point_cloud, NodeId parent = NULL_NODE);
         NodeId addMesh(const std::string& name, std::shared_ptr<lfs::core::MeshData> mesh_data, NodeId parent = NULL_NODE);

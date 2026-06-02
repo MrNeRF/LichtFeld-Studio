@@ -32,12 +32,15 @@
 #include <cctype>
 #include <cuda_runtime.h>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <format>
+#include <fstream>
 #include <memory>
 #include <stdexcept>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -47,6 +50,202 @@ namespace lfs::vis::gui {
         constexpr size_t MIN_PATH_RENDER_SAMPLES = 128;
         constexpr size_t MAX_PATH_RENDER_SAMPLES = 4096;
         constexpr float PATH_SAMPLES_PER_VIEWPORT_PIXEL = 2.0f;
+        constexpr uint32_t PLY_SEQUENCE_CACHE_MAGIC = 0x4C465351; // "LFSQ"
+        constexpr uint32_t PLY_SEQUENCE_CACHE_VERSION = 1;
+
+        struct PlySequenceCacheHeader {
+            uint32_t magic = PLY_SEQUENCE_CACHE_MAGIC;
+            uint32_t version = PLY_SEQUENCE_CACHE_VERSION;
+            uint64_t source_size = 0;
+            int64_t source_mtime_ns = 0;
+            uint64_t source_key = 0;
+        };
+
+        [[nodiscard]] uint64_t fnv1a64(std::string_view text) {
+            uint64_t hash = 14695981039346656037ull;
+            for (const unsigned char c : text) {
+                hash ^= static_cast<uint64_t>(c);
+                hash *= 1099511628211ull;
+            }
+            return hash;
+        }
+
+        [[nodiscard]] int64_t fileTimeNs(const std::filesystem::path& path) {
+            std::error_code ec;
+            const auto write_time = std::filesystem::last_write_time(path, ec);
+            if (ec)
+                return 0;
+            return std::chrono::duration_cast<std::chrono::nanoseconds>(
+                       write_time.time_since_epoch())
+                .count();
+        }
+
+        [[nodiscard]] std::filesystem::path stableAbsolutePath(const std::filesystem::path& path) {
+            std::error_code ec;
+            auto absolute = std::filesystem::weakly_canonical(path, ec);
+            if (!ec && !absolute.empty())
+                return absolute;
+            absolute = std::filesystem::absolute(path, ec);
+            return ec ? path : absolute;
+        }
+
+        [[nodiscard]] std::filesystem::path plySequenceCacheRoot() {
+            if (const char* explicit_dir = std::getenv("LFS_PLY_SEQUENCE_CACHE_DIR");
+                explicit_dir && *explicit_dir) {
+                return lfs::core::utf8_to_path(explicit_dir);
+            }
+#ifdef _WIN32
+            if (const char* local_app_data = std::getenv("LOCALAPPDATA");
+                local_app_data && *local_app_data) {
+                return lfs::core::utf8_to_path(local_app_data) / "LichtFeld" / "ply_sequence_cache";
+            }
+            if (const char* temp = std::getenv("TEMP"); temp && *temp) {
+                return lfs::core::utf8_to_path(temp) / "LichtFeld" / "ply_sequence_cache";
+            }
+            return std::filesystem::path("C:/Temp/LichtFeld/ply_sequence_cache");
+#else
+            if (const char* xdg_cache = std::getenv("XDG_CACHE_HOME");
+                xdg_cache && *xdg_cache) {
+                return lfs::core::utf8_to_path(xdg_cache) / "lichtfeld" / "ply_sequence_cache";
+            }
+            if (const char* home = std::getenv("HOME"); home && *home) {
+                return lfs::core::utf8_to_path(home) / ".cache" / "lichtfeld" / "ply_sequence_cache";
+            }
+            return std::filesystem::temp_directory_path() / "lichtfeld" / "ply_sequence_cache";
+#endif
+        }
+
+        [[nodiscard]] std::optional<PlySequenceCacheHeader> makePlySequenceCacheHeader(
+            const std::filesystem::path& source_path) {
+            std::error_code ec;
+            const uint64_t source_size = std::filesystem::file_size(source_path, ec);
+            if (ec)
+                return std::nullopt;
+
+            const auto absolute = stableAbsolutePath(source_path);
+            const int64_t source_mtime_ns = fileTimeNs(source_path);
+            const std::string key_text = std::format("{}|{}|{}",
+                                                     lfs::core::path_to_utf8(absolute),
+                                                     source_size,
+                                                     source_mtime_ns);
+            return PlySequenceCacheHeader{
+                .magic = PLY_SEQUENCE_CACHE_MAGIC,
+                .version = PLY_SEQUENCE_CACHE_VERSION,
+                .source_size = source_size,
+                .source_mtime_ns = source_mtime_ns,
+                .source_key = fnv1a64(key_text)};
+        }
+
+        [[nodiscard]] std::filesystem::path plySequenceCachePath(
+            const PlySequenceCacheHeader& header) {
+            return plySequenceCacheRoot() / std::format("{:016x}.lfs_splat", header.source_key);
+        }
+
+        [[nodiscard]] bool cacheHeaderMatches(const PlySequenceCacheHeader& actual,
+                                              const PlySequenceCacheHeader& expected) {
+            return actual.magic == PLY_SEQUENCE_CACHE_MAGIC &&
+                   actual.version == PLY_SEQUENCE_CACHE_VERSION &&
+                   actual.source_size == expected.source_size &&
+                   actual.source_mtime_ns == expected.source_mtime_ns &&
+                   actual.source_key == expected.source_key;
+        }
+
+        [[nodiscard]] std::unique_ptr<lfs::core::SplatData> loadPlySequenceCache(
+            const std::filesystem::path& source_path,
+            const lfs::io::SplatTensorAllocator& allocator,
+            std::string& error) {
+            const auto expected_header = makePlySequenceCacheHeader(source_path);
+            if (!expected_header) {
+                error = "source metadata unavailable";
+                return nullptr;
+            }
+
+            const auto cache_path = plySequenceCachePath(*expected_header);
+            std::ifstream file;
+            if (!lfs::core::open_file_for_read(cache_path, std::ios::binary, file)) {
+                error = "cache miss";
+                return nullptr;
+            }
+
+            PlySequenceCacheHeader actual_header{};
+            file.read(reinterpret_cast<char*>(&actual_header), sizeof(actual_header));
+            if (!file || !cacheHeaderMatches(actual_header, *expected_header)) {
+                error = "stale cache";
+                std::error_code ec;
+                std::filesystem::remove(cache_path, ec);
+                return nullptr;
+            }
+
+            try {
+                auto model = std::make_unique<lfs::core::SplatData>();
+                model->deserialize(file, allocator);
+                if (!file) {
+                    error = "truncated cache";
+                    std::error_code ec;
+                    std::filesystem::remove(cache_path, ec);
+                    return nullptr;
+                }
+                return model;
+            } catch (const std::exception& e) {
+                error = e.what();
+                std::error_code ec;
+                std::filesystem::remove(cache_path, ec);
+                return nullptr;
+            }
+        }
+
+        [[nodiscard]] bool writePlySequenceCache(const std::filesystem::path& source_path,
+                                                 const lfs::core::SplatData& model,
+                                                 std::string& error) {
+            const auto header = makePlySequenceCacheHeader(source_path);
+            if (!header) {
+                error = "source metadata unavailable";
+                return false;
+            }
+
+            const auto cache_path = plySequenceCachePath(*header);
+            std::error_code ec;
+            std::filesystem::create_directories(cache_path.parent_path(), ec);
+            if (ec) {
+                error = ec.message();
+                return false;
+            }
+
+            const auto tmp_path = cache_path.parent_path() /
+                                  (cache_path.filename().string() + ".tmp");
+            std::ofstream file;
+            if (!lfs::core::open_file_for_write(tmp_path,
+                                                std::ios::binary | std::ios::trunc,
+                                                file)) {
+                error = "open failed";
+                return false;
+            }
+
+            try {
+                file.write(reinterpret_cast<const char*>(&*header), sizeof(*header));
+                model.serialize(file);
+            } catch (const std::exception& e) {
+                error = e.what();
+                std::filesystem::remove(tmp_path, ec);
+                return false;
+            }
+            file.close();
+            if (!file) {
+                error = "write failed";
+                std::filesystem::remove(tmp_path, ec);
+                return false;
+            }
+
+            std::filesystem::remove(cache_path, ec);
+            ec.clear();
+            std::filesystem::rename(tmp_path, cache_path, ec);
+            if (ec) {
+                error = ec.message();
+                std::filesystem::remove(tmp_path, ec);
+                return false;
+            }
+            return true;
+        }
 
     } // namespace
 
@@ -58,9 +257,12 @@ namespace lfs::vis::gui {
           overlay_(std::make_unique<RmlSequencerOverlay>(controller_, rml_manager)),
           scene_sync_(std::make_unique<KeyframeSceneSync>(controller_, viewer)) {}
 
-    SequencerUIManager::~SequencerUIManager() = default;
+    SequencerUIManager::~SequencerUIManager() {
+        stopPlySequenceStreaming();
+    }
 
     void SequencerUIManager::destroyGraphicsResources() {
+        stopPlySequenceStreaming();
         last_ply_sequence_frame_ = std::nullopt;
         loaded_ply_sequence_frames_.clear();
         if (panel_)
@@ -228,6 +430,7 @@ namespace lfs::vis::gui {
                 !controller_.timeline().hasAnimationClip() &&
                 !controller_.hasPlySequence())
                 return;
+            stopPlySequenceStreaming();
             controller_.clear();
             last_ply_sequence_frame_ = std::nullopt;
             loaded_ply_sequence_frames_.clear();
@@ -345,12 +548,507 @@ namespace lfs::vis::gui {
     bool SequencerUIManager::needsAnimationFrame() const {
         return controller_.isPlaying() ||
                controller_.state() == PlaybackState::SCRUBBING ||
+               plySequenceStreamHasWork() ||
                keyframe_gizmo_active_ ||
                viewport_keyframe_edit_snapshot_.has_value() ||
                (ui_state_.show_pip_preview && pip_needs_update_) ||
                (overlay_ && (overlay_->wantsInput() ||
                              overlay_->isContextMenuOpen() ||
                              overlay_->isPopupOpen()));
+    }
+
+    bool SequencerUIManager::plySequenceStreamHasWork() const {
+        std::lock_guard lock(ply_stream_mutex_);
+        return ply_stream_inflight_ ||
+               !ply_stream_requests_.empty() ||
+               !ply_stream_completed_.empty();
+    }
+
+    bool SequencerUIManager::isPlySequenceFrameResident(const size_t frame_index) const {
+        std::lock_guard lock(ply_stream_mutex_);
+        return frame_index < ply_stream_states_.size() &&
+               ply_stream_states_[frame_index] == PlyStreamFrameState::Resident;
+    }
+
+    size_t SequencerUIManager::plySequenceFrameDistance(const size_t lhs,
+                                                        const size_t rhs,
+                                                        const size_t frame_count) const {
+        if (frame_count == 0)
+            return 0;
+
+        const size_t direct = lhs > rhs ? lhs - rhs : rhs - lhs;
+        if (controller_.loopMode() != LoopMode::LOOP)
+            return direct;
+        return std::min(direct, frame_count - direct);
+    }
+
+    bool SequencerUIManager::isPlySequenceFrameInWindow(const size_t frame_index,
+                                                        const size_t center_frame,
+                                                        const size_t frame_count) const {
+        return isPlySequenceFrameInWindow(frame_index,
+                                          center_frame,
+                                          frame_count,
+                                          controller_.loopMode() == LoopMode::LOOP);
+    }
+
+    bool SequencerUIManager::isPlySequenceFrameInWindow(const size_t frame_index,
+                                                        const size_t center_frame,
+                                                        const size_t frame_count,
+                                                        const bool loop) const {
+        if (frame_count == 0 || frame_index >= frame_count || center_frame >= frame_count)
+            return false;
+        if (frame_count <= MAX_STREAM_RESIDENT_FRAMES)
+            return true;
+        if (frame_index == center_frame)
+            return true;
+
+        if (loop) {
+            const size_t forward = (frame_index + frame_count - center_frame) % frame_count;
+            const size_t backward = (center_frame + frame_count - frame_index) % frame_count;
+            return forward <= STREAM_PREFETCH_AHEAD || backward <= STREAM_PREFETCH_BEHIND;
+        }
+
+        if (frame_index > center_frame)
+            return frame_index - center_frame <= STREAM_PREFETCH_AHEAD;
+        return center_frame - frame_index <= STREAM_PREFETCH_BEHIND;
+    }
+
+    std::optional<size_t> SequencerUIManager::selectPlySequenceDisplayFrame(const size_t requested_frame) const {
+        const auto* const sequence = controller_.plySequence();
+        if (!sequence || requested_frame >= sequence->frames.size())
+            return std::nullopt;
+
+        std::lock_guard lock(ply_stream_mutex_);
+        if (requested_frame < ply_stream_states_.size() &&
+            ply_stream_states_[requested_frame] == PlyStreamFrameState::Resident) {
+            return requested_frame;
+        }
+
+        const size_t frame_count = sequence->frames.size();
+        const bool playing = controller_.isPlaying();
+        std::optional<size_t> best_frame;
+        size_t best_score = 0;
+        for (size_t frame = 0; frame < ply_stream_states_.size() && frame < frame_count; ++frame) {
+            if (ply_stream_states_[frame] != PlyStreamFrameState::Resident)
+                continue;
+
+            size_t score = 0;
+            if (!playing) {
+                score = plySequenceFrameDistance(frame, requested_frame, frame_count);
+            } else if (controller_.loopMode() == LoopMode::LOOP) {
+                score = (frame + frame_count - requested_frame) % frame_count;
+            } else if (frame >= requested_frame) {
+                score = frame - requested_frame;
+            } else {
+                score = STREAM_PREFETCH_AHEAD + 1 + requested_frame - frame;
+            }
+
+            if (!best_frame.has_value() || score < best_score) {
+                best_frame = frame;
+                best_score = score;
+            }
+        }
+
+        return best_frame;
+    }
+
+    void SequencerUIManager::requestPlySequenceFrame(const size_t frame_index, const bool priority) {
+        std::lock_guard lock(ply_stream_mutex_);
+        if (frame_index >= ply_stream_states_.size())
+            return;
+
+        auto& state = ply_stream_states_[frame_index];
+        if (state == PlyStreamFrameState::Resident || state == PlyStreamFrameState::Loading)
+            return;
+
+        if (state == PlyStreamFrameState::Queued) {
+            if (priority) {
+                std::erase(ply_stream_requests_, frame_index);
+                ply_stream_requests_.push_front(frame_index);
+            }
+            return;
+        }
+
+        state = PlyStreamFrameState::Queued;
+        if (priority)
+            ply_stream_requests_.push_front(frame_index);
+        else
+            ply_stream_requests_.push_back(frame_index);
+        ply_stream_cv_.notify_one();
+    }
+
+    void SequencerUIManager::prunePlySequenceRequests(const size_t frame_index) {
+        const auto* const sequence = controller_.plySequence();
+        if (!sequence || sequence->frames.size() <= MAX_STREAM_RESIDENT_FRAMES)
+            return;
+
+        const size_t count = sequence->frames.size();
+        std::lock_guard lock(ply_stream_mutex_);
+        for (auto it = ply_stream_requests_.begin(); it != ply_stream_requests_.end();) {
+            const size_t queued_frame = *it;
+            if (isPlySequenceFrameInWindow(queued_frame, frame_index, count)) {
+                ++it;
+                continue;
+            }
+            if (queued_frame < ply_stream_states_.size() &&
+                ply_stream_states_[queued_frame] == PlyStreamFrameState::Queued) {
+                ply_stream_states_[queued_frame] = PlyStreamFrameState::Empty;
+            }
+            it = ply_stream_requests_.erase(it);
+            ++ply_stream_stale_request_drop_count_;
+        }
+    }
+
+    void SequencerUIManager::requestPlySequenceWindow(const size_t frame_index) {
+        const auto* const sequence = controller_.plySequence();
+        if (!sequence || sequence->frames.empty())
+            return;
+
+        const size_t count = sequence->frames.size();
+        ply_stream_target_frame_.store(frame_index, std::memory_order_release);
+        ply_stream_target_loop_.store(controller_.loopMode() == LoopMode::LOOP, std::memory_order_release);
+        prunePlySequenceRequests(frame_index);
+        requestPlySequenceFrame(frame_index, true);
+
+        if (count <= MAX_STREAM_RESIDENT_FRAMES) {
+            for (size_t frame = 0; frame < count; ++frame)
+                requestPlySequenceFrame(frame, frame == frame_index);
+            return;
+        }
+
+        for (size_t offset = 1; offset <= STREAM_PREFETCH_AHEAD && offset < count; ++offset) {
+            const size_t next = controller_.loopMode() == LoopMode::LOOP
+                                    ? (frame_index + offset) % count
+                                    : frame_index + offset;
+            if (next >= count)
+                break;
+            requestPlySequenceFrame(next, false);
+        }
+
+        for (size_t offset = 1; offset <= STREAM_PREFETCH_BEHIND && offset < count; ++offset) {
+            if (controller_.loopMode() == LoopMode::LOOP) {
+                requestPlySequenceFrame((frame_index + count - offset) % count, false);
+            } else if (offset <= frame_index) {
+                requestPlySequenceFrame(frame_index - offset, false);
+            } else {
+                break;
+            }
+        }
+    }
+
+    void SequencerUIManager::plySequenceStreamWorker(const uint64_t generation) {
+        auto loader = lfs::io::Loader::create();
+
+        while (!ply_stream_stop_.load(std::memory_order_acquire) &&
+               ply_stream_generation_.load(std::memory_order_acquire) == generation) {
+            size_t frame_index = 0;
+            std::filesystem::path path;
+            lfs::io::SplatTensorAllocator allocator;
+
+            {
+                std::unique_lock lock(ply_stream_mutex_);
+                ply_stream_cv_.wait(lock, [this, generation] {
+                    return ply_stream_stop_.load(std::memory_order_acquire) ||
+                           ply_stream_generation_.load(std::memory_order_acquire) != generation ||
+                           !ply_stream_requests_.empty();
+                });
+
+                if (ply_stream_stop_.load(std::memory_order_acquire) ||
+                    ply_stream_generation_.load(std::memory_order_acquire) != generation)
+                    return;
+
+                frame_index = ply_stream_requests_.front();
+                ply_stream_requests_.pop_front();
+                if (frame_index >= ply_stream_states_.size() ||
+                    frame_index >= ply_stream_paths_.size() ||
+                    ply_stream_states_[frame_index] != PlyStreamFrameState::Queued) {
+                    continue;
+                }
+
+                ply_stream_states_[frame_index] = PlyStreamFrameState::Loading;
+                ply_stream_inflight_ = true;
+                ply_stream_inflight_frame_ = frame_index;
+                path = ply_stream_paths_[frame_index];
+                allocator = ply_stream_allocator_;
+            }
+
+            const auto start = std::chrono::steady_clock::now();
+            PlyStreamResult completed{};
+            completed.generation = generation;
+            completed.frame_index = frame_index;
+
+            try {
+                std::string cache_error;
+                completed.model = loadPlySequenceCache(path, allocator, cache_error);
+                completed.cache_hit = completed.model != nullptr;
+                completed.cache_miss = !completed.cache_hit;
+
+                if (!completed.model) {
+                    const lfs::io::LoadOptions load_options{
+                        .resize_factor = -1,
+                        .max_width = 0,
+                        .images_folder = "images",
+                        .validate_only = false,
+                        .cancel_requested = [this, generation, frame_index, frame_count = ply_stream_paths_.size()] {
+                            if (ply_stream_stop_.load(std::memory_order_acquire) ||
+                                ply_stream_generation_.load(std::memory_order_acquire) != generation) {
+                                return true;
+                            }
+                            if (frame_count <= MAX_STREAM_RESIDENT_FRAMES)
+                                return false;
+
+                            const size_t target = ply_stream_target_frame_.load(std::memory_order_acquire);
+                            if (target >= frame_count)
+                                return false;
+                            const bool loop = ply_stream_target_loop_.load(std::memory_order_acquire);
+                            return !isPlySequenceFrameInWindow(frame_index, target, frame_count, loop);
+                        },
+                        .splat_tensor_allocator = allocator};
+
+                    auto load_result = loader->load(path, load_options);
+                    if (!load_result)
+                        throw std::runtime_error(load_result.error().format());
+
+                    auto* splat_data = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&load_result->data);
+                    if (!splat_data || !*splat_data)
+                        throw std::runtime_error("sequence frame is not a gaussian splat PLY");
+
+                    completed.model = std::make_unique<lfs::core::SplatData>(std::move(**splat_data));
+                    std::string write_error;
+                    if (writePlySequenceCache(path, *completed.model, write_error)) {
+                        completed.cache_written = true;
+                    } else {
+                        completed.cache_write_failed = true;
+                        LOG_DEBUG("Failed to write PLY sequence cache for '{}': {}",
+                                  lfs::core::path_to_utf8(path),
+                                  write_error);
+                    }
+                }
+            } catch (const lfs::io::LoadCancelledError& e) {
+                completed.cancelled = true;
+                completed.error = e.what();
+            } catch (const std::exception& e) {
+                completed.error = e.what();
+            }
+
+            completed.load_ms =
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+
+            {
+                std::lock_guard lock(ply_stream_mutex_);
+                if (ply_stream_generation_.load(std::memory_order_acquire) == generation) {
+                    ply_stream_completed_.push_back(std::move(completed));
+                }
+                ply_stream_inflight_ = false;
+                ply_stream_cv_.notify_one();
+            }
+        }
+    }
+
+    void SequencerUIManager::startPlySequenceStreaming(std::vector<std::filesystem::path> paths,
+                                                       lfs::io::SplatTensorAllocator allocator) {
+        stopPlySequenceStreaming();
+
+        const uint64_t generation = ply_stream_generation_.fetch_add(1, std::memory_order_acq_rel) + 1;
+        {
+            std::lock_guard lock(ply_stream_mutex_);
+            ply_stream_paths_ = std::move(paths);
+            ply_stream_allocator_ = std::move(allocator);
+            ply_stream_states_.assign(ply_stream_paths_.size(), PlyStreamFrameState::Empty);
+            ply_stream_requests_.clear();
+            ply_stream_completed_.clear();
+            ply_stream_inflight_ = false;
+            ply_stream_inflight_frame_ = 0;
+            ply_stream_last_load_ms_ = 0.0;
+            ply_stream_failed_count_ = 0;
+            ply_stream_miss_count_ = 0;
+            ply_stream_fallback_count_ = 0;
+            ply_stream_eviction_count_ = 0;
+            ply_stream_stale_request_drop_count_ = 0;
+            ply_stream_cache_hit_count_ = 0;
+            ply_stream_cache_miss_count_ = 0;
+            ply_stream_cache_write_count_ = 0;
+            ply_stream_cache_write_fail_count_ = 0;
+        }
+        ply_stream_target_frame_.store(0, std::memory_order_release);
+        ply_stream_target_loop_.store(controller_.loopMode() == LoopMode::LOOP, std::memory_order_release);
+
+        ply_stream_stop_.store(false, std::memory_order_release);
+        ply_stream_thread_ = std::thread([this, generation] {
+            plySequenceStreamWorker(generation);
+        });
+
+        requestPlySequenceWindow(0);
+    }
+
+    void SequencerUIManager::stopPlySequenceStreaming() {
+        ply_stream_stop_.store(true, std::memory_order_release);
+        ply_stream_generation_.fetch_add(1, std::memory_order_acq_rel);
+        ply_stream_cv_.notify_all();
+        if (ply_stream_thread_.joinable())
+            ply_stream_thread_.join();
+
+        std::lock_guard lock(ply_stream_mutex_);
+        ply_stream_paths_.clear();
+        ply_stream_allocator_ = {};
+        ply_stream_states_.clear();
+        ply_stream_requests_.clear();
+        ply_stream_completed_.clear();
+        ply_stream_inflight_ = false;
+        ply_stream_inflight_frame_ = 0;
+        ply_stream_last_load_ms_ = 0.0;
+        ply_stream_failed_count_ = 0;
+        ply_stream_miss_count_ = 0;
+        ply_stream_fallback_count_ = 0;
+        ply_stream_eviction_count_ = 0;
+        ply_stream_stale_request_drop_count_ = 0;
+        ply_stream_cache_hit_count_ = 0;
+        ply_stream_cache_miss_count_ = 0;
+        ply_stream_cache_write_count_ = 0;
+        ply_stream_cache_write_fail_count_ = 0;
+        ply_stream_target_frame_.store(0, std::memory_order_release);
+        ply_stream_target_loop_.store(false, std::memory_order_release);
+    }
+
+    void SequencerUIManager::drainPlySequenceStream() {
+        auto* const scene_manager = viewer_->getSceneManager();
+        const auto* const sequence = controller_.plySequence();
+        if (!scene_manager || !sequence)
+            return;
+
+        std::deque<PlyStreamResult> completed;
+        {
+            std::lock_guard lock(ply_stream_mutex_);
+            completed.swap(ply_stream_completed_);
+        }
+
+        if (completed.empty())
+            return;
+
+        auto& scene = scene_manager->getScene();
+        const uint64_t active_generation = ply_stream_generation_.load(std::memory_order_acquire);
+        bool current_frame_loaded = false;
+        const auto current_frame = controller_.currentPlySequenceFrameIndex();
+
+        while (!completed.empty()) {
+            auto result = std::move(completed.front());
+            completed.pop_front();
+            if (result.generation != active_generation ||
+                result.frame_index >= sequence->frames.size()) {
+                continue;
+            }
+
+            const std::string& node_name = sequence->frames[result.frame_index].node_name;
+            if (!result.model) {
+                if (result.cancelled) {
+                    std::lock_guard lock(ply_stream_mutex_);
+                    if (result.frame_index < ply_stream_states_.size())
+                        ply_stream_states_[result.frame_index] = PlyStreamFrameState::Empty;
+                    ply_stream_last_load_ms_ = result.load_ms;
+                    continue;
+                }
+
+                LOG_ERROR("Failed to stream PLY sequence frame {}: {}",
+                          result.frame_index,
+                          result.error.empty() ? "unknown error" : result.error);
+                std::lock_guard lock(ply_stream_mutex_);
+                if (result.frame_index < ply_stream_states_.size())
+                    ply_stream_states_[result.frame_index] = PlyStreamFrameState::Failed;
+                ++ply_stream_failed_count_;
+                ply_stream_last_load_ms_ = result.load_ms;
+                continue;
+            }
+
+            const size_t gaussian_count = result.model->size();
+            auto old_model = scene.swapNodeModel(node_name, std::move(result.model));
+            old_model.reset();
+            scene.setNodeVisibility(node_name, false);
+            scene_manager->setPlyPath(node_name, sequence->frames[result.frame_index].path);
+
+            {
+                std::lock_guard lock(ply_stream_mutex_);
+                if (result.frame_index < ply_stream_states_.size())
+                    ply_stream_states_[result.frame_index] = PlyStreamFrameState::Resident;
+                std::erase(loaded_ply_sequence_frames_, result.frame_index);
+                loaded_ply_sequence_frames_.push_back(result.frame_index);
+                ply_stream_last_load_ms_ = result.load_ms;
+                if (result.cache_hit)
+                    ++ply_stream_cache_hit_count_;
+                if (result.cache_miss)
+                    ++ply_stream_cache_miss_count_;
+                if (result.cache_written)
+                    ++ply_stream_cache_write_count_;
+                if (result.cache_write_failed)
+                    ++ply_stream_cache_write_fail_count_;
+            }
+
+            LOG_INFO("Streamed PLY sequence frame {} '{}' ({} gaussians, {:.1f}ms, cache={})",
+                     result.frame_index,
+                     node_name,
+                     gaussian_count,
+                     result.load_ms,
+                     result.cache_hit ? "hit" : "miss");
+            current_frame_loaded = current_frame.has_value() && *current_frame == result.frame_index;
+        }
+
+        if (current_frame_loaded)
+            last_ply_sequence_frame_ = std::nullopt;
+        if (auto* const rm = viewer_->getRenderingManager())
+            rm->markDirty(DirtyFlag::SPLATS);
+        if (current_frame.has_value())
+            evictPlySequenceFrames(*current_frame);
+    }
+
+    void SequencerUIManager::evictPlySequenceFrames(const size_t keep_frame_index) {
+        const auto* const sequence = controller_.plySequence();
+        auto* const scene_manager = viewer_->getSceneManager();
+        if (!sequence || !scene_manager)
+            return;
+
+        auto& scene = scene_manager->getScene();
+        const size_t frame_count = sequence->frames.size();
+        const size_t budget = std::min(MAX_STREAM_RESIDENT_FRAMES, frame_count);
+        while (loaded_ply_sequence_frames_.size() > budget) {
+            auto victim_it = loaded_ply_sequence_frames_.end();
+            bool victim_outside_window = false;
+            size_t victim_distance = 0;
+
+            for (auto it = loaded_ply_sequence_frames_.begin(); it != loaded_ply_sequence_frames_.end(); ++it) {
+                const size_t candidate = *it;
+                if (candidate == keep_frame_index ||
+                    (last_ply_sequence_frame_.has_value() && candidate == *last_ply_sequence_frame_) ||
+                    candidate >= frame_count) {
+                    continue;
+                }
+
+                const bool outside_window = !isPlySequenceFrameInWindow(candidate, keep_frame_index, frame_count);
+                const size_t distance = plySequenceFrameDistance(candidate, keep_frame_index, frame_count);
+                if (victim_it == loaded_ply_sequence_frames_.end() ||
+                    (outside_window && !victim_outside_window) ||
+                    (outside_window == victim_outside_window && distance > victim_distance)) {
+                    victim_it = it;
+                    victim_outside_window = outside_window;
+                    victim_distance = distance;
+                }
+            }
+
+            if (victim_it == loaded_ply_sequence_frames_.end())
+                return;
+
+            const size_t victim = *victim_it;
+            loaded_ply_sequence_frames_.erase(victim_it);
+            if (victim >= frame_count)
+                continue;
+
+            const std::string& victim_name = sequence->frames[victim].node_name;
+            auto old_model = scene.swapNodeModel(victim_name, nullptr);
+            old_model.reset();
+            scene.setNodeVisibility(victim_name, false);
+            std::lock_guard lock(ply_stream_mutex_);
+            if (victim < ply_stream_states_.size())
+                ply_stream_states_[victim] = PlyStreamFrameState::Empty;
+            ++ply_stream_eviction_count_;
+        }
     }
 
     float SequencerUIManager::advancePanelClock() {
@@ -365,14 +1063,23 @@ namespace lfs::vis::gui {
         return delta_time;
     }
 
-    float SequencerUIManager::playbackDelta(const float delta_time) const {
-        if (controller_.isPlaying() && controller_.hasPlySequence() &&
-            controller_.timeline().realKeyframeCount() == 0 &&
-            !controller_.timeline().hasAnimationClip()) {
-            const float fps = std::max(controller_.plySequenceFps(), MIN_SEQUENCE_FPS);
-            const float speed = std::max(controller_.playbackSpeed(), MIN_PLAYBACK_SPEED);
-            return std::min(delta_time, 1.0f / (fps * speed));
+    float SequencerUIManager::advancePlaybackClock() {
+        const auto now = std::chrono::steady_clock::now();
+        if (!last_playback_tick_time_.has_value()) {
+            last_playback_tick_time_ = now;
+            return 0.0f;
         }
+
+        float delta_time = std::chrono::duration<float>(now - *last_playback_tick_time_).count();
+        last_playback_tick_time_ = now;
+        if (!std::isfinite(delta_time) || delta_time < 0.0f)
+            delta_time = 0.0f;
+        if (!controller_.hasPlySequence())
+            delta_time = std::min(delta_time, 0.1f);
+        return delta_time;
+    }
+
+    float SequencerUIManager::playbackDelta(const float delta_time) const {
         return delta_time;
     }
 
@@ -400,11 +1107,15 @@ namespace lfs::vis::gui {
     }
 
     void SequencerUIManager::tickPlaybackBeforeSceneRender() {
-        if (!controller_.isPlaying())
+        if (!controller_.isPlaying()) {
+            last_playback_tick_time_ = std::nullopt;
+            drainPlySequenceStream();
+            applyPlySequenceFrame();
             return;
+        }
 
-        const float delta_time = advancePanelClock();
-        advancePlayback(delta_time);
+        advancePanelClock();
+        advancePlayback(advancePlaybackClock());
         playback_ticked_before_scene_ = true;
     }
 
@@ -413,10 +1124,53 @@ namespace lfs::vis::gui {
         if (!sequence)
             return {};
         const auto current_frame = controller_.currentPlySequenceFrameIndex();
+
+        size_t resident = 0;
+        size_t queued = 0;
+        size_t failed = 0;
+        bool inflight = false;
+        double last_load_ms = 0.0;
+        size_t misses = 0;
+        size_t fallbacks = 0;
+        size_t evictions = 0;
+        size_t stale_drops = 0;
+        size_t cache_hits = 0;
+        size_t cache_misses = 0;
+        size_t cache_writes = 0;
+        size_t cache_write_failures = 0;
+        {
+            std::lock_guard lock(ply_stream_mutex_);
+            for (const auto state : ply_stream_states_) {
+                switch (state) {
+                case PlyStreamFrameState::Resident: ++resident; break;
+                case PlyStreamFrameState::Queued: ++queued; break;
+                case PlyStreamFrameState::Loading: break;
+                case PlyStreamFrameState::Failed: ++failed; break;
+                case PlyStreamFrameState::Empty: break;
+                }
+            }
+            queued = std::max(queued, ply_stream_requests_.size());
+            inflight = ply_stream_inflight_;
+            failed = std::max(failed, ply_stream_failed_count_);
+            last_load_ms = ply_stream_last_load_ms_;
+            misses = ply_stream_miss_count_;
+            fallbacks = ply_stream_fallback_count_;
+            evictions = ply_stream_eviction_count_;
+            stale_drops = ply_stream_stale_request_drop_count_;
+            cache_hits = ply_stream_cache_hit_count_;
+            cache_misses = ply_stream_cache_miss_count_;
+            cache_writes = ply_stream_cache_write_count_;
+            cache_write_failures = ply_stream_cache_write_fail_count_;
+        }
+
         return std::format(
             "{{\"frame_count\":{},\"displayed_frame\":{},\"requested_frame\":{},\"on_target\":{},"
             "\"resident\":{},\"slots\":{},\"max_slots\":{},\"decode_queue\":{},"
-            "\"inflight\":{},\"failed\":{},\"last_swap_ms\":{:.3f}}}",
+            "\"inflight\":{},\"failed\":{},\"last_swap_ms\":{:.3f},"
+            "\"last_load_ms\":{:.3f},\"misses\":{},\"fallbacks\":{},"
+            "\"evictions\":{},\"stale_queue_drops\":{},\"cache_hits\":{},"
+            "\"cache_misses\":{},\"cache_writes\":{},\"cache_write_failures\":{},"
+            "\"streaming\":true}}",
             sequence->frames.size(),
             last_ply_sequence_frame_.has_value() ? static_cast<long long>(*last_ply_sequence_frame_) : -1ll,
             current_frame.has_value() ? static_cast<long long>(*current_frame) : -1ll,
@@ -424,13 +1178,22 @@ namespace lfs::vis::gui {
                     *last_ply_sequence_frame_ == *current_frame
                 ? "true"
                 : "false",
-            loaded_ply_sequence_frames_.size(),
-            sequence->frames.size(),
-            sequence->frames.size(),
-            0,
-            0,
-            0,
-            0.0);
+            resident,
+            resident,
+            std::min(MAX_STREAM_RESIDENT_FRAMES, sequence->frames.size()),
+            queued,
+            inflight ? 1 : 0,
+            failed,
+            0.0,
+            last_load_ms,
+            misses,
+            fallbacks,
+            evictions,
+            stale_drops,
+            cache_hits,
+            cache_misses,
+            cache_writes,
+            cache_write_failures);
     }
 
     void SequencerUIManager::renderSequencerPanel(const UIContext& /*ctx*/, const ViewportLayout& viewport,
@@ -441,8 +1204,16 @@ namespace lfs::vis::gui {
         const bool already_ticked = playback_ticked_before_scene_;
         const float delta_time = already_ticked ? last_panel_delta_time_ : advancePanelClock();
         playback_ticked_before_scene_ = false;
-        if (!already_ticked)
-            advancePlayback(delta_time);
+        if (!already_ticked) {
+            if (controller_.isPlaying()) {
+                advancePlayback(advancePlaybackClock());
+            } else {
+                last_playback_tick_time_ = std::nullopt;
+                advancePlayback(delta_time);
+            }
+        } else if (!controller_.isPlaying()) {
+            last_playback_tick_time_ = std::nullopt;
+        }
 
         panel_->setFilmStripAttached(ui_state_.show_film_strip);
 
@@ -539,6 +1310,7 @@ namespace lfs::vis::gui {
         if (panel_->consumeClearRequest() &&
             (controller_.timeline().realKeyframeCount() > 0 || controller_.timeline().hasAnimationClip() ||
              controller_.hasPlySequence())) {
+            stopPlySequenceStreaming();
             controller_.clear();
             last_ply_sequence_frame_ = std::nullopt;
             loaded_ply_sequence_frames_.clear();
@@ -628,6 +1400,7 @@ namespace lfs::vis::gui {
                                    if (action == "clear_confirm" &&
                                        (controller_.timeline().realKeyframeCount() > 0 || controller_.timeline().hasAnimationClip() ||
                                         controller_.hasPlySequence())) {
+                                       stopPlySequenceStreaming();
                                        controller_.clear();
                                        last_ply_sequence_frame_ = std::nullopt;
                                        loaded_ply_sequence_frames_.clear();
@@ -1243,7 +2016,8 @@ namespace lfs::vis::gui {
             return;
         }
 
-        // A PLY sequence replaces the scene and loads each frame as a real child node.
+        // A PLY sequence replaces the scene. Each file gets a real scene-graph
+        // child immediately; the heavy SplatData is streamed into those nodes.
         if (scene_manager->getContentType() != SceneManager::ContentType::Empty) {
             if (!scene_manager->clear())
                 return;
@@ -1264,9 +2038,6 @@ namespace lfs::vis::gui {
         std::vector<std::string> node_names;
         loaded_paths.reserve(paths.size());
         node_names.reserve(paths.size());
-        loaded_ply_sequence_frames_.reserve(paths.size());
-
-        auto loader = lfs::io::Loader::create();
         auto splat_allocator = scene_manager->makeExternalSplatAllocator();
         auto& scene = scene_manager->getScene();
         scene.setCombinedModelAllocator(splat_allocator);
@@ -1276,70 +2047,31 @@ namespace lfs::vis::gui {
             return;
         }
 
-        cudaSetDevice(0);
-        struct ScopedCudaStream {
-            cudaStream_t stream = nullptr;
-            ~ScopedCudaStream() {
-                if (stream)
-                    cudaStreamDestroy(stream);
-            }
-        } upload_stream;
-        if (cudaStreamCreateWithFlags(&upload_stream.stream, cudaStreamNonBlocking) != cudaSuccess)
-            upload_stream.stream = nullptr;
-
-        const lfs::io::LoadOptions load_options{
-            .resize_factor = -1,
-            .max_width = 0,
-            .images_folder = "images",
-            .validate_only = false,
-            .splat_tensor_allocator = splat_allocator};
-
         for (size_t i = 0; i < paths.size(); ++i) {
             const std::string stem = lfs::core::path_to_utf8(paths[i].stem());
             const std::string base_name = std::format("{}_{:04}_{}", sequence_node, i, stem);
-            try {
-                const lfs::core::CUDAStreamGuard stream_guard(upload_stream.stream);
-                auto load_result = loader->load(paths[i], load_options);
-                if (!load_result)
-                    throw std::runtime_error(load_result.error().format());
+            std::string node_name = base_name;
+            for (int suffix = 1; scene.getNode(node_name); ++suffix)
+                node_name = std::format("{}_{}", base_name, suffix);
 
-                auto* splat_data = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&load_result->data);
-                if (!splat_data || !*splat_data)
-                    throw std::runtime_error("sequence frame is not a gaussian splat PLY");
-
-                std::string node_name = base_name;
-                for (int suffix = 1; scene.getNode(node_name); ++suffix)
-                    node_name = std::format("{}_{}", base_name, suffix);
-
-                const size_t gaussian_count = (*splat_data)->size();
-                if (scene.addSplat(node_name,
-                                   std::make_unique<lfs::core::SplatData>(std::move(**splat_data)),
-                                   sequence_id) == core::NULL_NODE) {
-                    throw std::runtime_error("failed to add sequence frame node");
-                }
-                scene.setNodeVisibility(node_name, false);
-                scene_manager->setPlyPath(node_name, paths[i]);
-
-                loaded_paths.push_back(paths[i]);
-                node_names.push_back(node_name);
-                loaded_ply_sequence_frames_.push_back(i);
-                LOG_INFO("Added '{}' ({} gaussians)", node_name, gaussian_count);
-            } catch (const std::exception& e) {
-                LOG_ERROR("Failed to load PLY sequence frame {}: {}",
-                          lfs::core::path_to_utf8(paths[i]),
-                          e.what());
+            if (scene.addSplatPlaceholder(node_name, sequence_id) == core::NULL_NODE) {
+                LOG_ERROR("Failed to create PLY sequence frame placeholder '{}'", node_name);
                 if (!scene_manager->clear())
-                    LOG_WARN("Failed to clear partial PLY sequence after load failure");
-                loaded_ply_sequence_frames_.clear();
-                last_ply_sequence_frame_ = std::nullopt;
+                    LOG_WARN("Failed to clear partial PLY sequence after placeholder failure");
                 return;
             }
+            scene.setNodeVisibility(node_name, false);
+            scene_manager->setPlyPath(node_name, paths[i]);
+            loaded_paths.push_back(paths[i]);
+            node_names.push_back(node_name);
+            LOG_DEBUG("Added PLY sequence placeholder '{}'", node_name);
         }
 
         ui_state_.sequence_fps = std::clamp(ui_state_.sequence_fps, MIN_SEQUENCE_FPS, MAX_SEQUENCE_FPS);
         controller_.setPlySequence(directory, sequence_node, std::move(loaded_paths), std::move(node_names), ui_state_.sequence_fps);
         ui_state_.sequence_fps = controller_.plySequenceFps();
         last_ply_sequence_frame_ = std::nullopt;
+        startPlySequenceStreaming(paths, std::move(splat_allocator));
         applyPlySequenceFrame();
 
         if (const auto* sequence = controller_.plySequence()) {
@@ -1356,6 +2088,7 @@ namespace lfs::vis::gui {
     }
 
     void SequencerUIManager::applyPlySequenceFrame() {
+        drainPlySequenceStream();
         auto* const scene_manager = viewer_->getSceneManager();
         const auto* const sequence = controller_.plySequence();
         const auto frame_index = controller_.currentPlySequenceFrameIndex();
@@ -1365,7 +2098,21 @@ namespace lfs::vis::gui {
         }
         if (*frame_index >= sequence->frames.size())
             return;
-        if (last_ply_sequence_frame_ == frame_index)
+
+        const size_t requested_frame = *frame_index;
+        requestPlySequenceWindow(requested_frame);
+        const auto display_frame = selectPlySequenceDisplayFrame(requested_frame);
+        if (!display_frame.has_value()) {
+            std::lock_guard lock(ply_stream_mutex_);
+            ++ply_stream_miss_count_;
+            return;
+        }
+        if (*display_frame != requested_frame) {
+            std::lock_guard lock(ply_stream_mutex_);
+            ++ply_stream_miss_count_;
+            ++ply_stream_fallback_count_;
+        }
+        if (last_ply_sequence_frame_ == display_frame)
             return;
 
         auto& scene = scene_manager->getScene();
@@ -1376,7 +2123,7 @@ namespace lfs::vis::gui {
                 scene.setNodeVisibility(previous, false);
         } else {
             for (const size_t loaded_frame : loaded_ply_sequence_frames_) {
-                if (loaded_frame == *frame_index || loaded_frame >= sequence->frames.size())
+                if (loaded_frame == *display_frame || loaded_frame >= sequence->frames.size())
                     continue;
                 const std::string& loaded_name = sequence->frames[loaded_frame].node_name;
                 if (scene.getNode(loaded_name))
@@ -1384,10 +2131,10 @@ namespace lfs::vis::gui {
             }
         }
 
-        const std::string& active = sequence->frames[*frame_index].node_name;
+        const std::string& active = sequence->frames[*display_frame].node_name;
         if (scene.getNode(active))
             scene.setNodeVisibility(active, true);
-        last_ply_sequence_frame_ = frame_index;
+        last_ply_sequence_frame_ = display_frame;
         if (auto* const rm = viewer_->getRenderingManager())
             rm->markDirty(DirtyFlag::SPLATS);
     }

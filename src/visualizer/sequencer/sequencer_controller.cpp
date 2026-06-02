@@ -278,20 +278,23 @@ namespace lfs::vis {
             break;
 
         case LoopMode::LOOP:
-            if (playhead_ >= end) {
-                playhead_ -= end;
-            } else if (playhead_ < 0.0f) {
+            playhead_ = std::fmod(playhead_, end);
+            if (playhead_ < 0.0f)
                 playhead_ += end;
-            }
             break;
 
         case LoopMode::PING_PONG:
-            if (playhead_ >= end) {
-                playhead_ = end - (playhead_ - end);
-                reverse_direction_ = true;
-            } else if (playhead_ < 0.0f) {
-                playhead_ = -playhead_;
-                reverse_direction_ = false;
+            if (const float period = end * 2.0f; period > 0.0f) {
+                float phase = std::fmod(playhead_, period);
+                if (phase < 0.0f)
+                    phase += period;
+                if (phase <= end) {
+                    playhead_ = phase;
+                    reverse_direction_ = false;
+                } else {
+                    playhead_ = period - phase;
+                    reverse_direction_ = true;
+                }
             }
             break;
         }
