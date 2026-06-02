@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
@@ -82,6 +83,6 @@ namespace lfs::vis {
     // One-tensor-per-VkBuffer allocator bound to the active window's Vulkan context, matching
     // what the splat renderer binds. Empty when interop is unavailable (headless). Shared by the
     // file loader and in-memory inserts (Python API).
-    [[nodiscard]] lfs::core::SplatTensorAllocator makeViewerSplatTensorAllocator();
+    [[nodiscard]] LFS_VIS_API lfs::core::SplatTensorAllocator makeViewerSplatTensorAllocator();
 
 } // namespace lfs::vis

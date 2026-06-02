@@ -272,6 +272,9 @@ target_link_libraries(lfs_py PRIVATE
     imgui::imgui
     implot::implot
     $<IF:$<PLATFORM_ID:Windows>,RmlUi::RmlUi,lfs_rmlui>
+    # py_scene.cpp now includes vulkan_external_tensor.hpp -> vulkan_context.hpp -> <vk_mem_alloc.h>.
+    # lfs_visualizer links VMA privately, so lfs_py needs the include interface directly.
+    GPUOpen::VulkanMemoryAllocator
 )
 
 target_include_directories(lfs_py PRIVATE
