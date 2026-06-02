@@ -33,6 +33,12 @@ namespace lfs::vis {
     void SequencerController::play() {
         if (!hasPlayableContent())
             return;
+        const float end = timeline_.clipDuration();
+        if (state_ == PlaybackState::PAUSED && loop_mode_ == LoopMode::ONCE &&
+            end > 0.0f && playhead_ >= end - KEYFRAME_SEEK_EPS) {
+            playhead_ = playbackStartTime();
+            reverse_direction_ = false;
+        }
         if (state_ == PlaybackState::STOPPED) {
             playhead_ = playbackStartTime();
             reverse_direction_ = false;

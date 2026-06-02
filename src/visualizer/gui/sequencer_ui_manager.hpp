@@ -20,6 +20,7 @@
 #include <glm/gtc/quaternion.hpp>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace lfs::vis::gui {
@@ -46,6 +47,7 @@ namespace lfs::vis {
             void reloadRmlResources();
 
             void destroyGraphicsResources();
+            void tickPlaybackBeforeSceneRender();
 
             [[nodiscard]] SequencerController& controller() { return controller_; }
             [[nodiscard]] const SequencerController& controller() const { return controller_; }
@@ -55,6 +57,9 @@ namespace lfs::vis {
             [[nodiscard]] bool blocksKeyboard() const;
             [[nodiscard]] bool needsAnimationFrame() const;
             [[nodiscard]] float preferredFloatingHeight() const;
+            // Serialized status of the active PLY sequence (empty when inactive).
+            // Used by MCP tooling to verify playback/scrub behaviour.
+            [[nodiscard]] std::string plyPlayerStatusJson() const;
 
         private:
             void renderSequencerPanel(const UIContext& ctx, const ViewportLayout& viewport,
@@ -64,9 +69,11 @@ namespace lfs::vis {
             void renderKeyframeGizmo(const UIContext& ctx, const ViewportLayout& viewport);
             void handleOverlayActions();
             void loadPlySequenceFromDirectory(const std::filesystem::path& directory);
-            bool ensurePlySequenceFrameLoaded(size_t frame_index);
             void applyPlySequenceFrame();
-            void prunePlySequenceFrameCache(size_t keep_frame_index);
+            float advancePanelClock();
+            [[nodiscard]] float playbackDelta(float delta_time) const;
+            void advancePlayback(float delta_time);
+            void applyPlaybackCameraFollow();
             void renderKeyframeEditOverlay(const ViewportLayout& viewport);
             void initPipPreview();
             void renderKeyframePreview(const UIContext& ctx);
@@ -91,7 +98,9 @@ namespace lfs::vis {
 
             lfs::vis::PanelInputState panel_input_{};
             std::chrono::steady_clock::time_point last_panel_frame_time_ = std::chrono::steady_clock::now();
+            float last_panel_delta_time_ = 0.0f;
             float panel_elapsed_time_ = 0.0f;
+            bool playback_ticked_before_scene_ = false;
 
             static constexpr int PREVIEW_WIDTH = 320;
             static constexpr int PREVIEW_HEIGHT = 180;

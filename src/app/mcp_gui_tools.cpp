@@ -4178,6 +4178,21 @@ namespace lfs::app {
                 .save_path = [](const std::string& path) { return python::save_camera_path(path); },
                 .load_path = [](const std::string& path) { return python::load_camera_path(path); },
                 .set_playback_speed = [](const float speed) { python::set_playback_speed(speed); },
+                .load_ply_sequence =
+                    [](const std::string& directory, const float fps) {
+                        core::events::cmd::SequencerLoadPlySequence{.directory = directory, .fps = fps}.emit();
+                    },
+                .scrub_to_time =
+                    [viewer_impl](const float time) {
+                        auto* const gui_manager = viewer_impl ? viewer_impl->getGuiManager() : nullptr;
+                        if (gui_manager)
+                            gui_manager->sequencer().seek(time);
+                    },
+                .ply_sequence_status =
+                    [viewer_impl]() -> std::string {
+                    auto* const gui_manager = viewer_impl ? viewer_impl->getGuiManager() : nullptr;
+                    return gui_manager ? gui_manager->sequencerUI().plyPlayerStatusJson() : std::string{};
+                },
             });
 
         // --- Plugin tools ---

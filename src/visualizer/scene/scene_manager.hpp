@@ -220,6 +220,13 @@ namespace lfs::vis {
         bool reparentNode(const std::string& node_name, const std::string& new_parent_name);
         std::string addGroupNode(const std::string& name, const std::string& parent_name = "");
         std::string addPlySequenceNode(const std::string& name, const std::string& parent_name = "", size_t frame_count = 0);
+
+        // Allocator that backs splat tensors with Vulkan-external interop storage (the
+        // form the rasterizer can bind zero-copy). Returns an empty allocator when interop
+        // is unavailable. The PLY-sequence streaming player uses this on the main thread to
+        // upload background-decoded frames into render-ready storage.
+        [[nodiscard]] lfs::io::SplatTensorAllocator makeExternalSplatAllocator() const;
+
         std::string duplicateNodeTree(const std::string& name);
         std::string mergeGroupNode(const std::string& name);
 

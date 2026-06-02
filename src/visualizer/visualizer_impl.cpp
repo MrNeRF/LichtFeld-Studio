@@ -1343,6 +1343,9 @@ namespace lfs::vis {
             store_dirty = app_store().store().drain_dirty_into_frame();
         }
 
+        if (gui_manager_)
+            gui_manager_->sequencerUI().tickPlaybackBeforeSceneRender();
+
         const bool is_training = trainer_manager_ && trainer_manager_->isRunning();
         const FrameDemand frame_demand = collectFrameDemand(viewport_export_locked, store_dirty);
         if (gui_frame_rendered_ && !frame_demand.shouldRenderFrame()) {

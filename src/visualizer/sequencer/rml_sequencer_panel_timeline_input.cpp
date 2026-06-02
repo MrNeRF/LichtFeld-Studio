@@ -332,7 +332,7 @@ namespace lfs::vis {
         const float s = cached_dp_ratio_;
 
         const auto& timeline = controller_.timeline();
-        if (timeline.empty())
+        if (timeline.empty() && !controller_.hasPlySequence())
             return;
 
         // Resolve actual rendered Y of #track-area (where diamonds live) from

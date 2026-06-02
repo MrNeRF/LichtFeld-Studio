@@ -3132,6 +3132,10 @@ namespace lfs::vis {
         return unique_name;
     }
 
+    lfs::io::SplatTensorAllocator SceneManager::makeExternalSplatAllocator() const {
+        return makeViewerSplatTensorAllocator();
+    }
+
     std::string SceneManager::addGeneratedSplatNode(std::unique_ptr<core::SplatData> model,
                                                     const std::string& source_name,
                                                     const std::string& desired_name,

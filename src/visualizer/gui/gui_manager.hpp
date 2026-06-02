@@ -110,6 +110,8 @@ namespace lfs::vis {
 
             [[nodiscard]] SequencerController& sequencer() { return sequencer_ui_.controller(); }
             [[nodiscard]] const SequencerController& sequencer() const { return sequencer_ui_.controller(); }
+            [[nodiscard]] SequencerUIManager& sequencerUI() { return sequencer_ui_; }
+            [[nodiscard]] const SequencerUIManager& sequencerUI() const { return sequencer_ui_; }
 
             [[nodiscard]] panels::SequencerUIState& getSequencerUIState() { return sequencer_ui_state_; }
             [[nodiscard]] const panels::SequencerUIState& getSequencerUIState() const { return sequencer_ui_state_; }

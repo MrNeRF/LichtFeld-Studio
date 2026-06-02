@@ -278,6 +278,24 @@ namespace lfs::core {
         }
     }
 
+    std::unique_ptr<lfs::core::SplatData> Scene::swapNodeModel(
+        const std::string& name, std::unique_ptr<lfs::core::SplatData> model) {
+        auto* node = getMutableNode(name);
+        if (!node) {
+            LOG_WARN("swapNodeModel: node '{}' not found", name);
+            return model;
+        }
+
+        const size_t gaussian_count = model ? static_cast<size_t>(model->size()) : 0;
+        const glm::vec3 centroid = model ? computeCentroid(model.get()) : node->centroid;
+        auto previous = std::move(node->model);
+        node->model = std::move(model);
+        node->gaussian_count.store(gaussian_count, std::memory_order_release);
+        node->centroid = centroid;
+        notifyMutation(MutationType::MODEL_CHANGED);
+        return previous;
+    }
+
     void Scene::setNodeVisibility(const std::string& name, const bool visible) {
         auto it = name_to_id_.find(name);
         if (it != name_to_id_.end()) {
