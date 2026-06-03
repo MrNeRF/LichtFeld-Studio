@@ -7,18 +7,33 @@ import logging
 import os
 import shutil
 import tempfile
+import threading
 import uuid
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
 _log = logging.getLogger(__name__)
+_T = TypeVar("_T")
+_ASSET_INDEX_LOCK = threading.RLock()
 
 LIBRARY_VERSION = "1.0.0"
 LEGACY_STORAGE_PATH = Path.home() / ".lichtfeld" / "asset_manager"
 DEFAULT_LIBRARY_PATH = LEGACY_STORAGE_PATH / "library.json"
 LEGACY_LIBRARY_PATH = LEGACY_STORAGE_PATH / "library.json"
+
+
+def _synchronized(method: Callable[..., _T]) -> Callable[..., _T]:
+    """Serialize access to the in-memory catalog and backing JSON file."""
+
+    @wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return wrapper
 
 
 def _dedupe_paths(paths: List[Path]) -> List[Path]:
@@ -282,6 +297,7 @@ class AssetIndex:
         """
         self._library_path = library_path or resolve_asset_manager_library_path()
         self._library_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = _ASSET_INDEX_LOCK
 
         # In-memory catalog storage
         self._version: str = LIBRARY_VERSION
@@ -299,30 +315,36 @@ class AssetIndex:
         return self._library_path
 
     @property
+    @_synchronized
     def folders(self) -> Dict[str, Dict[str, Any]]:
         """Return folders as dictionaries for backward compatibility."""
         return {fid: f.to_dict() for fid, f in self._folders.items()}
 
     @property
+    @_synchronized
     def scenes(self) -> Dict[str, Dict[str, Any]]:
         """Return scenes as dictionaries for backward compatibility."""
         return {sid: s.to_dict() for sid, s in self._scenes.items()}
 
     @property
+    @_synchronized
     def assets(self) -> Dict[str, Dict[str, Any]]:
         """Return assets as dictionaries for backward compatibility."""
         return {aid: a.to_dict() for aid, a in self._assets.items()}
 
     @property
+    @_synchronized
     def collections(self) -> Dict[str, Dict[str, Any]]:
         """Return collections."""
-        return self._collections
+        return dict(self._collections)
 
     @property
+    @_synchronized
     def tags(self) -> Dict[str, Dict[str, Any]]:
         """Return tags."""
-        return self._tags
+        return dict(self._tags)
 
+    @_synchronized
     def load(self) -> bool:
         """Load library.json, create default if missing.
 
@@ -379,6 +401,7 @@ class AssetIndex:
             _log.error("Failed to load library: %s", exc)
             return False
 
+    @_synchronized
     def save(self) -> bool:
         """Atomic save with backup (.json.bak).
 
@@ -456,6 +479,7 @@ class AssetIndex:
             )
             return False
 
+    @_synchronized
     def ensure_default_catalog(self) -> None:
         """Create empty catalog structure."""
         self._version = LIBRARY_VERSION
@@ -472,6 +496,7 @@ class AssetIndex:
     # Folder CRUD
     # -------------------------------------------------------------------------
 
+    @_synchronized
     def create_folder(
         self, name: str, description: str = "", tags: Optional[List[str]] = None
     ) -> Folder:
@@ -495,6 +520,7 @@ class AssetIndex:
         self.save()
         return folder
 
+    @_synchronized
     def update_folder(self, folder_id: str, **kwargs) -> Optional[Folder]:
         """Update a folder.
 
@@ -516,6 +542,7 @@ class AssetIndex:
         self.save()
         return folder
 
+    @_synchronized
     def delete_folder(self, folder_id: str) -> bool:
         """Delete a folder and all associated scenes and assets.
 
@@ -548,6 +575,7 @@ class AssetIndex:
         self.save()
         return True
 
+    @_synchronized
     def get_folder(self, folder_id: str) -> Optional[Folder]:
         """Get a folder by ID.
 
@@ -559,6 +587,7 @@ class AssetIndex:
         """
         return self._folders.get(folder_id)
 
+    @_synchronized
     def get_watch_dirs(self, folder_id: str) -> List[str]:
         """Get watched directories for a folder.
 
@@ -573,6 +602,7 @@ class AssetIndex:
             return []
         return list(folder.watch_directories)
 
+    @_synchronized
     def set_watch_dirs(self, folder_id: str, paths: List[str]) -> bool:
         """Set watched directories for a folder.
 
@@ -596,6 +626,7 @@ class AssetIndex:
             return False
         return True
 
+    @_synchronized
     def list_folders(self) -> List[Folder]:
         """List all folders.
 
@@ -604,6 +635,7 @@ class AssetIndex:
         """
         return list(self._folders.values())
 
+    @_synchronized
     def find_or_create_folder(self, name: str) -> Folder:
         """Find a folder by name or create a new one.
 
@@ -622,6 +654,7 @@ class AssetIndex:
     # Scene CRUD
     # -------------------------------------------------------------------------
 
+    @_synchronized
     def create_scene(
         self,
         folder_id: str,
@@ -661,6 +694,7 @@ class AssetIndex:
             return None
         return scene
 
+    @_synchronized
     def update_scene(self, scene_id: str, **kwargs) -> Optional[Scene]:
         """Update a scene.
 
@@ -684,6 +718,7 @@ class AssetIndex:
             return None
         return scene
 
+    @_synchronized
     def delete_scene(self, scene_id: str) -> bool:
         """Delete a scene and all associated assets.
 
@@ -716,6 +751,7 @@ class AssetIndex:
         self.save()
         return True
 
+    @_synchronized
     def get_scene(self, scene_id: str) -> Optional[Scene]:
         """Get a scene by ID.
 
@@ -727,6 +763,7 @@ class AssetIndex:
         """
         return self._scenes.get(scene_id)
 
+    @_synchronized
     def list_scenes(self, folder_id: Optional[str] = None) -> List[Scene]:
         """List scenes, optionally filtered by folder.
 
@@ -741,6 +778,7 @@ class AssetIndex:
             scenes = [s for s in scenes if s.folder_id == folder_id]
         return scenes
 
+    @_synchronized
     def find_or_create_scene(self, folder_id: str, name: str) -> Optional[Scene]:
         """Find a scene by name within a folder or create a new one.
 
@@ -762,6 +800,7 @@ class AssetIndex:
     # Asset CRUD
     # -------------------------------------------------------------------------
 
+    @_synchronized
     def create_asset(
         self,
         folder_id: Optional[str],
@@ -875,6 +914,7 @@ class AssetIndex:
             return None
         return asset
 
+    @_synchronized
     def update_asset(self, asset_id: str, **kwargs) -> Optional[Asset]:
         """Update an asset.
 
@@ -900,6 +940,7 @@ class AssetIndex:
             return None
         return asset
 
+    @_synchronized
     def delete_asset(self, asset_id: str) -> bool:
         """Delete an asset.
 
@@ -953,10 +994,12 @@ class AssetIndex:
             return False
         return True
 
+    @_synchronized
     def remove_asset(self, asset_id: str) -> bool:
         """Backward-compatible alias for delete_asset."""
         return self.delete_asset(asset_id)
 
+    @_synchronized
     def get_asset(self, asset_id: str) -> Optional[Asset]:
         """Get an asset by ID.
 
@@ -968,6 +1011,7 @@ class AssetIndex:
         """
         return self._assets.get(asset_id)
 
+    @_synchronized
     def find_asset_by_path(
         self,
         absolute_path: str,
@@ -990,6 +1034,7 @@ class AssetIndex:
                 return asset
         return None
 
+    @_synchronized
     def rebuild_tag_index(self, save: bool = True) -> None:
         """Recompute tag counts from current catalog contents."""
         tag_counts: Dict[str, Dict[str, Any]] = {}
@@ -1019,6 +1064,7 @@ class AssetIndex:
         if save:
             self.save()
 
+    @_synchronized
     def add_tag_to_asset(self, asset_id: str, tag: str) -> Optional[Asset]:
         """Add a tag to an asset if it is not already present."""
         asset = self._assets.get(asset_id)
@@ -1034,6 +1080,7 @@ class AssetIndex:
         self.save()
         return asset
 
+    @_synchronized
     def remove_tag_from_asset(self, asset_id: str, tag: str) -> Optional[Asset]:
         """Remove a tag from an asset."""
         asset = self._assets.get(asset_id)
@@ -1052,6 +1099,7 @@ class AssetIndex:
             return None
         return asset
 
+    @_synchronized
     def list_assets(
         self,
         folder_id: Optional[str] = None,
@@ -1085,6 +1133,7 @@ class AssetIndex:
             assets = [a for a in assets if all(t in a.tags for t in tags)]
         return assets
 
+    @_synchronized
     def mark_missing_files(self) -> Tuple[int, int]:
         """Update exists flag for all assets based on file existence.
 
@@ -1114,6 +1163,7 @@ class AssetIndex:
     # Search/Filter Methods
     # -------------------------------------------------------------------------
 
+    @_synchronized
     def search_folders(self, query: str) -> List[Folder]:
         """Search folders by name, description, or tags.
 
@@ -1133,6 +1183,7 @@ class AssetIndex:
                 results.append(folder)
         return results
 
+    @_synchronized
     def search_scenes(
         self, query: str, folder_id: Optional[str] = None
     ) -> List[Scene]:
@@ -1156,6 +1207,7 @@ class AssetIndex:
                 results.append(scene)
         return results
 
+    @_synchronized
     def search_assets(
         self,
         query: str,
@@ -1181,6 +1233,7 @@ class AssetIndex:
                 results.append(asset)
         return results
 
+    @_synchronized
     def get_recent_assets(self, limit: int = 10) -> List[Asset]:
         """Get most recently modified assets.
 
@@ -1197,6 +1250,7 @@ class AssetIndex:
         )
         return sorted_assets[:limit]
 
+    @_synchronized
     def get_statistics(self) -> Dict[str, Any]:
         """Get catalog statistics.
 

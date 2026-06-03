@@ -113,7 +113,7 @@
     "dialog.create_new_folder": "Neuen Ordner erstellen",
     "dialog.enter_new_name": "Neuen Namen eingeben für: {name}",
     "dialog.enter_number_or_name": "Nummer oder Namen eingeben:",
-    "dialog.enter_folder_name": "Namen für das neue Ordner eingeben:",
+    "dialog.enter_folder_name": "Namen für den neuen Ordner eingeben:",
     "dialog.move_to_folder": "Zu Ordner verschieben",
     "dialog.new_folder": "Neuer Ordner",
     "dialog.rename_asset": "Asset umbenennen",

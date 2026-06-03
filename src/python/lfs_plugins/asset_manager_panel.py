@@ -1852,8 +1852,11 @@ class AssetManagerPanel(Panel):
             if thread.is_alive():
                 thread.join(timeout=timeout / max(len(threads), 1))
         with self._pending_thumbnail_lock:
-            self._pending_thumbnail_threads.clear()
-            self._thumbnail_in_flight.clear()
+            self._pending_thumbnail_threads = {
+                thread for thread in self._pending_thumbnail_threads if thread.is_alive()
+            }
+            if not self._pending_thumbnail_threads:
+                self._thumbnail_in_flight.clear()
 
     def _generate_asset_thumbnail(self, asset: Any) -> None:
         if not asset:
@@ -3285,7 +3288,7 @@ class AssetManagerPanel(Panel):
         folders = []
         for fld_id, fld in self._asset_index.folders.items():
             if fld_id != asset.get("folder_id"):  # Exclude current folder
-                folders.append((proj_id, proj.get("name", "Unnamed")))
+                folders.append((fld_id, fld.get("name", "Unnamed")))
 
         if not folders:
             self._log_info("No other folders available to move to")
@@ -3315,8 +3318,8 @@ class AssetManagerPanel(Panel):
                     # Try to match by name
                     for fld_id, fld_name in folders:
                         if selection.lower() in fld_name.lower():
-                            selected_folder_id = proj_id
-                            selected_folder_name = proj_name
+                            selected_folder_id = fld_id
+                            selected_folder_name = fld_name
                             break
 
                 if not selected_folder_id:
@@ -3549,12 +3552,6 @@ class AssetManagerPanel(Panel):
             self._log_warn("Cannot delete the Default folder")
             return
 
-        # Prevent deletion of the Default folder
-        folder_name = folder.get("name", "")
-        if folder_name.lower() == "default":
-            self._log_warn("Cannot delete the Default folder")
-            return
-
         # Close the menu
         self._open_menu_folder_id = None
         self._dirty_model("folders")
@@ -3565,9 +3562,9 @@ class AssetManagerPanel(Panel):
         default_folder = None
         default_folder_id = None
         for fid, fldr in self._asset_index.folders.items():
-            if fld.get("name", "").lower() == "default":
+            if fldr.get("name", "").lower() == "default":
                 default_folder_id = fid
-                default_folder = fld
+                default_folder = fldr
                 break
 
         # Create Default folder if it doesn't exist
