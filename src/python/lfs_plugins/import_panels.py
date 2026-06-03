@@ -285,6 +285,14 @@ def _register_discovered_assets(
         scene_id,
         len(metadata_list),
     )
+    if not folder_id:
+        _watch_log(
+            "warn",
+            "register skipped without selected folder library=%s metadata_count=%d",
+            _index_library_path(index),
+            len(metadata_list),
+        )
+        return []
 
     for metadata in metadata_list:
         file_path = metadata.get("path")
@@ -1150,13 +1158,10 @@ class URLImportPanel(_ImportDialogPanel):
                 folder_id = candidate_folder
             if candidate_scene and candidate_scene in index.scenes:
                 scene = index.scenes[candidate_scene]
-                if folder_id is None or scene.folder_id == folder_id:
+                scene_folder_id = scene.get("folder_id")
+                if folder_id is None or scene_folder_id == folder_id:
                     scene_id = candidate_scene
-                    folder_id = folder_id or scene.folder_id
-
-        if folder_id is None:
-            folder = index.find_or_create_folder("Default")
-            folder_id = folder.id if folder is not None else None
+                    folder_id = folder_id or scene_folder_id
 
         return folder_id, scene_id
 

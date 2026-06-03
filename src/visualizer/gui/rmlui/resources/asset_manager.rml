@@ -136,8 +136,9 @@
                 </div>
                 <button class="asset-card-menu" data-attr-data-asset-id="asset.id" data-asset-action="menu"><img src="../icon/more-vertical.png" /></button>
                 <div class="asset-load-menu" data-class-is-visible="asset.load_menu_open">
-                  <div class="asset-dropdown-item" data-attr-data-asset-id="asset.id" data-asset-action="load_new">{{load_new_label}}</div>
-                  <div class="asset-dropdown-item" data-attr-data-asset-id="asset.id" data-asset-action="add_to_scene">{{add_to_scene_label}}</div>
+                  <div class="asset-dropdown-item" data-if="asset.can_load" data-attr-data-asset-id="asset.id" data-asset-action="load_new">{{load_new_label}}</div>
+                  <div class="asset-dropdown-item" data-if="asset.can_load" data-attr-data-asset-id="asset.id" data-asset-action="add_to_scene">{{add_to_scene_label}}</div>
+                  <div class="asset-dropdown-item is-danger" data-attr-data-asset-id="asset.id" data-asset-action="remove_from_menu">{{remove_from_catalog_label}}</div>
                 </div>
                 <div class="asset-card-dropdown" data-class-is-visible="asset.menu_open">
                   <div data-if="asset.type != 'dataset'">
@@ -181,8 +182,9 @@
                 <span class="asset-col asset-col-size">{{asset.size_label}}</span>
                 <span class="asset-col asset-col-modified">{{asset.modified_label}}</span>
                 <div class="asset-load-menu" data-class-is-visible="asset.load_menu_open">
-                  <div class="asset-dropdown-item" data-attr-data-asset-id="asset.id" data-asset-action="load_new">{{load_new_label}}</div>
-                  <div class="asset-dropdown-item" data-attr-data-asset-id="asset.id" data-asset-action="add_to_scene">{{add_to_scene_label}}</div>
+                  <div class="asset-dropdown-item" data-if="asset.can_load" data-attr-data-asset-id="asset.id" data-asset-action="load_new">{{load_new_label}}</div>
+                  <div class="asset-dropdown-item" data-if="asset.can_load" data-attr-data-asset-id="asset.id" data-asset-action="add_to_scene">{{add_to_scene_label}}</div>
+                  <div class="asset-dropdown-item is-danger" data-attr-data-asset-id="asset.id" data-asset-action="remove_from_menu">{{remove_from_catalog_label}}</div>
                 </div>
               </div>
             </div>

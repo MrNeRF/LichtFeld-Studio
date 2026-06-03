@@ -12,7 +12,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Any
+from typing import Callable, Dict, List, Optional, Set, Any
 from urllib.parse import quote
 
 import lichtfeld as lf
@@ -523,6 +523,7 @@ class AssetManagerPanel(Panel):
         model.bind_func("show_in_folder_label", lambda: tr("asset_manager.action.show_in_folder"))
         model.bind_func("update_thumbnail_label", lambda: tr("asset_manager.action.update_thumbnail"))
         model.bind_func("remove_label", lambda: tr("asset_manager.action.remove"))
+        model.bind_func("remove_from_catalog_label", lambda: tr("asset_manager.action.remove_from_catalog"))
         model.bind_func("refresh_label", lambda: tr("asset_manager.action.refresh"))
         model.bind_func("clean_missing_label", lambda: tr("asset_manager.action.clean_missing"))
         model.bind_func("refresh_tooltip", lambda: tr("asset_manager.tooltip.refresh"))
@@ -764,7 +765,8 @@ class AssetManagerPanel(Panel):
             return f"{file_size_bytes / 1024:.1f} {tr('asset_manager.unit.kb')}"
         return f"{file_size_bytes} {tr('asset_manager.unit.b')}"
 
-    def _ellipsize_path(self, path: str, max_chars: int = 56) -> str:
+    def _ellipsize_path(self, path: Any, max_chars: int = 56) -> str:
+        path = str(path or "")
         if not path or len(path) <= max_chars:
             return path
         keep = max(8, (max_chars - 3) // 2)
@@ -824,28 +826,71 @@ class AssetManagerPanel(Panel):
             if asset.get("folder_id") == folder_id and self._asset_file_exists(asset)
         )
 
-    def _ensure_default_folder(self) -> None:
-        """Ensure a 'Default' folder always exists."""
+    def _folder_sort_key(self, folder_id: str) -> str:
         if not self._asset_index or not hasattr(self._asset_index, "folders"):
-            return
+            return folder_id
+        folder = self._asset_index.folders.get(folder_id, {})
+        return self._sort_text(folder.get("name") or folder_id)
 
-        # Check if Default folder exists
-        default_folder_name = tr("asset_manager.default_folder_name")
-        has_default = any(
-            folder.get("name") == default_folder_name
-            for folder in self._asset_index.folders.values()
-        )
+    @staticmethod
+    def _sort_text(value: Any) -> str:
+        return str(value or "").lower()
 
-        if not has_default:
-            if not hasattr(self._asset_index, "create_folder"):
-                return
-            try:
-                self._asset_index.create_folder(name=default_folder_name)
-                self._log_info(tr("asset_manager.msg.created_default"))
-            except Exception as e:
-                self._log_error(
-                    tr("asset_manager.msg.failed_create_default", error=e)
-                )
+    def _repair_selected_folder(self) -> Optional[str]:
+        if not self._asset_index or not hasattr(self._asset_index, "folders"):
+            self._selected_folder_id = None
+            self._selected_scene_id = None
+            return None
+
+        folders = self._asset_index.folders
+        candidate_id: Optional[str] = None
+        if self._selected_folder_id in folders:
+            candidate_id = self._selected_folder_id
+
+        if not candidate_id and self._selected_scene_id and hasattr(self._asset_index, "scenes"):
+            scene = self._asset_index.scenes.get(self._selected_scene_id)
+            scene_folder_id = scene.get("folder_id") if scene else None
+            if scene_folder_id in folders:
+                candidate_id = scene_folder_id
+
+        if not candidate_id and hasattr(self._asset_index, "assets"):
+            for asset_id in self._selected_asset_ids:
+                asset = self._asset_index.assets.get(asset_id)
+                asset_folder_id = asset.get("folder_id") if asset else None
+                if asset_folder_id in folders:
+                    candidate_id = asset_folder_id
+                    break
+
+        if not candidate_id and folders:
+            candidate_id = sorted(folders.keys(), key=self._folder_sort_key)[0]
+
+        self._selected_folder_id = candidate_id
+        if not candidate_id:
+            self._selected_scene_id = None
+            self._selected_asset_ids.clear()
+            if self._selection_type == "folder":
+                self._selection_type = "none"
+            return None
+
+        if self._selected_scene_id and hasattr(self._asset_index, "scenes"):
+            scene = self._asset_index.scenes.get(self._selected_scene_id)
+            if not scene or scene.get("folder_id") != candidate_id:
+                self._selected_scene_id = None
+                if self._selection_type == "scene":
+                    self._selection_type = "folder"
+        if self._selected_asset_ids and hasattr(self._asset_index, "assets"):
+            visible_asset_ids = {
+                aid
+                for aid in self._selected_asset_ids
+                if self._asset_index.assets.get(aid, {}).get("folder_id") == candidate_id
+            }
+            if visible_asset_ids != self._selected_asset_ids:
+                self._selected_asset_ids = visible_asset_ids
+                if not visible_asset_ids and self._selection_type == "asset":
+                    self._selection_type = "folder"
+        if self._selection_type == "none":
+            self._selection_type = "folder"
+        return candidate_id
 
     def _format_display_name(self, name: str, max_length: int = 15) -> str:
         """Format a name for display, truncating with ... if too long."""
@@ -868,11 +913,11 @@ class AssetManagerPanel(Panel):
                 "name", ""
             )
 
-        return folder_name, scene_name
+        return str(folder_name or ""), str(scene_name or "")
 
     def _asset_display_title(self, asset: Dict[str, Any]) -> str:
         # Prioritize custom name if set by user
-        custom_name = asset.get("name", "").strip()
+        custom_name = str(asset.get("name") or "").strip()
         if custom_name:
             return custom_name
 
@@ -880,7 +925,7 @@ class AssetManagerPanel(Panel):
         file_path = asset.get("absolute_path") or asset.get("path") or ""
         if file_path:
             try:
-                leaf = Path(os.path.normpath(file_path)).name
+                leaf = Path(os.path.normpath(str(file_path))).name
                 if leaf:
                     return leaf
             except Exception:
@@ -894,8 +939,9 @@ class AssetManagerPanel(Panel):
         folder_name: str,
         scene_name: str,
     ) -> Dict[str, str]:
-        asset_name = asset.get("name", "Unnamed")
-        role_label = asset.get("role", "").replace("_", " ").title()
+        asset_name = str(asset.get("name") or "")
+        role = str(asset.get("role") or "")
+        role_label = role.replace("_", " ").title()
         display_name = self._asset_display_title(asset)
 
         if scene_name and scene_name != display_name:
@@ -938,6 +984,10 @@ class AssetManagerPanel(Panel):
         stale_cutoff = timedelta(days=self._STALE_ASSET_GRACE_DAYS)
         prune_ids: List[str] = []
 
+        folder_id = self._repair_selected_folder()
+        if not folder_id:
+            return []
+
         assets = []
         for asset_id, asset in self._asset_index.assets.items():
             if not self._asset_file_exists(asset):
@@ -950,10 +1000,7 @@ class AssetManagerPanel(Panel):
                     prune_ids.append(asset_id)
                 continue
 
-            if (
-                self._selected_folder_id
-                and asset.get("folder_id") != self._selected_folder_id
-            ):
+            if asset.get("folder_id") != folder_id:
                 continue
             if (
                 self._selected_scene_id
@@ -1010,11 +1057,11 @@ class AssetManagerPanel(Panel):
         Matches if all characters in query appear in the asset name in order.
         Example: 'pt' matches 'points3D', 'tester', 'point_cloud'
         """
-        query_l = query.strip().lower()
+        query_l = str(query or "").strip().lower()
         if not query_l:
             return True
 
-        asset_name = asset.get("name", "").lower()
+        asset_name = self._sort_text(asset.get("name"))
         if not asset_name:
             return False
 
@@ -1035,14 +1082,14 @@ class AssetManagerPanel(Panel):
     def _sort_assets(self, assets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Sort assets based on current sort mode."""
         if self._sort_mode == "name":
-            return sorted(assets, key=lambda a: a.get("name", "").lower())
+            return sorted(assets, key=lambda a: self._sort_text(a.get("name")))
         if self._sort_mode == "size":
             return sorted(
                 assets, key=lambda a: a.get("file_size_bytes", 0), reverse=True
             )
         if self._sort_mode == "type":
-            return sorted(assets, key=lambda a: a.get("type", "").lower())
-        return sorted(assets, key=lambda a: a.get("name", "").lower())
+            return sorted(assets, key=lambda a: self._sort_text(a.get("type")))
+        return sorted(assets, key=lambda a: self._sort_text(a.get("name")))
 
     def _thumbnail_decorator(self, asset: Dict[str, Any]) -> str:
         thumbnail_path = asset.get("thumbnail_path") or ""
@@ -1058,8 +1105,10 @@ class AssetManagerPanel(Panel):
 
     def _format_asset_for_ui(self, asset: Dict[str, Any]) -> Dict[str, Any]:
         """Format asset data for UI display."""
-        asset_id = asset.get("id", "")
-        asset_type = asset.get("type", "")
+        asset_id = str(asset.get("id") or "")
+        asset_type = str(asset.get("type") or "")
+        asset_name = str(asset.get("name") or tr("asset_manager.unnamed"))
+        role = str(asset.get("role") or "")
         file_size_bytes = self._coerce_nonnegative_int(
             asset.get("file_size_bytes", 0)
         )
@@ -1124,23 +1173,28 @@ class AssetManagerPanel(Panel):
             "usd": tr("asset_manager.type.usd"),
         }
         type_label = type_labels.get(asset_type, asset_type.upper() if asset_type else "")
+        tags = asset.get("tags") or []
+        if isinstance(tags, (list, tuple, set)):
+            tags_label = ", ".join(str(tag) for tag in tags if tag is not None)
+        else:
+            tags_label = str(tags)
 
         return {
             "id": asset_id,
-            "name": asset.get("name", "Unnamed"),
+            "name": asset_name,
             "display_name": display_fields["display_name"],
             "display_subtitle": display_fields["display_subtitle"],
             "context_label": display_fields["context_label"],
             "type": asset_type,
-            "role": asset.get("role", ""),
+            "role": role,
             "type_label": type_label,
-            "role_label": asset.get("role", "").replace("_", " ").title(),
+            "role_label": role.replace("_", " ").title(),
             "size_label": size_str,
             "file_size_bytes": file_size_bytes,
             "points_label": points_str,
             "gaussian_count": gaussian_count,
             # Record-list rows only support scalar fields in the current RML bridge.
-            "tags_label": ", ".join(asset.get("tags", [])) if asset.get("tags") else "",
+            "tags_label": tags_label,
             "thumb_class": thumb_class,
             "thumb_label": asset_type.upper() if asset_type else tr("asset_manager.type.asset"),
             "thumbnail_decorator": self._thumbnail_decorator(asset),
@@ -1153,7 +1207,7 @@ class AssetManagerPanel(Panel):
             "scene_id": asset.get("scene_id"),
             "folder_name": folder_name,
             "scene_name": scene_name,
-            "modified_at": asset.get("modified_at", ""),
+            "modified_at": str(asset.get("modified_at") or ""),
             "modified_label": self._format_timestamp(asset.get("modified_at", "")),
             "thumbnail_path": asset.get("thumbnail_path"),
             "menu_open": asset_id == self._open_menu_asset_id,
@@ -1165,8 +1219,7 @@ class AssetManagerPanel(Panel):
         if not self._asset_index or not hasattr(self._asset_index, "folders"):
             return []
 
-        # Ensure Default folder always exists
-        self._ensure_default_folder()
+        self._repair_selected_folder()
 
         folders = []
         for folder_id, folder in self._asset_index.folders.items():
@@ -1186,7 +1239,7 @@ class AssetManagerPanel(Panel):
                 }
             )
 
-        return sorted(folders, key=lambda f: f["name"].lower())
+        return sorted(folders, key=lambda f: self._sort_text(f.get("name")))
 
     def get_scene_list(self) -> List[Dict[str, Any]]:
         """Return list of scenes for selected folder."""
@@ -1213,17 +1266,20 @@ class AssetManagerPanel(Panel):
                 }
             )
 
-        return sorted(scenes, key=lambda s: s["name"].lower())
+        return sorted(scenes, key=lambda s: self._sort_text(s.get("name")))
 
     def get_filter_list(self) -> List[Dict[str, Any]]:
         """Return list of filter categories with counts (multi-select checkboxes)."""
         if not self._asset_index or not hasattr(self._asset_index, "assets"):
             return self._get_default_filters()
+        folder_id = self._repair_selected_folder()
+        if not folder_id:
+            return self._get_default_filters()
 
         assets = [
             a
             for a in self._asset_index.assets.values()
-            if self._asset_file_exists(a)
+            if self._asset_file_exists(a) and a.get("folder_id") == folder_id
         ]
 
         # Count by filter (Splat, PCL, Dataset, Checkpoint)
@@ -1270,10 +1326,30 @@ class AssetManagerPanel(Panel):
     def _get_default_filters(self) -> List[Dict[str, Any]]:
         """Return default filter list when backend unavailable."""
         return [
-            {"id": "splat", "label": tr("asset_manager.filter.splat"), "count": 0, "is_selected": False},
-            {"id": "pcl", "label": tr("asset_manager.filter.pcl"), "count": 0, "is_selected": False},
-            {"id": "dataset", "label": tr("asset_manager.filter.dataset"), "count": 0, "is_selected": False},
-            {"id": "checkpoint", "label": tr("asset_manager.filter.checkpoints"), "count": 0, "is_selected": False},
+            {
+                "id": "splat",
+                "label": tr("asset_manager.filter.splat"),
+                "count": 0,
+                "is_selected": "splat" in self._active_filters,
+            },
+            {
+                "id": "pcl",
+                "label": tr("asset_manager.filter.pcl"),
+                "count": 0,
+                "is_selected": "pcl" in self._active_filters,
+            },
+            {
+                "id": "dataset",
+                "label": tr("asset_manager.filter.dataset"),
+                "count": 0,
+                "is_selected": "dataset" in self._active_filters,
+            },
+            {
+                "id": "checkpoint",
+                "label": tr("asset_manager.filter.checkpoints"),
+                "count": 0,
+                "is_selected": "checkpoint" in self._active_filters,
+            },
         ]
 
     # ── Flattened Selected Asset Getters ─────────────────────
@@ -1293,7 +1369,7 @@ class AssetManagerPanel(Panel):
 
     def get_selected_asset_type(self) -> str:
         asset = self._get_selected_asset()
-        asset_type = asset.get("type", "") if asset else ""
+        asset_type = str(asset.get("type") or "") if asset else ""
         return asset_type.upper() if asset_type else ""
 
     def get_selected_asset_folder_name(self) -> str:
@@ -1327,7 +1403,7 @@ class AssetManagerPanel(Panel):
         asset = self._get_selected_asset()
         if not asset:
             return ""
-        role = asset.get("role", "")
+        role = str(asset.get("role") or "")
         return role.replace("_", " ").title() if role else ""
 
     def get_selected_asset_resolution(self) -> str:
@@ -1424,7 +1500,7 @@ class AssetManagerPanel(Panel):
         asset = self._get_selected_asset()
         if not asset:
             return ""
-        asset_type = asset.get("type", "")
+        asset_type = str(asset.get("type") or "")
         # For datasets, show initial points from COLMAP
         if asset_type == "dataset":
             dataset_meta = asset.get("dataset_metadata", {}) or {}
@@ -1538,14 +1614,14 @@ class AssetManagerPanel(Panel):
         asset = self._get_selected_asset()
         if not asset:
             return ""
-        asset_type = asset.get("type", "")
+        asset_type = str(asset.get("type") or "")
         return f"asset-pill-{asset_type.replace('_', '-')}" if asset_type else ""
 
     def get_selected_asset_type_label(self) -> str:
         asset = self._get_selected_asset()
         if not asset:
             return ""
-        asset_type = asset.get("type", "")
+        asset_type = str(asset.get("type") or "")
         type_labels = {
             "ply_3dgs": tr("asset_manager.type.splat"),
             "ply_pcl": tr("asset_manager.type.pcl"),
@@ -1653,25 +1729,57 @@ class AssetManagerPanel(Panel):
         except Exception:
             return timestamp
 
-    def _ensure_import_folder(
-        self, default_name: str = "Default"
-    ) -> Optional[str]:
-        # Import to currently selected folder if one is selected, otherwise use Default
+    def _create_folder_from_name(self, name: str) -> Optional[str]:
+        if not self._asset_index or not name or not name.strip():
+            return None
+        name = name.strip()
+        try:
+            folder = self._asset_index.create_folder(name=name)
+            if not folder:
+                self._log_error("Failed to create folder")
+                return None
+
+            self._selected_folder_id = folder.id
+            self._selected_scene_id = None
+            self._selected_asset_ids.clear()
+            self._selection_type = "folder"
+            self.refresh_catalog()
+            self._log_info("Created new folder: %s", name)
+            return folder.id
+        except Exception as e:
+            self._log_error("Failed to create new folder: %s", e)
+            return None
+
+    def _prompt_for_import_folder(
+        self, continuation: Callable[[str], None]
+    ) -> None:
+        def _on_folder_name_entered(name):
+            folder_id = self._create_folder_from_name(name)
+            if folder_id:
+                continuation(folder_id)
+
+        lf.ui.input_dialog(
+            tr("asset_manager.dialog.create_new_folder"),
+            tr("asset_manager.dialog.enter_folder_name"),
+            "",
+            _on_folder_name_entered,
+        )
+
+    def _with_import_folder(self, continuation: Callable[[str], None]) -> None:
+        if not self._asset_index:
+            self._log_warn("Asset index not initialized")
+            return
+        folder_id = self._ensure_import_folder()
+        if folder_id:
+            continuation(folder_id)
+            return
+        self._prompt_for_import_folder(continuation)
+
+    def _ensure_import_folder(self) -> Optional[str]:
+        # Import to the selected folder, repairing selection to an existing folder.
         if not self._asset_index:
             return None
-        
-        # If a folder is currently selected, use that
-        if self._selected_folder_id:
-            folder = self._asset_index.folders.get(self._selected_folder_id)
-            if folder:
-                return self._selected_folder_id
-        
-        # Fall back to Default folder
-        self._ensure_default_folder()
-        for fid, fldr in self._asset_index.folders.items():
-            if fldr.get("name") == "Default":
-                return fid
-        return None
+        return self._repair_selected_folder()
 
     def _metadata_to_asset_kwargs(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
         format_specific = metadata.get("format_specific", {}) or {}
@@ -1895,7 +2003,7 @@ class AssetManagerPanel(Panel):
             return False
 
         asset_id = asset.get("id", "")
-        asset_type = asset.get("type", "")
+        asset_type = str(asset.get("type") or "")
         if not asset_id:
             return False
 
@@ -1966,7 +2074,7 @@ class AssetManagerPanel(Panel):
         return (not thumbnail_exists) or (not thumbnail_size_ok)
 
     def _asset_needs_metadata_sync(self, asset: Dict[str, Any]) -> bool:
-        asset_type = asset.get("type", "")
+        asset_type = str(asset.get("type") or "")
         file_path = asset.get("absolute_path") or asset.get("path", "")
         if not file_path or not os.path.exists(file_path):
             return False
@@ -2023,7 +2131,7 @@ class AssetManagerPanel(Panel):
             if self._asset_needs_thumbnail_refresh(asset):
                 self._generate_asset_thumbnail_for_values(
                     asset_id,
-                    asset.get("type", ""),
+                    str(asset.get("type") or ""),
                     asset.get("absolute_path") or asset.get("path", ""),
                     asset.get("dataset_metadata", {}) or {},
                 )
@@ -2041,6 +2149,10 @@ class AssetManagerPanel(Panel):
         override_type: Optional[str] = None,
         override_role: Optional[str] = None,
     ):
+        if not folder_id:
+            self._log_warn("Cannot register asset without a folder: %s", path)
+            return None
+
         metadata = self._asset_scanner.scan_file(path) if self._asset_scanner else {}
         asset_kwargs = self._metadata_to_asset_kwargs(metadata)
         # Always pop type and role from kwargs to avoid duplicate keyword argument error
@@ -2066,6 +2178,41 @@ class AssetManagerPanel(Panel):
         if asset:
             self._generate_asset_thumbnail(asset)
         return asset
+
+    def _find_dataset_import_paths(self, path: str) -> List[str]:
+        if not self._asset_scanner:
+            return []
+        detected_type = self._asset_scanner.detect_type(path)
+        if detected_type == "dataset":
+            return [str(Path(path).resolve())]
+
+        datasets: List[str] = []
+        seen: Set[str] = set()
+        for metadata in self._asset_scanner.scan_directory(path, recursive=True):
+            if metadata.get("type") != "dataset":
+                continue
+            metadata_path = metadata.get("path")
+            if not metadata_path:
+                continue
+            resolved = str(Path(metadata_path).resolve())
+            if resolved in seen:
+                continue
+            datasets.append(resolved)
+            seen.add(resolved)
+        return datasets
+
+    def _drop_unknown_container_asset(self, path: str, folder_id: str) -> None:
+        if not self._asset_index:
+            return
+        existing = self._asset_index.find_asset_by_path(
+            str(Path(path).resolve()),
+            folder_id=folder_id,
+        )
+        if existing is None or existing.type == "dataset":
+            return
+        if existing.type not in (None, "", "unknown"):
+            return
+        self._asset_index.delete_asset(existing.id)
 
     def _log_info(self, message: str, *args) -> None:
         if args:
@@ -2250,24 +2397,7 @@ class AssetManagerPanel(Panel):
         self._dirty_model("new_folder_menu_open")
 
         def _on_folder_name_entered(name):
-            if not name or not name.strip():
-                return
-
-            name = name.strip()
-
-            try:
-                # Create new folder
-                folder = self._asset_index.create_folder(name=name)
-                if not folder:
-                    self._log_error("Failed to create folder")
-                    return
-
-                # Refresh the catalog to show the new folder
-                self.refresh_catalog()
-                self._log_info("Created new folder: %s", name)
-
-            except Exception as e:
-                self._log_error("Failed to create new folder: %s", e)
+            self._create_folder_from_name(name)
 
         lf.ui.input_dialog(
             tr("asset_manager.dialog.create_new_folder"),
@@ -2332,56 +2462,57 @@ class AssetManagerPanel(Panel):
             _logger.warning("Asset index not initialized")
             return
 
-        file_path = lf.ui.open_ply_file_dialog("")
-        if not file_path:
-            return
+        def _continue_import(folder_id: str) -> None:
+            file_path = lf.ui.open_ply_file_dialog("")
+            if not file_path:
+                return
 
-        try:
-            folder_id = self._ensure_import_folder()
+            try:
+                path_lower = file_path.lower()
+                if path_lower.endswith('.ply'):
+                    asset_type = None  # Let scanner detect ply_3dgs vs ply_pcl
+                    fallback_role = (
+                        "initial_point_cloud"
+                        if 'point_cloud' in path_lower or 'initial' in path_lower
+                        else "trained_output"
+                    )
+                elif path_lower.endswith(('.sog', '.spz')):
+                    asset_type = path_lower.split('.')[-1]
+                    fallback_role = (
+                        "initial_point_cloud"
+                        if 'point_cloud' in path_lower or 'initial' in path_lower
+                        else "trained_output"
+                    )
+                elif path_lower.endswith(('.usd', '.usda', '.usdc', '.usdz')):
+                    asset_type = "usd"
+                    fallback_role = "reference"
+                else:
+                    asset_type = None
+                    fallback_role = "reference"
 
-            path_lower = file_path.lower()
-            if path_lower.endswith('.ply'):
-                asset_type = None  # Let scanner detect ply_3dgs vs ply_pcl
-                fallback_role = (
-                    "initial_point_cloud"
-                    if 'point_cloud' in path_lower or 'initial' in path_lower
-                    else "trained_output"
+                asset = self._scan_and_register_asset(
+                    file_path,
+                    folder_id=folder_id,
+                    scene_id=self._selected_scene_id,
+                    fallback_role=fallback_role,
+                    override_type=asset_type,
                 )
-            elif path_lower.endswith(('.sog', '.spz')):
-                asset_type = path_lower.split('.')[-1]
-                fallback_role = (
-                    "initial_point_cloud"
-                    if 'point_cloud' in path_lower or 'initial' in path_lower
-                    else "trained_output"
-                )
-            elif path_lower.endswith(('.usd', '.usda', '.usdc', '.usdz')):
-                asset_type = "usd"
-                fallback_role = "reference"
-            else:
-                asset_type = None
-                fallback_role = "reference"
+                self._import_menu_open = False
 
-            asset = self._scan_and_register_asset(
-                file_path,
-                folder_id=folder_id,
-                scene_id=self._selected_scene_id,
-                fallback_role=fallback_role,
-                override_type=asset_type,
-            )
-            self._import_menu_open = False
+                if asset:
+                    self._selected_asset_ids.add(asset.id)
+                    self._update_selection_type()
 
-            if asset:
-                self._selected_asset_ids.add(asset.id)
-                self._update_selection_type()
+                self.refresh_catalog()
+                self._dirty_model("import_menu_open")
 
-            self.refresh_catalog()
-            self._dirty_model("import_menu_open")
+                if asset:
+                    _logger.info(f"Imported asset: {asset.name}")
 
-            if asset:
-                _logger.info(f"Imported asset: {asset.name}")
+            except Exception as e:
+                _logger.error(f"Failed to import splat: {e}")
 
-        except Exception as e:
-            _logger.error(f"Failed to import splat: {e}")
+        self._with_import_folder(_continue_import)
 
     def on_import_mesh(self, _handle, _ev, args):
         """Import a mesh file (OBJ, FBX, GLTF, etc.)."""
@@ -2389,34 +2520,35 @@ class AssetManagerPanel(Panel):
             _logger.warning("Asset index not initialized")
             return
 
-        file_path = lf.ui.open_mesh_file_dialog("")
-        if not file_path:
-            return
+        def _continue_import(folder_id: str) -> None:
+            file_path = lf.ui.open_mesh_file_dialog("")
+            if not file_path:
+                return
 
-        try:
-            folder_id = self._ensure_import_folder()
+            try:
+                asset = self._scan_and_register_asset(
+                    file_path,
+                    folder_id=folder_id,
+                    scene_id=self._selected_scene_id,
+                    fallback_role="reference",
+                    override_type="mesh",
+                )
+                self._import_menu_open = False
 
-            asset = self._scan_and_register_asset(
-                file_path,
-                folder_id=folder_id,
-                scene_id=self._selected_scene_id,
-                fallback_role="reference",
-                override_type="mesh",
-            )
-            self._import_menu_open = False
+                if asset:
+                    self._selected_asset_ids.add(asset.id)
+                    self._update_selection_type()
 
-            if asset:
-                self._selected_asset_ids.add(asset.id)
-                self._update_selection_type()
+                self.refresh_catalog()
+                self._dirty_model("import_menu_open")
 
-            self.refresh_catalog()
-            self._dirty_model("import_menu_open")
+                if asset:
+                    _logger.info(f"Imported asset: {asset.name}")
 
-            if asset:
-                _logger.info(f"Imported asset: {asset.name}")
+            except Exception as e:
+                _logger.error(f"Failed to import mesh: {e}")
 
-        except Exception as e:
-            _logger.error(f"Failed to import mesh: {e}")
+        self._with_import_folder(_continue_import)
 
     def on_import_dataset(self, _handle, _ev, args):
         """Import a dataset folder."""
@@ -2424,51 +2556,65 @@ class AssetManagerPanel(Panel):
             _logger.warning("Asset index not initialized")
             return
 
-        # Open folder dialog for datasets
-        folder_path = lf.ui.open_dataset_folder_dialog()
+        def _continue_import(folder_id: str) -> None:
+            # Open folder dialog for datasets
+            folder_path = lf.ui.open_dataset_folder_dialog()
 
-        if not folder_path:
-            return
-
-        try:
-            # Validate dataset structure
-            dataset_info = self._asset_scanner.validate_dataset(folder_path)
-
-            if not dataset_info.get("is_valid", False):
-                _logger.warning(f"Invalid dataset structure: {folder_path}")
+            if not folder_path:
                 return
 
-            context = ensure_dataset_catalog_context(
-                folder_path,
-                asset_index=self._asset_index,
-                scanner=self._asset_scanner,
-                thumbnails=self._asset_thumbnails,
-            )
-            folder_id = context.get("folder_id")
-            scene_id = context.get("scene_id")
-            asset_id = context.get("asset_id")
-            asset = self._asset_index.get_asset(asset_id) if asset_id else None
+            try:
+                dataset_paths = self._find_dataset_import_paths(folder_path)
+                if not dataset_paths:
+                    _logger.warning(
+                        "No importable dataset folders found under: %s",
+                        folder_path,
+                    )
+                    return
 
-            # Link dataset to scene
-            if asset:
-                # Auto-select the newly imported dataset to show its info
-                # Add to selection instead of replacing (allow multiple imports)
-                self._selected_asset_ids.add(asset.id)
-                # Preserve user's existing folder/scene filters - don't change them
-                # The dataset will appear in the catalog based on current filters
-                self._update_selection_type()
-            self._import_menu_open = False
+                imported_assets = []
+                for dataset_path in dataset_paths:
+                    context = ensure_dataset_catalog_context(
+                        dataset_path,
+                        asset_index=self._asset_index,
+                        scanner=self._asset_scanner,
+                        thumbnails=self._asset_thumbnails,
+                        folder_id=folder_id,
+                    )
+                    asset_id = context.get("asset_id")
+                    asset = self._asset_index.get_asset(asset_id) if asset_id else None
+                    if asset:
+                        imported_assets.append(asset)
 
-            # Refresh UI
-            self.refresh_catalog()
-            self._dirty_model("import_menu_open")
-            self._update_selection_details()
+                if imported_assets and str(Path(folder_path).resolve()) not in dataset_paths:
+                    self._drop_unknown_container_asset(folder_path, folder_id)
 
-            if asset:
-                _logger.info(f"Imported dataset: {asset.name}")
+                # Link dataset to scene
+                if imported_assets:
+                    # Auto-select the newly imported dataset to show its info
+                    # Add to selection instead of replacing (allow multiple imports)
+                    self._selected_asset_ids.update(asset.id for asset in imported_assets)
+                    # Preserve user's existing folder/scene filters - don't change them
+                    # The dataset will appear in the catalog based on current filters
+                    self._update_selection_type()
+                self._import_menu_open = False
 
-        except Exception as e:
-            _logger.error(f"Failed to import dataset: {e}")
+                # Refresh UI
+                self.refresh_catalog()
+                self._dirty_model("import_menu_open")
+                self._update_selection_details()
+
+                if imported_assets:
+                    _logger.info(
+                        "Imported %d dataset asset(s) from: %s",
+                        len(imported_assets),
+                        folder_path,
+                    )
+
+            except Exception as e:
+                _logger.error(f"Failed to import dataset: {e}")
+
+        self._with_import_folder(_continue_import)
 
     def on_load_selected(self, _handle, _ev, args):
         """Load selected asset(s) into the viewer."""
@@ -2492,7 +2638,7 @@ class AssetManagerPanel(Panel):
                 if asset.get("type") not in self.LOADABLE_TYPES:
                     continue
                 # Load based on asset type
-                asset_type = asset.get("type", "")
+                asset_type = str(asset.get("type") or "")
                 if asset_type == "dataset":
                     # Datasets need special loading with output path
                     output_path = asset.get("output_path") or str(
@@ -2609,32 +2755,35 @@ class AssetManagerPanel(Panel):
             _logger.warning("Asset index not initialized")
             return
 
-        # Open file dialog for checkpoint
-        file_path = lf.ui.open_checkpoint_file_dialog()
+        def _continue_import(folder_id: str) -> None:
+            # Open file dialog for checkpoint
+            file_path = lf.ui.open_checkpoint_file_dialog()
 
-        if not file_path:
-            return
+            if not file_path:
+                return
 
-        try:
-            asset = self._scan_and_register_asset(
-                file_path,
-                folder_id=self._ensure_import_folder(),
-                scene_id=self._selected_scene_id,
-                fallback_role="training_checkpoint",
-                override_type="checkpoint",
-                override_role="training_checkpoint",
-            )
-            self._import_menu_open = False
+            try:
+                asset = self._scan_and_register_asset(
+                    file_path,
+                    folder_id=folder_id,
+                    scene_id=self._selected_scene_id,
+                    fallback_role="training_checkpoint",
+                    override_type="checkpoint",
+                    override_role="training_checkpoint",
+                )
+                self._import_menu_open = False
 
-            # Refresh UI
-            self.refresh_catalog()
-            self._dirty_model("import_menu_open")
+                # Refresh UI
+                self.refresh_catalog()
+                self._dirty_model("import_menu_open")
 
-            if asset:
-                _logger.info(f"Imported checkpoint: {asset.name}")
+                if asset:
+                    _logger.info(f"Imported checkpoint: {asset.name}")
 
-        except Exception as e:
-            _logger.error(f"Failed to import checkpoint: {e}")
+            except Exception as e:
+                _logger.error(f"Failed to import checkpoint: {e}")
+
+        self._with_import_folder(_continue_import)
 
     def on_locate_file(self, _handle, _ev, args):
         """Open file dialog to locate missing file."""
@@ -2714,7 +2863,7 @@ class AssetManagerPanel(Panel):
                 lf.clear_scene()
 
             # Load based on asset type
-            asset_type = asset.get("type", "")
+            asset_type = str(asset.get("type") or "")
             if asset_type == "dataset":
                 # Datasets need special loading with output path
                 output_path = asset.get("output_path") or str(
@@ -3044,7 +3193,7 @@ class AssetManagerPanel(Panel):
                 })
 
         # Sort by name
-        return sorted(folders, key=lambda f: f["name"].lower())
+        return sorted(folders, key=lambda f: self._sort_text(f.get("name")))
 
     def on_toggle_asset_menu(self, _handle, _ev, args):
         """Toggle dropdown menu for an asset."""
@@ -3101,7 +3250,7 @@ class AssetManagerPanel(Panel):
         self._dirty_model("assets")
 
         # Prompt for rename using input dialog
-        current_name = asset.get("name", "Unnamed")
+        current_name = str(asset.get("name") or tr("asset_manager.unnamed"))
 
         def _on_rename_result(new_name):
             if new_name and new_name.strip() and new_name.strip() != current_name:
@@ -3197,8 +3346,8 @@ class AssetManagerPanel(Panel):
             self._log_warn("Asset has no file path: %s", asset_id)
             return
 
-        asset_type = asset.get("type", "")
-        if asset_type.lower() not in self.LOADABLE_TYPES:
+        asset_type = str(asset.get("type") or "")
+        if self._sort_text(asset_type) not in self.LOADABLE_TYPES:
             self._log_warn("Asset type not renderable: %s", asset_type)
             return
 
@@ -3317,7 +3466,7 @@ class AssetManagerPanel(Panel):
                 except (ValueError, IndexError):
                     # Try to match by name
                     for fld_id, fld_name in folders:
-                        if selection.lower() in fld_name.lower():
+                        if selection.lower() in self._sort_text(fld_name):
                             selected_folder_id = fld_id
                             selected_folder_name = fld_name
                             break
@@ -3527,7 +3676,7 @@ class AssetManagerPanel(Panel):
         )
 
     def on_delete_folder(self, _handle, _ev, args):
-        """Delete a folder after moving its assets to Default."""
+        """Delete a folder without creating an implicit fallback folder."""
         folder_id = self._resolve_event_value(args, _ev, "data-folder-id")
         if not folder_id:
             return
@@ -3546,56 +3695,53 @@ class AssetManagerPanel(Panel):
         if not folder:
             return
 
-        # Prevent deletion of the Default folder
-        folder_name = folder.get("name", "")
-        if folder_name.lower() == "default":
-            self._log_warn("Cannot delete the Default folder")
-            return
-
         # Close the menu
         self._open_menu_folder_id = None
         self._dirty_model("folders")
 
         folder_name = folder.get("name", "Unnamed Folder")
 
-        # Find or create Default folder
-        default_folder = None
-        default_folder_id = None
-        for fid, fldr in self._asset_index.folders.items():
-            if fldr.get("name", "").lower() == "default":
-                default_folder_id = fid
-                default_folder = fldr
+        assets_to_move = [
+            asset_id
+            for asset_id, asset in getattr(self._asset_index, "assets", {}).items()
+            if asset.get("folder_id") == folder_id
+        ]
+        target_folder_id = None
+        for fid in sorted(self._asset_index.folders.keys(), key=self._folder_sort_key):
+            if fid != folder_id:
+                target_folder_id = fid
                 break
 
-        # Create Default folder if it doesn't exist
-        if not default_folder_id:
-            try:
-                default_folder = self._asset_index.create_folder(name="Default")
-                if default_folder:
-                    default_folder_id = default_folder.id
-                    self._log_info("Created Default folder for asset migration")
-            except Exception as e:
-                self._log_error("Failed to create Default folder: %s", e)
-                return
-
-        if not default_folder_id:
-            self._log_error("Cannot delete folder: Default folder not available")
+        if assets_to_move and not target_folder_id:
+            self._log_warn(
+                "Cannot delete folder '%s': create another folder or remove its assets first",
+                folder_name,
+            )
             return
 
-        # Move all assets from this folder to Default
+        # Move all assets from this folder to another explicit folder before deleting.
         moved_count = 0
-        if hasattr(self._asset_index, "assets"):
-            for asset_id, asset in list(self._asset_index.assets.items()):
-                if asset.get("folder_id") == folder_id:
-                    try:
-                        self._asset_index.update_asset(
-                            asset_id,
-                            folder_id=default_folder_id,
-                            scene_id=None  # Clear scene since scenes are folder-specific
-                        )
-                        moved_count += 1
-                    except Exception as e:
-                        self._log_warn("Failed to move asset %s to Default: %s", asset_id, e)
+        target_folder_name = ""
+        if target_folder_id:
+            target_folder_name = self._asset_index.folders.get(
+                target_folder_id, {}
+            ).get("name", "another folder")
+            for asset_id in assets_to_move:
+                try:
+                    self._asset_index.update_asset(
+                        asset_id,
+                        folder_id=target_folder_id,
+                        scene_id=None  # Clear scene since scenes are folder-specific
+                    )
+                    moved_count += 1
+                except Exception as e:
+                    self._log_warn(
+                        "Failed to move asset %s to folder '%s': %s",
+                        asset_id,
+                        target_folder_name,
+                        e,
+                    )
+                    return
 
         # Delete the folder
         try:
@@ -3612,16 +3758,22 @@ class AssetManagerPanel(Panel):
 
             # Clear selection if the deleted folder was selected
             if self._selected_folder_id == folder_id:
-                self._selected_folder_id = None
+                self._selected_folder_id = target_folder_id
                 self._selected_scene_id = None
                 self._selected_asset_ids.clear()
-                self._selection_type = "none"
+                self._selection_type = "folder" if target_folder_id else "none"
+            self._repair_selected_folder()
 
             self.refresh_catalog()
-            self._log_info(
-                "Deleted folder '%s' and moved %d assets to Default",
-                folder_name, moved_count
-            )
+            if moved_count:
+                self._log_info(
+                    "Deleted folder '%s' and moved %d assets to '%s'",
+                    folder_name,
+                    moved_count,
+                    target_folder_name,
+                )
+            else:
+                self._log_info("Deleted folder '%s'", folder_name)
         except Exception as e:
             self._log_error("Failed to delete folder: %s", e)
 
@@ -3901,6 +4053,8 @@ class AssetManagerPanel(Panel):
                 self._stop_event(event)
                 return
             elif action == "remove_from_menu":
+                self._load_menu_asset_id = None
+                self._open_menu_asset_id = None
                 self.on_remove_asset(None, event, [asset_id])
                 self._stop_event(event)
                 return
@@ -4274,8 +4428,18 @@ class AssetManagerPanel(Panel):
                     try:
                         if self._asset_scanner:
                             metadata = self._asset_scanner.scan_file(path)
-                            if metadata:
-                                self._asset_index.update_asset(asset["id"], **metadata)
+                            if metadata and metadata.get("type") is not None:
+                                update_kwargs = self._metadata_to_asset_kwargs(metadata)
+                                asset_type = update_kwargs.pop("type", None)
+                                role = update_kwargs.pop("role", None)
+                                if asset_type:
+                                    update_kwargs["type"] = asset_type
+                                if role and role != "unknown":
+                                    update_kwargs["role"] = role
+                                update_kwargs["name"] = metadata.get("name") or asset.get("name")
+                                update_kwargs["path"] = metadata.get("path") or asset.get("path")
+                                update_kwargs["absolute_path"] = metadata.get("path") or asset.get("absolute_path")
+                                self._asset_index.update_asset(asset["id"], **update_kwargs)
                     except Exception as exc:
                         _logger.debug(f"Failed to rescan {path}: {exc}")
             self._asset_index.save()
@@ -4314,11 +4478,15 @@ class AssetManagerPanel(Panel):
             return
 
         try:
+            folder_id = self._repair_selected_folder()
+            if not folder_id:
+                return
             context = ensure_dataset_catalog_context(
                 params.data_path,
                 asset_index=self._asset_index,
                 scanner=self._asset_scanner,
                 thumbnails=self._asset_thumbnails,
+                folder_id=folder_id,
             )
             if select_current and context.get("asset_id"):
                 self._selected_asset_ids = {context["asset_id"]}
@@ -4357,8 +4525,11 @@ class AssetManagerPanel(Panel):
                             scene_assets.append(
                                 {
                                     "id": asset_id,
-                                    "name": asset.get("name", "Unnamed"),
-                                    "type": asset.get("type", "").upper(),
+                                    "name": str(
+                                        asset.get("name")
+                                        or tr("asset_manager.unnamed")
+                                    ),
+                                    "type": str(asset.get("type") or "").upper(),
                                 }
                             )
                 self._handle.update_record_list("selected_scene_assets", scene_assets)
@@ -4503,7 +4674,7 @@ class AssetManagerPanel(Panel):
         """Open the retained URL import panel."""
         self._import_menu_open = False
         self._dirty_model("import_menu_open")
-        open_url_import_panel()
+        self._with_import_folder(lambda _folder_id: open_url_import_panel())
 
 
 # ── atexit backup ─────────────────────────────────────────

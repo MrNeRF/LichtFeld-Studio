@@ -147,12 +147,31 @@ def derive_project_scene_names(dataset_path: str) -> tuple[str, str]:
     return folder_name, scene_name
 
 
+def _resolve_active_catalog_context(index: AssetIndex) -> tuple[Optional[str], Optional[str]]:
+    panel = get_asset_manager_panel()
+    if panel is None:
+        return None, None
+
+    folder_id = getattr(panel, "_selected_folder_id", None)
+    if not folder_id or folder_id not in index.folders:
+        return None, None
+
+    scene_id = getattr(panel, "_selected_scene_id", None)
+    if scene_id:
+        scene = index.scenes.get(scene_id)
+        if scene and scene.get("folder_id") == folder_id:
+            return folder_id, scene_id
+
+    return folder_id, None
+
+
 def ensure_dataset_catalog_context(
     dataset_path: str,
     *,
     asset_index: Optional[AssetIndex] = None,
     scanner: Optional[AssetScanner] = None,
     thumbnails: Optional[AssetThumbnails] = None,
+    folder_id: Optional[str] = None,
 ) -> dict[str, Optional[str]]:
     if not dataset_path:
         return {"folder_id": None, "scene_id": None, "asset_id": None}
@@ -164,18 +183,28 @@ def ensure_dataset_catalog_context(
         return {"folder_id": None, "scene_id": None, "asset_id": None}
 
     normalized_path = os.path.abspath(dataset_path)
-    # Always use "Default" folder for all imported assets
-    folder = index.find_or_create_folder("Default")
-    # Use derived scene name for organization within the Default folder
+    if not folder_id or folder_id not in index.folders:
+        _logger.warning(
+            "Cannot register dataset in Asset Manager without a selected folder: %s",
+            normalized_path,
+        )
+        return {"folder_id": None, "scene_id": None, "asset_id": None}
+
+    metadata = scan.scan_file(normalized_path) if scan else {}
+    if metadata.get("type") != "dataset":
+        _logger.warning(
+            "Cannot register dataset in Asset Manager: not a dataset root: %s",
+            normalized_path,
+        )
+        return {"folder_id": None, "scene_id": None, "asset_id": None}
+
     _folder_name, scene_name = derive_project_scene_names(normalized_path)
-    scene = index.find_or_create_scene(folder.id, scene_name) if folder else None
-    folder_id = folder.id if folder else None
+    scene = index.find_or_create_scene(folder_id, scene_name)
     scene_id = scene.id if scene else None
     existing = index.find_asset_by_path(normalized_path, folder_id=folder_id)
 
     asset = existing
     if asset is None or asset.type != "dataset":
-        metadata = scan.scan_file(normalized_path) if scan else {}
         asset_kwargs = metadata_to_asset_kwargs(metadata)
         asset = index.create_asset(
             folder_id=folder_id,
@@ -221,6 +250,8 @@ def register_catalog_asset_path(
     asset_index: Optional[AssetIndex] = None,
     scanner: Optional[AssetScanner] = None,
     thumbnails: Optional[AssetThumbnails] = None,
+    folder_id: Optional[str] = None,
+    scene_id: Optional[str] = None,
 ) -> Optional[Any]:
     if not path or not ASSET_MANAGER_BACKEND_AVAILABLE:
         return None
@@ -232,12 +263,17 @@ def register_catalog_asset_path(
     if index is None:
         return None
 
+    active_folder_id, active_scene_id = _resolve_active_catalog_context(index)
+    folder_id = folder_id or active_folder_id
+    scene_id = scene_id or active_scene_id
+
     if is_dataset:
         context = ensure_dataset_catalog_context(
             normalized_path,
             asset_index=index,
             scanner=scan,
             thumbnails=thumbs,
+            folder_id=folder_id,
         )
         asset_id = context.get("asset_id")
         asset = index.get_asset(asset_id) if asset_id else None
@@ -256,21 +292,23 @@ def register_catalog_asset_path(
     except Exception:
         dataset_params = None
 
-    if dataset_params and dataset_params.has_params() and dataset_params.data_path:
+    if folder_id and dataset_params and dataset_params.has_params() and dataset_params.data_path:
         dataset_context = ensure_dataset_catalog_context(
             dataset_params.data_path,
             asset_index=index,
             scanner=scan,
             thumbnails=thumbs,
+            folder_id=folder_id,
         )
 
-    folder_id = dataset_context.get("folder_id")
-    scene_id = dataset_context.get("scene_id")
-
-    if folder_id is None:
-        # Always use "Default" folder for imported assets
-        folder = index.find_or_create_folder("Default")
-        folder_id = folder.id if folder else None
+    folder_id = folder_id or dataset_context.get("folder_id")
+    scene_id = scene_id or dataset_context.get("scene_id")
+    if not folder_id or folder_id not in index.folders:
+        _logger.warning(
+            "Cannot register asset in Asset Manager without a selected folder: %s",
+            normalized_path,
+        )
+        return None
 
     metadata = scan.scan_file(normalized_path) if scan else {}
     asset_kwargs = metadata_to_asset_kwargs(metadata)
@@ -563,9 +601,9 @@ def save_asset_to_catalog(node_name: str) -> bool:
                 return True
             return False
 
-        folder = index.find_or_create_folder("Default")
-        if folder is None:
-            _logger.warning("Cannot save asset: failed to create folder")
+        folder_id, scene_id = _resolve_active_catalog_context(index)
+        if not folder_id:
+            _logger.warning("Cannot save asset: create or select an Asset Manager folder first")
             return False
 
         if not abs_path and geometry_type in {"GROUP", "DATASET"}:
@@ -580,11 +618,12 @@ def save_asset_to_catalog(node_name: str) -> bool:
             )
             return False
         created = index.create_asset(
-            folder_id=folder.id,
+            folder_id=folder_id,
             name=geometry_name,
             type=_asset_type_from_node_type(geometry_type),
             path=rel_path,
             absolute_path=abs_path,
+            scene_id=scene_id,
             role="scene_reference",
             geometry_metadata=geometry_metadata,
             transform_metadata=transform_metadata,

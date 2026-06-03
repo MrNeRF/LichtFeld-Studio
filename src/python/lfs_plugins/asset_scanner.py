@@ -873,6 +873,10 @@ class AssetScanner:
             return result
 
         try:
+            if not self._looks_like_dataset(path_obj):
+                result["issues"].append("No images or sparse model found")
+                return result
+
             image_count = len(self._collect_dataset_images(path_obj))
             result["image_count"] = image_count
             result["has_images"] = image_count > 0
@@ -880,6 +884,11 @@ class AssetScanner:
             # Check for COLMAP structure
             sparse_dir = path_obj / "sparse"
             result["has_sparse"] = sparse_dir.is_dir() and any(sparse_dir.iterdir())
+            has_colmap_db = (path_obj / "database.db").exists()
+            has_text_colmap = (
+                (path_obj / "cameras.txt").exists()
+                and (path_obj / "images.txt").exists()
+            )
 
             # Check for masks
             masks_dir = path_obj / "masks"
@@ -888,9 +897,9 @@ class AssetScanner:
             # Validate
             if result["has_images"]:
                 result["is_valid"] = True
-            elif result["has_sparse"]:
+            elif result["has_sparse"] or has_colmap_db or has_text_colmap:
                 result["is_valid"] = True
-                result["issues"].append("No images found, but sparse model exists")
+                result["issues"].append("No images found, but COLMAP data exists")
             else:
                 result["issues"].append("No images or sparse model found")
 
