@@ -419,7 +419,7 @@ namespace lfs::vis::gui {
 
         [[nodiscard]] std::vector<DialogFilter> imageFilters() {
             return {makeFilter("Image Files",
-                               {".png", ".jpg", ".jpeg", ".bmp", ".tga", ".hdr", ".exr"})};
+                               {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tga", ".hdr", ".exr"})};
         }
 
         [[nodiscard]] std::vector<DialogFilter> environmentMapFilters() {
