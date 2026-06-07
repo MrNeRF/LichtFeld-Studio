@@ -213,6 +213,25 @@ def test_asset_manager_requests_update_from_reactive_store(asset_manager_panel_m
     assert panel._handle.dirty_fields == ["__update__", "__update__"]
 
 
+def test_scan_status_transition_requests_model_update(asset_manager_panel_module, monkeypatch):
+    panel = asset_manager_panel_module.AssetManagerPanel()
+    requested = []
+    monkeypatch.setattr(panel, "_request_model_update", lambda: requested.append(True))
+
+    panel._set_scan_status("scanning")
+
+    assert panel.get_scan_status_visible() is True
+    assert panel.get_scan_status_label() == "asset_manager.status.scanning"
+    assert panel.get_scan_status_class() == "scan-status-scanning"
+    assert requested == [True]
+
+    panel._set_scan_status("idle")
+    assert panel.get_scan_status_class() == "scan-status-idle"
+    assert panel.get_scan_status_visible() is True
+    assert panel.get_scan_status_label() == "asset_manager.status.scanning"
+    assert requested == [True, True]
+
+
 def test_asset_rows_expose_scalar_tag_label(asset_manager_panel_module):
     panel = asset_manager_panel_module.AssetManagerPanel()
     row = panel._format_asset_for_ui(_make_asset())
@@ -938,6 +957,27 @@ def test_edit_watch_dirs_uses_clicked_folder_without_selecting_it(
 
     assert panel._selected_folder_id == "default"
     assert opened == ["target"]
+
+
+def test_repair_selected_folder_prefers_default_name_when_selection_is_stale(
+    asset_manager_panel_module,
+):
+    panel = asset_manager_panel_module.AssetManagerPanel()
+    panel._asset_index = SimpleNamespace(
+        assets={},
+        folders={
+            "zeta": {"id": "zeta", "name": "Zeta", "scene_ids": []},
+            "default": {"id": "default", "name": "Default", "scene_ids": []},
+        },
+        scenes={},
+        tags={},
+        collections={},
+    )
+    panel._selected_folder_id = "missing"
+    panel._selection_type = "folder"
+
+    assert panel._repair_selected_folder() == "default"
+    assert panel._selected_folder_id == "default"
 
 
 def test_bind_dom_event_listeners_registers_gallery_wheel_handler(

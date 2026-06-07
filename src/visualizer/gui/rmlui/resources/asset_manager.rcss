@@ -1183,6 +1183,6 @@
     color: #f0c040;
 }
 
-.scan-status-updated {
+.scan-status-idle {
     color: #4caf50;
 }

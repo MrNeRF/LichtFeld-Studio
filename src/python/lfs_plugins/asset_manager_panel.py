@@ -853,6 +853,14 @@ class AssetManagerPanel(Panel):
         folder = self._asset_index.folders.get(folder_id, {})
         return self._sort_text(folder.get("name") or folder_id)
 
+    def _default_folder_id(self) -> Optional[str]:
+        if not self._asset_index or not hasattr(self._asset_index, "folders"):
+            return None
+        for folder_id, folder in self._asset_index.folders.items():
+            if self._sort_text(folder.get("name")).strip() == "default":
+                return folder_id
+        return None
+
     @staticmethod
     def _sort_text(value: Any) -> str:
         return str(value or "").lower()
@@ -881,6 +889,9 @@ class AssetManagerPanel(Panel):
                 if asset_folder_id in folders:
                     candidate_id = asset_folder_id
                     break
+
+        if not candidate_id:
+            candidate_id = self._default_folder_id()
 
         if not candidate_id and folders:
             candidate_id = sorted(folders.keys(), key=self._folder_sort_key)[0]
@@ -1376,21 +1387,22 @@ class AssetManagerPanel(Panel):
     # ── Scan Status Getters ───────────────────────────────────
 
     def get_scan_status_label(self) -> str:
-        if self._scan_status == "scanning":
-            return tr("asset_manager.status.scanning")
-        if self._scan_status == "updated":
-            return tr("asset_manager.status.updated")
-        return ""
+        return tr("asset_manager.status.scanning")
 
     def get_scan_status_class(self) -> str:
         if self._scan_status == "scanning":
             return "scan-status-scanning"
-        if self._scan_status == "updated":
-            return "scan-status-updated"
-        return ""
+        return "scan-status-idle"
 
     def get_scan_status_visible(self) -> bool:
-        return self._scan_status != "idle"
+        return True
+
+    def _set_scan_status(self, status: str, *, refresh_needed: bool = False) -> None:
+        with self._scan_thread_lock:
+            self._scan_status = status
+            if refresh_needed:
+                self._scan_ui_refresh_needed = True
+        self._request_model_update()
 
     # ── Flattened Selected Asset Getters ─────────────────────
 
@@ -2172,7 +2184,6 @@ class AssetManagerPanel(Panel):
                 self._scan_requeue = True
                 return
 
-            self._scan_status = "scanning"
             self._scan_requeue = False
             self._scan_ui_refresh_needed = False
             self._scan_thread = threading.Thread(
@@ -2181,6 +2192,7 @@ class AssetManagerPanel(Panel):
                 daemon=True,
             )
             self._scan_thread.start()
+        self._set_scan_status("scanning")
 
     def _scan_worker(self, asset_ids: List[str], scan_type: str) -> None:
         """Run in a background thread: scan assets and update the catalog incrementally."""
@@ -2255,17 +2267,14 @@ class AssetManagerPanel(Panel):
                     if self._scan_requeue:
                         self._scan_requeue = False
                         # Restart the scan for the remaining assets
-                        self._scan_status = "scanning"
                         self._scan_ui_refresh_needed = True
                         continue
-                    self._scan_status = "updated"
                     self._scan_ui_refresh_needed = True
-                    break
+                self._set_scan_status("idle", refresh_needed=True)
+                break
         except Exception as exc:
             _logger.error(f"Background scan worker failed: {exc}")
-            with self._scan_thread_lock:
-                self._scan_status = "idle"
-                self._scan_ui_refresh_needed = True
+            self._set_scan_status("idle", refresh_needed=True)
 
     def _sync_existing_asset_metadata(self) -> bool:
         """Non-blocking launcher: queue assets that need metadata sync for background scanning."""

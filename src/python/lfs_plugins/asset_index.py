@@ -23,6 +23,8 @@ LIBRARY_VERSION = "1.0.0"
 LEGACY_STORAGE_PATH = Path.home() / ".lichtfeld" / "asset_manager"
 DEFAULT_LIBRARY_PATH = LEGACY_STORAGE_PATH / "library.json"
 LEGACY_LIBRARY_PATH = LEGACY_STORAGE_PATH / "library.json"
+DEFAULT_FOLDER_ID = "default"
+DEFAULT_FOLDER_NAME = "Default"
 
 
 def _synchronized(method: Callable[..., _T]) -> Callable[..., _T]:
@@ -385,6 +387,7 @@ class AssetIndex:
             self._collections = data.get("collections", {})
             self._tags = data.get("tags", {})
             self.rebuild_tag_index(save=False)
+            self._ensure_default_folder()
 
             _log.info(
                 "Loaded library with %d folders, %d scenes, %d assets",
@@ -490,7 +493,27 @@ class AssetIndex:
         self._assets = {}
         self._collections = {}
         self._tags = {}
+        self._ensure_default_folder()
         _log.debug("Initialized default catalog")
+
+    def _ensure_default_folder(self) -> bool:
+        """Guarantee that the catalog always contains the canonical default folder."""
+        for folder in self._folders.values():
+            if folder.id == DEFAULT_FOLDER_ID:
+                if folder.name != DEFAULT_FOLDER_NAME:
+                    folder.name = DEFAULT_FOLDER_NAME
+                    folder.modified_at = datetime.now().isoformat()
+                return False
+
+        for folder in self._folders.values():
+            if str(folder.name).strip().lower() == DEFAULT_FOLDER_NAME.lower():
+                return False
+
+        self._folders[DEFAULT_FOLDER_ID] = Folder(
+            id=DEFAULT_FOLDER_ID,
+            name=DEFAULT_FOLDER_NAME,
+        )
+        return True
 
     # -------------------------------------------------------------------------
     # Folder CRUD
