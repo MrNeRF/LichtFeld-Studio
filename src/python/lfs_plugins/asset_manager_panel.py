@@ -545,6 +545,8 @@ class AssetManagerPanel(Panel):
         model.bind_func("prop_scene_label", lambda: tr("asset_manager.property.scene"))
         model.bind_func("prop_role_label", lambda: tr("asset_manager.property.role"))
         model.bind_func("prop_points_label", lambda: tr("asset_manager.property.points"))
+        model.bind_func("selected_asset_sh_degree", self.get_selected_asset_sh_degree)
+        model.bind_func("prop_sh_degree_label", lambda: tr("asset_manager.property.sh_degree"))
 
         model.bind_func("prop_size_label", lambda: tr("asset_manager.property.size"))
         model.bind_func("prop_path_label", lambda: tr("asset_manager.property.path"))
@@ -1528,6 +1530,20 @@ class AssetManagerPanel(Panel):
             return f"{gaussian_count / 1_000:.1f}K"
         return str(gaussian_count) if gaussian_count > 0 else ""
 
+    def get_selected_asset_sh_degree(self) -> str:
+        """Return SH degree for splat types; empty string hides the row for non-splats."""
+        asset = self._get_selected_asset()
+        if not asset:
+            return ""
+        asset_type = str(asset.get("type") or "")
+        if asset_type not in ("ply_3dgs", "ply_pcl", "ply", "rad", "sog", "spz"):
+            return ""
+        geom = asset.get("geometry_metadata", {}) or {}
+        sh_degree = geom.get("sh_degree")
+        if sh_degree is None:
+            return "--"
+        return str(int(sh_degree))
+
     def get_selected_asset_bounding_box(self) -> str:
         asset = self._get_selected_asset()
         if not asset:
@@ -2096,8 +2112,12 @@ class AssetManagerPanel(Panel):
 
         if asset_type in ("ply_3dgs", "ply_pcl", "ply", "rad", "sog", "spz", "mesh"):
             geom_meta = asset.get("geometry_metadata", {}) or {}
-            # Need sync if empty or if gaussian_count is not present
-            return not geom_meta or geom_meta.get("gaussian_count") is None
+            # Need sync if empty, gaussian_count is not present, or sh_degree is missing for splats
+            if not geom_meta or geom_meta.get("gaussian_count") is None:
+                return True
+            if asset_type != "mesh" and geom_meta.get("sh_degree") is None:
+                return True
+            return False
         return asset.get("file_size_bytes", 0) <= 0
 
     def _sync_existing_asset_metadata(self) -> bool:
