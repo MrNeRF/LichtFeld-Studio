@@ -174,6 +174,9 @@ namespace lfs::core {
             opt_json["mask_opacity_penalty_power"] = mask_opacity_penalty_power;
             opt_json["mask_threshold"] = mask_threshold;
             opt_json["use_alpha_as_mask"] = use_alpha_as_mask;
+            opt_json["use_depth_loss"] = use_depth_loss;
+            opt_json["depth_loss_weight"] = depth_loss_weight;
+            opt_json["depth_loss_mode"] = depth_loss_mode;
 
             // MRNF strategy parameters
             opt_json["growth_grad_threshold"] = growth_grad_threshold;
@@ -194,6 +197,8 @@ namespace lfs::core {
                 return "GUT and igs+ strategy cannot be used together";
             if (ppisp_freeze_from_sidecar && !use_ppisp)
                 return "PPISP sidecar freeze requires PPISP enabled";
+            if (depth_loss_mode != "pearson" && depth_loss_mode != "adaptive-warped-l1")
+                return "depth_loss_mode must be 'pearson' or 'adaptive-warped-l1'";
             return {};
         }
 
@@ -512,6 +517,15 @@ namespace lfs::core {
             }
             if (json.contains("use_alpha_as_mask")) {
                 params.use_alpha_as_mask = json["use_alpha_as_mask"];
+            }
+            if (json.contains("use_depth_loss")) {
+                params.use_depth_loss = json["use_depth_loss"];
+            }
+            if (json.contains("depth_loss_weight")) {
+                params.depth_loss_weight = json["depth_loss_weight"];
+            }
+            if (json.contains("depth_loss_mode")) {
+                params.depth_loss_mode = json["depth_loss_mode"];
             }
 
             // MRNF strategy parameters

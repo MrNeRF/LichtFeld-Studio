@@ -17,6 +17,8 @@
 #include <format>
 #include <fstream>
 #include <nlohmann/json.hpp>
+#include <optional>
+#include <tuple>
 
 namespace lfs::io {
 
@@ -138,6 +140,7 @@ namespace lfs::io {
             // Get base path for mask lookup
             std::filesystem::path base_path = transforms_file.parent_path();
             MaskDirCache mask_cache(base_path, options.cancel_requested);
+            DepthDirCache depth_cache(base_path, options.cancel_requested);
 
             for (size_t i = 0; i < camera_infos.size(); ++i) {
                 if ((i % 64) == 0) {
@@ -158,9 +161,28 @@ namespace lfs::io {
                             base_path);
                     }
 
-                    // Validate mask dimensions match image dimensions
+                    std::filesystem::path depth_path;
+                    if (auto depth_lookup = depth_cache.lookup(info._image_name); depth_lookup.found()) {
+                        depth_path = std::move(depth_lookup.path);
+                    } else if (depth_lookup.ambiguous()) {
+                        return make_error(
+                            ErrorCode::INVALID_DATASET,
+                            std::format("Depth map for image '{}' is ambiguous across the dataset depth folders. "
+                                        "Keep depth maps in the same relative subdirectories as the images or rename them uniquely.",
+                                        info._image_name),
+                            base_path);
+                    }
+
+                    // Validate mask/depth dimensions match image dimensions
+                    std::optional<std::tuple<int, int, int>> image_info;
+                    auto get_image_info_cached = [&]() {
+                        if (!image_info.has_value()) {
+                            image_info = lfs::core::get_image_info(info._image_path);
+                        }
+                        return *image_info;
+                    };
                     if (!mask_path.empty()) {
-                        auto [img_w, img_h, img_c] = lfs::core::get_image_info(info._image_path);
+                        auto [img_w, img_h, img_c] = get_image_info_cached();
                         auto [mask_w, mask_h, mask_c] = lfs::core::get_image_info(mask_path);
                         if (img_w != mask_w || img_h != mask_h) {
                             return make_error(ErrorCode::MASK_SIZE_MISMATCH,
@@ -168,6 +190,17 @@ namespace lfs::io {
                                                           lfs::core::path_to_utf8(mask_path.filename()), mask_w, mask_h,
                                                           info._image_name, img_w, img_h),
                                               mask_path);
+                        }
+                    }
+                    if (!depth_path.empty()) {
+                        auto [img_w, img_h, img_c] = get_image_info_cached();
+                        auto [depth_w, depth_h, depth_c] = lfs::core::get_image_info(depth_path);
+                        if (img_w != depth_w || img_h != depth_h) {
+                            return make_error(ErrorCode::DEPTH_SIZE_MISMATCH,
+                                              std::format("Depth map '{}' is {}x{} but image '{}' is {}x{}",
+                                                          lfs::core::path_to_utf8(depth_path.filename()), depth_w, depth_h,
+                                                          info._image_name, img_w, img_h),
+                                              depth_path);
                         }
                     }
 
@@ -186,7 +219,9 @@ namespace lfs::io {
                         mask_path,
                         info._width,
                         info._height,
-                        static_cast<int>(i));
+                        static_cast<int>(i),
+                        0,
+                        depth_path);
 
                     cameras.push_back(cam);
                 } catch (const std::exception& e) {

@@ -371,6 +371,10 @@ class SceneNode:
         """Path to the camera mask file"""
 
     @property
+    def depth_path(self) -> str:
+        """Path to the camera depth map file"""
+
+    @property
     def has_camera(self) -> bool:
         """Whether this node has camera data"""
 
@@ -378,9 +382,18 @@ class SceneNode:
     def has_mask(self) -> bool:
         """Whether this camera node has a mask file"""
 
+    @property
+    def has_depth(self) -> bool:
+        """Whether this camera node has a depth map file"""
+
     def load_mask(self, resize_factor: int = 1, max_width: int = 0, invert: bool = False, threshold: float = 0.5) -> lichtfeld.Tensor | None:
         """
         Load mask as tensor [1, H, W] on CUDA (None if not a camera node or no mask)
+        """
+
+    def load_depth(self, resize_factor: int = 1, max_width: int = 0) -> lichtfeld.Tensor | None:
+        """
+        Load depth map as tensor [H, W] on CUDA (None if not a camera node or no depth map)
         """
 
     @property
@@ -751,8 +764,16 @@ class Camera:
         """Full path to mask file"""
 
     @property
+    def depth_path(self) -> str:
+        """Full path to depth map file"""
+
+    @property
     def has_mask(self) -> bool:
         """Whether a mask file exists"""
+
+    @property
+    def has_depth(self) -> bool:
+        """Whether a depth map file exists"""
 
     @property
     def uid(self) -> int:
@@ -799,6 +820,9 @@ class Camera:
 
     def load_mask(self, resize_factor: int = 1, max_width: int = 0, invert: bool = False, threshold: float = 0.5) -> lichtfeld.Tensor:
         """Load mask as tensor [1, H, W] on CUDA"""
+
+    def load_depth(self, resize_factor: int = 1, max_width: int = 0) -> lichtfeld.Tensor:
+        """Load depth map as tensor [H, W] on CUDA"""
 
 class CameraDataset:
     def __len__(self) -> int:

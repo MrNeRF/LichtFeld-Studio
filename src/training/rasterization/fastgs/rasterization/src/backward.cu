@@ -14,6 +14,7 @@ void fast_lfs::rasterization::backward(
     const float* densification_error_map,
     const float* grad_image,
     const float* grad_alpha,
+    const float* grad_depth,
     const float* image,
     const float* alpha,
     const float3* means,
@@ -30,6 +31,7 @@ void fast_lfs::rasterization::backward(
     float3* grad_color_helper,
     float2* grad_mean2d_helper,
     float* grad_conic_helper,
+    float* grad_depth_helper,
     float4* grad_w2c,
     float* densification_info,
     const int n_primitives,
@@ -44,7 +46,8 @@ void fast_lfs::rasterization::backward(
     const float cy,
     bool mip_filter,
     DensificationType densification_type,
-    FusedAdamSettings fused_adam) {
+    FusedAdamSettings fused_adam,
+    bool detach_depth_weights) {
     const dim3 grid(div_round_up(width, config::tile_width), div_round_up(height, config::tile_height), 1);
     const uint64_t n_tiles_u64 = static_cast<uint64_t>(grid.x) * static_cast<uint64_t>(grid.y);
     const int n_tiles = checked_to_int(n_tiles_u64, "n_tiles exceeds int range");
@@ -64,14 +67,17 @@ void fast_lfs::rasterization::backward(
                 per_primitive_buffers.mean2d,
                 per_primitive_buffers.conic_opacity,
                 per_primitive_buffers.color,
+                per_primitive_buffers.depths,
                 grad_image,
                 grad_alpha,
+                grad_depth,
                 image,
                 alpha,
                 per_tile_buffers.n_contributions,
                 per_tile_buffers.final_transmittance,
                 grad_mean2d_helper,
                 grad_conic_helper,
+                grad_depth_helper,
                 grad_opacity_helper,
                 grad_color_helper,
                 densification_info,
@@ -81,7 +87,8 @@ void fast_lfs::rasterization::backward(
                 n_primitives,
                 width,
                 height,
-                grid.x);
+                grid.x,
+                detach_depth_weights);
         };
         if (densification_type == DensificationType::MRNF && densification_info != nullptr) {
             launch_blend_backward.template operator()<DensificationType::MRNF>();
@@ -115,6 +122,7 @@ void fast_lfs::rasterization::backward(
                 per_primitive_buffers.n_touched_tiles,
                 grad_mean2d_helper,
                 grad_conic_helper,
+                grad_depth_helper,
                 grad_opacity_helper,
                 grad_color_helper,
                 grad_w2c,

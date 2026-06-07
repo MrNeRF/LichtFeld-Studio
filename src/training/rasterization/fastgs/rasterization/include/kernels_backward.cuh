@@ -42,6 +42,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         const std::uint64_t* __restrict__ primitive_n_touched_tiles,
         const float2* __restrict__ grad_mean2d,
         const float* __restrict__ grad_conic,
+        const float* __restrict__ grad_depth,
         float* __restrict__ grad_opacity_helper,
         float3* __restrict__ grad_color_helper,
         float4* __restrict__ grad_w2c,
@@ -242,10 +243,11 @@ namespace fast_lfs::rasterization::kernels::backward {
 
         // mean3d camera space gradient from J and mean2d (accounts for tx/ty clipping)
         const float2 dL_dmean2d = grad_mean2d[primitive_idx];
+        const float dL_ddepth = grad_depth ? grad_depth[primitive_idx] : 0.0f;
         float3 dL_dmean3d_cam = make_float3(
             j11 * dL_dmean2d.x,
             j22 * dL_dmean2d.y,
-            -j11 * x * dL_dmean2d.x - j22 * y * dL_dmean2d.y);
+            -j11 * x * dL_dmean2d.x - j22 * y * dL_dmean2d.y + dL_ddepth);
         const bool valid_x = x >= clip_left && x <= clip_right;
         const bool valid_y = y >= clip_top && y <= clip_bottom;
         if (valid_x)
@@ -344,12 +346,13 @@ namespace fast_lfs::rasterization::kernels::backward {
         float color_x;
         float color_y;
         float color_z;
+        float depth;
         float densification_weight;
         float densification_error_weighted;
     };
 
     __device__ __forceinline__ BlendBackwardAccum make_zero_blend_backward_accum() {
-        return {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+        return {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     }
 
     template <DensificationType DENSIFICATION_TYPE>
@@ -360,14 +363,17 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float2* __restrict__ primitive_mean2d,
         const float4* __restrict__ primitive_conic_opacity,
         const float3* __restrict__ primitive_color,
+        const float* __restrict__ primitive_depths,
         const float* __restrict__ grad_image,
         const float* __restrict__ grad_alpha_map,
+        const float* __restrict__ grad_depth_map,
         const float* __restrict__ image,
         const float* __restrict__ alpha_map,
         const uint* __restrict__ tile_n_contributions,
         const float* __restrict__ tile_final_transmittance,
         float2* __restrict__ grad_mean2d,
         float* __restrict__ grad_conic,
+        float* __restrict__ grad_depth,
         float* __restrict__ grad_compensated_opacity,
         float3* __restrict__ grad_color,
         float* __restrict__ densification_info,
@@ -377,7 +383,8 @@ namespace fast_lfs::rasterization::kernels::backward {
         const uint n_primitives,
         const uint width,
         const uint height,
-        const uint grid_width) {
+        const uint grid_width,
+        const bool detach_depth_weights) {
         (void)image;
         (void)alpha_map;
         auto block = cg::this_thread_block();
@@ -452,6 +459,7 @@ namespace fast_lfs::rasterization::kernels::backward {
             float3 conic = make_float3(0.0f);
             float compensated_opacity = 0.0f;
             float3 color = make_float3(0.0f);
+            float depth = 0.0f;
             float3 color_grad_factor = make_float3(0.0f);
 
             if (valid_splat) {
@@ -480,6 +488,7 @@ namespace fast_lfs::rasterization::kernels::backward {
                     compensated_opacity = conic_opacity.w;
                     const float3 color_unclamped = primitive_color[primitive_idx];
                     color = fminf(fmaxf(color_unclamped, 0.0f), config::max_blend_color);
+                    depth = primitive_depths[primitive_idx];
                     color_grad_factor = make_float3(
                         (color_unclamped.x >= 0.0f && color_unclamped.x <= config::max_blend_color) ? 1.0f : 0.0f,
                         (color_unclamped.y >= 0.0f && color_unclamped.y <= config::max_blend_color) ? 1.0f : 0.0f,
@@ -515,10 +524,12 @@ namespace fast_lfs::rasterization::kernels::backward {
                                 const float transmittance_before = transmittance_after / one_minus_alpha_safe;
                                 const float blending_weight = transmittance_before * alpha;
                                 const float3 grad_color_pixel = s_grad_color_state[pixel_rank];
+                                const uint pixel_idx = width * pixel_coords.y + pixel_coords.x;
+                                const float grad_depth_pixel = grad_depth_map ? grad_depth_map[pixel_idx] : 0.0f;
+                                const float grad_depth_weight_pixel = detach_depth_weights ? 0.0f : grad_depth_pixel;
                                 const float grad_transmittance_after = s_grad_transmittance_state[pixel_rank];
 
                                 if constexpr (DENSIFICATION_TYPE == DensificationType::MCMC) {
-                                    const uint pixel_idx = width * pixel_coords.y + pixel_coords.x;
                                     const float pixel_error = densification_error_map[pixel_idx];
                                     accum.densification_weight += blending_weight;
                                     accum.densification_error_weighted += blending_weight * pixel_error;
@@ -530,8 +541,10 @@ namespace fast_lfs::rasterization::kernels::backward {
                                 accum.color_z += dL_dcolor.z;
 
                                 const float dL_dalpha = dot(transmittance_before * color, grad_color_pixel) -
-                                                        grad_transmittance_after * transmittance_before;
+                                                        grad_transmittance_after * transmittance_before +
+                                                        transmittance_before * depth * grad_depth_weight_pixel;
                                 accum.compensated_opacity += alpha_saturated ? 0.0f : gaussian * dL_dalpha;
+                                accum.depth += blending_weight * grad_depth_pixel;
 
                                 const float gaussian_grad_helper = alpha_saturated ? 0.0f : -alpha * dL_dalpha;
                                 accum.conic_x += 0.5f * gaussian_grad_helper * delta.x * delta.x;
@@ -544,7 +557,6 @@ namespace fast_lfs::rasterization::kernels::backward {
                                 accum.mean_y += dL_dmean2d.y;
 
                                 if constexpr (DENSIFICATION_TYPE == DensificationType::MRNF) {
-                                    const uint pixel_idx = width * pixel_coords.y + pixel_coords.x;
                                     const float pixel_error = (densification_error_map != nullptr)
                                                                   ? densification_error_map[pixel_idx]
                                                                   : 1.0f;
@@ -554,6 +566,7 @@ namespace fast_lfs::rasterization::kernels::backward {
 
                                 s_transmittance_state[pixel_rank] = transmittance_before;
                                 s_grad_transmittance_state[pixel_rank] = dot(grad_color_pixel, alpha * color) +
+                                                                         alpha * depth * grad_depth_weight_pixel +
                                                                          grad_transmittance_after * one_minus_alpha;
                             }
                         }
@@ -568,6 +581,7 @@ namespace fast_lfs::rasterization::kernels::backward {
                 atomicAdd(&grad_conic[primitive_idx], clamp_grad(accum.conic_x));
                 atomicAdd(&grad_conic[n_primitives + primitive_idx], clamp_grad(accum.conic_y));
                 atomicAdd(&grad_conic[2 * n_primitives + primitive_idx], clamp_grad(accum.conic_z));
+                atomicAdd(&grad_depth[primitive_idx], clamp_grad(accum.depth));
 
                 atomicAdd(&grad_compensated_opacity[primitive_idx],
                           clamp_grad(accum.compensated_opacity));

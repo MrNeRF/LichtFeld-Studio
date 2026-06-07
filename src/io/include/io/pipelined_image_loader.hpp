@@ -67,6 +67,8 @@ namespace lfs::io {
         LoadParams params;
         // Optional mask to load alongside the image
         std::optional<std::filesystem::path> mask_path;
+        // Optional depth map to load alongside the image
+        std::optional<std::filesystem::path> depth_path;
         MaskParams mask_params;
         bool extract_alpha_as_mask = false;
         MaskParams alpha_mask_params;
@@ -78,6 +80,7 @@ namespace lfs::io {
         lfs::core::Tensor tensor;              // Image tensor [C,H,W], float32
         std::optional<lfs::core::Tensor> mask; // Optional mask [H,W], float32
         cudaStream_t stream = nullptr;
+        std::optional<lfs::core::Tensor> depth; // Optional depth [H,W], float32
     };
 
     class LFS_IO_API PipelinedImageLoader {
@@ -85,11 +88,14 @@ namespace lfs::io {
         struct GpuMemoryStats {
             size_t output_image_bytes = 0;
             size_t output_mask_bytes = 0;
+            size_t output_depth_bytes = 0;
             size_t pending_image_bytes = 0;
             size_t pending_mask_bytes = 0;
+            size_t pending_depth_bytes = 0;
 
             [[nodiscard]] size_t total_bytes() const {
-                return output_image_bytes + output_mask_bytes + pending_image_bytes + pending_mask_bytes;
+                return output_image_bytes + output_mask_bytes + output_depth_bytes +
+                       pending_image_bytes + pending_mask_bytes + pending_depth_bytes;
             }
         };
 
@@ -110,6 +116,7 @@ namespace lfs::io {
             size_t masks_loaded = 0;
             size_t mask_cache_hits = 0;
             size_t mask_cache_misses = 0;
+            size_t depths_loaded = 0;
             // Pending pairs (for leak detection)
             size_t pending_pairs_count = 0;
             // Queue sizes (for monitoring pipeline state)
@@ -119,8 +126,10 @@ namespace lfs::io {
             size_t output_queue_size = 0;
             size_t output_image_bytes = 0;
             size_t output_mask_bytes = 0;
+            size_t output_depth_bytes = 0;
             size_t pending_image_bytes = 0;
             size_t pending_mask_bytes = 0;
+            size_t pending_depth_bytes = 0;
         };
 
         explicit PipelinedImageLoader(PipelinedLoaderConfig config = {});
@@ -158,8 +167,9 @@ namespace lfs::io {
             bool is_cache_hit = false;
             bool is_original_jpeg = false;
             bool needs_processing = false;
-            // Mask-specific fields
+            // Optional auxiliary image fields
             bool is_mask = false;   // True if this item is a mask (not an image)
+            bool is_depth = false;  // True if this item is a depth map (not an image)
             MaskParams mask_params; // Invert/threshold params (only used if is_mask)
             bool alpha_as_mask = false;
             MaskParams alpha_mask_params;
@@ -171,15 +181,21 @@ namespace lfs::io {
             bool from_base_key = false;
         };
 
-        // Pairing buffer: wait for both image and mask before output
+        // Pairing buffer: wait for the image and requested auxiliary images before output
         struct PendingPair {
             std::optional<lfs::core::Tensor> image;
             std::optional<lfs::core::Tensor> mask;
+            std::optional<lfs::core::Tensor> depth;
             cudaStream_t stream = nullptr;
             bool mask_expected = false; // True if a mask was requested for this sequence_id
+            bool depth_expected = false;
             size_t image_bytes = 0;
             size_t mask_bytes = 0;
+            size_t depth_bytes = 0;
         };
+
+        using PendingPairMap = std::unordered_map<size_t, PendingPair>;
+        using PendingPairIterator = PendingPairMap::iterator;
 
         template <typename T>
         class ThreadSafeQueue {
@@ -283,7 +299,7 @@ namespace lfs::io {
         void put_in_jpeg_cache(const std::string& cache_key, std::vector<uint8_t>&& data);
         void evict_jpeg_cache_if_needed(size_t required_bytes);
 
-        // Mask-specific helpers
+        // Auxiliary image pairing helpers
         std::string make_mask_cache_key(
             const std::filesystem::path& path,
             const LoadParams& params) const;
@@ -291,11 +307,13 @@ namespace lfs::io {
             size_t sequence_id,
             std::optional<lfs::core::Tensor> image,
             std::optional<lfs::core::Tensor> mask,
-            cudaStream_t stream);
+            cudaStream_t stream,
+            std::optional<lfs::core::Tensor> depth = std::nullopt);
+        void try_push_ready_locked(size_t sequence_id, PendingPairIterator it);
         void add_output_ready_bytes(const ReadyImage& ready);
         void release_output_ready_bytes(const ReadyImage& ready);
         void push_output_ready(ReadyImage ready);
-        void erase_pending_pair_locked(std::unordered_map<size_t, PendingPair>::iterator it);
+        void erase_pending_pair_locked(PendingPairIterator it);
         void reset_pipeline_gpu_bytes();
 
         PipelinedLoaderConfig config_;
@@ -327,11 +345,13 @@ namespace lfs::io {
         std::atomic<size_t> in_flight_{0};
         std::atomic<size_t> output_image_bytes_{0};
         std::atomic<size_t> output_mask_bytes_{0};
+        std::atomic<size_t> output_depth_bytes_{0};
         std::atomic<size_t> pending_image_bytes_{0};
         std::atomic<size_t> pending_mask_bytes_{0};
+        std::atomic<size_t> pending_depth_bytes_{0};
 
-        // Pairing buffer for image+mask delivery
-        std::unordered_map<size_t, PendingPair> pending_pairs_;
+        // Pairing buffer for image and auxiliary image delivery
+        PendingPairMap pending_pairs_;
         mutable std::mutex pending_pairs_mutex_;
     };
 

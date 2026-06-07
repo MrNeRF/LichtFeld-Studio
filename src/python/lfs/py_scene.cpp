@@ -1130,12 +1130,17 @@ namespace lfs::python {
             .def_prop_ro("camera_uid", &PySceneNode::camera_uid, "Camera unique identifier")
             .def_prop_ro("image_path", &PySceneNode::image_path, "Path to the camera image file")
             .def_prop_ro("mask_path", &PySceneNode::mask_path, "Path to the camera mask file")
+            .def_prop_ro("depth_path", &PySceneNode::depth_path, "Path to the camera depth map file")
             .def_prop_ro("has_camera", &PySceneNode::has_camera, "Whether this node has camera data")
             .def_prop_ro("has_mask", &PySceneNode::has_mask, "Whether this camera node has a mask file")
+            .def_prop_ro("has_depth", &PySceneNode::has_depth, "Whether this camera node has a depth map file")
             .def("load_mask", &PySceneNode::load_mask,
                  nb::arg("resize_factor") = 1, nb::arg("max_width") = 0,
                  nb::arg("invert") = false, nb::arg("threshold") = 0.5f,
                  "Load mask as tensor [1, H, W] on CUDA (None if not a camera node or no mask)")
+            .def("load_depth", &PySceneNode::load_depth,
+                 nb::arg("resize_factor") = 1, nb::arg("max_width") = 0,
+                 "Load depth map as tensor [H, W] on CUDA (None if not a camera node or no depth map)")
             .def_prop_ro("camera_R", &PySceneNode::camera_R, "Camera rotation matrix [3, 3]")
             .def_prop_ro("camera_T", &PySceneNode::camera_T, "Camera translation vector [3, 1]")
             .def_prop_ro("camera_focal_x", &PySceneNode::camera_focal_x, "Camera focal length in pixels (x)")

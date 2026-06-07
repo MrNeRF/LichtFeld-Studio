@@ -69,6 +69,15 @@ def _is_mrnf_strategy(strategy):
     return strategy in ("mrnf", "mnrf", "lfs")
 
 
+DEPTH_LOSS_MODE_VALUES = ("pearson", "adaptive-warped-l1")
+DEFAULT_DEPTH_LOSS_MODE = "adaptive-warped-l1"
+
+
+def _depth_loss_mode_or_default(mode):
+    mode = str(mode or "")
+    return mode if mode in DEPTH_LOSS_MODE_VALUES else DEFAULT_DEPTH_LOSS_MODE
+
+
 LOCALE_KEYS = {
     "hdr_basic_params": "training.section.basic_params",
     "hdr_advanced_params": "training.section.advanced_params",
@@ -94,6 +103,9 @@ LOCALE_KEYS = {
     "opacity_penalty_power": "training.masking.penalty_power",
     "mask_threshold": "training.masking.threshold",
     "use_alpha_as_mask": "training_params.use_alpha_as_mask",
+    "use_depth_loss": "training_params.use_depth_loss",
+    "depth_loss_mode": "training_params.depth_loss_mode",
+    "depth_loss_weight": "training_params.depth_loss_weight",
     "sparsity": "training_params.sparsity",
     "gut": "training_params.gut",
     "undistort": "training_params.undistort",
@@ -175,6 +187,8 @@ LOCALE_KEYS = {
     "mask_segment": "training.options.mask.segment",
     "mask_ignore": "training.options.mask.ignore",
     "mask_alpha_consistent": "training.options.mask.alpha_consistent",
+    "depth_loss_pearson": "training.options.depth_loss.pearson",
+    "depth_loss_adaptive_warped_l1": "training.options.depth_loss.adaptive_warped_l1",
     "bg_option_color": "training.options.bg.color",
     "bg_option_modulation": "training.options.bg.modulation",
     "bg_option_image": "training.options.bg.image",
@@ -198,6 +212,7 @@ PARAM_BOOL_PROPS = [
     "use_bilateral_grid",
     "invert_masks",
     "use_alpha_as_mask",
+    "use_depth_loss",
     "enable_sparsity",
     "gut",
     "undistort",
@@ -238,6 +253,7 @@ NUM_PROP_DEFS = [
     ("mask_opacity_penalty_weight", float, "%.3f", 0, None, 0.1),
     ("mask_opacity_penalty_power", float, "%.3f", 0.5, None, 0.1),
     ("mask_threshold", float, "%.3f", 0, 1, 0.05),
+    ("depth_loss_weight", float, "%.3f", 0, 100, 0.1),
     ("opacity_reg", float, "%.4f", 0, None, 0.001),
     ("scale_reg", float, "%.4f", 0, None, 0.001),
     ("tv_loss_weight", float, "%.1f", 0, None, 0.5),
@@ -547,6 +563,10 @@ class TrainingPanel(Panel):
             lambda: p() is not None and p().has_params() and p().mask_mode.value == 1,
         )
         model.bind_func(
+            "dep_depth_loss",
+            lambda: p() is not None and p().has_params() and p().use_depth_loss,
+        )
+        model.bind_func(
             "dep_ppisp", lambda: p() is not None and p().has_params() and p().ppisp
         )
         model.bind_func(
@@ -722,6 +742,15 @@ class TrainingPanel(Panel):
             "mask_mode_str",
             lambda: str(p().mask_mode.value) if p() and p().has_params() else "0",
             lambda v: self._set_mask_mode(v),
+        )
+        model.bind(
+            "depth_loss_mode_str",
+            lambda: (
+                _depth_loss_mode_or_default(p().depth_loss_mode)
+                if p() and p().has_params()
+                else DEFAULT_DEPTH_LOSS_MODE
+            ),
+            lambda v: self._set_depth_loss_mode(v),
         )
         model.bind(
             "bg_mode_str",
@@ -1557,6 +1586,14 @@ class TrainingPanel(Panel):
             self._sync_text_bufs()
             self._handle.dirty_all()
 
+    def _set_depth_loss_mode(self, val_str):
+        params = lf.optimization_params()
+        if not params or not params.has_params():
+            return
+        params.depth_loss_mode = _depth_loss_mode_or_default(val_str)
+        if self._handle:
+            self._handle.dirty_all()
+
     def _set_bg_mode(self, val_str):
         params = lf.optimization_params()
         if not params or not params.has_params():
@@ -2384,6 +2421,59 @@ class TrainingPanel(Panel):
             layout.pop_item_width()
             if layout.is_item_hovered():
                 layout.set_tooltip(tr("training.tooltip.mask_mode"))
+
+            layout.table_next_row()
+            layout.table_next_column()
+            layout.label(tr("training_params.use_depth_loss"))
+            layout.table_next_column()
+            changed, new_val = layout.checkbox(
+                "##py_use_depth_loss", params.use_depth_loss
+            )
+            if changed:
+                params.use_depth_loss = new_val
+            if layout.is_item_hovered():
+                layout.set_tooltip(tr("training.tooltip.use_depth_loss"))
+
+            if params.use_depth_loss:
+                layout.table_next_row()
+                layout.table_next_column()
+                layout.label(tr("training_params.depth_loss_mode"))
+                layout.table_next_column()
+                layout.push_item_width(-1)
+                depth_loss_mode = _depth_loss_mode_or_default(params.depth_loss_mode)
+                depth_loss_mode_idx = DEPTH_LOSS_MODE_VALUES.index(depth_loss_mode)
+                depth_loss_mode_items = [
+                    tr("training.options.depth_loss.pearson"),
+                    tr("training.options.depth_loss.adaptive_warped_l1"),
+                ]
+                changed, new_idx = layout.combo(
+                    "##py_depth_loss_mode",
+                    depth_loss_mode_idx,
+                    depth_loss_mode_items,
+                )
+                if changed and 0 <= new_idx < len(DEPTH_LOSS_MODE_VALUES):
+                    params.depth_loss_mode = DEPTH_LOSS_MODE_VALUES[new_idx]
+                layout.pop_item_width()
+                if layout.is_item_hovered():
+                    layout.set_tooltip(tr("training.tooltip.depth_loss_mode"))
+
+                layout.table_next_row()
+                layout.table_next_column()
+                layout.label(tr("training_params.depth_loss_weight"))
+                layout.table_next_column()
+                layout.push_item_width(-1)
+                changed, new_val = layout.input_float(
+                    "##py_depth_loss_weight",
+                    params.depth_loss_weight,
+                    0.1,
+                    0.5,
+                    "%.3f",
+                )
+                if changed:
+                    params.depth_loss_weight = max(0.0, new_val)
+                layout.pop_item_width()
+                if layout.is_item_hovered():
+                    layout.set_tooltip(tr("training.tooltip.depth_loss_weight"))
 
             if params.mask_mode.value != 0:
                 layout.table_next_row()

@@ -120,6 +120,23 @@
           <option value="3" data-tooltip="training.tooltip.opt.mask_mode.alpha_consistent">{{label_mask_alpha_consistent}}</option>
         </select>
       </div>
+      <div class="setting-row" data-tooltip="training.tooltip.use_depth_loss">
+        <span class="prop-label">{{label_use_depth_loss}}</span>
+        <input type="checkbox" data-checked="use_depth_loss" />
+      </div>
+      <div class="setting-row" data-tooltip="training.tooltip.depth_loss_mode" data-if="dep_depth_loss">
+        <span class="prop-label">{{label_depth_loss_mode}}</span>
+        <select data-value="depth_loss_mode_str">
+          <option value="pearson" data-tooltip="training.tooltip.opt.depth_loss_mode.pearson">{{label_depth_loss_pearson}}</option>
+          <option value="adaptive-warped-l1" data-tooltip="training.tooltip.opt.depth_loss_mode.adaptive_warped_l1">{{label_depth_loss_adaptive_warped_l1}}</option>
+        </select>
+      </div>
+      <div class="setting-row" data-tooltip="training.tooltip.depth_loss_weight" data-if="dep_depth_loss">
+        <span class="prop-label">{{label_depth_loss_weight}}</span>
+        <input type="text" class="number-input" data-value="depth_loss_weight_str" />
+        <button class="num-step-btn" data-event-mousedown="num_step('depth_loss_weight', -1)">-</button>
+        <button class="num-step-btn" data-event-mousedown="num_step('depth_loss_weight', 1)">+</button>
+      </div>
       <div class="mask-settings-group" data-if="dep_mask_mode">
         <div class="setting-row" data-tooltip="training.tooltip.invert_masks">
           <span class="prop-label">{{label_invert_masks}}</span>

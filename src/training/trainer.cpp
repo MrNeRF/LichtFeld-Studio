@@ -35,6 +35,7 @@
 #include "strategies/strategy_factory.hpp"
 #include "strategies/strategy_utils.hpp"
 #include "training/kernels/camera_loss_heatmap.cuh"
+#include "training/kernels/depth_loss.hpp"
 #include "training/kernels/grad_alpha.hpp"
 #include "training/kernels/mrnf_kernels.hpp"
 #include "training/training_setup.hpp"
@@ -82,6 +83,41 @@ namespace lfs::training {
             return value != "0" && value != "false" && value != "FALSE" &&
                    value != "off" && value != "OFF" &&
                    value != "no" && value != "NO";
+        }
+
+        [[nodiscard]] int env_int_or_default(const char* name, const int fallback) {
+            const char* raw = std::getenv(name);
+            if (!raw || raw[0] == '\0') {
+                return fallback;
+            }
+
+            char* end = nullptr;
+            const long parsed = std::strtol(raw, &end, 10);
+            if (end == raw || parsed <= 0 || parsed > std::numeric_limits<int>::max()) {
+                return fallback;
+            }
+            return static_cast<int>(parsed);
+        }
+
+        [[nodiscard]] kernels::DepthLossMode depth_loss_mode_from_name(const std::string_view mode) {
+            if (mode == "adaptive-warped-l1") {
+                return kernels::DepthLossMode::AdaptiveWarpedL1;
+            }
+            if (mode == "pearson") {
+                return kernels::DepthLossMode::PearsonAbs;
+            }
+            LOG_WARN("Unknown depth loss mode '{}'; using adaptive-warped-l1", mode);
+            return kernels::DepthLossMode::AdaptiveWarpedL1;
+        }
+
+        [[nodiscard]] const char* depth_loss_mode_name(const kernels::DepthLossMode mode) {
+            switch (mode) {
+            case kernels::DepthLossMode::AdaptiveWarpedL1:
+                return "adaptive-warped-l1";
+            case kernels::DepthLossMode::PearsonAbs:
+            default:
+                return "pearson";
+            }
         }
 
         [[nodiscard]] double bytes_to_mib(const size_t bytes) {
@@ -2844,6 +2880,7 @@ namespace lfs::training {
                 record_optimizer_vram_breakdown(strategy_->get_optimizer());
                 record_vram_tensor("train.persistent", "loss_accumulator", loss_accumulator_);
                 record_vram_tensor("train.persistent", "pipelined_mask", pipelined_mask_);
+                record_vram_tensor("train.persistent", "pipelined_depth", pipelined_depth_);
                 record_vram_tensor("train.persistent", "background", background_);
                 record_vram_tensor("train.persistent", "background_mix_buffer", bg_mix_buffer_);
                 record_vram_tensor("train.persistent", "background_image_base", bg_image_base_);
@@ -3256,6 +3293,7 @@ namespace lfs::training {
                     lfs::core::Tensor tile_grad;
                     lfs::core::Tensor tile_grad_raw;
                     lfs::core::Tensor tile_grad_alpha;
+                    lfs::core::Tensor tile_grad_depth;
                     lfs::core::Tensor tile_error_map;
                     lfs::core::Tensor mask_tile;
 
@@ -3310,6 +3348,138 @@ namespace lfs::training {
                             tile_loss = result->loss;
                             tile_grad = result->grad_corrected;
                             tile_grad_raw = result->grad_raw;
+                        }
+                    }
+
+                    if (run_fastgs_gaussian_backward &&
+                        params_.optimization.use_depth_loss &&
+                        params_.optimization.depth_loss_weight > 0.0f &&
+                        output.depth.is_valid() &&
+                        output.depth.numel() > 0 &&
+                        output.alpha.is_valid() &&
+                        output.alpha.numel() > 0) {
+                        LFS_VRAM_SCOPE("train.depth_loss");
+                        LOG_VRAM_DIFF("train.depth_loss");
+
+                        lfs::core::Tensor target_depth;
+                        if (pipelined_depth_.is_valid() && pipelined_depth_.numel() > 0) {
+                            target_depth = pipelined_depth_;
+                        } else if (cam->has_depth()) {
+                            target_depth = cam->load_and_get_depth(
+                                params_.dataset.resize_factor,
+                                params_.dataset.max_width);
+                        }
+
+                        if (target_depth.is_valid() && target_depth.numel() > 0) {
+                            if (target_depth.ndim() == 3 && target_depth.shape()[0] == 1) {
+                                target_depth = target_depth.squeeze(0);
+                            }
+                            if (target_depth.device() != lfs::core::Device::CUDA) {
+                                target_depth = target_depth.cuda();
+                            }
+                            if (!target_depth.is_contiguous()) {
+                                target_depth = target_depth.contiguous();
+                            }
+
+                            lfs::core::Tensor rendered_depth = output.depth;
+                            if (rendered_depth.ndim() == 3 && rendered_depth.shape()[0] == 1) {
+                                rendered_depth = rendered_depth.squeeze(0);
+                            }
+                            if (!rendered_depth.is_contiguous()) {
+                                rendered_depth = rendered_depth.contiguous();
+                            }
+
+                            lfs::core::Tensor rendered_alpha = output.alpha;
+                            if (rendered_alpha.ndim() == 3 && rendered_alpha.shape()[0] == 1) {
+                                rendered_alpha = rendered_alpha.squeeze(0);
+                            }
+                            if (!rendered_alpha.is_contiguous()) {
+                                rendered_alpha = rendered_alpha.contiguous();
+                            }
+
+                            const bool depth_shape_matches =
+                                target_depth.ndim() == 2 &&
+                                rendered_depth.ndim() == 2 &&
+                                rendered_alpha.ndim() == 2 &&
+                                target_depth.shape()[0] == rendered_depth.shape()[0] &&
+                                target_depth.shape()[1] == rendered_depth.shape()[1] &&
+                                target_depth.shape()[0] == rendered_alpha.shape()[0] &&
+                                target_depth.shape()[1] == rendered_alpha.shape()[1];
+
+                            if (depth_shape_matches) {
+                                const size_t num_depth_pixels = rendered_depth.numel();
+                                const size_t depth_partials =
+                                    lfs::training::kernels::depth_loss_partial_count(num_depth_pixels);
+                                const cudaStream_t depth_stream = rendered_depth.stream();
+                                const auto depth_loss_mode =
+                                    depth_loss_mode_from_name(params_.optimization.depth_loss_mode);
+
+                                if (!depth_loss_scalar_.is_valid()) {
+                                    depth_loss_scalar_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
+                                }
+                                depth_loss_scalar_.set_stream(depth_stream);
+                                if (!depth_loss_grad_.is_valid() ||
+                                    depth_loss_grad_.shape() != rendered_depth.shape()) {
+                                    depth_loss_grad_ = lfs::core::Tensor::empty(rendered_depth.shape(), lfs::core::Device::CUDA);
+                                }
+                                depth_loss_grad_.set_stream(depth_stream);
+                                if (!depth_loss_partials_.is_valid() ||
+                                    depth_loss_partials_.shape()[0] != depth_partials) {
+                                    depth_loss_partials_ = lfs::core::Tensor::empty({depth_partials}, lfs::core::Device::CUDA);
+                                }
+                                depth_loss_partials_.set_stream(depth_stream);
+
+                                lfs::training::kernels::launch_depth_loss(
+                                    rendered_depth.ptr<float>(),
+                                    rendered_alpha.ptr<float>(),
+                                    target_depth.ptr<float>(),
+                                    depth_loss_grad_.ptr<float>(),
+                                    depth_loss_scalar_.ptr<float>(),
+                                    depth_loss_partials_.ptr<float>(),
+                                    num_depth_pixels,
+                                    params_.optimization.depth_loss_weight,
+                                    depth_loss_mode,
+                                    depth_stream);
+
+                                static const bool depth_loss_diag = env_flag_enabled("LFS_DEPTH_LOSS_DIAG");
+                                static const int depth_loss_diag_interval =
+                                    env_int_or_default("LFS_DEPTH_LOSS_DIAG_INTERVAL", 50);
+                                if (depth_loss_diag && (iter == 1 || iter % depth_loss_diag_interval == 0)) {
+                                    const auto depth_grad_abs = depth_loss_grad_.abs();
+                                    const float valid_count = depth_loss_partials_.slice(0, 0, 1).item<float>();
+                                    const float scale_or_norm = depth_loss_partials_.slice(0, 3, 4).item<float>();
+                                    const float depth_corr = depth_loss_partials_.slice(0, 4, 5).item<float>();
+                                    const float valid_fraction = num_depth_pixels > 0
+                                                                     ? valid_count / static_cast<float>(num_depth_pixels)
+                                                                     : 0.0f;
+                                    LOG_INFO("[DEPTH_LOSS] iter={} mode={} camera='{}' loss={:.6f} corr={:.6f} scale_or_norm={:.6f} valid_pixels={:.0f} valid_fraction={:.3f} target_depth_min={:.6f} target_depth_max={:.6f} target_depth_mean={:.6f} depth_accum_min={:.6f} depth_accum_max={:.6f} depth_accum_mean={:.6f} alpha_accum_min={:.6f} alpha_accum_max={:.6f} alpha_accum_mean={:.6f} grad_depth_abs_max={:.6e} grad_depth_abs_mean={:.6e}",
+                                             iter,
+                                             depth_loss_mode_name(depth_loss_mode),
+                                             cam->image_name(),
+                                             depth_loss_scalar_.item<float>(),
+                                             depth_corr,
+                                             scale_or_norm,
+                                             valid_count,
+                                             valid_fraction,
+                                             target_depth.min().item<float>(),
+                                             target_depth.max().item<float>(),
+                                             target_depth.mean().item<float>(),
+                                             rendered_depth.min().item<float>(),
+                                             rendered_depth.max().item<float>(),
+                                             rendered_depth.mean().item<float>(),
+                                             rendered_alpha.min().item<float>(),
+                                             rendered_alpha.max().item<float>(),
+                                             rendered_alpha.mean().item<float>(),
+                                             depth_grad_abs.max().item<float>(),
+                                             depth_grad_abs.mean().item<float>());
+                                }
+
+                                tile_grad_depth = depth_loss_grad_;
+                                tile_loss = tile_loss + depth_loss_scalar_;
+                            } else {
+                                LOG_WARN("Skipping depth loss for '{}': rendered depth shape and target depth shape differ",
+                                         cam->image_name());
+                            }
                         }
                     }
 
@@ -3456,6 +3626,7 @@ namespace lfs::training {
                         }
                         fastgs_entries.emplace_back("render.output_image", tensor_reserved_bytes(output.image));
                         fastgs_entries.emplace_back("render.output_alpha", tensor_reserved_bytes(output.alpha));
+                        fastgs_entries.emplace_back("render.output_depth", tensor_reserved_bytes(output.depth));
                         fastgs_entries.emplace_back("train.gt_tile", tensor_reserved_bytes(gt_tile));
                         if (bg_image.is_valid() && !bg_image.is_empty()) {
                             fastgs_entries.emplace_back("train.background_image", tensor_reserved_bytes(bg_image));
@@ -3484,6 +3655,9 @@ namespace lfs::training {
                         add_tensor_entry(trainer_entries, "trainer.densification_error_map", densification_error_map_);
                         add_tensor_entry(trainer_entries, "trainer.loss_accumulator", loss_accumulator_);
                         add_tensor_entry(trainer_entries, "trainer.pipelined_mask", pipelined_mask_);
+                        add_tensor_entry(trainer_entries, "trainer.pipelined_depth", pipelined_depth_);
+                        add_tensor_entry(trainer_entries, "trainer.depth_loss_grad", depth_loss_grad_);
+                        add_tensor_entry(trainer_entries, "trainer.depth_loss_partials", depth_loss_partials_);
                         log_entry_bytes("trainer_pool_backed_live", trainer_entries);
 
                         if (auto loader = getActiveImageLoader()) {
@@ -3560,7 +3734,9 @@ namespace lfs::training {
                                                         use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{},
                                                         densification_type,
                                                         iter,
-                                                        fused_extra_gradients);
+                                                        fused_extra_gradients,
+                                                        tile_grad_depth,
+                                                        tile_grad_depth.is_valid() && tile_grad_depth.numel() > 0);
                             } else {
                                 cleanup_tile_context();
                             }
@@ -4000,24 +4176,32 @@ namespace lfs::training {
             pipelined_config = tunePipelinedLoaderConfig(pipelined_config, train_dataset_);
 
             const bool alpha_available = scene_ && scene_->imagesHaveAlpha();
-            PipelinedMaskConfig mask_pipeline_config;
+            PipelinedAuxiliaryImageConfig aux_pipeline_config;
+            aux_pipeline_config.load_depths =
+                params_.optimization.use_depth_loss &&
+                params_.optimization.depth_loss_weight > 0.0f;
+            if (aux_pipeline_config.load_depths) {
+                LOG_INFO("Depth loss enabled (mode={}, weight={})",
+                         depth_loss_mode_name(depth_loss_mode_from_name(params_.optimization.depth_loss_mode)),
+                         params_.optimization.depth_loss_weight);
+            }
             if (params_.optimization.mask_mode != lfs::core::param::MaskMode::None) {
-                mask_pipeline_config.invert_masks = params_.optimization.invert_masks;
-                mask_pipeline_config.mask_threshold = params_.optimization.mask_threshold;
+                aux_pipeline_config.invert_masks = params_.optimization.invert_masks;
+                aux_pipeline_config.mask_threshold = params_.optimization.mask_threshold;
                 if (params_.optimization.use_alpha_as_mask && alpha_available) {
-                    mask_pipeline_config.use_alpha_as_mask = true;
-                    mask_pipeline_config.load_masks = true;
+                    aux_pipeline_config.use_alpha_as_mask = true;
+                    aux_pipeline_config.load_masks = true;
                     LOG_INFO("Alpha-as-mask enabled (invert={}, threshold={})",
-                             mask_pipeline_config.invert_masks, mask_pipeline_config.mask_threshold);
+                             aux_pipeline_config.invert_masks, aux_pipeline_config.mask_threshold);
                 } else {
-                    mask_pipeline_config.load_masks = true;
+                    aux_pipeline_config.load_masks = true;
                     LOG_INFO("Mask file loading enabled (invert={}, threshold={})",
-                             mask_pipeline_config.invert_masks, mask_pipeline_config.mask_threshold);
+                             aux_pipeline_config.invert_masks, aux_pipeline_config.mask_threshold);
                 }
             }
 
             auto train_dataloader = create_infinite_pipelined_dataloader(
-                train_dataset_, pipelined_config, mask_pipeline_config);
+                train_dataset_, pipelined_config, aux_pipeline_config);
             auto active_image_loader_guard = makeScopeGuard([this]() {
                 clearActiveImageLoader();
             });
@@ -4068,6 +4252,7 @@ namespace lfs::training {
 
                 // Store pipelined mask for use in train_step
                 pipelined_mask_ = example.mask.has_value() ? std::move(*example.mask) : lfs::core::Tensor();
+                pipelined_depth_ = example.depth.has_value() ? std::move(*example.depth) : lfs::core::Tensor();
 
                 if (memory_breakdown_enabled_ && !memory_breakdown_logged_first_batch_) {
                     const auto snapshot = capture_vram_snapshot(true);
@@ -4076,12 +4261,13 @@ namespace lfs::training {
                     const size_t channels = gt_image.ndim() > 2 ? gt_image.shape()[0] : 1;
                     const size_t height = gt_image.ndim() > 2 ? gt_image.shape()[1] : gt_image.shape()[0];
                     const size_t width = gt_image.ndim() > 2 ? gt_image.shape()[2] : gt_image.shape()[1];
-                    LOG_INFO("[MEM] first_batch gt_image={}x{}x{} = {:.2f} MiB, mask = {:.2f} MiB, output_queue={}, pending_pairs={}, in_flight={}",
+                    LOG_INFO("[MEM] first_batch gt_image={}x{}x{} = {:.2f} MiB, mask = {:.2f} MiB, depth = {:.2f} MiB, output_queue={}, pending_pairs={}, in_flight={}",
                              channels,
                              height,
                              width,
                              bytes_to_mib(tensor_reserved_bytes(gt_image)),
                              bytes_to_mib(tensor_reserved_bytes(pipelined_mask_)),
+                             bytes_to_mib(tensor_reserved_bytes(pipelined_depth_)),
                              stats.output_queue_size,
                              stats.pending_pairs_count,
                              train_dataloader->get_loader_shared()->in_flight_count());

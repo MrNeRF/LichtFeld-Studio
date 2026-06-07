@@ -184,13 +184,45 @@ TEST_F(ColmapImageLayoutTest, ResolvesNestedImagesByBasename) {
         lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images");
     ASSERT_TRUE(result.has_value()) << result.error().format();
 
-    auto& [cameras, scene_center] = *result;
-    (void)scene_center;
+    const auto& cameras = std::get<0>(*result);
 
     ASSERT_EQ(cameras.size(), 1u);
     EXPECT_EQ(cameras[0]->image_name(), "frame_0001.png");
     EXPECT_TRUE(fs::equivalent(cameras[0]->image_path(), nested_image));
     EXPECT_TRUE(fs::equivalent(cameras[0]->mask_path(), nested_mask));
+}
+
+TEST_F(ColmapImageLayoutTest, ResolvesDepthMapsByImageName) {
+    const fs::path dataset_dir = temp_dir_ / "dataset";
+    const fs::path image_path = dataset_dir / "images" / "frame_0000.png";
+    const fs::path depth_path = dataset_dir / "depth" / "frame_0000.png";
+
+    write_minimal_colmap_text_dataset(dataset_dir, "frame_0000.png");
+    write_png(image_path);
+    write_png(depth_path);
+
+    auto result =
+        lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images");
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+
+    const auto& cameras = std::get<0>(*result);
+
+    ASSERT_EQ(cameras.size(), 1u);
+    EXPECT_TRUE(cameras[0]->has_depth());
+    EXPECT_TRUE(fs::equivalent(cameras[0]->depth_path(), depth_path));
+}
+
+TEST_F(ColmapImageLayoutTest, DepthDirCacheResolvesDepthsFolderAndDepthExtension) {
+    const fs::path dataset_dir = temp_dir_ / "dataset";
+    const fs::path depth_path = dataset_dir / "depths" / "nested" / "frame_0001.depth.png";
+
+    write_png(depth_path);
+
+    const lfs::io::DepthDirCache cache(dataset_dir);
+    const auto result = cache.lookup("nested/frame_0001.png");
+
+    ASSERT_TRUE(result.found());
+    EXPECT_TRUE(fs::equivalent(result.path, depth_path));
 }
 
 TEST_F(ColmapImageLayoutTest, ResolvesDuplicateNestedImagesAndMasksByRelativePath) {
@@ -367,6 +399,8 @@ TEST_F(ColmapImageLayoutTest, DetectDatasetInfoCountsNestedImagesAndMasks) {
     write_png(dataset_dir / "images" / "img2" / "frame_0002.png");
     write_png(dataset_dir / "masks" / "img1" / "frame_0001.png");
     write_png(dataset_dir / "masks" / "img2" / "frame_0002.png");
+    write_png(dataset_dir / "depth" / "img1" / "frame_0001.png");
+    write_png(dataset_dir / "depth" / "img2" / "frame_0002.png");
     write_text_file(dataset_dir / "sparse" / "0" / "cameras.txt",
                     "1 PINHOLE 1 1 1 1 0.5 0.5\n");
 
@@ -377,6 +411,9 @@ TEST_F(ColmapImageLayoutTest, DetectDatasetInfoCountsNestedImagesAndMasks) {
     EXPECT_EQ(info.image_count, 2);
     EXPECT_TRUE(info.has_masks);
     EXPECT_EQ(info.mask_count, 2);
+    EXPECT_TRUE(fs::equivalent(info.depths_path, dataset_dir / "depth"));
+    EXPECT_TRUE(info.has_depths);
+    EXPECT_EQ(info.depth_count, 2);
 }
 
 TEST_F(ColmapImageLayoutTest, WriteBackAppliesSceneTransformsToTextSparseModel) {

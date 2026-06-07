@@ -1162,6 +1162,7 @@ namespace lfs::app {
                 {"image_name", node.camera->image_name()},
                 {"image_path", core::path_to_utf8(node.camera->image_path())},
                 {"mask_path", core::path_to_utf8(node.camera->mask_path())},
+                {"depth_path", core::path_to_utf8(node.camera->depth_path())},
                 {"camera_width", node.camera->camera_width()},
                 {"camera_height", node.camera->camera_height()},
                 {"image_width", node.camera->image_width()},

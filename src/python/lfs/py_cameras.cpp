@@ -92,7 +92,9 @@ namespace lfs::python {
     std::string PyCamera::image_name() const { return cam_->image_name(); }
     std::string PyCamera::image_path() const { return lfs::core::path_to_utf8(cam_->image_path()); }
     std::string PyCamera::mask_path() const { return lfs::core::path_to_utf8(cam_->mask_path()); }
+    std::string PyCamera::depth_path() const { return lfs::core::path_to_utf8(cam_->depth_path()); }
     bool PyCamera::has_mask() const { return cam_->has_mask(); }
+    bool PyCamera::has_depth() const { return cam_->has_depth(); }
     int PyCamera::uid() const { return cam_->uid(); }
 
     PyTensor PyCamera::rotation() const {
@@ -149,6 +151,10 @@ namespace lfs::python {
         return PyTensor(cam_->load_and_get_mask(resize_factor, max_width, invert, threshold), true);
     }
 
+    PyTensor PyCamera::load_depth(int resize_factor, int max_width) {
+        return PyTensor(cam_->load_and_get_depth(resize_factor, max_width), true);
+    }
+
     core::Camera* PyCamera::camera() { return cam_; }
     const core::Camera* PyCamera::camera() const { return cam_; }
 
@@ -170,7 +176,9 @@ namespace lfs::python {
             .def_prop_ro("image_name", &PyCamera::image_name, "Image filename")
             .def_prop_ro("image_path", &PyCamera::image_path, "Full path to image file")
             .def_prop_ro("mask_path", &PyCamera::mask_path, "Full path to mask file")
+            .def_prop_ro("depth_path", &PyCamera::depth_path, "Full path to depth map file")
             .def_prop_ro("has_mask", &PyCamera::has_mask, "Whether a mask file exists")
+            .def_prop_ro("has_depth", &PyCamera::has_depth, "Whether a depth map file exists")
             .def_prop_ro("uid", &PyCamera::uid, "Unique camera identifier")
             // Visualizer-space camera pose, directly compatible with render_view().
             .def_prop_ro("rotation", &PyCamera::rotation,
@@ -196,7 +204,10 @@ namespace lfs::python {
             .def("load_mask", &PyCamera::load_mask,
                  nb::arg("resize_factor") = 1, nb::arg("max_width") = 0,
                  nb::arg("invert") = false, nb::arg("threshold") = 0.5f,
-                 "Load mask as tensor [1, H, W] on CUDA");
+                 "Load mask as tensor [1, H, W] on CUDA")
+            .def("load_depth", &PyCamera::load_depth,
+                 nb::arg("resize_factor") = 1, nb::arg("max_width") = 0,
+                 "Load depth map as tensor [H, W] on CUDA");
 
         // CameraDataset class
         nb::class_<PyCameraDataset>(m, "CameraDataset")

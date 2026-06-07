@@ -2259,6 +2259,7 @@ namespace lfs::core {
         node->camera_uid = node->camera->uid();
         node->image_path = lfs::core::path_to_utf8(node->camera->image_path());
         node->mask_path = lfs::core::path_to_utf8(node->camera->mask_path());
+        node->depth_path = lfs::core::path_to_utf8(node->camera->depth_path());
 
         if (parent != NULL_NODE) {
             if (auto* p = getNodeById(parent)) {

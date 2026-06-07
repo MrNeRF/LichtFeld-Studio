@@ -2117,17 +2117,26 @@ Example:
             "masks_path", [](const lfs::io::DatasetInfo& i) { return lfs::core::path_to_utf8(i.masks_path); },
             "Path to the masks directory")
         .def_prop_ro(
+            "depths_path", [](const lfs::io::DatasetInfo& i) { return lfs::core::path_to_utf8(i.depths_path); },
+            "Path to the depth maps directory")
+        .def_prop_ro(
             "has_masks", [](const lfs::io::DatasetInfo& i) { return i.has_masks; },
             "Whether the dataset includes masks")
+        .def_prop_ro(
+            "has_depths", [](const lfs::io::DatasetInfo& i) { return i.has_depths; },
+            "Whether the dataset includes depth maps")
         .def_prop_ro(
             "image_count", [](const lfs::io::DatasetInfo& i) { return i.image_count; },
             "Number of images in the dataset")
         .def_prop_ro(
             "mask_count", [](const lfs::io::DatasetInfo& i) { return i.mask_count; },
             "Number of masks in the dataset")
+        .def_prop_ro(
+            "depth_count", [](const lfs::io::DatasetInfo& i) { return i.depth_count; },
+            "Number of depth maps in the dataset")
         .def("__repr__", [](const lfs::io::DatasetInfo& i) {
-            return std::format("DatasetInfo(base_path='{}', images={}, masks={})",
-                               lfs::core::path_to_utf8(i.base_path), i.image_count, i.mask_count);
+            return std::format("DatasetInfo(base_path='{}', images={}, masks={}, depths={})",
+                               lfs::core::path_to_utf8(i.base_path), i.image_count, i.mask_count, i.depth_count);
         });
 
     m.def(

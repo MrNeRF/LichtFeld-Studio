@@ -39,6 +39,7 @@ namespace lfs::training {
 
         lfs::core::Tensor image;
         lfs::core::Tensor alpha;
+        lfs::core::Tensor depth;
         lfs::core::Tensor bg_color; // Saved for alpha gradient computation
 
         // Gaussian parameters (saved to avoid re-fetching in backward)
@@ -100,6 +101,7 @@ namespace lfs::training {
         void move_from(FastRasterizeContext&& other) noexcept {
             image = std::move(other.image);
             alpha = std::move(other.alpha);
+            depth = std::move(other.depth);
             bg_color = std::move(other.bg_color);
             means = std::move(other.means);
             raw_scales = std::move(other.raw_scales);
@@ -163,7 +165,9 @@ namespace lfs::training {
         const lfs::core::Tensor& pixel_error_map = {},
         DensificationType densification_type = DensificationType::None,
         int iteration = 0,
-        const FastGSFusedExtraGradients& fused_extra_gradients = {});
+        const FastGSFusedExtraGradients& fused_extra_gradients = {},
+        const lfs::core::Tensor& grad_depth = {},
+        bool detach_depth_weights = false);
 
     // Convenience wrapper for inference (no backward needed)
     inline RenderOutput fast_rasterize(

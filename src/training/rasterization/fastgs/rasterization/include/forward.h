@@ -31,6 +31,7 @@ namespace fast_lfs::rasterization {
         const float3* cam_position,
         float* image,
         float* alpha,
+        float* depth,
         const int n_primitives,
         const int active_sh_bases,
         const int sh_layout_bases,

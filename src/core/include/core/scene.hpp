@@ -115,6 +115,7 @@ namespace lfs::core {
 
         std::string image_path;
         std::string mask_path;
+        std::string depth_path;
 
         mutable glm::mat4 world_transform{1.0f};
         mutable bool transform_dirty = true;

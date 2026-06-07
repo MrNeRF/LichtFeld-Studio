@@ -2051,6 +2051,27 @@ class OptimizationParams:
     def use_alpha_as_mask(self, arg: bool, /) -> None: ...
 
     @property
+    def use_depth_loss(self) -> bool:
+        """Load depth maps and use depth-map supervision during training"""
+
+    @use_depth_loss.setter
+    def use_depth_loss(self, arg: bool, /) -> None: ...
+
+    @property
+    def depth_loss_weight(self) -> float:
+        """Weight for depth-map supervision"""
+
+    @depth_loss_weight.setter
+    def depth_loss_weight(self, arg: float, /) -> None: ...
+
+    @property
+    def depth_loss_mode(self) -> str:
+        """Depth supervision mode: 'pearson' or 'adaptive-warped-l1'"""
+
+    @depth_loss_mode.setter
+    def depth_loss_mode(self, arg: str, /) -> None: ...
+
+    @property
     def undistort(self) -> bool:
         """Undistort images on-the-fly before training"""
 
@@ -2248,8 +2269,16 @@ class DatasetInfo:
         """Path to the masks directory"""
 
     @property
+    def depths_path(self) -> str:
+        """Path to the depth maps directory"""
+
+    @property
     def has_masks(self) -> bool:
         """Whether the dataset includes masks"""
+
+    @property
+    def has_depths(self) -> bool:
+        """Whether the dataset includes depth maps"""
 
     @property
     def image_count(self) -> int:
@@ -2258,6 +2287,10 @@ class DatasetInfo:
     @property
     def mask_count(self) -> int:
         """Number of masks in the dataset"""
+
+    @property
+    def depth_count(self) -> int:
+        """Number of depth maps in the dataset"""
 
     def __repr__(self) -> str: ...
 

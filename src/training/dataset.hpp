@@ -151,8 +151,9 @@ namespace lfs::training {
     /// Dataset example type
     struct CameraExample {
         CameraWithImage data;
-        lfs::core::Tensor target;              // Empty tensor, not used
-        std::optional<lfs::core::Tensor> mask; // Optional mask [H,W], float32
+        lfs::core::Tensor target;                    // Empty tensor, not used
+        std::optional<lfs::core::Tensor> mask = {};  // Optional mask [H,W], float32
+        std::optional<lfs::core::Tensor> depth = {}; // Optional depth [H,W], float32
     };
 
     /// Camera dataset configuration
@@ -510,9 +511,10 @@ namespace lfs::training {
         bool shutdown_;
     };
 
-    /// Configuration for mask loading in PipelinedDataLoader
-    struct PipelinedMaskConfig {
+    /// Configuration for optional mask/depth loading in PipelinedDataLoader
+    struct PipelinedAuxiliaryImageConfig {
         bool load_masks = false;        // Whether to load masks alongside images
+        bool load_depths = false;       // Whether to load depth maps alongside images
         bool invert_masks = false;      // Invert mask values (1.0 - mask)
         float mask_threshold = 0.0f;    // If > 0, values >= threshold become 1.0
         bool use_alpha_as_mask = false; // Extract alpha channel from RGBA as mask
@@ -527,11 +529,11 @@ namespace lfs::training {
         PipelinedDataLoader(std::shared_ptr<CameraDataset> dataset,
                             Sampler sampler,
                             lfs::io::PipelinedLoaderConfig config = {},
-                            PipelinedMaskConfig mask_config = {})
+                            PipelinedAuxiliaryImageConfig aux_config = {})
             : dataset_(dataset),
               sampler_(std::move(sampler)),
               config_(config),
-              mask_config_(mask_config),
+              aux_config_(aux_config),
               loader_(std::make_shared<lfs::io::PipelinedImageLoader>(config)),
               shutdown_(false) {
 
@@ -573,17 +575,27 @@ namespace lfs::training {
                 // Attach mask if present
                 if (ready.mask && ready.mask->is_valid()) {
                     example.mask = std::move(*ready.mask);
-                } else if (mask_config_.load_masks && cam->has_in_memory_mask()) {
+                } else if (aux_config_.load_masks && cam->has_in_memory_mask()) {
                     // Direct-scene plugins attach masks as in-memory tensors
                     // via Camera::set_mask_tensor — load_and_get_mask returns
                     // the processed-and-cached tensor (skips file I/O).
                     auto m = cam->load_and_get_mask(
                         dataset_->get_resize_factor(),
                         dataset_->get_max_width(),
-                        mask_config_.invert_masks,
-                        mask_config_.mask_threshold);
+                        aux_config_.invert_masks,
+                        aux_config_.mask_threshold);
                     if (m.is_valid()) {
                         example.mask = std::move(m);
+                    }
+                }
+                if (ready.depth && ready.depth->is_valid()) {
+                    example.depth = std::move(*ready.depth);
+                } else if (aux_config_.load_depths && cam->has_depth()) {
+                    auto depth = cam->load_and_get_depth(
+                        dataset_->get_resize_factor(),
+                        dataset_->get_max_width());
+                    if (depth.is_valid()) {
+                        example.depth = std::move(depth);
                     }
                 }
 
@@ -638,14 +650,17 @@ namespace lfs::training {
                     request.params.undistort = request.undistort;
                 }
 
-                if (mask_config_.load_masks && cam->has_mask()) {
+                if (aux_config_.load_masks && cam->has_mask()) {
                     request.mask_path = cam->mask_path();
-                    request.mask_params.invert = mask_config_.invert_masks;
-                    request.mask_params.threshold = mask_config_.mask_threshold;
-                } else if (mask_config_.use_alpha_as_mask && cam->has_alpha()) {
+                    request.mask_params.invert = aux_config_.invert_masks;
+                    request.mask_params.threshold = aux_config_.mask_threshold;
+                } else if (aux_config_.use_alpha_as_mask && cam->has_alpha()) {
                     request.extract_alpha_as_mask = true;
-                    request.alpha_mask_params.invert = mask_config_.invert_masks;
-                    request.alpha_mask_params.threshold = mask_config_.mask_threshold;
+                    request.alpha_mask_params.invert = aux_config_.invert_masks;
+                    request.alpha_mask_params.threshold = aux_config_.mask_threshold;
+                }
+                if (aux_config_.load_depths && cam->has_depth()) {
+                    request.depth_path = cam->depth_path();
                 }
 
                 loader_->prefetch({request});
@@ -655,7 +670,7 @@ namespace lfs::training {
         std::shared_ptr<CameraDataset> dataset_;
         Sampler sampler_;
         lfs::io::PipelinedLoaderConfig config_;
-        PipelinedMaskConfig mask_config_;
+        PipelinedAuxiliaryImageConfig aux_config_;
         std::shared_ptr<lfs::io::PipelinedImageLoader> loader_;
 
         std::unordered_map<size_t, size_t> sequence_to_camera_;
@@ -684,16 +699,16 @@ namespace lfs::training {
     template <typename SamplerType = RandomSampler>
     inline auto create_pipelined_dataloader(std::shared_ptr<CameraDataset> dataset,
                                             lfs::io::PipelinedLoaderConfig config = {},
-                                            PipelinedMaskConfig mask_config = {}) {
+                                            PipelinedAuxiliaryImageConfig aux_config = {}) {
         const size_t dataset_size = dataset->size();
         return std::make_unique<PipelinedDataLoader<SamplerType>>(
-            dataset, SamplerType(dataset_size), config, mask_config);
+            dataset, SamplerType(dataset_size), config, aux_config);
     }
 
     inline auto create_infinite_pipelined_dataloader(std::shared_ptr<CameraDataset> dataset,
                                                      lfs::io::PipelinedLoaderConfig config = {},
-                                                     PipelinedMaskConfig mask_config = {}) {
-        return create_pipelined_dataloader<InfiniteRandomSampler>(dataset, config, mask_config);
+                                                     PipelinedAuxiliaryImageConfig aux_config = {}) {
+        return create_pipelined_dataloader<InfiniteRandomSampler>(dataset, config, aux_config);
     }
 
 } // namespace lfs::training

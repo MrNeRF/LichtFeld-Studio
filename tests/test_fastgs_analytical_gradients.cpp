@@ -15,16 +15,21 @@
 #include <gtest/gtest.h>
 #include <torch/torch.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cuda_runtime.h>
+#include <vector>
 
 #include "core/cuda/sh_layout.cuh"
+#include "training/kernels/depth_loss.hpp"
 #include "training/rasterization/gsplat/SphericalHarmonics.h"
 
 namespace {
 
     constexpr float REL_TOL = 1e-4f;
     constexpr float ABS_TOL = 1e-6f;
+    constexpr float MIN_ALPHA_FOR_DEPTH_LOSS = 1.0e-3f;
 
     bool tensors_close(const torch::Tensor& a, const torch::Tensor& b, float rtol = REL_TOL, float atol = ABS_TOL) {
         return torch::allclose(a, b, rtol, atol);
@@ -34,6 +39,176 @@ namespace {
         auto diff = (a - b).abs();
         auto scale = torch::max(a.abs(), b.abs()) + 1e-8f;
         return (diff / scale).max().item<float>();
+    }
+
+    torch::Tensor pearson_depth_loss(
+        const torch::Tensor& depth_accum,
+        const torch::Tensor& alpha_accum,
+        const torch::Tensor& target_depth,
+        const float weight) {
+        const auto depth_safe = depth_accum.clamp_min(0.0f);
+        const auto pred = depth_safe;
+        const auto active = target_depth.gt(0.0f).logical_and(alpha_accum.gt(MIN_ALPHA_FOR_DEPTH_LOSS));
+        const auto active_f = active.to(torch::kFloat32);
+        const auto count = active_f.sum();
+        if (count.item<float>() <= 1.0f) {
+            return torch::zeros({}, depth_accum.options());
+        }
+
+        const auto pred_sum = (pred * active_f).sum();
+        const auto target_sum = (target_depth * active_f).sum();
+        const auto mean_pred = pred_sum / count;
+        const auto mean_target = target_sum / count;
+        const auto centered_pred = (pred - mean_pred) * active_f;
+        const auto centered_target = (target_depth - mean_target) * active_f;
+        const auto pred_var = (centered_pred * centered_pred).sum();
+        const auto target_var = (centered_target * centered_target).sum();
+        if (pred_var.item<float>() <= 1.0e-12f || target_var.item<float>() <= 1.0e-12f) {
+            return torch::zeros({}, depth_accum.options());
+        }
+
+        const auto corr = (centered_pred * centered_target).sum() / torch::sqrt(pred_var * target_var);
+        return weight * (1.0f - corr.abs());
+    }
+
+    float adaptive_warp_scale_from_means(const float mean_pred, const float mean_target_oriented) {
+        const float target = std::min(std::max(mean_target_oriented, 1.0e-3f), 1.0f - 1.0e-3f);
+        const float pred = std::max(mean_pred, 1.0e-4f);
+        if (target < 0.5f) {
+            return std::max(pred / std::max(2.0f * target, 1.0e-3f), 1.0e-4f);
+        }
+        return std::max(2.0f * pred * std::max(1.0f - target, 1.0e-3f), 1.0e-4f);
+    }
+
+    torch::Tensor adaptive_warp_depth(const torch::Tensor& depth_accum, const float scale) {
+        const auto depth_safe = depth_accum.clamp_min(0.0f);
+        const auto scale_tensor = torch::full_like(depth_safe, scale);
+        const auto near_depth = 0.5f * depth_safe / scale;
+        const auto far_depth = 1.0f - 0.5f * scale / depth_safe.clamp_min(1.0e-4f);
+        return torch::where(depth_safe.lt(scale_tensor), near_depth, far_depth);
+    }
+
+    torch::Tensor adaptive_warped_l1_depth_loss(
+        const torch::Tensor& depth_accum,
+        const torch::Tensor& alpha_accum,
+        const torch::Tensor& target_depth,
+        const float weight) {
+        const auto depth_safe = depth_accum.clamp_min(0.0f);
+        const auto active = target_depth.gt(0.0f).logical_and(alpha_accum.detach().gt(MIN_ALPHA_FOR_DEPTH_LOSS));
+        const auto active_f = active.to(torch::kFloat32).detach();
+        const auto count = active_f.sum();
+        if (count.item<float>() <= 1.0f) {
+            return torch::zeros({}, depth_accum.options());
+        }
+
+        const auto pred_det = depth_safe.detach();
+        const auto target_det = target_depth.detach();
+        const auto pred_sum = (pred_det * active_f).sum();
+        const auto target_sum = (target_det * active_f).sum();
+        const auto mean_pred = pred_sum / count;
+        const auto mean_target = target_sum / count;
+        const auto centered_pred = (pred_det - mean_pred) * active_f;
+        const auto centered_target = (target_det - mean_target) * active_f;
+        const auto pred_var = (centered_pred * centered_pred).sum();
+        const auto target_var = (centered_target * centered_target).sum();
+        if (pred_var.item<float>() <= 1.0e-12f || target_var.item<float>() <= 1.0e-12f) {
+            return torch::zeros({}, depth_accum.options());
+        }
+
+        const auto corr = (centered_pred * centered_target).sum() / torch::sqrt(pred_var * target_var);
+        const bool same_orientation = corr.item<float>() >= 0.0f;
+        const float mean_target_oriented = same_orientation
+                                               ? mean_target.item<float>()
+                                               : 1.0f - mean_target.item<float>();
+        const float scale = adaptive_warp_scale_from_means(mean_pred.item<float>(), mean_target_oriented);
+        const auto target_oriented = same_orientation
+                                         ? target_depth.clamp(0.0f, 1.0f)
+                                         : 1.0f - target_depth.clamp(0.0f, 1.0f);
+        return weight * ((adaptive_warp_depth(depth_accum, scale) - target_oriented).abs() * active_f).sum() / count;
+    }
+
+    void expect_depth_loss_kernel_matches_autograd(
+        const torch::Tensor& depth_accum,
+        const torch::Tensor& alpha_accum,
+        const torch::Tensor& target_depth,
+        const float weight) {
+        ASSERT_TRUE(depth_accum.is_cuda());
+        ASSERT_TRUE(alpha_accum.is_cuda());
+        ASSERT_TRUE(target_depth.is_cuda());
+        ASSERT_EQ(depth_accum.numel(), target_depth.numel());
+        ASSERT_EQ(alpha_accum.numel(), target_depth.numel());
+
+        auto depth_ag = depth_accum.detach().clone().set_requires_grad(true);
+        auto alpha_ag = alpha_accum.detach().clone().set_requires_grad(true);
+        const auto expected_loss = pearson_depth_loss(depth_ag, alpha_ag, target_depth, weight);
+        expected_loss.backward();
+
+        const auto opts = depth_accum.options();
+        auto grad_depth = torch::empty_like(depth_accum);
+        auto loss_out = torch::empty({1}, opts);
+        const auto num_pixels = static_cast<size_t>(depth_accum.numel());
+        auto partials = torch::empty(
+            {static_cast<int64_t>(lfs::training::kernels::depth_loss_partial_count(num_pixels))}, opts);
+
+        lfs::training::kernels::launch_depth_loss(
+            depth_accum.data_ptr<float>(),
+            alpha_accum.data_ptr<float>(),
+            target_depth.data_ptr<float>(),
+            grad_depth.data_ptr<float>(),
+            loss_out.data_ptr<float>(),
+            partials.data_ptr<float>(),
+            num_pixels,
+            weight,
+            lfs::training::kernels::DepthLossMode::PearsonAbs);
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+        EXPECT_TRUE(torch::allclose(loss_out, expected_loss.detach().reshape({1}), 5e-5f, 1e-6f))
+            << "depth loss value mismatch: kernel=" << loss_out.item<float>()
+            << ", autograd=" << expected_loss.item<float>();
+        EXPECT_TRUE(tensors_close(grad_depth, depth_ag.grad(), 5e-5f, 1e-7f))
+            << "depth loss depth-gradient mismatch: " << max_rel_error(grad_depth, depth_ag.grad());
+    }
+
+    void expect_adaptive_warped_l1_depth_loss_kernel_matches_autograd(
+        const torch::Tensor& depth_accum,
+        const torch::Tensor& alpha_accum,
+        const torch::Tensor& target_depth,
+        const float weight) {
+        ASSERT_TRUE(depth_accum.is_cuda());
+        ASSERT_TRUE(alpha_accum.is_cuda());
+        ASSERT_TRUE(target_depth.is_cuda());
+        ASSERT_EQ(depth_accum.numel(), target_depth.numel());
+        ASSERT_EQ(alpha_accum.numel(), target_depth.numel());
+
+        auto depth_ag = depth_accum.detach().clone().set_requires_grad(true);
+        auto alpha_ag = alpha_accum.detach().clone().set_requires_grad(true);
+        const auto expected_loss = adaptive_warped_l1_depth_loss(depth_ag, alpha_ag, target_depth, weight);
+        expected_loss.backward();
+
+        const auto opts = depth_accum.options();
+        auto grad_depth = torch::empty_like(depth_accum);
+        auto loss_out = torch::empty({1}, opts);
+        const auto num_pixels = static_cast<size_t>(depth_accum.numel());
+        auto partials = torch::empty(
+            {static_cast<int64_t>(lfs::training::kernels::depth_loss_partial_count(num_pixels))}, opts);
+
+        lfs::training::kernels::launch_depth_loss(
+            depth_accum.data_ptr<float>(),
+            alpha_accum.data_ptr<float>(),
+            target_depth.data_ptr<float>(),
+            grad_depth.data_ptr<float>(),
+            loss_out.data_ptr<float>(),
+            partials.data_ptr<float>(),
+            num_pixels,
+            weight,
+            lfs::training::kernels::DepthLossMode::AdaptiveWarpedL1);
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+        EXPECT_TRUE(torch::allclose(loss_out, expected_loss.detach().reshape({1}), 5e-5f, 1e-6f))
+            << "adaptive warped L1 depth loss value mismatch: kernel=" << loss_out.item<float>()
+            << ", autograd=" << expected_loss.item<float>();
+        EXPECT_TRUE(tensors_close(grad_depth, depth_ag.grad(), 5e-5f, 1e-7f))
+            << "adaptive warped L1 depth-gradient mismatch: " << max_rel_error(grad_depth, depth_ag.grad());
     }
 
     struct SplitSHTensors {
@@ -414,7 +589,321 @@ TEST_F(AnalyticalGradientTest, AlphaBlending) {
 }
 
 // =============================================================================
-// Test 7: Spherical Harmonics degree 0 gradient
+// Test 7: Front-to-back color/depth/alpha compositing gradient
+// =============================================================================
+TEST_F(AnalyticalGradientTest, DepthAccumulationBlendingMatchesAutograd) {
+    const int N = 64;
+    const auto opts = torch::dtype(torch::kFloat32).device(torch::kCUDA);
+
+    const auto colors = torch::rand({N, 3}, opts) * 1.5f - 0.25f;
+    const auto depths = torch::rand({N}, opts) * 7.0f + 0.5f;
+    const auto alphas = torch::rand({N}, opts) * 0.55f + 0.01f;
+    const auto grad_rgb = torch::randn({3}, opts);
+    const auto grad_depth_out = torch::randn({}, opts);
+    const auto grad_alpha_out = torch::randn({}, opts);
+
+    auto colors_ag = colors.clone().set_requires_grad(true);
+    auto depths_ag = depths.clone().set_requires_grad(true);
+    auto alphas_ag = alphas.clone().set_requires_grad(true);
+
+    auto rgb = torch::zeros({3}, opts);
+    auto depth_out = torch::zeros({}, opts);
+    auto transmittance = torch::ones({}, opts);
+    for (int i = 0; i < N; ++i) {
+        const auto alpha = alphas_ag.select(0, i);
+        const auto weight = transmittance * alpha;
+        rgb = rgb + weight * colors_ag.select(0, i);
+        depth_out = depth_out + weight * depths_ag.select(0, i);
+        transmittance = transmittance * (1.0f - alpha);
+    }
+    const auto alpha_out = 1.0f - transmittance;
+    const auto loss = (rgb * grad_rgb).sum() + depth_out * grad_depth_out + alpha_out * grad_alpha_out;
+    loss.backward();
+
+    std::vector<torch::Tensor> transmittance_before;
+    transmittance_before.reserve(N);
+    auto transmittance_value = torch::ones({}, opts);
+    for (int i = 0; i < N; ++i) {
+        transmittance_before.push_back(transmittance_value);
+        transmittance_value = transmittance_value * (1.0f - alphas.select(0, i));
+    }
+
+    std::vector<torch::Tensor> grad_color_parts(N);
+    std::vector<torch::Tensor> grad_depth_parts(N);
+    std::vector<torch::Tensor> grad_alpha_parts(N);
+    auto grad_transmittance_after = -grad_alpha_out;
+    for (int i = N - 1; i >= 0; --i) {
+        const auto T = transmittance_before[static_cast<size_t>(i)];
+        const auto alpha = alphas.select(0, i);
+        const auto color = colors.select(0, i);
+        const auto depth = depths.select(0, i);
+        const auto grad_weight = (color * grad_rgb).sum() + depth * grad_depth_out;
+
+        grad_color_parts[static_cast<size_t>(i)] = T * alpha * grad_rgb;
+        grad_depth_parts[static_cast<size_t>(i)] = T * alpha * grad_depth_out;
+        grad_alpha_parts[static_cast<size_t>(i)] = T * grad_weight - T * grad_transmittance_after;
+        grad_transmittance_after = alpha * grad_weight + (1.0f - alpha) * grad_transmittance_after;
+    }
+
+    const auto grad_colors_analytical = torch::stack(grad_color_parts, 0);
+    const auto grad_depths_analytical = torch::stack(grad_depth_parts, 0);
+    const auto grad_alphas_analytical = torch::stack(grad_alpha_parts, 0);
+
+    EXPECT_TRUE(tensors_close(colors_ag.grad(), grad_colors_analytical, 5e-5f, 1e-6f))
+        << "composited color gradient mismatch: " << max_rel_error(colors_ag.grad(), grad_colors_analytical);
+    EXPECT_TRUE(tensors_close(depths_ag.grad(), grad_depths_analytical, 5e-5f, 1e-6f))
+        << "composited depth gradient mismatch: " << max_rel_error(depths_ag.grad(), grad_depths_analytical);
+    EXPECT_TRUE(tensors_close(alphas_ag.grad(), grad_alphas_analytical, 5e-5f, 1e-6f))
+        << "composited alpha gradient mismatch: " << max_rel_error(alphas_ag.grad(), grad_alphas_analytical);
+}
+
+// =============================================================================
+// Test 8: sign-invariant Pearson depth-map loss gradient
+// =============================================================================
+TEST_F(AnalyticalGradientTest, PearsonDepthLossGradientMatchesAutograd) {
+    const int N = 512;
+    constexpr float kWeight = 2.0f;
+    const auto opts = torch::dtype(torch::kFloat32).device(torch::kCUDA);
+
+    const auto depth_accum = torch::rand({N}, opts) * 18.0f + 0.1f;
+    const auto alpha_accum = torch::rand({N}, opts) * 0.99f + 0.005f;
+    auto target_depth = torch::linspace(0.05f, 0.95f, N, opts);
+    target_depth = target_depth.index({torch::randperm(N, torch::dtype(torch::kInt64).device(torch::kCUDA))});
+    auto valid_mask_seed = torch::rand({N}, opts).gt(0.15f);
+    target_depth = target_depth * valid_mask_seed.to(torch::kFloat32);
+
+    auto depth_ag = depth_accum.clone().set_requires_grad(true);
+    auto alpha_ag = alpha_accum.clone().set_requires_grad(true);
+    const auto loss = pearson_depth_loss(depth_ag, alpha_ag, target_depth, kWeight);
+    loss.backward();
+
+    const auto manual_depth = depth_accum.clamp_min(0.0f);
+    const auto manual_alpha = alpha_accum;
+    const auto manual_pred = manual_depth;
+    const auto active = target_depth.gt(0.0f).logical_and(manual_alpha.gt(MIN_ALPHA_FOR_DEPTH_LOSS));
+    const auto active_f = active.to(torch::kFloat32);
+    const auto count = active_f.sum();
+    const auto pred_sum = (manual_pred * active_f).sum();
+    const auto target_sum = (target_depth * active_f).sum();
+    const auto mean_pred = pred_sum / count;
+    const auto mean_target = target_sum / count;
+    const auto centered_pred = (manual_pred - mean_pred) * active_f;
+    const auto centered_target = (target_depth - mean_target) * active_f;
+    const auto pred_var = (centered_pred * centered_pred).sum();
+    const auto target_var = (centered_target * centered_target).sum();
+    const auto corr = (centered_pred * centered_target).sum() / torch::sqrt(pred_var * target_var);
+    const auto corr_sign = corr.ge(0.0f).to(torch::kFloat32) * 2.0f - 1.0f;
+    const auto d_corr_d_pred =
+        centered_target / torch::sqrt(pred_var * target_var) -
+        corr * centered_pred / pred_var;
+    const auto grad_pred = -corr_sign * kWeight * d_corr_d_pred * active_f;
+    const auto grad_depth_manual = grad_pred;
+    const auto grad_alpha_manual = torch::zeros_like(manual_alpha);
+
+    EXPECT_TRUE(tensors_close(depth_ag.grad(), grad_depth_manual, 5e-5f, 1e-7f))
+        << "Pearson depth loss depth-gradient mismatch: " << max_rel_error(depth_ag.grad(), grad_depth_manual);
+    const auto alpha_grad_autograd = alpha_ag.grad().defined()
+                                         ? alpha_ag.grad()
+                                         : torch::zeros_like(alpha_accum);
+    EXPECT_TRUE(tensors_close(alpha_grad_autograd, grad_alpha_manual, 5e-5f, 1e-7f))
+        << "Pearson depth loss alpha-gradient mismatch: " << max_rel_error(alpha_grad_autograd, grad_alpha_manual);
+}
+
+TEST_F(AnalyticalGradientTest, PearsonDepthLossCudaKernelMatchesLibtorchAutograd) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+
+    constexpr int64_t N = 4099;
+    constexpr float kWeight = 2.0f;
+    const auto opts = torch::dtype(torch::kFloat32).device(torch::kCUDA);
+
+    torch::manual_seed(1234);
+    auto depth_accum = torch::rand({N}, opts) * 24.0f + 0.01f;
+    auto alpha_accum = torch::rand({N}, opts) * 0.99f + 0.005f;
+    auto target_depth = torch::linspace(0.01f, 1.0f, N, opts);
+    target_depth = target_depth.index({torch::randperm(N, torch::dtype(torch::kInt64).device(torch::kCUDA))});
+    const auto zero_indices = torch::arange(0, N, 17, torch::dtype(torch::kInt64).device(torch::kCUDA));
+    target_depth.index_put_({zero_indices}, 0.0f);
+
+    expect_depth_loss_kernel_matches_autograd(depth_accum, alpha_accum, target_depth, kWeight);
+    expect_depth_loss_kernel_matches_autograd(depth_accum, alpha_accum, 1.0f - target_depth, kWeight);
+}
+
+TEST_F(AnalyticalGradientTest, AdaptiveWarpedL1DepthLossCudaKernelMatchesLibtorchAutograd) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+
+    constexpr int64_t N = 4099;
+    constexpr float kWeight = 2.0f;
+    const auto opts = torch::dtype(torch::kFloat32).device(torch::kCUDA);
+
+    torch::manual_seed(1234);
+    auto depth_accum = torch::rand({N}, opts) * 24.0f + 0.01f;
+    auto alpha_accum = torch::rand({N}, opts) * 0.99f + 0.005f;
+    auto target_depth = torch::linspace(0.01f, 1.0f, N, opts);
+    target_depth = target_depth.index({torch::randperm(N, torch::dtype(torch::kInt64).device(torch::kCUDA))});
+    const auto zero_indices = torch::arange(0, N, 17, torch::dtype(torch::kInt64).device(torch::kCUDA));
+    target_depth.index_put_({zero_indices}, 0.0f);
+
+    expect_adaptive_warped_l1_depth_loss_kernel_matches_autograd(depth_accum, alpha_accum, target_depth, kWeight);
+    expect_adaptive_warped_l1_depth_loss_kernel_matches_autograd(depth_accum, alpha_accum, 1.0f - target_depth, kWeight);
+}
+
+TEST_F(AnalyticalGradientTest, PearsonDepthLossCompositingMatchesAutograd) {
+    const int P = 48;
+    const int N = 16;
+    constexpr float kWeight = 2.0f;
+    const auto opts = torch::dtype(torch::kFloat32).device(torch::kCUDA);
+
+    const auto depths = torch::rand({P, N}, opts) * 7.0f + 0.5f;
+    const auto alphas = torch::rand({P, N}, opts) * 0.45f + 0.02f;
+    auto target_depth = torch::linspace(0.05f, 0.95f, P, opts);
+    target_depth = target_depth.index({torch::randperm(P, torch::dtype(torch::kInt64).device(torch::kCUDA))});
+
+    auto depths_ag = depths.clone().set_requires_grad(true);
+    auto alphas_ag = alphas.clone().set_requires_grad(true);
+    auto depth_accum = torch::zeros({P}, opts);
+    auto alpha_accum = torch::zeros({P}, opts);
+    auto transmittance = torch::ones({P}, opts);
+    for (int i = 0; i < N; ++i) {
+        const auto alpha = alphas_ag.select(1, i);
+        const auto weight = transmittance * alpha;
+        depth_accum = depth_accum + weight * depths_ag.select(1, i);
+        alpha_accum = alpha_accum + weight;
+        transmittance = transmittance * (1.0f - alpha);
+    }
+
+    const auto loss = pearson_depth_loss(depth_accum, alpha_accum, target_depth, kWeight);
+    loss.backward();
+
+    auto depth_accum_value = torch::zeros({P}, opts);
+    auto alpha_accum_value = torch::zeros({P}, opts);
+    std::vector<torch::Tensor> transmittance_before;
+    transmittance_before.reserve(N);
+    auto transmittance_value = torch::ones({P}, opts);
+    for (int i = 0; i < N; ++i) {
+        transmittance_before.push_back(transmittance_value);
+        const auto alpha = alphas.select(1, i);
+        const auto weight = transmittance_value * alpha;
+        depth_accum_value = depth_accum_value + weight * depths.select(1, i);
+        alpha_accum_value = alpha_accum_value + weight;
+        transmittance_value = transmittance_value * (1.0f - alpha);
+    }
+
+    const auto pred = depth_accum_value;
+    const auto active_f = target_depth.gt(0.0f).logical_and(alpha_accum_value.gt(MIN_ALPHA_FOR_DEPTH_LOSS)).to(torch::kFloat32);
+    const auto count = active_f.sum();
+    const auto pred_sum = (pred * active_f).sum();
+    const auto target_sum = (target_depth * active_f).sum();
+    const auto mean_pred = pred_sum / count;
+    const auto mean_target = target_sum / count;
+    const auto centered_pred = (pred - mean_pred) * active_f;
+    const auto centered_target = (target_depth - mean_target) * active_f;
+    const auto pred_var = (centered_pred * centered_pred).sum();
+    const auto target_var = (centered_target * centered_target).sum();
+    const auto corr = (centered_pred * centered_target).sum() / torch::sqrt(pred_var * target_var);
+    const auto corr_sign = corr.ge(0.0f).to(torch::kFloat32) * 2.0f - 1.0f;
+    const auto d_corr_d_pred =
+        centered_target / torch::sqrt(pred_var * target_var) -
+        corr * centered_pred / pred_var;
+    const auto grad_pred = -corr_sign * kWeight * d_corr_d_pred * active_f;
+    const auto grad_depth_out = grad_pred;
+
+    std::vector<torch::Tensor> grad_depth_parts(N);
+    std::vector<torch::Tensor> grad_alpha_parts(N);
+    auto grad_transmittance_after = torch::zeros({P}, opts);
+    for (int i = N - 1; i >= 0; --i) {
+        const auto T = transmittance_before[static_cast<size_t>(i)];
+        const auto alpha = alphas.select(1, i);
+        const auto depth = depths.select(1, i);
+        const auto grad_weight = depth * grad_depth_out;
+
+        grad_depth_parts[static_cast<size_t>(i)] = T * alpha * grad_depth_out;
+        grad_alpha_parts[static_cast<size_t>(i)] = T * grad_weight - T * grad_transmittance_after;
+        grad_transmittance_after = alpha * grad_weight + (1.0f - alpha) * grad_transmittance_after;
+    }
+
+    const auto grad_depths_analytical = torch::stack(grad_depth_parts, 1);
+    const auto grad_alphas_analytical = torch::stack(grad_alpha_parts, 1);
+
+    EXPECT_TRUE(tensors_close(depths_ag.grad(), grad_depths_analytical, 5e-5f, 1e-6f))
+        << "Pearson composited depth gradient mismatch: "
+        << max_rel_error(depths_ag.grad(), grad_depths_analytical);
+    EXPECT_TRUE(tensors_close(alphas_ag.grad(), grad_alphas_analytical, 5e-5f, 1e-6f))
+        << "Pearson composited alpha gradient mismatch: "
+        << max_rel_error(alphas_ag.grad(), grad_alphas_analytical);
+}
+
+TEST_F(AnalyticalGradientTest, PearsonDepthLossDetachedCompositingKeepsAlphaGradZero) {
+    const int P = 48;
+    const int N = 16;
+    constexpr float kWeight = 2.0f;
+    const auto opts = torch::dtype(torch::kFloat32).device(torch::kCUDA);
+
+    const auto depths = torch::rand({P, N}, opts) * 7.0f + 0.5f;
+    const auto alphas = torch::rand({P, N}, opts) * 0.45f + 0.02f;
+    auto target_depth = torch::linspace(0.05f, 0.95f, P, opts);
+    target_depth = target_depth.index({torch::randperm(P, torch::dtype(torch::kInt64).device(torch::kCUDA))});
+
+    auto depths_ag = depths.clone().set_requires_grad(true);
+    auto alphas_ag = alphas.clone().set_requires_grad(true);
+    auto depth_accum = torch::zeros({P}, opts);
+    auto alpha_accum = torch::zeros({P}, opts);
+    auto transmittance = torch::ones({P}, opts);
+    std::vector<torch::Tensor> detached_weights;
+    detached_weights.reserve(N);
+    for (int i = 0; i < N; ++i) {
+        const auto alpha = alphas_ag.select(1, i);
+        const auto weight = (transmittance * alpha).detach();
+        detached_weights.push_back(weight);
+        depth_accum = depth_accum + weight * depths_ag.select(1, i);
+        alpha_accum = alpha_accum + weight;
+        transmittance = (transmittance * (1.0f - alpha)).detach();
+    }
+
+    const auto loss = pearson_depth_loss(depth_accum, alpha_accum.detach(), target_depth, kWeight);
+    loss.backward();
+
+    const auto pred = depth_accum.detach();
+    const auto active_f = target_depth.gt(0.0f).logical_and(alpha_accum.gt(MIN_ALPHA_FOR_DEPTH_LOSS)).to(torch::kFloat32);
+    const auto count = active_f.sum();
+    const auto pred_sum = (pred * active_f).sum();
+    const auto target_sum = (target_depth * active_f).sum();
+    const auto mean_pred = pred_sum / count;
+    const auto mean_target = target_sum / count;
+    const auto centered_pred = (pred - mean_pred) * active_f;
+    const auto centered_target = (target_depth - mean_target) * active_f;
+    const auto pred_var = (centered_pred * centered_pred).sum();
+    const auto target_var = (centered_target * centered_target).sum();
+    const auto corr = (centered_pred * centered_target).sum() / torch::sqrt(pred_var * target_var);
+    const auto corr_sign = corr.ge(0.0f).to(torch::kFloat32) * 2.0f - 1.0f;
+    const auto d_corr_d_pred =
+        centered_target / torch::sqrt(pred_var * target_var) -
+        corr * centered_pred / pred_var;
+    const auto grad_pred = -corr_sign * kWeight * d_corr_d_pred * active_f;
+
+    std::vector<torch::Tensor> grad_depth_parts(N);
+    for (int i = 0; i < N; ++i) {
+        grad_depth_parts[static_cast<size_t>(i)] = detached_weights[static_cast<size_t>(i)] * grad_pred;
+    }
+    const auto grad_depths_analytical = torch::stack(grad_depth_parts, 1);
+    const auto alpha_grad_autograd = alphas_ag.grad().defined()
+                                         ? alphas_ag.grad()
+                                         : torch::zeros_like(alphas);
+    const auto grad_alphas_analytical = torch::zeros_like(alphas);
+
+    EXPECT_TRUE(tensors_close(depths_ag.grad(), grad_depths_analytical, 5e-5f, 1e-6f))
+        << "detached Pearson composited depth gradient mismatch: "
+        << max_rel_error(depths_ag.grad(), grad_depths_analytical);
+    EXPECT_TRUE(tensors_close(alpha_grad_autograd, grad_alphas_analytical, 5e-5f, 1e-7f))
+        << "detached Pearson composited alpha gradient should be zero: "
+        << max_rel_error(alpha_grad_autograd, grad_alphas_analytical);
+}
+
+// =============================================================================
+// Test 9: Spherical Harmonics degree 0 gradient
 // =============================================================================
 TEST_F(AnalyticalGradientTest, SHDegree0) {
     const int N = 100;
@@ -443,7 +932,7 @@ TEST_F(AnalyticalGradientTest, SHDegree0) {
 }
 
 // =============================================================================
-// Test 8: Spherical Harmonics degree 1 gradient
+// Test 10: Spherical Harmonics degree 1 gradient
 // =============================================================================
 TEST_F(AnalyticalGradientTest, SHDegree1) {
     const int N = 100;
@@ -489,7 +978,7 @@ TEST_F(AnalyticalGradientTest, SHDegree1) {
 }
 
 // =============================================================================
-// Test 9: Full forward chain (quat + scale -> cov3d -> cov2d -> conic -> gaussian)
+// Test 11: Full forward chain (quat + scale -> cov3d -> cov2d -> conic -> gaussian)
 // =============================================================================
 TEST_F(AnalyticalGradientTest, FullForwardChain) {
     const int N = 50;

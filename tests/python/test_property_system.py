@@ -48,8 +48,30 @@ class TestOptimizationParams:
         assert isinstance(params.headless, bool)
         assert isinstance(params.use_bilateral_grid, bool)
         assert isinstance(params.invert_masks, bool)
+        assert isinstance(params.use_depth_loss, bool)
         assert isinstance(params.random, bool)
         assert isinstance(params.enable_sparsity, bool)
+
+    def test_depth_loss_properties_are_editable(self, lf):
+        """Depth loading/loss controls should be exposed through Python params."""
+        params = lf.optimization_params()
+
+        original_enabled = params.use_depth_loss
+        original_mode = params.depth_loss_mode
+        original_weight = params.depth_loss_weight
+
+        try:
+            params.use_depth_loss = True
+            params.depth_loss_mode = "adaptive-warped-l1"
+            params.depth_loss_weight = 3.25
+
+            assert params.use_depth_loss is True
+            assert params.depth_loss_mode == "adaptive-warped-l1"
+            assert params.depth_loss_weight == pytest.approx(3.25)
+        finally:
+            params.use_depth_loss = original_enabled
+            params.depth_loss_mode = original_mode
+            params.depth_loss_weight = original_weight
 
     def test_get_string_property(self, lf):
         """Should be able to read strategy string property."""

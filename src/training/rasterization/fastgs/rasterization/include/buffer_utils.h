@@ -263,6 +263,7 @@ namespace fast_lfs::rasterization {
         size_t cub_workspace_size;
         char* cub_workspace;
         uint* depth_keys;
+        float* depths;
         std::uint64_t* n_touched_tiles;
         std::uint64_t* offset;
         ushort4* screen_bounds;
@@ -274,6 +275,7 @@ namespace fast_lfs::rasterization {
         static PerPrimitiveBuffers from_blob(char*& blob, int n_primitives) {
             PerPrimitiveBuffers buffers{};
             obtain(blob, buffers.depth_keys, n_primitives, 128);
+            obtain(blob, buffers.depths, n_primitives, 128);
             obtain(blob, buffers.n_touched_tiles, n_primitives, 128);
             obtain(blob, buffers.offset, n_primitives, 128);
             obtain(blob, buffers.screen_bounds, n_primitives, 128);

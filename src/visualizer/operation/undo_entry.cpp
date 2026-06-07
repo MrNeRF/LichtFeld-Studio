@@ -753,6 +753,7 @@ namespace lfs::vis::op {
             snapshot.image_name = camera.image_name();
             snapshot.image_path = camera.image_path();
             snapshot.mask_path = camera.mask_path();
+            snapshot.depth_path = camera.depth_path();
             snapshot.split = camera.split();
             snapshot.focal_x = camera.focal_x();
             snapshot.focal_y = camera.focal_y();
@@ -784,7 +785,8 @@ namespace lfs::vis::op {
                 snapshot.camera_width,
                 snapshot.camera_height,
                 snapshot.uid,
-                snapshot.camera_id);
+                snapshot.camera_id,
+                snapshot.depth_path);
             camera->set_split(snapshot.split);
             camera->set_image_dimensions(snapshot.image_width, snapshot.image_height);
             return camera;

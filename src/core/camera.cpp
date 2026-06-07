@@ -52,7 +52,8 @@ namespace lfs::core {
                    const std::filesystem::path& mask_path,
                    int camera_width, int camera_height,
                    int uid,
-                   int camera_id)
+                   int camera_id,
+                   const std::filesystem::path& depth_path)
         : _uid(uid),
           _camera_id(camera_id),
           _focal_x(focal_x),
@@ -67,6 +68,7 @@ namespace lfs::core {
           _image_name(image_name),
           _image_path(image_path),
           _mask_path(mask_path),
+          _depth_path(depth_path),
           _camera_width(camera_width),
           _camera_height(camera_height),
           _image_width(camera_width),
@@ -140,6 +142,7 @@ namespace lfs::core {
           _image_path(std::move(other._image_path)),
           _image_name(std::move(other._image_name)),
           _mask_path(std::move(other._mask_path)),
+          _depth_path(std::move(other._depth_path)),
           _split(other._split),
           _camera_width(other._camera_width),
           _camera_height(other._camera_height),
@@ -150,6 +153,8 @@ namespace lfs::core {
           _cached_mask(std::move(other._cached_mask)),
           _mask_loaded(other._mask_loaded),
           _in_memory_mask_raw(std::move(other._in_memory_mask_raw)),
+          _cached_depth(std::move(other._cached_depth)),
+          _depth_loaded(other._depth_loaded),
           _undistort_precomputed(other._undistort_precomputed),
           _undistort_prepared(other._undistort_prepared),
           _undistort_params(other._undistort_params),
@@ -157,6 +162,7 @@ namespace lfs::core {
         // Take ownership of the stream
         other._stream = nullptr;
         other._mask_loaded = false;
+        other._depth_loaded = false;
         other._undistort_precomputed = false;
         other._undistort_prepared = false;
     }
@@ -184,6 +190,7 @@ namespace lfs::core {
             _image_path = std::move(other._image_path);
             _image_name = std::move(other._image_name);
             _mask_path = std::move(other._mask_path);
+            _depth_path = std::move(other._depth_path);
             _split = other._split;
             _camera_width = other._camera_width;
             _camera_height = other._camera_height;
@@ -194,6 +201,8 @@ namespace lfs::core {
             _cached_mask = std::move(other._cached_mask);
             _mask_loaded = other._mask_loaded;
             _in_memory_mask_raw = std::move(other._in_memory_mask_raw);
+            _cached_depth = std::move(other._cached_depth);
+            _depth_loaded = other._depth_loaded;
             _undistort_precomputed = other._undistort_precomputed;
             _undistort_prepared = other._undistort_prepared;
             _undistort_params = other._undistort_params;
@@ -202,6 +211,7 @@ namespace lfs::core {
             _stream = other._stream;
             other._stream = nullptr;
             other._mask_loaded = false;
+            other._depth_loaded = false;
             other._undistort_precomputed = false;
             other._undistort_prepared = false;
         }
@@ -223,6 +233,7 @@ namespace lfs::core {
           _image_name(other._image_name),
           _image_path(other._image_path),
           _mask_path(other._mask_path),
+          _depth_path(other._depth_path),
           _split(other._split),
           _camera_width(other._camera_width),
           _camera_height(other._camera_height),
@@ -454,6 +465,64 @@ namespace lfs::core {
         LOG_DEBUG("Loaded mask for {}: [{},{}]", _image_name, mask.shape()[0], mask.shape()[1]);
 
         return _cached_mask;
+    }
+
+    Tensor Camera::load_and_get_depth(const int resize_factor, const int max_width) {
+        if (_depth_loaded && _cached_depth.is_valid()) {
+            return _cached_depth;
+        }
+
+        if (_depth_path.empty() || !std::filesystem::exists(_depth_path)) {
+            return Tensor();
+        }
+
+        const ImageLoadParams params{
+            .path = _depth_path,
+            .resize_factor = resize_factor,
+            .max_width = max_width,
+            .stream = _stream};
+
+        Tensor depth = load_image_cached(params);
+
+        if (depth.device() != Device::CUDA) {
+            depth = depth.to(Device::CUDA, _stream);
+            if (_stream) {
+                cudaStreamSynchronize(_stream);
+            }
+        }
+
+        if (depth.dtype() == DataType::UInt8) {
+            depth = depth.to(DataType::Float32).div(255.0f);
+        } else if (depth.dtype() != DataType::Float32) {
+            depth = depth.to(DataType::Float32);
+        }
+
+        // Convert RGB [C,H,W] to grayscale [H,W].
+        if (depth.ndim() == 3 && depth.shape()[0] >= 3) {
+            const auto r = depth.slice(0, 0, 1).squeeze(0);
+            const auto g = depth.slice(0, 1, 2).squeeze(0);
+            const auto b = depth.slice(0, 2, 3).squeeze(0);
+            depth = (r + g + b) / 3.0f;
+        } else if (depth.ndim() == 3 && depth.shape()[0] == 1) {
+            depth = depth.squeeze(0);
+        } else if (depth.ndim() == 3 && depth.shape()[2] == 1) {
+            depth = depth.squeeze(2);
+        }
+
+        if (_undistort_prepared) {
+            const auto scaled = scale_undistort_params(
+                _undistort_params,
+                static_cast<int>(depth.shape()[1]),
+                static_cast<int>(depth.shape()[0]));
+            depth = undistort_mask(depth, scaled, _stream);
+        }
+
+        _cached_depth = depth.contiguous();
+        _depth_loaded = true;
+
+        LOG_DEBUG("Loaded depth for {}: [{},{}]", _image_name, _cached_depth.shape()[0], _cached_depth.shape()[1]);
+
+        return _cached_depth;
     }
 
     void Camera::precompute_undistortion(float blank_pixels) {

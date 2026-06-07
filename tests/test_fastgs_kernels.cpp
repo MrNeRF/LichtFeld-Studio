@@ -231,6 +231,252 @@ TEST_F(FastGSKernelTest, Backward_Blend) {
     EXPECT_GT(adam_moment(*opt, ParamType::Scaling).pow(2.0f).sum().item<float>(), 0.0f);
 }
 
+TEST(FastGSDepthGradientTest, BackwardDepthMatchesLibtorchAutogradForCenteredSplat) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+
+    std::vector<float> means_data{0.0f, 0.0f, 1.0f};
+    auto means = Tensor::from_blob(means_data.data(), {1, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+    auto sh0 = Tensor::zeros({1, 1, 3}, Device::CUDA);
+    auto shN = Tensor::zeros({1, 0, 3}, Device::CUDA);
+    auto scaling = Tensor::full({1, 3}, -1.5f, Device::CUDA);
+    std::vector<float> rotation_data{1.0f, 0.0f, 0.0f, 0.0f};
+    auto rotation = Tensor::from_blob(rotation_data.data(), {1, 4}, Device::CPU, DataType::Float32).to(Device::CUDA);
+
+    const float opacity_value = 0.3f;
+    const float raw_opacity_value = std::log(opacity_value / (1.0f - opacity_value));
+    auto opacity = Tensor::full({1}, raw_opacity_value, Device::CUDA);
+    auto splat = SplatData(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
+
+    auto R = Tensor::eye(3, Device::CUDA);
+    std::vector<float> t_data{0.0f, 0.0f, 4.0f};
+    auto T = Tensor::from_blob(t_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+    auto camera = Camera(R, T, 1.0f, 1.0f, 0.5f, 0.5f,
+                         Tensor(), Tensor(), CameraModelType::PINHOLE,
+                         "depth_grad", "", std::filesystem::path{}, 1, 1, 0);
+    auto bg = Tensor::zeros({3}, Device::CUDA);
+
+    auto forward = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false);
+    ASSERT_TRUE(forward.has_value()) << forward.error();
+    ASSERT_EQ(forward->first.depth.numel(), 1);
+    EXPECT_GT(forward->first.depth.item<float>(), 0.0f);
+
+    AdamConfig cfg{.lr = 0.001f, .beta1 = 0.9, .beta2 = 0.999, .eps = 1e-15};
+    AdamOptimizer opt(splat, cfg);
+    opt.allocate_gradients();
+    opt.zero_grad(0);
+
+    const float upstream_depth_grad = 1.7f;
+    auto grad_image = Tensor::zeros_like(forward->first.image);
+    auto grad_depth = Tensor::full({1, 1}, upstream_depth_grad, Device::CUDA);
+    fast_rasterize_backward(
+        forward->second,
+        grad_image,
+        splat,
+        opt,
+        {},
+        {},
+        DensificationType::None,
+        1,
+        {},
+        grad_depth);
+
+    const auto mean_grad = recovered_fused_grad(opt, ParamType::Means).to(Device::CPU);
+    const auto opacity_grad = recovered_fused_grad(opt, ParamType::Opacity).to(Device::CPU);
+
+    auto raw_opacity_ag = torch::tensor({raw_opacity_value}, torch::dtype(torch::kFloat32).device(torch::kCUDA))
+                              .set_requires_grad(true);
+    auto depth_ag = torch::tensor({means_data[2] + t_data[2]}, torch::dtype(torch::kFloat32).device(torch::kCUDA))
+                        .set_requires_grad(true);
+    auto depth_out = torch::sigmoid(raw_opacity_ag) * depth_ag;
+    auto loss = depth_out * upstream_depth_grad;
+    loss.backward();
+
+    const float expected_opacity_grad = raw_opacity_ag.grad().item<float>();
+    const float expected_depth_grad = depth_ag.grad().item<float>();
+    const float actual_opacity_grad = opacity_grad.ptr<float>()[0];
+    const float actual_mean_z_grad = mean_grad.ptr<float>()[2];
+
+    EXPECT_NEAR(actual_opacity_grad, expected_opacity_grad, 1.0e-4f)
+        << "raw opacity depth gradient should match libtorch autograd";
+    EXPECT_NEAR(actual_mean_z_grad, expected_depth_grad, 1.0e-4f)
+        << "mean z depth gradient should match libtorch autograd";
+    EXPECT_NEAR(mean_grad.ptr<float>()[0], 0.0f, 1.0e-5f);
+    EXPECT_NEAR(mean_grad.ptr<float>()[1], 0.0f, 1.0e-5f);
+}
+
+TEST(FastGSDepthGradientTest, BackwardDepthMatchesLibtorchAutogradForOverlappingSplats) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+
+    std::vector<float> means_data{
+        0.0f, 0.0f, 0.5f,
+        0.0f, 0.0f, 1.5f};
+    auto means = Tensor::from_blob(means_data.data(), {2, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+    auto sh0 = Tensor::zeros({2, 1, 3}, Device::CUDA);
+    auto shN = Tensor::zeros({2, 0, 3}, Device::CUDA);
+    auto scaling = Tensor::full({2, 3}, -1.5f, Device::CUDA);
+    std::vector<float> rotation_data{
+        1.0f, 0.0f, 0.0f, 0.0f,
+        1.0f, 0.0f, 0.0f, 0.0f};
+    auto rotation = Tensor::from_blob(rotation_data.data(), {2, 4}, Device::CPU, DataType::Float32).to(Device::CUDA);
+
+    const std::vector<float> opacity_values{0.25f, 0.4f};
+    std::vector<float> raw_opacity_values{
+        std::log(opacity_values[0] / (1.0f - opacity_values[0])),
+        std::log(opacity_values[1] / (1.0f - opacity_values[1]))};
+    auto opacity = Tensor::from_blob(raw_opacity_values.data(), {2}, Device::CPU, DataType::Float32).to(Device::CUDA);
+    auto splat = SplatData(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
+
+    auto R = Tensor::eye(3, Device::CUDA);
+    std::vector<float> t_data{0.0f, 0.0f, 4.0f};
+    auto T = Tensor::from_blob(t_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+    auto camera = Camera(R, T, 1.0f, 1.0f, 0.5f, 0.5f,
+                         Tensor(), Tensor(), CameraModelType::PINHOLE,
+                         "depth_grad_overlap", "", std::filesystem::path{}, 1, 1, 0);
+    auto bg = Tensor::zeros({3}, Device::CUDA);
+
+    auto forward = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false);
+    ASSERT_TRUE(forward.has_value()) << forward.error();
+    ASSERT_EQ(forward->first.depth.numel(), 1);
+
+    const float depth0 = means_data[2] + t_data[2];
+    const float depth1 = means_data[5] + t_data[2];
+    const float expected_forward_depth =
+        opacity_values[0] * depth0 +
+        (1.0f - opacity_values[0]) * opacity_values[1] * depth1;
+    EXPECT_NEAR(forward->first.depth.item<float>(), expected_forward_depth, 1.0e-4f)
+        << "test setup should render the nearer splat first";
+
+    AdamConfig cfg{.lr = 0.001f, .beta1 = 0.9, .beta2 = 0.999, .eps = 1e-15};
+    AdamOptimizer opt(splat, cfg);
+    opt.allocate_gradients();
+    opt.zero_grad(0);
+
+    const float upstream_depth_grad = 1.3f;
+    auto grad_image = Tensor::zeros_like(forward->first.image);
+    auto grad_depth = Tensor::full({1, 1}, upstream_depth_grad, Device::CUDA);
+    fast_rasterize_backward(
+        forward->second,
+        grad_image,
+        splat,
+        opt,
+        {},
+        {},
+        DensificationType::None,
+        1,
+        {},
+        grad_depth);
+
+    const auto mean_grad = recovered_fused_grad(opt, ParamType::Means).to(Device::CPU);
+    const auto opacity_grad = recovered_fused_grad(opt, ParamType::Opacity).to(Device::CPU);
+
+    const auto opts = torch::dtype(torch::kFloat32).device(torch::kCUDA);
+    auto raw_opacity_ag = torch::tensor(raw_opacity_values, opts).clone().set_requires_grad(true);
+    auto depth_ag = torch::tensor({depth0, depth1}, opts).clone().set_requires_grad(true);
+    const auto alpha = torch::sigmoid(raw_opacity_ag);
+    const auto depth_out =
+        alpha.select(0, 0) * depth_ag.select(0, 0) +
+        (1.0f - alpha.select(0, 0)) * alpha.select(0, 1) * depth_ag.select(0, 1);
+    const auto loss = depth_out * upstream_depth_grad;
+    loss.backward();
+
+    const auto expected_opacity_grad = raw_opacity_ag.grad().to(torch::kCPU);
+    const auto expected_depth_grad = depth_ag.grad().to(torch::kCPU);
+    const float* actual_opacity_grad = opacity_grad.ptr<float>();
+    const float* actual_mean_grad = mean_grad.ptr<float>();
+
+    for (int i = 0; i < 2; ++i) {
+        EXPECT_NEAR(actual_opacity_grad[i], expected_opacity_grad[i].item<float>(), 1.0e-4f)
+            << "raw opacity depth gradient mismatch for splat " << i;
+        EXPECT_NEAR(actual_mean_grad[i * 3 + 2], expected_depth_grad[i].item<float>(), 1.0e-4f)
+            << "mean z depth gradient mismatch for splat " << i;
+        EXPECT_NEAR(actual_mean_grad[i * 3], 0.0f, 1.0e-5f);
+        EXPECT_NEAR(actual_mean_grad[i * 3 + 1], 0.0f, 1.0e-5f);
+    }
+}
+
+TEST(FastGSDepthGradientTest, DetachedDepthWeightsMoveDepthButNotOpacity) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+
+    std::vector<float> means_data{
+        0.0f, 0.0f, 0.5f,
+        0.0f, 0.0f, 1.5f};
+    auto means = Tensor::from_blob(means_data.data(), {2, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+    auto sh0 = Tensor::zeros({2, 1, 3}, Device::CUDA);
+    auto shN = Tensor::zeros({2, 0, 3}, Device::CUDA);
+    auto scaling = Tensor::full({2, 3}, -1.5f, Device::CUDA);
+    std::vector<float> rotation_data{
+        1.0f, 0.0f, 0.0f, 0.0f,
+        1.0f, 0.0f, 0.0f, 0.0f};
+    auto rotation = Tensor::from_blob(rotation_data.data(), {2, 4}, Device::CPU, DataType::Float32).to(Device::CUDA);
+
+    const std::vector<float> opacity_values{0.25f, 0.4f};
+    std::vector<float> raw_opacity_values{
+        std::log(opacity_values[0] / (1.0f - opacity_values[0])),
+        std::log(opacity_values[1] / (1.0f - opacity_values[1]))};
+    auto opacity = Tensor::from_blob(raw_opacity_values.data(), {2}, Device::CPU, DataType::Float32).to(Device::CUDA);
+    auto splat = SplatData(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
+
+    auto R = Tensor::eye(3, Device::CUDA);
+    std::vector<float> t_data{0.0f, 0.0f, 4.0f};
+    auto T = Tensor::from_blob(t_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+    auto camera = Camera(R, T, 1.0f, 1.0f, 0.5f, 0.5f,
+                         Tensor(), Tensor(), CameraModelType::PINHOLE,
+                         "depth_grad_detached", "", std::filesystem::path{}, 1, 1, 0);
+    auto bg = Tensor::zeros({3}, Device::CUDA);
+
+    auto forward = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false);
+    ASSERT_TRUE(forward.has_value()) << forward.error();
+    ASSERT_EQ(forward->first.depth.numel(), 1);
+
+    AdamConfig cfg{.lr = 0.001f, .beta1 = 0.9, .beta2 = 0.999, .eps = 1e-15};
+    AdamOptimizer opt(splat, cfg);
+    opt.allocate_gradients();
+    opt.zero_grad(0);
+
+    const float upstream_depth_grad = 1.3f;
+    auto grad_image = Tensor::zeros_like(forward->first.image);
+    auto grad_depth = Tensor::full({1, 1}, upstream_depth_grad, Device::CUDA);
+    fast_rasterize_backward(
+        forward->second,
+        grad_image,
+        splat,
+        opt,
+        {},
+        {},
+        DensificationType::None,
+        1,
+        {},
+        grad_depth,
+        true);
+
+    const auto mean_grad = recovered_fused_grad(opt, ParamType::Means).to(Device::CPU);
+    const auto opacity_grad = recovered_fused_grad(opt, ParamType::Opacity).to(Device::CPU);
+
+    const float expected_depth_grad0 = opacity_values[0] * upstream_depth_grad;
+    const float expected_depth_grad1 = (1.0f - opacity_values[0]) * opacity_values[1] * upstream_depth_grad;
+    const float* actual_mean_grad = mean_grad.ptr<float>();
+    EXPECT_NEAR(actual_mean_grad[2], expected_depth_grad0, 1.0e-4f)
+        << "detached depth-weight path should keep the front splat z gradient";
+    EXPECT_NEAR(actual_mean_grad[5], expected_depth_grad1, 1.0e-4f)
+        << "detached depth-weight path should keep the rear splat z gradient";
+    EXPECT_NEAR(actual_mean_grad[0], 0.0f, 1.0e-5f);
+    EXPECT_NEAR(actual_mean_grad[1], 0.0f, 1.0e-5f);
+    EXPECT_NEAR(actual_mean_grad[3], 0.0f, 1.0e-5f);
+    EXPECT_NEAR(actual_mean_grad[4], 0.0f, 1.0e-5f);
+
+    const float* actual_opacity_grad = opacity_grad.ptr<float>();
+    EXPECT_NEAR(actual_opacity_grad[0], 0.0f, 1.0e-5f)
+        << "depth loss must not directly train front opacity when depth weights are detached";
+    EXPECT_NEAR(actual_opacity_grad[1], 0.0f, 1.0e-5f)
+        << "depth loss must not directly train rear opacity when depth weights are detached";
+}
+
 TEST_F(FastGSKernelTest, Backward_Preprocess) {
     auto r = forward();
     ASSERT_TRUE(r.has_value());

@@ -40,6 +40,7 @@ TEST(ArgumentParserTest, TrainingDefaultsApplyMaxWidthCap) {
     EXPECT_FALSE((*parsed)->cli_bg_color_set);
     EXPECT_EQ((*parsed)->dataset.max_width, 3840);
     EXPECT_EQ((*parsed)->dataset.resize_factor, 1);
+    EXPECT_EQ((*parsed)->optimization.depth_loss_mode, "adaptive-warped-l1");
 }
 
 TEST(ArgumentParserTest, MaxWidthCanBeExplicitlySet) {
@@ -176,6 +177,51 @@ TEST(ArgumentParserTest, TrainingParsesAddSplats) {
     ASSERT_EQ((*parsed)->add_splat_paths.size(), 2u);
     EXPECT_EQ((*parsed)->add_splat_paths[0], splat_a);
     EXPECT_EQ((*parsed)->add_splat_paths[1], splat_b);
+}
+
+TEST(ArgumentParserTest, TrainingParsesExplicitDepthLossOptions) {
+    const auto data_path = make_test_path("lfs_arg_parser_depth_loss_data");
+    const auto output_path = make_test_path("lfs_arg_parser_depth_loss_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--use-depth-loss",
+        "--depth-loss-weight",
+        "3.25",
+        "--depth-loss-mode",
+        "adaptive-warped-l1"};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+
+    EXPECT_TRUE((*parsed)->optimization.use_depth_loss);
+    EXPECT_FLOAT_EQ((*parsed)->optimization.depth_loss_weight, 3.25f);
+    EXPECT_EQ((*parsed)->optimization.depth_loss_mode, "adaptive-warped-l1");
+}
+
+TEST(ArgumentParserTest, TrainingRejectsLegacyDepthLossAlias) {
+    const auto data_path = make_test_path("lfs_arg_parser_depth_invalid_data");
+    const auto output_path = make_test_path("lfs_arg_parser_depth_invalid_output");
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_path.c_str(),
+        "--output-path",
+        output_path.c_str(),
+        "--use-depth-loss",
+        "--depth-loss-mode",
+        "lod"};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_FALSE(parsed.has_value());
+    EXPECT_NE(parsed.error().find("depth_loss_mode must be 'pearson' or 'adaptive-warped-l1'"), std::string::npos);
 }
 
 TEST(ArgumentParserTest, TrainingParsesBackgroundModeModulation) {

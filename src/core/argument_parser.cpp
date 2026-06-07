@@ -269,10 +269,10 @@ namespace {
                                                                      {"by_cameras", "by_cameras"}});
 
             // =============================================================================
-            // MASK OPTIONS
+            // MASK / DEPTH OPTIONS
             // =============================================================================
             ::args::Group mask_sep(parser, " ");
-            ::args::Group mask_group(parser, "MASK OPTIONS:");
+            ::args::Group mask_group(parser, "MASK / DEPTH OPTIONS:");
             ::args::MapFlag<std::string, lfs::core::param::MaskMode> mask_mode(mask_group, "mask_mode",
                                                                                "Mask mode: none, segment, ignore, alpha_consistent (default: none)",
                                                                                {"mask-mode"},
@@ -283,6 +283,9 @@ namespace {
                                                                                    {"alpha_consistent", lfs::core::param::MaskMode::AlphaConsistent}});
             ::args::Flag invert_masks(mask_group, "invert_masks", "Invert mask values (swap object/background)", {"invert-masks"});
             ::args::Flag no_alpha_as_mask(mask_group, "no_alpha_as_mask", "Disable automatic alpha-as-mask for RGBA images", {"no-alpha-as-mask"});
+            ::args::Flag use_depth_loss(mask_group, "use_depth_loss", "Load depth maps and enable depth-map supervision", {"use-depth-loss"});
+            ::args::ValueFlag<float> depth_loss_weight(mask_group, "depth_loss_weight", "Depth loss weight (default: 2.0)", {"depth-loss-weight"});
+            ::args::ValueFlag<std::string> depth_loss_mode(mask_group, "depth_loss_mode", "Depth loss mode: pearson, adaptive-warped-l1 (default: adaptive-warped-l1)", {"depth-loss-mode"});
 
             // =============================================================================
             // SPARSITY OPTIMIZATION
@@ -712,6 +715,8 @@ namespace {
                                         prune_ratio_val = cli_option_present({"--prune-ratio"}) ? std::optional<float>(::args::get(prune_ratio)) : std::optional<float>(),
                                         // Mask parameters
                                         mask_mode_val = cli_option_present({"--mask-mode"}) ? std::optional<lfs::core::param::MaskMode>(::args::get(mask_mode)) : std::optional<lfs::core::param::MaskMode>(),
+                                        depth_loss_weight_val = cli_option_present({"--depth-loss-weight"}) ? std::optional<float>(::args::get(depth_loss_weight)) : std::optional<float>(),
+                                        depth_loss_mode_val = cli_option_present({"--depth-loss-mode"}) ? std::optional<std::string>(::args::get(depth_loss_mode)) : std::optional<std::string>(),
                                         // Python scripts
                                         python_scripts_val = cli_option_present({"--python-script"}) ? std::optional<std::vector<std::string>>(::args::get(python_scripts)) : std::optional<std::vector<std::string>>(),
                                         centralize_val = cli_option_present({"--centralize"}) ? std::optional<std::string>(::args::get(centralize)) : std::optional<std::string>(),
@@ -742,6 +747,7 @@ namespace {
                                         enable_sparsity_flag = bool(enable_sparsity),
                                         invert_masks_flag = bool(invert_masks),
                                         no_alpha_as_mask_flag = bool(no_alpha_as_mask),
+                                        use_depth_loss_flag = bool(use_depth_loss),
                                         use_error_map_flag = bool(use_error_map),
                                         use_edge_map_flag = bool(use_edge_map),
                                         output_name_val = cli_option_present({"--output-name"}) ? std::optional<std::string>(::args::get(output_name)) : std::optional<std::string>()]() {
@@ -833,6 +839,11 @@ namespace {
                 setFlag(invert_masks_flag, opt.invert_masks);
                 if (no_alpha_as_mask_flag)
                     opt.use_alpha_as_mask = false;
+                setFlag(use_depth_loss_flag, opt.use_depth_loss);
+                setVal(depth_loss_weight_val, opt.depth_loss_weight);
+                if (depth_loss_mode_val) {
+                    opt.depth_loss_mode = *depth_loss_mode_val;
+                }
                 // Also propagate to dataset config for loading
                 ds.invert_masks = opt.invert_masks;
                 ds.mask_threshold = opt.mask_threshold;

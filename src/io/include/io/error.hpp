@@ -35,6 +35,7 @@ namespace lfs::io {
         INVALID_HEADER = 205,
         MALFORMED_JSON = 206,
         MASK_SIZE_MISMATCH = 207,
+        DEPTH_SIZE_MISMATCH = 208,
 
         // Save/Export (300-399)
         WRITE_FAILURE = 300,
@@ -67,6 +68,7 @@ namespace lfs::io {
         case ErrorCode::INVALID_HEADER: return "Invalid header";
         case ErrorCode::MALFORMED_JSON: return "Malformed JSON";
         case ErrorCode::MASK_SIZE_MISMATCH: return "Mask size mismatch";
+        case ErrorCode::DEPTH_SIZE_MISMATCH: return "Depth size mismatch";
         case ErrorCode::WRITE_FAILURE: return "Write failed";
         case ErrorCode::ENCODING_FAILED: return "Encoding failed";
         case ErrorCode::ARCHIVE_CREATION_FAILED: return "Archive creation failed";

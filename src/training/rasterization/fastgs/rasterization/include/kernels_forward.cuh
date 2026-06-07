@@ -63,6 +63,7 @@ namespace fast_lfs::rasterization::kernels::forward {
         const float4* __restrict__ w2c,
         const float3* __restrict__ cam_position,
         uint* __restrict__ primitive_depth_keys,
+        float* __restrict__ primitive_depths,
         std::uint64_t* __restrict__ primitive_n_touched_tiles,
         ushort4* __restrict__ primitive_screen_bounds,
         float2* __restrict__ primitive_mean2d,
@@ -240,6 +241,7 @@ namespace fast_lfs::rasterization::kernels::forward {
             mean3d, cam_position[0],
             primitive_idx, active_sh_bases, sh_layout_slots);
         primitive_depth_keys[primitive_idx] = quantize_depth_key(depth, depth_bits);
+        primitive_depths[primitive_idx] = depth;
     }
 
     // based on https://github.com/r4dl/StopThePop-Rasterization/blob/d8cad09919ff49b11be3d693d1e71fa792f559bb/cuda_rasterizer/stopthepop/stopthepop_common.cuh#L325
@@ -386,8 +388,10 @@ namespace fast_lfs::rasterization::kernels::forward {
         const float2* __restrict__ primitive_mean2d,
         const float4* __restrict__ primitive_conic_opacity,
         const float3* __restrict__ primitive_color,
+        const float* __restrict__ primitive_depths,
         float* __restrict__ image,
         float* __restrict__ alpha_map,
+        float* __restrict__ depth_map,
         uint* __restrict__ tile_n_contributions,
         float* __restrict__ tile_final_transmittance,
         const uint width,
@@ -409,8 +413,10 @@ namespace fast_lfs::rasterization::kernels::forward {
         __shared__ float2 collected_mean2d[config::block_size_blend];
         __shared__ float4 collected_conic_opacity[config::block_size_blend];
         __shared__ float3 collected_color[config::block_size_blend];
+        __shared__ float collected_depth[config::block_size_blend];
         // initialize local storage
         float3 color_pixel = make_float3(0.0f);
+        float depth_pixel = 0.0f;
         float transmittance = 1.0f;
         uint n_possible_contributions = 0;
         uint n_contributions = 0;
@@ -425,6 +431,7 @@ namespace fast_lfs::rasterization::kernels::forward {
                 collected_conic_opacity[thread_rank] = primitive_conic_opacity[primitive_idx];
                 const float3 color = fminf(fmaxf(primitive_color[primitive_idx], 0.0f), config::max_blend_color);
                 collected_color[thread_rank] = color;
+                collected_depth[thread_rank] = primitive_depths[primitive_idx];
             }
             block.sync();
             const int current_batch_size = min(config::block_size_blend, n_points_remaining);
@@ -441,7 +448,9 @@ namespace fast_lfs::rasterization::kernels::forward {
                 const float alpha = fminf(opacity * gaussian, config::max_fragment_alpha);
                 if (alpha < config::min_alpha_threshold)
                     continue;
-                color_pixel += transmittance * alpha * collected_color[j];
+                const float weight = transmittance * alpha;
+                color_pixel += weight * collected_color[j];
+                depth_pixel += weight * collected_depth[j];
                 transmittance *= (1.0f - alpha);
                 n_contributions = n_possible_contributions;
                 if (transmittance < config::transmittance_threshold) {
@@ -458,6 +467,7 @@ namespace fast_lfs::rasterization::kernels::forward {
             image[pixel_idx + n_pixels] = color_pixel.y;
             image[pixel_idx + n_pixels * 2] = color_pixel.z;
             alpha_map[pixel_idx] = 1.0f - transmittance;
+            depth_map[pixel_idx] = depth_pixel;
             tile_n_contributions[pixel_idx] = n_contributions;
         }
         tile_final_transmittance[tile_idx * config::block_size_blend + thread_rank] = inside ? transmittance : 1.0f;
