@@ -1169,3 +1169,20 @@
     flex: 1;
     text-align: center;
 }
+
+.asset-scan-status {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4dp 0 0 0;
+    font-size: 12dp;
+    font-weight: 500;
+}
+
+.scan-status-scanning {
+    color: #f0c040;
+}
+
+.scan-status-updated {
+    color: #4caf50;
+}

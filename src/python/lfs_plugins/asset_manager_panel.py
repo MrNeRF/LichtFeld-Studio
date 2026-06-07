@@ -313,6 +313,14 @@ class AssetManagerPanel(Panel):
         # do not keep retrying on every on_update() cycle.
         self._thumbnail_render_failed: Set[str] = set()
 
+        # Background asset scanning (metadata sync / refresh)
+        self._scan_thread: Optional[threading.Thread] = None
+        self._scan_thread_lock = threading.Lock()
+        self._scan_ui_refresh_needed = False
+        self._scan_status = "idle"
+        self._scan_last_refresh_time = 0.0
+        self._scan_requeue = False
+
         # New folder menu state
         self._new_folder_menu_open: bool = False
 
@@ -584,6 +592,9 @@ class AssetManagerPanel(Panel):
         model.bind_func("folder_details_title", lambda: tr("asset_manager.info_panel.folder_details"))
         model.bind_func("prop_scenes_label", lambda: tr("asset_manager.property.scenes"))
         model.bind_func("scenes_list_title", lambda: tr("asset_manager.sidebar.scenes"))
+        model.bind_func("scan_status_label", self.get_scan_status_label)
+        model.bind_func("scan_status_class", self.get_scan_status_class)
+        model.bind_func("scan_status_visible", self.get_scan_status_visible)
 
         # Record lists for data-for loops (main lists)
         model.bind_record_list("folders")
@@ -1359,6 +1370,25 @@ class AssetManagerPanel(Panel):
             },
         ]
 
+    # ── Scan Status Getters ───────────────────────────────────
+
+    def get_scan_status_label(self) -> str:
+        if self._scan_status == "scanning":
+            return tr("asset_manager.status.scanning")
+        if self._scan_status == "updated":
+            return tr("asset_manager.status.updated")
+        return ""
+
+    def get_scan_status_class(self) -> str:
+        if self._scan_status == "scanning":
+            return "scan-status-scanning"
+        if self._scan_status == "updated":
+            return "scan-status-updated"
+        return ""
+
+    def get_scan_status_visible(self) -> bool:
+        return self._scan_status != "idle"
+
     # ── Flattened Selected Asset Getters ─────────────────────
 
     def _get_selected_asset(self) -> Optional[Dict[str, Any]]:
@@ -1536,10 +1566,16 @@ class AssetManagerPanel(Panel):
         if not asset:
             return ""
         asset_type = str(asset.get("type") or "")
-        if asset_type not in ("ply_3dgs", "ply_pcl", "ply", "rad", "sog", "spz"):
-            return ""
         geom = asset.get("geometry_metadata", {}) or {}
         sh_degree = geom.get("sh_degree")
+        _logger.info(
+            "get_selected_asset_sh_degree: type=%s geom=%s sh_degree=%r",
+            asset_type,
+            geom,
+            sh_degree,
+        )
+        if asset_type not in ("ply_3dgs", "ply_pcl", "ply", "rad", "sog", "spz"):
+            return ""
         if sh_degree is None:
             return "--"
         return str(int(sh_degree))
@@ -2112,57 +2148,130 @@ class AssetManagerPanel(Panel):
 
         if asset_type in ("ply_3dgs", "ply_pcl", "ply", "rad", "sog", "spz", "mesh"):
             geom_meta = asset.get("geometry_metadata", {}) or {}
-            # Need sync if empty, gaussian_count is not present, or sh_degree is missing for splats
-            if not geom_meta or geom_meta.get("gaussian_count") is None:
-                return True
-            if asset_type != "mesh" and geom_meta.get("sh_degree") is None:
-                return True
-            return False
+            # Need sync if empty or gaussian_count is not present
+            return not geom_meta or geom_meta.get("gaussian_count") is None
         return asset.get("file_size_bytes", 0) <= 0
 
-    def _sync_existing_asset_metadata(self) -> bool:
-        if not self._asset_index or not self._asset_scanner:
-            return False
+    # ── Background Asset Scanning ───────────────────────────────
 
-        updated_any = False
-        for asset_id, asset in list(self._asset_index.assets.items()):
-            if self._asset_needs_metadata_sync(asset):
-                file_path = asset.get("absolute_path") or asset.get("path", "")
-                try:
-                    metadata = self._asset_scanner.scan_file(file_path)
-                except Exception as exc:
-                    _logger.debug(f"Failed to rescan asset metadata for {file_path}: {exc}")
-                    metadata = None
+    def _start_scan_worker(self, asset_ids: List[str], scan_type: str) -> None:
+        """Start a background thread to scan assets and update the catalog.
 
-                if metadata:
-                    update_kwargs = self._metadata_to_asset_kwargs(metadata)
-                    size_bytes = metadata.get("size_bytes")
-                    if size_bytes is not None and size_bytes != asset.get("file_size_bytes", 0):
-                        update_kwargs["file_size_bytes"] = size_bytes
+        If a scan is already running, the request is requeued so it runs
+        automatically after the current scan finishes.
+        """
+        with self._scan_thread_lock:
+            if self._scan_thread is not None and self._scan_thread.is_alive():
+                self._scan_requeue = True
+                return
 
-                    modified_at = metadata.get("modified")
-                    if modified_at and modified_at != asset.get("modified_at"):
-                        update_kwargs["modified_at"] = modified_at
+            self._scan_status = "scanning"
+            self._scan_requeue = False
+            self._scan_ui_refresh_needed = False
+            self._scan_thread = threading.Thread(
+                target=self._scan_worker,
+                args=(asset_ids, scan_type),
+                daemon=True,
+            )
+            self._scan_thread.start()
 
-                    created_at = metadata.get("created")
-                    if created_at and not asset.get("created_at"):
-                        update_kwargs["created_at"] = created_at
+    def _scan_worker(self, asset_ids: List[str], scan_type: str) -> None:
+        """Run in a background thread: scan assets and update the catalog incrementally."""
+        try:
+            while True:
+                updated_any = False
+                for asset_id in asset_ids:
+                    with self._scan_thread_lock:
+                        if self._scan_requeue:
+                            # Another scan was requested; finish this loop and let the
+                            # requeued scan handle the rest.
+                            break
 
-                    if update_kwargs:
-                        self._asset_index.update_asset(asset_id, **update_kwargs)
+                    asset = self._asset_index.assets.get(asset_id)
+                    if asset is None:
+                        continue
+
+                    file_path = asset.get("absolute_path") or asset.get("path", "")
+                    if not file_path or not os.path.exists(file_path):
+                        continue
+
+                    try:
+                        metadata = self._asset_scanner.scan_file(file_path)
+                    except Exception as exc:
+                        _logger.debug(f"Failed to rescan asset metadata for {file_path}: {exc}")
+                        metadata = None
+
+                    if metadata:
+                        # Merge new metadata into existing asset instead of overwriting
+                        # so previously detected fields (like sh_degree) are not lost.
+                        update_kwargs = self._metadata_to_asset_kwargs(metadata)
+                        size_bytes = metadata.get("size_bytes")
+                        if size_bytes is not None and size_bytes != asset.get("file_size_bytes", 0):
+                            update_kwargs["file_size_bytes"] = size_bytes
+                        modified_at = metadata.get("modified")
+                        if modified_at and modified_at != asset.get("modified_at"):
+                            update_kwargs["modified_at"] = modified_at
+                        created_at = metadata.get("created")
+                        if created_at and not asset.get("created_at"):
+                            update_kwargs["created_at"] = created_at
+                        # Merge geometry/dataset metadata instead of replacing
+                        for meta_key in ("geometry_metadata", "dataset_metadata", "transform_metadata"):
+                            if meta_key in update_kwargs:
+                                existing = asset.get(meta_key, {}) or {}
+                                merged = dict(existing)
+                                merged.update(update_kwargs[meta_key])
+                                update_kwargs[meta_key] = merged
+                        if update_kwargs:
+                            self._asset_index.update_asset(asset_id, **update_kwargs)
+                            updated_any = True
+
+                    asset = self._asset_index.assets.get(asset_id, asset)
+                    if self._asset_needs_thumbnail_refresh(asset):
+                        self._generate_asset_thumbnail_for_values(
+                            asset_id,
+                            str(asset.get("type") or ""),
+                            asset.get("absolute_path") or asset.get("path", ""),
+                            asset.get("dataset_metadata", {}) or {},
+                        )
                         updated_any = True
 
-            asset = self._asset_index.assets.get(asset_id, asset)
-            if self._asset_needs_thumbnail_refresh(asset):
-                self._generate_asset_thumbnail_for_values(
-                    asset_id,
-                    str(asset.get("type") or ""),
-                    asset.get("absolute_path") or asset.get("path", ""),
-                    asset.get("dataset_metadata", {}) or {},
-                )
-                updated_any = True
+                    with self._scan_thread_lock:
+                        self._scan_ui_refresh_needed = True
 
-        return updated_any
+                if updated_any:
+                    try:
+                        self._asset_index.save()
+                    except Exception as exc:
+                        _logger.debug(f"Failed to save catalog after background scan: {exc}")
+
+                with self._scan_thread_lock:
+                    if self._scan_requeue:
+                        self._scan_requeue = False
+                        # Restart the scan for the remaining assets
+                        self._scan_status = "scanning"
+                        self._scan_ui_refresh_needed = True
+                        continue
+                    self._scan_status = "updated"
+                    self._scan_ui_refresh_needed = True
+                    break
+        except Exception as exc:
+            _logger.error(f"Background scan worker failed: {exc}")
+            with self._scan_thread_lock:
+                self._scan_status = "idle"
+                self._scan_ui_refresh_needed = True
+
+    def _sync_existing_asset_metadata(self) -> bool:
+        """Non-blocking launcher: queue assets that need metadata sync for background scanning."""
+        if not self._asset_index or not self._asset_scanner:
+            return False
+        asset_ids = [
+            asset_id
+            for asset_id, asset in list(self._asset_index.assets.items())
+            if self._asset_needs_metadata_sync(asset)
+        ]
+        if asset_ids:
+            self._start_scan_worker(asset_ids, "sync")
+        return False
 
     def _scan_and_register_asset(
         self,
@@ -3831,11 +3940,7 @@ class AssetManagerPanel(Panel):
         if self._asset_index and hasattr(self._asset_index, "load"):
             try:
                 self._asset_index.load()
-                if (
-                    self._sync_existing_asset_metadata()
-                    and self._asset_index.library_path.exists()
-                ):
-                    self._library_mtime = self._asset_index.library_path.stat().st_mtime
+                self._sync_existing_asset_metadata()
                 if self._asset_index.library_path.exists():
                     self._library_mtime = self._asset_index.library_path.stat().st_mtime
             except Exception as e:
@@ -3896,11 +4001,20 @@ class AssetManagerPanel(Panel):
                 current_mtime = library_path.stat().st_mtime
                 if current_mtime > self._library_mtime:
                     self._asset_index.load()
-                    if self._sync_existing_asset_metadata() and library_path.exists():
-                        current_mtime = library_path.stat().st_mtime
+                    self._sync_existing_asset_metadata()
                     self._library_mtime = current_mtime
                     self.refresh_catalog(request_update=False)
                     changed = True
+
+            # If a background scan just finished, refresh the UI (throttled).
+            with self._scan_thread_lock:
+                if self._scan_ui_refresh_needed:
+                    now = time.time()
+                    if now - self._scan_last_refresh_time > 0.2:
+                        self._scan_ui_refresh_needed = False
+                        self._scan_last_refresh_time = now
+                        self.refresh_catalog(request_update=False)
+                        changed = True
 
             if hasattr(self._asset_index, "mark_missing_files"):
                 previous_missing = sum(
@@ -3939,6 +4053,11 @@ class AssetManagerPanel(Panel):
 
         # Wait for any pending thumbnail generation threads to finish
         self._join_pending_thumbnail_threads(timeout=2.0)
+
+        # Wait for any pending background scan to finish
+        with self._scan_thread_lock:
+            if self._scan_thread is not None and self._scan_thread.is_alive():
+                self._scan_thread.join(timeout=2.0)
 
         if self._asset_index and hasattr(self._asset_index, "save"):
             try:
@@ -4452,36 +4571,13 @@ class AssetManagerPanel(Panel):
                 self._request_model_update()
 
     def refresh_catalog_scan(self, _handle=None, _ev=None, _args=None):
-        """Rescan all known asset directories and refresh the catalog."""
+        """Non-blocking launcher: rescan all known assets in the background."""
         if not self._asset_index:
             return
-        try:
-            # Rescan all asset paths in the index
-            for asset in list(self._asset_index.assets.values()):
-                path = asset.get("absolute_path") or asset.get("path")
-                if path and os.path.exists(path):
-                    try:
-                        if self._asset_scanner:
-                            metadata = self._asset_scanner.scan_file(path)
-                            if metadata and metadata.get("type") is not None:
-                                update_kwargs = self._metadata_to_asset_kwargs(metadata)
-                                asset_type = update_kwargs.pop("type", None)
-                                role = update_kwargs.pop("role", None)
-                                if asset_type:
-                                    update_kwargs["type"] = asset_type
-                                if role and role != "unknown":
-                                    update_kwargs["role"] = role
-                                update_kwargs["name"] = metadata.get("name") or asset.get("name")
-                                update_kwargs["path"] = metadata.get("path") or asset.get("path")
-                                update_kwargs["absolute_path"] = metadata.get("path") or asset.get("absolute_path")
-                                self._asset_index.update_asset(asset["id"], **update_kwargs)
-                    except Exception as exc:
-                        _logger.debug(f"Failed to rescan {path}: {exc}")
-            self._asset_index.save()
-            self.refresh_catalog()
-            self._log_info("Refreshed asset catalog")
-        except Exception as exc:
-            self._log_error(f"Failed to refresh catalog: {exc}")
+        asset_ids = list(self._asset_index.assets.keys())
+        if asset_ids:
+            self._start_scan_worker(asset_ids, "refresh")
+        self._log_info("Queued background catalog refresh (%d assets)", len(asset_ids))
 
     def clean_missing(self, _handle=None, _ev=None, _args=None):
         """Prune every catalog entry whose backing file is no longer on disk."""

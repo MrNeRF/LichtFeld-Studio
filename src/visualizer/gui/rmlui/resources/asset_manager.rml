@@ -97,6 +97,9 @@
           <button class="asset-action-button" data-event-click="refresh_catalog" data-tooltip="asset_manager.tooltip.refresh">{{refresh_label}}</button>
           <button class="asset-action-button" data-event-click="clean_missing" data-tooltip="asset_manager.tooltip.clean_missing">{{clean_missing_label}}</button>
         </div>
+        <div class="asset-scan-status" data-if="scan_status_visible">
+          <span data-attr-class="scan_status_class">{{scan_status_label}}</span>
+        </div>
         </div>
       </div>
 

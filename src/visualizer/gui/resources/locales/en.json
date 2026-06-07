@@ -205,6 +205,8 @@
     "status.select_item": "Select an item to view details",
     "status.one_item_selected": "1 item selected",
     "status.multi_items_selected": "{count} items selected",
+    "status.scanning": "Searching",
+    "status.updated": "Updated",
     "batch.load_selected": "Load Selected",
     "batch.export_selected": "Export Selected",
     "batch.remove_from_catalog": "Remove From Catalog",
