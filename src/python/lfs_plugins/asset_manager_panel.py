@@ -438,6 +438,9 @@ class AssetManagerPanel(Panel):
         model.bind_func("selected_asset_created", self.get_selected_asset_created)
         model.bind_func("selected_asset_modified", self.get_selected_asset_modified)
         model.bind_func(
+            "selected_asset_has_sh_degree", self.get_selected_asset_has_sh_degree
+        )
+        model.bind_func(
             "selected_asset_has_geometry_metadata",
             self.get_selected_asset_has_geometry_metadata,
         )
@@ -1470,6 +1473,13 @@ class AssetManagerPanel(Panel):
         geom = asset.get("geometry_metadata", {}) or {}
         return bool(geom)
 
+    def get_selected_asset_has_sh_degree(self) -> bool:
+        asset = self._get_selected_asset()
+        if not asset:
+            return False
+        geom = asset.get("geometry_metadata", {}) or {}
+        return geom.get("sh_degree") is not None
+
     def get_selected_asset_has_dataset_metadata(self) -> bool:
         asset = self._get_selected_asset()
         if not asset:
@@ -1561,21 +1571,18 @@ class AssetManagerPanel(Panel):
         return str(gaussian_count) if gaussian_count > 0 else ""
 
     def get_selected_asset_sh_degree(self) -> str:
-        """Return SH degree for splat types; empty string hides the row for non-splats."""
+        """Return SH degree when saved geometry metadata includes it."""
         asset = self._get_selected_asset()
         if not asset:
             return ""
-        asset_type = str(asset.get("type") or "")
         geom = asset.get("geometry_metadata", {}) or {}
         sh_degree = geom.get("sh_degree")
         _logger.info(
             "get_selected_asset_sh_degree: type=%s geom=%s sh_degree=%r",
-            asset_type,
+            str(asset.get("type") or ""),
             geom,
             sh_degree,
         )
-        if asset_type not in ("ply_3dgs", "ply_pcl", "ply", "rad", "sog", "spz"):
-            return ""
         if sh_degree is None:
             return "--"
         return str(int(sh_degree))

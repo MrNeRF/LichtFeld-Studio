@@ -303,6 +303,7 @@ def test_asset_manager_rml_uses_text_interpolation_for_display_values():
     assert "{{asset.display_name}}" in rml
     assert "{{selected_asset_name}}" in rml
     assert "{{selected_asset_dataset_image_count}}" in rml
+    assert "data-if=\"selected_asset_has_sh_degree\"" in rml
     assert 'data-style-decorator="asset.thumbnail_decorator"' in rml
 
 
@@ -589,6 +590,27 @@ def test_asset_selection_dirties_info_fields(asset_manager_panel_module):
     dirty = panel._handle.dirty_fields
     assert "selected_asset_path" in dirty or "__all__" in dirty
     assert "show_selection_asset" in dirty or "__all__" in dirty
+
+
+def test_selected_asset_sh_degree_is_visible_for_any_geometry_asset_type(
+    asset_manager_panel_module,
+):
+    panel = asset_manager_panel_module.AssetManagerPanel()
+    asset = _make_asset()
+    asset["type"] = "mesh"
+    asset["geometry_metadata"] = {"sh_degree": 0}
+    panel._asset_index = SimpleNamespace(
+        assets={"a1": asset},
+        folders={"p1": {"id": "p1", "name": "Imported Datasets", "scene_ids": ["s1"]}},
+        scenes={"s1": {"id": "s1", "name": "bicycle", "folder_id": "p1"}},
+        tags={},
+        collections={},
+    )
+    panel._selected_asset_ids = {"a1"}
+    panel._selection_type = "asset"
+
+    assert panel.get_selected_asset_has_sh_degree() is True
+    assert panel.get_selected_asset_sh_degree() == "0"
 
 
 def test_asset_selection_resolves_asset_id_from_clicked_element(asset_manager_panel_module):

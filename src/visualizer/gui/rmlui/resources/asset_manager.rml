@@ -239,7 +239,7 @@
                 <span class="parameter-label">{{prop_points_label}}</span>
                 <span class="parameter-value">{{selected_asset_points}}</span>
               </div>
-              <div class="parameter-row" data-if="selected_asset_sh_degree">
+              <div class="parameter-row" data-if="selected_asset_has_sh_degree">
                 <span class="parameter-label">{{prop_sh_degree_label}}</span>
                 <span class="parameter-value">{{selected_asset_sh_degree}}</span>
               </div>
