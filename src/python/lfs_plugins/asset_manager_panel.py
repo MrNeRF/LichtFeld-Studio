@@ -320,6 +320,7 @@ class AssetManagerPanel(Panel):
         self._scan_status = "idle"
         self._scan_last_refresh_time = 0.0
         self._scan_requeue = False
+        self._scan_queued_asset_ids: List[str] = []
 
         # New folder menu state
         self._new_folder_menu_open: bool = False
@@ -2167,8 +2168,12 @@ class AssetManagerPanel(Panel):
 
         if asset_type in ("ply_3dgs", "ply_pcl", "ply", "rad", "sog", "spz", "mesh"):
             geom_meta = asset.get("geometry_metadata", {}) or {}
-            # Need sync if empty or gaussian_count is not present
-            return not geom_meta or geom_meta.get("gaussian_count") is None
+            needs_sh_degree = asset_type in ("ply_3dgs", "ply", "rad", "sog", "spz")
+            return (
+                not geom_meta
+                or geom_meta.get("gaussian_count") is None
+                or (needs_sh_degree and "sh_degree" not in geom_meta)
+            )
         return asset.get("file_size_bytes", 0) <= 0
 
     # ── Background Asset Scanning ───────────────────────────────
@@ -2179,31 +2184,46 @@ class AssetManagerPanel(Panel):
         If a scan is already running, the request is requeued so it runs
         automatically after the current scan finishes.
         """
+        asset_ids = list(dict.fromkeys(asset_ids))
+        if not asset_ids:
+            return
+
+        thread_to_start = None
         with self._scan_thread_lock:
             if self._scan_thread is not None and self._scan_thread.is_alive():
+                self._scan_queued_asset_ids = list(
+                    dict.fromkeys(self._scan_queued_asset_ids + asset_ids)
+                )
                 self._scan_requeue = True
+                self._scan_ui_refresh_needed = True
                 return
 
             self._scan_requeue = False
+            self._scan_queued_asset_ids = []
             self._scan_ui_refresh_needed = False
+            self._scan_status = "scanning"
             self._scan_thread = threading.Thread(
                 target=self._scan_worker,
                 args=(asset_ids, scan_type),
                 daemon=True,
             )
-            self._scan_thread.start()
-        self._set_scan_status("scanning")
+            thread_to_start = self._scan_thread
+
+        thread_to_start.start()
+        self._request_model_update()
 
     def _scan_worker(self, asset_ids: List[str], scan_type: str) -> None:
         """Run in a background thread: scan assets and update the catalog incrementally."""
         try:
+            asset_ids = list(dict.fromkeys(asset_ids))
             while True:
                 updated_any = False
-                for asset_id in asset_ids:
+                remaining_asset_ids: List[str] = []
+                for asset_index, asset_id in enumerate(asset_ids):
                     with self._scan_thread_lock:
                         if self._scan_requeue:
-                            # Another scan was requested; finish this loop and let the
-                            # requeued scan handle the rest.
+                            # Another scan was requested; switch to the queued batch.
+                            remaining_asset_ids = asset_ids[asset_index:]
                             break
 
                     asset = self._asset_index.assets.get(asset_id)
@@ -2263,18 +2283,35 @@ class AssetManagerPanel(Panel):
                     except Exception as exc:
                         _logger.debug(f"Failed to save catalog after background scan: {exc}")
 
+                next_asset_ids = None
                 with self._scan_thread_lock:
                     if self._scan_requeue:
+                        next_asset_ids = list(
+                            dict.fromkeys(remaining_asset_ids + self._scan_queued_asset_ids)
+                        )
+                        self._scan_queued_asset_ids = []
                         self._scan_requeue = False
-                        # Restart the scan for the remaining assets
                         self._scan_ui_refresh_needed = True
-                        continue
-                    self._scan_ui_refresh_needed = True
-                self._set_scan_status("idle", refresh_needed=True)
+                    else:
+                        self._scan_ui_refresh_needed = True
+                        self._scan_status = "idle"
+                        if self._scan_thread is threading.current_thread():
+                            self._scan_thread = None
+                if next_asset_ids is not None:
+                    asset_ids = next_asset_ids
+                    continue
+                self._request_model_update()
                 break
         except Exception as exc:
             _logger.error(f"Background scan worker failed: {exc}")
-            self._set_scan_status("idle", refresh_needed=True)
+            with self._scan_thread_lock:
+                self._scan_status = "idle"
+                self._scan_ui_refresh_needed = True
+                self._scan_requeue = False
+                self._scan_queued_asset_ids = []
+                if self._scan_thread is threading.current_thread():
+                    self._scan_thread = None
+            self._request_model_update()
 
     def _sync_existing_asset_metadata(self) -> bool:
         """Non-blocking launcher: queue assets that need metadata sync for background scanning."""
