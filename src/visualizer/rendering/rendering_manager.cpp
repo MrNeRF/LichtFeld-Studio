@@ -36,6 +36,30 @@ namespace lfs::vis {
                    !ppispOverridesEqual(old_settings.ppisp_overrides, new_settings.ppisp_overrides);
         }
 
+        [[nodiscard]] bool applySparkLodViewerDefaults(RenderSettings& settings) {
+            bool changed = false;
+
+            if (settings.lod_max_splats == 1'500'000) {
+                settings.lod_max_splats = DEFAULT_LOD_MAX_SPLATS;
+                changed = true;
+            }
+
+            if (settings.lod_behind_camera_penalty == 2.0f) {
+                settings.lod_behind_camera_penalty = DEFAULT_LOD_BEHIND_CAMERA_FOVEATION;
+                changed = true;
+            }
+
+            if (settings.lod_cone_inner_degrees == 0.0f &&
+                settings.lod_cone_outer_degrees == 0.0f) {
+                settings.lod_cone_foveation = DEFAULT_LOD_CONE_FOVEATION;
+                settings.lod_cone_inner_degrees = DEFAULT_LOD_CONE_INNER_DEGREES;
+                settings.lod_cone_outer_degrees = DEFAULT_LOD_CONE_OUTER_DEGREES;
+                changed = true;
+            }
+
+            return changed;
+        }
+
         [[nodiscard]] std::expected<RenderingManager::CameraMetricsOverlayState, std::string>
         computeCameraMetricsForCurrentView(TrainerManager& trainer_mgr,
                                            const int camera_id,
@@ -125,6 +149,18 @@ namespace lfs::vis {
         LOG_TRACE("Render marked dirty (flags: 0x{:x})", flags);
     }
 
+    bool RenderingManager::pollDirtyState() {
+        if (const DirtyMask animation_dirty = animation_state_.pollDirtyState(); animation_dirty) {
+            dirty_mask_.fetch_or(animation_dirty, std::memory_order_relaxed);
+            return true;
+        }
+        if (lod_controller_ && lod_controller_->hasReadyResults()) {
+            dirty_mask_.fetch_or(DirtyFlag::CAMERA, std::memory_order_relaxed);
+            return true;
+        }
+        return dirty_mask_.load(std::memory_order_relaxed) != 0;
+    }
+
     void RenderingManager::setViewportResizeActive(bool active) {
         if (const DirtyMask dirty = frame_lifecycle_service_.setViewportResizeActive(active); dirty) {
             markDirty(dirty);
@@ -133,20 +169,19 @@ namespace lfs::vis {
 
     void RenderingManager::setLodAvailable(bool available) {
         lod_available_ = available;
+        if (available) {
+            auto settings = getSettings();
+            if (applySparkLodViewerDefaults(settings)) {
+                updateSettings(settings, DirtyFlag::ALL);
+            }
+        }
     }
 
     void RenderingManager::setLodEnabled(bool enabled) {
-        bool changed = false;
-        {
-            std::lock_guard<std::mutex> lock(settings_mutex_);
-            changed = settings_.lod_enabled != enabled;
-            settings_.lod_enabled = enabled;
-        }
-        if (changed) {
-            auto& render_settings_generation = app_store().render_settings_generation;
-            render_settings_generation.set(render_settings_generation.get() + 1);
-        }
-        markDirty(DirtyFlag::SPLATS);
+        auto settings = getSettings();
+        settings.lod_enabled = enabled;
+        const bool changed = enabled && applySparkLodViewerDefaults(settings);
+        updateSettings(settings, changed ? DirtyFlag::ALL : DirtyFlag::SPLATS);
     }
 
     bool RenderingManager::isLodEnabled() const {
@@ -154,15 +189,31 @@ namespace lfs::vis {
         return settings_.lod_enabled;
     }
 
-    std::tuple<size_t, size_t, std::vector<std::pair<uint8_t, size_t>>> RenderingManager::getLodStats() const {
-        if (!lod_controller_ || !lod_controller_->hasTree()) {
-            return {0, 0, {}};
+    SparkLodController::Stats RenderingManager::getLodStats() const {
+        SparkLodController::Stats stats;
+        if (lod_controller_) {
+            stats = lod_controller_->stats();
         }
-        return {
-            lod_controller_->selectedCount(),
-            lod_controller_->lastParams().max_splats,
-            lod_controller_->getLevelHistogram()
-        };
+
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex_);
+            stats.enabled = settings_.lod_enabled;
+            if (stats.max_splats == 0) {
+                stats.max_splats = settings_.lod_max_splats;
+            }
+            if (stats.lod_render_scale == 0.0f) {
+                stats.lod_render_scale = settings_.lod_render_scale;
+            }
+            stats.behind_camera_penalty = settings_.lod_behind_camera_penalty;
+            stats.cone_foveation = settings_.lod_cone_foveation;
+            stats.cone_inner_degrees = settings_.lod_cone_inner_degrees;
+            stats.cone_outer_degrees = settings_.lod_cone_outer_degrees;
+        }
+
+        stats.available = lod_available_ || stats.has_tree;
+        stats.active = stats.has_tree && lod_controller_ != nullptr &&
+                       (stats.enabled || stats.full_quality_reference);
+        return stats;
     }
 
     void RenderingManager::releaseSceneModelResources() {

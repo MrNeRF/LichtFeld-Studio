@@ -12,6 +12,55 @@
 #include <queue>
 
 namespace lfs::vis {
+namespace {
+
+constexpr std::size_t kSparkLodChunkSplats = 65'536;
+
+uint64_t hashSelectedIndices(const std::vector<uint32_t>& indices) {
+    uint64_t hash = 1469598103934665603ull;
+    const auto mix = [&hash](const uint64_t value) {
+        hash ^= value;
+        hash *= 1099511628211ull;
+    };
+    const size_t size = indices.size();
+    mix(static_cast<uint64_t>(size));
+    if (size == 0) {
+        return hash;
+    }
+
+    constexpr size_t kMaxSamples = 4096;
+    const size_t sample_count = std::min(size, kMaxSamples);
+    if (sample_count == 1) {
+        mix(indices.front());
+        return hash;
+    }
+
+    for (size_t sample = 0; sample < sample_count; ++sample) {
+        const size_t index = (sample * (size - 1)) / (sample_count - 1);
+        mix(static_cast<uint64_t>(index));
+        mix(static_cast<uint64_t>(indices[index]));
+    }
+    return hash;
+}
+
+std::size_t countTouchedChunks(const std::vector<uint32_t>& indices) {
+    if (indices.empty()) {
+        return 0;
+    }
+
+    std::size_t touched = 0;
+    std::size_t last_chunk = std::numeric_limits<std::size_t>::max();
+    for (const uint32_t index : indices) {
+        const std::size_t chunk = static_cast<std::size_t>(index) / kSparkLodChunkSplats;
+        if (chunk != last_chunk) {
+            ++touched;
+            last_chunk = chunk;
+        }
+    }
+    return touched;
+}
+
+} // namespace
 
 SparkLodController::SparkLodController() {
     worker_ = std::jthread([this](std::stop_token stop_token) {
@@ -29,7 +78,6 @@ void SparkLodController::attach(const lfs::core::SplatData& data) {
         return;
     }
 
-    data_ = &data;
     const auto& tree = *data.lod_tree;
     const size_t n = tree.total_nodes();
     if (n == 0 || n > static_cast<size_t>(data.size())) {
@@ -41,6 +89,10 @@ void SparkLodController::attach(const lfs::core::SplatData& data) {
         return;
     }
     nodes_.resize(n);
+    full_quality_indices_.clear();
+    full_quality_indices_.reserve(n);
+    full_quality_hash_ = 0;
+    full_quality_touched_chunks_ = 0;
 
     const bool has_cached_centers = tree.centers.size() >= n;
     const bool has_cached_sizes = tree.sizes.size() >= n;
@@ -79,6 +131,9 @@ void SparkLodController::attach(const lfs::core::SplatData& data) {
         nodes_[i].child_start = tree.child_start[i];
         nodes_[i].child_count = tree.child_count[i];
         nodes_[i].lod_level = (i < tree.lod_level.size()) ? tree.lod_level[i] : 0;
+        if (nodes_[i].child_count == 0) {
+            full_quality_indices_.push_back(static_cast<uint32_t>(i));
+        }
     }
 
     // Compute lod_level via BFS if not provided by loader
@@ -115,11 +170,37 @@ void SparkLodController::attach(const lfs::core::SplatData& data) {
         non_leaf_count,
         nodes_.empty() ? 0u : static_cast<unsigned>(nodes_[0].child_count),
         static_cast<unsigned>(max_child_count));
+    full_quality_hash_ = hashSelectedIndices(full_quality_indices_);
+    full_quality_touched_chunks_ = countTouchedChunks(full_quality_indices_);
+
+    SparkLodController::Stats stats;
+    stats.has_tree = !nodes_.empty();
+    stats.lod_opacity_encoded = tree.lod_opacity_encoded;
+    stats.model_splats = data.size();
+    stats.tree_nodes = nodes_.size();
+    stats.non_leaf_nodes = non_leaf_count;
+    stats.full_quality_splats = full_quality_indices_.size();
+    stats.chunk_splats = kSparkLodChunkSplats;
+    stats.chunk_count = (nodes_.size() + kSparkLodChunkSplats - 1) / kSparkLodChunkSplats;
+    stats.resident_chunks = stats.chunk_count;
+    stats.root_child_count = nodes_.empty() ? 0 : nodes_[0].child_count;
+    stats.max_child_count = max_child_count;
+    base_stats_ = stats;
+    {
+        std::scoped_lock lock(mutex_);
+        current_stats_ = stats;
+        ready_swap_stats_ = {};
+        next_work_generation_ = 0;
+        latest_requested_generation_ = 0;
+        stats_generation_ = 0;
+    }
 }
 
 void SparkLodController::detach() {
-    data_ = nullptr;
     nodes_.clear();
+    full_quality_indices_.clear();
+    full_quality_hash_ = 0;
+    full_quality_touched_chunks_ = 0;
     selected_indices_.clear();
     {
         std::scoped_lock lock(mutex_);
@@ -127,6 +208,12 @@ void SparkLodController::detach() {
         ready_available_ = false;
         async_indices_.clear();
         ready_swap_indices_.clear();
+        base_stats_ = {};
+        current_stats_ = {};
+        ready_swap_stats_ = {};
+        next_work_generation_ = 0;
+        latest_requested_generation_ = 0;
+        stats_generation_ = 0;
     }
 }
 
@@ -140,7 +227,10 @@ float SparkLodController::computePixelScale(uint32_t node_index,
         return std::numeric_limits<float>::max();
     }
 
-    float pixel_scale = (node.size * params.lod_render_scale) / radial_dist;
+    const float object_scale = std::isfinite(params.object_scale) && params.object_scale > 0.0f
+                                   ? params.object_scale
+                                   : 1.0f;
+    float pixel_scale = (node.size * object_scale) / radial_dist;
 
     // Foveation: match Spark's compute_pixel_scale exactly.
     float forward_dot = -center_vs.z;  // dot(center_vs, -z_axis)
@@ -184,17 +274,26 @@ float SparkLodController::computePixelScale(uint32_t node_index,
 size_t SparkLodController::update(const glm::mat4& view_matrix, const LodParameters& params) {
     {
         std::scoped_lock lock(mutex_);
+        pending_work_.reset();
         ready_available_ = false;
+        latest_requested_generation_ = ++next_work_generation_;
     }
-    const size_t count = traverse(view_matrix, params, selected_indices_);
-    last_params_ = params;
-    return count;
+    const auto result = traverse(view_matrix, params, selected_indices_);
+    {
+        std::scoped_lock lock(mutex_);
+        current_stats_ = result.stats;
+        current_stats_.generation = ++stats_generation_;
+    }
+    return result.count;
 }
 
 void SparkLodController::updateAsync(const glm::mat4& view_matrix, const LodParameters& params) {
     {
         std::scoped_lock lock(mutex_);
-        pending_work_ = WorkItem{view_matrix, params};
+        const uint64_t generation = ++next_work_generation_;
+        latest_requested_generation_ = generation;
+        ready_available_ = false;
+        pending_work_ = WorkItem{view_matrix, params, generation};
     }
     cv_.notify_one();
 }
@@ -205,6 +304,8 @@ bool SparkLodController::swapAsyncResults() {
         return false;
     }
     selected_indices_.swap(ready_swap_indices_);
+    current_stats_ = ready_swap_stats_;
+    current_stats_.generation = ++stats_generation_;
     ready_available_ = false;
     return true;
 }
@@ -229,25 +330,68 @@ void SparkLodController::workerLoop(std::stop_token stop_token) {
             pending_work_.reset();
         }
 
-        traverse(work.view_matrix, work.params, async_indices_);
+        const auto result = traverse(work.view_matrix, work.params, async_indices_);
 
         {
             std::scoped_lock lock(mutex_);
-            ready_swap_indices_.swap(async_indices_);
-            ready_available_ = true;
+            if (work.generation == latest_requested_generation_) {
+                ready_swap_indices_.swap(async_indices_);
+                ready_swap_stats_ = result.stats;
+                ready_available_ = true;
+            }
         }
     }
 }
 
-size_t SparkLodController::traverse(const glm::mat4& view_matrix,
-                                    const LodParameters& params,
-                                    std::vector<uint32_t>& out_indices) const {
+SparkLodController::TraverseResult SparkLodController::traverse(
+    const glm::mat4& view_matrix,
+    const LodParameters& params,
+    std::vector<uint32_t>& out_indices) const {
+    TraverseResult result;
+    result.stats = base_stats_;
+    auto& stats = result.stats;
+    stats.async_result_ready = false;
+    stats.budget_limited = false;
+    stats.threshold_limited = false;
+    stats.output_limited = false;
+    stats.selected_splats = 0;
+    stats.output_size = 0;
+    stats.frontier_size = 0;
+    stats.leaf_count = 0;
+    stats.touched_chunks = 0;
+    stats.min_pixel_scale = 0.0f;
+    stats.selection_hash = 0;
+    stats.max_splats = params.max_splats;
+    stats.pixel_scale_limit = params.pixel_scale_limit;
+    stats.lod_render_scale = params.lod_render_scale;
+    stats.behind_camera_penalty = params.behind_camera_penalty;
+    stats.cone_foveation = params.cone_foveation;
+    stats.cone_inner_degrees = params.cone_inner_degrees;
+    stats.cone_outer_degrees = params.cone_outer_degrees;
+
     out_indices.clear();
     if (nodes_.empty() || params.max_splats == 0) {
-        return 0;
+        stats.output_limited = params.max_splats == 0;
+        stats.selection_hash = hashSelectedIndices(out_indices);
+        return result;
     }
 
     out_indices.reserve(params.max_splats);
+    std::vector<std::uint8_t> touched_chunks(stats.chunk_count, 0);
+    const auto touch_chunk = [&](const std::size_t node_index) {
+        const std::size_t chunk_index = node_index / kSparkLodChunkSplats;
+        if (chunk_index < touched_chunks.size() && touched_chunks[chunk_index] == 0) {
+            touched_chunks[chunk_index] = 1;
+            ++stats.touched_chunks;
+        }
+    };
+    const auto touch_child_range = [&](const std::size_t child_start, const std::size_t child_count) {
+        if (child_count == 0) {
+            return;
+        }
+        touch_chunk(child_start);
+        touch_chunk(child_start + child_count - 1);
+    };
 
     struct HeapNode {
         uint32_t index;
@@ -261,18 +405,20 @@ size_t SparkLodController::traverse(const glm::mat4& view_matrix,
     };
 
     std::priority_queue<HeapNode, std::vector<HeapNode>, HeapCompare> heap;
-    std::vector<std::uint8_t> queued(nodes_.size(), 0);
 
     // Seed with root node
     heap.push({0, computePixelScale(0, view_matrix, params)});
-    queued[0] = 1;
+    touch_chunk(0);
 
     // Matches Spark semantics: this tracks output size after draining frontier.
     size_t num_splats = 1;
+    float min_pixel_scale = std::numeric_limits<float>::max();
 
     while (!heap.empty()) {
         const auto top = heap.top();
+        min_pixel_scale = std::min(min_pixel_scale, top.pixel_scale);
         if (top.pixel_scale <= params.pixel_scale_limit) {
+            stats.threshold_limited = true;
             break;
         }
 
@@ -282,7 +428,9 @@ size_t SparkLodController::traverse(const glm::mat4& view_matrix,
         if (node.child_count == 0) {
             // Leaf: output directly.
             out_indices.push_back(top.index);
+            ++stats.leaf_count;
             if (out_indices.size() >= params.max_splats) {
+                stats.output_limited = true;
                 break;
             }
         } else {
@@ -291,15 +439,17 @@ size_t SparkLodController::traverse(const glm::mat4& view_matrix,
             if (new_num_splats > params.max_splats) {
                 // Keep this node in the frontier output (Spark behavior).
                 heap.push(top);
+                stats.budget_limited = true;
                 break;
             }
 
             // Expand children. Children already below threshold go directly to output.
+            touch_child_range(node.child_start, node.child_count);
             for (uint32_t c = 0; c < node.child_count; ++c) {
                 const uint32_t child_idx = node.child_start + c;
-                if (child_idx < nodes_.size() && !queued[child_idx]) {
-                    queued[child_idx] = 1;
+                if (child_idx < nodes_.size()) {
                     const float scale = computePixelScale(child_idx, view_matrix, params);
+                    min_pixel_scale = std::min(min_pixel_scale, scale);
                     if (scale <= params.pixel_scale_limit) {
                         out_indices.push_back(child_idx);
                     } else {
@@ -309,49 +459,98 @@ size_t SparkLodController::traverse(const glm::mat4& view_matrix,
             }
             num_splats = new_num_splats;
             if (out_indices.size() >= params.max_splats) {
+                stats.output_limited = true;
                 break;
             }
         }
     }
 
-    // Drain remaining frontier nodes while honoring the budget.
-    while (!heap.empty() && out_indices.size() < params.max_splats) {
+    stats.output_size = out_indices.size();
+    stats.frontier_size = heap.size();
+
+    // Spark drains the whole remaining frontier after the budget/threshold loop.
+    // The expansion test above is what keeps this set within the requested cap.
+    while (!heap.empty()) {
         out_indices.push_back(heap.top().index);
         heap.pop();
     }
 
-    return out_indices.size();
+    stats.selected_splats = out_indices.size();
+    stats.min_pixel_scale =
+        min_pixel_scale == std::numeric_limits<float>::max() ? 0.0f : min_pixel_scale;
+    stats.selection_hash = hashSelectedIndices(out_indices);
+    {
+        std::vector<size_t> counts(256, 0);
+        for (const uint32_t index : out_indices) {
+            if (index < nodes_.size()) {
+                ++counts[nodes_[index].lod_level];
+            }
+        }
+        for (size_t level = 0; level < counts.size(); ++level) {
+            if (counts[level] > 0) {
+                stats.level_histogram.emplace_back(static_cast<uint8_t>(level), counts[level]);
+            }
+        }
+    }
+    result.count = out_indices.size();
+    return result;
 }
 
 bool SparkLodController::hasTree() const {
     return !nodes_.empty();
 }
 
-size_t SparkLodController::selectedCount() const {
-    return selected_indices_.size();
-}
-
 const std::vector<uint32_t>& SparkLodController::selectedIndices() const {
     return selected_indices_;
 }
 
-std::vector<std::pair<uint8_t, size_t>> SparkLodController::getLevelHistogram() const {
-    std::vector<std::pair<uint8_t, size_t>> result;
-    if (nodes_.empty() || selected_indices_.empty()) {
-        return result;
+const std::vector<uint32_t>& SparkLodController::fullQualityIndices() const {
+    return full_quality_indices_;
+}
+
+void SparkLodController::activateFullQualityReference() {
+    std::scoped_lock lock(mutex_);
+    pending_work_.reset();
+    ready_available_ = false;
+    latest_requested_generation_ = ++next_work_generation_;
+    if (current_stats_.full_quality_reference &&
+        current_stats_.selected_splats == full_quality_indices_.size()) {
+        return;
     }
-    std::vector<size_t> counts(256, 0);
-    for (uint32_t idx : selected_indices_) {
-        if (idx < nodes_.size()) {
-            counts[nodes_[idx].lod_level]++;
+
+    Stats stats = base_stats_;
+    stats.active = true;
+    stats.enabled = false;
+    stats.full_quality_reference = true;
+    stats.selected_splats = full_quality_indices_.size();
+    stats.output_size = full_quality_indices_.size();
+    stats.leaf_count = full_quality_indices_.size();
+    stats.max_splats = full_quality_indices_.size();
+    stats.touched_chunks = full_quality_touched_chunks_;
+    stats.selection_hash = full_quality_hash_;
+    {
+        std::vector<size_t> counts(256, 0);
+        for (const uint32_t index : full_quality_indices_) {
+            if (index < nodes_.size()) {
+                ++counts[nodes_[index].lod_level];
+            }
+        }
+        for (size_t level = 0; level < counts.size(); ++level) {
+            if (counts[level] > 0) {
+                stats.level_histogram.emplace_back(static_cast<uint8_t>(level), counts[level]);
+            }
         }
     }
-    for (size_t level = 0; level < counts.size(); ++level) {
-        if (counts[level] > 0) {
-            result.emplace_back(static_cast<uint8_t>(level), counts[level]);
-        }
-    }
-    return result;
+
+    current_stats_ = stats;
+    current_stats_.generation = ++stats_generation_;
+}
+
+SparkLodController::Stats SparkLodController::stats() const {
+    std::scoped_lock lock(mutex_);
+    auto stats = current_stats_;
+    stats.async_result_ready = ready_available_;
+    return stats;
 }
 
 } // namespace lfs::vis

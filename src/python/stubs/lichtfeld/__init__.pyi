@@ -1390,6 +1390,11 @@ class RenderSettings:
 
 def get_render_settings() -> RenderSettings | None: ...
 
+def get_lod_stats() -> dict:
+    """
+    Get LOD statistics: {enabled, selected, budget, levels:[{level, count}, ...]}
+    """
+
 def register_class(cls: object) -> None:
     """Register a class (Panel, Operator, or Menu)"""
 

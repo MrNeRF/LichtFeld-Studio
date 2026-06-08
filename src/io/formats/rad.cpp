@@ -1190,8 +1190,9 @@ namespace lfs::io {
                 return result;
             }
 
-            static EncodedProperty encode_alpha(const float* data, size_t count, RadAlphaEncoding encoding) {
+            static EncodedProperty encode_alpha(const float* data, size_t count, RadAlphaEncoding encoding, bool lod_tree) {
                 EncodedProperty result;
+                const float max_encoded_alpha = lod_tree ? 2.0f : 1.0f;
 
                 switch (encoding) {
                 case RadAlphaEncoding::F32:
@@ -1207,7 +1208,7 @@ namespace lfs::io {
                     break;
 
                 case RadAlphaEncoding::R8: {
-                    auto r8_result = encode_r8(data, 1, count, 0.0f, 1.0f);
+                    auto r8_result = encode_r8(data, 1, count, 0.0f, max_encoded_alpha);
                     result.data = std::move(r8_result.data);
                     result.min_val = r8_result.min_val;
                     result.max_val = r8_result.max_val;
@@ -1224,7 +1225,7 @@ namespace lfs::io {
                         result.data = encode_f16(data, 1, count);
                         result.encoding = "f16";
                     } else {
-                        auto r8_result = encode_r8(data, 1, count, 0.0f, 1.0f);
+                        auto r8_result = encode_r8(data, 1, count, 0.0f, max_encoded_alpha);
                         result.data = std::move(r8_result.data);
                         result.min_val = r8_result.min_val;
                         result.max_val = r8_result.max_val;
@@ -1850,7 +1851,7 @@ namespace lfs::io {
 
                 // Encode alpha
                 {
-                    auto encoded = PropertyEncoder::encode_alpha(opacity_ptr + base, count, RadAlphaEncoding::Auto);
+                    auto encoded = PropertyEncoder::encode_alpha(opacity_ptr + base, count, RadAlphaEncoding::Auto, lod_tree);
                     auto compressed = rad_compress(encoded.data.data(), encoded.data.size(), compression_level_);
 
                     RadChunkProperty prop;
@@ -2463,13 +2464,16 @@ namespace lfs::io {
                         const float sx = all_scales_linear[i * 3 + 0];
                         const float sy = all_scales_linear[i * 3 + 1];
                         const float sz = all_scales_linear[i * 3 + 2];
-                        float size = 2.0f * std::max({sx, sy, sz});
+                        const float avg_scale = (sx + sy + sz) / 3.0f;
+                        float expansion = 1.0f;
                         if (lod_opacity_encoded) {
                             const float lod_alpha = std::max(all_opacity[i], 0.0f);
                             if (lod_alpha > 1.0f) {
-                                size *= std::sqrt(lod_alpha);
+                                const float spark_lod_opacity = std::min(lod_alpha * 4.0f - 3.0f, 5.0f);
+                                expansion = 1.0f + 0.7f * (spark_lod_opacity - 1.0f);
                             }
                         }
+                        const float size = 2.0f * expansion * avg_scale;
                         tree->sizes.push_back(size);
                     }
                     tree->lod_opacity_encoded = lod_opacity_encoded;

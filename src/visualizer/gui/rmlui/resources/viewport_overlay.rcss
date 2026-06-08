@@ -875,11 +875,62 @@ body {
     z-index: 20;
 }
 
+.viewport-lod-stats-overlay {
+    position: absolute;
+    pointer-events: none;
+    z-index: 18;
+}
+
+.viewport-lod-stats-card {
+    width: 356dp;
+    padding: 8dp 10dp;
+    border-width: 1dp;
+    border-radius: 8dp;
+    display: flex;
+    flex-direction: column;
+    gap: 4dp;
+    box-sizing: border-box;
+}
+
+.viewport-lod-stats-title {
+    font-size: 12dp;
+    font-weight: bold;
+    line-height: 16dp;
+    margin-bottom: 2dp;
+}
+
+.viewport-lod-stats-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8dp;
+    min-height: 14dp;
+}
+
+.viewport-lod-stats-label {
+    width: 70dp;
+    min-width: 70dp;
+    font-size: 9dp;
+    line-height: 14dp;
+    white-space: nowrap;
+}
+
+.viewport-lod-stats-value {
+    flex-grow: 1;
+    min-width: 0;
+    font-family: "JetBrains Mono";
+    font-size: 9dp;
+    line-height: 14dp;
+    text-align: right;
+    white-space: normal;
+    word-break: break-word;
+}
+
 .viewport-metrics-card {
     min-width: 152dp;
     padding: 10dp 12dp;
     border-width: 1dp;
-    border-radius: 10dp;
+    border-radius: 8dp;
     display: flex;
     flex-direction: column;
     gap: 6dp;

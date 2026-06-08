@@ -445,11 +445,11 @@ class RenderingPanel(Panel):
         model.bind_func("label_hdr_lod",
                          lambda: _tr_fallback("rendering_panel.section_lod", "LOD"))
         model.bind_func("label_lod_stats_selected",
-                         lambda: _tr_fallback("label_lod_stats_selected", "Selected"))
+                         lambda: _tr_fallback("rendering_panel.label_lod_stats_selected", "Selected"))
         model.bind_func("label_lod_stats_budget",
-                         lambda: _tr_fallback("label_lod_stats_budget", "Budget"))
+                         lambda: _tr_fallback("rendering_panel.label_lod_stats_budget", "Budget"))
         model.bind_func("label_lod_stats_levels",
-                         lambda: _tr_fallback("label_lod_stats_levels", "Levels"))
+                         lambda: _tr_fallback("rendering_panel.label_lod_stats_levels", "Levels"))
         model.bind_func("label_hdr_simplify",
                          lambda: _tr_fallback("rendering_panel.section_simplify", "Splat Simplify"))
         model.bind_func("label_hdr_selection",

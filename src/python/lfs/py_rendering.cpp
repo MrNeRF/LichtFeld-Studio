@@ -825,16 +825,17 @@ namespace lfs::python {
                  "Enable hierarchical level-of-detail rendering", false);
         add_bool(&Proxy::lod_debug_colors, "lod_debug_colors", "Debug Colors",
                  "Color splats by their LOD level for debugging", false);
-        add_float(&Proxy::lod_max_splats, "lod_max_splats", "Max Splats",
-                  "Maximum number of splats to render per frame", 1500000.0, 100000.0, 5000000.0);
+        add_float(&Proxy::lod_max_splats, "lod_max_splats", "LOD Budget",
+                  "Maximum number of splats in the dynamic LOD cut",
+                  static_cast<double>(vis::DEFAULT_LOD_MAX_SPLATS), 1.0, 10000000.0);
         add_float(&Proxy::lod_render_scale, "lod_render_scale", "Render Scale",
-                  "Resolution multiplier for LOD calculations", 1.0, 0.1, 2.0);
+                  "Resolution multiplier for LOD calculations", vis::DEFAULT_LOD_RENDER_SCALE, 0.1, 2.0);
         add_float(&Proxy::lod_cone_foveation, "lod_cone_foveation", "Cone Foveation",
-                  "Peripheral LOD penalty factor (1.0 = no penalty)", 0.4, 0.1, 2.0);
+                  "Peripheral LOD penalty factor (1.0 = no penalty)", vis::DEFAULT_LOD_CONE_FOVEATION, 0.1, 2.0);
         add_float(&Proxy::lod_cone_inner_degrees, "lod_cone_inner_degrees", "Cone Inner",
-                  "Inner cone angle in degrees (no penalty inside this angle)", 90.0, 0.0, 180.0);
+                  "Inner cone angle in degrees (no penalty inside this angle)", vis::DEFAULT_LOD_CONE_INNER_DEGREES, 0.0, 180.0);
         add_float(&Proxy::lod_cone_outer_degrees, "lod_cone_outer_degrees", "Cone Outer",
-                  "Outer cone angle in degrees (full penalty beyond this angle)", 120.0, 0.0, 180.0);
+                  "Outer cone angle in degrees (full penalty beyond this angle)", vis::DEFAULT_LOD_CONE_OUTER_DEGREES, 0.0, 180.0);
 
         add_bool(&Proxy::apply_appearance_correction, "apply_appearance_correction", "Appearance Correction",
                  "Enable PPISP appearance correction", false);
@@ -1282,12 +1283,12 @@ namespace lfs::python {
             result["levels"] = nb::list();
             return result;
         }
-        auto [selected, budget, histogram] = rm->getLodStats();
-        result["enabled"] = rm->isLodEnabled();
-        result["selected"] = selected;
-        result["budget"] = budget;
+        const auto stats = rm->getLodStats();
+        result["enabled"] = stats.enabled && stats.has_tree;
+        result["selected"] = stats.selected_splats;
+        result["budget"] = stats.max_splats;
         nb::list levels;
-        for (const auto& [level, count] : histogram) {
+        for (const auto& [level, count] : stats.level_histogram) {
             nb::dict item;
             item["level"] = level;
             item["count"] = count;

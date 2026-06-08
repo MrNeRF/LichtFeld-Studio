@@ -65,9 +65,9 @@ Gaussian_3D load_gaussian_split(
         ? max(opacity_raw[g_idx], 0.0f)
         : sigmoid_activation(opacity_raw[g_idx]);
     if (lod_opacity_encoded && g_opacities > 1.0f) {
-        const float inflate = sqrt(g_opacities);
-        g_scales *= inflate;
-        g_opacities /= (inflate * inflate);
+        // Spark stores high-opacity LOD nodes in the compact 1..2 range, then
+        // maps them back to the 1..5 LOD kernel range in the shader.
+        g_opacities = min(g_opacities * 4.0f - 3.0f, 5.0f);
     }
 
     return { g_xyz_ws, g_sh_coeffs, g_rotations, g_scales, g_opacities };
@@ -107,7 +107,7 @@ Splat_2D_Vertex project_gaussian_to_camera(Gaussian_3D g, Camera cam, uint activ
     float3x3 cov_ws = get_covariance_from_quat_scales(
         safe_quat_normalize(g.rotations), g.scales
     );
-    float4 cov_vs = covariance_3d_to_2d(cam, g.xyz_ws, cov_ws, false);
+    float4 cov_vs = covariance_3d_to_2d(cam, g.xyz_ws, cov_ws, false, false);
 
     float det = compute_det(cov_vs.xyz);
     float3 inv_cov_vs = compute_inverse(cov_vs.xyz);
@@ -124,7 +124,8 @@ Splat_2D_Vertex project_gaussian_to_camera_model(
     StructuredBuffer<float4> model_transform_rows,
     uint model_transform_base,
     bool model_transform_enabled,
-    bool mip_filter) {
+    bool mip_filter,
+    bool spark_rad_opacity_path) {
     float3 xyz_vs = project_point(mean_ws, cam);
     // Reject behind-camera, non-finite, and far off-screen means. The EWA
     // projection Jacobian degenerates as the mean moves outside the frustum
@@ -152,14 +153,13 @@ Splat_2D_Vertex project_gaussian_to_camera_model(
     if (model_transform_enabled) {
         cov_ws = transform_covariance_rows(model_transform_rows, model_transform_base, cov_ws);
     }
-    float4 cov_vs = covariance_3d_to_2d(cam, mean_ws, cov_ws, mip_filter);
-
-    float3 cov_clamped = clamp_covariance_2d_extent(cov_vs.xyz, g.opacities * cov_vs.w);
-    float det = compute_det(cov_clamped);
-    float3 inv_cov_vs = compute_inverse(cov_clamped);
+    float4 cov_vs = covariance_3d_to_2d(cam, mean_ws, cov_ws, mip_filter, spark_rad_opacity_path);
     float opac = g.opacities * cov_vs.w;
+    float3 cov_projected = clamp_covariance_2d_extent(cov_vs.xyz, opac);
+    float det = compute_det(cov_projected);
+    float3 inv_cov_vs = compute_inverse(cov_projected);
 
-    return { xyz_vs, rgb, cov_clamped, float4(inv_cov_vs, opac), det };
+    return { xyz_vs, rgb, cov_projected, float4(inv_cov_vs, opac), det };
 }
 
 [ForceInline]
@@ -249,7 +249,7 @@ Splat_2D_Vertex project_gaussian_to_camera_gut(
         cov2d += weight * float3(d.x * d.x, d.x * d.y, d.y * d.y);
     }
 
-    float4 cov_vs = add_blur_to_covariance2d(cov2d, mip_filter);
+    float4 cov_vs = add_blur_to_covariance2d(cov2d, mip_filter, false);
     float det = compute_det(cov_vs.xyz);
     if (!isfinite(det) || det <= 0.0f) {
         return { float3(0.0), float3(0.0), float3(0.0), float4(0.0), 0.0 };
@@ -586,6 +586,8 @@ void main(
     }
 #endif
 
+    const bool spark_rad_opacity_path = (uniforms.lod_enabled & 4u) != 0u;
+
     // projection (differentiable)
   #if EXPORT_MODE != EXPORT_MODE_VULKAN_BACKWARD
     // forward
@@ -608,7 +610,8 @@ void main(
         model_transforms,
         model_transform_base,
         model_transform_enabled,
-        uniforms.mip_filter != 0u);
+        uniforms.mip_filter != 0u,
+        spark_rad_opacity_path);
   #endif
   #else
     // backward
@@ -662,7 +665,7 @@ void main(
     float2 radii = float2(radius);
   #else
     float extend = no_diff extend_from_opacity(gauss.opacities);
-    float2 radii = sqrt(splat_dist.cov_vs.xz) * extend;
+    float2 radii = sqrt(max(splat_dist.cov_vs.xz, float2(0.0f))) * extend;
   #endif
     if (equirectangular_camera) {
         radii.x = min(radii.x, float(image_width));

@@ -419,6 +419,60 @@
 
     </div>
 
+    <div id="lod-stats-overlay" class="viewport-lod-stats-overlay hidden">
+        <div class="viewport-lod-stats-card">
+            <div class="viewport-lod-stats-title">RAD LOD</div>
+            <div class="viewport-lod-stats-row">
+                <span class="viewport-lod-stats-label">Status</span>
+                <span id="lod-stats-status" class="viewport-lod-stats-value">--</span>
+            </div>
+            <div class="viewport-lod-stats-row">
+                <span class="viewport-lod-stats-label">Selected</span>
+                <span id="lod-stats-selected" class="viewport-lod-stats-value">--</span>
+            </div>
+            <div class="viewport-lod-stats-row">
+                <span class="viewport-lod-stats-label">Budget</span>
+                <span id="lod-stats-budget" class="viewport-lod-stats-value">--</span>
+            </div>
+            <div class="viewport-lod-stats-row">
+                <span class="viewport-lod-stats-label">Model</span>
+                <span id="lod-stats-model" class="viewport-lod-stats-value">--</span>
+            </div>
+            <div class="viewport-lod-stats-row">
+                <span class="viewport-lod-stats-label">Tree</span>
+                <span id="lod-stats-tree" class="viewport-lod-stats-value">--</span>
+            </div>
+            <div class="viewport-lod-stats-row">
+                <span class="viewport-lod-stats-label">Traversal</span>
+                <span id="lod-stats-traversal" class="viewport-lod-stats-value">--</span>
+            </div>
+            <div class="viewport-lod-stats-row">
+                <span class="viewport-lod-stats-label">Stop</span>
+                <span id="lod-stats-stop" class="viewport-lod-stats-value">--</span>
+            </div>
+            <div class="viewport-lod-stats-row">
+                <span class="viewport-lod-stats-label">Chunks</span>
+                <span id="lod-stats-chunks" class="viewport-lod-stats-value">--</span>
+            </div>
+            <div class="viewport-lod-stats-row">
+                <span class="viewport-lod-stats-label">Pixel</span>
+                <span id="lod-stats-pixel" class="viewport-lod-stats-value">--</span>
+            </div>
+            <div class="viewport-lod-stats-row">
+                <span class="viewport-lod-stats-label">Render</span>
+                <span id="lod-stats-render" class="viewport-lod-stats-value">--</span>
+            </div>
+            <div class="viewport-lod-stats-row">
+                <span class="viewport-lod-stats-label">Foveation</span>
+                <span id="lod-stats-foveation" class="viewport-lod-stats-value">--</span>
+            </div>
+            <div class="viewport-lod-stats-row">
+                <span class="viewport-lod-stats-label">Hash</span>
+                <span id="lod-stats-hash" class="viewport-lod-stats-value">--</span>
+            </div>
+        </div>
+    </div>
+
     <div id="selection-block" class="viewport-selection-overlay hidden">
         <div class="viewport-transform-panel viewport-selection-panel" data-tooltip="tooltip.selection_panel">
             <div class="viewport-selection-row">

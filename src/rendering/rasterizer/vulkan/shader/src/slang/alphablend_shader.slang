@@ -279,6 +279,7 @@ void main(
     bool thread_active = is_inside;
 
     float2 center_pix_coord = pix_coord;
+    const bool spark_rad_opacity_path = (uniforms.lod_enabled & 4u) != 0u;
 #if LFS_3DGUT_RASTERIZE
     float3 ray_origin = float3(0.0);
     float3 ray_direction = float3(0.0, 0.0, 1.0);
@@ -392,7 +393,9 @@ void main(
                   #endif
               #else
                     Splat_2D_AlphaBlend g = collected_splats[j];
-                    gauss_rgba = evaluate_splat(g, center_pix_coord);
+                    gauss_rgba = spark_rad_opacity_path
+                                      ? evaluate_splat_spark_rad(g, center_pix_coord)
+                                      : evaluate_splat(g, center_pix_coord);
                   #if LFS_RASTER_OVERLAYS
                     overlay_splat = g;
                   #endif
@@ -411,7 +414,9 @@ void main(
                 float3 g_inv_cov = g_inv_cov_opacity.xyz;
                 float g_opacity = g_inv_cov_opacity.w;
 
-                float alpha = evaluate_splat_alpha(g_xy, g_opacity, g_inv_cov, center_pix_coord);
+                float alpha = spark_rad_opacity_path
+                                  ? evaluate_splat_alpha_spark_rad(g_xy, g_opacity, g_inv_cov, center_pix_coord)
+                                  : evaluate_splat_alpha(g_xy, g_opacity, g_inv_cov, center_pix_coord);
                 if (alpha < ALPHA_THRESHOLD)
                     continue;
 

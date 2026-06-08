@@ -1421,11 +1421,14 @@ std::expected<std::unique_ptr<SplatData>, std::string> build_bhatt_lod(
             const float sx = workset.scale_x[old_idx];
             const float sy = workset.scale_y[old_idx];
             const float sz = workset.scale_z[old_idx];
-            float size = 2.0f * std::max({sx, sy, sz});
+            const float avg_scale = (sx + sy + sz) / 3.0f;
+            float expansion = 1.0f;
             const float lod_alpha = std::max(workset.opacity[old_idx], 0.0f);
             if (lod_alpha > 1.0f) {
-                size *= std::sqrt(lod_alpha);
+                const float spark_lod_opacity = std::min(lod_alpha * 4.0f - 3.0f, 5.0f);
+                expansion = 1.0f + 0.7f * (spark_lod_opacity - 1.0f);
             }
+            const float size = 2.0f * expansion * avg_scale;
             lod_tree->sizes.push_back(size);
         }
 

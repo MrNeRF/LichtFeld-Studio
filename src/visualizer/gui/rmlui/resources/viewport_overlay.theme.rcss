@@ -94,6 +94,20 @@
     border-color: @{viewport.metrics_border};
 }
 
+.viewport-lod-stats-card {
+    background-color: @{viewport.metrics_bg};
+    border-color: @{viewport.metrics_border};
+}
+
+.viewport-lod-stats-title,
+.viewport-lod-stats-value {
+    color: @{text};
+}
+
+.viewport-lod-stats-label {
+    color: @{text_dim};
+}
+
 .viewport-metrics-label {
     color: @{text_dim};
 }

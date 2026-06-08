@@ -608,7 +608,7 @@ float3 clamp_covariance_2d_extent(float3 cov_vs, float opacity_after_compensatio
 
 [ForceInline]
 [Differentiable]
-float4 add_blur_to_covariance2d(float3 cov_vs, no_diff bool mip_filter) {
+float4 add_blur_to_covariance2d(float3 cov_vs, no_diff bool mip_filter, no_diff bool compensate_non_mip) {
     float4 result = float4(cov_vs, 1.0);
 
     if (mip_filter) {
@@ -618,8 +618,13 @@ float4 add_blur_to_covariance2d(float3 cov_vs, no_diff bool mip_filter) {
         float new_det = compute_det(result.xyz);
         result.w = sqrt(max(0.f, old_det / new_det));
     } else {
+        float old_det = compute_det(result.xyz);
         result.x += DILATION_3DGS;
         result.z += DILATION_3DGS;
+        if (compensate_non_mip) {
+            float new_det = compute_det(result.xyz);
+            result.w = sqrt(max(0.f, old_det / new_det));
+        }
     }
 
     return result;
@@ -644,12 +649,20 @@ float2 undistort_fisheye(float2 uv, float4 dist_coeffs) {
 
 // returns (xx, xy, yy, compensation)
 [Differentiable]
-float4 covariance_3d_to_2d(Camera cam, float3 xyz_ws, float3x3 cov_ws, no_diff bool mip_filter) {
+float4 covariance_3d_to_2d(
+    Camera cam,
+    float3 xyz_ws,
+    float3x3 cov_ws,
+    no_diff bool mip_filter,
+    no_diff bool compensate_non_mip) {
     float3x3 R = (float3x3)cam.world_view_transform;
     float3x3 J = compute_jacobian(xyz_ws, cam);
     float3x3 cov_vs = mul(J, mul(R, mul(cov_ws, mul(transpose(R), transpose(J)))));
 
-    return add_blur_to_covariance2d(float3(cov_vs[0][0], cov_vs[0][1], cov_vs[1][1]), mip_filter);
+    return add_blur_to_covariance2d(
+        float3(cov_vs[0][0], cov_vs[0][1], cov_vs[1][1]),
+        mip_filter,
+        compensate_non_mip);
 }
 
 
@@ -848,6 +861,40 @@ float4 evaluate_splat(Splat_2D_AlphaBlend g,
 }
 
 [ForceInline]
+float spark_rad_alpha_from_value(float opacity, float val)
+{
+    if (opacity <= 1.0f) {
+        return clipOpacity(opacity * val);
+    }
+
+    const float lod_density = exp((opacity * opacity - 1.0f) / 2.718281828459045f);
+    const float lod_alpha = 1.0f - pow(max(0.0f, 1.0f - val), lod_density);
+    return clipOpacity(lod_alpha);
+}
+
+[ForceInline]
+float4 evaluate_splat_spark_rad(Splat_2D_AlphaBlend g,
+                                no_diff float2 pix_coord)
+{
+    float2 g_xy = g.xy_vs;
+    float3 g_rgb = g.rgb;
+    float3 g_inv_cov_vs = g.inv_cov_vs_opacity.xyz;
+    float g_opacity = g.inv_cov_vs_opacity.w;
+
+    float2 d = pix_coord - g_xy;
+
+    float sigma_over_2 = 0.5f * (g_inv_cov_vs.x * d.x*d.x + g_inv_cov_vs.z * d.y*d.y) + g_inv_cov_vs.y * d.x*d.y;
+    float val = (sigma_over_2 < 0.0f || sigma_over_2 > power_threshold_for_spark_rad_opacity(g_opacity))
+        ? 0.0f
+        : exp(-sigma_over_2);
+
+    float alpha = float(spark_rad_alpha_from_value(g_opacity, val));
+    float3 premult_rgb = clamp(g_rgb, float3(0.0f), float3(MAX_BLEND_COLOR)) * alpha;
+
+    return float4(premult_rgb, alpha);
+}
+
+[ForceInline]
 float4 evaluate_gut_splat(Splat_3D_GUT_AlphaBlend g, float3 ray_origin, float3 ray_direction)
 {
     // Same world-space 3DGUT alpha test as the CUDA path: transform the pixel
@@ -877,8 +924,25 @@ float evaluate_splat_alpha(
         : exp(-sigma_over_2);
 
     float alpha = clipOpacity(g_opacity * val);
-
     return float(alpha);
+}
+
+[ForceInline]
+float evaluate_splat_alpha_spark_rad(
+    float2 g_xy,
+    float g_opacity,
+    float3 g_inv_cov_vs,
+    no_diff float2 pix_coord)
+{
+
+    float2 d = pix_coord - g_xy;
+
+    float sigma_over_2 = 0.5f * (g_inv_cov_vs.x * d.x*d.x + g_inv_cov_vs.z * d.y*d.y) + g_inv_cov_vs.y * d.x*d.y;
+    float val = (sigma_over_2 < 0.0f || sigma_over_2 > power_threshold_for_spark_rad_opacity(g_opacity))
+        ? 0.0f
+        : exp(-sigma_over_2);
+
+    return float(spark_rad_alpha_from_value(g_opacity, val));
 }
 
 [Differentiable]
@@ -902,6 +966,16 @@ float3x3 get_covariance_from_quat_scales(float4 q, float3 s) {
 float power_threshold_for_opacity(float opacity) {
     const float safe_opacity = max(opacity, ALPHA_THRESHOLD);
     return max(MAX_POWER_THRESHOLD, log(safe_opacity / ALPHA_THRESHOLD));
+}
+
+float power_threshold_for_spark_rad_opacity(float opacity) {
+    const float safe_opacity = max(opacity, ALPHA_THRESHOLD);
+    if (safe_opacity > 1.0f) {
+        const float spark_lod_opacity = min(safe_opacity, 5.0f);
+        const float adjusted_stddev = sqrt(8.0f) + 0.7f * (spark_lod_opacity - 1.0f);
+        return 0.5f * adjusted_stddev * adjusted_stddev;
+    }
+    return power_threshold_for_opacity(safe_opacity);
 }
 
 float extend_from_opacity(float opac) {

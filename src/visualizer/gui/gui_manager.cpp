@@ -134,6 +134,115 @@ namespace lfs::vis::gui {
         constexpr auto kInteractiveIdleToggleMinInterval = std::chrono::milliseconds(750);
         constexpr auto kInteractiveTrainingToggleMinInterval = std::chrono::milliseconds(3000);
 
+        [[nodiscard]] std::string formatLodCount(const std::size_t value) {
+            constexpr double kThousand = 1'000.0;
+            constexpr double kMillion = 1'000'000.0;
+            constexpr double kBillion = 1'000'000'000.0;
+            const auto numeric = static_cast<double>(value);
+            if (numeric >= kBillion)
+                return std::format("{:.2f}B", numeric / kBillion);
+            if (numeric >= kMillion)
+                return std::format("{:.2f}M", numeric / kMillion);
+            if (numeric >= kThousand)
+                return std::format("{:.1f}K", numeric / kThousand);
+            return std::format("{}", value);
+        }
+
+        [[nodiscard]] std::string formatLodFloat(const float value) {
+            if (!std::isfinite(value))
+                return "--";
+            const float abs_value = std::abs(value);
+            if (abs_value > 0.0f && abs_value < 0.001f)
+                return std::format("{:.2e}", value);
+            if (abs_value >= 1000.0f)
+                return std::format("{:.1f}", value);
+            return std::format("{:.4f}", value);
+        }
+
+        [[nodiscard]] std::string formatLodPercent(const std::size_t numerator,
+                                                    const std::size_t denominator) {
+            if (denominator == 0)
+                return "";
+            const double ratio =
+                (static_cast<double>(numerator) / static_cast<double>(denominator)) * 100.0;
+            return std::format(" ({:.1f}%)", ratio);
+        }
+
+        [[nodiscard]] RmlViewportOverlay::LodStatsOverlayState makeLodStatsOverlayState(
+            const SparkLodController::Stats& stats) {
+            RmlViewportOverlay::LodStatsOverlayState state;
+            state.visible = stats.available || stats.has_tree || stats.enabled;
+            if (!state.visible)
+                return state;
+
+            if (stats.full_quality_reference) {
+                state.status_text = "Full quality reference";
+            } else if (stats.active) {
+                state.status_text = stats.async_result_ready ? "Active, async ready" : "Active";
+            } else if (stats.has_tree || stats.available) {
+                state.status_text = stats.enabled ? "Waiting for frame" : "Tree loaded, off";
+            } else {
+                state.status_text = stats.enabled ? "Enabled, no tree" : "No RAD LOD";
+            }
+
+            const std::size_t selected = stats.selected_splats > 0 ? stats.selected_splats : stats.output_size;
+            const std::size_t full_quality = stats.full_quality_splats > 0
+                                                 ? stats.full_quality_splats
+                                                 : stats.model_splats;
+            state.selected_text = std::format("{} / {}{}",
+                                              formatLodCount(selected),
+                                              formatLodCount(full_quality),
+                                              formatLodPercent(selected, full_quality));
+            state.budget_text = stats.full_quality_reference
+                                    ? "leaf set"
+                                    : std::format("{} max", formatLodCount(stats.max_splats));
+            state.model_text = std::format("{} splats", formatLodCount(stats.model_splats));
+            state.tree_text = std::format("{} nodes | {} internal | {} leaves",
+                                          formatLodCount(stats.tree_nodes),
+                                          formatLodCount(stats.non_leaf_nodes),
+                                          formatLodCount(stats.full_quality_splats));
+
+            std::string stop_reason = "complete";
+            if (stats.full_quality_reference) {
+                stop_reason = "leaf complete";
+            } else if (stats.output_limited && stats.budget_limited) {
+                stop_reason = "budget and output cap";
+            } else if (stats.budget_limited) {
+                stop_reason = "budget before expansion";
+            } else if (stats.output_limited) {
+                stop_reason = "output cap";
+            } else if (stats.threshold_limited) {
+                stop_reason = "pixel threshold";
+            }
+            state.traversal_text = std::format("{} output | {} frontier | {} leaf",
+                                               formatLodCount(stats.output_size),
+                                               formatLodCount(stats.frontier_size),
+                                               formatLodCount(stats.leaf_count));
+            state.stop_text = stop_reason;
+            state.chunks_text = stats.chunk_count > 0
+                                    ? std::format("{} touched | {} resident | {} total @ {} splats",
+                                                  formatLodCount(stats.touched_chunks),
+                                                  formatLodCount(stats.resident_chunks),
+                                                  formatLodCount(stats.chunk_count),
+                                                  formatLodCount(stats.chunk_splats))
+                                    : "--";
+            state.pixel_text = std::format("limit {} | min {}",
+                                           formatLodFloat(stats.pixel_scale_limit),
+                                           formatLodFloat(stats.min_pixel_scale));
+            state.render_text = stats.full_quality_reference
+                                    ? "leaf-only reference"
+                                    : std::format("LOD scale x{:.1f}", stats.lod_render_scale);
+            state.foveation_text = std::format("cone {:.0f}/{:.0f} deg | edge x{:.2f} | behind x{:.2f}",
+                                               stats.cone_inner_degrees,
+                                               stats.cone_outer_degrees,
+                                               stats.cone_foveation,
+                                               stats.behind_camera_penalty);
+            state.hash_text = std::format("{:08x}",
+                                          static_cast<std::uint32_t>(
+                                              stats.selection_hash & 0xffffffffull));
+            return state;
+        }
+
         void capturePressedKeysForRebinding(InputController& input_controller,
                                             const FrameInputBuffer& input) {
             auto& bindings = input_controller.getBindings();
@@ -5796,6 +5905,11 @@ namespace lfs::vis::gui {
             }
         }
         rml_viewport_overlay_.setSplitDividerOverlay(split_divider_state);
+        RmlViewportOverlay::LodStatsOverlayState lod_stats_state;
+        if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr) {
+            lod_stats_state = makeLodStatsOverlayState(rendering->getLodStats());
+        }
+        rml_viewport_overlay_.setLodStatsOverlay(std::move(lod_stats_state));
         AppStore::GTMetricsOverlayConfig gt_metrics_config;
         if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr) {
             const auto settings = rendering->getSettings();
