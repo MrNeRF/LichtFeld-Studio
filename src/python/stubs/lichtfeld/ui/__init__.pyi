@@ -2523,6 +2523,15 @@ def get_ui_scale_preference() -> float:
 def set_clipboard_text(text: str) -> None:
     """Copy text to the system clipboard"""
 
+def has_clipboard_image() -> bool:
+    """Return True if the system clipboard holds an image"""
+
+def get_clipboard_image_texture() -> tuple:
+    """Read clipboard image as UI texture, returns (texture_id, width, height)"""
+
+def save_clipboard_image(path: str) -> bool:
+    """Decode the clipboard image and write it to path; returns success"""
+
 def set_mouse_cursor_hand() -> None:
     """Set mouse cursor to hand pointer for this frame"""
 

@@ -583,6 +583,61 @@ namespace lfs::python {
             return {static_cast<uint64_t>(result.texture_id), result.width, result.height};
         }
 
+        // SDL returns clipboard payloads keyed by MIME type, chosen by the source app
+        // (browsers use image/png, native copies may use image/bmp, etc.), so scan every
+        // advertised image/* type rather than guessing a fixed set.
+        bool clipboard_has_image() {
+            size_t count = 0;
+            char** mimes = SDL_GetClipboardMimeTypes(&count);
+            if (!mimes)
+                return false;
+            bool found = false;
+            for (size_t i = 0; i < count; ++i) {
+                if (mimes[i] && std::string_view(mimes[i]).starts_with("image/")) {
+                    found = true;
+                    break;
+                }
+            }
+            SDL_free(mimes);
+            return found;
+        }
+
+        // Returns an owning RGB buffer (caller frees with lfs::core::free_image), or
+        // {nullptr, 0, 0, 0} when the clipboard holds no decodable image.
+        std::tuple<unsigned char*, int, int, int> decode_clipboard_image() {
+            size_t count = 0;
+            char** mimes = SDL_GetClipboardMimeTypes(&count);
+            if (!mimes)
+                return {nullptr, 0, 0, 0};
+
+            std::tuple<unsigned char*, int, int, int> image{nullptr, 0, 0, 0};
+            for (size_t i = 0; i < count; ++i) {
+                if (!mimes[i] || !std::string_view(mimes[i]).starts_with("image/"))
+                    continue;
+
+                size_t size = 0;
+                void* raw = SDL_GetClipboardData(mimes[i], &size);
+                if (!raw)
+                    continue;
+                if (size == 0) {
+                    SDL_free(raw);
+                    continue;
+                }
+
+                try {
+                    image = lfs::core::load_image_from_memory(
+                        static_cast<const uint8_t*>(raw), size);
+                } catch (const std::exception& e) {
+                    LOG_WARN("Clipboard image decode failed ({}): {}", mimes[i], e.what());
+                }
+                SDL_free(raw);
+                if (std::get<0>(image))
+                    break;
+            }
+            SDL_free(mimes);
+            return image;
+        }
+
         vis::op::OperatorResult parse_operator_result(nb::object result, nb::object instance = nb::none()) {
             if (nb::isinstance<nb::set>(result)) {
                 nb::set result_set = nb::cast<nb::set>(result);
@@ -5123,6 +5178,40 @@ namespace lfs::python {
             "set_clipboard_text",
             [](const std::string& text) { SDL_SetClipboardText(text.c_str()); },
             nb::arg("text"), "Copy text to the system clipboard");
+
+        m.def(
+            "has_clipboard_image",
+            []() { return clipboard_has_image(); },
+            "Return True if the system clipboard holds an image");
+
+        m.def(
+            "get_clipboard_image_texture",
+            []() -> nb::tuple {
+                auto [data, w, h, channels] = decode_clipboard_image();
+                if (!data)
+                    return nb::make_tuple(0, 0, 0);
+                const auto [tex_id, width, height] = create_ui_texture_from_data(data, w, h, channels);
+                lfs::core::free_image(data);
+                return nb::make_tuple(tex_id, width, height);
+            },
+            "Read an image from the clipboard as a UI texture, returns (texture_id, width, height)");
+
+        m.def(
+            "save_clipboard_image",
+            [](const std::string& path) {
+                const auto image = decode_clipboard_image();
+                if (!std::get<0>(image))
+                    return false;
+                bool saved = false;
+                try {
+                    saved = lfs::core::save_img_data(lfs::core::utf8_to_path(path), image);
+                } catch (const std::exception& e) {
+                    LOG_WARN("Failed to save clipboard image to {}: {}", path, e.what());
+                }
+                lfs::core::free_image(std::get<0>(image));
+                return saved;
+            },
+            nb::arg("path"), "Decode the clipboard image and write it to path; returns success");
 
         m.def(
             "set_mouse_cursor_hand",
