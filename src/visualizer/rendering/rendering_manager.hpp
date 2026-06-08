@@ -31,6 +31,7 @@
 #include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -102,6 +103,7 @@ namespace lfs::vis {
 
         RenderingManager();
         ~RenderingManager();
+        void setWakeCallback(std::function<void()> callback);
 
         // Initialize rendering resources
         void initialize();
@@ -568,6 +570,7 @@ namespace lfs::vis {
         void applySplitModeChange(const SplitViewService::ModeChangeResult& result);
         void queueCameraMetricsRefreshIfStale(SceneManager* scene_manager);
         void invalidateCameraMetricsRequests(bool clear_latest = false);
+        void notifyAsyncLodResultsReady();
         void cameraMetricsWorkerLoop(std::stop_token stop_token);
         void releaseSceneModelResources();
         void releaseSceneRenderResources();
@@ -622,6 +625,8 @@ namespace lfs::vis {
         VkImageLayout vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
         std::uint64_t vulkan_external_viewport_image_generation_ = 0;
         std::uint64_t split_view_image_generation_ = 0;
+        std::mutex wake_callback_mutex_;
+        std::function<void()> wake_callback_;
         glm::ivec2 vulkan_viewport_image_size_{0, 0};
         bool vulkan_viewport_image_flip_y_ = false;
         glm::ivec2 vulkan_gt_comparison_content_size_{0, 0};

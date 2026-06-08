@@ -115,8 +115,16 @@ namespace lfs::vis {
     }
 
     RenderingManager::~RenderingManager() {
+        if (lod_controller_) {
+            lod_controller_->setReadyCallback(nullptr);
+        }
         camera_metrics_worker_.request_stop();
         camera_metrics_cv_.notify_all();
+    }
+
+    void RenderingManager::setWakeCallback(std::function<void()> callback) {
+        std::scoped_lock lock(wake_callback_mutex_);
+        wake_callback_ = std::move(callback);
     }
 
     void RenderingManager::initialize() {
@@ -161,6 +169,19 @@ namespace lfs::vis {
         return dirty_mask_.load(std::memory_order_relaxed) != 0;
     }
 
+    void RenderingManager::notifyAsyncLodResultsReady() {
+        dirty_mask_.fetch_or(DirtyFlag::CAMERA, std::memory_order_relaxed);
+
+        std::function<void()> wake_callback;
+        {
+            std::scoped_lock lock(wake_callback_mutex_);
+            wake_callback = wake_callback_;
+        }
+        if (wake_callback) {
+            wake_callback();
+        }
+    }
+
     void RenderingManager::setViewportResizeActive(bool active) {
         if (const DirtyMask dirty = frame_lifecycle_service_.setViewportResizeActive(active); dirty) {
             markDirty(dirty);
@@ -198,6 +219,7 @@ namespace lfs::vis {
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
             stats.enabled = settings_.lod_enabled;
+            stats.requested_max_splats = settings_.lod_max_splats;
             if (stats.max_splats == 0) {
                 stats.max_splats = settings_.lod_max_splats;
             }
@@ -271,11 +293,20 @@ namespace lfs::vis {
     void RenderingManager::updateSettings(const RenderSettings& new_settings,
                                           const DirtyMask dirty_flags) {
         bool clear_metrics = false;
+        bool lod_request_changed = false;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
             const int focused_panel_index =
                 static_cast<int>(splitViewPanelIndex(split_view_service_.focusedPanel()));
             const bool grid_plane_changed = settings_.grid_plane != new_settings.grid_plane;
+            lod_request_changed =
+                settings_.lod_enabled != new_settings.lod_enabled ||
+                settings_.lod_max_splats != new_settings.lod_max_splats ||
+                settings_.lod_render_scale != new_settings.lod_render_scale ||
+                settings_.lod_behind_camera_penalty != new_settings.lod_behind_camera_penalty ||
+                settings_.lod_cone_foveation != new_settings.lod_cone_foveation ||
+                settings_.lod_cone_inner_degrees != new_settings.lod_cone_inner_degrees ||
+                settings_.lod_cone_outer_degrees != new_settings.lod_cone_outer_degrees;
 
             // Update preview color if changed
             if (settings_.selection_color_preview != new_settings.selection_color_preview) {
@@ -317,6 +348,10 @@ namespace lfs::vis {
                 syncGridPlanesLocked(settings_.grid_plane);
             }
             markDirty(dirty_flags);
+        }
+
+        if (lod_request_changed && lod_controller_) {
+            lod_controller_->invalidatePendingWork();
         }
 
         auto& render_settings_generation = app_store().render_settings_generation;

@@ -1280,13 +1280,30 @@ namespace lfs::python {
             result["enabled"] = false;
             result["selected"] = 0;
             result["budget"] = 0;
+            result["requested_budget"] = 0;
             result["levels"] = nb::list();
             return result;
         }
         const auto stats = rm->getLodStats();
         result["enabled"] = stats.enabled && stats.has_tree;
+        result["active"] = stats.active;
+        result["async_ready"] = stats.async_result_ready;
         result["selected"] = stats.selected_splats;
         result["budget"] = stats.max_splats;
+        result["requested_budget"] = stats.requested_max_splats;
+        result["generation"] = stats.generation;
+        result["selection_hash"] = stats.selection_hash;
+        result["model_splats"] = stats.model_splats;
+        result["full_quality_splats"] = stats.full_quality_splats;
+        result["output_size"] = stats.output_size;
+        result["frontier_size"] = stats.frontier_size;
+        result["leaf_count"] = stats.leaf_count;
+        result["budget_limited"] = stats.budget_limited;
+        result["threshold_limited"] = stats.threshold_limited;
+        result["output_limited"] = stats.output_limited;
+        result["full_quality_reference"] = stats.full_quality_reference;
+        result["pixel_scale_limit"] = stats.pixel_scale_limit;
+        result["min_pixel_scale"] = stats.min_pixel_scale;
         nb::list levels;
         for (const auto& [level, count] : stats.level_histogram) {
             nb::dict item;

@@ -704,13 +704,12 @@ namespace lfs::vis {
         }
 
         DirtyMask frame_dirty = dirty_mask_.exchange(0);
-        const DirtyMask projection_frame_dirty = frame_dirty;
         if (lod_controller_ && lod_controller_->hasReadyResults()) {
             frame_dirty |= DirtyFlag::CAMERA;
         }
         constexpr DirtyMask projection_dirty =
             DirtyFlag::CAMERA | DirtyFlag::SPLATS | DirtyFlag::VIEWPORT | DirtyFlag::SPLIT_VIEW;
-        if ((projection_frame_dirty & projection_dirty) != 0) {
+        if ((frame_dirty & projection_dirty) != 0) {
             ++viewport_projection_generation_;
             if (viewport_projection_generation_ == 0) {
                 ++viewport_projection_generation_;
@@ -1541,12 +1540,19 @@ namespace lfs::vis {
 
             const bool has_lod_tree = model && model->lod_tree && model->lod_tree->has_tree();
             if (has_lod_tree) {
+                const auto create_lod_controller = [this]() {
+                    auto controller = std::make_unique<SparkLodController>();
+                    controller->setReadyCallback([this] {
+                        notifyAsyncLodResultsReady();
+                    });
+                    return controller;
+                };
                 if (!lod_controller_) {
-                    lod_controller_ = std::make_unique<SparkLodController>();
+                    lod_controller_ = create_lod_controller();
                 }
                 if (lod_controller_model_ != model) {
                     lod_controller_.reset();
-                    lod_controller_ = std::make_unique<SparkLodController>();
+                    lod_controller_ = create_lod_controller();
                     lod_controller_->attach(*model);
                     lod_controller_model_ = model;
                     lod_need_sync_fallback_ = true;
@@ -1580,13 +1586,9 @@ namespace lfs::vis {
                         params.pixel_scale_limit *= params.lod_render_scale;
                     }
 
-                    if (lod_need_sync_fallback_) {
-                        lod_controller_->update(lod_frame.object_to_view, params);
-                        lod_need_sync_fallback_ = false;
-                    } else {
-                        lod_controller_->swapAsyncResults();
-                        lod_controller_->updateAsync(lod_frame.object_to_view, params);
-                    }
+                    lod_controller_->swapAsyncResults();
+                    lod_controller_->updateAsync(lod_frame.object_to_view, params);
+                    lod_need_sync_fallback_ = false;
                 } else {
                     lod_controller_->activateFullQualityReference();
                     lod_need_sync_fallback_ = true;

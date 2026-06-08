@@ -15,6 +15,7 @@ namespace lfs::vis {
 namespace {
 
 constexpr std::size_t kSparkLodChunkSplats = 65'536;
+constexpr std::size_t kDynamicTraversalNodeThreshold = 12'000'000;
 
 uint64_t hashSelectedIndices(const std::vector<uint32_t>& indices) {
     uint64_t hash = 1469598103934665603ull;
@@ -60,6 +61,42 @@ std::size_t countTouchedChunks(const std::vector<uint32_t>& indices) {
     return touched;
 }
 
+bool almostEqual(const float a, const float b) {
+    if (a == b) {
+        return true;
+    }
+    if (!std::isfinite(a) || !std::isfinite(b)) {
+        return false;
+    }
+    constexpr float kAbsEpsilon = 1.0e-6f;
+    constexpr float kRelEpsilon = 1.0e-5f;
+    const float scale = std::max({1.0f, std::abs(a), std::abs(b)});
+    return std::abs(a - b) <= std::max(kAbsEpsilon, kRelEpsilon * scale);
+}
+
+bool equivalentParams(const SparkLodController::LodParameters& a,
+                      const SparkLodController::LodParameters& b) {
+    return a.max_splats == b.max_splats &&
+           almostEqual(a.pixel_scale_limit, b.pixel_scale_limit) &&
+           almostEqual(a.lod_render_scale, b.lod_render_scale) &&
+           almostEqual(a.object_scale, b.object_scale) &&
+           almostEqual(a.behind_camera_penalty, b.behind_camera_penalty) &&
+           almostEqual(a.cone_foveation, b.cone_foveation) &&
+           almostEqual(a.cone_inner_degrees, b.cone_inner_degrees) &&
+           almostEqual(a.cone_outer_degrees, b.cone_outer_degrees);
+}
+
+bool equivalentMatrix(const glm::mat4& a, const glm::mat4& b) {
+    for (int col = 0; col < 4; ++col) {
+        for (int row = 0; row < 4; ++row) {
+            if (!almostEqual(a[col][row], b[col][row])) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 SparkLodController::SparkLodController() {
@@ -68,8 +105,23 @@ SparkLodController::SparkLodController() {
     });
 }
 
+bool SparkLodController::equivalentWork(const WorkItem& a, const WorkItem& b) {
+    return equivalentMatrix(a.view_matrix, b.view_matrix) &&
+           equivalentParams(a.params, b.params);
+}
+
 SparkLodController::~SparkLodController() {
+    {
+        std::scoped_lock lock(mutex_);
+        pending_work_.reset();
+        ready_callback_ = nullptr;
+        latest_requested_generation_.store(++next_work_generation_, std::memory_order_release);
+    }
+    worker_.request_stop();
     cv_.notify_all();
+    if (worker_.joinable()) {
+        worker_.join();
+    }
 }
 
 void SparkLodController::attach(const lfs::core::SplatData& data) {
@@ -188,10 +240,21 @@ void SparkLodController::attach(const lfs::core::SplatData& data) {
     base_stats_ = stats;
     {
         std::scoped_lock lock(mutex_);
+        selected_indices_.clear();
+        if (!nodes_.empty()) {
+            selected_indices_.push_back(0);
+            stats.active = true;
+            stats.selected_splats = 1;
+            stats.output_size = 1;
+            stats.frontier_size = 1;
+            stats.max_splats = 1;
+            stats.selection_hash = hashSelectedIndices(selected_indices_);
+        }
         current_stats_ = stats;
         ready_swap_stats_ = {};
+        last_requested_work_.reset();
         next_work_generation_ = 0;
-        latest_requested_generation_ = 0;
+        latest_requested_generation_.store(0, std::memory_order_release);
         stats_generation_ = 0;
     }
 }
@@ -208,21 +271,36 @@ void SparkLodController::detach() {
         ready_available_ = false;
         async_indices_.clear();
         ready_swap_indices_.clear();
+        last_requested_work_.reset();
         base_stats_ = {};
         current_stats_ = {};
         ready_swap_stats_ = {};
         next_work_generation_ = 0;
-        latest_requested_generation_ = 0;
+        latest_requested_generation_.store(0, std::memory_order_release);
         stats_generation_ = 0;
     }
 }
 
+SparkLodController::TraversalView SparkLodController::makeTraversalView(const glm::mat4& object_to_view) {
+    const glm::mat4 view_to_object = glm::inverse(object_to_view);
+    glm::vec3 forward = -glm::vec3(view_to_object[2]);
+    const float forward_length = glm::length(forward);
+    if (forward_length > 1.0e-6f) {
+        forward /= forward_length;
+    } else {
+        forward = {0.0f, 0.0f, -1.0f};
+    }
+
+    return {.origin = glm::vec3(view_to_object[3]),
+            .forward = forward};
+}
+
 float SparkLodController::computePixelScale(uint32_t node_index,
-                                             const glm::mat4& view_matrix,
+                                             const TraversalView& view,
                                              const LodParameters& params) const {
     const auto& node = nodes_[node_index];
-    glm::vec4 center_vs = view_matrix * glm::vec4(node.center, 1.0f);
-    float radial_dist = glm::length(glm::vec3(center_vs));
+    const glm::vec3 delta = node.center - view.origin;
+    float radial_dist = glm::length(delta);
     if (radial_dist <= 0.0f) {
         return std::numeric_limits<float>::max();
     }
@@ -233,7 +311,7 @@ float SparkLodController::computePixelScale(uint32_t node_index,
     float pixel_scale = (node.size * object_scale) / radial_dist;
 
     // Foveation: match Spark's compute_pixel_scale exactly.
-    float forward_dot = -center_vs.z;  // dot(center_vs, -z_axis)
+    float forward_dot = glm::dot(delta, view.forward);
     float foveate;
     if (forward_dot <= 0.0f) {
         // Behind camera: apply behind-camera penalty
@@ -276,7 +354,9 @@ size_t SparkLodController::update(const glm::mat4& view_matrix, const LodParamet
         std::scoped_lock lock(mutex_);
         pending_work_.reset();
         ready_available_ = false;
-        latest_requested_generation_ = ++next_work_generation_;
+        const uint64_t generation = ++next_work_generation_;
+        latest_requested_generation_.store(generation, std::memory_order_release);
+        last_requested_work_ = WorkItem{view_matrix, params, generation};
     }
     const auto result = traverse(view_matrix, params, selected_indices_);
     {
@@ -288,12 +368,18 @@ size_t SparkLodController::update(const glm::mat4& view_matrix, const LodParamet
 }
 
 void SparkLodController::updateAsync(const glm::mat4& view_matrix, const LodParameters& params) {
+    WorkItem work{view_matrix, params, 0};
     {
         std::scoped_lock lock(mutex_);
+        if (last_requested_work_ && equivalentWork(*last_requested_work_, work)) {
+            return;
+        }
         const uint64_t generation = ++next_work_generation_;
-        latest_requested_generation_ = generation;
+        work.generation = generation;
+        latest_requested_generation_.store(generation, std::memory_order_release);
         ready_available_ = false;
-        pending_work_ = WorkItem{view_matrix, params, generation};
+        pending_work_ = work;
+        last_requested_work_ = work;
     }
     cv_.notify_one();
 }
@@ -315,6 +401,45 @@ bool SparkLodController::hasReadyResults() const {
     return ready_available_;
 }
 
+void SparkLodController::invalidatePendingWork() {
+    std::scoped_lock lock(mutex_);
+    pending_work_.reset();
+    ready_available_ = false;
+    last_requested_work_.reset();
+    latest_requested_generation_.store(++next_work_generation_, std::memory_order_release);
+}
+
+void SparkLodController::setReadyCallback(std::function<void()> callback) {
+    std::scoped_lock lock(mutex_);
+    ready_callback_ = std::move(callback);
+}
+
+bool SparkLodController::shouldPublishDynamicPreview() const {
+    return nodes_.size() >= kDynamicTraversalNodeThreshold;
+}
+
+bool SparkLodController::publishAsyncResult(const WorkItem& work, const TraverseResult& result) {
+    if (result.cancelled) {
+        return false;
+    }
+
+    std::function<void()> ready_callback;
+    {
+        std::scoped_lock lock(mutex_);
+        if (work.generation != latest_requested_generation_.load(std::memory_order_acquire)) {
+            return false;
+        }
+        ready_swap_indices_.swap(async_indices_);
+        ready_swap_stats_ = result.stats;
+        ready_available_ = true;
+        ready_callback = ready_callback_;
+    }
+    if (ready_callback) {
+        ready_callback();
+    }
+    return true;
+}
+
 void SparkLodController::workerLoop(std::stop_token stop_token) {
     while (true) {
         WorkItem work{};
@@ -330,23 +455,27 @@ void SparkLodController::workerLoop(std::stop_token stop_token) {
             pending_work_.reset();
         }
 
-        const auto result = traverse(work.view_matrix, work.params, async_indices_);
-
-        {
-            std::scoped_lock lock(mutex_);
-            if (work.generation == latest_requested_generation_) {
-                ready_swap_indices_.swap(async_indices_);
-                ready_swap_stats_ = result.stats;
-                ready_available_ = true;
+        if (shouldPublishDynamicPreview()) {
+            const auto preview = traverseDynamic(work.view_matrix, work.params, async_indices_, work.generation);
+            if (preview.cancelled || stop_token.stop_requested()) {
+                continue;
             }
+            publishAsyncResult(work, preview);
         }
+
+        const auto result = traverse(work.view_matrix, work.params, async_indices_, work.generation);
+        if (result.cancelled || stop_token.stop_requested()) {
+            continue;
+        }
+        publishAsyncResult(work, result);
     }
 }
 
 SparkLodController::TraverseResult SparkLodController::traverse(
     const glm::mat4& view_matrix,
     const LodParameters& params,
-    std::vector<uint32_t>& out_indices) const {
+    std::vector<uint32_t>& out_indices,
+    const std::uint64_t cancel_generation) const {
     TraverseResult result;
     result.stats = base_stats_;
     auto& stats = result.stats;
@@ -370,6 +499,23 @@ SparkLodController::TraverseResult SparkLodController::traverse(
     stats.cone_outer_degrees = params.cone_outer_degrees;
 
     out_indices.clear();
+    std::uint32_t cancel_poll = 0;
+    const auto should_cancel = [&]() {
+        if (cancel_generation == 0) {
+            return false;
+        }
+        if ((++cancel_poll & 0x3ffu) != 0) {
+            return false;
+        }
+        return latest_requested_generation_.load(std::memory_order_acquire) != cancel_generation;
+    };
+    const auto cancel_traversal = [&]() {
+        out_indices.clear();
+        result.count = 0;
+        result.cancelled = true;
+        return result;
+    };
+
     if (nodes_.empty() || params.max_splats == 0) {
         stats.output_limited = params.max_splats == 0;
         stats.selection_hash = hashSelectedIndices(out_indices);
@@ -404,10 +550,15 @@ SparkLodController::TraverseResult SparkLodController::traverse(
         }
     };
 
-    std::priority_queue<HeapNode, std::vector<HeapNode>, HeapCompare> heap;
+    std::vector<HeapNode> heap_storage;
+    heap_storage.reserve(std::min(params.max_splats, nodes_.size()));
+    std::priority_queue<HeapNode, std::vector<HeapNode>, HeapCompare> heap(
+        HeapCompare{},
+        std::move(heap_storage));
+    const TraversalView traversal_view = makeTraversalView(view_matrix);
 
     // Seed with root node
-    heap.push({0, computePixelScale(0, view_matrix, params)});
+    heap.push({0, computePixelScale(0, traversal_view, params)});
     touch_chunk(0);
 
     // Matches Spark semantics: this tracks output size after draining frontier.
@@ -415,6 +566,9 @@ SparkLodController::TraverseResult SparkLodController::traverse(
     float min_pixel_scale = std::numeric_limits<float>::max();
 
     while (!heap.empty()) {
+        if (should_cancel()) {
+            return cancel_traversal();
+        }
         const auto top = heap.top();
         min_pixel_scale = std::min(min_pixel_scale, top.pixel_scale);
         if (top.pixel_scale <= params.pixel_scale_limit) {
@@ -429,10 +583,7 @@ SparkLodController::TraverseResult SparkLodController::traverse(
             // Leaf: output directly.
             out_indices.push_back(top.index);
             ++stats.leaf_count;
-            if (out_indices.size() >= params.max_splats) {
-                stats.output_limited = true;
-                break;
-            }
+            continue;
         } else {
             // Internal node: check budget before expanding.
             const size_t new_num_splats = num_splats - 1 + static_cast<size_t>(node.child_count);
@@ -446,9 +597,12 @@ SparkLodController::TraverseResult SparkLodController::traverse(
             // Expand children. Children already below threshold go directly to output.
             touch_child_range(node.child_start, node.child_count);
             for (uint32_t c = 0; c < node.child_count; ++c) {
+                if (should_cancel()) {
+                    return cancel_traversal();
+                }
                 const uint32_t child_idx = node.child_start + c;
                 if (child_idx < nodes_.size()) {
-                    const float scale = computePixelScale(child_idx, view_matrix, params);
+                    const float scale = computePixelScale(child_idx, traversal_view, params);
                     min_pixel_scale = std::min(min_pixel_scale, scale);
                     if (scale <= params.pixel_scale_limit) {
                         out_indices.push_back(child_idx);
@@ -458,10 +612,6 @@ SparkLodController::TraverseResult SparkLodController::traverse(
                 }
             }
             num_splats = new_num_splats;
-            if (out_indices.size() >= params.max_splats) {
-                stats.output_limited = true;
-                break;
-            }
         }
     }
 
@@ -471,6 +621,9 @@ SparkLodController::TraverseResult SparkLodController::traverse(
     // Spark drains the whole remaining frontier after the budget/threshold loop.
     // The expansion test above is what keeps this set within the requested cap.
     while (!heap.empty()) {
+        if (should_cancel()) {
+            return cancel_traversal();
+        }
         out_indices.push_back(heap.top().index);
         heap.pop();
     }
@@ -482,6 +635,211 @@ SparkLodController::TraverseResult SparkLodController::traverse(
     {
         std::vector<size_t> counts(256, 0);
         for (const uint32_t index : out_indices) {
+            if (should_cancel()) {
+                return cancel_traversal();
+            }
+            if (index < nodes_.size()) {
+                ++counts[nodes_[index].lod_level];
+            }
+        }
+        for (size_t level = 0; level < counts.size(); ++level) {
+            if (counts[level] > 0) {
+                stats.level_histogram.emplace_back(static_cast<uint8_t>(level), counts[level]);
+            }
+        }
+    }
+    result.count = out_indices.size();
+    return result;
+}
+
+SparkLodController::TraverseResult SparkLodController::traverseDynamic(
+    const glm::mat4& view_matrix,
+    const LodParameters& params,
+    std::vector<uint32_t>& out_indices,
+    const std::uint64_t cancel_generation) const {
+    TraverseResult result;
+    result.stats = base_stats_;
+    auto& stats = result.stats;
+    stats.async_result_ready = false;
+    stats.budget_limited = false;
+    stats.threshold_limited = false;
+    stats.output_limited = false;
+    stats.selected_splats = 0;
+    stats.output_size = 0;
+    stats.frontier_size = 0;
+    stats.leaf_count = 0;
+    stats.touched_chunks = 0;
+    stats.min_pixel_scale = 0.0f;
+    stats.selection_hash = 0;
+    stats.max_splats = params.max_splats;
+    stats.pixel_scale_limit = params.pixel_scale_limit;
+    stats.lod_render_scale = params.lod_render_scale;
+    stats.behind_camera_penalty = params.behind_camera_penalty;
+    stats.cone_foveation = params.cone_foveation;
+    stats.cone_inner_degrees = params.cone_inner_degrees;
+    stats.cone_outer_degrees = params.cone_outer_degrees;
+
+    out_indices.clear();
+    std::uint32_t cancel_poll = 0;
+    const auto should_cancel = [&]() {
+        if (cancel_generation == 0) {
+            return false;
+        }
+        if ((++cancel_poll & 0x3ffu) != 0) {
+            return false;
+        }
+        return latest_requested_generation_.load(std::memory_order_acquire) != cancel_generation;
+    };
+    const auto cancel_traversal = [&]() {
+        out_indices.clear();
+        result.count = 0;
+        result.cancelled = true;
+        return result;
+    };
+
+    if (nodes_.empty() || params.max_splats == 0) {
+        stats.output_limited = params.max_splats == 0;
+        stats.selection_hash = hashSelectedIndices(out_indices);
+        return result;
+    }
+
+    struct ScaleNode {
+        uint32_t index;
+        float pixel_scale;
+    };
+
+    const TraversalView traversal_view = makeTraversalView(view_matrix);
+    std::vector<ScaleNode> stack;
+    std::vector<ScaleNode> frontier;
+    std::vector<float> chunk_max(stats.chunk_count, 0.0f);
+    out_indices.reserve(params.max_splats);
+    stack.reserve(std::min(params.max_splats, nodes_.size()));
+    frontier.reserve(std::min(params.max_splats, nodes_.size()));
+
+    const auto touch_chunk = [&](const std::size_t chunk_index, const float pixel_scale) {
+        if (chunk_index >= chunk_max.size()) {
+            return;
+        }
+        if (chunk_max[chunk_index] == 0.0f) {
+            ++stats.touched_chunks;
+        }
+        chunk_max[chunk_index] = std::max(chunk_max[chunk_index], pixel_scale);
+    };
+    const auto touch_child_range = [&](const std::size_t child_start,
+                                       const std::size_t child_count,
+                                       const float pixel_scale) {
+        if (child_count == 0) {
+            return;
+        }
+        const std::size_t first_chunk = child_start / kSparkLodChunkSplats;
+        const std::size_t last_chunk = (child_start + child_count - 1) / kSparkLodChunkSplats;
+        touch_chunk(first_chunk, pixel_scale);
+        if (last_chunk != first_chunk) {
+            touch_chunk(last_chunk, pixel_scale);
+        }
+    };
+
+    stack.push_back({0, computePixelScale(0, traversal_view, params)});
+    touch_chunk(0, std::numeric_limits<float>::infinity());
+
+    float min_pixel_scale = std::numeric_limits<float>::max();
+    float current_scale = params.pixel_scale_limit * 100.0f;
+    if (!std::isfinite(current_scale) || current_scale <= params.pixel_scale_limit) {
+        current_scale = params.pixel_scale_limit;
+    }
+
+    for (int iteration = 0; iteration < 64; ++iteration) {
+        if (should_cancel()) {
+            return cancel_traversal();
+        }
+
+        frontier.clear();
+        while (!stack.empty()) {
+            if (should_cancel()) {
+                return cancel_traversal();
+            }
+
+            const ScaleNode current = stack.back();
+            stack.pop_back();
+            min_pixel_scale = std::min(min_pixel_scale, current.pixel_scale);
+
+            if (current.pixel_scale <= current_scale) {
+                frontier.push_back(current);
+                continue;
+            }
+
+            const auto& node = nodes_[current.index];
+            if (node.child_count == 0) {
+                out_indices.push_back(current.index);
+                ++stats.leaf_count;
+                continue;
+            }
+
+            touch_child_range(node.child_start, node.child_count, current.pixel_scale);
+            for (uint32_t c = 0; c < node.child_count; ++c) {
+                if (should_cancel()) {
+                    return cancel_traversal();
+                }
+
+                const uint32_t child_idx = node.child_start + c;
+                if (child_idx >= nodes_.size()) {
+                    continue;
+                }
+
+                const float scale = computePixelScale(child_idx, traversal_view, params);
+                min_pixel_scale = std::min(min_pixel_scale, scale);
+                if (scale <= current_scale) {
+                    if (scale <= params.pixel_scale_limit) {
+                        out_indices.push_back(child_idx);
+                    } else {
+                        frontier.push_back({child_idx, scale});
+                    }
+                } else {
+                    stack.push_back({child_idx, scale});
+                }
+            }
+        }
+
+        const size_t output_count = out_indices.size() + frontier.size();
+        const bool no_frontier = frontier.empty();
+        const float ratio = static_cast<float>(output_count) /
+                            static_cast<float>(std::max<std::size_t>(params.max_splats, 1));
+        float next_scale = 0.99f * current_scale * std::sqrt(std::max(ratio, 0.0f));
+        next_scale = std::max(next_scale, 0.5f * current_scale);
+        next_scale = std::max(next_scale, params.pixel_scale_limit);
+
+        stats.output_size = out_indices.size();
+        stats.frontier_size = frontier.size();
+        if (no_frontier || next_scale == current_scale || output_count >= params.max_splats) {
+            stats.threshold_limited = no_frontier;
+            stats.budget_limited = output_count >= params.max_splats;
+            break;
+        }
+
+        current_scale = next_scale;
+        stack.swap(frontier);
+    }
+
+    stats.output_size = out_indices.size();
+    stats.frontier_size = frontier.size();
+    for (const ScaleNode& node : frontier) {
+        if (should_cancel()) {
+            return cancel_traversal();
+        }
+        out_indices.push_back(node.index);
+    }
+
+    stats.selected_splats = out_indices.size();
+    stats.output_limited = out_indices.size() > params.max_splats;
+    stats.min_pixel_scale =
+        min_pixel_scale == std::numeric_limits<float>::max() ? 0.0f : min_pixel_scale;
+    stats.selection_hash = hashSelectedIndices(out_indices);
+    {
+        std::vector<size_t> counts(256, 0);
+        for (const uint32_t index : out_indices) {
+            if (should_cancel()) {
+                return cancel_traversal();
+            }
             if (index < nodes_.size()) {
                 ++counts[nodes_[index].lod_level];
             }
@@ -511,8 +869,9 @@ const std::vector<uint32_t>& SparkLodController::fullQualityIndices() const {
 void SparkLodController::activateFullQualityReference() {
     std::scoped_lock lock(mutex_);
     pending_work_.reset();
+    last_requested_work_.reset();
     ready_available_ = false;
-    latest_requested_generation_ = ++next_work_generation_;
+    latest_requested_generation_.store(++next_work_generation_, std::memory_order_release);
     if (current_stats_.full_quality_reference &&
         current_stats_.selected_splats == full_quality_indices_.size()) {
         return;

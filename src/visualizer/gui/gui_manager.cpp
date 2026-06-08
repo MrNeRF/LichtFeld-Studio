@@ -193,9 +193,16 @@ namespace lfs::vis::gui {
                                               formatLodCount(selected),
                                               formatLodCount(full_quality),
                                               formatLodPercent(selected, full_quality));
-            state.budget_text = stats.full_quality_reference
-                                    ? "leaf set"
-                                    : std::format("{} max", formatLodCount(stats.max_splats));
+            if (stats.full_quality_reference) {
+                state.budget_text = "leaf set";
+            } else if (stats.requested_max_splats > 0 &&
+                       stats.max_splats != stats.requested_max_splats) {
+                state.budget_text = std::format("{} result | {} requested",
+                                                formatLodCount(stats.max_splats),
+                                                formatLodCount(stats.requested_max_splats));
+            } else {
+                state.budget_text = std::format("{} max", formatLodCount(stats.max_splats));
+            }
             state.model_text = std::format("{} splats", formatLodCount(stats.model_splats));
             state.tree_text = std::format("{} nodes | {} internal | {} leaves",
                                           formatLodCount(stats.tree_nodes),

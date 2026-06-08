@@ -82,6 +82,9 @@ namespace lfs::vis {
 
         // Create rendering manager with initial antialiasing setting
         rendering_manager_ = std::make_unique<RenderingManager>();
+        rendering_manager_->setWakeCallback([this] {
+            wakeMainLoop();
+        });
 
         // Set initial antialiasing
         RenderSettings initial_settings;

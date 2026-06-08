@@ -211,25 +211,11 @@
       </label>
     </div>
     <div data-if="lod_enabled">
-      <div class="lod-stats-block">
-        <div class="lod-stat-row">
-          <span class="lod-stat-label">{{label_lod_stats_selected}}</span>
-          <span class="lod-stat-value">{{lod_stats_selected}}</span>
-        </div>
-        <div class="lod-stat-row">
-          <span class="lod-stat-label">{{label_lod_stats_budget}}</span>
-          <span class="lod-stat-value">{{lod_stats_budget}} ({{lod_stats_pct}})</span>
-        </div>
-        <div class="lod-stat-row">
-          <span class="lod-stat-label">{{label_lod_stats_levels}}</span>
-          <span class="lod-stat-value">{{lod_stats_levels}}</span>
-        </div>
-      </div>
-      <div class="lod-separator"></div>
       <div class="setting-row setting-row--aligned" data-tooltip="tooltip_lod_max_splats">
         <span class="setting-row__label-col">{{label_lod_max_splats}}</span>
-        <div class="setting-row__control-col">
-          <input type="text" class="number-input" data-value="lod_max_splats_str" />
+        <div class="setting-row__control-col setting-row__control-col--slider">
+          <input type="range" class="setting-slider" data-value="lod_max_splats" min="1" max="5000000" step="10000" />
+          <span class="slider-value">{{lod_max_splats | format_int}}</span>
         </div>
       </div>
       <div class="setting-row setting-row--aligned" data-tooltip="tooltip_lod_render_scale">

@@ -5,6 +5,8 @@
 #pragma once
 #include "core/splat_data.hpp"
 #include "rendering_types.hpp"
+#include <atomic>
+#include <functional>
 #include <vector>
 #include <cstdint>
 #include <thread>
@@ -46,6 +48,7 @@ public:
         size_t full_quality_splats = 0;
         size_t selected_splats = 0;
         size_t max_splats = 0;
+        size_t requested_max_splats = 0;
         size_t output_size = 0;
         size_t frontier_size = 0;
         size_t leaf_count = 0;
@@ -79,6 +82,8 @@ public:
     void updateAsync(const glm::mat4& view_matrix, const LodParameters& params);
     bool swapAsyncResults();
     bool hasReadyResults() const;
+    void invalidatePendingWork();
+    void setReadyCallback(std::function<void()> callback);
 
     // Accessors
     bool hasTree() const;
@@ -96,17 +101,33 @@ private:
         uint8_t lod_level;
     };
 
+    struct TraversalView {
+        glm::vec3 origin;
+        glm::vec3 forward;
+    };
+
     float computePixelScale(uint32_t node_index,
-                           const glm::mat4& view_matrix,
+                           const TraversalView& view,
                            const LodParameters& params) const;
+    static TraversalView makeTraversalView(const glm::mat4& object_to_view);
     struct TraverseResult {
         size_t count = 0;
+        bool cancelled = false;
         Stats stats;
     };
 
+    struct WorkItem;
+
     TraverseResult traverse(const glm::mat4& view_matrix,
                             const LodParameters& params,
-                            std::vector<uint32_t>& out_indices) const;
+                            std::vector<uint32_t>& out_indices,
+                            std::uint64_t cancel_generation = 0) const;
+    TraverseResult traverseDynamic(const glm::mat4& view_matrix,
+                                   const LodParameters& params,
+                                   std::vector<uint32_t>& out_indices,
+                                   std::uint64_t cancel_generation = 0) const;
+    bool publishAsyncResult(const WorkItem& work, const TraverseResult& result);
+    bool shouldPublishDynamicPreview() const;
     void workerLoop(std::stop_token stop_token);
 
     struct WorkItem {
@@ -114,6 +135,8 @@ private:
         LodParameters params;
         uint64_t generation = 0;
     };
+
+    static bool equivalentWork(const WorkItem& a, const WorkItem& b);
 
     std::vector<LodTreeNode> nodes_;
     std::vector<uint32_t> full_quality_indices_;
@@ -124,14 +147,16 @@ private:
     std::condition_variable_any cv_;
     std::jthread worker_;
     std::optional<WorkItem> pending_work_;
+    std::optional<WorkItem> last_requested_work_;
     bool ready_available_ = false;
     std::vector<uint32_t> async_indices_;
     std::vector<uint32_t> ready_swap_indices_;
     Stats base_stats_;
     Stats current_stats_;
     Stats ready_swap_stats_;
+    std::function<void()> ready_callback_;
     uint64_t next_work_generation_ = 0;
-    uint64_t latest_requested_generation_ = 0;
+    std::atomic<uint64_t> latest_requested_generation_{0};
     uint64_t stats_generation_ = 0;
 };
 
