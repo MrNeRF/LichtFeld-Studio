@@ -589,6 +589,11 @@ namespace lfs::core {
             return true;
         if (_tangential_distortion.is_valid() && _tangential_distortion.numel() > 0)
             return true;
+        // Equirectangular is a complete projection model handled natively by the
+        // rasterizer; there is no pinhole image to "undistort" to, so it must not
+        // be routed through the undistortion path.
+        if (_camera_model_type == CameraModelType::EQUIRECTANGULAR)
+            return false;
         if (_camera_model_type != CameraModelType::PINHOLE)
             return true;
         return false;
