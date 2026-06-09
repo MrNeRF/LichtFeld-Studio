@@ -26,6 +26,7 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <numeric>
 #include <optional>
 #include <string>
 #include <utility>
@@ -1534,6 +1535,292 @@ namespace lfs::io {
             }
         };
 
+        std::expected<RadDecodedChunk, std::string> decode_rad_chunk_buffer(
+            const std::vector<uint8_t>& data,
+            int fallback_max_sh,
+            const bool has_lod_tree,
+            bool lod_opacity_encoded) {
+            if (data.size() < 8) {
+                return std::unexpected("RAD chunk too small");
+            }
+
+            std::size_t offset = 0;
+            const uint32_t chunk_magic = decode_u32(&data[offset]);
+            if (chunk_magic != RAD_CHUNK_MAGIC) {
+                return std::unexpected("Invalid RAD chunk magic");
+            }
+
+            const uint32_t chunk_meta_size = decode_u32(&data[offset + 4]);
+            const std::size_t chunk_meta_padded = pad8(chunk_meta_size);
+            if (offset + 8 + chunk_meta_padded + 8 > data.size()) {
+                return std::unexpected("Unexpected end of RAD chunk metadata");
+            }
+
+            RadChunkMeta chunk;
+            try {
+                std::string chunk_json(reinterpret_cast<const char*>(&data[offset + 8]), chunk_meta_size);
+                chunk = RadChunkMeta::from_json(nlohmann::json::parse(chunk_json));
+            } catch (const std::exception& e) {
+                return std::unexpected(std::string("Failed to parse RAD chunk metadata: ") + e.what());
+            }
+
+            const std::size_t payload_size_offset = offset + 8 + chunk_meta_padded;
+            bool has_payload_prefix = false;
+            std::size_t payload_start = payload_size_offset;
+            std::size_t chunk_end = 0;
+            if (payload_size_offset + 8 <= data.size()) {
+                const uint64_t payload_bytes = decode_u64(&data[payload_size_offset]);
+                payload_start = payload_size_offset + 8;
+                chunk_end = payload_start + static_cast<std::size_t>(payload_bytes);
+                has_payload_prefix = (chunk_end <= data.size()) && (chunk.payload_bytes == payload_bytes);
+            }
+
+            if (!has_payload_prefix) {
+                payload_start = offset;
+                chunk_end = offset + pad8(static_cast<std::size_t>(chunk.payload_bytes));
+                if (chunk_end > data.size()) {
+                    return std::unexpected("RAD chunk payload exceeds file bounds");
+                }
+            }
+
+            if (chunk.splat_encoding.has_value()) {
+                const auto& enc = chunk.splat_encoding.value();
+                if (enc.is_object()) {
+                    const auto it = enc.find("lodOpacity");
+                    if (it != enc.end() && it->is_boolean()) {
+                        lod_opacity_encoded = it->get<bool>();
+                    }
+                }
+            }
+
+            int max_sh = chunk.max_sh > 0 ? chunk.max_sh : fallback_max_sh;
+            max_sh = std::clamp(max_sh, 0, 3);
+            const int sh_coeffs = max_sh > 0 ? SH_COEFFS_FOR_DEGREE[max_sh] : 0;
+            const std::size_t chunk_count = static_cast<std::size_t>(chunk.count);
+            const bool decode_tree = has_lod_tree || chunk.lod_tree;
+
+            std::vector<float> chunk_means(chunk_count * 3u);
+            std::vector<float> chunk_opacity(chunk_count);
+            std::vector<float> chunk_sh0(chunk_count * 3u);
+            std::vector<float> chunk_scales(chunk_count * 3u);
+            std::vector<float> chunk_rotation(chunk_count * 4u);
+            std::vector<float> chunk_shN(chunk_count * static_cast<std::size_t>(sh_coeffs) * 3u, 0.0f);
+            std::vector<uint16_t> chunk_child_count;
+            std::vector<uint32_t> chunk_child_start;
+            if (decode_tree) {
+                chunk_child_count.resize(chunk_count);
+                chunk_child_start.resize(chunk_count);
+            }
+
+            std::vector<float> comp_data(chunk_count);
+
+            try {
+                for (const auto& prop : chunk.properties) {
+                    const std::size_t prop_offset = static_cast<std::size_t>(prop.offset);
+                    const std::size_t prop_bytes = static_cast<std::size_t>(prop.bytes);
+                    const std::size_t absolute_offset =
+                        has_payload_prefix ? (payload_start + prop_offset) : (offset + prop_offset);
+                    if (absolute_offset + prop_bytes > chunk_end) {
+                        return std::unexpected("RAD chunk property data exceeds file bounds");
+                    }
+
+                    std::vector<uint8_t> prop_data;
+                    if (prop.compression.has_value() &&
+                        (prop.compression.value() == "gz" || prop.compression.value() == "gzip")) {
+                        prop_data = rad_decompress(&data[absolute_offset], prop_bytes);
+                        if (prop_data.empty()) {
+                            return std::unexpected("Failed to decompress RAD chunk property: " + prop.property);
+                        }
+                    } else {
+                        prop_data.assign(&data[absolute_offset], &data[absolute_offset + prop_bytes]);
+                    }
+
+                    if (prop.property == PROP_CENTER) {
+                        PropertyDecoder::decode_center(prop_data.data(), chunk_means.data(), 3, chunk_count, prop.encoding);
+                    } else if (prop.property.find(PROP_CENTER) == 0 && prop.property != PROP_CENTER) {
+                        const int comp = prop.property.back() - '0';
+                        PropertyDecoder::decode_center(prop_data.data(), comp_data.data(), 1, chunk_count, prop.encoding);
+                        for (std::size_t i = 0; i < chunk_count; ++i) {
+                            chunk_means[i * 3u + static_cast<std::size_t>(comp)] = comp_data[i];
+                        }
+                    } else if (prop.property == PROP_ALPHA) {
+                        PropertyDecoder::decode_alpha(prop_data.data(),
+                                                      chunk_opacity.data(),
+                                                      chunk_count,
+                                                      prop.encoding,
+                                                      prop.min_val.value_or(0.0f),
+                                                      prop.max_val.value_or(1.0f));
+                    } else if (prop.property == PROP_RGB) {
+                        PropertyDecoder::decode_rgb(prop_data.data(),
+                                                    chunk_sh0.data(),
+                                                    3,
+                                                    chunk_count,
+                                                    prop.encoding,
+                                                    prop.min_val.value_or(0.0f),
+                                                    prop.max_val.value_or(1.0f),
+                                                    prop.base.value_or(0.0f),
+                                                    prop.scale.value_or(1.0f));
+                    } else if (prop.property.find(PROP_RGB) == 0 && prop.property != PROP_RGB) {
+                        const int comp = prop.property.back() - '0';
+                        PropertyDecoder::decode_rgb(prop_data.data(),
+                                                    comp_data.data(),
+                                                    1,
+                                                    chunk_count,
+                                                    prop.encoding,
+                                                    prop.min_val.value_or(0.0f),
+                                                    prop.max_val.value_or(1.0f),
+                                                    prop.base.value_or(0.0f),
+                                                    prop.scale.value_or(1.0f));
+                        for (std::size_t i = 0; i < chunk_count; ++i) {
+                            chunk_sh0[i * 3u + static_cast<std::size_t>(comp)] = comp_data[i];
+                        }
+                    } else if (prop.property == PROP_SCALES) {
+                        PropertyDecoder::decode_scales(prop_data.data(),
+                                                       chunk_scales.data(),
+                                                       3,
+                                                       chunk_count,
+                                                       prop.encoding,
+                                                       prop.min_val.value_or(0.0f),
+                                                       prop.max_val.value_or(prop.scale.value_or(1.0f)));
+                    } else if (prop.property.find(PROP_SCALES) == 0 && prop.property != PROP_SCALES) {
+                        const int comp = prop.property.back() - '0';
+                        PropertyDecoder::decode_scales(prop_data.data(),
+                                                       comp_data.data(),
+                                                       1,
+                                                       chunk_count,
+                                                       prop.encoding,
+                                                       prop.min_val.value_or(0.0f),
+                                                       prop.max_val.value_or(prop.scale.value_or(1.0f)));
+                        for (std::size_t i = 0; i < chunk_count; ++i) {
+                            chunk_scales[i * 3u + static_cast<std::size_t>(comp)] = comp_data[i];
+                        }
+                    } else if (prop.property == PROP_ORIENTATION) {
+                        std::vector<float> quat_data(chunk_count * 4u);
+                        PropertyDecoder::decode_orientation(prop_data.data(), quat_data.data(), chunk_count, prop.encoding);
+                        for (std::size_t i = 0; i < chunk_count; ++i) {
+                            chunk_rotation[i * 4u + 0u] = quat_data[i * 4u + 3u];
+                            chunk_rotation[i * 4u + 1u] = quat_data[i * 4u + 0u];
+                            chunk_rotation[i * 4u + 2u] = quat_data[i * 4u + 1u];
+                            chunk_rotation[i * 4u + 3u] = quat_data[i * 4u + 2u];
+                        }
+                    } else if ((prop.property == PROP_SH1 || prop.property == PROP_SH2 || prop.property == PROP_SH3) &&
+                               sh_coeffs > 0) {
+                        int coeff_start = 0;
+                        int coeff_count = 0;
+                        if (prop.property == PROP_SH1) {
+                            coeff_start = 0;
+                            coeff_count = 3;
+                        } else if (prop.property == PROP_SH2) {
+                            coeff_start = 3;
+                            coeff_count = 5;
+                        } else {
+                            coeff_start = 8;
+                            coeff_count = 7;
+                        }
+
+                        const std::size_t dims = static_cast<std::size_t>(coeff_count) * 3u;
+                        std::vector<float> sh_block(chunk_count * dims, 0.0f);
+                        PropertyDecoder::decode_sh(prop_data.data(),
+                                                   sh_block.data(),
+                                                   dims,
+                                                   chunk_count,
+                                                   prop.encoding,
+                                                   prop.min_val.value_or(0.0f),
+                                                   prop.max_val.value_or(1.0f),
+                                                   prop.base.value_or(0.0f),
+                                                   prop.scale.value_or(1.0f));
+
+                        for (std::size_t i = 0; i < chunk_count; ++i) {
+                            for (int c = 0; c < coeff_count; ++c) {
+                                const int coeff = coeff_start + c;
+                                if (coeff >= sh_coeffs) {
+                                    continue;
+                                }
+                                for (int ch = 0; ch < 3; ++ch) {
+                                    chunk_shN[i * static_cast<std::size_t>(sh_coeffs) * 3u +
+                                              static_cast<std::size_t>(coeff) * 3u +
+                                              static_cast<std::size_t>(ch)] =
+                                        sh_block[i * dims + static_cast<std::size_t>(c) * 3u +
+                                                 static_cast<std::size_t>(ch)];
+                                }
+                            }
+                        }
+                    } else if (prop.property.find("sh") == 0 && sh_coeffs > 0) {
+                        const std::size_t first_underscore = prop.property.find('_');
+                        const std::size_t second_underscore = prop.property.find('_', first_underscore + 1);
+                        if (first_underscore != std::string::npos && second_underscore != std::string::npos) {
+                            const int coeff = std::stoi(prop.property.substr(first_underscore + 1,
+                                                                             second_underscore - first_underscore - 1));
+                            const int ch = prop.property.back() - '0';
+                            if (coeff >= 0 && coeff < sh_coeffs && ch >= 0 && ch < 3) {
+                                PropertyDecoder::decode_sh(prop_data.data(),
+                                                           comp_data.data(),
+                                                           1,
+                                                           chunk_count,
+                                                           prop.encoding,
+                                                           prop.min_val.value_or(0.0f),
+                                                           prop.max_val.value_or(1.0f),
+                                                           prop.base.value_or(0.0f),
+                                                           prop.scale.value_or(1.0f));
+                                for (std::size_t i = 0; i < chunk_count; ++i) {
+                                    chunk_shN[i * static_cast<std::size_t>(sh_coeffs) * 3u +
+                                              static_cast<std::size_t>(coeff) * 3u +
+                                              static_cast<std::size_t>(ch)] = comp_data[i];
+                                }
+                            }
+                        }
+                    } else if (prop.property == PROP_CHILD_COUNT && decode_tree) {
+                        if (prop_data.size() >= chunk_count * 2u) {
+                            for (std::size_t i = 0; i < chunk_count; ++i) {
+                                chunk_child_count[i] = decode_u16(&prop_data[i * 2u]);
+                            }
+                        }
+                    } else if (prop.property == PROP_CHILD_START && decode_tree) {
+                        if (prop_data.size() >= chunk_count * 4u) {
+                            for (std::size_t i = 0; i < chunk_count; ++i) {
+                                chunk_child_start[i] = decode_u32(&prop_data[i * 4u]);
+                            }
+                        }
+                    }
+                }
+            } catch (const std::exception& e) {
+                return std::unexpected(std::string("Failed to decode RAD chunk: ") + e.what());
+            }
+
+            for (float& v : chunk_sh0) {
+                v = (v - 0.5f) / SH_C0;
+            }
+            if (!lod_opacity_encoded) {
+                for (float& v : chunk_opacity) {
+                    const float a = std::clamp(v, 1.0e-6f, 1.0f - 1.0e-6f);
+                    v = std::log(a / (1.0f - a));
+                }
+            } else {
+                for (float& v : chunk_opacity) {
+                    v = std::max(v, 0.0f);
+                }
+            }
+            for (float& v : chunk_scales) {
+                v = std::log(std::max(v, 1.0e-8f));
+            }
+
+            return RadDecodedChunk{
+                .base = chunk.base,
+                .count = chunk.count,
+                .max_sh_degree = max_sh,
+                .sh_coeffs_rest = static_cast<std::uint32_t>(sh_coeffs),
+                .lod_opacity_encoded = lod_opacity_encoded,
+                .means = std::move(chunk_means),
+                .opacity_raw = std::move(chunk_opacity),
+                .sh0_raw = std::move(chunk_sh0),
+                .scaling_raw = std::move(chunk_scales),
+                .rotation_raw = std::move(chunk_rotation),
+                .shN_canonical = std::move(chunk_shN),
+                .child_count = std::move(chunk_child_count),
+                .child_start = std::move(chunk_child_start),
+            };
+        }
+
         // ============================================================================
         // RAD Encoder
         // ============================================================================
@@ -2109,7 +2396,9 @@ namespace lfs::io {
 
         class RadDecoder {
         public:
-            std::expected<SplatData, std::string> decode(const std::vector<uint8_t>& data) {
+            std::expected<SplatData, std::string> decode(
+                const std::vector<uint8_t>& data,
+                const std::filesystem::path* source_path = nullptr) {
                 if (data.size() < 8) {
                     return std::unexpected("RAD file too small");
                 }
@@ -2152,12 +2441,17 @@ namespace lfs::io {
                 std::vector<float> all_shN;
                 std::vector<uint16_t> all_child_count;
                 std::vector<uint32_t> all_child_start;
+                std::vector<lfs::core::SplatLodTree::ChunkFileRange> chunk_file_ranges;
 
                 const int max_sh = meta.max_sh.value_or(0);
                 const int sh_coeffs = max_sh > 0 ? SH_COEFFS_FOR_DEGREE[max_sh] : 0;
                 const bool has_lod_tree = meta.lod_tree.value_or(false);
+                if (has_lod_tree) {
+                    chunk_file_ranges.reserve(meta.chunks.size());
+                }
 
                 for (size_t chunk_idx = 0; chunk_idx < meta.chunks.size(); ++chunk_idx) {
+                    const size_t chunk_file_offset = offset;
                     if (offset + 8 > data.size()) {
                         return std::unexpected("Unexpected end of RAD file (chunk header)");
                     }
@@ -2201,6 +2495,16 @@ namespace lfs::io {
                         if (chunk_end > data.size()) {
                             return std::unexpected("Chunk payload exceeds file bounds");
                         }
+                    }
+                    if (has_lod_tree) {
+                        chunk_file_ranges.push_back({
+                            .file_offset = static_cast<uint64_t>(chunk_file_offset),
+                            .file_bytes = static_cast<uint64_t>(chunk_end - chunk_file_offset),
+                            .payload_offset = static_cast<uint64_t>(payload_start),
+                            .payload_bytes = chunk.payload_bytes,
+                            .base = chunk.base,
+                            .count = chunk.count,
+                        });
                     }
 
                     const size_t chunk_count = static_cast<size_t>(chunk.count);
@@ -2453,6 +2757,19 @@ namespace lfs::io {
                     auto tree = std::make_unique<lfs::core::SplatLodTree>();
                     tree->child_count = std::move(all_child_count);
                     tree->child_start = std::move(all_child_start);
+                    const size_t chunk_count =
+                        (N + lfs::core::SplatLodTree::kChunkSplats - 1) /
+                        lfs::core::SplatLodTree::kChunkSplats;
+                    tree->chunk_to_page.resize(chunk_count);
+                    tree->page_to_chunk.resize(chunk_count);
+                    std::iota(tree->chunk_to_page.begin(), tree->chunk_to_page.end(), 0u);
+                    std::iota(tree->page_to_chunk.begin(), tree->page_to_chunk.end(), 0u);
+                    if (source_path != nullptr && !source_path->empty()) {
+                        tree->rad_source.path = *source_path;
+                        tree->rad_source.chunk_size = meta.chunk_size.value_or(CHUNK_SIZE);
+                        tree->rad_source.metadata_bytes = 8 + pad8(meta_size);
+                        tree->rad_source.chunks = std::move(chunk_file_ranges);
+                    }
                     tree->centers.reserve(N);
                     tree->sizes.reserve(N);
                     for (size_t i = 0; i < N; ++i) {
@@ -2517,7 +2834,7 @@ namespace lfs::io {
 
         // Decode
         RadDecoder decoder;
-        auto result = decoder.decode(data);
+        auto result = decoder.decode(data, &filepath);
 
         if (!result) {
             return result;
@@ -2530,6 +2847,58 @@ namespace lfs::io {
                  result->size(), result->get_max_sh_degree(), elapsed.count());
 
         return result;
+    }
+
+    std::expected<RadDecodedChunk, std::string> load_rad_chunk(
+        const std::filesystem::path& filepath,
+        const lfs::core::SplatLodTree::ChunkFileRange& range,
+        const int max_sh_degree,
+        const bool lod_opacity_encoded) {
+        if (range.file_bytes == 0) {
+            return std::unexpected("RAD chunk range has zero bytes");
+        }
+        if (range.file_bytes > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+            return std::unexpected("RAD chunk range is too large for this platform");
+        }
+
+        std::ifstream in;
+        if (!lfs::core::open_file_for_read(filepath, std::ios::binary, in)) {
+            return std::unexpected(std::format("Failed to open RAD file for chunk read: {}",
+                                               lfs::core::path_to_utf8(filepath)));
+        }
+        in.seekg(static_cast<std::streamoff>(range.file_offset), std::ios::beg);
+        if (!in.good()) {
+            return std::unexpected(std::format("Failed to seek RAD chunk at offset {} in {}",
+                                               range.file_offset,
+                                               lfs::core::path_to_utf8(filepath)));
+        }
+
+        std::vector<uint8_t> data(static_cast<std::size_t>(range.file_bytes));
+        in.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(data.size()));
+        if (!in.good()) {
+            return std::unexpected(std::format("Failed to read RAD chunk at offset {} in {}",
+                                               range.file_offset,
+                                               lfs::core::path_to_utf8(filepath)));
+        }
+
+        auto decoded = decode_rad_chunk_buffer(data,
+                                               max_sh_degree,
+                                               true,
+                                               lod_opacity_encoded);
+        if (!decoded) {
+            return decoded;
+        }
+        if (range.base != 0 || range.count != 0) {
+            if (decoded->base != range.base || decoded->count != range.count) {
+                return std::unexpected(std::format(
+                    "RAD chunk range mismatch: range base/count={}/{}, decoded base/count={}/{}",
+                    range.base,
+                    range.count,
+                    decoded->base,
+                    decoded->count));
+            }
+        }
+        return decoded;
     }
 
     Result<void> save_rad(const SplatData& splat_data, const RadSaveOptions& options) {

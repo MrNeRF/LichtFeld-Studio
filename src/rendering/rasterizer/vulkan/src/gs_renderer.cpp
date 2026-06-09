@@ -7,6 +7,8 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
 #ifdef max
 #undef max
@@ -268,7 +270,9 @@ void VulkanGSRenderer::executeProjectionForward(
     const _VulkanBuffer& model_transforms,
     size_t alloc_reserve,
     bool use_gut_projection,
-    const _VulkanBuffer& lod_indices) {
+    const _VulkanBuffer& lod_indices,
+    const _VulkanBuffer& lod_logical_indices,
+    const _VulkanBuffer& lod_levels) {
     PerfTimer::Timer<PerfTimer::ProjectionForward> timer(this);
     DEVICE_GUARD;
 
@@ -305,16 +309,28 @@ void VulkanGSRenderer::executeProjectionForward(
                         COMPUTE_SHADER_READ_WRITE);
 
     // Ensure transfer writes to optional LOD buffers are visible to projection.
-    if (lod_indices.buffer != VK_NULL_HANDLE) {
-        bufferMemoryBarrier(
-            {
-                {lod_indices, TRANSFER_COMPUTE_SHADER_WRITE},
-            },
-            COMPUTE_SHADER_READ);
+    if (lod_indices.buffer != VK_NULL_HANDLE ||
+        lod_logical_indices.buffer != VK_NULL_HANDLE ||
+        lod_levels.buffer != VK_NULL_HANDLE) {
+        std::vector<std::pair<_VulkanBuffer, BarrierMask>> barriers;
+        if (lod_indices.buffer != VK_NULL_HANDLE) {
+            barriers.push_back({lod_indices, TRANSFER_COMPUTE_SHADER_WRITE});
+        }
+        if (lod_logical_indices.buffer != VK_NULL_HANDLE) {
+            barriers.push_back({lod_logical_indices, TRANSFER_COMPUTE_SHADER_WRITE});
+        }
+        if (lod_levels.buffer != VK_NULL_HANDLE) {
+            barriers.push_back({lod_levels, TRANSFER_COMPUTE_SHADER_WRITE});
+        }
+        bufferMemoryBarrier(barriers, COMPUTE_SHADER_READ);
     }
 
     const _VulkanBuffer lod_indices_binding =
         (lod_indices.buffer != VK_NULL_HANDLE) ? lod_indices : primitive_depth_keys;
+    const _VulkanBuffer lod_logical_indices_binding =
+        (lod_logical_indices.buffer != VK_NULL_HANDLE) ? lod_logical_indices : lod_indices_binding;
+    const _VulkanBuffer lod_levels_binding =
+        (lod_levels.buffer != VK_NULL_HANDLE) ? lod_levels : primitive_depth_keys;
 
     std::vector<_VulkanBuffer> projection_buffers = {
         // inputs
@@ -339,6 +355,8 @@ void VulkanGSRenderer::executeProjectionForward(
         model_transforms,
         primitive_depth_keys,
         lod_indices_binding,
+        lod_logical_indices_binding,
+        lod_levels_binding,
     };
 
     executeCompute(

@@ -8,16 +8,43 @@
 #include "core/splat_data.hpp"
 #include "formats/rad.hpp"
 #include "io/error.hpp"
+
+#include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <string>
 
 namespace lfs::io {
 
     using lfs::core::Device;
     using lfs::core::SplatData;
     using lfs::core::Tensor;
+
+    namespace {
+        bool radPagedGpuUploadRequested(const SplatData& data) {
+            if (!data.lod_tree || !data.lod_tree->rad_source.valid()) {
+                return false;
+            }
+            const std::size_t logical_chunks = data.lod_tree->chunk_count();
+            if (logical_chunks <= 1) {
+                return false;
+            }
+            const char* const env = std::getenv("LFS_LOD_PAGE_CAPACITY");
+            if (env == nullptr || env[0] == '\0') {
+                return false;
+            }
+            try {
+                const std::size_t requested = static_cast<std::size_t>(std::stoull(env));
+                const std::size_t physical_pages = std::clamp(requested, std::size_t{1}, logical_chunks);
+                return physical_pages < logical_chunks;
+            } catch (...) {
+                return false;
+            }
+        }
+    } // namespace
 
     Result<LoadResult> RadLoader::load(
         const std::filesystem::path& path,
@@ -80,18 +107,25 @@ namespace lfs::io {
                               std::format("Failed to load RAD: {}", splat_result.error()), path);
         }
 
-        // Move tensors to CUDA for Vulkan renderer compatibility
         SplatData& data = *splat_result;
-        data.means_raw() = data.means_raw().to(Device::CUDA);
-        data.sh0_raw() = data.sh0_raw().to(Device::CUDA);
-        if (data.shN_raw().is_valid() && data.shN_raw().numel() > 0) {
-            data.shN_raw() = data.shN_raw().to(Device::CUDA);
-        }
-        data.scaling_raw() = data.scaling_raw().to(Device::CUDA);
-        data.rotation_raw() = data.rotation_raw().to(Device::CUDA);
-        data.opacity_raw() = data.opacity_raw().to(Device::CUDA);
-        if (data.has_deleted_mask()) {
-            data.deleted() = data.deleted().to(Device::CUDA);
+        if (radPagedGpuUploadRequested(data)) {
+            LOG_INFO("RAD paged LOD active: deferring full CUDA tensor migration "
+                     "(chunks={}, requested_pages={})",
+                     data.lod_tree->chunk_count(),
+                     std::getenv("LFS_LOD_PAGE_CAPACITY"));
+        } else {
+            // Move tensors to CUDA for Vulkan renderer compatibility.
+            data.means_raw() = data.means_raw().to(Device::CUDA);
+            data.sh0_raw() = data.sh0_raw().to(Device::CUDA);
+            if (data.shN_raw().is_valid() && data.shN_raw().numel() > 0) {
+                data.shN_raw() = data.shN_raw().to(Device::CUDA);
+            }
+            data.scaling_raw() = data.scaling_raw().to(Device::CUDA);
+            data.rotation_raw() = data.rotation_raw().to(Device::CUDA);
+            data.opacity_raw() = data.opacity_raw().to(Device::CUDA);
+            if (data.has_deleted_mask()) {
+                data.deleted() = data.deleted().to(Device::CUDA);
+            }
         }
 
         if (options.progress) {

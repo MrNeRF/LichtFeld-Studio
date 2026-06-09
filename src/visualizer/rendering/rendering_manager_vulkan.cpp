@@ -972,13 +972,35 @@ namespace lfs::vis {
             auto request = request_override
                                ? *request_override
                                : buildViewportRenderRequest(frame_ctx, panel_size, &source_viewport, panel_id);
+            std::vector<std::uint32_t> lod_touched_chunks;
             if (lod_controller_ && lod_controller_->hasTree()) {
                 const auto& selected = settings_.lod_enabled
                                            ? lod_controller_->selectedIndices()
                                            : lod_controller_->fullQualityIndices();
                 if (!selected.empty()) {
                     request.lod_indices = selected.data();
+                    if (lod_controller_->pageMappingActive()) {
+                        const auto& logical = settings_.lod_enabled
+                                                  ? lod_controller_->selectedLogicalIndices()
+                                                  : lod_controller_->fullQualityLogicalIndices();
+                        if (logical.size() == selected.size()) {
+                            request.lod_logical_indices = logical.data();
+                        }
+                    }
+                    if (settings_.lod_debug_colors) {
+                        const auto& levels = settings_.lod_enabled
+                                                 ? lod_controller_->selectedLevels()
+                                                 : lod_controller_->fullQualityLevels();
+                        if (levels.size() == selected.size()) {
+                            request.lod_levels = levels.data();
+                        }
+                    }
                     request.lod_count = selected.size();
+                    request.lod_selection_hash = lod_controller_->selectionHash();
+                    request.lod_generation = lod_controller_->statsGeneration();
+                    lod_touched_chunks = lod_controller_->touchedChunks();
+                    request.lod_touched_chunks = lod_touched_chunks.data();
+                    request.lod_touched_chunk_count = lod_touched_chunks.size();
                     request.lod_debug_mode = settings_.lod_debug_colors;
                 }
             }
@@ -1537,6 +1559,12 @@ namespace lfs::vis {
             request.raster_backend =
                 lfs::rendering::normalizeViewerRasterBackend(request.raster_backend, request.gut);
             request.gut = lfs::rendering::isGutBackend(request.raster_backend);
+            std::vector<std::uint32_t> lod_touched_chunks;
+            if (lfs::rendering::isVkSplatBackend(request.raster_backend) &&
+                context.vulkan_context &&
+                !vksplat_viewport_renderer_) {
+                vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
+            }
 
             const bool has_lod_tree = model && model->lod_tree && model->lod_tree->has_tree();
             if (has_lod_tree) {
@@ -1555,10 +1583,18 @@ namespace lfs::vis {
                     lod_controller_ = create_lod_controller();
                     lod_controller_->attach(*model);
                     lod_controller_model_ = model;
-                    lod_need_sync_fallback_ = true;
+                    lod_controller_needs_sync_traversal_ = true;
+                    lod_controller_page_map_generation_ = 0;
                 }
-                if (!lod_was_active_last_frame_) {
-                    lod_need_sync_fallback_ = true;
+                if (vksplat_viewport_renderer_) {
+                    if (auto page_snapshot = vksplat_viewport_renderer_->ensureLodPageCacheSnapshot(*model);
+                        page_snapshot &&
+                        page_snapshot->generation != lod_controller_page_map_generation_) {
+                        lod_controller_->applyPageMaps(page_snapshot->page_to_chunk,
+                                                       page_snapshot->chunk_to_page);
+                        lod_controller_page_map_generation_ = page_snapshot->generation;
+                        lod_controller_needs_sync_traversal_ = true;
+                    }
                 }
 
                 if (settings_.lod_enabled) {
@@ -1586,12 +1622,15 @@ namespace lfs::vis {
                         params.pixel_scale_limit *= params.lod_render_scale;
                     }
 
-                    lod_controller_->swapAsyncResults();
-                    lod_controller_->updateAsync(lod_frame.object_to_view, params);
-                    lod_need_sync_fallback_ = false;
+                    if (lod_controller_needs_sync_traversal_) {
+                        lod_controller_->update(lod_frame.object_to_view, params);
+                        lod_controller_needs_sync_traversal_ = false;
+                    } else {
+                        lod_controller_->swapAsyncResults();
+                        lod_controller_->updateAsync(lod_frame.object_to_view, params);
+                    }
                 } else {
                     lod_controller_->activateFullQualityReference();
-                    lod_need_sync_fallback_ = true;
                 }
 
                 const auto& selected = settings_.lod_enabled
@@ -1599,15 +1638,36 @@ namespace lfs::vis {
                                            : lod_controller_->fullQualityIndices();
                 if (!selected.empty()) {
                     request.lod_indices = selected.data();
+                    if (lod_controller_->pageMappingActive()) {
+                        const auto& logical = settings_.lod_enabled
+                                                  ? lod_controller_->selectedLogicalIndices()
+                                                  : lod_controller_->fullQualityLogicalIndices();
+                        if (logical.size() == selected.size()) {
+                            request.lod_logical_indices = logical.data();
+                        }
+                    }
+                    if (settings_.lod_debug_colors) {
+                        const auto& levels = settings_.lod_enabled
+                                                 ? lod_controller_->selectedLevels()
+                                                 : lod_controller_->fullQualityLevels();
+                        if (levels.size() == selected.size()) {
+                            request.lod_levels = levels.data();
+                        }
+                    }
                     request.lod_count = selected.size();
+                    request.lod_selection_hash = lod_controller_->selectionHash();
+                    request.lod_generation = lod_controller_->statsGeneration();
+                    lod_touched_chunks = lod_controller_->touchedChunks();
+                    request.lod_touched_chunks = lod_touched_chunks.data();
+                    request.lod_touched_chunk_count = lod_touched_chunks.size();
                 }
                 request.lod_debug_mode = settings_.lod_debug_colors;
             } else {
                 lod_controller_.reset();
                 lod_controller_model_ = nullptr;
-                lod_need_sync_fallback_ = true;
+                lod_controller_needs_sync_traversal_ = false;
+                lod_controller_page_map_generation_ = 0;
             }
-            lod_was_active_last_frame_ = settings_.lod_enabled && has_lod_tree;
 
             if (lfs::rendering::isVkSplatBackend(request.raster_backend)) {
                 if (!context.vulkan_context) {

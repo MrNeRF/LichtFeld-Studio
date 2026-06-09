@@ -294,11 +294,13 @@ namespace lfs::vis {
                                           const DirtyMask dirty_flags) {
         bool clear_metrics = false;
         bool lod_request_changed = false;
+        bool lod_enabled_turned_on = false;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
             const int focused_panel_index =
                 static_cast<int>(splitViewPanelIndex(split_view_service_.focusedPanel()));
             const bool grid_plane_changed = settings_.grid_plane != new_settings.grid_plane;
+            lod_enabled_turned_on = !settings_.lod_enabled && new_settings.lod_enabled;
             lod_request_changed =
                 settings_.lod_enabled != new_settings.lod_enabled ||
                 settings_.lod_max_splats != new_settings.lod_max_splats ||
@@ -352,6 +354,9 @@ namespace lfs::vis {
 
         if (lod_request_changed && lod_controller_) {
             lod_controller_->invalidatePendingWork();
+        }
+        if (lod_enabled_turned_on) {
+            lod_controller_needs_sync_traversal_ = true;
         }
 
         auto& render_settings_generation = app_store().render_settings_generation;

@@ -1407,6 +1407,12 @@ std::expected<std::unique_ptr<SplatData>, std::string> build_bhatt_lod(
         lod_tree->child_count = std::move(out_child_count);
         lod_tree->child_start = std::move(out_child_start);
         lod_tree->lod_level = std::move(out_lod_level);
+        const size_t chunk_count =
+            (output_count + SplatLodTree::kChunkSplats - 1) / SplatLodTree::kChunkSplats;
+        lod_tree->chunk_to_page.resize(chunk_count);
+        lod_tree->page_to_chunk.resize(chunk_count);
+        std::iota(lod_tree->chunk_to_page.begin(), lod_tree->chunk_to_page.end(), 0u);
+        std::iota(lod_tree->page_to_chunk.begin(), lod_tree->page_to_chunk.end(), 0u);
         lod_tree->centers.reserve(output_count);
         lod_tree->sizes.reserve(output_count);
 

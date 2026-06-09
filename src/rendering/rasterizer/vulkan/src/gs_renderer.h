@@ -104,8 +104,10 @@ public:
                                   const _VulkanBuffer& overlay_params,
                                   const _VulkanBuffer& model_transforms,
                                   size_t alloc_reserve = 0,
-                                   bool use_gut_projection = false,
-                                   const _VulkanBuffer& lod_indices = _VulkanBuffer());
+                                  bool use_gut_projection = false,
+                                  const _VulkanBuffer& lod_indices = _VulkanBuffer(),
+                                  const _VulkanBuffer& lod_logical_indices = _VulkanBuffer(),
+                                  const _VulkanBuffer& lod_levels = _VulkanBuffer());
     void executeGenerateKeys(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers);
     void executeComputeTileRanges(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers);
     void executeRasterizeForward(const VulkanGSRendererUniforms& uniforms,
@@ -183,8 +185,8 @@ protected:
                                         const _VulkanBuffer& overlay_params,
                                         bool overlays_active);
 
-    _ComputePipeline pipeline_projection_forward = _ComputePipeline(20);
-    _ComputePipeline pipeline_projection_forward_3dgut = _ComputePipeline(20);
+    _ComputePipeline pipeline_projection_forward = _ComputePipeline(21);
+    _ComputePipeline pipeline_projection_forward_3dgut = _ComputePipeline(21);
     _ComputePipeline pipeline_selection_mask = _ComputePipeline(9);
     _ComputePipeline pipeline_selection_polygon_rasterize = _ComputePipeline(2);
     _ComputePipeline pipeline_generate_keys = _ComputePipeline(7);

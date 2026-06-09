@@ -176,7 +176,13 @@ namespace lfs::rendering {
 
         // LOD index indirection (optional)
         const uint32_t* lod_indices = nullptr;
+        const uint32_t* lod_logical_indices = nullptr;
+        const uint32_t* lod_levels = nullptr;
         size_t lod_count = 0;
+        uint64_t lod_selection_hash = 0;
+        uint64_t lod_generation = 0;
+        const uint32_t* lod_touched_chunks = nullptr;
+        size_t lod_touched_chunk_count = 0;
         bool lod_debug_mode = false;
     };
 

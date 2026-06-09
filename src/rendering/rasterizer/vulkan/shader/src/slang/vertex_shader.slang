@@ -85,10 +85,13 @@ Gaussian_3D load_zero_gaussian() {
 }
 
 [ForceInline]
-float3 chunk_debug_color(uint chunk_id) {
-    float hue = fract(float(chunk_id) * 0.61803398875);
-    float3 rgb = clamp(abs(fmod(hue * 6.0 + float3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
-    return lerp(float3(1.0), rgb, 0.85);
+float3 lod_debug_color(uint lod_level) {
+    const uint palette_index = lod_level % 5u;
+    if (palette_index == 0u) return float3(1.0, 0.0, 0.0);
+    if (palette_index == 1u) return float3(0.0, 1.0, 0.0);
+    if (palette_index == 2u) return float3(0.0, 0.0, 1.0);
+    if (palette_index == 3u) return float3(1.0, 1.0, 0.0);
+    return float3(1.0, 0.0, 1.0);
 }
 
 [Differentiable]
@@ -365,6 +368,8 @@ layout(binding=17) StructuredBuffer<float4> model_transforms;
 layout(binding=18) RWStructuredBuffer<uint32_t> out_primitive_depth_keys;
 // LOD index indirection buffer
 layout(binding=19) StructuredBuffer<uint32_t> lod_indices;
+layout(binding=20) StructuredBuffer<uint32_t> lod_logical_indices;
+layout(binding=21) StructuredBuffer<uint32_t> lod_levels;
 
 
 #elif EXPORT_MODE == EXPORT_MODE_VULKAN_BACKWARD
@@ -422,8 +427,12 @@ void main(
 
     // LOD indirection
     const bool lod_active = (uniforms.lod_enabled & 1u) != 0u;
+    uint logical_idx = g_idx;
     if (lod_active) {
         g_idx = lod_indices[render_idx];
+        logical_idx = (uniforms.lod_enabled & 8u) != 0u
+            ? lod_logical_indices[render_idx]
+            : g_idx;
     }
     const uint out_idx = render_idx;
 
@@ -482,7 +491,7 @@ void main(
     float4 emphasis_flags = overlay_params[OVERLAY_PARAM_EMPHASIS_FLAGS];
     bool node_data_enabled = overlay_enabled(emphasis_flags.y);
     int node_count = overlay_int(emphasis_flags.z);
-    int node_idx = node_data_enabled ? read_int32(transform_indices, g_idx) : -1;
+    int node_idx = node_data_enabled ? read_int32(transform_indices, logical_idx) : -1;
     int model_transform_idx = node_data_enabled ? node_idx : 0;
     model_transform_idx = clamp(model_transform_idx, 0, int(max(model_transform_count, 1u)) - 1);
     uint model_transform_base = uint(model_transform_idx) * 4u;
@@ -732,8 +741,8 @@ void main(
 #if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD
 
     if ((uniforms.lod_enabled & 2u) != 0u) {
-        const float3 debug_rgb = chunk_debug_color(uint(g_idx) >> 12u);
-        splat.rgb = lerp(splat.rgb, debug_rgb, 0.80f);
+        const float3 debug_rgb = lod_debug_color(lod_levels[render_idx]);
+        splat.rgb *= debug_rgb;
     }
 
     out_xy_vs[out_idx] = splat.xyz_vs.xy;

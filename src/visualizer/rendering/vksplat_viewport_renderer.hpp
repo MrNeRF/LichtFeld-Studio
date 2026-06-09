@@ -6,6 +6,7 @@
 
 #include "core/exportable_storage.hpp"
 #include "core/splat_data.hpp"
+#include "lod_page_cache.hpp"
 #include "rendering/cuda_vulkan_interop.hpp"
 #include "rendering/rasterizer/vulkan/src/gs_renderer.h"
 #include "rendering/rendering.hpp"
@@ -19,6 +20,8 @@
 #include <glm/glm.hpp>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -146,6 +149,10 @@ namespace lfs::vis {
         void releasePreviewResources();
         void releaseSceneResources();
         void reset();
+        [[nodiscard]] std::optional<LodPageCache::Snapshot> ensureLodPageCacheSnapshot(
+            const lfs::core::SplatData& splat_data);
+        [[nodiscard]] std::optional<LodPageCache::Snapshot> lodPageCacheSnapshot(
+            const lfs::core::SplatData& splat_data) const;
 
     private:
         struct ComposePipeline;
@@ -161,6 +168,15 @@ namespace lfs::vis {
             bool force_upload,
             int upload_sh_degree,
             bool synchronize_upload = false);
+        [[nodiscard]] std::expected<void, std::string> ensureLodPageInputStorage(
+            VulkanContext& context,
+            const lfs::core::SplatData& splat_data,
+            std::size_t ring_slot,
+            int upload_sh_degree);
+        [[nodiscard]] std::expected<void, std::string> uploadLodPageInputs(
+            const lfs::core::SplatData& splat_data,
+            std::span<const LodPageCache::PendingUpload> uploads,
+            std::size_t ring_slot);
         struct OverlayBindingViews {
             _VulkanBuffer selection_mask{};
             _VulkanBuffer preview_mask{};
@@ -328,6 +344,33 @@ namespace lfs::vis {
         mutable VkFence readback_fence_ = VK_NULL_HANDLE;
         VulkanGSRenderer renderer_;
         VulkanGSPipelineBuffers buffers_;
+        struct LodUploadSignature {
+            const lfs::core::SplatData* model = nullptr;
+            std::size_t count = 0;
+            std::uint64_t hash = 0;
+            std::uint64_t generation = 0;
+            bool valid = false;
+        };
+        LodUploadSignature uploaded_lod_indices_{};
+        LodUploadSignature uploaded_lod_logical_indices_{};
+        LodUploadSignature uploaded_lod_levels_{};
+        bool lod_indices_upload_pending_ = false;
+        bool lod_logical_indices_upload_pending_ = false;
+        bool lod_levels_upload_pending_ = false;
+        const lfs::core::SplatData* lod_page_cache_model_ = nullptr;
+        LodPageCache lod_page_cache_;
+        std::uint64_t lod_page_cache_prefetch_generation_ = 0;
+        struct LodPageInputStorage {
+            VulkanContext::ExternalBuffer buffer{};
+            lfs::rendering::CudaVulkanBufferInterop interop{};
+            std::array<std::size_t, kInputRegionCount> region_offset{};
+            std::array<std::size_t, kInputRegionCount> region_bytes{};
+            const lfs::core::SplatData* model = nullptr;
+            std::size_t physical_pages = 0;
+            std::size_t splat_capacity = 0;
+            int input_sh_degree = -1;
+        };
+        LodPageInputStorage lod_page_inputs_;
         std::unique_ptr<ComposePipeline> compose_;
         struct OutputImageSlot {
             VulkanContext::ExternalImage image{};

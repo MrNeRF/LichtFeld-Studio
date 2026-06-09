@@ -12,6 +12,7 @@
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "io/formats/rad.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "viewport/vksplat_compose.comp.spv.h"
 #include "vksplat_input_packer.hpp"
@@ -22,6 +23,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <format>
@@ -47,6 +49,23 @@ namespace lfs::vis {
         constexpr std::uint32_t kVkSplatCameraModelEquirectangular = 3u;
         constexpr std::uint32_t kVkSplatProjectionModeShift = 8u;
         constexpr std::uint32_t kVkSplatProjectionModeGut = 1u;
+
+        std::size_t requestedLodPhysicalPages(const std::size_t logical_chunks,
+                                              const lfs::core::SplatData& splat_data) {
+            if (logical_chunks == 0 || splat_data.has_deleted_mask()) {
+                return logical_chunks;
+            }
+            const char* const env = std::getenv("LFS_LOD_PAGE_CAPACITY");
+            if (env == nullptr || env[0] == '\0') {
+                return logical_chunks;
+            }
+            try {
+                const std::size_t requested = static_cast<std::size_t>(std::stoull(env));
+                return std::clamp(requested, std::size_t{1}, logical_chunks);
+            } catch (...) {
+                return logical_chunks;
+            }
+        }
 
         template <typename Fn>
         class ScopeExit final {
@@ -1023,6 +1042,110 @@ namespace lfs::vis {
             return {};
         }
 
+        [[nodiscard]] std::expected<void, std::string> requireCudaFloat32ContiguousTensor(
+            const Tensor& tensor,
+            const std::string_view label) {
+            if (!tensor.is_valid() || tensor.data_ptr() == nullptr) {
+                return std::unexpected(std::format("VkSplat LOD page upload missing {}", label));
+            }
+            if (tensor.dtype() != DataType::Float32) {
+                return std::unexpected(std::format("VkSplat LOD page upload expected Float32 {}", label));
+            }
+            if (tensor.device() != Device::CUDA) {
+                return std::unexpected(std::format("VkSplat LOD page upload expected CUDA {}", label));
+            }
+            if (!tensor.is_contiguous()) {
+                return std::unexpected(std::format("VkSplat LOD page upload expected contiguous {}", label));
+            }
+            return {};
+        }
+
+        [[nodiscard]] std::expected<void, std::string> copyCudaBytes(
+            const void* src,
+            void* dst,
+            const std::size_t bytes,
+            const cudaStream_t stream,
+            const std::string_view label) {
+            if (bytes == 0) {
+                return {};
+            }
+            if (src == nullptr || dst == nullptr) {
+                return std::unexpected(std::format("VkSplat LOD page {} copy received a null pointer", label));
+            }
+            const cudaError_t status = cudaMemcpyAsync(dst, src, bytes, cudaMemcpyDeviceToDevice, stream);
+            if (status != cudaSuccess) {
+                return std::unexpected(std::format("VkSplat LOD page {} copy failed: {} ({})",
+                                                   label,
+                                                   cudaGetErrorName(status),
+                                                   cudaGetErrorString(status)));
+            }
+            return {};
+        }
+
+        [[nodiscard]] std::expected<void, std::string> copyHostBytesToCuda(
+            const void* src,
+            void* dst,
+            const std::size_t bytes,
+            const cudaStream_t stream,
+            const std::string_view label) {
+            if (bytes == 0) {
+                return {};
+            }
+            if (src == nullptr || dst == nullptr) {
+                return std::unexpected(std::format("VkSplat LOD page {} H2D copy received a null pointer", label));
+            }
+            const cudaError_t status = cudaMemcpyAsync(dst, src, bytes, cudaMemcpyHostToDevice, stream);
+            if (status != cudaSuccess) {
+                return std::unexpected(std::format("VkSplat LOD page {} H2D copy failed: {} ({})",
+                                                   label,
+                                                   cudaGetErrorName(status),
+                                                   cudaGetErrorString(status)));
+            }
+            return {};
+        }
+
+        [[nodiscard]] std::vector<float> buildSwizzledShPage(
+            const std::vector<float>& canonical,
+            const std::size_t count,
+            const std::uint32_t src_rest,
+            const std::uint32_t dst_rest) {
+            if (count == 0 || dst_rest == 0u) {
+                return {};
+            }
+            const std::uint32_t slots = lfs::core::sh_float4_slots_for_rest(dst_rest);
+            if (slots == 0u) {
+                return {};
+            }
+            const std::size_t page_capacity = LodPageCache::kChunkSplats;
+            std::vector<float> swizzled(
+                lfs::core::sh_swizzled_float_count(page_capacity, dst_rest),
+                0.0f);
+            if (src_rest == 0u) {
+                return swizzled;
+            }
+            const std::size_t source_stride = static_cast<std::size_t>(src_rest) * lfs::core::kShChannels;
+            const std::size_t active_floats = static_cast<std::size_t>(src_rest) * lfs::core::kShChannels;
+            const std::size_t row_count = std::min(count, page_capacity);
+            for (std::size_t i = 0; i < row_count; ++i) {
+                const float* const row = canonical.data() + i * source_stride;
+                const std::uint32_t block = static_cast<std::uint32_t>(i / lfs::core::kShReorderSize);
+                const std::uint32_t lane = static_cast<std::uint32_t>(i % lfs::core::kShReorderSize);
+                for (std::uint32_t slot = 0; slot < slots; ++slot) {
+                    const std::size_t float4_index =
+                        (static_cast<std::size_t>(block) * slots * lfs::core::kShReorderSize) +
+                        (static_cast<std::size_t>(slot) * lfs::core::kShReorderSize) +
+                        lane;
+                    float* const dst = swizzled.data() + float4_index * 4u;
+                    const std::size_t source_offset = static_cast<std::size_t>(slot) * 4u;
+                    for (std::size_t component = 0; component < 4u; ++component) {
+                        const std::size_t source_index = source_offset + component;
+                        dst[component] = source_index < active_floats ? row[source_index] : 0.0f;
+                    }
+                }
+            }
+            return swizzled;
+        }
+
         void populateVksplatCameraUniforms(
             VulkanGSRendererUniforms& uniforms,
             const lfs::rendering::FrameView& frame_view,
@@ -1239,6 +1362,18 @@ namespace lfs::vis {
         buffers_.num_splats = 0;
         buffers_.num_indices = 0;
         buffers_.is_unsorted_1 = true;
+        uploaded_lod_indices_ = {};
+        uploaded_lod_logical_indices_ = {};
+        uploaded_lod_levels_ = {};
+        lod_indices_upload_pending_ = false;
+        lod_logical_indices_upload_pending_ = false;
+        lod_levels_upload_pending_ = false;
+        lod_page_cache_model_ = nullptr;
+        lod_page_cache_.reset();
+        lod_page_cache_prefetch_generation_ = 0;
+        lod_page_inputs_.interop.reset();
+        context_->destroyExternalBuffer(lod_page_inputs_.buffer);
+        lod_page_inputs_ = {};
         current_input_sh_degree_ = -1;
 
         releasePrivateScratchBuffers();
@@ -1298,6 +1433,11 @@ namespace lfs::vis {
             context_->destroyExternalBuffer(cuda_selection_query_.buffer);
         }
         cuda_selection_query_ = {};
+        lod_page_inputs_.interop.reset();
+        if (context_) {
+            context_->destroyExternalBuffer(lod_page_inputs_.buffer);
+        }
+        lod_page_inputs_ = {};
         for (auto& snap : ring_uploaded_) {
             snap = {};
         }
@@ -1353,8 +1493,569 @@ namespace lfs::vis {
         current_input_sh_degree_ = -1;
         compose_.reset();
         buffers_ = {};
+        uploaded_lod_indices_ = {};
+        uploaded_lod_logical_indices_ = {};
+        uploaded_lod_levels_ = {};
+        lod_indices_upload_pending_ = false;
+        lod_logical_indices_upload_pending_ = false;
+        lod_levels_upload_pending_ = false;
+        lod_page_cache_model_ = nullptr;
+        lod_page_cache_.reset();
+        lod_page_cache_prefetch_generation_ = 0;
         initialized_ = false;
         context_ = nullptr;
+    }
+
+    std::optional<LodPageCache::Snapshot> VksplatViewportRenderer::lodPageCacheSnapshot(
+        const lfs::core::SplatData& splat_data) const {
+        if (lod_page_cache_model_ != &splat_data || !lod_page_cache_.configured()) {
+            return std::nullopt;
+        }
+        return lod_page_cache_.snapshot();
+    }
+
+    std::optional<LodPageCache::Snapshot> VksplatViewportRenderer::ensureLodPageCacheSnapshot(
+        const lfs::core::SplatData& splat_data) {
+        const std::size_t logical_chunks =
+            splat_data.lod_tree ? splat_data.lod_tree->chunk_count() : 0;
+        if (logical_chunks == 0) {
+            return std::nullopt;
+        }
+
+        const std::size_t physical_pages = requestedLodPhysicalPages(logical_chunks, splat_data);
+        const bool needs_configure =
+            lod_page_cache_model_ != &splat_data ||
+            !lod_page_cache_.configured() ||
+            lod_page_cache_.snapshot().logical_chunks != logical_chunks ||
+            lod_page_cache_.snapshot().physical_pages != physical_pages;
+        if (needs_configure) {
+            lod_page_cache_model_ = &splat_data;
+            lod_page_cache_.configure(logical_chunks, physical_pages, 1);
+            lod_page_cache_prefetch_generation_ = 0;
+            if (lod_page_cache_.fullyResident()) {
+                (void)lod_page_cache_.drainPendingUploads();
+            }
+            LOG_INFO("LOD page cache configured: logical_chunks={} physical_pages={} partial={} rad_source={}",
+                     logical_chunks,
+                     physical_pages,
+                     physical_pages < logical_chunks ? 1 : 0,
+                     splat_data.lod_tree && splat_data.lod_tree->rad_source.valid() ? 1 : 0);
+        }
+        lod_page_cache_.setRadSource(splat_data.lod_tree ? &splat_data.lod_tree->rad_source : nullptr,
+                                     splat_data.get_max_sh_degree(),
+                                     splat_data.lod_tree ? splat_data.lod_tree->lod_opacity_encoded : false);
+        if (lod_page_cache_.fullyResident() &&
+            lod_page_inputs_.buffer.buffer != VK_NULL_HANDLE &&
+            context_ != nullptr) {
+            lod_page_inputs_.interop.reset();
+            context_->destroyExternalBuffer(lod_page_inputs_.buffer);
+            lod_page_inputs_ = {};
+        }
+        return lod_page_cache_.snapshot();
+    }
+
+    std::expected<void, std::string> VksplatViewportRenderer::ensureLodPageInputStorage(
+        VulkanContext& context,
+        const lfs::core::SplatData& splat_data,
+        const std::size_t ring_slot,
+        const int upload_sh_degree) {
+        const auto snapshot = ensureLodPageCacheSnapshot(splat_data);
+        if (!snapshot || !lod_page_cache_.configured() || lod_page_cache_.fullyResident()) {
+            return {};
+        }
+        if (splat_data.has_deleted_mask()) {
+            return std::unexpected(
+                "VkSplat LOD page input storage does not support deleted-mask opacity baking");
+        }
+        if (!context.externalMemoryInteropEnabled()) {
+            return std::unexpected(
+                "VkSplat LOD page input storage requires CUDA/Vulkan external-memory interop");
+        }
+        if (snapshot->physical_pages == 0) {
+            return std::unexpected("VkSplat LOD page input storage requested zero physical pages");
+        }
+        if (snapshot->physical_pages >
+            std::numeric_limits<std::size_t>::max() / LodPageCache::kChunkSplats) {
+            return std::unexpected("VkSplat LOD page input storage capacity overflow");
+        }
+
+        const std::size_t splat_capacity = snapshot->physical_pages * LodPageCache::kChunkSplats;
+        const int effective_upload_sh_degree =
+            upload_sh_degree < 0
+                ? splat_data.get_max_sh_degree()
+                : std::clamp(upload_sh_degree, 0, splat_data.get_max_sh_degree());
+        const std::uint32_t source_rest = static_cast<std::uint32_t>(splat_data.max_sh_coeffs_rest());
+        const std::uint32_t layout_rest = std::min<std::uint32_t>(
+            source_rest,
+            lfs::core::sh_rest_coefficients_for_degree(effective_upload_sh_degree));
+
+        std::array<std::size_t, kInputRegionCount> region_bytes{};
+        region_bytes[InputXyzWs] = splat_capacity * 3u * sizeof(float);
+        region_bytes[InputSh0] = splat_capacity * 3u * sizeof(float);
+        region_bytes[InputShN] = layout_rest == 0u
+                                     ? 4u * sizeof(float)
+                                     : lfs::core::sh_swizzled_byte_count(splat_capacity, layout_rest);
+        region_bytes[InputRotations] = splat_capacity * 4u * sizeof(float);
+        region_bytes[InputScalingRaw] = splat_capacity * 3u * sizeof(float);
+        region_bytes[InputOpacityRaw] = splat_capacity * sizeof(float);
+
+        std::array<std::size_t, kInputRegionCount> region_offset{};
+        const std::size_t total_bytes = layoutRegions(region_bytes, region_offset, kRegionAlignment);
+        const bool storage_config_changed =
+            lod_page_inputs_.model != &splat_data ||
+            lod_page_inputs_.physical_pages != snapshot->physical_pages ||
+            lod_page_inputs_.splat_capacity != splat_capacity ||
+            lod_page_inputs_.input_sh_degree != effective_upload_sh_degree ||
+            lod_page_inputs_.region_bytes != region_bytes ||
+            lod_page_inputs_.region_offset != region_offset;
+        const VkBuffer previous_buffer = lod_page_inputs_.buffer.buffer;
+        const VkDeviceSize previous_size = lod_page_inputs_.buffer.size;
+
+        if (auto ok = ensureCudaInteropBuffer(context,
+                                              lod_page_inputs_.buffer,
+                                              lod_page_inputs_.interop,
+                                              total_bytes,
+                                              "vulkan.vksplat.lod_page_inputs",
+                                              std::format("pages{}.sh{}",
+                                                          snapshot->physical_pages,
+                                                          effective_upload_sh_degree),
+                                              "LOD page input");
+            !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (lod_page_inputs_.interop.devicePointer() == nullptr) {
+            return std::unexpected("VkSplat LOD page input storage is not mapped");
+        }
+
+        const bool storage_recreated =
+            previous_buffer != lod_page_inputs_.buffer.buffer ||
+            previous_size != lod_page_inputs_.buffer.size;
+        lod_page_inputs_.region_offset = region_offset;
+        lod_page_inputs_.region_bytes = region_bytes;
+        lod_page_inputs_.model = &splat_data;
+        lod_page_inputs_.physical_pages = snapshot->physical_pages;
+        lod_page_inputs_.splat_capacity = splat_capacity;
+        lod_page_inputs_.input_sh_degree = effective_upload_sh_degree;
+
+        const auto view = [&](const std::size_t region) {
+            return makeRegionView(lod_page_inputs_.buffer,
+                                  lod_page_inputs_.region_offset[region],
+                                  lod_page_inputs_.region_bytes[region]);
+        };
+        buffers_.xyz_ws.deviceBuffer = view(InputXyzWs);
+        buffers_.sh0.deviceBuffer = view(InputSh0);
+        buffers_.shN.deviceBuffer = view(InputShN);
+        buffers_.rotations.deviceBuffer = view(InputRotations);
+        buffers_.scaling_raw.deviceBuffer = view(InputScalingRaw);
+        buffers_.opacity_raw.deviceBuffer = view(InputOpacityRaw);
+        buffers_.scales_opacs.deviceBuffer = {};
+        buffers_.sh_coeffs.deviceBuffer = {};
+        releaseInputHostStorage(buffers_);
+        buffers_.num_splats = splat_capacity;
+        if (storage_config_changed || storage_recreated) {
+            buffers_.num_indices = 0;
+            buffers_.is_unsorted_1 = true;
+        }
+        current_input_sh_degree_ = effective_upload_sh_degree;
+
+        if (storage_config_changed || storage_recreated) {
+            std::vector<LodPageCache::PendingUpload> resident_pages;
+            resident_pages.reserve(snapshot->page_to_chunk.size());
+            for (std::size_t page = 0; page < snapshot->page_to_chunk.size(); ++page) {
+                const std::uint32_t chunk = snapshot->page_to_chunk[page];
+                if (chunk == LodPageCache::kInvalidPage) {
+                    continue;
+                }
+                resident_pages.push_back({
+                    .page = static_cast<std::uint32_t>(page),
+                    .chunk = chunk,
+                    .generation = snapshot->generation,
+                    .decoded_chunk = std::nullopt,
+                    .error = {},
+                });
+            }
+            if (auto ok = uploadLodPageInputs(splat_data, resident_pages, ring_slot); !ok) {
+                return std::unexpected(ok.error());
+            }
+        }
+
+        return {};
+    }
+
+    std::expected<void, std::string> VksplatViewportRenderer::uploadLodPageInputs(
+        const lfs::core::SplatData& splat_data,
+        const std::span<const LodPageCache::PendingUpload> uploads,
+        const std::size_t ring_slot) {
+        if (uploads.empty()) {
+            return {};
+        }
+        if (ring_slot >= upload_timelines_.size()) {
+            return std::unexpected("VkSplat LOD page upload received an invalid ring slot");
+        }
+        if (lod_page_inputs_.model != &splat_data ||
+            lod_page_inputs_.interop.devicePointer() == nullptr ||
+            lod_page_inputs_.physical_pages == 0 ||
+            lod_page_inputs_.splat_capacity == 0) {
+            return std::unexpected("VkSplat LOD page upload requires initialized page input storage");
+        }
+
+        auto* const base = static_cast<std::uint8_t*>(lod_page_inputs_.interop.devicePointer());
+        const auto region_ptr = [&](const std::size_t region) -> std::uint8_t* {
+            return base + lod_page_inputs_.region_offset[region];
+        };
+        auto* const means_dst = reinterpret_cast<float*>(region_ptr(InputXyzWs));
+        auto* const sh0_dst = reinterpret_cast<float*>(region_ptr(InputSh0));
+        auto* const shN_dst = reinterpret_cast<float*>(region_ptr(InputShN));
+        auto* const rotations_dst = reinterpret_cast<float*>(region_ptr(InputRotations));
+        auto* const scaling_dst = reinterpret_cast<float*>(region_ptr(InputScalingRaw));
+        auto* const opacity_dst = reinterpret_cast<float*>(region_ptr(InputOpacityRaw));
+
+        const auto* rad_source =
+            splat_data.lod_tree && splat_data.lod_tree->rad_source.valid()
+                ? &splat_data.lod_tree->rad_source
+                : nullptr;
+        if (rad_source != nullptr) {
+            const cudaStream_t stream =
+                splat_data.means_raw().is_valid() ? splat_data.means_raw().stream() : nullptr;
+            const std::uint32_t dst_rest = std::min<std::uint32_t>(
+                static_cast<std::uint32_t>(splat_data.max_sh_coeffs_rest()),
+                lfs::core::sh_rest_coefficients_for_degree(lod_page_inputs_.input_sh_degree));
+            const std::uint32_t dst_slots = lfs::core::sh_float4_slots_for_rest(dst_rest);
+            const std::size_t page_sh_bytes =
+                dst_rest == 0u ? 0u : lfs::core::sh_swizzled_byte_count(LodPageCache::kChunkSplats, dst_rest);
+
+            const auto require_floats = [](const std::vector<float>& values,
+                                           const std::size_t floats,
+                                           const std::string_view label) -> std::expected<void, std::string> {
+                if (values.size() < floats) {
+                    return std::unexpected(std::format(
+                        "RAD chunk {} decoded {} floats, expected at least {}",
+                        label,
+                        values.size(),
+                        floats));
+                }
+                return {};
+            };
+
+            bool queued_upload = false;
+            std::size_t uploaded_splats = 0;
+            std::vector<LodPageCache::PendingUpload> completed_uploads;
+            completed_uploads.reserve(uploads.size());
+            for (const auto& upload : uploads) {
+                if (!upload.error.empty()) {
+                    return std::unexpected(upload.error);
+                }
+                if (upload.page == LodPageCache::kInvalidPage ||
+                    upload.chunk == LodPageCache::kInvalidPage ||
+                    upload.page >= lod_page_inputs_.physical_pages ||
+                    upload.chunk >= rad_source->chunks.size()) {
+                    continue;
+                }
+                const std::size_t dst_start =
+                    static_cast<std::size_t>(upload.page) * LodPageCache::kChunkSplats;
+                if (dst_start >= lod_page_inputs_.splat_capacity) {
+                    continue;
+                }
+                std::optional<lfs::io::RadDecodedChunk> loaded_chunk;
+                const lfs::io::RadDecodedChunk* decoded = nullptr;
+                if (upload.decoded_chunk) {
+                    decoded = &*upload.decoded_chunk;
+                } else {
+                    auto loaded = lfs::io::load_rad_chunk(rad_source->path,
+                                                          rad_source->chunks[upload.chunk],
+                                                          splat_data.get_max_sh_degree(),
+                                                          splat_data.lod_tree->lod_opacity_encoded);
+                    if (!loaded) {
+                        return std::unexpected(loaded.error());
+                    }
+                    loaded_chunk = std::move(*loaded);
+                    decoded = &*loaded_chunk;
+                }
+                const std::size_t count = std::min({
+                    static_cast<std::size_t>(decoded->count),
+                    LodPageCache::kChunkSplats,
+                    lod_page_inputs_.splat_capacity - dst_start,
+                });
+                if (count == 0) {
+                    continue;
+                }
+                if (auto ok = require_floats(decoded->means, count * 3u, "means"); !ok) {
+                    return std::unexpected(ok.error());
+                }
+                if (auto ok = require_floats(decoded->sh0_raw, count * 3u, "sh0"); !ok) {
+                    return std::unexpected(ok.error());
+                }
+                if (auto ok = require_floats(decoded->rotation_raw, count * 4u, "rotation"); !ok) {
+                    return std::unexpected(ok.error());
+                }
+                if (auto ok = require_floats(decoded->scaling_raw, count * 3u, "scaling"); !ok) {
+                    return std::unexpected(ok.error());
+                }
+                if (auto ok = require_floats(decoded->opacity_raw, count, "opacity"); !ok) {
+                    return std::unexpected(ok.error());
+                }
+                if (dst_rest > 0u &&
+                    decoded->sh_coeffs_rest > 0u &&
+                    decoded->shN_canonical.size() <
+                        count * static_cast<std::size_t>(decoded->sh_coeffs_rest) * lfs::core::kShChannels) {
+                    return std::unexpected(std::format(
+                        "RAD chunk shN decoded {} floats, expected at least {}",
+                        decoded->shN_canonical.size(),
+                        count * static_cast<std::size_t>(decoded->sh_coeffs_rest) * lfs::core::kShChannels));
+                }
+
+                if (auto ok = copyHostBytesToCuda(decoded->means.data(),
+                                                  means_dst + dst_start * 3u,
+                                                  count * 3u * sizeof(float),
+                                                  stream,
+                                                  "RAD means");
+                    !ok) {
+                    return std::unexpected(ok.error());
+                }
+                if (auto ok = copyHostBytesToCuda(decoded->sh0_raw.data(),
+                                                  sh0_dst + dst_start * 3u,
+                                                  count * 3u * sizeof(float),
+                                                  stream,
+                                                  "RAD sh0");
+                    !ok) {
+                    return std::unexpected(ok.error());
+                }
+                if (dst_rest > 0u) {
+                    std::vector<float> page_sh =
+                        buildSwizzledShPage(decoded->shN_canonical,
+                                            count,
+                                            decoded->sh_coeffs_rest,
+                                            dst_rest);
+                    if (!page_sh.empty()) {
+                        const std::size_t page_block_offset =
+                            (dst_start / lfs::core::kShReorderSize) *
+                            static_cast<std::size_t>(dst_slots) *
+                            lfs::core::kShReorderSize *
+                            4u;
+                        if (auto ok = copyHostBytesToCuda(page_sh.data(),
+                                                          shN_dst + page_block_offset,
+                                                          page_sh_bytes,
+                                                          stream,
+                                                          "RAD shN");
+                            !ok) {
+                            return std::unexpected(ok.error());
+                        }
+                    }
+                }
+                if (auto ok = copyHostBytesToCuda(decoded->rotation_raw.data(),
+                                                  rotations_dst + dst_start * 4u,
+                                                  count * 4u * sizeof(float),
+                                                  stream,
+                                                  "RAD rotation");
+                    !ok) {
+                    return std::unexpected(ok.error());
+                }
+                if (auto ok = copyHostBytesToCuda(decoded->scaling_raw.data(),
+                                                  scaling_dst + dst_start * 3u,
+                                                  count * 3u * sizeof(float),
+                                                  stream,
+                                                  "RAD scaling");
+                    !ok) {
+                    return std::unexpected(ok.error());
+                }
+                if (auto ok = copyHostBytesToCuda(decoded->opacity_raw.data(),
+                                                  opacity_dst + dst_start,
+                                                  count * sizeof(float),
+                                                  stream,
+                                                  "RAD opacity");
+                    !ok) {
+                    return std::unexpected(ok.error());
+                }
+                queued_upload = true;
+                uploaded_splats += count;
+                completed_uploads.push_back(upload);
+            }
+
+            if (!queued_upload) {
+                return {};
+            }
+            if (const cudaError_t status = cudaGetLastError(); status != cudaSuccess) {
+                return std::unexpected(std::format("VkSplat RAD LOD page upload failed: {} ({})",
+                                                   cudaGetErrorName(status),
+                                                   cudaGetErrorString(status)));
+            }
+
+            auto& timeline = upload_timelines_[ring_slot];
+            const std::uint64_t signal_value = ++timeline.value;
+            if (!timeline.cuda_semaphore.cudaSignal(signal_value, stream)) {
+                return std::unexpected(std::format("VkSplat RAD LOD page upload signal failed: {}",
+                                                   timeline.cuda_semaphore.lastError()));
+            }
+            renderer_.addTimelineWait(timeline.vk_semaphore.semaphore,
+                                      signal_value,
+                                      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+            lod_page_cache_.completeUploads(completed_uploads);
+            const auto& page_snapshot = lod_page_cache_.snapshot();
+            LOG_INFO("vksplat.lod_page_upload source=rad pages={} splats={} resident_chunks={} physical_pages={} generation={}",
+                     completed_uploads.size(),
+                     uploaded_splats,
+                     page_snapshot.resident_chunks,
+                     page_snapshot.physical_pages,
+                     page_snapshot.generation);
+            return {};
+        }
+
+        auto raw_layout = vksplat::rawDeviceInputLayout(splat_data, lod_page_inputs_.input_sh_degree);
+        if (!raw_layout) {
+            return std::unexpected(raw_layout.error());
+        }
+
+        const Tensor& means = splat_data.means_raw();
+        const Tensor& sh0 = splat_data.sh0_raw();
+        const Tensor& shN = splat_data.shN_raw();
+        const Tensor& rotations = splat_data.rotation_raw();
+        const Tensor& scaling = splat_data.scaling_raw();
+        const Tensor& opacity = splat_data.opacity_raw();
+        if (auto ok = requireCudaFloat32ContiguousTensor(means, "means"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (auto ok = requireCudaFloat32ContiguousTensor(sh0, "sh0"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (!raw_layout->omits_shN) {
+            if (auto ok = requireCudaFloat32ContiguousTensor(shN, "shN"); !ok) {
+                return std::unexpected(ok.error());
+            }
+        }
+        if (auto ok = requireCudaFloat32ContiguousTensor(rotations, "rotation"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (auto ok = requireCudaFloat32ContiguousTensor(scaling, "scaling"); !ok) {
+            return std::unexpected(ok.error());
+        }
+        if (auto ok = requireCudaFloat32ContiguousTensor(opacity, "opacity"); !ok) {
+            return std::unexpected(ok.error());
+        }
+
+        const cudaStream_t stream = means.stream();
+        if (auto ok = waitForSplatInputStreams(stream, splat_data); !ok) {
+            return std::unexpected(ok.error());
+        }
+
+        const auto* const means_src = static_cast<const float*>(means.data_ptr());
+        const auto* const sh0_src = static_cast<const float*>(sh0.data_ptr());
+        const auto* const shN_src = static_cast<const float*>(raw_layout->omits_shN ? nullptr : shN.data_ptr());
+        const auto* const rotations_src = static_cast<const float*>(rotations.data_ptr());
+        const auto* const scaling_src = static_cast<const float*>(scaling.data_ptr());
+        const auto* const opacity_src = static_cast<const float*>(opacity.data_ptr());
+
+        const std::size_t n = static_cast<std::size_t>(splat_data.size());
+        bool queued_upload = false;
+        std::size_t uploaded_splats = 0;
+        std::vector<LodPageCache::PendingUpload> completed_uploads;
+        completed_uploads.reserve(uploads.size());
+        for (const auto& upload : uploads) {
+            if (!upload.error.empty()) {
+                return std::unexpected(upload.error);
+            }
+            if (upload.page == LodPageCache::kInvalidPage ||
+                upload.chunk == LodPageCache::kInvalidPage ||
+                upload.page >= lod_page_inputs_.physical_pages) {
+                continue;
+            }
+            const std::size_t logical_start =
+                static_cast<std::size_t>(upload.chunk) * LodPageCache::kChunkSplats;
+            const std::size_t dst_start =
+                static_cast<std::size_t>(upload.page) * LodPageCache::kChunkSplats;
+            if (logical_start >= n || dst_start >= lod_page_inputs_.splat_capacity) {
+                continue;
+            }
+            const std::size_t count = std::min({
+                LodPageCache::kChunkSplats,
+                n - logical_start,
+                lod_page_inputs_.splat_capacity - dst_start,
+            });
+            if (count == 0) {
+                continue;
+            }
+
+            if (auto ok = copyCudaBytes(means_src + logical_start * 3u,
+                                        means_dst + dst_start * 3u,
+                                        count * 3u * sizeof(float),
+                                        stream,
+                                        "means");
+                !ok) {
+                return std::unexpected(ok.error());
+            }
+            if (auto ok = copyCudaBytes(sh0_src + logical_start * 3u,
+                                        sh0_dst + dst_start * 3u,
+                                        count * 3u * sizeof(float),
+                                        stream,
+                                        "sh0");
+                !ok) {
+                return std::unexpected(ok.error());
+            }
+            if (!raw_layout->omits_shN) {
+                lfs::core::shN_swizzled_copy_range(
+                    shN_src,
+                    shN_dst,
+                    logical_start,
+                    count,
+                    dst_start,
+                    static_cast<std::uint32_t>(splat_data.max_sh_coeffs_rest()),
+                    raw_layout->shN_layout_rest,
+                    stream);
+            }
+            if (auto ok = copyCudaBytes(rotations_src + logical_start * 4u,
+                                        rotations_dst + dst_start * 4u,
+                                        count * 4u * sizeof(float),
+                                        stream,
+                                        "rotation");
+                !ok) {
+                return std::unexpected(ok.error());
+            }
+            if (auto ok = copyCudaBytes(scaling_src + logical_start * 3u,
+                                        scaling_dst + dst_start * 3u,
+                                        count * 3u * sizeof(float),
+                                        stream,
+                                        "scaling");
+                !ok) {
+                return std::unexpected(ok.error());
+            }
+            if (auto ok = copyCudaBytes(opacity_src + logical_start,
+                                        opacity_dst + dst_start,
+                                        count * sizeof(float),
+                                        stream,
+                                        "opacity");
+                !ok) {
+                return std::unexpected(ok.error());
+            }
+            queued_upload = true;
+            uploaded_splats += count;
+            completed_uploads.push_back(upload);
+        }
+        if (!queued_upload) {
+            return {};
+        }
+        if (const cudaError_t status = cudaGetLastError(); status != cudaSuccess) {
+            return std::unexpected(std::format("VkSplat LOD page SH upload failed: {} ({})",
+                                               cudaGetErrorName(status),
+                                               cudaGetErrorString(status)));
+        }
+
+        auto& timeline = upload_timelines_[ring_slot];
+        const std::uint64_t signal_value = ++timeline.value;
+        if (!timeline.cuda_semaphore.cudaSignal(signal_value, stream)) {
+            return std::unexpected(std::format("VkSplat LOD page upload signal failed: {}",
+                                               timeline.cuda_semaphore.lastError()));
+        }
+        renderer_.addTimelineWait(timeline.vk_semaphore.semaphore,
+                                  signal_value,
+                                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+        lod_page_cache_.completeUploads(completed_uploads);
+        const auto& page_snapshot = lod_page_cache_.snapshot();
+        LOG_INFO("vksplat.lod_page_upload source=resident pages={} splats={} resident_chunks={} physical_pages={} generation={}",
+                 completed_uploads.size(),
+                 uploaded_splats,
+                 page_snapshot.resident_chunks,
+                 page_snapshot.physical_pages,
+                 page_snapshot.generation);
+        return {};
     }
 
     void VksplatViewportRenderer::detachManagedBuffers() {
@@ -4504,12 +5205,57 @@ namespace lfs::vis {
                      ratio);
         }
 
-        auto input_binding = prepareInputs(context,
-                                           splat_data,
-                                           ring_slot,
-                                           force_input_upload,
-                                           active_sh_degree,
-                                           synchronize_input_upload);
+        const bool lod_indices_present = request.lod_count > 0 && request.lod_indices != nullptr;
+        const bool lod_logical_indices_present =
+            lod_indices_present && request.lod_logical_indices != nullptr;
+        const bool lod_levels_present =
+            lod_indices_present && request.lod_debug_mode && request.lod_levels != nullptr;
+        const bool rad_backed_lod_pages =
+            lod_indices_present &&
+            splat_data.lod_tree &&
+            splat_data.lod_tree->rad_source.valid();
+        std::vector<LodPageCache::PendingUpload> lod_page_uploads;
+        bool partial_lod_page_inputs = false;
+        bool queue_lod_prefetch_after_render = false;
+        if (lod_indices_present) {
+            (void)ensureLodPageCacheSnapshot(splat_data);
+            partial_lod_page_inputs =
+                rad_backed_lod_pages &&
+                lod_page_cache_.configured() &&
+                !lod_page_cache_.fullyResident();
+            queue_lod_prefetch_after_render =
+                partial_lod_page_inputs &&
+                request.lod_touched_chunks != nullptr &&
+                request.lod_touched_chunk_count > 0 &&
+                lod_page_cache_prefetch_generation_ != request.lod_generation;
+            if (partial_lod_page_inputs) {
+                lod_page_uploads = lod_page_cache_.drainPendingUploads();
+            }
+        } else {
+            lod_page_cache_prefetch_generation_ = 0;
+        }
+
+        std::expected<InputBindingResult, std::string> input_binding =
+            InputBindingResult{.uses_temporary_upload_slot = false};
+        if (partial_lod_page_inputs) {
+            if (auto ok = ensureLodPageInputStorage(context,
+                                                    splat_data,
+                                                    ring_slot,
+                                                    active_sh_degree);
+                !ok) {
+                return std::unexpected(ok.error());
+            }
+            if (auto ok = uploadLodPageInputs(splat_data, lod_page_uploads, ring_slot); !ok) {
+                return std::unexpected(ok.error());
+            }
+        } else {
+            input_binding = prepareInputs(context,
+                                          splat_data,
+                                          ring_slot,
+                                          force_input_upload,
+                                          active_sh_degree,
+                                          synchronize_input_upload);
+        }
         if (!input_binding) {
             return std::unexpected(input_binding.error());
         }
@@ -4519,22 +5265,125 @@ namespace lfs::vis {
         // buffer would couple render throughput to selection-overlay correctness.
         (void)input_binding;
 
+        const std::size_t active_splat_count =
+            lod_indices_present ? request.lod_count : buffers_.num_splats;
+        // Stage LOD indices on host; actual GPU upload happens inside the
+        // active command batch right before projection dispatch.
+        if (request.lod_count > 0 && request.lod_indices != nullptr) {
+            auto& lod_buf = buffers_.lod_indices;
+            const bool device_needs_resize =
+                lod_buf.deviceBuffer.buffer == VK_NULL_HANDLE || lod_buf.deviceSize() < request.lod_count;
+            const bool signature_changed =
+                !uploaded_lod_indices_.valid ||
+                uploaded_lod_indices_.model != &splat_data ||
+                uploaded_lod_indices_.count != request.lod_count ||
+                (request.lod_selection_hash != 0
+                     ? uploaded_lod_indices_.hash != request.lod_selection_hash
+                     : uploaded_lod_indices_.generation != request.lod_generation);
+            const bool host_size_changed = lod_buf.size() != request.lod_count;
+            if (device_needs_resize) {
+                renderer_.resizeAndCopyDeviceBuffer(lod_buf, request.lod_count, false);
+            }
+            lod_indices_upload_pending_ = device_needs_resize || signature_changed || host_size_changed;
+            if (lod_indices_upload_pending_) {
+                lod_buf.resize(request.lod_count);
+                std::memcpy(lod_buf.data(), request.lod_indices, request.lod_count * sizeof(uint32_t));
+                uploaded_lod_indices_ = {.model = &splat_data,
+                                         .count = request.lod_count,
+                                         .hash = request.lod_selection_hash,
+                                         .generation = request.lod_generation,
+                                         .valid = true};
+            }
+            buffers_.has_lod_indices = true;
+        } else {
+            buffers_.has_lod_indices = false;
+            lod_indices_upload_pending_ = false;
+        }
+        if (lod_logical_indices_present) {
+            auto& lod_logical_buf = buffers_.lod_logical_indices;
+            const bool device_needs_resize =
+                lod_logical_buf.deviceBuffer.buffer == VK_NULL_HANDLE ||
+                lod_logical_buf.deviceSize() < request.lod_count;
+            const bool signature_changed =
+                !uploaded_lod_logical_indices_.valid ||
+                uploaded_lod_logical_indices_.model != &splat_data ||
+                uploaded_lod_logical_indices_.count != request.lod_count ||
+                (request.lod_selection_hash != 0
+                     ? uploaded_lod_logical_indices_.hash != request.lod_selection_hash
+                     : uploaded_lod_logical_indices_.generation != request.lod_generation);
+            const bool host_size_changed = lod_logical_buf.size() != request.lod_count;
+            if (device_needs_resize) {
+                renderer_.resizeAndCopyDeviceBuffer(lod_logical_buf, request.lod_count, false);
+            }
+            lod_logical_indices_upload_pending_ = device_needs_resize || signature_changed || host_size_changed;
+            if (lod_logical_indices_upload_pending_) {
+                lod_logical_buf.resize(request.lod_count);
+                std::memcpy(lod_logical_buf.data(), request.lod_logical_indices, request.lod_count * sizeof(uint32_t));
+                uploaded_lod_logical_indices_ = {.model = &splat_data,
+                                                 .count = request.lod_count,
+                                                 .hash = request.lod_selection_hash,
+                                                 .generation = request.lod_generation,
+                                                 .valid = true};
+            }
+            buffers_.has_lod_logical_indices = true;
+        } else {
+            buffers_.has_lod_logical_indices = false;
+            lod_logical_indices_upload_pending_ = false;
+        }
+        if (lod_levels_present) {
+            auto& lod_levels_buf = buffers_.lod_levels;
+            const bool device_needs_resize =
+                lod_levels_buf.deviceBuffer.buffer == VK_NULL_HANDLE ||
+                lod_levels_buf.deviceSize() < request.lod_count;
+            const bool signature_changed =
+                !uploaded_lod_levels_.valid ||
+                uploaded_lod_levels_.model != &splat_data ||
+                uploaded_lod_levels_.count != request.lod_count ||
+                (request.lod_selection_hash != 0
+                     ? uploaded_lod_levels_.hash != request.lod_selection_hash
+                     : uploaded_lod_levels_.generation != request.lod_generation);
+            const bool host_size_changed = lod_levels_buf.size() != request.lod_count;
+            if (device_needs_resize) {
+                renderer_.resizeAndCopyDeviceBuffer(lod_levels_buf, request.lod_count, false);
+            }
+            lod_levels_upload_pending_ = device_needs_resize || signature_changed || host_size_changed;
+            if (lod_levels_upload_pending_) {
+                lod_levels_buf.resize(request.lod_count);
+                std::memcpy(lod_levels_buf.data(), request.lod_levels, request.lod_count * sizeof(uint32_t));
+                uploaded_lod_levels_ = {.model = &splat_data,
+                                        .count = request.lod_count,
+                                        .hash = request.lod_selection_hash,
+                                        .generation = request.lod_generation,
+                                        .valid = true};
+            }
+            buffers_.has_lod_levels = true;
+        } else {
+            buffers_.has_lod_levels = false;
+            lod_levels_upload_pending_ = false;
+        }
+
+        // lod_enabled bit flags:
+        //   bit0 (1): LOD index indirection active
+        //   bit1 (2): LOD-level debug coloring active
+        //   bit2 (4): Spark LOD opacity encoding active
+        //   bit3 (8): lod_logical_indices is bound for logical overlay/model ids
         VulkanGSRendererUniforms uniforms{};
         {
             LOG_TIMER("vksplat.render.populateUniforms");
-            const bool lod_indices_present = request.lod_count > 0 && request.lod_indices != nullptr;
-            const std::size_t render_splat_count = lod_indices_present ? request.lod_count : buffers_.num_splats;
             populateVksplatCameraUniforms(uniforms,
                                           request.frame_view,
                                           request.scene,
                                           active_sh_degree,
                                           renderShNLayoutSlots(active_sh_degree, current_input_sh_degree_),
-                                          render_splat_count,
+                                          active_splat_count,
                                           request.equirectangular,
                                           request.gut,
                                           request.mip_filter);
             uniforms.step = static_cast<std::uint32_t>(modelTransformCount(request.scene.model_transforms));
             uniforms.lod_enabled = lod_indices_present ? 1u : 0u;
+            if (lod_logical_indices_present) {
+                uniforms.lod_enabled |= 8u;
+            }
             uniforms.lod_count = lod_indices_present ? static_cast<std::uint32_t>(request.lod_count) : 0u;
             if (lod_indices_present &&
                 splat_data.lod_tree &&
@@ -4543,47 +5392,39 @@ namespace lfs::vis {
                 uniforms.lod_enabled |= 4u;
             }
         }
-
-        // Stage LOD indices on host; actual GPU upload happens inside the
-        // active command batch right before projection dispatch.
-        if (request.lod_count > 0 && request.lod_indices != nullptr) {
-            auto& lod_buf = buffers_.lod_indices;
-            if (lod_buf.deviceSize() < request.lod_count) {
-                renderer_.resizeAndCopyDeviceBuffer(lod_buf, request.lod_count, false);
-            }
-            lod_buf.resize(request.lod_count);
-            std::memcpy(lod_buf.data(), request.lod_indices, request.lod_count * sizeof(uint32_t));
-            buffers_.has_lod_indices = true;
-        } else {
-            buffers_.has_lod_indices = false;
-        }
-
-        // lod_enabled bit flags:
-        //   bit0 (1): LOD index indirection active
-        //   bit1 (2): chunk debug coloring active
-        //   bit2 (4): Spark LOD opacity encoding active
-        if ((uniforms.lod_enabled & 1u) != 0u && request.lod_debug_mode) {
+        if ((uniforms.lod_enabled & 1u) != 0u && buffers_.has_lod_levels) {
             uniforms.lod_enabled |= 2u;
         }
 
         if (uniforms.lod_enabled != 0u) {
             static std::uint32_t lod_dispatch_log_counter = 0;
-            const bool log_this_frame = (uniforms.lod_count == 0u) || ((++lod_dispatch_log_counter % 120u) == 0u);
+            const std::uint32_t log_counter = ++lod_dispatch_log_counter;
+            const bool partial_lod_pages =
+                lod_indices_present && lod_page_cache_.configured() && !lod_page_cache_.fullyResident();
+            const bool log_this_frame =
+                (uniforms.lod_count == 0u) ||
+                ((log_counter % 120u) == 0u) ||
+                (partial_lod_pages && (log_counter <= 10u || (log_counter % 30u) == 0u));
             if (log_this_frame) {
                 const std::uint32_t lod_count = uniforms.lod_count;
                 const std::uint32_t uniform_num_splats = uniforms.num_splats;
                 const std::uint32_t lod_mode = uniforms.lod_enabled;
+                const auto& page_snapshot = lod_page_cache_.snapshot();
                 LOG_INFO(
-                    "LOD dispatch: uniform_lod_count={} uniform_num_splats={} model_num_splats={} has_lod_indices={} lod_mode={}",
+                    "LOD dispatch: uniform_lod_count={} uniform_num_splats={} model_num_splats={} has_lod_indices={} has_lod_levels={} lod_mode={} lod_pages={}/{} lod_page_generation={}",
                     lod_count,
                     uniform_num_splats,
                     buffers_.num_splats,
                     buffers_.has_lod_indices ? 1 : 0,
-                    lod_mode);
+                    buffers_.has_lod_levels ? 1 : 0,
+                    lod_mode,
+                    page_snapshot.resident_chunks,
+                    page_snapshot.physical_pages,
+                    page_snapshot.generation);
             }
         }
 
-        const std::size_t target_sort_capacity = std::max(buffers_.num_indices, buffers_.num_splats);
+        const std::size_t target_sort_capacity = std::max(buffers_.num_indices, active_splat_count);
         // Reserve from the exact measured tile-instance count. num_indices is the
         // exact total from the previous frame's executeCalculateIndexBufferOffset
         // and num_indices_high_water is its running max, so after the first frame
@@ -4592,9 +5433,9 @@ namespace lfs::vis {
         // exists; the shared block grows in place if it turns out to be too small.
         const std::size_t first_frame_estimate =
             buffers_.num_indices_high_water == 0
-                ? (buffers_.num_splats > (std::numeric_limits<std::size_t>::max() / 4u)
-                       ? buffers_.num_splats
-                       : buffers_.num_splats * 4u)
+                ? (active_splat_count > (std::numeric_limits<std::size_t>::max() / 4u)
+                       ? active_splat_count
+                       : active_splat_count * 4u)
                 : 0u;
         // Size the sort buffers to the exact measured peak: num_indices_high_water is
         // the running max tile-instance count, so this is exactly what every frame seen
@@ -4604,7 +5445,7 @@ namespace lfs::vis {
         // The former unconditional *2 cost ~100 MiB of permanently-committed sort scratch
         // at 5M splats; a rare one-frame regrow during transients is the better trade.
         const std::size_t shared_sort_capacity =
-            std::max({buffers_.num_indices, buffers_.num_splats,
+            std::max({buffers_.num_indices, active_splat_count,
                       buffers_.num_indices_high_water, first_frame_estimate});
         const std::size_t num_pixels =
             static_cast<std::size_t>(uniforms.image_width) * static_cast<std::size_t>(uniforms.image_height);
@@ -4617,13 +5458,13 @@ namespace lfs::vis {
             return std::format(
                 "attempt_id={}, required={}MiB, capacity={}MiB, generation={}, sort_capacity={}, high_water={}, last_indices={}, splats={}, viewport={}x{}, grid={}x{}, ring={}, next_render_value={}",
                 shared_scratch_attempt_id,
-                estimateSharedScratchBytes(buffers_.num_splats, shared_sort_capacity, num_pixels, num_tiles) >> 20,
+                estimateSharedScratchBytes(active_splat_count, shared_sort_capacity, num_pixels, num_tiles) >> 20,
                 shared_scratch_.bytes >> 20,
                 shared_scratch_.generation,
                 shared_sort_capacity,
                 buffers_.num_indices_high_water,
                 buffers_.num_indices,
-                buffers_.num_splats,
+                active_splat_count,
                 static_cast<std::uint32_t>(uniforms.image_width),
                 static_cast<std::uint32_t>(uniforms.image_height),
                 static_cast<std::uint32_t>(uniforms.grid_width),
@@ -4638,7 +5479,7 @@ namespace lfs::vis {
             // Do not resize output images until this render is guaranteed to proceed.
             releasePrivateScratchBuffers();
             const std::size_t required_shared_scratch =
-                estimateSharedScratchBytes(buffers_.num_splats, shared_sort_capacity, num_pixels, num_tiles);
+                estimateSharedScratchBytes(active_splat_count, shared_sort_capacity, num_pixels, num_tiles);
             shared_scratch_attempt_id = ++shared_scratch_attempt_serial_;
             if (auto ok = ensureSharedScratchArena(context, required_shared_scratch); ok) {
                 try {
@@ -4650,13 +5491,13 @@ namespace lfs::vis {
                         shared_arena_guard.reset();
                         return std::unexpected(rok.error());
                     }
-                    bindSharedScratchBuffers(buffers_.num_splats, shared_sort_capacity, num_pixels, num_tiles);
+                    bindSharedScratchBuffers(active_splat_count, shared_sort_capacity, num_pixels, num_tiles);
                     shared_scratch_bound = true;
                     LOG_PERF("vksplat.memory.shared_scratch required={}MiB capacity={}MiB sort_capacity={} splats={}",
                              required_shared_scratch >> 20,
                              shared_scratch_.bytes >> 20,
                              shared_sort_capacity,
-                             buffers_.num_splats);
+                             active_splat_count);
                 } catch (const std::exception& e) {
                     shared_arena_guard.reset();
                     detachSharedScratchBuffers();
@@ -4682,7 +5523,7 @@ namespace lfs::vis {
             renderer_.shrinkSortBuffersForCapacity(buffers_, target_sort_capacity)) {
             LOG_PERF("vksplat.memory.shrink_sort_buffers target_capacity={} splats={}",
                      target_sort_capacity,
-                     buffers_.num_splats);
+                     active_splat_count);
         }
 
         auto overlay_bindings = [&] {
@@ -4726,18 +5567,32 @@ namespace lfs::vis {
             // the next iteration while this frame is still in flight.
             LOG_TIMER("vksplat.render.batch_total");
             auto batch = DeviceGuard(&renderer_,
-                                     synchronize_input_upload,
+                                     synchronize_input_upload || partial_lod_page_inputs,
                                      render_complete_timeline_,
                                      completion_value);
             {
                 LOG_TIMER("vksplat.render.record");
                 {
                     LOG_TIMER("vksplat.render.record.executeProjectionForward");
-                    if (buffers_.has_lod_indices && !buffers_.lod_indices.empty()) {
+                    if (buffers_.has_lod_indices && lod_indices_upload_pending_ && !buffers_.lod_indices.empty()) {
                         recordUpdateBufferChunks(renderer_.activeCommandBuffer(),
                                                  buffers_.lod_indices.deviceBuffer,
                                                  buffers_.lod_indices.data(),
                                                  buffers_.lod_indices.size() * sizeof(std::uint32_t));
+                    }
+                    if (buffers_.has_lod_logical_indices &&
+                        lod_logical_indices_upload_pending_ &&
+                        !buffers_.lod_logical_indices.empty()) {
+                        recordUpdateBufferChunks(renderer_.activeCommandBuffer(),
+                                                 buffers_.lod_logical_indices.deviceBuffer,
+                                                 buffers_.lod_logical_indices.data(),
+                                                 buffers_.lod_logical_indices.size() * sizeof(std::uint32_t));
+                    }
+                    if (buffers_.has_lod_levels && lod_levels_upload_pending_ && !buffers_.lod_levels.empty()) {
+                        recordUpdateBufferChunks(renderer_.activeCommandBuffer(),
+                                                 buffers_.lod_levels.deviceBuffer,
+                                                 buffers_.lod_levels.data(),
+                                                 buffers_.lod_levels.size() * sizeof(std::uint32_t));
                     }
                     renderer_.executeProjectionForward(uniforms,
                                                        buffers_,
@@ -4747,7 +5602,9 @@ namespace lfs::vis {
                                                        overlay_bindings->model_transforms,
                                                        0,
                                                        request.gut,
-                                                       buffers_.has_lod_indices ? buffers_.lod_indices.deviceBuffer : _VulkanBuffer());
+                                                       buffers_.has_lod_indices ? buffers_.lod_indices.deviceBuffer : _VulkanBuffer(),
+                                                       buffers_.has_lod_logical_indices ? buffers_.lod_logical_indices.deviceBuffer : _VulkanBuffer(),
+                                                       buffers_.has_lod_levels ? buffers_.lod_levels.deviceBuffer : _VulkanBuffer());
                 }
                 // Two-stage sort (Splatshop, matches gsplat_fwd reference):
                 //   1. Depth-sort N primitives by radial distance (full 32-bit key).
@@ -4774,15 +5631,15 @@ namespace lfs::vis {
                         shared_sort_capacity,
                         buffers_.num_indices));
                 }
-                if (buffers_.num_splats > 0) {
+                if (active_splat_count > 0) {
                     const double instances_per_splat =
                         static_cast<double>(buffers_.num_indices) /
-                        static_cast<double>(buffers_.num_splats);
+                        static_cast<double>(active_splat_count);
                     const std::uint32_t grid_width = uniforms.grid_width;
                     const std::uint32_t grid_height = uniforms.grid_height;
                     LOG_PERF("vksplat.render.tile_instances count={} splats={} instances_per_splat={:.3f} grid={}x{}",
                              buffers_.num_indices,
-                             buffers_.num_splats,
+                             active_splat_count,
                              instances_per_splat,
                              grid_width,
                              grid_height);
@@ -4858,6 +5715,28 @@ namespace lfs::vis {
 
         renderer_.tagDeferredVisibleCountReadback(render_complete_timeline_, completion_value);
         ring_completion_values_[ring_slot] = completion_value;
+        if (queue_lod_prefetch_after_render) {
+            std::vector<std::uint32_t> protected_chunks;
+            if (request.lod_logical_indices != nullptr && request.lod_count > 0) {
+                protected_chunks.reserve(
+                    std::min(request.lod_count,
+                             splat_data.lod_tree ? splat_data.lod_tree->chunk_count() : request.lod_count));
+                for (std::size_t i = 0; i < request.lod_count; ++i) {
+                    protected_chunks.push_back(
+                        request.lod_logical_indices[i] /
+                        static_cast<std::uint32_t>(LodPageCache::kChunkSplats));
+                }
+                std::sort(protected_chunks.begin(), protected_chunks.end());
+                protected_chunks.erase(std::unique(protected_chunks.begin(), protected_chunks.end()),
+                                       protected_chunks.end());
+            }
+            lod_page_cache_.submitTraversalPriority(
+                std::span<const std::uint32_t>(
+                    request.lod_touched_chunks,
+                    request.lod_touched_chunk_count),
+                protected_chunks);
+            lod_page_cache_prefetch_generation_ = request.lod_generation;
+        }
 
         const auto& output = output_slots_[outputSlotIndex(output_slot)][ring_slot];
         return RenderResult{

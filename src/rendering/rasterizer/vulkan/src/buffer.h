@@ -160,8 +160,12 @@ struct VulkanGSPipelineBuffers {
     size_t num_indices_high_water = 0;
 
     // LOD index indirection buffer
-    Buffer<uint32_t> lod_indices;  // [M] selected splat indices
+    Buffer<uint32_t> lod_indices;         // [M] selected physical splat indices
+    Buffer<uint32_t> lod_logical_indices; // [M] selected logical/model splat indices
+    Buffer<uint32_t> lod_levels;          // [M] selected splat LOD levels
     bool has_lod_indices = false;
+    bool has_lod_logical_indices = false;
+    bool has_lod_levels = false;
 
     [[nodiscard]] size_t getTotalOwnedAllocSize() const;
     [[nodiscard]] std::map<std::string, size_t> getOwnedVramBreakdown() const;

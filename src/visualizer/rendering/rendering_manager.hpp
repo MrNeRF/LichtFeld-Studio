@@ -609,8 +609,8 @@ namespace lfs::vis {
         std::unique_ptr<PointCloudVulkanRenderer> point_cloud_vulkan_renderer_;
         std::unique_ptr<SparkLodController> lod_controller_;
         const lfs::core::SplatData* lod_controller_model_ = nullptr;
-        bool lod_was_active_last_frame_ = false;
-        bool lod_need_sync_fallback_ = false;
+        bool lod_controller_needs_sync_traversal_ = false;
+        std::uint64_t lod_controller_page_map_generation_ = 0;
         // Cached SH0→RGB derivation for the point-cloud Vulkan path. Refreshed
         // only when the source sh0_raw() pointer/size changes so the Vulkan
         // renderer's per-tensor upload cache stays warm across frames.

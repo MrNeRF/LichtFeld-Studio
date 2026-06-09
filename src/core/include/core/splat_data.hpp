@@ -29,14 +29,39 @@ namespace lfs::core {
     }
 
     struct SplatLodTree {
+        static constexpr std::size_t kChunkSplats = 65'536;
+        static constexpr uint32_t    kInvalidPage = 0xFFFFFFFFu;
+
+        struct ChunkFileRange {
+            uint64_t file_offset = 0;
+            uint64_t file_bytes = 0;
+            uint64_t payload_offset = 0;
+            uint64_t payload_bytes = 0;
+            uint64_t base = 0;
+            uint64_t count = 0;
+        };
+
+        struct RadSource {
+            std::filesystem::path path;
+            uint32_t chunk_size = static_cast<uint32_t>(kChunkSplats);
+            uint64_t metadata_bytes = 0;
+            std::vector<ChunkFileRange> chunks;
+
+            [[nodiscard]] bool valid() const { return !path.empty() && !chunks.empty(); }
+        };
+
         std::vector<uint16_t> child_count;
         std::vector<uint32_t> child_start;
         std::vector<uint8_t>  lod_level;
         std::vector<glm::vec3> centers;
         std::vector<float>     sizes;
+        std::vector<uint32_t> page_to_chunk;
+        std::vector<uint32_t> chunk_to_page;
+        RadSource             rad_source;
         bool                   lod_opacity_encoded = false;
 
         size_t total_nodes() const { return child_count.size(); }
+        size_t chunk_count() const { return (total_nodes() + kChunkSplats - 1) / kChunkSplats; }
         bool   has_tree() const  { return !child_count.empty(); }
     };
 
