@@ -7,6 +7,16 @@ import spherical_harmonics;
 #define LFS_3DGUT_PROJECTION 0
 #endif
 
+// Survivor-list projection (HiGS viewer path): dispatched indirectly over the
+// compact survivor list emitted by cull_splats.slang instead of all N splats.
+// Outputs are written at wave-appended compact slots, so every per-splat
+// output buffer is sized by visible capacity, the depth-sort input is appended
+// directly (no visible-flag/prefix/compact passes, no sentinel pre-fill), and
+// the sorted ids ARE slots.
+#ifndef LFS_PROJECTION_SURVIVORS
+#define LFS_PROJECTION_SURVIVORS 0
+#endif
+
 
 struct Gaussian_3D : IDifferentiable
 {
@@ -92,6 +102,149 @@ float3 lod_debug_color(uint lod_level) {
     if (palette_index == 2u) return float3(0.0, 0.0, 1.0);
     if (palette_index == 3u) return float3(1.0, 1.0, 0.0);
     return float3(1.0, 0.0, 1.0);
+}
+
+// Crop/ellipsoid/view-box/node culls and overlay flag classification, shared
+// between the position-only cull prepass (cull_splats.slang) and the survivor
+// projection. Single source of truth: the cull pass rejects a splat only if
+// this exact logic would reject it in projection too.
+struct SplatActiveState {
+    bool active;
+    uint overlay_flags;
+    float3 mean_ws;
+    uint model_transform_base;
+    bool model_transform_enabled;
+};
+
+SplatActiveState compute_splat_active_state(
+    uint logical_idx,
+    float3 xyz_ws_in,
+    uint model_transform_count,
+    ByteAddressBuffer transform_indices,
+    ByteAddressBuffer node_mask,
+    StructuredBuffer<float4> overlay_params,
+    StructuredBuffer<float4> model_transforms)
+{
+    uint overlay_flags = 0;
+    bool active = true;
+    float4 emphasis_flags = overlay_params[OVERLAY_PARAM_EMPHASIS_FLAGS];
+    bool node_data_enabled = overlay_enabled(emphasis_flags.y);
+    int node_count = overlay_int(emphasis_flags.z);
+    int node_idx = node_data_enabled ? read_int32(transform_indices, logical_idx) : -1;
+    int model_transform_idx = node_data_enabled ? node_idx : 0;
+    model_transform_idx = clamp(model_transform_idx, 0, int(max(model_transform_count, 1u)) - 1);
+    uint model_transform_base = uint(model_transform_idx) * 4u;
+    bool model_transform_enabled = model_transform_count > 0u;
+    float3 mean_ws = model_transform_enabled
+                         ? transform_point_rows(model_transforms, model_transform_base, xyz_ws_in)
+                         : xyz_ws_in;
+
+    float4 crop_flags = overlay_params[OVERLAY_PARAM_CROP_FLAGS];
+    if (overlay_enabled(crop_flags.x)) {
+        int parent_node_idx = overlay_int(crop_flags.w);
+        bool applies = parent_node_idx < 0 || (node_data_enabled && node_idx == parent_node_idx);
+        if (applies) {
+            float3 local = transform_point_rows(overlay_params, OVERLAY_PARAM_CROP_TRANSFORM, mean_ws);
+            float3 bmin = overlay_params[OVERLAY_PARAM_CROP_MIN].xyz;
+            float3 bmax = overlay_params[OVERLAY_PARAM_CROP_MAX].xyz;
+            bool inside = local.x >= bmin.x && local.x <= bmax.x &&
+                          local.y >= bmin.y && local.y <= bmax.y &&
+                          local.z >= bmin.z && local.z <= bmax.z;
+            bool outside = inside == overlay_enabled(crop_flags.y);
+            if (outside) {
+                overlay_flags |= OVERLAY_FLAG_NONSELECTABLE;
+                if (overlay_enabled(crop_flags.z)) {
+                    overlay_flags |= OVERLAY_FLAG_DIM;
+                } else {
+                    active = false;
+                }
+            }
+        }
+    }
+
+    float4 ellipsoid_flags = overlay_params[OVERLAY_PARAM_ELLIPSOID_FLAGS];
+    if (active && overlay_enabled(ellipsoid_flags.x)) {
+        int parent_node_idx = overlay_int(ellipsoid_flags.w);
+        bool applies = parent_node_idx < 0 || (node_data_enabled && node_idx == parent_node_idx);
+        if (applies) {
+            float3 local = transform_point_rows(overlay_params, OVERLAY_PARAM_ELLIPSOID_TRANSFORM, mean_ws);
+            float3 radii = overlay_params[OVERLAY_PARAM_ELLIPSOID_RADII].xyz;
+            float norm = (local.x * local.x) / (radii.x * radii.x) +
+                         (local.y * local.y) / (radii.y * radii.y) +
+                         (local.z * local.z) / (radii.z * radii.z);
+            bool inside = norm <= 1.0f;
+            bool outside = inside == overlay_enabled(ellipsoid_flags.y);
+            if (outside) {
+                overlay_flags |= OVERLAY_FLAG_NONSELECTABLE;
+                if (overlay_enabled(ellipsoid_flags.z)) {
+                    overlay_flags |= OVERLAY_FLAG_DIM;
+                } else {
+                    active = false;
+                }
+            }
+        }
+    }
+
+    float4 view_flags = overlay_params[OVERLAY_PARAM_VIEW_FLAGS];
+    if (active && overlay_enabled(view_flags.x)) {
+        float3 local = transform_point_rows(overlay_params, OVERLAY_PARAM_VIEW_TRANSFORM, mean_ws);
+        float3 vmin = overlay_params[OVERLAY_PARAM_VIEW_MIN].xyz;
+        float3 vmax = overlay_params[OVERLAY_PARAM_VIEW_MAX].xyz;
+        bool inside = local.x >= vmin.x && local.x <= vmax.x &&
+                      local.y >= vmin.y && local.y <= vmax.y &&
+                      local.z >= vmin.z && local.z <= vmax.z;
+        if (!inside) {
+            overlay_flags |= OVERLAY_FLAG_NONSELECTABLE;
+            if (overlay_enabled(view_flags.y)) {
+                active = false;
+            }
+        }
+    }
+
+    if (active && overlay_enabled(emphasis_flags.x) && node_data_enabled && node_idx >= 0 && node_idx < node_count) {
+        if (read_byte(node_mask, uint(node_idx)) == 0) {
+            overlay_flags |= (OVERLAY_FLAG_DIM | OVERLAY_FLAG_NONSELECTABLE);
+        }
+    }
+
+    if (active && emphasis_flags.w > 0.0f && node_data_enabled && node_idx >= 0 && node_idx < node_count) {
+        if (read_byte(node_mask, uint(node_idx)) != 0) {
+            overlay_flags |= OVERLAY_FLAG_FLASH;
+        }
+    }
+
+    float4 visibility_flags = overlay_params[OVERLAY_PARAM_VISIBILITY_FLAGS];
+    if (active && overlay_enabled(visibility_flags.x) && node_data_enabled && node_idx >= 0 && node_idx < node_count) {
+        if (read_byte(node_mask, uint(node_idx)) == 0) {
+            active = false;
+        }
+    }
+
+    SplatActiveState state;
+    state.active = active;
+    state.overlay_flags = overlay_flags;
+    state.mean_ws = mean_ws;
+    state.model_transform_base = model_transform_base;
+    state.model_transform_enabled = model_transform_enabled;
+    return state;
+}
+
+// Position-level visibility tests, exact mirrors of the center rejects inside
+// project_gaussian_to_camera_model / _gut. The cull prepass must never reject
+// a splat the projection would keep — these are the same expressions, so the
+// survivor set is a strict superset of the finally-visible set.
+[ForceInline]
+bool splat_center_potentially_visible(float3 mean_ws, Camera cam) {
+    float3 xyz_vs = project_point(mean_ws, cam);
+    return xyz_vs.z > NEAR_CLIP &&
+           isfinite(dot(xyz_vs, xyz_vs)) &&
+           image_point_in_image_bounds_margin(xyz_vs.xy, cam, 0.2f);
+}
+
+[ForceInline]
+bool splat_center_potentially_visible_gut(float3 mean_ws, Camera cam) {
+    float3 mean_vs = project_point(mean_ws, cam);
+    return mean_vs.z > NEAR_CLIP && isfinite(dot(mean_vs, mean_vs));
 }
 
 [Differentiable]
@@ -347,13 +500,20 @@ layout(binding=4) StructuredBuffer<float> scaling_raw;  // 3
 layout(binding=5) StructuredBuffer<float> opacity_raw;  // 1
 
 // Output buffers
+#if !LFS_PROJECTION_SURVIVORS
+// The macro chain derives coverage from the rect + ellipse; tiles_touched and
+// radii are legacy-chain outputs only and their bindings are absent in the
+// survivor variant.
 layout(binding=6) RWStructuredBuffer<int> out_tiles_touched;
+#endif
 #if USE_EMULATED_INT64
 layout(binding=7) RWStructuredBuffer<int32_t> out_rect_tile_space;
 #else
 layout(binding=7) RWStructuredBuffer<int64_t> out_rect_tile_space;
 #endif
+#if !LFS_PROJECTION_SURVIVORS
 layout(binding=8) RWStructuredBuffer<int> out_radii;
+#endif
 layout(binding=9) RWStructuredBuffer<float2> out_xy_vs;
 layout(binding=10) RWStructuredBuffer<float> out_depths;
 layout(binding=11) RWStructuredBuffer<float4> out_inv_cov_vs;
@@ -363,9 +523,15 @@ layout(binding=14) ByteAddressBuffer transform_indices;
 layout(binding=15) ByteAddressBuffer node_mask;
 layout(binding=16) StructuredBuffer<float4> overlay_params;
 layout(binding=17) StructuredBuffer<float4> model_transforms;
+#if LFS_PROJECTION_SURVIVORS
+// Depth-sort input, appended directly at the compact slot. No sentinel
+// pre-fill: only [0, emit_count) is ever sorted.
+layout(binding=18) RWStructuredBuffer<uint32_t> out_sort_keys;
+#else
 // Two-stage sort: per-primitive depth key written only at the success path.
 // CPU pre-fills with 0xFFFFFFFFu so invisible primitives sort to the tail.
 layout(binding=18) RWStructuredBuffer<uint32_t> out_primitive_depth_keys;
+#endif
 // LOD index indirection buffer
 layout(binding=19) StructuredBuffer<uint32_t> lod_indices;
 layout(binding=20) StructuredBuffer<uint32_t> lod_logical_indices;
@@ -373,7 +539,22 @@ layout(binding=21) StructuredBuffer<uint32_t> lod_levels;
 layout(binding=22) StructuredBuffer<float> lod_weights;
 // GPU LoD selector append count; [0] = appended total (may exceed capacity).
 layout(binding=23) StructuredBuffer<uint32_t> lod_counts;
+#if LFS_PROJECTION_SURVIVORS
+// Compact survivor list from the cull prepass; entries are render indices.
+layout(binding=24) StructuredBuffer<int32_t> survivors;
+// [0] = survivor count (written by the cull pass).
+layout(binding=25) StructuredBuffer<uint32_t> survivor_count;
+// Depth-sort ids; out_sort_ids[slot] = slot, so the sorted ids are slots.
+layout(binding=26) RWStructuredBuffer<int32_t> out_sort_ids;
+// [0] = total emitted (may exceed capacity; clamp detection reads this).
+layout(binding=27) RWStructuredBuffer<uint32_t> out_emit_count;
+// Model-splat index per slot, for bit-per-model-splat selection masks.
+layout(binding=28) RWStructuredBuffer<int32_t> out_orig_ids;
+#endif
 
+#if !LFS_PROJECTION_SURVIVORS
+// Legacy N-wide variant only: the survivor-list variant never clears, because
+// rejected splats simply do not append a compact slot.
 [ForceInline]
 void clear_forward_projection_output(uint out_idx, uint overlay_flags) {
     out_overlay_flags[out_idx] = overlay_flags;
@@ -390,6 +571,7 @@ void clear_forward_projection_output(uint out_idx, uint overlay_flags) {
     out_inv_cov_vs[out_idx] = float4(0.0);
     write_t3_float3(float3(0.0), out_idx, out_rgb);
 }
+#endif
 
 
 #elif EXPORT_MODE == EXPORT_MODE_VULKAN_BACKWARD
@@ -439,18 +621,29 @@ void main(
     const uint camera_model = base_camera_model(uniforms.camera_model);
     const float4x4 world_view_transform = (uniforms.world_view_transform);
 
+#if LFS_PROJECTION_SURVIVORS
+    // Indirect dispatch over the survivor list. The cull pass already applied
+    // the LoD exact-count cut and rejected invalid LoD entries; both checks
+    // below are kept as cheap defensive guards only.
+    const uint survivor_idx = dispatchThreadID.x;
+    if (survivor_idx >= survivor_count[0])
+        return;
+    uint g_idx = uint(survivors[survivor_idx]);
+    uint render_idx = g_idx;
+#else
     uint g_idx = dispatchThreadID.x;
     uint render_idx = g_idx;
     const uint out_idx = render_idx;
 
     if (g_idx >= uniforms.num_splats)
         return;
+#endif
 
     // LOD indirection
     const bool lod_active = (uniforms.lod_enabled & 1u) != 0u;
     uint logical_idx = g_idx;
     if (lod_active) {
-      #if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD
+      #if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD && !LFS_PROJECTION_SURVIVORS
         if ((uniforms.lod_enabled & 32u) != 0u) {
             const uint valid = min(lod_counts[0], uniforms.lod_count);
             if (render_idx >= valid) {
@@ -461,7 +654,7 @@ void main(
       #endif
         g_idx = lod_indices[render_idx];
         if (g_idx == 0xffffffffu || g_idx >= uniforms.model_num_splats) {
-          #if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD
+          #if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD && !LFS_PROJECTION_SURVIVORS
             clear_forward_projection_output(out_idx, 0u);
           #endif
             return;
@@ -524,104 +717,21 @@ void main(
   #endif
 
 #if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD
-    uint overlay_flags = 0;
-    bool active = true;
-    float4 emphasis_flags = overlay_params[OVERLAY_PARAM_EMPHASIS_FLAGS];
-    bool node_data_enabled = overlay_enabled(emphasis_flags.y);
-    int node_count = overlay_int(emphasis_flags.z);
-    int node_idx = node_data_enabled ? read_int32(transform_indices, logical_idx) : -1;
-    int model_transform_idx = node_data_enabled ? node_idx : 0;
-    model_transform_idx = clamp(model_transform_idx, 0, int(max(model_transform_count, 1u)) - 1);
-    uint model_transform_base = uint(model_transform_idx) * 4u;
-    bool model_transform_enabled = model_transform_count > 0u;
-    float3 mean_ws = model_transform_enabled
-                         ? transform_point_rows(model_transforms, model_transform_base, gauss.xyz_ws)
-                         : gauss.xyz_ws;
+    const SplatActiveState active_state = compute_splat_active_state(
+        logical_idx, gauss.xyz_ws, model_transform_count,
+        transform_indices, node_mask, overlay_params, model_transforms);
+    uint overlay_flags = active_state.overlay_flags;
+    uint model_transform_base = active_state.model_transform_base;
+    bool model_transform_enabled = active_state.model_transform_enabled;
+    float3 mean_ws = active_state.mean_ws;
 
-    float4 crop_flags = overlay_params[OVERLAY_PARAM_CROP_FLAGS];
-    if (overlay_enabled(crop_flags.x)) {
-        int parent_node_idx = overlay_int(crop_flags.w);
-        bool applies = parent_node_idx < 0 || (node_data_enabled && node_idx == parent_node_idx);
-        if (applies) {
-            float3 local = transform_point_rows(overlay_params, OVERLAY_PARAM_CROP_TRANSFORM, mean_ws);
-            float3 bmin = overlay_params[OVERLAY_PARAM_CROP_MIN].xyz;
-            float3 bmax = overlay_params[OVERLAY_PARAM_CROP_MAX].xyz;
-            bool inside = local.x >= bmin.x && local.x <= bmax.x &&
-                          local.y >= bmin.y && local.y <= bmax.y &&
-                          local.z >= bmin.z && local.z <= bmax.z;
-            bool outside = inside == overlay_enabled(crop_flags.y);
-            if (outside) {
-                overlay_flags |= OVERLAY_FLAG_NONSELECTABLE;
-                if (overlay_enabled(crop_flags.z)) {
-                    overlay_flags |= OVERLAY_FLAG_DIM;
-                } else {
-                    active = false;
-                }
-            }
-        }
-    }
-
-    float4 ellipsoid_flags = overlay_params[OVERLAY_PARAM_ELLIPSOID_FLAGS];
-    if (active && overlay_enabled(ellipsoid_flags.x)) {
-        int parent_node_idx = overlay_int(ellipsoid_flags.w);
-        bool applies = parent_node_idx < 0 || (node_data_enabled && node_idx == parent_node_idx);
-        if (applies) {
-            float3 local = transform_point_rows(overlay_params, OVERLAY_PARAM_ELLIPSOID_TRANSFORM, mean_ws);
-            float3 radii = overlay_params[OVERLAY_PARAM_ELLIPSOID_RADII].xyz;
-            float norm = (local.x * local.x) / (radii.x * radii.x) +
-                         (local.y * local.y) / (radii.y * radii.y) +
-                         (local.z * local.z) / (radii.z * radii.z);
-            bool inside = norm <= 1.0f;
-            bool outside = inside == overlay_enabled(ellipsoid_flags.y);
-            if (outside) {
-                overlay_flags |= OVERLAY_FLAG_NONSELECTABLE;
-                if (overlay_enabled(ellipsoid_flags.z)) {
-                    overlay_flags |= OVERLAY_FLAG_DIM;
-                } else {
-                    active = false;
-                }
-            }
-        }
-    }
-
-    float4 view_flags = overlay_params[OVERLAY_PARAM_VIEW_FLAGS];
-    if (active && overlay_enabled(view_flags.x)) {
-        float3 local = transform_point_rows(overlay_params, OVERLAY_PARAM_VIEW_TRANSFORM, mean_ws);
-        float3 vmin = overlay_params[OVERLAY_PARAM_VIEW_MIN].xyz;
-        float3 vmax = overlay_params[OVERLAY_PARAM_VIEW_MAX].xyz;
-        bool inside = local.x >= vmin.x && local.x <= vmax.x &&
-                      local.y >= vmin.y && local.y <= vmax.y &&
-                      local.z >= vmin.z && local.z <= vmax.z;
-        if (!inside) {
-            overlay_flags |= OVERLAY_FLAG_NONSELECTABLE;
-            if (overlay_enabled(view_flags.y)) {
-                active = false;
-            }
-        }
-    }
-
-    if (active && overlay_enabled(emphasis_flags.x) && node_data_enabled && node_idx >= 0 && node_idx < node_count) {
-        if (read_byte(node_mask, uint(node_idx)) == 0) {
-            overlay_flags |= (OVERLAY_FLAG_DIM | OVERLAY_FLAG_NONSELECTABLE);
-        }
-    }
-
-    if (active && emphasis_flags.w > 0.0f && node_data_enabled && node_idx >= 0 && node_idx < node_count) {
-        if (read_byte(node_mask, uint(node_idx)) != 0) {
-            overlay_flags |= OVERLAY_FLAG_FLASH;
-        }
-    }
-
-    float4 visibility_flags = overlay_params[OVERLAY_PARAM_VISIBILITY_FLAGS];
-    if (active && overlay_enabled(visibility_flags.x) && node_data_enabled && node_idx >= 0 && node_idx < node_count) {
-        if (read_byte(node_mask, uint(node_idx)) == 0) {
-            active = false;
-        }
-    }
-
-    if (!active) {
+    if (!active_state.active) {
+      #if LFS_PROJECTION_SURVIVORS
+        return;
+      #else
         clear_forward_projection_output(out_idx, overlay_flags);
         return;
+      #endif
     }
 #endif
 
@@ -681,7 +791,7 @@ void main(
         splat.inv_cov_vs_opac.w <= ALPHA_THRESHOLD ||
         splat.det <= 0.0
     ) {
-        #if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD
+        #if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD && !LFS_PROJECTION_SURVIVORS
             clear_forward_projection_output(out_idx, overlay_flags);
         #endif
         return;
@@ -709,7 +819,7 @@ void main(
 
     int32_t n_tiles = int32_t(rect_tile_space.max_x - rect_tile_space.min_x) * int32_t(rect_tile_space.max_y - rect_tile_space.min_y);
     if (n_tiles == 0) {
-        #if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD
+        #if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD && !LFS_PROJECTION_SURVIVORS
             clear_forward_projection_output(out_idx, overlay_flags);
         #endif
         return;
@@ -724,6 +834,42 @@ void main(
     }
   #endif
 
+#if LFS_PROJECTION_SURVIVORS
+    // TILE_CULLING_MODE == 2 can refine n_tiles to zero after the bbox check.
+    if (n_tiles == 0)
+        return;
+
+    // Wave-aggregated compact-slot allocation. Lanes that early-returned are
+    // inactive, so the ballot counts exactly the emitting lanes. out_emit_count
+    // keeps the unclamped total for overflow detection; writes are clamped to
+    // capacity (uniforms.sort_capacity carries the visible capacity here).
+    const uint emit_in_wave = WaveActiveCountBits(true);
+    const uint lane_offset = WavePrefixCountBits(true);
+    uint wave_base = 0;
+    if (WaveIsFirstLane()) {
+        InterlockedAdd(out_emit_count[0], emit_in_wave, wave_base);
+    }
+    wave_base = WaveReadLaneFirst(wave_base);
+    const uint out_idx = wave_base + lane_offset;
+    if (out_idx >= uniforms.sort_capacity)
+        return;
+
+  #if USE_EMULATED_INT64
+    out_rect_tile_space[2*out_idx+0] = (int32_t)rect_tile_space.min_x | ((int32_t)rect_tile_space.min_y << 16);
+    out_rect_tile_space[2*out_idx+1] = (int32_t)rect_tile_space.max_x | ((int32_t)rect_tile_space.max_y << 16);
+  #else
+    out_rect_tile_space[out_idx] = reinterpret<int64_t>(rect_tile_space);
+  #endif
+
+    // Same radial depth key as the N-wide path; ids are slots, so after the
+    // depth radix sort the sorted ids index the compact outputs directly.
+    float3 cam_origin = no_diff camera_origin_ws(cam);
+    float3 sort_delta = mean_ws - cam_origin;
+    float radial_sort_metric = dot(sort_delta, sort_delta);
+    out_sort_keys[out_idx] = reinterpret<uint32_t>(radial_sort_metric);
+    out_sort_ids[out_idx] = int32_t(out_idx);
+    out_orig_ids[out_idx] = int32_t(logical_idx);
+#else
     // out_radii[g_idx] = (uint32_t)radius;  // inria
     out_radii[out_idx] = (uint32_t)ceil(max(radii.x, radii.y));  // gsplat, only used in densification
     out_tiles_touched[out_idx] = n_tiles;
@@ -749,6 +895,7 @@ void main(
     float3 sort_delta = mean_ws - cam_origin;
     float radial_sort_metric = dot(sort_delta, sort_delta);
     out_primitive_depth_keys[out_idx] = reinterpret<uint32_t>(radial_sort_metric);
+#endif  // LFS_PROJECTION_SURVIVORS
 
 #endif  // EXPORT_MODE != EXPORT_MODE_VULKAN_BACKWARD
 

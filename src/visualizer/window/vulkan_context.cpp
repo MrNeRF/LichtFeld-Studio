@@ -1401,9 +1401,13 @@ namespace lfs::vis {
             opt_supported_head = &supported_host_image_copy;
         }
 
+        VkPhysicalDeviceVulkan11Features supported_features11{};
+        supported_features11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+        supported_features11.pNext = &supported_features12;
+
         VkPhysicalDeviceFeatures2 supported_features2{};
         supported_features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-        supported_features2.pNext = &supported_features12;
+        supported_features2.pNext = &supported_features11;
         vkGetPhysicalDeviceFeatures2(physical_device_, &supported_features2);
 
         if (opt_supported_head != nullptr) {
@@ -1527,7 +1531,16 @@ namespace lfs::vis {
             enabled_chain_head = &host_image_copy_features;
         }
 
-        features12.pNext = enabled_chain_head;
+        // 16-bit storage for the fp16 splat raster path (half4 partials,
+        // half-packed staging). Mirrors device support; consumers must check
+        // hasFloat16Storage() and fall back to fp32 shader variants.
+        VkPhysicalDeviceVulkan11Features features11{};
+        features11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+        features11.storageBuffer16BitAccess = supported_features11.storageBuffer16BitAccess;
+        features11.uniformAndStorageBuffer16BitAccess =
+            supported_features11.uniformAndStorageBuffer16BitAccess;
+        features11.pNext = enabled_chain_head;
+        features12.pNext = &features11;
 
         VkPhysicalDeviceFeatures2 features2{};
         features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
@@ -1581,6 +1594,8 @@ namespace lfs::vis {
         external_memory_dedicated_allocation_enabled_ = enable_dedicated_allocation;
         has_push_descriptor_ = enable_push_descriptor;
         has_shader_object_ = enable_shader_object_feature;
+        has_float16_storage_ = features12.shaderFloat16 == VK_TRUE &&
+                               features11.storageBuffer16BitAccess == VK_TRUE;
         has_extended_dynamic_state3_ = enable_eds3_feature;
         has_cooperative_matrix_ = enable_coop_matrix_feature;
         has_host_image_copy_ = enable_host_image_copy_feature;

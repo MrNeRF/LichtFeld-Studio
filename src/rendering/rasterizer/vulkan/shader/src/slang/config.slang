@@ -21,6 +21,25 @@
 #define RASTER_BATCH_SIZE 1024u
 #define RASTER_DENSE_TILE_THRESHOLD RASTER_BATCH_SIZE
 
+// HiGS macro-tile pipeline. Mirrors config.h; the tile count per macro tile
+// must equal SUBGROUP_SIZE (ballot transpose carries one tile per lane).
+// The HiGS chain rasterizes 8x8 px render tiles (the paper's preferred
+// geometry; macro tile = 64x32 px) independent of the legacy 16x16 grid.
+#define HIGS_MACRO_TILE_WIDTH_TILES 8u
+#define HIGS_MACRO_TILE_HEIGHT_TILES 4u
+#define HIGS_MACRO_TILE_SIZE_TILES (HIGS_MACRO_TILE_WIDTH_TILES * HIGS_MACRO_TILE_HEIGHT_TILES)
+#define HIGS_TILE_WIDTH 8u
+#define HIGS_TILE_HEIGHT 8u
+#define HIGS_TILE_SIZE (HIGS_TILE_WIDTH * HIGS_TILE_HEIGHT)
+// Macro-tile extent in legacy 16px-tile units (projection rects use that grid).
+#define HIGS_MACRO_T16_W ((HIGS_MACRO_TILE_WIDTH_TILES * HIGS_TILE_WIDTH) / TILE_WIDTH)
+#define HIGS_MACRO_T16_H ((HIGS_MACRO_TILE_HEIGHT_TILES * HIGS_TILE_HEIGHT) / TILE_HEIGHT)
+#define HIGS_RASTER_WAVE_BATCHES 16384u
+#define HIGS_RASTER_MAX_WAVES 16u
+// Drain ring buffer: per-warp shared queue of compacted splat indices,
+// blended in dense batches of this size (reference Bd = 64).
+#define HIGS_DRAIN_BATCH 64u
+
 // 0: none
 // 1: gsplat
 // 2: all nonzero

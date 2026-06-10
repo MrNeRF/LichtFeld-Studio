@@ -22,6 +22,7 @@ void main(uniform Uniforms uniforms) {
     }
 
     out_visible_count[0] = visible_count;
+    out_visible_count[1] = visible_count;
 
     uint32_t partition_size = max(uniforms.sort_partition_size, 1u);
     uint32_t groups_x = (visible_count + partition_size - 1u) / partition_size;

@@ -371,6 +371,30 @@ namespace lfs::vis {
                 {"compact_visible_primitives", (root / "generated/compact_visible_primitives.spv").string()},
                 {"lod_map_indices", (root / "generated/lod_map_indices.spv").string()},
                 {"lod_select_threshold", (root / "generated/lod_select_threshold.spv").string()},
+                {"cull_splats", (root / "generated/cull_splats.spv").string()},
+                {"cull_prepare", (root / "generated/cull_prepare.spv").string()},
+                {"projection_forward_survivors",
+                 (root / "generated/projection_forward_survivors.spv").string()},
+                {"prepare_visible_chain", (root / "generated/prepare_visible_chain.spv").string()},
+                {"copy_visible_indices", (root / "generated/copy_visible_indices.spv").string()},
+                {"cumsum_block_scan_indirect",
+                 (root / "generated/cumsum_block_scan_indirect.spv").string()},
+                {"cumsum_scan_block_sums_indirect",
+                 (root / "generated/cumsum_scan_block_sums_indirect.spv").string()},
+                {"cumsum_add_block_offsets_indirect",
+                 (root / "generated/cumsum_add_block_offsets_indirect.spv").string()},
+                {"prepare_tile_sort_visible",
+                 (root / "generated/prepare_tile_sort_visible.spv").string()},
+                {"macro_coverage", (root / "generated/macro_coverage.spv").string()},
+                {"generate_macro_keys", (root / "generated/generate_macro_keys.spv").string()},
+                {"compute_macro_ranges", (root / "generated/compute_macro_ranges.spv").string()},
+                {"macro_batch_counts", (root / "generated/macro_batch_counts.spv").string()},
+                {"macro_batch_prepare", (root / "generated/macro_batch_prepare.spv").string()},
+                {"macro_raster", (root / "generated/macro_raster.spv").string()},
+                {"macro_raster_fp32", (root / "generated/macro_raster_fp32.spv").string()},
+                {"macro_raster_overlays", (root / "generated/macro_raster_overlays.spv").string()},
+                {"macro_compose", (root / "generated/macro_compose.spv").string()},
+                {"macro_compose_overlays", (root / "generated/macro_compose_overlays.spv").string()},
             };
         }
 
@@ -1497,7 +1521,11 @@ namespace lfs::vis {
         }
         buffers_.num_splats = 0;
         buffers_.num_indices = 0;
+        buffers_.num_indices_high_water = 0;
         buffers_.is_unsorted_1 = true;
+        visible_high_water_ = 0;
+        visible_clamp_pending_ = false;
+        instance_clamp_pending_ = false;
         uploaded_lod_indices_ = {};
         uploaded_lod_logical_indices_ = {};
         uploaded_lod_levels_ = {};
@@ -2771,6 +2799,8 @@ namespace lfs::vis {
 
     std::size_t VksplatViewportRenderer::estimateSharedScratchBytes(
         const std::size_t num_splats,
+        const std::size_t visible_capacity,
+        const bool macro_chain,
         const std::size_t sort_capacity,
         const std::size_t num_pixels,
         const std::size_t num_tiles) const {
@@ -2783,43 +2813,52 @@ namespace lfs::vis {
             add(count * elem_size);
         };
         const std::size_t dense_batch_capacity = denseTileBatchCapacity(sort_capacity, num_tiles);
+        // Macro chain: per-splat outputs live at compact slots (visible
+        // capacity), and the legacy-only buffers are not part of the frame.
+        const std::size_t per_visible = macro_chain ? visible_capacity : num_splats;
 
-        add_count(num_splats, sizeof(std::uint32_t));                                                            // primitive_depth_keys
-        add_count(num_splats, sizeof(std::int32_t));                                                             // tiles_touched
-        add_count(num_splats, sizeof(std::int64_t));                                                             // rect_tile_space
-        add_count(num_splats, sizeof(std::int32_t));                                                             // radii
-        add_count(2 * num_splats, sizeof(float));                                                                // xy_vs
-        add_count(num_splats, sizeof(float));                                                                    // depths
-        add_count(4 * num_splats, sizeof(float));                                                                // inv_cov_vs_opacity
-        add_count(3 * num_splats, sizeof(float));                                                                // rgb
-        add_count(num_splats, sizeof(std::int32_t));                                                             // overlay_flags
-        add_count(num_splats, sizeof(std::int32_t));                                                             // primitive_sort_indices
-        add_count(num_splats, sizeof(std::int32_t));                                                             // tiles_touched_depth_ordered
-        add_count(num_splats, sizeof(std::int32_t));                                                             // visible_flags
-        add_count(num_splats, sizeof(std::int32_t));                                                             // visible_prefix
-        add_count(1, sizeof(std::uint32_t));                                                                     // visible_count
-        add_count(3, sizeof(std::uint32_t));                                                                     // visible_sort_dispatch_args
-        add_count(num_splats, sizeof(std::int32_t));                                                             // index_buffer_offset
-        add_count(sort_capacity, sizeof(sortingKey_t));                                                          // sorting_keys_1
-        add_count(sort_capacity, sizeof(sortingKey_t));                                                          // sorting_keys_2
-        add_count(sort_capacity, sizeof(std::int32_t));                                                          // sorting_gauss_idx_1
-        add_count(sort_capacity, sizeof(std::int32_t));                                                          // sorting_gauss_idx_2
-        add_count(1, sizeof(std::uint32_t));                                                                     // tile_sort_count
-        add_count(3, sizeof(std::uint32_t));                                                                     // tile_sort_dispatch_args
-        add_count(num_tiles + 1, sizeof(std::int32_t));                                                          // tile_ranges
-        add_count(num_tiles, sizeof(std::int32_t));                                                              // tile_batch_counts
-        add_count(num_tiles, sizeof(std::int32_t));                                                              // tile_batch_offsets
-        add_count(3, sizeof(std::uint32_t));                                                                     // tile_batch_dispatch_args
-        add_count(4 * dense_batch_capacity, sizeof(std::uint32_t));                                              // tile_batch_descriptors
-        add_count(4 * dense_batch_capacity * TILE_WIDTH * TILE_HEIGHT, sizeof(float));                           // tile_batch_pixel_state
-        add_count(dense_batch_capacity * TILE_WIDTH * TILE_HEIGHT, sizeof(std::int32_t));                        // tile_batch_n_contributors
-        add_count(4 * num_pixels, sizeof(float));                                                                // pixel_state
-        add_count(num_pixels, sizeof(float));                                                                    // pixel_depth
-        add_count(num_pixels, sizeof(std::int32_t));                                                             // n_contributors
-        add_count(_CEIL_DIV(num_splats, std::size_t{1024}), sizeof(std::int32_t));                               // _cumsum_blockSums
-        add_count(_CEIL_DIV(_CEIL_DIV(num_splats, std::size_t{1024}), std::size_t{1024}), sizeof(std::int32_t)); // _cumsum_blockSums2
-        add_count(8 * 256, sizeof(std::int32_t));                                                                // _sorting_histogram
-        add_count(_CEIL_DIV(sort_capacity, std::size_t{512 * 8}) * 256, sizeof(std::int32_t));                   // _sorting_histogram_cumsum
+        if (!macro_chain) {
+            add_count(num_splats, sizeof(std::uint32_t)); // primitive_depth_keys
+            add_count(num_splats, sizeof(std::int32_t));  // tiles_touched
+        }
+        add_count(per_visible, sizeof(std::int64_t)); // rect_tile_space
+        if (!macro_chain) {
+            add_count(num_splats, sizeof(std::int32_t)); // radii
+        }
+        add_count(2 * per_visible, sizeof(float));    // xy_vs
+        add_count(per_visible, sizeof(float));        // depths
+        add_count(4 * per_visible, sizeof(float));    // inv_cov_vs_opacity
+        add_count(3 * per_visible, sizeof(float));    // rgb
+        add_count(per_visible, sizeof(std::int32_t)); // overlay_flags
+        add_count(per_visible, sizeof(std::int32_t)); // primitive_sort_indices
+        add_count(per_visible, sizeof(std::int32_t)); // tiles_touched_depth_ordered
+        if (!macro_chain) {
+            add_count(num_splats, sizeof(std::int32_t)); // visible_flags
+            add_count(num_splats, sizeof(std::int32_t)); // visible_prefix
+        }
+        add_count(2, sizeof(std::uint32_t));                                                                      // visible_count
+        add_count(3, sizeof(std::uint32_t));                                                                      // visible_sort_dispatch_args
+        add_count(per_visible, sizeof(std::int32_t));                                                             // index_buffer_offset
+        add_count(sort_capacity, sizeof(sortingKey_t));                                                           // sorting_keys_1
+        add_count(sort_capacity, sizeof(sortingKey_t));                                                           // sorting_keys_2
+        add_count(sort_capacity, sizeof(std::int32_t));                                                           // sorting_gauss_idx_1
+        add_count(sort_capacity, sizeof(std::int32_t));                                                           // sorting_gauss_idx_2
+        add_count(2, sizeof(std::uint32_t));                                                                      // tile_sort_count
+        add_count(3, sizeof(std::uint32_t));                                                                      // tile_sort_dispatch_args
+        add_count(num_tiles + 1, sizeof(std::int32_t));                                                           // tile_ranges
+        add_count(num_tiles, sizeof(std::int32_t));                                                               // tile_batch_counts
+        add_count(num_tiles, sizeof(std::int32_t));                                                               // tile_batch_offsets
+        add_count(3, sizeof(std::uint32_t));                                                                      // tile_batch_dispatch_args
+        add_count(4 * dense_batch_capacity, sizeof(std::uint32_t));                                               // tile_batch_descriptors
+        add_count(4 * dense_batch_capacity * TILE_WIDTH * TILE_HEIGHT, sizeof(float));                            // tile_batch_pixel_state
+        add_count(dense_batch_capacity * TILE_WIDTH * TILE_HEIGHT, sizeof(std::int32_t));                         // tile_batch_n_contributors
+        add_count(4 * num_pixels, sizeof(float));                                                                 // pixel_state
+        add_count(num_pixels, sizeof(float));                                                                     // pixel_depth
+        add_count(num_pixels, sizeof(std::int32_t));                                                              // n_contributors
+        add_count(_CEIL_DIV(per_visible, std::size_t{1024}), sizeof(std::int32_t));                               // _cumsum_blockSums
+        add_count(_CEIL_DIV(_CEIL_DIV(per_visible, std::size_t{1024}), std::size_t{1024}), sizeof(std::int32_t)); // _cumsum_blockSums2
+        add_count(8 * 256, sizeof(std::int32_t));                                                                 // _sorting_histogram
+        add_count(_CEIL_DIV(sort_capacity, std::size_t{512 * 8}) * 256, sizeof(std::int32_t));                    // _sorting_histogram_cumsum
         return alignUp(cursor, kRegionAlignment);
     }
 
@@ -3043,6 +3082,8 @@ namespace lfs::vis {
 
     void VksplatViewportRenderer::bindSharedScratchBuffers(
         const std::size_t num_splats,
+        const std::size_t visible_capacity,
+        const bool macro_chain,
         const std::size_t sort_capacity,
         const std::size_t num_pixels,
         const std::size_t num_tiles) {
@@ -3066,29 +3107,38 @@ namespace lfs::vis {
             bind_bytes(typed_buffer, count * sizeof(Value));
         };
 
-        bind_count(buffers_.primitive_depth_keys, num_splats);
-        bind_count(buffers_.tiles_touched, num_splats);
-        bind_count(buffers_.rect_tile_space, num_splats);
-        bind_count(buffers_.radii, num_splats);
-        bind_count(buffers_.xy_vs, 2 * num_splats);
-        bind_count(buffers_.depths, num_splats);
-        bind_count(buffers_.inv_cov_vs_opacity, 4 * num_splats);
-        bind_count(buffers_.rgb, 3 * num_splats);
-        bind_count(buffers_.overlay_flags, num_splats);
-        bind_count(buffers_.primitive_sort_indices, num_splats);
-        bind_count(buffers_.tiles_touched_depth_ordered, num_splats);
-        bind_count(buffers_.visible_flags, num_splats);
-        bind_count(buffers_.visible_prefix, num_splats);
-        bind_count(buffers_.visible_count, 1);
+        // Mirror estimateSharedScratchBytes exactly; the two walk the same
+        // cursor so every region lands at the estimated offset.
+        const std::size_t per_visible = macro_chain ? visible_capacity : num_splats;
+        if (!macro_chain) {
+            bind_count(buffers_.primitive_depth_keys, num_splats);
+            bind_count(buffers_.tiles_touched, num_splats);
+        }
+        bind_count(buffers_.rect_tile_space, per_visible);
+        if (!macro_chain) {
+            bind_count(buffers_.radii, num_splats);
+        }
+        bind_count(buffers_.xy_vs, 2 * per_visible);
+        bind_count(buffers_.depths, per_visible);
+        bind_count(buffers_.inv_cov_vs_opacity, 4 * per_visible);
+        bind_count(buffers_.rgb, 3 * per_visible);
+        bind_count(buffers_.overlay_flags, per_visible);
+        bind_count(buffers_.primitive_sort_indices, per_visible);
+        bind_count(buffers_.tiles_touched_depth_ordered, per_visible);
+        if (!macro_chain) {
+            bind_count(buffers_.visible_flags, num_splats);
+            bind_count(buffers_.visible_prefix, num_splats);
+        }
+        bind_count(buffers_.visible_count, 2);
         bind_count(buffers_.visible_sort_dispatch_args, 3);
-        bind_count(buffers_.index_buffer_offset, num_splats);
+        bind_count(buffers_.index_buffer_offset, per_visible);
         const std::size_t per_splat_end = cursor;
         bind_count(buffers_.sorting_keys_1, sort_capacity);
         bind_count(buffers_.sorting_keys_2, sort_capacity);
         bind_count(buffers_.sorting_gauss_idx_1, sort_capacity);
         bind_count(buffers_.sorting_gauss_idx_2, sort_capacity);
         const std::size_t sort_end = cursor;
-        bind_count(buffers_.tile_sort_count, 1);
+        bind_count(buffers_.tile_sort_count, 2);
         bind_count(buffers_.tile_sort_dispatch_args, 3);
         bind_count(buffers_.tile_ranges, num_tiles + 1);
         const std::size_t dense_batch_capacity = denseTileBatchCapacity(sort_capacity, num_tiles);
@@ -3103,8 +3153,8 @@ namespace lfs::vis {
         bind_count(buffers_.pixel_depth, num_pixels);
         bind_count(buffers_.n_contributors, num_pixels);
         const std::size_t pixel_end = cursor;
-        bind_count(buffers_._cumsum_blockSums, _CEIL_DIV(num_splats, std::size_t{1024}));
-        bind_count(buffers_._cumsum_blockSums2, _CEIL_DIV(_CEIL_DIV(num_splats, std::size_t{1024}), std::size_t{1024}));
+        bind_count(buffers_._cumsum_blockSums, _CEIL_DIV(per_visible, std::size_t{1024}));
+        bind_count(buffers_._cumsum_blockSums2, _CEIL_DIV(_CEIL_DIV(per_visible, std::size_t{1024}), std::size_t{1024}));
         bind_count(buffers_._sorting_histogram, 8 * 256);
         bind_count(buffers_._sorting_histogram_cumsum,
                    _CEIL_DIV(sort_capacity, std::size_t{512 * 8}) * 256);
@@ -5711,17 +5761,30 @@ namespace lfs::vis {
                 LOG_TIMER("vksplat.selection_overlay.record");
                 {
                     LOG_TIMER("vksplat.selection_overlay.record.executeRasterizeForward");
-                    renderer_.executeRasterizeForward(uniforms,
-                                                      buffers_,
-                                                      overlay_bindings->selection_mask,
-                                                      overlay_bindings->preview_mask,
-                                                      overlay_bindings->selection_colors,
-                                                      buffers_.overlay_flags.deviceBuffer,
-                                                      overlay_bindings->overlay_params,
-                                                      overlay_bindings->transform_indices,
-                                                      overlay_bindings->model_transforms,
-                                                      request.gut,
-                                                      overlay_bindings->raster_overlays_active);
+                    if (last_render_used_macro_chain_) {
+                        // The resident sort/range buffers hold the macro chain's
+                        // layout; re-rasterize through the macro path.
+                        renderer_.executeMacroRasterCompose(uniforms,
+                                                            buffers_,
+                                                            uniforms.sort_capacity,
+                                                            overlay_bindings->selection_mask,
+                                                            overlay_bindings->preview_mask,
+                                                            overlay_bindings->selection_colors,
+                                                            overlay_bindings->overlay_params,
+                                                            overlay_bindings->raster_overlays_active);
+                    } else {
+                        renderer_.executeRasterizeForward(uniforms,
+                                                          buffers_,
+                                                          overlay_bindings->selection_mask,
+                                                          overlay_bindings->preview_mask,
+                                                          overlay_bindings->selection_colors,
+                                                          buffers_.overlay_flags.deviceBuffer,
+                                                          overlay_bindings->overlay_params,
+                                                          overlay_bindings->transform_indices,
+                                                          overlay_bindings->model_transforms,
+                                                          request.gut,
+                                                          overlay_bindings->raster_overlays_active);
+                    }
                 }
                 {
                     LOG_TIMER("vksplat.selection_overlay.record.composePixelState");
@@ -5802,6 +5865,41 @@ namespace lfs::vis {
                      visibility_stats->visible_count,
                      visibility_stats->num_splats,
                      ratio);
+            const std::size_t decayed = visible_high_water_ - visible_high_water_ / 8;
+            visible_clamp_pending_ =
+                visibility_stats->raw_count > visibility_stats->visible_count;
+            // A clamped frame means the camera is moving toward more content;
+            // overshoot the mark so the heal converges in one round instead of
+            // chasing the zoom frame by frame.
+            const std::size_t grown = visible_clamp_pending_
+                                          ? std::min(visibility_stats->num_splats,
+                                                     visibility_stats->raw_count +
+                                                         visibility_stats->raw_count / 2)
+                                          : visibility_stats->raw_count;
+            visible_high_water_ = std::max(grown, decayed);
+            if (visible_clamp_pending_) {
+                LOG_PERF("vksplat.render.visible_clamped raw={} rendered={}",
+                         visibility_stats->raw_count,
+                         visibility_stats->visible_count);
+            }
+        }
+        if (const auto macro_stats = renderer_.pollDeferredMacroInstanceStats()) {
+            // One frame stale; drives the capacity high-water mark. A clamped
+            // frame (raw > clamped) grows the mark so the next frames render
+            // complete content.
+            buffers_.num_indices = macro_stats->instance_count;
+            instance_clamp_pending_ =
+                macro_stats->raw_count > macro_stats->instance_count;
+            const std::size_t instance_target = instance_clamp_pending_
+                                                    ? macro_stats->raw_count + macro_stats->raw_count / 2
+                                                    : macro_stats->raw_count;
+            buffers_.num_indices_high_water =
+                std::max(buffers_.num_indices_high_water, instance_target);
+            if (instance_clamp_pending_) {
+                LOG_PERF("vksplat.render.macro_instances_clamped raw={} rendered={}",
+                         macro_stats->raw_count,
+                         macro_stats->instance_count);
+            }
         }
         if (const auto lod_stats = renderer_.pollDeferredLodSelectionStats()) {
             gpu_lod_last_candidate_count_ = lod_stats->candidate_count;
@@ -6195,6 +6293,21 @@ namespace lfs::vis {
             uniforms.lod_enabled |= 2u;
         }
 
+        // The HiGS macro-tile chain is the viewer pipeline. 3DGUT falls back
+        // to the legacy per-render-tile chain (its raster loads model tensors
+        // by sorted id, which compact slots would break), as do devices
+        // without 16-bit storage (the macro raster stores half4 partials).
+        const bool higs_active = !request.gut && renderer_.supportsFloat16Storage();
+        // Visible capacity follows the decaying high-water mark; until the
+        // first readback lands, size at the render domain (always sufficient).
+        // A clamped frame self-heals: the raw emit count grows the mark and
+        // the next frames render complete content.
+        const std::size_t higs_visible_capacity =
+            visible_high_water_ == 0
+                ? static_cast<std::size_t>(uniforms.num_splats)
+                : std::min<std::size_t>(static_cast<std::size_t>(uniforms.num_splats),
+                                        visible_high_water_ + visible_high_water_ / 4 + 65536);
+
         if (uniforms.lod_enabled != 0u) {
             static std::uint32_t lod_dispatch_log_counter = 0;
             const std::uint32_t log_counter = ++lod_dispatch_log_counter;
@@ -6258,7 +6371,9 @@ namespace lfs::vis {
             return std::format(
                 "attempt_id={}, required={}MiB, capacity={}MiB, generation={}, sort_capacity={}, high_water={}, last_indices={}, splats={}, viewport={}x{}, grid={}x{}, ring={}, next_render_value={}",
                 shared_scratch_attempt_id,
-                estimateSharedScratchBytes(active_splat_count, shared_sort_capacity, num_pixels, num_tiles) >> 20,
+                estimateSharedScratchBytes(active_splat_count, higs_visible_capacity, higs_active,
+                                           shared_sort_capacity, num_pixels, num_tiles) >>
+                    20,
                 shared_scratch_.bytes >> 20,
                 shared_scratch_.generation,
                 shared_sort_capacity,
@@ -6279,7 +6394,8 @@ namespace lfs::vis {
             // Do not resize output images until this render is guaranteed to proceed.
             releasePrivateScratchBuffers();
             const std::size_t required_shared_scratch =
-                estimateSharedScratchBytes(active_splat_count, shared_sort_capacity, num_pixels, num_tiles);
+                estimateSharedScratchBytes(active_splat_count, higs_visible_capacity, higs_active,
+                                           shared_sort_capacity, num_pixels, num_tiles);
             shared_scratch_attempt_id = ++shared_scratch_attempt_serial_;
             if (auto ok = ensureSharedScratchArena(context, required_shared_scratch); ok) {
                 try {
@@ -6291,7 +6407,8 @@ namespace lfs::vis {
                         shared_arena_guard.reset();
                         return std::unexpected(rok.error());
                     }
-                    bindSharedScratchBuffers(active_splat_count, shared_sort_capacity, num_pixels, num_tiles);
+                    bindSharedScratchBuffers(active_splat_count, higs_visible_capacity, higs_active,
+                                             shared_sort_capacity, num_pixels, num_tiles);
                     shared_scratch_bound = true;
                     LOG_PERF("vksplat.memory.shared_scratch required={}MiB capacity={}MiB sort_capacity={} splats={}",
                              required_shared_scratch >> 20,
@@ -6320,7 +6437,9 @@ namespace lfs::vis {
         });
 
         if (!synchronize_input_upload &&
-            renderer_.shrinkSortBuffersForCapacity(buffers_, target_sort_capacity)) {
+            renderer_.shrinkSortBuffersForCapacity(buffers_,
+                                                   target_sort_capacity,
+                                                   higs_active ? higs_visible_capacity : 0)) {
             LOG_PERF("vksplat.memory.shrink_sort_buffers target_capacity={} splats={}",
                      target_sort_capacity,
                      active_splat_count);
@@ -6435,37 +6554,71 @@ namespace lfs::vis {
                             buffers_,
                             gpu_lod_tree_.chunk_to_page.deviceBuffer);
                     }
-                    renderer_.executeProjectionForward(uniforms,
-                                                       buffers_,
-                                                       overlay_bindings->transform_indices,
-                                                       overlay_bindings->node_mask,
-                                                       overlay_bindings->overlay_params,
-                                                       overlay_bindings->model_transforms,
-                                                       0,
-                                                       request.gut,
-                                                       buffers_.has_lod_indices
-                                                           ? (gpu_lod_render_active
-                                                                  ? buffers_.lod_gpu_indices.deviceBuffer
-                                                                  : buffers_.lod_indices.deviceBuffer)
-                                                           : _VulkanBuffer(),
-                                                       buffers_.has_lod_logical_indices
-                                                           ? (gpu_lod_render_active
-                                                                  ? buffers_.lod_gpu_logical_indices.deviceBuffer
-                                                                  : buffers_.lod_logical_indices.deviceBuffer)
-                                                           : _VulkanBuffer(),
-                                                       buffers_.has_lod_levels
-                                                           ? (gpu_lod_render_active
-                                                                  ? buffers_.lod_gpu_levels.deviceBuffer
-                                                                  : buffers_.lod_levels.deviceBuffer)
-                                                           : _VulkanBuffer(),
-                                                       buffers_.has_lod_weights
-                                                           ? (gpu_lod_render_active
-                                                                  ? buffers_.lod_gpu_weights.deviceBuffer
-                                                                  : buffers_.lod_weights.deviceBuffer)
-                                                           : _VulkanBuffer(),
-                                                       gpu_lod_render_active
-                                                           ? buffers_.lod_gpu_counts.deviceBuffer
-                                                           : _VulkanBuffer());
+                    const _VulkanBuffer lod_indices_buffer =
+                        buffers_.has_lod_indices
+                            ? (gpu_lod_render_active
+                                   ? buffers_.lod_gpu_indices.deviceBuffer
+                                   : buffers_.lod_indices.deviceBuffer)
+                            : _VulkanBuffer();
+                    const _VulkanBuffer lod_logical_indices_buffer =
+                        buffers_.has_lod_logical_indices
+                            ? (gpu_lod_render_active
+                                   ? buffers_.lod_gpu_logical_indices.deviceBuffer
+                                   : buffers_.lod_logical_indices.deviceBuffer)
+                            : _VulkanBuffer();
+                    const _VulkanBuffer lod_levels_buffer =
+                        buffers_.has_lod_levels
+                            ? (gpu_lod_render_active
+                                   ? buffers_.lod_gpu_levels.deviceBuffer
+                                   : buffers_.lod_levels.deviceBuffer)
+                            : _VulkanBuffer();
+                    const _VulkanBuffer lod_weights_buffer =
+                        buffers_.has_lod_weights
+                            ? (gpu_lod_render_active
+                                   ? buffers_.lod_gpu_weights.deviceBuffer
+                                   : buffers_.lod_weights.deviceBuffer)
+                            : _VulkanBuffer();
+                    const _VulkanBuffer lod_counts_buffer =
+                        gpu_lod_render_active
+                            ? buffers_.lod_gpu_counts.deviceBuffer
+                            : _VulkanBuffer();
+                    if (higs_active) {
+                        renderer_.executeCullSplats(uniforms,
+                                                    buffers_,
+                                                    overlay_bindings->transform_indices,
+                                                    overlay_bindings->node_mask,
+                                                    overlay_bindings->overlay_params,
+                                                    overlay_bindings->model_transforms,
+                                                    lod_indices_buffer,
+                                                    lod_logical_indices_buffer,
+                                                    lod_counts_buffer);
+                        renderer_.executeProjectionForwardSurvivors(uniforms,
+                                                                    buffers_,
+                                                                    overlay_bindings->transform_indices,
+                                                                    overlay_bindings->node_mask,
+                                                                    overlay_bindings->overlay_params,
+                                                                    overlay_bindings->model_transforms,
+                                                                    higs_visible_capacity,
+                                                                    lod_indices_buffer,
+                                                                    lod_logical_indices_buffer,
+                                                                    lod_levels_buffer,
+                                                                    lod_weights_buffer,
+                                                                    lod_counts_buffer);
+                    } else {
+                        renderer_.executeProjectionForward(uniforms,
+                                                           buffers_,
+                                                           overlay_bindings->transform_indices,
+                                                           overlay_bindings->node_mask,
+                                                           overlay_bindings->overlay_params,
+                                                           overlay_bindings->model_transforms,
+                                                           0,
+                                                           request.gut,
+                                                           lod_indices_buffer,
+                                                           lod_logical_indices_buffer,
+                                                           lod_levels_buffer,
+                                                           lod_weights_buffer,
+                                                           lod_counts_buffer);
+                    }
                 }
                 // Two-stage sort (Splatshop, matches gsplat_fwd reference):
                 //   1. Depth-sort N primitives by radial distance (full 32-bit key).
@@ -6473,19 +6626,38 @@ namespace lfs::vis {
                 //      offsets match a depth-ordered emission walk.
                 //   3. Stable-sort tile instances by tile id only (no depth bits
                 //      packed in), which preserves depth order within each tile.
-                {
-                    LOG_TIMER("vksplat.render.record.executeSortPrimitivesByDepth");
-                    renderer_.executeSortPrimitivesByDepth(uniforms, buffers_);
+                // The HiGS chain runs the same stages bounded by the GPU-resident
+                // visible count: the survivor projection already appended the
+                // depth-sort input at compact slots.
+                if (higs_active) {
+                    {
+                        LOG_TIMER("vksplat.render.record.executeSortPrimitivesByDepth");
+                        renderer_.executeSortPrimitivesByDepthVisible(uniforms, buffers_, higs_visible_capacity);
+                    }
+                    {
+                        LOG_TIMER("vksplat.render.record.executeMacroCoverage");
+                        renderer_.executeMacroCoverage(uniforms, buffers_, higs_visible_capacity);
+                    }
+                    {
+                        LOG_TIMER("vksplat.render.record.executeCalculateIndexBufferOffset");
+                        renderer_.executeCalculateIndexBufferOffsetVisible(
+                            uniforms, buffers_, higs_visible_capacity, shared_sort_capacity);
+                    }
+                } else {
+                    {
+                        LOG_TIMER("vksplat.render.record.executeSortPrimitivesByDepth");
+                        renderer_.executeSortPrimitivesByDepth(uniforms, buffers_);
+                    }
+                    {
+                        LOG_TIMER("vksplat.render.record.executeApplyDepthOrdering");
+                        renderer_.executeApplyDepthOrdering(uniforms, buffers_);
+                    }
+                    {
+                        LOG_TIMER("vksplat.render.record.executeCalculateIndexBufferOffset");
+                        renderer_.executeCalculateIndexBufferOffset(uniforms, buffers_);
+                    }
                 }
-                {
-                    LOG_TIMER("vksplat.render.record.executeApplyDepthOrdering");
-                    renderer_.executeApplyDepthOrdering(uniforms, buffers_);
-                }
-                {
-                    LOG_TIMER("vksplat.render.record.executeCalculateIndexBufferOffset");
-                    renderer_.executeCalculateIndexBufferOffset(uniforms, buffers_);
-                }
-                if (shared_scratch_bound && buffers_.num_indices > shared_sort_capacity) {
+                if (!higs_active && shared_scratch_bound && buffers_.num_indices > shared_sort_capacity) {
                     return std::unexpected(std::format(
                         "VkSplat shared scratch sort capacity insufficient: {}; have {}, need {}",
                         shared_scratch_context(),
@@ -6513,46 +6685,86 @@ namespace lfs::vis {
                              grid_width,
                              grid_height);
                 }
+                // HiGS records against the capacity (the GPU-resident count
+                // bounds every pass); the legacy chain keeps the exact count
+                // from its synchronous readback.
                 uniforms.sort_capacity = static_cast<uint32_t>(
-                    std::min<std::size_t>(buffers_.num_indices,
+                    std::min<std::size_t>(higs_active ? shared_sort_capacity : buffers_.num_indices,
                                           static_cast<std::size_t>(std::numeric_limits<uint32_t>::max())));
-                if (buffers_.num_indices > 0) {
+                if (higs_active || buffers_.num_indices > 0) {
                     {
                         LOG_TIMER("vksplat.render.record.executeGenerateKeys");
-                        renderer_.executeGenerateKeys(uniforms, buffers_);
+                        if (higs_active) {
+                            renderer_.executeGenerateMacroKeys(
+                                uniforms, buffers_, higs_visible_capacity, shared_sort_capacity);
+                        } else {
+                            renderer_.executeGenerateKeys(uniforms, buffers_);
+                        }
                     }
-                    // Stage-2 sort bits: ceil(log2(grid_w*grid_h + 1)) rounded up to
-                    // the next byte. Real tile ids fit in this range; the sentinel
-                    // (grid_w*grid_h) sorts to the end.
-                    int tile_bits = 0;
-                    uint32_t tile_max = uniforms.grid_width * uniforms.grid_height;
-                    while (tile_max) {
-                        tile_max >>= 1;
-                        ++tile_bits;
+                    // Stage-2 sort bits: ceil(log2(id_max + 1)) — render-tile ids for
+                    // the legacy chain, macro-tile ids for the HiGS chain. The
+                    // sentinel id (count) sorts to the end either way.
+                    uint32_t id_max = uniforms.grid_width * uniforms.grid_height;
+                    if (higs_active) {
+                        const std::uint32_t mgw =
+                            (uniforms.grid_width + HIGS_MACRO_T16_W - 1u) / HIGS_MACRO_T16_W;
+                        const std::uint32_t mgh =
+                            (uniforms.grid_height + HIGS_MACRO_T16_H - 1u) / HIGS_MACRO_T16_H;
+                        id_max = mgw * mgh;
+                    }
+                    int sort_bits = 0;
+                    while (id_max) {
+                        id_max >>= 1;
+                        ++sort_bits;
                     }
                     {
                         LOG_TIMER("vksplat.render.record.executeSort");
-                        renderer_.executeSortTileInstances(uniforms, buffers_, tile_bits);
+                        renderer_.executeSortTileInstances(
+                            uniforms, buffers_, sort_bits,
+                            higs_active ? shared_sort_capacity : buffers_.num_indices);
                     }
-                    {
-                        LOG_TIMER("vksplat.render.record.executeComputeTileRanges");
-                        renderer_.executeComputeTileRanges(uniforms, buffers_);
-                    }
-                    {
-                        LOG_TIMER("vksplat.render.record.executeRasterizeForward");
-                        renderer_.executeRasterizeForward(uniforms,
-                                                          buffers_,
-                                                          overlay_bindings->selection_mask,
-                                                          overlay_bindings->preview_mask,
-                                                          overlay_bindings->selection_colors,
-                                                          buffers_.overlay_flags.deviceBuffer,
-                                                          overlay_bindings->overlay_params,
-                                                          overlay_bindings->transform_indices,
-                                                          overlay_bindings->model_transforms,
-                                                          request.gut,
-                                                          overlay_bindings->raster_overlays_active);
+                    if (higs_active) {
+                        {
+                            LOG_TIMER("vksplat.render.record.executeComputeMacroRanges");
+                            renderer_.executeComputeMacroRanges(uniforms, buffers_, shared_sort_capacity);
+                        }
+                        {
+                            LOG_TIMER("vksplat.render.record.executeMacroBatches");
+                            renderer_.executeMacroBatches(uniforms, buffers_);
+                        }
+                        {
+                            LOG_TIMER("vksplat.render.record.executeRasterizeForward");
+                            renderer_.executeMacroRasterCompose(uniforms,
+                                                                buffers_,
+                                                                shared_sort_capacity,
+                                                                overlay_bindings->selection_mask,
+                                                                overlay_bindings->preview_mask,
+                                                                overlay_bindings->selection_colors,
+                                                                overlay_bindings->overlay_params,
+                                                                overlay_bindings->raster_overlays_active);
+                        }
+                    } else {
+                        {
+                            LOG_TIMER("vksplat.render.record.executeComputeTileRanges");
+                            renderer_.executeComputeTileRanges(uniforms, buffers_);
+                        }
+                        {
+                            LOG_TIMER("vksplat.render.record.executeRasterizeForward");
+                            renderer_.executeRasterizeForward(uniforms,
+                                                              buffers_,
+                                                              overlay_bindings->selection_mask,
+                                                              overlay_bindings->preview_mask,
+                                                              overlay_bindings->selection_colors,
+                                                              buffers_.overlay_flags.deviceBuffer,
+                                                              overlay_bindings->overlay_params,
+                                                              overlay_bindings->transform_indices,
+                                                              overlay_bindings->model_transforms,
+                                                              request.gut,
+                                                              overlay_bindings->raster_overlays_active);
+                        }
                     }
                 }
+                last_render_used_macro_chain_ = higs_active;
                 {
                     LOG_TIMER("vksplat.render.record.composePixelState");
                     // Record compose into the rasterizer's batch so the entire frame
@@ -6584,6 +6796,7 @@ namespace lfs::vis {
 
         renderer_.tagDeferredVisibleCountReadback(render_complete_timeline_, completion_value);
         renderer_.tagDeferredLodSelectionReadback(render_complete_timeline_, completion_value);
+        renderer_.tagDeferredInstanceCountReadback(render_complete_timeline_, completion_value);
         ring_completion_values_[ring_slot] = completion_value;
         if (queue_lod_prefetch_after_render) {
             if (gpu_lod_prefetch_source) {
@@ -6603,8 +6816,11 @@ namespace lfs::vis {
             lod_request_active && lod_page_cache_.configured()
                 ? lod_page_cache_.snapshot().generation
                 : 0u;
+        // Clamp self-heal rides the streaming flag: keep scheduling frames
+        // until a readback confirms a complete (unclamped) frame landed.
         const bool lod_streaming_active =
-            lod_page_inputs_active && lod_page_cache_.hasOutstandingWork();
+            (lod_page_inputs_active && lod_page_cache_.hasOutstandingWork()) ||
+            visible_clamp_pending_ || instance_clamp_pending_;
         return RenderResult{
             .image = output.image.image,
             .image_view = output.image.view,

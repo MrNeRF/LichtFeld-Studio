@@ -1129,8 +1129,24 @@ struct Uniforms {
     float fy;
     float cx;
     float cy;
+    // HiGS raster/compose wave window start (batch index); occupies what was
+    // implicit alignment padding before dist_coeffs, so the layout is unchanged.
+    uint wave_base;
+    uint higs_pad0;
     float4 dist_coeffs;
     float4x4 world_view_transform;
+}
+
+// HiGS macro-tile grid (64x32 px macro tiles), derived from the legacy
+// 16px-tile grid dims carried in the uniforms: ceil(ceil(w/16)/4) == ceil(w/64).
+[ForceInline]
+uint higs_macro_grid_width(uint grid_width) {
+    return (grid_width + HIGS_MACRO_T16_W - 1u) / HIGS_MACRO_T16_W;
+}
+
+[ForceInline]
+uint higs_macro_grid_height(uint grid_height) {
+    return (grid_height + HIGS_MACRO_T16_H - 1u) / HIGS_MACRO_T16_H;
 }
 
 static const uint OVERLAY_FLAG_DIM = 1;

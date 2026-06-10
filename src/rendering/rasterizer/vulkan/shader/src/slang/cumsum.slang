@@ -30,10 +30,21 @@
 #endif
 
 
+// CUMSUM_INDIRECT=1: the element count is GPU-resident (per-level counts
+// written by prepare_visible_chain) and the dispatch is indirect, so the host
+// never needs to know the visible count. numElements carries the
+// level index instead of the count.
+#ifndef CUMSUM_INDIRECT
+#define CUMSUM_INDIRECT 0
+#endif
+
 layout(binding=0) StructuredBuffer<int32_t> g_input;
 
 layout(binding=1) RWStructuredBuffer<int32_t> g_output;
 layout(binding=2) RWStructuredBuffer<int32_t> g_blockSums;
+#if CUMSUM_INDIRECT
+layout(binding=3) StructuredBuffer<int32_t> g_counts;
+#endif
 
 
 groupshared int32_t s_data[BLOCK_SIZE_0];
@@ -43,6 +54,12 @@ struct Uniforms {
     uint32_t numElements;
     // uint32_t stride;
 };
+
+#if CUMSUM_INDIRECT
+#define RESOLVE_NUM_ELEMENTS(u) uint32_t(max(g_counts[(u).numElements], 0))
+#else
+#define RESOLVE_NUM_ELEMENTS(u) (u).numElements
+#endif
 
 
 
@@ -67,6 +84,7 @@ void blockScan(
     uint3 localId : SV_GroupThreadID,
     uniform Uniforms uniforms
 ) {
+    const uint32_t numElements = RESOLVE_NUM_ELEMENTS(uniforms);
     uint tid = localId.x;
     // The workgroup always launches BLOCK_SIZE_0 threads (numthreads is compile-time),
     // but only BLOCK_SIZE of them do work. Every launched thread must reach each
@@ -80,7 +98,7 @@ void blockScan(
 
     // Load data into shared memory
     if (active)
-        s_data[tid] = (gid < uniforms.numElements) ? g_input[gid] : 0;
+        s_data[tid] = (gid < numElements) ? g_input[gid] : 0;
     GroupMemoryBarrierWithGroupSync();
 
     // Subgroup-level scan
@@ -109,7 +127,7 @@ void blockScan(
     GroupMemoryBarrierWithGroupSync();
 
     // Write results and block sum
-    if (active && gid < uniforms.numElements) {
+    if (active && gid < numElements) {
         g_output[gid] = s_data[tid];
     }
 
@@ -127,6 +145,7 @@ void scanBlockSums(
     uint3 localId : SV_GroupThreadID,
     uniform Uniforms uniforms
 ) {
+    const uint32_t numElements = RESOLVE_NUM_ELEMENTS(uniforms);
     uint tid = localId.x;
     // See blockScan: gate work with `active` so all launched threads reach every barrier.
     const bool active = (tid < BLOCK_SIZE);
@@ -135,7 +154,7 @@ void scanBlockSums(
 
     // Load block sums
     if (active)
-        s_data[tid] = (gid < uniforms.numElements) ? g_blockSums[gid] : 0;
+        s_data[tid] = (gid < numElements) ? g_blockSums[gid] : 0;
     GroupMemoryBarrierWithGroupSync();
 
     // Perform scan similar to blockScan
@@ -162,7 +181,7 @@ void scanBlockSums(
     GroupMemoryBarrierWithGroupSync();
 
     // Write scanned block sums back
-    if (active && gid < uniforms.numElements) {
+    if (active && gid < numElements) {
         g_blockSums[gid] = s_data[tid];
     }
 }
@@ -175,13 +194,14 @@ void addBlockOffsets(
     uint3 localId : SV_GroupThreadID,
     uniform Uniforms uniforms
 ) {
+    const uint32_t numElements = RESOLVE_NUM_ELEMENTS(uniforms);
     uint tid = localId.x;
     if (tid >= BLOCK_SIZE)
         return;
     uint blockId = groupId.x;
     uint gid = blockId * BLOCK_SIZE + tid;
 
-    if (gid < uniforms.numElements && blockId > 0) {
+    if (gid < numElements && blockId > 0) {
         g_output[gid] += g_blockSums[blockId-1];
     }
 }
@@ -194,11 +214,12 @@ void singlePassPrefixSum(
     uint3 globalId : SV_DispatchThreadID,
     uniform Uniforms uniforms
 ) {
+    const uint32_t numElements = RESOLVE_NUM_ELEMENTS(uniforms);
     uint tid = localId.x;
     uint gid = globalId.x;
 
     // Load data
-    int32_t v_in = (gid < uniforms.numElements) ? g_input[gid] : 0;
+    int32_t v_in = (gid < numElements) ? g_input[gid] : 0;
     s_data[tid] = v_in;
     GroupMemoryBarrierWithGroupSync();
 
@@ -227,7 +248,7 @@ void singlePassPrefixSum(
     }
 
     // Write exclusive prefix sum result
-    if (gid < uniforms.numElements) {
+    if (gid < numElements) {
         g_output[gid] = s_data[tid] + v_in;
     }
 }

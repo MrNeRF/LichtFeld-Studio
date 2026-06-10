@@ -43,6 +43,15 @@ size_t VulkanGSPipelineBuffers::getTotalOwnedAllocSize() const {
     ADD_OWNED(visible_prefix);
     ADD_OWNED(visible_count);
     ADD_OWNED(visible_sort_dispatch_args);
+    ADD_OWNED(survivors);
+    ADD_OWNED(survivor_state);
+    ADD_OWNED(visible_emit_count);
+    ADD_OWNED(orig_ids);
+    ADD_OWNED(cumsum_counts);
+    ADD_OWNED(visible_dispatch);
+    ADD_OWNED(macro_partials);
+    ADD_OWNED(macro_active_mask);
+    ADD_OWNED(macro_wave_args);
     ADD_OWNED(index_buffer_offset);
     ADD_OWNED(sorting_keys_1);
     ADD_OWNED(sorting_keys_2);
@@ -110,6 +119,15 @@ std::map<std::string, size_t> VulkanGSPipelineBuffers::getOwnedVramBreakdown() c
     ADD_OWNED(visible_prefix);
     ADD_OWNED(visible_count);
     ADD_OWNED(visible_sort_dispatch_args);
+    ADD_OWNED(survivors);
+    ADD_OWNED(survivor_state);
+    ADD_OWNED(visible_emit_count);
+    ADD_OWNED(orig_ids);
+    ADD_OWNED(cumsum_counts);
+    ADD_OWNED(visible_dispatch);
+    ADD_OWNED(macro_partials);
+    ADD_OWNED(macro_active_mask);
+    ADD_OWNED(macro_wave_args);
     ADD_OWNED(index_buffer_offset);
     ADD_OWNED(sorting_keys_1);
     ADD_OWNED(sorting_keys_2);
@@ -483,6 +501,7 @@ void VulkanGSPipelineBuffers::assignScalesOpacs(
     template void VulkanGSPipelineBuffers::undoReorderSH(Buffer<dtype>& coeffs, size_t num_splats);
 
 _INSTANTIATE_BUFFER(uint8_t)
+_INSTANTIATE_BUFFER(uint16_t)
 _INSTANTIATE_BUFFER(float)
 _INSTANTIATE_BUFFER(int32_t)
 _INSTANTIATE_BUFFER(int64_t)

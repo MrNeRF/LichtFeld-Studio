@@ -40,18 +40,24 @@ VulkanGSRenderer::~VulkanGSRenderer() {
         endCommandBatch(false);
     destroyVisibleCountReadback();
     destroyLodSelectionReadback();
+    destroyInstanceCountReadback();
     cleanup();
 }
 
 void VulkanGSRenderer::cleanup() {
     destroyVisibleCountReadback();
     destroyLodSelectionReadback();
+    destroyInstanceCountReadback();
     VulkanGSPipeline::cleanup();
 }
 
 void VulkanGSRenderer::tagDeferredVisibleCountReadback(const VkSemaphore semaphore,
                                                        const std::uint64_t value) {
-    if (visible_count_readback_pending_) {
+    // Tag only the frame whose command buffer contains the copy. Re-tagging
+    // every frame ratchets the awaited timeline value past GPU completion
+    // whenever rendering is continuous, and the stats starve.
+    if (visible_count_readback_pending_ &&
+        visible_count_readback_signal_ == VK_NULL_HANDLE) {
         visible_count_readback_signal_ = semaphore;
         visible_count_readback_value_ = value;
     }
@@ -65,8 +71,117 @@ void VulkanGSRenderer::tagDeferredLodSelectionReadback(const VkSemaphore semapho
     }
 }
 
+void VulkanGSRenderer::tagDeferredInstanceCountReadback(const VkSemaphore semaphore,
+                                                        const std::uint64_t value) {
+    if (instance_count_readback_pending_ &&
+        instance_count_readback_signal_ == VK_NULL_HANDLE) {
+        instance_count_readback_signal_ = semaphore;
+        instance_count_readback_value_ = value;
+    }
+}
+
+void VulkanGSRenderer::ensureInstanceCountReadback() {
+    if (instance_count_readback_initialized_)
+        return;
+
+    VkBufferCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    info.size = 2 * sizeof(uint32_t);
+    info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    VmaAllocationCreateInfo aci{};
+    aci.usage = VMA_MEMORY_USAGE_AUTO;
+    aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+    VmaAllocationInfo alloc_info{};
+    if (vmaCreateBuffer(allocator, &info, &aci,
+                        &instance_count_readback_buffer_.buffer,
+                        &instance_count_readback_buffer_.allocation,
+                        &alloc_info) != VK_SUCCESS) {
+        instance_count_readback_buffer_.buffer = VK_NULL_HANDLE;
+        instance_count_readback_buffer_.allocation = VK_NULL_HANDLE;
+        _CHECK_FATAL("Failed to allocate instance_count readback buffer");
+    }
+    instance_count_readback_buffer_.allocSize = 2 * sizeof(uint32_t);
+    instance_count_readback_buffer_.size = 2 * sizeof(uint32_t);
+    instance_count_readback_mapped_ = static_cast<uint32_t*>(alloc_info.pMappedData);
+    if (instance_count_readback_mapped_) {
+        instance_count_readback_mapped_[0] = 0;
+        instance_count_readback_mapped_[1] = 0;
+    }
+    instance_count_readback_initialized_ = true;
+    instance_count_readback_pending_ = false;
+    instance_count_readback_signal_ = VK_NULL_HANDLE;
+    instance_count_readback_value_ = 0;
+}
+
+void VulkanGSRenderer::destroyInstanceCountReadback() {
+    if (!instance_count_readback_initialized_)
+        return;
+    if (instance_count_readback_buffer_.buffer != VK_NULL_HANDLE) {
+        vmaDestroyBuffer(allocator,
+                         instance_count_readback_buffer_.buffer,
+                         instance_count_readback_buffer_.allocation);
+    }
+    instance_count_readback_buffer_ = {};
+    instance_count_readback_mapped_ = nullptr;
+    instance_count_readback_initialized_ = false;
+    instance_count_readback_pending_ = false;
+    instance_count_readback_signal_ = VK_NULL_HANDLE;
+    instance_count_readback_value_ = 0;
+}
+
+void VulkanGSRenderer::recordInstanceCountReadback(VulkanGSPipelineBuffers& buffers) {
+    ensureInstanceCountReadback();
+    if (buffers.tile_sort_count.deviceBuffer.buffer == VK_NULL_HANDLE)
+        return;
+    // Never stomp an in-flight tagged copy: with the GPU a frame behind, the
+    // re-record would reset the tag every frame and the stats would starve.
+    if (instance_count_readback_pending_ &&
+        instance_count_readback_signal_ != VK_NULL_HANDLE)
+        return;
+
+    VkBufferCopy copy{};
+    copy.srcOffset = buffers.tile_sort_count.deviceBuffer.offset;
+    copy.dstOffset = 0;
+    copy.size = 2 * sizeof(uint32_t);
+    vkCmdCopyBuffer(command_buffer,
+                    buffers.tile_sort_count.deviceBuffer.buffer,
+                    instance_count_readback_buffer_.buffer,
+                    1,
+                    &copy);
+    bufferMemoryBarrier({{instance_count_readback_buffer_, TRANSFER_WRITE}},
+                        HOST_READ);
+    instance_count_readback_pending_ = true;
+    instance_count_readback_signal_ = VK_NULL_HANDLE;
+    instance_count_readback_value_ = 0;
+}
+
+std::optional<VulkanGSRenderer::MacroInstanceStats>
+VulkanGSRenderer::pollDeferredMacroInstanceStats() {
+    if (!instance_count_readback_pending_ || !instance_count_readback_mapped_)
+        return std::nullopt;
+    if (instance_count_readback_signal_ == VK_NULL_HANDLE || instance_count_readback_value_ == 0)
+        return std::nullopt;
+    if (!timelineValueComplete(instance_count_readback_signal_, instance_count_readback_value_))
+        return std::nullopt;
+    if (!invalidateReadbackBuffer(instance_count_readback_buffer_, 2 * sizeof(uint32_t)))
+        return std::nullopt;
+
+    MacroInstanceStats stats{};
+    stats.instance_count = instance_count_readback_mapped_[0];
+    stats.raw_count = instance_count_readback_mapped_[1];
+    instance_count_readback_pending_ = false;
+    instance_count_readback_signal_ = VK_NULL_HANDLE;
+    instance_count_readback_value_ = 0;
+    return stats;
+}
+
 bool VulkanGSRenderer::shrinkSortBuffersForCapacity(VulkanGSPipelineBuffers& buffers,
-                                                    size_t target_capacity) {
+                                                    size_t target_capacity,
+                                                    size_t visible_capacity) {
     if (commandBatchInProgress)
         _THROW_ERROR("shrinkSortBuffersForCapacity called while command batch is active");
     if (buffers.num_splats == 0)
@@ -77,27 +192,41 @@ bool VulkanGSRenderer::shrinkSortBuffersForCapacity(VulkanGSPipelineBuffers& buf
         return false;
 
     bool changed = false;
-    const auto shrink_i32 = [&](Buffer<int32_t>& buffer) {
-        const size_t target_bytes = target_capacity * sizeof(int32_t);
+    // 2x hysteresis everywhere: a buffer is reallocated only when it holds
+    // more than twice its target, so capacity decay causes log2 reallocations,
+    // not one per frame. Shared-arena views (allocation == null) are skipped.
+    const auto shrink_to = [&](auto& buffer, const size_t count) {
+        using Value = typename std::remove_reference_t<decltype(buffer)>::value_type;
+        if (buffer.deviceBuffer.allocation == VK_NULL_HANDLE)
+            return;
+        const size_t target_bytes = count * sizeof(Value);
         if (buffer.deviceBuffer.allocSize > target_bytes * 2) {
-            resizeDeviceBuffer(buffer, target_capacity, false);
-            changed = true;
-        }
-    };
-    const auto shrink_sort_key = [&](Buffer<sortingKey_t>& buffer) {
-        const size_t target_bytes = target_capacity * sizeof(sortingKey_t);
-        if (buffer.deviceBuffer.allocSize > target_bytes * 2) {
-            resizeDeviceBuffer(buffer, target_capacity, false);
+            resizeDeviceBuffer(buffer, count, false);
             changed = true;
         }
     };
 
-    shrink_sort_key(buffers.sorting_keys_1);
-    shrink_sort_key(buffers.sorting_keys_2);
-    shrink_i32(buffers.sorting_gauss_idx_1);
-    shrink_i32(buffers.sorting_gauss_idx_2);
+    shrink_to(buffers.sorting_keys_1, target_capacity);
+    shrink_to(buffers.sorting_keys_2, target_capacity);
+    shrink_to(buffers.sorting_gauss_idx_1, target_capacity);
+    shrink_to(buffers.sorting_gauss_idx_2, target_capacity);
     if (changed)
         buffers.num_indices_high_water = std::min(buffers.num_indices_high_water, target_capacity);
+
+    if (visible_capacity > 0) {
+        const bool sort_changed = changed;
+        shrink_to(buffers.rect_tile_space, visible_capacity);
+        shrink_to(buffers.xy_vs, 2 * visible_capacity);
+        shrink_to(buffers.depths, visible_capacity);
+        shrink_to(buffers.inv_cov_vs_opacity, 4 * visible_capacity);
+        shrink_to(buffers.rgb, 3 * visible_capacity);
+        shrink_to(buffers.overlay_flags, visible_capacity);
+        shrink_to(buffers.orig_ids, visible_capacity);
+        shrink_to(buffers.primitive_sort_indices, visible_capacity);
+        shrink_to(buffers.tiles_touched_depth_ordered, visible_capacity);
+        shrink_to(buffers.index_buffer_offset, visible_capacity);
+        (void)sort_changed;
+    }
     return changed;
 }
 
@@ -107,7 +236,7 @@ void VulkanGSRenderer::ensureVisibleCountReadback() {
 
     VkBufferCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    info.size = sizeof(uint32_t);
+    info.size = 2 * sizeof(uint32_t);
     info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
@@ -125,11 +254,13 @@ void VulkanGSRenderer::ensureVisibleCountReadback() {
         visible_count_readback_buffer_.allocation = VK_NULL_HANDLE;
         _CHECK_FATAL("Failed to allocate visible_count readback buffer");
     }
-    visible_count_readback_buffer_.allocSize = sizeof(uint32_t);
-    visible_count_readback_buffer_.size = sizeof(uint32_t);
+    visible_count_readback_buffer_.allocSize = 2 * sizeof(uint32_t);
+    visible_count_readback_buffer_.size = 2 * sizeof(uint32_t);
     visible_count_readback_mapped_ = static_cast<uint32_t*>(alloc_info.pMappedData);
-    if (visible_count_readback_mapped_)
-        *visible_count_readback_mapped_ = 0;
+    if (visible_count_readback_mapped_) {
+        visible_count_readback_mapped_[0] = 0;
+        visible_count_readback_mapped_[1] = 0;
+    }
     visible_count_readback_initialized_ = true;
     visible_count_readback_pending_ = false;
     visible_count_readback_signal_ = VK_NULL_HANDLE;
@@ -229,12 +360,13 @@ VulkanGSRenderer::pollDeferredPrimitiveVisibilityStats() {
         return std::nullopt;
     if (!timelineValueComplete(visible_count_readback_signal_, visible_count_readback_value_))
         return std::nullopt;
-    if (!invalidateReadbackBuffer(visible_count_readback_buffer_, sizeof(uint32_t)))
+    if (!invalidateReadbackBuffer(visible_count_readback_buffer_, 2 * sizeof(uint32_t)))
         return std::nullopt;
 
     PrimitiveVisibilityStats stats{};
     stats.num_splats = visible_count_readback_num_splats_;
-    stats.visible_count = std::min<size_t>(*visible_count_readback_mapped_, stats.num_splats);
+    stats.visible_count = std::min<size_t>(visible_count_readback_mapped_[0], stats.num_splats);
+    stats.raw_count = std::min<size_t>(visible_count_readback_mapped_[1], stats.num_splats);
     visible_count_readback_pending_ = false;
     visible_count_readback_signal_ = VK_NULL_HANDLE;
     visible_count_readback_value_ = 0;
@@ -275,11 +407,18 @@ void VulkanGSRenderer::recordVisibleCountReadback(VulkanGSPipelineBuffers& buffe
     ensureVisibleCountReadback();
     if (buffers.visible_count.deviceBuffer.buffer == VK_NULL_HANDLE)
         return;
+    // Never stomp an in-flight tagged copy: with the GPU a frame behind, the
+    // re-record would reset the tag every frame and the stats — which drive
+    // the visible-capacity high-water mark — would starve, leaving a clamped
+    // frame on screen permanently.
+    if (visible_count_readback_pending_ &&
+        visible_count_readback_signal_ != VK_NULL_HANDLE)
+        return;
 
     VkBufferCopy copy{};
     copy.srcOffset = buffers.visible_count.deviceBuffer.offset;
     copy.dstOffset = 0;
-    copy.size = sizeof(uint32_t);
+    copy.size = 2 * sizeof(uint32_t);
     vkCmdCopyBuffer(command_buffer,
                     buffers.visible_count.deviceBuffer.buffer,
                     visible_count_readback_buffer_.buffer,
@@ -358,6 +497,7 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
                                           VkPipelineCache external_pipeline_cache) {
     destroyVisibleCountReadback();
     destroyLodSelectionReadback();
+    destroyInstanceCountReadback();
     VulkanGSPipeline::initializeExternal(
         external_instance,
         external_physical_device,
@@ -415,6 +555,55 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
     createComputePipeline(pipeline_compact_visible_primitives, spirv_paths.at("compact_visible_primitives"));
     createComputePipeline(pipeline_lod_map_indices, spirv_paths.at("lod_map_indices"));
     createComputePipeline(pipeline_lod_select_threshold, spirv_paths.at("lod_select_threshold"));
+
+    // HiGS viewer chain pipelines are optional so trainer-side users of this
+    // renderer (which pass only the legacy shader set) keep working.
+    const auto create_optional = [&](auto& pipeline, const char* name) {
+        const auto it = spirv_paths.find(name);
+        if (it != spirv_paths.end()) {
+            createComputePipeline(pipeline, it->second);
+        }
+    };
+    create_optional(pipeline_cull_splats, "cull_splats");
+    create_optional(pipeline_cull_prepare, "cull_prepare");
+    create_optional(pipeline_projection_forward_survivors, "projection_forward_survivors");
+    create_optional(pipeline_prepare_visible_chain, "prepare_visible_chain");
+    create_optional(pipeline_copy_visible_indices, "copy_visible_indices");
+    create_optional(pipeline_cumsum_indirect.block_scan, "cumsum_block_scan_indirect");
+    create_optional(pipeline_cumsum_indirect.scan_block_sums, "cumsum_scan_block_sums_indirect");
+    create_optional(pipeline_cumsum_indirect.add_block_offsets, "cumsum_add_block_offsets_indirect");
+    create_optional(pipeline_prepare_tile_sort_visible, "prepare_tile_sort_visible");
+
+    // The macro raster/compose pipelines store half4 partials, which needs
+    // 16-bit storage + fp16 arithmetic. Without them the whole macro chain is
+    // skipped (the viewer falls back to the legacy chain).
+    {
+        VkPhysicalDeviceVulkan12Features f12{};
+        f12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+        VkPhysicalDeviceVulkan11Features f11{};
+        f11.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+        f11.pNext = &f12;
+        VkPhysicalDeviceFeatures2 f2{};
+        f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        f2.pNext = &f11;
+        vkGetPhysicalDeviceFeatures2(external_physical_device, &f2);
+        supports_float16_storage_ =
+            f12.shaderFloat16 == VK_TRUE && f11.storageBuffer16BitAccess == VK_TRUE;
+    }
+    if (supports_float16_storage_) {
+        create_optional(pipeline_macro_coverage, "macro_coverage");
+        create_optional(pipeline_generate_macro_keys, "generate_macro_keys");
+        create_optional(pipeline_macro_batch_counts, "macro_batch_counts");
+        create_optional(pipeline_macro_batch_prepare, "macro_batch_prepare");
+        for (int i = 0; i < 2; ++i) {
+            create_optional(pipeline_compute_macro_ranges[i], "compute_macro_ranges");
+            create_optional(pipeline_macro_raster[i], "macro_raster");
+            create_optional(pipeline_macro_raster_fp32[i], "macro_raster_fp32");
+            create_optional(pipeline_macro_raster_overlays[i], "macro_raster_overlays");
+            create_optional(pipeline_macro_compose[i], "macro_compose");
+            create_optional(pipeline_macro_compose_overlays[i], "macro_compose_overlays");
+        }
+    }
 }
 
 void VulkanGSRenderer::executeMapLodIndices(const std::uint32_t lod_count,
@@ -1417,14 +1606,15 @@ void VulkanGSRenderer::executeSortIndirectCount(
 void VulkanGSRenderer::executeSortTileInstances(
     const VulkanGSRendererUniforms& uniforms,
     VulkanGSPipelineBuffers& buffers,
-    const int num_bits) {
+    const int num_bits,
+    const size_t capacity) {
     PerfTimer::Timer<PerfTimer::SortRTS> timer(this);
     executeSortIndirectCountImpl(uniforms,
                                  buffers,
                                  num_bits,
                                  buffers.tile_sort_count.deviceBuffer,
                                  buffers.tile_sort_dispatch_args.deviceBuffer,
-                                 buffers.num_indices,
+                                 capacity,
                                  "vksplat.render.record.sort_tile_indirect");
 }
 
@@ -1601,7 +1791,7 @@ void VulkanGSRenderer::executeSortPrimitivesByDepth(
         unsorted_keys = &resizeDeviceBuffer(buffers.unsorted_keys(), num_splats);
         unsorted_idx = &resizeDeviceBuffer(buffers.unsorted_gauss_idx(), num_splats);
         resizeDeviceBuffer(buffers.visible_flags, num_splats);
-        resizeDeviceBuffer(buffers.visible_count, 1);
+        resizeDeviceBuffer(buffers.visible_count, 2);
         resizeDeviceBuffer(buffers.visible_sort_dispatch_args, 3);
     }
 
@@ -1763,4 +1953,685 @@ void VulkanGSRenderer::executeApplyDepthOrdering(
             tiles_touched_ordered,
             buffers.visible_count.deviceBuffer,
         });
+}
+
+void VulkanGSRenderer::executeCullSplats(
+    const VulkanGSRendererUniforms& uniforms,
+    VulkanGSPipelineBuffers& buffers,
+    const _VulkanBuffer& transform_indices,
+    const _VulkanBuffer& node_mask,
+    const _VulkanBuffer& overlay_params,
+    const _VulkanBuffer& model_transforms,
+    const _VulkanBuffer& lod_indices,
+    const _VulkanBuffer& lod_logical_indices,
+    const _VulkanBuffer& lod_counts) {
+    PerfTimer::Timer<PerfTimer::CullSplats> timer(this);
+    DEVICE_GUARD;
+
+    const size_t num_splats = static_cast<size_t>(uniforms.num_splats);
+    if (num_splats == 0)
+        return;
+
+    bufferMemoryBarrier({
+                            {buffers.xyz_ws.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
+                            {transform_indices, TRANSFER_COMPUTE_SHADER_WRITE},
+                            {node_mask, TRANSFER_COMPUTE_SHADER_WRITE},
+                            {overlay_params, TRANSFER_COMPUTE_SHADER_WRITE},
+                            {model_transforms, TRANSFER_COMPUTE_SHADER_WRITE},
+                        },
+                        COMPUTE_SHADER_READ);
+
+    auto& survivors = resizeDeviceBuffer(buffers.survivors, num_splats);
+    auto& survivor_state = clearDeviceBuffer(buffers.survivor_state, 4);
+    auto& emit_count = resizeDeviceBuffer(buffers.visible_emit_count, 1);
+    bufferMemoryBarrier({{survivor_state, TRANSFER_WRITE}}, COMPUTE_SHADER_READ_WRITE);
+
+    if (lod_indices.buffer != VK_NULL_HANDLE ||
+        lod_logical_indices.buffer != VK_NULL_HANDLE) {
+        std::vector<std::pair<_VulkanBuffer, BarrierMask>> barriers;
+        if (lod_indices.buffer != VK_NULL_HANDLE) {
+            barriers.push_back({lod_indices, TRANSFER_COMPUTE_SHADER_WRITE});
+        }
+        if (lod_logical_indices.buffer != VK_NULL_HANDLE) {
+            barriers.push_back({lod_logical_indices, TRANSFER_COMPUTE_SHADER_WRITE});
+        }
+        bufferMemoryBarrier(barriers, COMPUTE_SHADER_READ);
+    }
+
+    const _VulkanBuffer lod_indices_binding =
+        (lod_indices.buffer != VK_NULL_HANDLE) ? lod_indices : survivor_state;
+    const _VulkanBuffer lod_logical_indices_binding =
+        (lod_logical_indices.buffer != VK_NULL_HANDLE) ? lod_logical_indices : lod_indices_binding;
+    const _VulkanBuffer lod_counts_binding =
+        (lod_counts.buffer != VK_NULL_HANDLE) ? lod_counts : survivor_state;
+
+    executeCompute(
+        {{num_splats, 256}},
+        &uniforms, sizeof(uniforms),
+        pipeline_cull_splats,
+        {
+            buffers.xyz_ws.deviceBuffer,
+            transform_indices,
+            node_mask,
+            overlay_params,
+            model_transforms,
+            lod_indices_binding,
+            lod_logical_indices_binding,
+            lod_counts_binding,
+            survivors,
+            survivor_state,
+        });
+
+    bufferMemoryBarrier({{survivor_state, COMPUTE_SHADER_WRITE}}, COMPUTE_SHADER_READ_WRITE);
+    executeCompute(
+        {{1, 1}},
+        nullptr, 0,
+        pipeline_cull_prepare,
+        {
+            survivor_state,
+            emit_count,
+        });
+
+    bufferMemoryBarrier({{survivor_state, COMPUTE_SHADER_WRITE}}, INDIRECT_DISPATCH_READ);
+    bufferMemoryBarrier({
+                            {survivors, COMPUTE_SHADER_WRITE},
+                            {emit_count, COMPUTE_SHADER_WRITE},
+                        },
+                        COMPUTE_SHADER_READ_WRITE);
+}
+
+void VulkanGSRenderer::executeProjectionForwardSurvivors(
+    const VulkanGSRendererUniforms& uniforms,
+    VulkanGSPipelineBuffers& buffers,
+    const _VulkanBuffer& transform_indices,
+    const _VulkanBuffer& node_mask,
+    const _VulkanBuffer& overlay_params,
+    const _VulkanBuffer& model_transforms,
+    size_t visible_capacity,
+    const _VulkanBuffer& lod_indices,
+    const _VulkanBuffer& lod_logical_indices,
+    const _VulkanBuffer& lod_levels,
+    const _VulkanBuffer& lod_weights,
+    const _VulkanBuffer& lod_counts) {
+    PerfTimer::Timer<PerfTimer::ProjectionSurvivors> timer(this);
+    DEVICE_GUARD;
+
+    if (visible_capacity == 0)
+        return;
+
+    bufferMemoryBarrier({
+                            {buffers.sh0.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
+                            {buffers.shN.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
+                            {buffers.rotations.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
+                            {buffers.scaling_raw.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
+                            {buffers.opacity_raw.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
+                        },
+                        COMPUTE_SHADER_READ);
+
+    if (lod_levels.buffer != VK_NULL_HANDLE || lod_weights.buffer != VK_NULL_HANDLE) {
+        std::vector<std::pair<_VulkanBuffer, BarrierMask>> barriers;
+        if (lod_levels.buffer != VK_NULL_HANDLE) {
+            barriers.push_back({lod_levels, TRANSFER_COMPUTE_SHADER_WRITE});
+        }
+        if (lod_weights.buffer != VK_NULL_HANDLE) {
+            barriers.push_back({lod_weights, TRANSFER_COMPUTE_SHADER_WRITE});
+        }
+        bufferMemoryBarrier(barriers, COMPUTE_SHADER_READ);
+    }
+
+    VulkanGSRendererUniforms survivor_uniforms = uniforms;
+    survivor_uniforms.sort_capacity = static_cast<uint32_t>(
+        std::min<size_t>(visible_capacity,
+                         static_cast<size_t>(std::numeric_limits<uint32_t>::max())));
+
+    auto& unsorted_keys = resizeDeviceBuffer(buffers.unsorted_keys(), visible_capacity);
+    auto& unsorted_idx = resizeDeviceBuffer(buffers.unsorted_gauss_idx(), visible_capacity);
+
+    const _VulkanBuffer lod_indices_binding =
+        (lod_indices.buffer != VK_NULL_HANDLE) ? lod_indices : unsorted_keys;
+    const _VulkanBuffer lod_logical_indices_binding =
+        (lod_logical_indices.buffer != VK_NULL_HANDLE) ? lod_logical_indices : lod_indices_binding;
+    const _VulkanBuffer lod_levels_binding =
+        (lod_levels.buffer != VK_NULL_HANDLE) ? lod_levels : unsorted_keys;
+    const _VulkanBuffer lod_weights_binding =
+        (lod_weights.buffer != VK_NULL_HANDLE) ? lod_weights : unsorted_keys;
+    const _VulkanBuffer lod_counts_binding =
+        (lod_counts.buffer != VK_NULL_HANDLE) ? lod_counts : unsorted_keys;
+
+    executeComputeIndirect(
+        buffers.survivor_state.deviceBuffer,
+        sizeof(uint32_t),
+        &survivor_uniforms, sizeof(survivor_uniforms),
+        pipeline_projection_forward_survivors,
+        {
+            // inputs
+            buffers.xyz_ws.deviceBuffer,
+            buffers.sh0.deviceBuffer,
+            buffers.shN.deviceBuffer,
+            buffers.rotations.deviceBuffer,
+            buffers.scaling_raw.deviceBuffer,
+            buffers.opacity_raw.deviceBuffer,
+            // compact-slot outputs (slots 6 and 8 are absent from the
+            // pipeline layout; the entries are placeholders)
+            unsorted_keys,
+            resizeDeviceBuffer(buffers.rect_tile_space, visible_capacity),
+            unsorted_keys,
+            resizeDeviceBuffer(buffers.xy_vs, 2 * visible_capacity),
+            resizeDeviceBuffer(buffers.depths, visible_capacity),
+            resizeDeviceBuffer(buffers.inv_cov_vs_opacity, 4 * visible_capacity),
+            resizeDeviceBuffer(buffers.rgb, 3 * visible_capacity),
+            resizeDeviceBuffer(buffers.overlay_flags, visible_capacity),
+            transform_indices,
+            node_mask,
+            overlay_params,
+            model_transforms,
+            unsorted_keys,
+            lod_indices_binding,
+            lod_logical_indices_binding,
+            lod_levels_binding,
+            lod_weights_binding,
+            lod_counts_binding,
+            buffers.survivors.deviceBuffer,
+            buffers.survivor_state.deviceBuffer,
+            unsorted_idx,
+            buffers.visible_emit_count.deviceBuffer,
+            resizeDeviceBuffer(buffers.orig_ids, visible_capacity),
+        });
+}
+
+void VulkanGSRenderer::executeSortPrimitivesByDepthVisible(
+    const VulkanGSRendererUniforms& uniforms,
+    VulkanGSPipelineBuffers& buffers,
+    size_t visible_capacity) {
+    PerfTimer::Timer<PerfTimer::SortPrimitivesByDepth> timer(this);
+    DEVICE_GUARD;
+
+    if (visible_capacity == 0)
+        return;
+
+    resizeDeviceBuffer(buffers.visible_count, 2);
+    auto& visible_dispatch = resizeDeviceBuffer(buffers.visible_dispatch, 12);
+    auto& cumsum_counts = resizeDeviceBuffer(buffers.cumsum_counts, 4);
+
+    struct PrepareUniforms {
+        uint32_t visible_capacity;
+        uint32_t sort_partition_size;
+        uint32_t pad0, pad1;
+    } prepare_uniforms{
+        static_cast<uint32_t>(
+            std::min<size_t>(visible_capacity,
+                             static_cast<size_t>(std::numeric_limits<uint32_t>::max()))),
+        512u * 8u, 0, 0};
+
+    {
+        PerfTimer::Timer<PerfTimer::PrepareVisibleSort> gpu_timer(this);
+        bufferMemoryBarrier({
+                                {buffers.visible_emit_count.deviceBuffer, COMPUTE_SHADER_WRITE},
+                            },
+                            COMPUTE_SHADER_READ);
+        executeCompute(
+            {{1, 1}},
+            &prepare_uniforms, sizeof(prepare_uniforms),
+            pipeline_prepare_visible_chain,
+            {
+                buffers.visible_emit_count.deviceBuffer,
+                buffers.visible_count.deviceBuffer,
+                visible_dispatch,
+                cumsum_counts,
+            });
+        bufferMemoryBarrier({
+                                {buffers.visible_count.deviceBuffer, COMPUTE_SHADER_WRITE},
+                                {cumsum_counts, COMPUTE_SHADER_WRITE},
+                            },
+                            TRANSFER_COMPUTE_SHADER_READ);
+        bufferMemoryBarrier({{visible_dispatch, COMPUTE_SHADER_WRITE}},
+                            INDIRECT_DISPATCH_READ);
+        // The readback's bound must be the render domain: clamping the raw
+        // count to the frame's *capacity* would mask exactly the clamping the
+        // raw count exists to detect.
+        recordVisibleCountReadback(buffers, static_cast<size_t>(uniforms.num_splats));
+    }
+
+    {
+        bufferMemoryBarrier({
+                                {buffers.unsorted_keys().deviceBuffer, COMPUTE_SHADER_WRITE},
+                                {buffers.unsorted_gauss_idx().deviceBuffer, COMPUTE_SHADER_WRITE},
+                            },
+                            COMPUTE_SHADER_READ_WRITE);
+        executeSortIndirectCount(uniforms,
+                                 buffers,
+                                 32,
+                                 buffers.visible_count.deviceBuffer,
+                                 visible_dispatch,
+                                 visible_capacity);
+    }
+
+    {
+        PerfTimer::Timer<PerfTimer::CopyPrimitiveSortIndices> gpu_timer(this);
+        auto& sort_indices = resizeDeviceBuffer(buffers.primitive_sort_indices, visible_capacity);
+        struct CopyUniforms {
+            uint32_t capacity;
+            uint32_t pad0, pad1, pad2;
+        } copy_uniforms{prepare_uniforms.visible_capacity, 0, 0, 0};
+        bufferMemoryBarrier({{buffers.sorted_gauss_idx().deviceBuffer, COMPUTE_SHADER_WRITE}},
+                            COMPUTE_SHADER_READ);
+        executeComputeIndirect(
+            visible_dispatch,
+            3 * sizeof(uint32_t),
+            &copy_uniforms, sizeof(copy_uniforms),
+            pipeline_copy_visible_indices,
+            {
+                buffers.sorted_gauss_idx().deviceBuffer,
+                sort_indices,
+                buffers.visible_count.deviceBuffer,
+            });
+        bufferMemoryBarrier({{sort_indices, COMPUTE_SHADER_WRITE}},
+                            COMPUTE_SHADER_READ);
+    }
+}
+
+void VulkanGSRenderer::executeMacroCoverage(
+    const VulkanGSRendererUniforms& uniforms,
+    VulkanGSPipelineBuffers& buffers,
+    size_t visible_capacity) {
+    PerfTimer::Timer<PerfTimer::ApplyDepthOrdering> timer(this);
+    DEVICE_GUARD;
+
+    if (visible_capacity == 0)
+        return;
+
+    // Reuses tiles_touched_depth_ordered as the per-rank macro coverage
+    // counts; the visible-bounded cumsum into index_buffer_offset is shared
+    // with the render-tile chain.
+    auto& macro_counts =
+        resizeDeviceBuffer(buffers.tiles_touched_depth_ordered, visible_capacity);
+
+    bufferMemoryBarrier({{buffers.rect_tile_space.deviceBuffer, COMPUTE_SHADER_WRITE}},
+                        COMPUTE_SHADER_READ);
+
+    executeComputeIndirect(
+        buffers.visible_dispatch.deviceBuffer,
+        3 * sizeof(uint32_t),
+        &uniforms, sizeof(uniforms),
+        pipeline_macro_coverage,
+        {
+            buffers.primitive_sort_indices.deviceBuffer,
+            buffers.rect_tile_space.deviceBuffer,
+            macro_counts,
+            buffers.visible_count.deviceBuffer,
+            buffers.xy_vs.deviceBuffer,
+            buffers.inv_cov_vs_opacity.deviceBuffer,
+        });
+}
+
+void VulkanGSRenderer::executeGenerateMacroKeys(
+    const VulkanGSRendererUniforms& uniforms,
+    VulkanGSPipelineBuffers& buffers,
+    size_t visible_capacity,
+    size_t instance_capacity) {
+    PerfTimer::Timer<PerfTimer::GenerateKeys> timer(this);
+    DEVICE_GUARD;
+
+    const size_t capacity = instance_capacity;
+    if (capacity == 0 || visible_capacity == 0)
+        return;
+
+    auto& unsorted_keys = resizeDeviceBuffer(buffers.unsorted_keys(), capacity);
+    auto& unsorted_idx = resizeDeviceBuffer(buffers.unsorted_gauss_idx(), capacity);
+
+    bufferMemoryBarrier({{unsorted_keys, COMPUTE_SHADER_READ_WRITE}},
+                        TRANSFER_COMPUTE_SHADER_WRITE);
+    vkCmdFillBuffer(command_buffer, unsorted_keys.buffer, unsorted_keys.offset, unsorted_keys.size,
+                    0xFFFFFFFFu);
+    bufferMemoryBarrier({{unsorted_keys, TRANSFER_COMPUTE_SHADER_WRITE}},
+                        COMPUTE_SHADER_READ_WRITE);
+
+    executeComputeIndirect(
+        buffers.visible_dispatch.deviceBuffer,
+        3 * sizeof(uint32_t),
+        &uniforms, sizeof(uniforms),
+        pipeline_generate_macro_keys,
+        {
+            buffers.xy_vs.deviceBuffer,
+            buffers.inv_cov_vs_opacity.deviceBuffer,
+            buffers.rect_tile_space.deviceBuffer,
+            buffers.index_buffer_offset.deviceBuffer,
+            buffers.primitive_sort_indices.deviceBuffer,
+            unsorted_keys,
+            unsorted_idx,
+            buffers.visible_count.deviceBuffer,
+        });
+}
+
+void VulkanGSRenderer::executeComputeMacroRanges(
+    const VulkanGSRendererUniforms& uniforms,
+    VulkanGSPipelineBuffers& buffers,
+    size_t instance_capacity) {
+    PerfTimer::Timer<PerfTimer::ComputeTileRanges> timer(this);
+    DEVICE_GUARD;
+
+    const size_t num_macro =
+        _CEIL_DIV(static_cast<size_t>(uniforms.grid_width), size_t{HIGS_MACRO_T16_W}) *
+        _CEIL_DIV(static_cast<size_t>(uniforms.grid_height), size_t{HIGS_MACRO_T16_H});
+
+    bufferMemoryBarrier({
+                            {buffers.sorted_keys().deviceBuffer, COMPUTE_SHADER_WRITE},
+                        },
+                        COMPUTE_SHADER_READ);
+
+    executeCompute(
+        {{instance_capacity + 1, 256}},
+        &uniforms, sizeof(uniforms),
+        pipeline_compute_macro_ranges[buffers.is_unsorted_1],
+        {
+            buffers.sorted_keys().deviceBuffer,
+            resizeDeviceBuffer(buffers.tile_ranges, num_macro + 1),
+            buffers.index_buffer_offset.deviceBuffer,
+            buffers.visible_count.deviceBuffer,
+        });
+}
+
+void VulkanGSRenderer::executeMacroBatches(
+    const VulkanGSRendererUniforms& uniforms,
+    VulkanGSPipelineBuffers& buffers) {
+    PerfTimer::Timer<PerfTimer::PrepareTileSort> timer(this);
+    DEVICE_GUARD;
+
+    const size_t num_macro =
+        _CEIL_DIV(static_cast<size_t>(uniforms.grid_width), size_t{HIGS_MACRO_T16_W}) *
+        _CEIL_DIV(static_cast<size_t>(uniforms.grid_height), size_t{HIGS_MACRO_T16_H});
+    if (num_macro == 0)
+        return;
+
+    bufferMemoryBarrier({{buffers.tile_ranges.deviceBuffer, COMPUTE_SHADER_WRITE}},
+                        COMPUTE_SHADER_READ);
+    executeCompute(
+        {{num_macro, 256}},
+        &uniforms, sizeof(uniforms),
+        pipeline_macro_batch_counts,
+        {
+            buffers.tile_ranges.deviceBuffer,
+            resizeDeviceBuffer(buffers.tile_batch_counts, num_macro),
+        });
+
+    executeCumsum(buffers, buffers.tile_batch_counts, buffers.tile_batch_offsets);
+
+    auto& wave_args = resizeDeviceBuffer(buffers.macro_wave_args,
+                                         2 * HIGS_RASTER_MAX_WAVES * 3);
+    bufferMemoryBarrier({{buffers.tile_batch_offsets.deviceBuffer, COMPUTE_SHADER_WRITE}},
+                        COMPUTE_SHADER_READ);
+    executeCompute(
+        {{1, 1}},
+        &uniforms, sizeof(uniforms),
+        pipeline_macro_batch_prepare,
+        {
+            buffers.tile_batch_offsets.deviceBuffer,
+            wave_args,
+        });
+    bufferMemoryBarrier({{wave_args, COMPUTE_SHADER_WRITE}}, INDIRECT_DISPATCH_READ);
+}
+
+void VulkanGSRenderer::executeMacroRasterCompose(
+    const VulkanGSRendererUniforms& uniforms,
+    VulkanGSPipelineBuffers& buffers,
+    size_t instance_capacity,
+    const _VulkanBuffer& selection_mask,
+    const _VulkanBuffer& preview_mask,
+    const _VulkanBuffer& selection_colors,
+    const _VulkanBuffer& overlay_params,
+    bool overlays_active) {
+    PerfTimer::Timer<PerfTimer::RasterizeForward> timer(this);
+    DEVICE_GUARD;
+
+    const size_t num_macro =
+        _CEIL_DIV(static_cast<size_t>(uniforms.grid_width), size_t{HIGS_MACRO_T16_W}) *
+        _CEIL_DIV(static_cast<size_t>(uniforms.grid_height), size_t{HIGS_MACRO_T16_H});
+    const size_t num_pixels =
+        static_cast<size_t>(uniforms.image_height) * uniforms.image_width;
+    if (num_macro == 0 || num_pixels == 0 || instance_capacity == 0)
+        return;
+
+    // Upper bound: every macro tile rounds its last batch up.
+    const size_t max_batches =
+        _CEIL_DIV(instance_capacity, size_t{RASTER_BATCH_SIZE}) + num_macro;
+    const size_t num_waves =
+        std::min<size_t>(_CEIL_DIV(max_batches, size_t{HIGS_RASTER_WAVE_BATCHES}),
+                         HIGS_RASTER_MAX_WAVES);
+    const size_t pool_batches = std::min<size_t>(max_batches, HIGS_RASTER_WAVE_BATCHES);
+
+    // Spark-rad LoD opacity needs the scalar alpha mapping the half2-packed
+    // kernel doesn't carry; those scenes and the overlay/editor path use the
+    // fp32 staging variant.
+    const bool use_fp32 = overlays_active || (uniforms.lod_enabled & 4u) != 0u;
+
+    auto& partials = resizeDeviceBuffer(
+        buffers.macro_partials,
+        pool_batches * HIGS_MACRO_TILE_SIZE_TILES * HIGS_TILE_SIZE * 4);
+    auto& active_mask = resizeDeviceBuffer(buffers.macro_active_mask, max_batches);
+    auto& pixel_state = resizeDeviceBuffer(buffers.pixel_state, 4 * num_pixels);
+    auto& pixel_depth = resizeDeviceBuffer(buffers.pixel_depth, num_pixels);
+    auto& n_contributors = resizeDeviceBuffer(buffers.n_contributors, num_pixels);
+
+    bufferMemoryBarrier({
+                            {buffers.sorted_gauss_idx().deviceBuffer, COMPUTE_SHADER_WRITE},
+                            {buffers.rgb.deviceBuffer, COMPUTE_SHADER_WRITE},
+                            {buffers.depths.deviceBuffer, COMPUTE_SHADER_WRITE},
+                            {selection_mask, TRANSFER_COMPUTE_SHADER_WRITE},
+                            {preview_mask, TRANSFER_COMPUTE_SHADER_WRITE},
+                            {selection_colors, TRANSFER_COMPUTE_SHADER_WRITE},
+                            {overlay_params, TRANSFER_COMPUTE_SHADER_WRITE},
+                        },
+                        COMPUTE_SHADER_READ);
+
+    auto& raster_pipeline = overlays_active
+                                ? pipeline_macro_raster_overlays
+                                : (use_fp32 ? pipeline_macro_raster_fp32 : pipeline_macro_raster);
+    auto& compose_pipeline = overlays_active
+                                 ? pipeline_macro_compose_overlays
+                                 : pipeline_macro_compose;
+
+    std::vector<_VulkanBuffer> raster_bindings{
+        buffers.sorted_gauss_idx().deviceBuffer,
+        buffers.tile_ranges.deviceBuffer,
+        buffers.tile_batch_offsets.deviceBuffer,
+        buffers.xy_vs.deviceBuffer,
+        buffers.inv_cov_vs_opacity.deviceBuffer,
+        buffers.rgb.deviceBuffer,
+        partials,
+        active_mask,
+    };
+    if (overlays_active) {
+        raster_bindings.insert(raster_bindings.end(),
+                               {
+                                   selection_mask,
+                                   preview_mask,
+                                   selection_colors,
+                                   buffers.overlay_flags.deviceBuffer,
+                                   overlay_params,
+                                   buffers.orig_ids.deviceBuffer,
+                               });
+    }
+
+    std::vector<_VulkanBuffer> compose_bindings{
+        buffers.sorted_gauss_idx().deviceBuffer,
+        buffers.tile_ranges.deviceBuffer,
+        buffers.tile_batch_offsets.deviceBuffer,
+        buffers.xy_vs.deviceBuffer,
+        buffers.inv_cov_vs_opacity.deviceBuffer,
+        buffers.rgb.deviceBuffer,
+        buffers.depths.deviceBuffer,
+        partials,
+        active_mask,
+        pixel_state,
+        pixel_depth,
+        n_contributors,
+    };
+    if (overlays_active) {
+        compose_bindings.insert(compose_bindings.end(),
+                                {
+                                    selection_mask,
+                                    preview_mask,
+                                    selection_colors,
+                                    buffers.overlay_flags.deviceBuffer,
+                                    overlay_params,
+                                    buffers.orig_ids.deviceBuffer,
+                                });
+    }
+
+    auto& wave_args = buffers.macro_wave_args.deviceBuffer;
+    VulkanGSRendererUniforms wave_uniforms = uniforms;
+    for (size_t w = 0; w < num_waves; ++w) {
+        wave_uniforms.wave_base =
+            static_cast<uint32_t>(w * HIGS_RASTER_WAVE_BATCHES);
+
+        if (w > 0) {
+            // The previous compose has read this wave's partials slots; the
+            // next raster overwrites them.
+            bufferMemoryBarrier({
+                                    {partials, COMPUTE_SHADER_READ},
+                                    {pixel_state, COMPUTE_SHADER_WRITE},
+                                    {pixel_depth, COMPUTE_SHADER_WRITE},
+                                },
+                                COMPUTE_SHADER_READ_WRITE);
+        }
+
+        executeComputeIndirect(
+            wave_args,
+            w * 3 * sizeof(uint32_t),
+            &wave_uniforms, sizeof(wave_uniforms),
+            raster_pipeline[buffers.is_unsorted_1],
+            raster_bindings);
+
+        bufferMemoryBarrier({
+                                {partials, COMPUTE_SHADER_WRITE},
+                                {active_mask, COMPUTE_SHADER_WRITE},
+                            },
+                            COMPUTE_SHADER_READ);
+
+        executeComputeIndirect(
+            wave_args,
+            (HIGS_RASTER_MAX_WAVES + w) * 3 * sizeof(uint32_t),
+            &wave_uniforms, sizeof(wave_uniforms),
+            compose_pipeline[buffers.is_unsorted_1],
+            compose_bindings);
+    }
+}
+
+void VulkanGSRenderer::executeCalculateIndexBufferOffsetVisible(
+    const VulkanGSRendererUniforms& uniforms,
+    VulkanGSPipelineBuffers& buffers,
+    size_t visible_capacity,
+    size_t instance_capacity) {
+    PerfTimer::Timer<PerfTimer::CalculateIndexBufferOffset> timer(this);
+    DEVICE_GUARD;
+
+    if (visible_capacity == 0 || instance_capacity == 0) {
+        buffers.num_indices = 0;
+        return;
+    }
+
+    const size_t block = 1024;
+    const size_t c1_capacity = _CEIL_DIV(visible_capacity, block);
+    const size_t c2_capacity = _CEIL_DIV(c1_capacity, block);
+    if (c2_capacity > block)
+        _THROW_ERROR("visible capacity exceeds 3-level indirect cumsum range");
+
+    auto& input = buffers.tiles_touched_depth_ordered.deviceBuffer;
+    auto& output = resizeDeviceBuffer(buffers.index_buffer_offset, visible_capacity);
+    auto& block_sums = resizeDeviceBuffer(buffers._cumsum_blockSums, c1_capacity, true);
+    auto& block_sums2 = resizeDeviceBuffer(buffers._cumsum_blockSums2, c2_capacity, true);
+    auto& counts = buffers.cumsum_counts.deviceBuffer;
+    auto& dispatch = buffers.visible_dispatch.deviceBuffer;
+
+    const auto level_uniform = [](uint32_t level) { return level; };
+
+    bufferMemoryBarrier({{input, COMPUTE_SHADER_WRITE}}, COMPUTE_SHADER_READ);
+
+    {
+        PerfTimer::Timer<PerfTimer::_Cumsum> cumsum_timer(this);
+
+        // Always-recorded 3-level indirect scan. Degenerate levels dispatch a
+        // single group over 1 element, so no host-side branching on the count.
+        uint32_t level = level_uniform(0);
+        executeComputeIndirect(dispatch, 6 * sizeof(uint32_t),
+                               &level, sizeof(level),
+                               pipeline_cumsum_indirect.block_scan,
+                               {input, output, block_sums, counts});
+
+        bufferMemoryBarrier({{block_sums, COMPUTE_SHADER_WRITE}}, COMPUTE_SHADER_READ_WRITE);
+        level = level_uniform(1);
+        executeComputeIndirect(dispatch, 9 * sizeof(uint32_t),
+                               &level, sizeof(level),
+                               pipeline_cumsum_indirect.block_scan,
+                               {block_sums, block_sums, block_sums2, counts});
+
+        bufferMemoryBarrier({
+                                {block_sums, COMPUTE_SHADER_READ_WRITE},
+                                {block_sums2, COMPUTE_SHADER_WRITE},
+                            },
+                            COMPUTE_SHADER_READ_WRITE);
+        level = level_uniform(2);
+        executeCompute({{1, 1}},
+                       &level, sizeof(level),
+                       pipeline_cumsum_indirect.scan_block_sums,
+                       {block_sums, block_sums, block_sums2, counts});
+
+        bufferMemoryBarrier({{block_sums2, COMPUTE_SHADER_READ_WRITE}},
+                            COMPUTE_SHADER_READ_WRITE);
+        level = level_uniform(1);
+        executeComputeIndirect(dispatch, 9 * sizeof(uint32_t),
+                               &level, sizeof(level),
+                               pipeline_cumsum_indirect.add_block_offsets,
+                               {block_sums, block_sums, block_sums2, counts});
+
+        bufferMemoryBarrier({
+                                {output, COMPUTE_SHADER_WRITE},
+                                {block_sums, COMPUTE_SHADER_READ_WRITE},
+                            },
+                            COMPUTE_SHADER_READ_WRITE);
+        level = level_uniform(0);
+        executeComputeIndirect(dispatch, 6 * sizeof(uint32_t),
+                               &level, sizeof(level),
+                               pipeline_cumsum_indirect.add_block_offsets,
+                               {input, output, block_sums, counts});
+    }
+
+    {
+        PerfTimer::Timer<PerfTimer::PrepareTileSort> gpu_timer(this);
+        resizeDeviceBuffer(buffers.tile_sort_count, 2);
+        resizeDeviceBuffer(buffers.tile_sort_dispatch_args, 3);
+
+        struct PrepareTileSortUniforms {
+            uint32_t num_splats;
+            uint32_t sort_capacity;
+            uint32_t sort_partition_size;
+            uint32_t pad0;
+        } prepare_uniforms{
+            static_cast<uint32_t>(
+                std::min<size_t>(visible_capacity,
+                                 static_cast<size_t>(std::numeric_limits<uint32_t>::max()))),
+            static_cast<uint32_t>(
+                std::min<size_t>(instance_capacity,
+                                 static_cast<size_t>(std::numeric_limits<uint32_t>::max()))),
+            512u * 8u,
+            0u};
+
+        bufferMemoryBarrier({{output, COMPUTE_SHADER_WRITE}}, COMPUTE_SHADER_READ);
+        executeCompute(
+            {{1, 1}},
+            &prepare_uniforms, sizeof(prepare_uniforms),
+            pipeline_prepare_tile_sort_visible,
+            {
+                output,
+                buffers.tile_sort_count.deviceBuffer,
+                buffers.tile_sort_dispatch_args.deviceBuffer,
+                buffers.visible_count.deviceBuffer,
+            });
+    }
+
+    bufferMemoryBarrier({{buffers.tile_sort_count.deviceBuffer, COMPUTE_SHADER_WRITE}},
+                        TRANSFER_COMPUTE_SHADER_READ);
+    bufferMemoryBarrier({{buffers.tile_sort_dispatch_args.deviceBuffer, COMPUTE_SHADER_WRITE}},
+                        INDIRECT_DISPATCH_READ);
+    recordInstanceCountReadback(buffers);
 }

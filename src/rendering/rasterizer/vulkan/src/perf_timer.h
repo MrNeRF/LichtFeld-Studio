@@ -26,7 +26,9 @@ namespace PerfTimer {
     _(CopyPrimitiveSortIndices)   \
     _(ApplyDepthOrdering)         \
     _(PrepareTileSort)            \
-    _(SortRTS)
+    _(SortRTS)                    \
+    _(CullSplats)                 \
+    _(ProjectionSurvivors)
 
 #define _(name) name,
     enum TrainStage {

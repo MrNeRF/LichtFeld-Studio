@@ -132,6 +132,7 @@ namespace lfs::vis {
         [[nodiscard]] bool hasCooperativeMatrix() const { return has_cooperative_matrix_; }
         [[nodiscard]] bool hasHostImageCopy() const { return has_host_image_copy_; }
         [[nodiscard]] bool hasDescriptorIndexing() const { return has_descriptor_indexing_; }
+        [[nodiscard]] bool hasFloat16Storage() const { return has_float16_storage_; }
         // Optional dedicated async-compute queue. When hasDedicatedComputeQueue() is
         // true, computeQueue() / computeQueueFamily() are distinct from graphicsQueue();
         // otherwise they alias the graphics queue and submitting on either is equivalent.
@@ -355,6 +356,7 @@ namespace lfs::vis {
         bool external_memory_dedicated_allocation_enabled_ = false;
         bool has_push_descriptor_ = false;
         bool has_shader_object_ = false;
+        bool has_float16_storage_ = false;
         bool has_extended_dynamic_state3_ = false;
         bool has_cooperative_matrix_ = false;
         bool has_host_image_copy_ = false;

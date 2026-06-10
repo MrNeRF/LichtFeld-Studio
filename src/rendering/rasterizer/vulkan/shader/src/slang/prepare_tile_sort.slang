@@ -1,5 +1,11 @@
 #include "config.slang"
 
+// LFS_VISIBLE_BOUNDED=1 (HiGS chain): the cumsum tail lives at
+// [visible_count - 1] instead of [num_splats - 1].
+#ifndef LFS_VISIBLE_BOUNDED
+#define LFS_VISIBLE_BOUNDED 0
+#endif
+
 struct Uniforms {
     uint32_t num_splats;
     uint32_t sort_capacity;
@@ -10,16 +16,31 @@ struct Uniforms {
 layout(binding=0) StructuredBuffer<int32_t> index_buffer_offset;
 layout(binding=1) RWStructuredBuffer<uint32_t> out_tile_instance_count;
 layout(binding=2) RWStructuredBuffer<uint32_t> out_sort_dispatch_args;
+#if LFS_VISIBLE_BOUNDED
+layout(binding=3) StructuredBuffer<uint32_t> visible_count;
+#endif
 
 [shader("compute")]
 [numthreads(1, 1, 1)]
 void main(uniform Uniforms uniforms) {
     uint32_t tile_instance_count = 0u;
+#if LFS_VISIBLE_BOUNDED
+    const uint32_t tail = min(visible_count[0], uniforms.num_splats);
+    uint32_t raw_instance_count = 0u;
+    if (tail > 0u) {
+        raw_instance_count = uint32_t(max(index_buffer_offset[tail - 1u], 0));
+        tile_instance_count = min(raw_instance_count, uniforms.sort_capacity);
+    }
+    // [1] keeps the unclamped total so the deferred readback can grow the
+    // capacity high-water mark after a clamped frame.
+    out_tile_instance_count[1] = raw_instance_count;
+#else
     if (uniforms.num_splats > 0u) {
         int32_t raw_count = index_buffer_offset[uniforms.num_splats - 1u];
         tile_instance_count = uint32_t(max(raw_count, 0));
         tile_instance_count = min(tile_instance_count, uniforms.sort_capacity);
     }
+#endif
 
     out_tile_instance_count[0] = tile_instance_count;
 

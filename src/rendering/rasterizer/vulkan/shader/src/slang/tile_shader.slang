@@ -23,6 +23,13 @@ import utils;
 #define ENTRY 0
 #endif
 
+// LFS_VISIBLE_BOUNDED=1 (HiGS chain): the primitive domain is the compact
+// visible set, bounded by a GPU-resident count instead of uniforms.num_splats,
+// and the cumsum tail lives at [visible_count - 1].
+#ifndef LFS_VISIBLE_BOUNDED
+#define LFS_VISIBLE_BOUNDED 0
+#endif
+
 static const uint32_t FLOAT32_FRACTION_BITS = 23;
 
 
@@ -52,6 +59,9 @@ layout(binding=4) StructuredBuffer<int32_t> primitive_sort_indices;
 
 layout(binding=5) RWStructuredBuffer<sortingKey_t> out_unsorted_keys;
 layout(binding=6) RWStructuredBuffer<int32_t> out_unsorted_gauss_idx;
+#if LFS_VISIBLE_BOUNDED
+layout(binding=7) StructuredBuffer<uint32_t> visible_count;
+#endif
 
 #define BLOCK_SIZE 64
 #define NUM_SUBGROUPS (BLOCK_SIZE / SUBGROUP_SIZE)
@@ -71,8 +81,15 @@ void main(
 
     int32_t depth_rank = dispatchThreadID.x;
 
+#if LFS_VISIBLE_BOUNDED
+    // The cumsum only covers [0, visible_count) entries; offsets past it are
+    // uninitialized, so this bound is a correctness gate, not an optimization.
+    if (uint32_t(depth_rank) >= min(visible_count[0], uint32_t(uniforms.num_splats)))
+        return;
+#else
     if (depth_rank >= uniforms.num_splats)
         return;
+#endif
 
     // index_buffer_offset is cumsum'd over the depth-ordered tiles_touched
     // array, so the offset interval for this depth_rank is contiguous.
@@ -197,6 +214,9 @@ void main(
 layout(binding=0) StructuredBuffer<sortingKey_t> sorted_keys;
 layout(binding=1) RWStructuredBuffer<int32_t> out_tile_ranges;
 layout(binding=2) StructuredBuffer<int32_t> index_buffer_offset_in;
+#if LFS_VISIBLE_BOUNDED
+layout(binding=3) StructuredBuffer<uint32_t> visible_count;
+#endif
 
 [shader("compute")]
 [numthreads(256, 1, 1)]
@@ -213,10 +233,15 @@ void main(
     // num_isects (= num_indices) is read directly from the GPU-resident cumsum
     // tail, then clamped to the CPU-chosen sort capacity so stale estimates from
     // resize/camera jumps cannot read past the sorted buffers.
+#if LFS_VISIBLE_BOUNDED
+    const uint32_t tail = min(visible_count[0], uint32_t(uniforms.num_splats));
+    uint32_t num_isects = tail == 0u ? 0u : (uint32_t)index_buffer_offset_in[tail - 1u];
+#else
     uint32_t num_isects =
         uniforms.num_splats == 0u
             ? 0u
             : (uint32_t)index_buffer_offset_in[uniforms.num_splats - 1u];
+#endif
     num_isects = min(num_isects, uniforms.sort_capacity);
     if (globalIdx > num_isects)
         return;

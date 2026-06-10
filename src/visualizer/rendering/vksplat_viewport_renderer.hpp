@@ -328,10 +328,14 @@ namespace lfs::vis {
         // stable, avoiding a cross-thread grow/re-import race.
         [[nodiscard]] std::expected<void, std::string> reimportSharedScratchIfGrown(VulkanContext& context);
         [[nodiscard]] std::size_t estimateSharedScratchBytes(std::size_t num_splats,
+                                                             std::size_t visible_capacity,
+                                                             bool macro_chain,
                                                              std::size_t sort_capacity,
                                                              std::size_t num_pixels,
                                                              std::size_t num_tiles) const;
         void bindSharedScratchBuffers(std::size_t num_splats,
+                                      std::size_t visible_capacity,
+                                      bool macro_chain,
                                       std::size_t sort_capacity,
                                       std::size_t num_pixels,
                                       std::size_t num_tiles);
@@ -447,6 +451,17 @@ namespace lfs::vis {
         std::uint64_t render_complete_value_ = 0;
         std::array<std::uint64_t, kFrameRingSize> ring_completion_values_{};
         std::size_t next_ring_slot_ = 0;
+        // Whether the last main render used the macro-tile chain; the
+        // selection-overlay re-render reuses its sorted buffers and must match.
+        bool last_render_used_macro_chain_ = false;
+        // Visible-splat capacity high-water mark, fed by the deferred raw emit
+        // count (decays /8 per poll, grows after a clamped frame). 0 until the
+        // first readback lands; the first frames size at the render domain.
+        std::size_t visible_high_water_ = 0;
+        // A clamped frame was observed and a complete one has not landed yet;
+        // keeps frames scheduled while idle so the capacity self-heal converges.
+        bool visible_clamp_pending_ = false;
+        bool instance_clamp_pending_ = false;
 
         // Fallback CUDA-backed input buffers for models that are not already
         // backed by Vulkan-external tensor storage. Direct Vulkan-external
