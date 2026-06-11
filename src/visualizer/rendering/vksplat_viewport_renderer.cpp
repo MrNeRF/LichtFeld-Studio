@@ -1263,7 +1263,8 @@ namespace lfs::vis {
             const std::size_t model_num_splats,
             const bool equirectangular,
             const bool gut,
-            const bool mip_filter) {
+            const bool mip_filter,
+            const float low_pass_filter_eps) {
             (void)scene;
             uniforms = {};
             uniforms.image_width = static_cast<std::uint32_t>(frame_view.size.x);
@@ -1285,6 +1286,9 @@ namespace lfs::vis {
             uniforms.shN_layout_slots = shN_layout_slots;
             uniforms.camera_model = packedVksplatCameraModel(frame_view, equirectangular, gut);
             uniforms.mip_filter = mip_filter ? 1u : 0u;
+            uniforms.low_pass_filter_eps = std::isfinite(low_pass_filter_eps)
+                                               ? std::max(0.0f, low_pass_filter_eps)
+                                               : 0.0f;
 
             if (frame_view.orthographic) {
                 const float ortho_scale =
@@ -5561,7 +5565,8 @@ namespace lfs::vis {
                                       num_splats,
                                       request.equirectangular,
                                       request.gut,
-                                      false);
+                                      false,
+                                      0.0f);
         VulkanGSSelectionMaskUniforms selection_uniforms{};
         selection_uniforms.num_splats = static_cast<std::uint32_t>(num_splats);
         selection_uniforms.primitive_count = static_cast<std::uint32_t>(request.primitives.size());
@@ -5752,7 +5757,8 @@ namespace lfs::vis {
                                           buffers_.num_splats,
                                           request.equirectangular,
                                           request.gut,
-                                          request.mip_filter);
+                                          request.mip_filter,
+                                          request.low_pass_filter_eps);
             uniforms.step = static_cast<std::uint32_t>(modelTransformCount(request.scene.model_transforms));
             uniforms.sort_capacity = static_cast<uint32_t>(
                 std::min<std::size_t>(buffers_.num_indices,
@@ -6277,7 +6283,8 @@ namespace lfs::vis {
                                           buffers_.num_splats,
                                           request.equirectangular,
                                           request.gut,
-                                          request.mip_filter);
+                                          request.mip_filter,
+                                          request.low_pass_filter_eps);
             uniforms.step = static_cast<std::uint32_t>(modelTransformCount(request.scene.model_transforms));
             uniforms.lod_enabled = (lod_indices_present || gpu_lod_render_active) ? 1u : 0u;
             if (lod_logical_indices_present || gpu_lod_render_active) {

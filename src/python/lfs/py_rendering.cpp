@@ -808,6 +808,8 @@ namespace lfs::python {
                       {"3DGUT", "3dgut", 3}},
                      2);
         add_bool(&Proxy::mip_filter, "mip_filter", "Mip Filter", "Enable mip-map filtering", false);
+        add_float(&Proxy::low_pass_filter_eps, "low_pass_filter_eps", "Splat Low Pass",
+                  "Additional screen-space covariance blur for Gaussian splats", 0.0, 0.0, 0.1);
         add_float(&Proxy::render_scale, "render_scale", "Render Scale", "Render resolution scale", 1.0, 0.25, 1.0);
         add_float(&Proxy::depth_view_min, "depth_view_min", "Depth Near", "Depth-map visualization near range",
                   lfs::rendering::DEFAULT_DEPTH_VIEW_MIN, 0.0, lfs::rendering::MAX_DEPTH_VIEW_DISTANCE);

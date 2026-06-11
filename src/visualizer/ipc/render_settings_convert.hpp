@@ -21,6 +21,7 @@ namespace lfs::vis {
         p.scaling_modifier = s.scaling_modifier;
         p.antialiasing = s.antialiasing;
         p.mip_filter = s.mip_filter;
+        p.low_pass_filter_eps = s.low_pass_filter_eps > 0.0f ? s.low_pass_filter_eps : 0.0f;
         p.sh_degree = s.sh_degree;
         p.render_scale = s.render_scale;
         p.camera_metrics_mode = static_cast<int>(s.camera_metrics_mode);
@@ -101,6 +102,7 @@ namespace lfs::vis {
         s.scaling_modifier = p.scaling_modifier;
         s.antialiasing = p.antialiasing;
         s.mip_filter = p.mip_filter;
+        s.low_pass_filter_eps = p.low_pass_filter_eps > 0.0f ? p.low_pass_filter_eps : 0.0f;
         s.sh_degree = p.sh_degree;
         s.render_scale = p.render_scale;
         s.camera_metrics_mode = static_cast<RenderSettings::CameraMetricsMode>(p.camera_metrics_mode);

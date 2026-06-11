@@ -186,6 +186,13 @@
         <input type="checkbox" data-checked="mip_filter" />
       </label>
     </div>
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.low_pass_filter_eps">
+      <span class="setting-row__label-col">{{label_low_pass_filter_eps}}</span>
+      <div class="setting-row__control-col setting-row__control-col--fill">
+        <input type="range" class="setting-slider" data-value="low_pass_filter_eps" min="0" max="0.1" step="0.001" />
+        <span class="slider-value">{{low_pass_filter_eps | format_float(4)}}</span>
+      </div>
+    </div>
     <div class="setting-row setting-row--aligned" data-tooltip="tooltip.camera_metrics_mode">
       <span class="setting-row__label-col">{{label_camera_metrics_mode}}</span>
       <div class="setting-row__control-col setting-row__control-col--fill">

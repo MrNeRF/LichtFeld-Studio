@@ -69,6 +69,7 @@ namespace lfs::vis {
         float scaling_modifier = 1.0f;
         bool antialiasing = false;
         bool mip_filter = false;
+        float low_pass_filter_eps = 0.0f;
         int sh_degree = 3;
         float render_scale = 1.0f;
         int camera_metrics_mode = 0;

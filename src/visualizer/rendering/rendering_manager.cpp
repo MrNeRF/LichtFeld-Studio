@@ -378,6 +378,7 @@ namespace lfs::vis {
                                            ? lfs::rendering::viewerRasterBackendForGutMode(settings_.gut)
                                            : lfs::rendering::normalizeViewerRasterBackend(
                                                  settings_.raster_backend, settings_.gut);
+            settings_.low_pass_filter_eps = std::max(0.0f, settings_.low_pass_filter_eps);
             settings_.gut = lfs::rendering::isGutBackend(settings_.raster_backend);
             enforceProjectionBackend(settings_);
             sanitizeDepthViewSettings(settings_);

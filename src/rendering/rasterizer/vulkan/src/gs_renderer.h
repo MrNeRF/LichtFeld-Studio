@@ -30,10 +30,9 @@ PACK_STRUCT(struct VulkanGSRendererUniforms {
     float fy;
     float cx;
     float cy;
-    // HiGS raster/compose wave window start; occupies the former alignment
-    // padding before dist_coeffs (match shader).
+    // Match shader layout before dist_coeffs.
     uint32_t wave_base;
-    uint32_t higs_pad0;
+    float low_pass_filter_eps;
     float dist_coeffs[4];
     float world_view_transform[16];
 });

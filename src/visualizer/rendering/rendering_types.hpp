@@ -169,6 +169,7 @@ namespace lfs::vis {
         float scaling_modifier = 1.0f;
         bool antialiasing = false;
         bool mip_filter = false;
+        float low_pass_filter_eps = 0.0f;
         int sh_degree = 3;
         float render_scale = 1.0f; // Viewer resolution scale (0.25-1.0), does not affect training
         CameraMetricsMode camera_metrics_mode = CameraMetricsMode::Off;

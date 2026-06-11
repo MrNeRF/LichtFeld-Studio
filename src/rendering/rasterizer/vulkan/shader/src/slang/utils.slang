@@ -608,19 +608,26 @@ float3 clamp_covariance_2d_extent(float3 cov_vs, float opacity_after_compensatio
 
 [ForceInline]
 [Differentiable]
-float4 add_blur_to_covariance2d(float3 cov_vs, no_diff bool mip_filter, no_diff bool compensate_non_mip) {
+float4 add_blur_to_covariance2d(
+    float3 cov_vs,
+    no_diff bool mip_filter,
+    no_diff bool compensate_non_mip,
+    no_diff float low_pass_filter_eps) {
     float4 result = float4(cov_vs, 1.0);
+    const float extra_blur = max(0.0f, low_pass_filter_eps);
 
     if (mip_filter) {
         float old_det = compute_det(result.xyz);
-        result.x += DILATION_MIP_FILTER;
-        result.z += DILATION_MIP_FILTER;
+        const float blur = DILATION_MIP_FILTER + extra_blur;
+        result.x += blur;
+        result.z += blur;
         float new_det = compute_det(result.xyz);
         result.w = sqrt(max(0.f, old_det / new_det));
     } else {
         float old_det = compute_det(result.xyz);
-        result.x += DILATION_3DGS;
-        result.z += DILATION_3DGS;
+        const float blur = DILATION_3DGS + extra_blur;
+        result.x += blur;
+        result.z += blur;
         if (compensate_non_mip) {
             float new_det = compute_det(result.xyz);
             result.w = sqrt(max(0.f, old_det / new_det));
@@ -654,7 +661,8 @@ float4 covariance_3d_to_2d(
     float3 xyz_ws,
     float3x3 cov_ws,
     no_diff bool mip_filter,
-    no_diff bool compensate_non_mip) {
+    no_diff bool compensate_non_mip,
+    no_diff float low_pass_filter_eps) {
     float3x3 R = (float3x3)cam.world_view_transform;
     float3x3 J = compute_jacobian(xyz_ws, cam);
     float3x3 cov_vs = mul(J, mul(R, mul(cov_ws, mul(transpose(R), transpose(J)))));
@@ -662,7 +670,8 @@ float4 covariance_3d_to_2d(
     return add_blur_to_covariance2d(
         float3(cov_vs[0][0], cov_vs[0][1], cov_vs[1][1]),
         mip_filter,
-        compensate_non_mip);
+        compensate_non_mip,
+        low_pass_filter_eps);
 }
 
 
@@ -1129,10 +1138,9 @@ struct Uniforms {
     float fy;
     float cx;
     float cy;
-    // HiGS raster/compose wave window start (batch index); occupies what was
-    // implicit alignment padding before dist_coeffs, so the layout is unchanged.
+    // HiGS raster/compose wave window start (batch index).
     uint wave_base;
-    uint higs_pad0;
+    float low_pass_filter_eps;
     float4 dist_coeffs;
     float4x4 world_view_transform;
 }

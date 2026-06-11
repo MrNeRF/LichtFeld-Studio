@@ -171,6 +171,7 @@ namespace lfs::vis {
             .scaling_modifier = ctx.settings.scaling_modifier,
             .antialiasing = ctx.settings.antialiasing,
             .mip_filter = ctx.settings.mip_filter,
+            .low_pass_filter_eps = ctx.settings.low_pass_filter_eps,
             .sh_degree = ctx.settings.sh_degree,
             .raster_backend = ctx.settings.raster_backend,
             .gut = ctx.settings.gut ||
@@ -240,6 +241,7 @@ namespace lfs::vis {
             .scaling_modifier = request.scaling_modifier,
             .antialiasing = request.antialiasing,
             .mip_filter = request.mip_filter,
+            .low_pass_filter_eps = request.low_pass_filter_eps,
             .sh_degree = request.sh_degree,
             .raster_backend = request.raster_backend,
             .gut = request.gut,

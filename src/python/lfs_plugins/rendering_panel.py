@@ -67,7 +67,7 @@ BOOL_PROPS = [
 
 SLIDER_PROPS = [
     "axes_size", "grid_opacity", "camera_frustum_scale", "voxel_size",
-    "focal_length_mm", "render_scale", "environment_exposure", "environment_rotation_degrees",
+    "focal_length_mm", "low_pass_filter_eps", "render_scale", "environment_exposure", "environment_rotation_degrees",
     "mesh_wireframe_width", "mesh_light_intensity", "mesh_ambient",
     "ppisp_exposure", "ppisp_vignette_strength", "ppisp_gamma_multiplier",
     "ppisp_gamma_red", "ppisp_gamma_green", "ppisp_gamma_blue",
@@ -82,6 +82,7 @@ SCRUB_FIELD_DEFS = {
     "camera_frustum_scale": ScrubFieldSpec(0.01, 10.0, 0.01, "%.3f"),
     "voxel_size": ScrubFieldSpec(0.001, 0.1, 0.001, "%.3f"),
     "focal_length_mm": ScrubFieldSpec(10.0, 200.0, 0.1, "%.1f"),
+    "low_pass_filter_eps": ScrubFieldSpec(0.0, 0.1, 0.001, "%.4f"),
     "render_scale": ScrubFieldSpec(0.25, 1.0, 0.01, "%.2f"),
     "environment_exposure": ScrubFieldSpec(-6.0, 6.0, 0.01, "%.2f"),
     "environment_rotation_degrees": ScrubFieldSpec(-180.0, 180.0, 0.1, "%.1f"),
@@ -165,6 +166,7 @@ LOCALE_KEY = {
     "equirectangular": "main_panel.equirectangular",
     "raster_backend": "main_panel.raster_backend",
     "mip_filter": "main_panel.mip_filter",
+    "low_pass_filter_eps": "main_panel.low_pass_filter_eps",
     "axes_size": "main_panel.axes_size",
     "grid_opacity": "main_panel.grid_opacity",
     "focal_length_mm": "main_panel.focal_length",

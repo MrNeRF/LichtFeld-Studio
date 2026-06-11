@@ -704,6 +704,7 @@
     "raster_backend": "Raster Backend",
     "gut_mode": "GUT (3DGUT)",
     "mip_filter": "Mip Filter",
+    "low_pass_filter_eps": "Splat Low Pass",
     "camera_metrics": "Camera Metrics",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
@@ -875,6 +876,7 @@
   "tooltip": {
     "gut_mode": "For fisheye/distorted/equirect cameras",
     "mip_filter": "Reduce aliasing for sub-pixel Gaussians",
+    "low_pass_filter_eps": "Additional screen-space covariance blur for Gaussian splats",
     "appearance_correction": "Apply learned exposure/color correction",
     "ppisp_mode": "Auto uses the trained controller, Manual allows slider adjustments",
     "ppisp_exposure": "Adjust exposure in EV stops",
