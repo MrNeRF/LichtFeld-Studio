@@ -1640,10 +1640,15 @@ bool RenderInterface_VK::InitializeExternal(const ExternalContext& context) {
     m_p_device = context.device;
     m_p_pipeline_cache = context.pipeline_cache;
 
+    // On Pascal (SM < 7.0) vkCopyMemoryToImageEXT / vkTransitionImageLayoutEXT are
+    // available as Vulkan 1.4 core symbols but crash inside libnvidia-glcore.
+    // LFS_DISABLE_HOST_IMAGE_COPY is defined by CMake for those GPUs.
+#ifndef LFS_DISABLE_HOST_IMAGE_COPY
     m_pfn_copy_memory_to_image = reinterpret_cast<PFN_vkCopyMemoryToImageEXT>(
         vkGetDeviceProcAddr(m_p_device, "vkCopyMemoryToImageEXT"));
     m_pfn_transition_image_layout = reinterpret_cast<PFN_vkTransitionImageLayoutEXT>(
         vkGetDeviceProcAddr(m_p_device, "vkTransitionImageLayoutEXT"));
+#endif
     m_p_queue_graphics = context.graphics_queue;
     m_p_queue_present = context.graphics_queue;
     m_p_queue_compute = context.graphics_queue;
