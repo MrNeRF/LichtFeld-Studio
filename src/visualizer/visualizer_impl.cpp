@@ -1055,6 +1055,9 @@ namespace lfs::vis {
             LOG_TIMER("startup.python.preload_plugins_async");
             python::preload_user_plugins_async();
         }
+        if (startup_plugin_preload_started_) {
+            python::process_plugin_preload_step();
+        }
 
         // Process MCP work queue
         {

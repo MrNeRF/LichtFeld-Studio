@@ -209,12 +209,18 @@ namespace lfs::vis::gui {
     void StartupOverlay::setPluginLoadState(bool active, float progress, std::string stage) {
         progress = std::clamp(progress, 0.0f, 1.0f);
         std::lock_guard lock(plugin_load_mutex_);
+        const bool was_started = plugin_load_state_started_;
         plugin_load_state_.active = active;
         plugin_load_state_.progress = progress;
         plugin_load_state_.stage = std::move(stage);
-        plugin_load_state_started_ = true;
         if (active) {
+            plugin_load_state_started_ = true;
             plugin_load_complete_ = false;
+        } else if (was_started) {
+            plugin_load_state_started_ = true;
+            if (progress >= 1.0f) {
+                plugin_load_complete_ = true;
+            }
         } else if (progress >= 1.0f) {
             plugin_load_complete_ = true;
         }
@@ -348,11 +354,7 @@ namespace lfs::vis::gui {
 
         if (!plugin_load_state_started_) {
             row->SetProperty("display", "none");
-            auto* hint = document_->GetElementById("click-hint");
-            if (hint) {
-                hint->SetInnerRML("");
-                hint->SetProperty("visibility", "hidden");
-            }
+            updateClickHintUI();
             return true;
         }
 
