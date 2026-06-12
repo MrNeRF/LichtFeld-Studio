@@ -268,6 +268,7 @@ namespace lfs::vis {
         bool pending_new_project_ = false;
         bool pending_reset_ = false;
         bool gui_frame_rendered_ = false;
+        bool startup_plugin_preload_started_ = false;
         bool update_work_processed_ = false;
         std::chrono::high_resolution_clock::time_point last_frame_time_ = std::chrono::high_resolution_clock::now();
         bool sequencer_ui_initialized_ = false;

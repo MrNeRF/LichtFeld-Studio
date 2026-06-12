@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <string>
 
 namespace Rml {
@@ -33,7 +34,9 @@ namespace lfs::vis::gui {
         void reloadResources();
         void render(const ViewportLayout& viewport, bool drag_hovering);
         void dismiss();
+        void setPluginLoadState(bool active, float progress, std::string stage);
         [[nodiscard]] bool isVisible() const { return visible_; }
+        [[nodiscard]] bool isPluginLoadComplete() const;
         [[nodiscard]] bool needsAnimationFrame() const;
 
         static void openURL(const char* url);
@@ -47,12 +50,20 @@ namespace lfs::vis::gui {
         void populateLanguages();
         void updateTheme();
         void updateLocalizedText();
+        bool updatePluginLoadUI();
+        void updateClickHintUI();
         void ensureLanguageDropdownFontsLoaded();
         [[nodiscard]] bool isLanguageSelectOpen() const;
         [[nodiscard]] bool isLanguageSelectHit(float local_x, float local_y) const;
         [[nodiscard]] bool hasInputActivity(const PanelInputState& input) const;
         InputForwardResult forwardInput(const PanelInputState& input, float overlay_x, float overlay_y,
                                         float overlay_w, float overlay_h);
+
+        struct PluginLoadState {
+            bool active = false;
+            float progress = 0.0f;
+            std::string stage;
+        };
 
         bool visible_ = true;
         int shown_frames_ = 0;
@@ -74,6 +85,12 @@ namespace lfs::vis::gui {
         float last_mouse_x_ = 0.0f;
         float last_mouse_y_ = 0.0f;
         bool language_dropdown_fonts_requested_ = false;
+        mutable std::mutex plugin_load_mutex_;
+        PluginLoadState plugin_load_state_;
+        PluginLoadState applied_plugin_load_state_;
+        bool has_applied_plugin_load_state_ = false;
+        bool plugin_load_state_started_ = false;
+        bool plugin_load_complete_ = true;
 
         Rml::EventListener* link_listener_ = nullptr;
         Rml::EventListener* lang_listener_ = nullptr;

@@ -201,6 +201,12 @@ namespace lfs::vis {
         callback_cleanup_.add([] { python::set_operator_callbacks(nullptr); });
         python::set_gui_manager(gui_manager_.get());
         callback_cleanup_.add([] { python::set_gui_manager(nullptr); });
+        python::set_startup_plugin_load_state_callback([](bool active, float progress, const char* stage) {
+            if (auto* const gui = python::get_gui_manager()) {
+                gui->setStartupPluginLoadState(active, progress, stage ? stage : "");
+            }
+        });
+        callback_cleanup_.add([] { python::set_startup_plugin_load_state_callback(nullptr); });
         python::set_main_loop_wake_callback(&wakeEventLoopViaServices);
         callback_cleanup_.add([] { python::set_main_loop_wake_callback(nullptr); });
         core::reactive::Store::set_wake_callback(&wakeEventLoopViaServices);
@@ -1032,10 +1038,6 @@ namespace lfs::vis {
             python::ensure_builtin_ui_registered();
         }
         {
-            LOG_TIMER("startup.python.preload_plugins_async");
-            python::preload_user_plugins_async();
-        }
-        {
             LOG_TIMER("startup.window.showWindow");
             window_manager_->showWindow();
         }
@@ -1047,6 +1049,12 @@ namespace lfs::vis {
     void VisualizerImpl::update() {
         update_work_processed_ = false;
         window_manager_->updateWindowSize();
+
+        if (fully_initialized_ && gui_frame_rendered_ && !startup_plugin_preload_started_) {
+            startup_plugin_preload_started_ = true;
+            LOG_TIMER("startup.python.preload_plugins_async");
+            python::preload_user_plugins_async();
+        }
 
         // Process MCP work queue
         {
@@ -1224,10 +1232,11 @@ namespace lfs::vis {
         demand.viewport_export_locked = viewport_export_locked;
         demand.scene_dirty = rendering_manager_ && rendering_manager_->pollDirtyState();
         demand.continuous_input = input_controller_ && input_controller_->isContinuousInputActive();
-        demand.python_animation = python::has_frame_callback();
-        demand.python_overlay = python::has_viewport_draw_handlers();
+        const bool plugin_preload_running = python::is_plugin_preload_running();
+        demand.python_animation = !plugin_preload_running && python::has_frame_callback();
+        demand.python_overlay = !plugin_preload_running && python::has_viewport_draw_handlers();
         demand.python_redraw = python::consume_redraw_request();
-        demand.gui_animation = gui_manager_ && gui_manager_->needsAnimationFrame();
+        demand.gui_animation = (gui_manager_ && gui_manager_->needsAnimationFrame()) || plugin_preload_running;
         demand.input_event = inputFrameRequestsRender();
         demand.posted_work = update_work_processed_;
         demand.render_work = hasPendingRenderWork();
@@ -1263,7 +1272,7 @@ namespace lfs::vis {
         }
 
         // Tick Python frame callback for animations
-        if (python::has_frame_callback()) {
+        if (!python::is_plugin_preload_running() && python::has_frame_callback()) {
             python::tick_frame_callback(delta_time);
             if (rendering_manager_) {
                 rendering_manager_->markDirty(DirtyFlag::ALL);
@@ -1288,7 +1297,8 @@ namespace lfs::vis {
         }
 
         if (input_controller_) {
-            if (!viewport_export_locked) {
+            const bool startup_overlay_visible = gui_manager_ && gui_manager_->isStartupVisible();
+            if (!viewport_export_locked && !startup_overlay_visible) {
                 input_controller_->update(delta_time);
             }
         }
@@ -1351,13 +1361,15 @@ namespace lfs::vis {
                      frame_demand.posted_work,
                      frame_demand.render_work,
                      frame_demand.store_dirty);
-            python::flush_signals();
+            if (!python::is_plugin_preload_running()) {
+                python::flush_signals();
+            }
             waitForNextEvent(is_training);
             return;
         }
 
         if (!viewport_export_locked && !interactive_transition_settling) {
-            if (frame_demand.python_redraw && gui_manager_)
+            if (!python::is_plugin_preload_running() && frame_demand.python_redraw && gui_manager_)
                 gui_manager_->syncVisiblePanelsBeforeSceneRender();
 
             const auto vulkan_frame = rendering_manager_->renderVulkanFrame(context);
@@ -1419,7 +1431,9 @@ namespace lfs::vis {
             processRenderWorkQueue();
         }
 
-        python::flush_signals();
+        if (!python::is_plugin_preload_running()) {
+            python::flush_signals();
+        }
         gui_frame_rendered_ = true;
         update_work_processed_ = false;
 

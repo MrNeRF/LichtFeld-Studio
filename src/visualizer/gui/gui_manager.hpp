@@ -131,6 +131,7 @@ namespace lfs::vis {
             [[nodiscard]] bool passiveMouseMoveNeedsRender(float mouse_x, float mouse_y) const;
             [[nodiscard]] bool isStartupVisible() const { return startup_overlay_.isVisible(); }
             void dismissStartupOverlay();
+            void setStartupPluginLoadState(bool active, float progress, const std::string& stage);
             void captureKey(int physical_key, int logical_key, int mods);
             void captureMouseButton(int button, int mods, double x, double y, std::optional<int> chord_key = std::nullopt);
             void captureMouseButtonRelease(int button);

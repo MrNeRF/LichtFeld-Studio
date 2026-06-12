@@ -29,6 +29,7 @@
 #include <format>
 #include <imgui_internal.h>
 #include <imgui.h>
+#include <utility>
 
 #ifdef _WIN32
 #include <shellapi.h>
@@ -205,6 +206,21 @@ namespace lfs::vis::gui {
         last_mouse_valid_ = false;
     }
 
+    void StartupOverlay::setPluginLoadState(bool active, float progress, std::string stage) {
+        progress = std::clamp(progress, 0.0f, 1.0f);
+        std::lock_guard lock(plugin_load_mutex_);
+        plugin_load_state_.active = active;
+        plugin_load_state_.progress = progress;
+        plugin_load_state_.stage = std::move(stage);
+        plugin_load_state_started_ = true;
+        if (active) {
+            plugin_load_complete_ = false;
+        } else if (progress >= 1.0f) {
+            plugin_load_complete_ = true;
+        }
+        content_dirty_ = true;
+    }
+
     bool StartupOverlay::needsAnimationFrame() const {
         if (!visible_)
             return false;
@@ -216,7 +232,33 @@ namespace lfs::vis::gui {
         if (!has_language_generation_ ||
             app_store().language_generation.get() != last_language_generation_)
             return true;
+        {
+            std::lock_guard lock(plugin_load_mutex_);
+            if (plugin_load_state_.active)
+                return true;
+        }
         return false;
+    }
+
+    bool StartupOverlay::isPluginLoadComplete() const {
+        std::lock_guard lock(plugin_load_mutex_);
+        return plugin_load_complete_;
+    }
+
+    static std::string escapeRmlText(const std::string& input) {
+        std::string out;
+        out.reserve(input.size());
+        for (const char ch : input) {
+            switch (ch) {
+            case '&': out += "&amp;"; break;
+            case '<': out += "&lt;"; break;
+            case '>': out += "&gt;"; break;
+            case '"': out += "&quot;"; break;
+            case '\'': out += "&apos;"; break;
+            default: out += ch; break;
+            }
+        }
+        return out;
     }
 
     void StartupOverlay::populateLanguages() {
@@ -257,7 +299,69 @@ namespace lfs::vis::gui {
 
         set_text("supported-text", lichtfeld::Strings::Startup::SUPPORTED_BY);
         set_text("lang-label", lichtfeld::Strings::Preferences::LANGUAGE);
-        set_text("click-hint", lichtfeld::Strings::Startup::CLICK_TO_CONTINUE);
+        updateClickHintUI();
+    }
+
+    void StartupOverlay::updateClickHintUI() {
+        if (!document_)
+            return;
+
+        auto* hint = document_->GetElementById("click-hint");
+        if (!hint)
+            return;
+
+        if (isPluginLoadComplete()) {
+            hint->SetInnerRML(LOC(lichtfeld::Strings::Startup::CLICK_TO_CONTINUE));
+            hint->SetProperty("visibility", "visible");
+        } else {
+            hint->SetInnerRML("");
+            hint->SetProperty("visibility", "hidden");
+        }
+    }
+
+    bool StartupOverlay::updatePluginLoadUI() {
+        if (!document_)
+            return false;
+
+        PluginLoadState current;
+        {
+            std::lock_guard lock(plugin_load_mutex_);
+            current = plugin_load_state_;
+        }
+
+        if (has_applied_plugin_load_state_ &&
+            current.active == applied_plugin_load_state_.active &&
+            current.progress == applied_plugin_load_state_.progress &&
+            current.stage == applied_plugin_load_state_.stage) {
+            return false;
+        }
+
+        applied_plugin_load_state_ = current;
+        has_applied_plugin_load_state_ = true;
+
+        auto* row = document_->GetElementById("plugin-load-row");
+        auto* stage = document_->GetElementById("plugin-load-stage");
+        auto* percent = document_->GetElementById("plugin-load-percent");
+        auto* fill = document_->GetElementById("plugin-load-fill");
+        if (!row || !stage || !percent || !fill)
+            return true;
+
+        if (!plugin_load_state_started_) {
+            row->SetProperty("display", "none");
+            auto* hint = document_->GetElementById("click-hint");
+            if (hint) {
+                hint->SetInnerRML("");
+                hint->SetProperty("visibility", "hidden");
+            }
+            return true;
+        }
+
+        row->SetProperty("display", "flex");
+        stage->SetInnerRML(escapeRmlText(current.stage));
+        percent->SetInnerRML(std::format("{:.0f}%", current.progress * 100.0f));
+        fill->SetProperty("width", std::format("{:.1f}%", current.progress * 100.0f));
+        updateClickHintUI();
+        return true;
     }
 
     void StartupOverlay::updateTheme() {
@@ -482,6 +586,9 @@ namespace lfs::vis::gui {
             refresh_cache = true;
         }
 
+        if (updatePluginLoadUI())
+            refresh_cache = true;
+
         if (size_changed) {
             width_ = ctx_w;
             height_ = ctx_h;
@@ -501,7 +608,8 @@ namespace lfs::vis::gui {
         bool escape_consumed = false;
         bool rml_select_open = isLanguageSelectOpen();
         bool input_event_forwarded = false;
-        if (input_ && hasInputActivity(*input_)) {
+        const bool plugin_load_complete = isPluginLoadComplete();
+        if (plugin_load_complete && input_ && hasInputActivity(*input_)) {
             const auto input_result = forwardInput(*input_, viewport.pos.x, viewport.pos.y,
                                                    viewport.size.x, viewport.size.y);
             escape_consumed = input_result.escape_consumed;
@@ -543,7 +651,15 @@ namespace lfs::vis::gui {
 
         ++shown_frames_;
 
-        if (shown_frames_ > 2 && !rml_select_open && !drag_hovering && input_) {
+        bool clicked_language_select = false;
+        if (plugin_load_complete && input_) {
+            const float local_x = input_->mouse_x - viewport.pos.x;
+            const float local_y = input_->mouse_y - viewport.pos.y;
+            clicked_language_select = input_->mouse_clicked[0] && isLanguageSelectHit(local_x, local_y);
+        }
+
+        if (plugin_load_complete && shown_frames_ > 2 && !rml_select_open &&
+            !clicked_language_select && !drag_hovering && input_) {
             const bool mouse_clicked =
                 input_->mouse_clicked[0] || input_->mouse_clicked[1] || input_->mouse_clicked[2];
             const bool key_action = (!escape_consumed &&
@@ -556,25 +672,8 @@ namespace lfs::vis::gui {
                 LOG_DEBUG("StartupOverlay: dismissed by key action");
                 visible_ = false;
             } else if (mouse_clicked) {
-                auto* overlay_box = document_->GetElementById("overlay-box");
-                bool inside = false;
-                if (overlay_box) {
-                    const float mx = input_->mouse_x - viewport.pos.x;
-                    const float my = input_->mouse_y - viewport.pos.y;
-                    auto abs_offset = overlay_box->GetAbsoluteOffset(Rml::BoxArea::Border);
-                    float box_w = overlay_box->GetOffsetWidth();
-                    float box_h = overlay_box->GetOffsetHeight();
-                    inside = mx >= abs_offset.x && mx < abs_offset.x + box_w &&
-                             my >= abs_offset.y && my < abs_offset.y + box_h;
-                    if (!inside)
-                        LOG_DEBUG("StartupOverlay: dismissed by click outside box "
-                                  "(mouse={:.0f},{:.0f} box={:.0f},{:.0f} {:.0f}x{:.0f})",
-                                  mx, my, abs_offset.x, abs_offset.y, box_w, box_h);
-                } else {
-                    LOG_DEBUG("StartupOverlay: dismissed - overlay-box element not found");
-                }
-                if (!inside)
-                    visible_ = false;
+                LOG_DEBUG("StartupOverlay: dismissed by mouse click after startup load");
+                visible_ = false;
             }
         }
     }

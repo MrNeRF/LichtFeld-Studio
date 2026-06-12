@@ -29,6 +29,10 @@ namespace lfs::vis::gui {
             return 6.0f * floatingUiScale();
         }
 
+        bool shouldSuppressPanelForContext(const PanelInfo& panel, const PanelDrawContext& ctx) {
+            return ctx.suppress_non_native_panels && !panel.is_native;
+        }
+
         float scaledFloatingDimensionForScale(const float value, const float scale) {
             if (value <= 0.0f)
                 return value;
@@ -330,7 +334,8 @@ namespace lfs::vis::gui {
             snapshots.reserve(panels_.size());
             for (size_t i = 0; i < panels_.size(); ++i) {
                 auto& p = panels_[i];
-                if (p.space == space && p.enabled && !p.error_disabled && p.parent_id.empty()) {
+                if (p.space == space && p.enabled && !p.error_disabled && p.parent_id.empty() &&
+                    !shouldSuppressPanelForContext(p, ctx)) {
                     snapshots.push_back({i, p.panel.get(), p.label, p.id,
                                          p.parent_id, p.options, p.is_native,
                                          p.poll_dependencies, p.initial_width, p.initial_height,
@@ -772,7 +777,8 @@ namespace lfs::vis::gui {
             std::lock_guard lock(mutex_);
             for (size_t i = 0; i < panels_.size(); ++i) {
                 auto& p = panels_[i];
-                if (p.space == space && p.enabled && !p.error_disabled && p.parent_id.empty()) {
+                if (p.space == space && p.enabled && !p.error_disabled && p.parent_id.empty() &&
+                    !shouldSuppressPanelForContext(p, ctx)) {
                     snapshots.push_back({i, p.panel.get(), p.label, p.id,
                                          p.parent_id, p.options, p.is_native,
                                          p.poll_dependencies, p.initial_width, p.initial_height,
@@ -847,7 +853,8 @@ namespace lfs::vis::gui {
             std::lock_guard lock(mutex_);
             for (size_t i = 0; i < panels_.size(); ++i) {
                 auto& p = panels_[i];
-                if (p.space == space && p.enabled && !p.error_disabled && p.parent_id.empty()) {
+                if (p.space == space && p.enabled && !p.error_disabled && p.parent_id.empty() &&
+                    !shouldSuppressPanelForContext(p, ctx)) {
                     snapshots.push_back({i, p.panel.get(), p.label, p.id,
                                          p.parent_id, p.options, p.is_native,
                                          p.poll_dependencies, p.initial_width, p.initial_height,
@@ -900,7 +907,8 @@ namespace lfs::vis::gui {
             std::lock_guard lock(mutex_);
             for (size_t i = 0; i < panels_.size(); ++i) {
                 auto& p = panels_[i];
-                if (p.space == space && p.enabled && !p.error_disabled && p.parent_id.empty()) {
+                if (p.space == space && p.enabled && !p.error_disabled && p.parent_id.empty() &&
+                    !shouldSuppressPanelForContext(p, ctx)) {
                     snapshots.push_back({i, p.panel.get(), p.label, p.id,
                                          p.parent_id, p.options, p.is_native,
                                          p.poll_dependencies, p.initial_width, p.initial_height,
@@ -959,7 +967,8 @@ namespace lfs::vis::gui {
             std::lock_guard lock(mutex_);
             for (size_t i = 0; i < panels_.size(); ++i) {
                 auto& p = panels_[i];
-                if (p.space == space && p.enabled && !p.error_disabled && p.parent_id.empty()) {
+                if (p.space == space && p.enabled && !p.error_disabled && p.parent_id.empty() &&
+                    !shouldSuppressPanelForContext(p, ctx)) {
                     snapshots.push_back({i, p.panel.get(), p.label, p.id,
                                          p.parent_id, p.options, p.is_native,
                                          p.poll_dependencies, p.initial_width, p.initial_height,
@@ -1014,7 +1023,8 @@ namespace lfs::vis::gui {
         {
             std::lock_guard lock(mutex_);
             for (size_t i = 0; i < panels_.size(); ++i) {
-                if (panels_[i].id == id && panels_[i].enabled && !panels_[i].error_disabled) {
+                if (panels_[i].id == id && panels_[i].enabled && !panels_[i].error_disabled &&
+                    !shouldSuppressPanelForContext(panels_[i], ctx)) {
                     panel_holder = panels_[i].panel;
                     snap = {i, panels_[i].panel.get(), panels_[i].label, panels_[i].id,
                             panels_[i].parent_id, panels_[i].options, panels_[i].is_native,
@@ -1356,7 +1366,8 @@ namespace lfs::vis::gui {
             snapshots.reserve(panels_.size());
             for (size_t i = 0; i < panels_.size(); ++i) {
                 auto& p = panels_[i];
-                if (p.parent_id == parent_id && p.enabled && !p.error_disabled) {
+                if (p.parent_id == parent_id && p.enabled && !p.error_disabled &&
+                    !shouldSuppressPanelForContext(p, ctx)) {
                     snapshots.push_back({i, p.panel.get(), p.label, p.id,
                                          p.parent_id, p.options, p.is_native,
                                          p.poll_dependencies, p.initial_width, p.initial_height,
@@ -1411,7 +1422,8 @@ namespace lfs::vis::gui {
         {
             std::lock_guard lock(mutex_);
             for (size_t i = 0; i < panels_.size(); ++i) {
-                if (panels_[i].id == id && panels_[i].enabled && !panels_[i].error_disabled) {
+                if (panels_[i].id == id && panels_[i].enabled && !panels_[i].error_disabled &&
+                    !shouldSuppressPanelForContext(panels_[i], ctx)) {
                     panel_holder = panels_[i].panel;
                     snap = {i, panels_[i].panel.get(), panels_[i].label, panels_[i].id,
                             panels_[i].parent_id, panels_[i].options, panels_[i].is_native,
@@ -1469,7 +1481,8 @@ namespace lfs::vis::gui {
         {
             std::lock_guard lock(mutex_);
             for (size_t i = 0; i < panels_.size(); ++i) {
-                if (panels_[i].id == id && panels_[i].enabled && !panels_[i].error_disabled) {
+                if (panels_[i].id == id && panels_[i].enabled && !panels_[i].error_disabled &&
+                    !shouldSuppressPanelForContext(panels_[i], ctx)) {
                     panel_holder = panels_[i].panel;
                     snap = {i, panels_[i].panel.get(), panels_[i].label, panels_[i].id,
                             panels_[i].parent_id, panels_[i].options, panels_[i].is_native,
@@ -1527,7 +1540,8 @@ namespace lfs::vis::gui {
         {
             std::lock_guard lock(mutex_);
             for (size_t i = 0; i < panels_.size(); ++i) {
-                if (panels_[i].id == id && panels_[i].enabled && !panels_[i].error_disabled) {
+                if (panels_[i].id == id && panels_[i].enabled && !panels_[i].error_disabled &&
+                    !shouldSuppressPanelForContext(panels_[i], ctx)) {
                     panel_holder = panels_[i].panel;
                     snap = {i, panels_[i].panel.get(), panels_[i].label, panels_[i].id,
                             panels_[i].parent_id, panels_[i].options, panels_[i].is_native,
@@ -1583,7 +1597,8 @@ namespace lfs::vis::gui {
             snapshots.reserve(panels_.size());
             for (size_t i = 0; i < panels_.size(); ++i) {
                 auto& p = panels_[i];
-                if (p.parent_id == parent_id && p.enabled && !p.error_disabled) {
+                if (p.parent_id == parent_id && p.enabled && !p.error_disabled &&
+                    !shouldSuppressPanelForContext(p, ctx)) {
                     snapshots.push_back({i, p.panel.get(), p.label, p.id,
                                          p.parent_id, p.options, p.is_native,
                                          p.poll_dependencies, p.initial_width, p.initial_height,
@@ -1640,7 +1655,8 @@ namespace lfs::vis::gui {
             snapshots.reserve(panels_.size());
             for (size_t i = 0; i < panels_.size(); ++i) {
                 auto& p = panels_[i];
-                if (p.parent_id == parent_id && p.enabled && !p.error_disabled) {
+                if (p.parent_id == parent_id && p.enabled && !p.error_disabled &&
+                    !shouldSuppressPanelForContext(p, ctx)) {
                     snapshots.push_back({i, p.panel.get(), p.label, p.id,
                                          p.parent_id, p.options, p.is_native,
                                          p.poll_dependencies, p.initial_width, p.initial_height,
@@ -1697,7 +1713,8 @@ namespace lfs::vis::gui {
             snapshots.reserve(panels_.size());
             for (size_t i = 0; i < panels_.size(); ++i) {
                 auto& p = panels_[i];
-                if (p.parent_id == parent_id && p.enabled && !p.error_disabled) {
+                if (p.parent_id == parent_id && p.enabled && !p.error_disabled &&
+                    !shouldSuppressPanelForContext(p, ctx)) {
                     snapshots.push_back({i, p.panel.get(), p.label, p.id,
                                          p.parent_id, p.options, p.is_native,
                                          p.poll_dependencies, p.initial_width, p.initial_height,

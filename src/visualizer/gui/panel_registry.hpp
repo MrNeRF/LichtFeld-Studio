@@ -48,6 +48,7 @@ namespace lfs::vis::gui {
         uint64_t scene_generation = 0;
         bool has_selection = false;
         bool is_training = false;
+        bool suppress_non_native_panels = false;
     };
 
     struct FloatingPanelAnchor {

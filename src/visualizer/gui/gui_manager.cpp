@@ -50,6 +50,7 @@
 #include "core/scene.hpp"
 #include "python/package_manager.hpp"
 #include "python/python_runtime.hpp"
+#include "python/runner.hpp"
 #include "python/ui_hooks.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/cuda_vulkan_interop.hpp"
@@ -5323,25 +5324,27 @@ namespace lfs::vis::gui {
             focus.want_capture_keyboard = io.WantCaptureKeyboard || rmlui_manager_.wantsCaptureKeyboard();
             focus.want_text_input = io.WantTextInput || rmlui_manager_.wantsTextInput();
         }
+        const bool startup_plugin_preload_running = python::is_plugin_preload_running();
 
         // Run queued Python/UI mutations before panel registries take draw snapshots.
         {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.python_flush_callbacks", 0.25);
-            if (python::has_pending_graphics_callbacks())
+            if (!startup_plugin_preload_running && python::has_pending_graphics_callbacks())
                 python::flush_graphics_callbacks();
         }
 
         bool modal_overlay_open = false;
         bool modal_overlay_pending = false;
         bool context_menu_open = false;
-        bool block_underlay_input = false;
+        bool startup_overlay_blocking = startup_overlay_.isVisible() && !startup_overlay_.isPluginLoadComplete();
+        bool block_underlay_input = startup_overlay_blocking;
         {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.frame_state", 0.25);
             rmlui_manager_.beginFrameCursorTracking();
             modal_overlay_open = rml_modal_overlay_->isOpen();
             modal_overlay_pending = rml_modal_overlay_->hasPendingRequest();
             context_menu_open = global_context_menu_ && global_context_menu_->isOpen();
-            block_underlay_input = modal_overlay_open || modal_overlay_pending || context_menu_open;
+            block_underlay_input = block_underlay_input || modal_overlay_open || modal_overlay_pending || context_menu_open;
 
             if (ImGui::IsKeyPressed(ImGuiKey_Escape) && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) {
                 auto* console_state = panels::PythonConsoleState::tryGetInstance();
@@ -5464,6 +5467,8 @@ namespace lfs::vis::gui {
         {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.frame_input", 0.25);
             frame_input = buildPanelInputFromSDL(sdl_input);
+            if (startup_overlay_blocking)
+                frame_input = maskInputForBlockedUi(std::move(frame_input));
             updateInputOverrides(frame_input, mouse_in_viewport);
             if (auto* const wm = viewer_->getWindowManager()) {
                 frame_input.viewport_keyboard_focus = wm->inputRouter().isViewportKeyboardFocused();
@@ -5581,6 +5586,7 @@ namespace lfs::vis::gui {
         draw_ctx.ui_hidden = ui_hidden_;
         draw_ctx.frame_serial = ++panel_frame_serial_;
         draw_ctx.scene_generation = python::get_scene_generation();
+        draw_ctx.suppress_non_native_panels = startup_plugin_preload_running;
         if (auto* sm = ctx.viewer->getSceneManager())
             draw_ctx.has_selection = sm->hasSelectedNode();
         if (auto* cc = lfs::event::command_center())
@@ -6078,7 +6084,8 @@ namespace lfs::vis::gui {
                 }
             }
         }
-        if (lfs::python::has_python_hooks("viewport_overlay", "draw")) {
+        if (!startup_plugin_preload_running &&
+            lfs::python::has_python_hooks("viewport_overlay", "draw")) {
             LOG_TIMER_THRESHOLD("gui_render.viewport_overlay.python_hooks", 0.25);
             lfs::python::invoke_python_hooks("viewport_overlay", "draw", true);
             lfs::python::invoke_python_hooks("viewport_overlay", "draw", false);
@@ -6117,48 +6124,48 @@ namespace lfs::vis::gui {
 
         if (!ui_hidden_) {
             LOG_TIMER_THRESHOLD("gui_render.status_bar_and_StatusBar", 0.10);
-            const float status_bar_h =
+            const float status_bar_height =
                 PanelLayoutManager::STATUS_BAR_HEIGHT * lfs::python::get_shared_dpi_scale();
             const float status_bar_x = screen.work_pos.x;
-            const float status_bar_y = screen.work_pos.y + screen.work_size.y - status_bar_h;
+            const float status_bar_y = screen.work_pos.y + screen.work_size.y - status_bar_height;
             const float status_bar_w = screen.work_size.x;
             const bool status_input =
                 !block_underlay_input &&
                 ((panel_input.mouse_x >= status_bar_x &&
                   panel_input.mouse_x < status_bar_x + status_bar_w &&
                   panel_input.mouse_y >= status_bar_y &&
-                  panel_input.mouse_y < status_bar_y + status_bar_h) ||
+                  panel_input.mouse_y < status_bar_y + status_bar_height) ||
                  panel_input.mouse_released[0]);
             if (status_input) {
                 rml_status_bar_.processInput(panel_input, status_bar_x, status_bar_y,
-                                             status_bar_w, status_bar_h);
+                                             status_bar_w, status_bar_height);
             }
             if (status_input) {
                 rml_status_bar_.render(draw_ctx,
                                        status_bar_x,
                                        status_bar_y,
                                        status_bar_w,
-                                       status_bar_h,
+                                       status_bar_height,
                                        panel_input.screen_w,
                                        panel_input.screen_h);
             } else {
                 rml_status_bar_.renderCached(draw_ctx,
-                                             status_bar_x,
-                                             status_bar_y,
-                                             status_bar_w,
-                                             status_bar_h,
-                                             panel_input.screen_w,
-                                             panel_input.screen_h);
+                                              status_bar_x,
+                                              status_bar_y,
+                                              status_bar_w,
+                                              status_bar_height,
+                                              panel_input.screen_w,
+                                              panel_input.screen_h);
             }
             if (has_status_bar_panels)
                 reg.draw_panels(PanelSpace::StatusBar, draw_ctx, &panel_input);
         }
 
-        if (python::has_python_modals()) {
+        if (!startup_plugin_preload_running && python::has_python_modals()) {
             LOG_TIMER("gui_render.python_modals_and_popups");
             python::draw_python_modals(scene);
         }
-        if (python::has_python_popups()) {
+        if (!startup_plugin_preload_running && python::has_python_popups()) {
             LOG_TIMER("gui_render.python_popups");
             python::draw_python_popups(scene);
         }
@@ -6835,7 +6842,8 @@ namespace lfs::vis::gui {
         using namespace lfs::core::events;
 
         ui::FileDropReceived::when([this](const auto&) {
-            startup_overlay_.dismiss();
+            if (startup_overlay_.isPluginLoadComplete())
+                startup_overlay_.dismiss();
             drag_drop_.resetHovering();
         });
 
@@ -7176,6 +7184,7 @@ namespace lfs::vis::gui {
         draw_ctx.scene = scene;
         draw_ctx.ui_hidden = ui_hidden_;
         draw_ctx.scene_generation = python::get_scene_generation();
+        draw_ctx.suppress_non_native_panels = python::is_plugin_preload_running();
         if (scene_manager)
             draw_ctx.has_selection = scene_manager->hasSelectedNode();
         if (auto* cc = lfs::event::command_center())
@@ -7249,7 +7258,8 @@ namespace lfs::vis::gui {
             return true;
         if (rml_right_panel_.needsAnimationFrame())
             return true;
-        if (PanelRegistry::instance().needsAnimationFrameForVisiblePanels({
+        if (!python::is_plugin_preload_running() &&
+            PanelRegistry::instance().needsAnimationFrameForVisiblePanels({
                 .active_main_tab = panel_layout_.getActiveTab(),
                 .ui_visible = !ui_hidden_,
                 .right_panel_visible = show_main_panel_ && !ui_hidden_,
@@ -7264,7 +7274,12 @@ namespace lfs::vis::gui {
     }
 
     void GuiManager::dismissStartupOverlay() {
-        startup_overlay_.dismiss();
+        if (startup_overlay_.isPluginLoadComplete())
+            startup_overlay_.dismiss();
+    }
+
+    void GuiManager::setStartupPluginLoadState(bool active, float progress, const std::string& stage) {
+        startup_overlay_.setPluginLoadState(active, progress, stage);
     }
 
     void GuiManager::requestExitConfirmation() {

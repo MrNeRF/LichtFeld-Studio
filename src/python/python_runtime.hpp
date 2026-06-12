@@ -96,6 +96,13 @@ namespace lfs::python {
     using MainLoopWakeCallback = void (*)();
     LFS_PYTHON_RUNTIME_API void set_main_loop_wake_callback(MainLoopWakeCallback cb);
 
+    using StartupPluginLoadStateCallback = void (*)(bool active, float progress, const char* stage);
+    LFS_PYTHON_RUNTIME_API void set_startup_plugin_load_state_callback(
+        StartupPluginLoadStateCallback cb);
+    LFS_PYTHON_RUNTIME_API void notify_startup_plugin_load_state(bool active,
+                                                                 float progress,
+                                                                 const char* stage);
+
     using CleanupCallback = void (*)();
     using EnsureInitializedCallback = void (*)();
 

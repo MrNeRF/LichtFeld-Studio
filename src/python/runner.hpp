@@ -55,6 +55,14 @@ namespace lfs::python {
     void preload_user_plugins_async();
 
     /**
+     * @brief True while the startup plugin preload thread is running.
+     *
+     * UI code uses this to avoid blocking main-thread Python calls while the
+     * preload thread owns the GIL during heavy imports.
+     */
+    bool is_plugin_preload_running();
+
+    /**
      * @brief Join the plugin preload thread if running.
      *        Called from finalize() to ensure clean shutdown.
      */

@@ -50,6 +50,7 @@ namespace lfs::python {
     static std::mutex g_python_bridge_failure_mutex;
     static std::string g_python_bridge_failure_detail;
     static std::atomic<bool> g_plugin_preload_scheduled{false};
+    static std::atomic<bool> g_plugin_preload_running{false};
 
     // RAII wrapper for the plugin preload thread that ensures proper cleanup
     // at static destruction time to avoid crashes from std::thread::~thread()
@@ -750,15 +751,35 @@ _add_dll_dirs()
             LOG_INFO("Plugin autoload: {} plugin(s) enabled for startup", to_load.size());
         }
 
-        for (const auto& name : to_load) {
+        python::notify_startup_plugin_load_state(true, 0.0f,
+                                                "Discovering startup plugins...");
+
+        if (to_load.empty()) {
+            python::notify_startup_plugin_load_state(false, 1.0f, "Startup plugins loaded");
+            mark_plugins_loaded();
+            return;
+        }
+
+        const std::size_t total = to_load.size();
+        for (std::size_t index = 0; index < total; ++index) {
+            const auto& name = to_load[index];
+            const float start_progress = static_cast<float>(index) / static_cast<float>(total);
+            const auto start_stage = std::format("Loading plugin {}/{}: {}", index + 1, total, name);
+            python::notify_startup_plugin_load_state(
+                true, start_progress, start_stage.c_str());
             const GilAcquire gil;
             if (load_single_plugin_locked(name)) {
                 LOG_INFO("Loaded plugin: {}", name);
             } else {
                 LOG_ERROR("Failed to load plugin: {}", name);
             }
+            const float end_progress = static_cast<float>(index + 1) / static_cast<float>(total);
+            const auto end_stage = std::format("Loaded plugin {}/{}: {}", index + 1, total, name);
+            python::notify_startup_plugin_load_state(
+                true, end_progress, end_stage.c_str());
         }
 
+        python::notify_startup_plugin_load_state(false, 1.0f, "Startup plugins loaded");
         mark_plugins_loaded();
     }
 
@@ -772,9 +793,21 @@ _add_dll_dirs()
             return;
         }
 
+        g_plugin_preload_running.store(true, std::memory_order_release);
+        python::notify_startup_plugin_load_state(true, 0.0f, "Preparing startup plugins...");
         g_plugin_preload_thread.thread = std::thread([]() {
+            struct RunningGuard {
+                ~RunningGuard() {
+                    g_plugin_preload_running.store(false, std::memory_order_release);
+                    python::request_redraw();
+                }
+            } guard;
             ensure_plugins_loaded();
         });
+    }
+
+    bool is_plugin_preload_running() {
+        return g_plugin_preload_running.load(std::memory_order_acquire);
     }
 
     bool start_debugpy(const int port) {
