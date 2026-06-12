@@ -1523,8 +1523,14 @@ namespace lfs::vis {
 
         VkPhysicalDeviceHostImageCopyFeaturesEXT host_image_copy_features{};
         host_image_copy_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_FEATURES_EXT;
+#ifdef LFS_DISABLE_HOST_IMAGE_COPY
+        // Pascal (SM < 7.0): driver reports VK_EXT_host_image_copy support but crashes inside
+        // vkTransitionImageLayoutEXT. Disabled at configure time via DETECTED_COMPUTE_CAP.
+        const bool enable_host_image_copy_feature = false;
+#else
         const bool enable_host_image_copy_feature =
             enable_host_image_copy && supported_host_image_copy.hostImageCopy == VK_TRUE;
+#endif
         if (enable_host_image_copy_feature) {
             host_image_copy_features.hostImageCopy = VK_TRUE;
             host_image_copy_features.pNext = enabled_chain_head;
