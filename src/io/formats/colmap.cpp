@@ -2357,8 +2357,6 @@ namespace lfs::io {
                 depth_path,
                 normal_path);
 
-            camera->precompute_undistortion();
-
             cameras.push_back(std::move(camera));
         }
 

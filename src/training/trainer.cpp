@@ -3667,12 +3667,8 @@ namespace lfs::training {
                     return std::unexpected("Training on cameras with ortho model is not supported yet.");
                 }
             } else if (!params_.optimization.undistort || !cam->is_undistort_prepared()) {
-                if (cam->radial_distortion().numel() != 0 ||
-                    cam->tangential_distortion().numel() != 0) {
-                    return std::unexpected("Distorted images detected. Use --gut or --undistort to train on cameras with distortion.");
-                }
-                if (cam->camera_model_type() != core::CameraModelType::PINHOLE) {
-                    return std::unexpected("Use --gut or --undistort to train on cameras with non-pinhole model.");
+                if (cam->camera_model_type() == core::CameraModelType::ORTHO) {
+                    return std::unexpected("Training on cameras with ortho model is not supported without --gut or --undistort.");
                 }
             }
 
@@ -3749,7 +3745,17 @@ namespace lfs::training {
                 bg_image = get_random_background_for_camera(cam->image_width(), cam->image_height(), iter);
             }
 
-            const bool fastgs_path = !params_.optimization.gut;
+            const bool needs_camera_model_rasterizer =
+                (!params_.optimization.undistort || !cam->is_undistort_prepared()) &&
+                (cam->has_distortion() || cam->camera_model_type() != core::CameraModelType::PINHOLE);
+            const bool use_gsplat_path = params_.optimization.gut || needs_camera_model_rasterizer;
+            const bool fastgs_path = !use_gsplat_path;
+
+            static bool distorted_gsplat_fallback_logged = false;
+            if (needs_camera_model_rasterizer && !params_.optimization.gut && !distorted_gsplat_fallback_logged) {
+                LOG_INFO("Distorted/non-pinhole cameras detected; using camera-model-aware gsplat rasterizer instead of FastGS pinhole rasterizer.");
+                distorted_gsplat_fallback_logged = true;
+            }
 
             if (!loss_accumulator_.is_valid()) {
                 loss_accumulator_ = core::Tensor::zeros({1}, core::Device::CUDA);
@@ -3946,7 +3952,7 @@ namespace lfs::training {
                 {
                     LFS_VRAM_SCOPE("train.rasterize_forward");
                     LOG_VRAM_DIFF("train.rasterize_forward");
-                    if (params_.optimization.gut) {
+                    if (use_gsplat_path) {
                         auto rasterize_result = gsplat_rasterize_forward(
                             *cam, strategy_->get_model(), bg,
                             0, 0, 0, 0,
