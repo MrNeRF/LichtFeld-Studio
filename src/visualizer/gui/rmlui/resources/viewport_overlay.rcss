@@ -556,6 +556,17 @@ body {
     height: 20dp;
 }
 
+.icon-btn.disabled,
+.icon-btn.disabled:hover,
+.icon-btn.disabled:active {
+    background-color: transparent;
+    border-color: transparent;
+}
+
+.icon-btn.disabled img {
+    image-color: rgba(255, 255, 255, 95);
+}
+
 .viewport-export-fields {
     display: flex;
     align-items: center;

@@ -653,7 +653,12 @@ namespace lfs::vis {
             // If we have a hovered camera, check for double-click. Defer
             // single-click selection until release so orbit drags that start
             // over dataset image frustums do not change the node selection.
-            if (hovered_camera_id_ >= 0 && !over_gizmo && !over_transform_gizmo) {
+            const auto tool_mode = getCurrentToolMode();
+            const bool allow_camera_frustum_pick =
+                tool_mode == input::ToolMode::GLOBAL ||
+                tool_mode == input::ToolMode::SELECTION;
+            if (allow_camera_frustum_pick &&
+                hovered_camera_id_ >= 0 && !over_gizmo && !over_transform_gizmo) {
                 if (is_double_click && hovered_camera_id_ == last_clicked_camera_id_) {
                     cmd::GoToCamView{.cam_id = hovered_camera_id_}.emit();
 
@@ -1020,7 +1025,12 @@ namespace lfs::vis {
             if (press_consumed_camera_frustum) {
                 const double drag_dist = glm::length(glm::dvec2(x, y) - pressed_camera_frustum_pos);
                 const bool was_click = drag_dist < kCameraFrustumClickThreshold;
-                if (was_click && pressed_camera_frustum_id >= 0 &&
+                const auto tool_mode = getCurrentToolMode();
+                const bool allow_camera_frustum_pick =
+                    tool_mode == input::ToolMode::GLOBAL ||
+                    tool_mode == input::ToolMode::SELECTION;
+                if (allow_camera_frustum_pick &&
+                    was_click && pressed_camera_frustum_id >= 0 &&
                     !over_gui && !over_transform_gizmo) {
                     selectCameraByUid(pressed_camera_frustum_id);
                     if (button == node_rect_button_) {

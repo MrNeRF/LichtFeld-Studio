@@ -16,6 +16,22 @@ class NewProjectOperator(Operator):
     description = "Clear the scene to start a new project"
 
     def execute(self, context) -> set:
+        if lf.has_scene():
+            tr = lf.ui.tr
+            new_project_label = tr("menu.file.new_project")
+
+            def _on_result(button):
+                if button == new_project_label:
+                    lf.new_project()
+
+            lf.ui.confirm_dialog(
+                new_project_label,
+                tr("exit_popup.unsaved_warning"),
+                [tr("common.cancel"), new_project_label],
+                _on_result,
+            )
+            return {"FINISHED"}
+
         lf.new_project()
         return {"FINISHED"}
 

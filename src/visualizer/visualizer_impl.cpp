@@ -36,6 +36,7 @@
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
+#include <unordered_map>
 #ifdef WIN32
 #include <windows.h>
 #endif
@@ -55,6 +56,24 @@ namespace lfs::vis {
                                                             const glm::vec3& target,
                                                             const glm::vec3& requested_up) {
             return lfs::rendering::tryMakeVisualizerLookAtRotation(eye, target, requested_up);
+        }
+
+        [[nodiscard]] bool shouldPreserveResetTransform(const core::SceneNode& node) {
+            return node.type == core::NodeType::DATASET ||
+                   node.type == core::NodeType::POINTCLOUD ||
+                   node.type == core::NodeType::SPLAT ||
+                   node.type == core::NodeType::CROPBOX ||
+                   node.type == core::NodeType::ELLIPSOID;
+        }
+
+        [[nodiscard]] std::unordered_map<std::string, glm::mat4> collectResetTransforms(const core::Scene& scene) {
+            std::unordered_map<std::string, glm::mat4> transforms;
+            for (const auto* node : scene.getNodes()) {
+                if (node && shouldPreserveResetTransform(*node)) {
+                    transforms.emplace(node->name, node->transform());
+                }
+            }
+            return transforms;
         }
 
     } // namespace
@@ -1092,6 +1111,15 @@ namespace lfs::vis {
         // Update editor context state from scene/trainer
         editor_context_.update(scene_manager_.get(), trainer_manager_.get());
 
+        if (pending_training_completion_refresh_frames_ > 0 &&
+            (!trainer_manager_ || !trainer_manager_->isTrainingActive())) {
+            --pending_training_completion_refresh_frames_;
+            if (rendering_manager_) {
+                rendering_manager_->markDirty(DirtyFlag::ALL);
+            }
+            wakeMainLoop();
+        }
+
         if (selection_tool_ && selection_tool_->isEnabled() && tool_context_) {
             selection_tool_->update(*tool_context_);
         }
@@ -1759,6 +1787,7 @@ namespace lfs::vis {
         }
 
         const auto preserved_camera = viewport_.camera;
+        const auto preserved_transforms = collectResetTransforms(scene_manager_->getScene());
 
         const auto& init_path = data_loader_->getParameters().init_path;
         if (auto* const param_mgr = services().paramsOrNull(); param_mgr && param_mgr->ensureLoaded()) {
@@ -1792,6 +1821,15 @@ namespace lfs::vis {
             return;
         }
 
+        if (!preserved_transforms.empty()) {
+            auto& scene = scene_manager_->getScene();
+            for (const auto& [name, transform] : preserved_transforms) {
+                if (scene.getNode(name)) {
+                    scene.setNodeTransform(name, transform);
+                }
+            }
+        }
+
         restore_camera();
     }
 
@@ -1817,8 +1855,20 @@ namespace lfs::vis {
 
     void VisualizerImpl::handleTrainingCompleted([[maybe_unused]] const state::TrainingCompleted& event) {
         if (scene_manager_) {
-            scene_manager_->changeContentType(SceneManager::ContentType::Dataset);
+            auto& scene = scene_manager_->getScene();
+            const std::string& model_name = scene.getTrainingModelNodeName();
+            if (!model_name.empty()) {
+                if (const auto* model_node = scene.getNode(model_name); model_node && !model_node->visible) {
+                    scene.setNodeVisibility(model_name, true);
+                }
+            }
         }
+
+        pending_training_completion_refresh_frames_ = 3;
+        if (rendering_manager_) {
+            rendering_manager_->markDirty(DirtyFlag::ALL);
+        }
+        wakeMainLoop();
     }
 
     void VisualizerImpl::handleSwitchToLatestCheckpoint() {

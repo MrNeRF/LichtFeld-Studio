@@ -5492,6 +5492,7 @@ namespace lfs::vis::gui {
                     .ui_visible = !ui_hidden_,
                     .right_panel_visible = right_panel_visible,
                     .bottom_dock_visible = panel_layout_.isBottomDockVisible(),
+                    .left_dock_visible = panel_layout_.isLeftDockVisible(),
                 });
         }
         const bool panel_registry_needs_animation = panel_animation_demand.any();
@@ -5629,10 +5630,12 @@ namespace lfs::vis::gui {
             std::abs(panel_layout_.getScenePanelRatio() - last_ui_layout_scene_ratio_) > 0.0001f ||
             std::abs(panel_layout_.getPythonConsoleWidth() - last_ui_layout_python_console_w_) > 0.5f ||
             std::abs(panel_layout_.getBottomDockHeight() - last_ui_layout_bottom_dock_h_) > 0.5f ||
+            std::abs(panel_layout_.getLeftDockWidth() - last_ui_layout_left_dock_w_) > 0.5f ||
             show_main_panel_ != last_ui_layout_show_main_panel_ ||
             ui_hidden_ != last_ui_layout_ui_hidden_ ||
             python_console_visible != last_ui_layout_python_console_visible_ ||
             panel_layout_.isBottomDockVisible() != last_ui_layout_bottom_dock_visible_ ||
+            panel_layout_.isLeftDockVisible() != last_ui_layout_left_dock_visible_ ||
             panel_layout_.getActiveTab() != last_ui_layout_active_tab_;
 
         if (ui_layout_changed) {
@@ -5644,10 +5647,12 @@ namespace lfs::vis::gui {
             last_ui_layout_scene_ratio_ = panel_layout_.getScenePanelRatio();
             last_ui_layout_python_console_w_ = panel_layout_.getPythonConsoleWidth();
             last_ui_layout_bottom_dock_h_ = panel_layout_.getBottomDockHeight();
+            last_ui_layout_left_dock_w_ = panel_layout_.getLeftDockWidth();
             last_ui_layout_show_main_panel_ = show_main_panel_;
             last_ui_layout_ui_hidden_ = ui_hidden_;
             last_ui_layout_python_console_visible_ = python_console_visible;
             last_ui_layout_bottom_dock_visible_ = panel_layout_.isBottomDockVisible();
+            last_ui_layout_left_dock_visible_ = panel_layout_.isLeftDockVisible();
             last_ui_layout_active_tab_ = panel_layout_.getActiveTab();
         }
 
@@ -5873,8 +5878,60 @@ namespace lfs::vis::gui {
         if (!hasMouseButtonDown(sdl_input))
             bottom_dock_pointer_live_capture_ = false;
 
+        // ── Left Dock ─────────────────────────────────────────────
+        constexpr float ICON_BAR_WIDTH = 40.0f;
+        const float icon_bar_w = ICON_BAR_WIDTH * current_ui_scale_;
+        const float left_dock_panel_w = std::max(panel_layout_.getLeftDockWidth(), 0.0f);
+        const float left_dock_h = show_main_panel_ && !ui_hidden_
+                                      ? std::max(0.0f, screen.work_size.y -
+                                                           PanelLayoutManager::STATUS_BAR_HEIGHT * current_ui_scale_)
+                                      : screen.work_size.y;
+        const float left_dock_edge_grab_w =
+            std::max(PanelLayoutManager::SPLITTER_H * current_ui_scale_,
+                     8.0f * current_ui_scale_);
+        const float left_dock_x = screen.work_pos.x + icon_bar_w;
+        const float left_dock_right_x = panel_layout_.isLeftDockVisible() ? left_dock_x + left_dock_panel_w : -1.0f;
+        const bool pointer_over_left_dock =
+            panel_layout_.isLeftDockVisible() &&
+            pointInRect(panel_input.mouse_x, panel_input.mouse_y,
+                        glm::vec2{left_dock_x, screen.work_pos.y},
+                        glm::vec2{left_dock_panel_w, left_dock_h});
+        const bool pointer_over_left_dock_edge =
+            panel_layout_.isLeftDockVisible() &&
+            panel_input.mouse_x >= left_dock_right_x - left_dock_edge_grab_w &&
+            panel_input.mouse_x <= left_dock_right_x + left_dock_edge_grab_w &&
+            panel_input.mouse_y >= screen.work_pos.y &&
+            panel_input.mouse_y < screen.work_pos.y + left_dock_h;
+        const bool pointer_targets_left_dock =
+            pointer_over_left_dock || pointer_over_left_dock_edge;
+        if (pointer_targets_left_dock &&
+            (hasMouseButtonClicked(sdl_input) || hasMouseButtonDown(sdl_input))) {
+            left_dock_pointer_live_capture_ = true;
+        }
+        const bool left_dock_pointer_activity =
+            hasPointerActivity(sdl_input) &&
+            (pointer_targets_left_dock || left_dock_pointer_live_capture_ ||
+             panel_layout_resize_active);
+        const bool left_dock_input_activity =
+            left_dock_pointer_activity ||
+            hasKeyboardActivity(sdl_input);
+        const bool left_dock_requires_live_layout =
+            ui_layout_changed || panel_layout_resize_active ||
+            panel_animation_demand.left_dock ||
+            left_dock_input_activity;
+        if (block_underlay_input || !left_dock_requires_live_layout) {
+            panel_layout_.renderLeftDockCached(draw_ctx, show_main_panel_, ui_hidden_,
+                                               panel_input, screen);
+        } else {
+            panel_layout_.renderLeftDock(draw_ctx, show_main_panel_, ui_hidden_,
+                                         panel_input, screen);
+        }
+        if (!hasMouseButtonDown(sdl_input))
+            left_dock_pointer_live_capture_ = false;
+
         if (has_side_panel_plugins || has_floating_panels || has_status_bar_panels ||
             right_panel_requires_live_layout || bottom_dock_requires_live_layout ||
+            left_dock_requires_live_layout ||
             ui_layout_changed || panel_registry_needs_animation || block_underlay_input) {
             LOG_PERF("gui_render.router side_panel_plugins={} floating_panels={} status_bar_panels={} viewport_overlay_panels={} editor_update={} right_live={} right_scene_live={} right_tab_live={} bottom_live={} layout_changed={} panel_registry_anim={} right_registry_anim={} bottom_registry_anim={} viewport_registry_anim={} block_underlay={}",
                      has_side_panel_plugins,
@@ -5951,14 +6008,14 @@ namespace lfs::vis::gui {
             if (const auto primary_panel = rendering->resolveViewerPanel(
                     viewer_->getViewport(),
                     viewport_layout_.pos, viewport_layout_.size, std::nullopt, SplitViewPanelId::Left)) {
-                primary_toolbar_x = primary_panel->x - viewport_layout_.pos.x;
+                primary_toolbar_x = primary_panel->x - screen.work_pos.x;
                 primary_toolbar_width = primary_panel->width;
             }
             if (const auto secondary_panel = rendering->resolveViewerPanel(
                     viewer_->getViewport(),
                     viewport_layout_.pos, viewport_layout_.size, std::nullopt, SplitViewPanelId::Right)) {
                 show_secondary_toolbar = secondary_panel->valid();
-                secondary_toolbar_x = secondary_panel->x - viewport_layout_.pos.x;
+                secondary_toolbar_x = secondary_panel->x - screen.work_pos.x;
                 secondary_toolbar_width = secondary_panel->width;
             }
         }
@@ -5968,9 +6025,14 @@ namespace lfs::vis::gui {
                                                show_secondary_toolbar,
                                                secondary_toolbar_x,
                                                secondary_toolbar_width);
+        const float left_dock_w =
+            icon_bar_w + (panel_layout_.isLeftDockVisible() ? left_dock_panel_w : 0.0f);
+        const glm::vec2 overlay_pos = {screen.work_pos.x, viewport_layout_.pos.y};
+        const glm::vec2 overlay_size = {viewport_layout_.size.x + left_dock_w, viewport_layout_.size.y};
         rml_viewport_overlay_.setViewportBounds(
-            viewport_layout_.pos, viewport_layout_.size,
+            overlay_pos, overlay_size,
             {panel_input.screen_x, panel_input.screen_y});
+        rml_viewport_overlay_.setViewportContentOffset(viewport_layout_.pos.x - screen.work_pos.x);
         RmlViewportOverlay::SplitDividerOverlayState split_divider_state;
         if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr;
             rendering && rendering->isSplitViewActive()) {
@@ -5985,7 +6047,7 @@ namespace lfs::vis::gui {
                     std::max(kSplitDividerMinWidthPx * current_ui_scale_,
                              std::round(t.viewport.border_size * current_ui_scale_ * 4.0f));
                 split_divider_state.visible = true;
-                split_divider_state.x = std::round((*divider_x - viewport_layout_.pos.x) - divider_width * 0.5f);
+                split_divider_state.x = std::round((*divider_x - screen.work_pos.x) - divider_width * 0.5f);
                 split_divider_state.y = content_bounds.y;
                 split_divider_state.width = divider_width;
                 split_divider_state.height = content_bounds.height;

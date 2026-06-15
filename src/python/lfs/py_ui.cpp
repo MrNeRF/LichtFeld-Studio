@@ -4356,6 +4356,25 @@ namespace lfs::python {
             "Get the currently active tool id from C++ EditorContext");
 
         m.def(
+            "is_tool_available", [](const std::string& id) -> bool {
+                static const std::unordered_map<std::string, vis::ToolType> tool_map = {
+                    {"builtin.select", vis::ToolType::Selection},
+                    {"builtin.translate", vis::ToolType::Translate},
+                    {"builtin.rotate", vis::ToolType::Rotate},
+                    {"builtin.scale", vis::ToolType::Scale},
+                    {"builtin.mirror", vis::ToolType::Mirror},
+                    {"builtin.align", vis::ToolType::Align},
+                };
+                const auto it = tool_map.find(id);
+                if (it == tool_map.end()) {
+                    return false;
+                }
+                const auto* const editor = get_editor_context();
+                return editor && editor->isToolAvailable(it->second);
+            },
+            nb::arg("id"), "Check whether a builtin tool is currently available");
+
+        m.def(
             "set_active_tool", [](const std::string& id) {
                 static const std::unordered_map<std::string, vis::ToolType> tool_map = {
                     {"builtin.select", vis::ToolType::Selection},

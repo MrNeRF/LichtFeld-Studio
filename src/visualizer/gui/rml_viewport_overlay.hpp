@@ -80,6 +80,7 @@ namespace lfs::vis::gui {
         void init(RmlUIManager* mgr);
         void shutdown();
         void setViewportBounds(glm::vec2 pos, glm::vec2 size, glm::vec2 screen_origin);
+        void setViewportContentOffset(float x);
         void setToolbarPanels(float primary_x, float primary_width,
                               bool show_secondary = false,
                               float secondary_x = 0.0f,
@@ -109,6 +110,7 @@ namespace lfs::vis::gui {
         void markDocumentSyncDirty();
         bool syncBuiltinDocument(bool force);
         bool updateToolbarRoots();
+        void updateViewportContentOffset();
         void bindReactiveStore();
         void refreshGTMetricsOverlayFromStore();
         void applySplitDividerOverlay();
@@ -156,6 +158,8 @@ namespace lfs::vis::gui {
         float applied_secondary_toolbar_x_ = 0.0f;
         float applied_secondary_toolbar_width_ = -1.0f;
         bool toolbar_roots_dirty_ = true;
+        float viewport_content_offset_ = 0.0f;
+        bool viewport_content_offset_dirty_ = true;
         std::size_t last_theme_signature_ = 0;
         bool has_theme_signature_ = false;
         std::string base_rcss_;

@@ -175,6 +175,7 @@ namespace lfs::vis::gui {
         bool ui_visible = true;
         bool right_panel_visible = true;
         bool bottom_dock_visible = true;
+        bool left_dock_visible = true;
     };
 
     struct PanelAnimationDemand {
@@ -184,6 +185,7 @@ namespace lfs::vis::gui {
         bool main_panel_tab = false;
         bool scene_header = false;
         bool bottom_dock = false;
+        bool left_dock = false;
         bool status_bar = false;
 
         [[nodiscard]] bool rightPanel() const {
@@ -192,7 +194,7 @@ namespace lfs::vis::gui {
 
         [[nodiscard]] bool any() const {
             return side_panel || floating || viewport_overlay || main_panel_tab ||
-                   scene_header || bottom_dock || status_bar;
+                   scene_header || bottom_dock || left_dock || status_bar;
         }
     };
 

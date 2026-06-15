@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda/undistort/undistort.hpp"
 #include "core/logger.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
@@ -1195,6 +1196,17 @@ namespace lfs::vis {
                     if (gt_tensor.is_valid() && gt_tensor.ndim() == 3) {
                         const auto gt_layout = lfs::rendering::detectImageLayout(gt_tensor);
                         if (gt_layout != lfs::rendering::ImageLayout::Unknown) {
+                            const bool undistort_gt =
+                                gt_layout == lfs::rendering::ImageLayout::CHW &&
+                                camera->camera_model_type() != lfs::core::CameraModelType::EQUIRECTANGULAR &&
+                                camera->is_undistort_precomputed();
+                            if (undistort_gt) {
+                                const auto scaled = lfs::core::scale_undistort_params(
+                                    camera->undistort_params(),
+                                    lfs::rendering::imageWidth(gt_tensor, gt_layout),
+                                    lfs::rendering::imageHeight(gt_tensor, gt_layout));
+                                gt_tensor = lfs::core::undistort_image(gt_tensor, scaled, nullptr);
+                            }
                             gt_tensor = lfs::rendering::flipImageVertical(gt_tensor, gt_layout);
                             const glm::ivec2 gt_size{
                                 lfs::rendering::imageWidth(gt_tensor, gt_layout),

@@ -884,14 +884,37 @@ namespace lfs::vis::cap {
     std::expected<core::NodeId, std::string> resolveCropBoxParentId(const SceneManager& scene_manager,
                                                                     const std::optional<std::string>& requested_node) {
         const auto& scene = scene_manager.getScene();
-        const auto resolve = [&scene](const core::SceneNode* node) -> std::expected<core::NodeId, std::string> {
+        const auto find_child_target = [&scene](const core::SceneNode& node,
+                                                const auto& self) -> core::NodeId {
+            for (const core::NodeId child_id : node.children) {
+                const auto* child = scene.getNodeById(child_id);
+                if (!child) {
+                    continue;
+                }
+                if (child->type == core::NodeType::SPLAT || child->type == core::NodeType::POINTCLOUD) {
+                    return child->id;
+                }
+                if (const core::NodeId nested = self(*child, self); nested != core::NULL_NODE) {
+                    return nested;
+                }
+            }
+            return core::NULL_NODE;
+        };
+
+        const auto resolve = [&scene, &find_child_target](const core::SceneNode* node) -> std::expected<core::NodeId, std::string> {
             if (!node)
                 return std::unexpected("Node not found");
             if (node->type == core::NodeType::CROPBOX)
                 return node->parent_id;
             if (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD)
                 return node->id;
-            return std::unexpected("Crop boxes can only target splat or pointcloud nodes");
+            if (node->type == core::NodeType::DATASET) {
+                if (const core::NodeId child_target = find_child_target(*node, find_child_target);
+                    child_target != core::NULL_NODE) {
+                    return child_target;
+                }
+            }
+            return std::unexpected("Crop boxes can only target splat, pointcloud, or dataset nodes with a model");
         };
 
         if (requested_node)

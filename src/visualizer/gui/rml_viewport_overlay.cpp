@@ -297,6 +297,14 @@ namespace lfs::vis::gui {
         screen_origin_ = screen_origin;
     }
 
+    void RmlViewportOverlay::setViewportContentOffset(const float x) {
+        if (std::abs(viewport_content_offset_ - x) > 0.5f) {
+            viewport_content_offset_ = x;
+            viewport_content_offset_dirty_ = true;
+            markRenderNeeded(RenderReason::ViewportResize);
+        }
+    }
+
     void RmlViewportOverlay::setToolbarPanels(const float primary_x,
                                               const float primary_width,
                                               const bool show_secondary,
@@ -502,6 +510,15 @@ namespace lfs::vis::gui {
         applied_secondary_toolbar_width_ = secondary_toolbar_width_;
         toolbar_roots_dirty_ = false;
         return true;
+    }
+
+    void RmlViewportOverlay::updateViewportContentOffset() {
+        if (!document_ || !viewport_content_offset_dirty_)
+            return;
+        if (auto* const element = document_->GetElementById("viewport-content")) {
+            element->SetProperty("left", std::format("{:.1f}px", viewport_content_offset_));
+        }
+        viewport_content_offset_dirty_ = false;
     }
 
     void RmlViewportOverlay::applySplitDividerOverlay() {
@@ -955,6 +972,7 @@ namespace lfs::vis::gui {
         const int h = static_cast<int>(vp_size_.y);
         const bool size_changed = (w != last_render_w_ || h != last_render_h_);
         const bool toolbar_changed = updateToolbarRoots();
+        updateViewportContentOffset();
         const bool document_force = theme_changed || size_changed || toolbar_changed;
         bool document_dirty = syncBuiltinDocument(document_force);
         const bool run_prepend_document_hooks = shouldRunDocumentHooks(document_force, true);

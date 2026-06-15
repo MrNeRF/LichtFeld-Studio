@@ -77,15 +77,30 @@ namespace lfs::vis {
                 cam.camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR;
 
             if (!render_camera.equirectangular) {
+                float base_fx = cam.focal_x();
+                float base_fy = cam.focal_y();
+                float base_cx = cam.center_x();
+                float base_cy = cam.center_y();
+                int base_width = cam.camera_width();
+                int base_height = cam.camera_height();
+                if (cam.is_undistort_precomputed()) {
+                    const auto& undistort = cam.undistort_params();
+                    base_fx = undistort.dst_fx;
+                    base_fy = undistort.dst_fy;
+                    base_cx = undistort.dst_cx;
+                    base_cy = undistort.dst_cy;
+                    base_width = undistort.dst_width;
+                    base_height = undistort.dst_height;
+                }
                 const float x_scale =
-                    static_cast<float>(render_size.x) / static_cast<float>(std::max(cam.camera_width(), 1));
+                    static_cast<float>(render_size.x) / static_cast<float>(std::max(base_width, 1));
                 const float y_scale =
-                    static_cast<float>(render_size.y) / static_cast<float>(std::max(cam.camera_height(), 1));
+                    static_cast<float>(render_size.y) / static_cast<float>(std::max(base_height, 1));
                 render_camera.intrinsics = lfs::rendering::CameraIntrinsics{
-                    .focal_x = cam.focal_x() * x_scale,
-                    .focal_y = cam.focal_y() * y_scale,
-                    .center_x = cam.center_x() * x_scale,
-                    .center_y = cam.center_y() * y_scale};
+                    .focal_x = base_fx * x_scale,
+                    .focal_y = base_fy * y_scale,
+                    .center_x = base_cx * x_scale,
+                    .center_y = base_cy * y_scale};
             }
 
             return render_camera;

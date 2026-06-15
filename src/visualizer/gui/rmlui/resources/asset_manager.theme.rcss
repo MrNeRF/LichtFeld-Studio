@@ -37,12 +37,27 @@
 .asset-view-button {
     background-color: @{surface_bright};
     border-color: @{border};
-    color: @{text_dim};
+    color: @{text};
 }
 
 .asset-view-button.is-active {
     background-color: @{lighten(surface_bright,0.06)};
     color: @{text};
+    border-color: @{primary};
+}
+
+.asset-button-label {
+    color: @{text};
+}
+
+.asset-header-action {
+    color: @{text};
+    background-color: @{surface_bright};
+    border-color: @{border};
+}
+
+.asset-header-action:hover {
+    background-color: @{lighten(surface_bright,0.12)};
     border-color: @{primary};
 }
 
@@ -54,11 +69,25 @@
     color: @{text_dim};
 }
 
+#asset-popup {
+    border-right-color: @{alpha(primary,0.30)};
+}
+
 /* ── Sidebar ─────────────────────────────────────────────── */
 
 #asset-sidebar {
     background-color: @{blend(surface,background,0.35)};
     border-right-color: @{border};
+}
+
+#sidebar-resize-handle {
+    background-color: @{alpha(primary,0.12)};
+    border-top-color: @{alpha(primary,0.26)};
+    border-bottom-color: @{alpha(background,0.55)};
+}
+
+#sidebar-resize-handle:hover {
+    background-color: @{alpha(primary,0.30)};
 }
 
 .asset-sidebar-title {
@@ -176,6 +205,16 @@
 #asset-info-panel {
     background-color: @{blend(surface,background,0.35)};
     border-left-color: @{border};
+}
+
+#bottom-panel-resize-handle {
+    background-color: @{alpha(primary,0.12)};
+    border-top-color: @{alpha(primary,0.26)};
+    border-bottom-color: @{alpha(background,0.55)};
+}
+
+#bottom-panel-resize-handle:hover {
+    background-color: @{alpha(primary,0.30)};
 }
 
 .asset-info-tabs {

@@ -912,9 +912,37 @@ progress fill {
     image-color: rgba(30, 30, 46, 255);
 }
 
+.icon-btn.disabled,
 .icon-btn:disabled {
     opacity: 0.4;
     cursor: default;
+}
+
+.icon-btn.disabled:hover,
+.icon-btn.disabled:active {
+    background-color: transparent;
+}
+
+.icon-btn.disabled img {
+    image-color: rgba(255, 255, 255, 95);
+}
+
+.viewport-transform-action.is-disabled,
+.viewport-transform-action:disabled {
+    opacity: 0.22;
+    cursor: default;
+}
+
+.viewport-transform-action.is-disabled:hover,
+.viewport-transform-action.is-disabled:active,
+.viewport-transform-action:disabled:hover,
+.viewport-transform-action:disabled:active {
+    background-color: transparent;
+}
+
+.viewport-transform-action.is-disabled img,
+.viewport-transform-action:disabled img {
+    image-color: rgba(255, 255, 255, 110);
 }
 
 /* ── Utilities ──────────────────────────────────────────── */

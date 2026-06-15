@@ -331,6 +331,22 @@ progress fill {
     background-color: @{components.border_med};
 }
 
+.icon-btn.disabled,
+.icon-btn.is-disabled,
+.icon-btn:disabled {
+    opacity: 0.22;
+    cursor: default;
+}
+
+.icon-btn.disabled:hover,
+.icon-btn.disabled:active,
+.icon-btn.is-disabled:hover,
+.icon-btn.is-disabled:active,
+.icon-btn:disabled:hover,
+.icon-btn:disabled:active {
+    background-color: transparent;
+}
+
 .icon-btn.selected {
     background-color: @{primary};
 }
@@ -341,6 +357,12 @@ progress fill {
 
 .icon-btn.selected img {
     image-color: @{background};
+}
+
+.icon-btn.disabled img,
+.icon-btn.is-disabled img,
+.icon-btn:disabled img {
+    image-color: @{blend(components.text_hi, surface, 0.6)};
 }
 
 .status-success {

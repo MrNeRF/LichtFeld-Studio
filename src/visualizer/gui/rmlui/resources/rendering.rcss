@@ -160,3 +160,39 @@ body {
     display: block;
     min-width: 0;
 }
+
+.lod-stats-block {
+    padding: 8dp 4dp;
+    margin: 4dp 0;
+}
+
+.lod-stat-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 4dp;
+    font-size: 12dp;
+}
+
+.lod-stat-row:last-child {
+    margin-bottom: 0;
+}
+
+.lod-stat-label {
+    color: rgba(160, 160, 160, 255);
+    text-transform: uppercase;
+    letter-spacing: 0.2dp;
+    font-size: 11dp;
+}
+
+.lod-stat-value {
+    font-weight: bold;
+    font-size: 12dp;
+    text-align: right;
+}
+
+.lod-separator {
+    border-top-width: 1dp;
+    border-top-color: rgba(80, 80, 80, 255);
+    margin: 8dp 4dp 12dp;
+}

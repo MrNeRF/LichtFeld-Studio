@@ -267,6 +267,7 @@ namespace lfs::vis {
         bool pending_auto_train_ = false;
         bool pending_new_project_ = false;
         bool pending_reset_ = false;
+        int pending_training_completion_refresh_frames_ = 0;
         bool gui_frame_rendered_ = false;
         bool startup_plugin_preload_started_ = false;
         bool update_work_processed_ = false;

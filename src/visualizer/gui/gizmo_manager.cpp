@@ -313,12 +313,35 @@ namespace lfs::vis::gui {
             return std::nullopt;
 
         const auto& scene = sm->getScene();
+        const auto find_child_target = [&scene](const core::SceneNode& node,
+                                                const auto& self) -> core::NodeId {
+            for (const core::NodeId child_id : node.children) {
+                const auto* child = scene.getNodeById(child_id);
+                if (!child) {
+                    continue;
+                }
+                if (child->type == core::NodeType::SPLAT || child->type == core::NodeType::POINTCLOUD) {
+                    return child->id;
+                }
+                if (const core::NodeId nested = self(*child, self); nested != core::NULL_NODE) {
+                    return nested;
+                }
+            }
+            return core::NULL_NODE;
+        };
+
         for (const auto& name : sm->getSelectedNodeNames()) {
             const auto* const node = scene.getNode(name);
             if (!node)
                 continue;
             if (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD)
                 return node->id;
+            if (node->type == core::NodeType::DATASET) {
+                if (const core::NodeId child_target = find_child_target(*node, find_child_target);
+                    child_target != core::NULL_NODE) {
+                    return child_target;
+                }
+            }
         }
         return std::nullopt;
     }
@@ -465,13 +488,46 @@ namespace lfs::vis::gui {
         if (!ensureCropToolState())
             return;
 
+        auto* const sm = viewer_ ? viewer_->getSceneManager() : nullptr;
+        auto* const rm = viewer_ ? viewer_->getRenderingManager() : nullptr;
+        if (!sm)
+            return;
+
         const glm::mat4 data_world_transform =
             rendering::visualizerWorldTransformToDataWorld(crop_tool_visualizer_transform_);
         if (crop_tool_shape_ == CropToolShape::Box) {
-            lfs::geometry::BoundingBox crop_box;
-            crop_box.setBounds(crop_tool_box_min_, crop_tool_box_max_);
-            crop_box.setworld2BBox(glm::inverse(data_world_transform));
-            cmd::CropPLY{.crop_box = crop_box, .inverse = false}.emit();
+            auto cropbox_id = cap::ensureCropBox(*sm, rm, crop_tool_target_node_id_);
+            if (!cropbox_id) {
+                LOG_WARN("Failed to persist active crop tool: {}", cropbox_id.error());
+                return;
+            }
+
+            auto& scene = sm->getScene();
+            const auto* cropbox_node = scene.getNodeById(*cropbox_id);
+            if (!cropbox_node || !cropbox_node->cropbox) {
+                LOG_WARN("Failed to persist active crop tool: crop box node is invalid");
+                return;
+            }
+
+            core::CropBoxData data = *cropbox_node->cropbox;
+            data.min = crop_tool_box_min_;
+            data.max = crop_tool_box_max_;
+            data.inverse = false;
+            data.enabled = true;
+            scene.setCropBoxData(*cropbox_id, data);
+
+            const glm::mat4 parent_world = scene.getWorldTransform(crop_tool_target_node_id_);
+            const glm::mat4 local_transform = glm::inverse(parent_world) * data_world_transform;
+            sm->setNodeTransform(cropbox_node->name, local_transform);
+            scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+
+            if (rm) {
+                auto settings = rm->getSettings();
+                settings.show_crop_box = true;
+                settings.use_crop_box = false;
+                settings.desaturate_cropping = true;
+                rm->updateSettings(settings, DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+            }
         } else {
             cmd::CropPLYEllipsoid{
                 .world_transform = data_world_transform,
@@ -480,13 +536,21 @@ namespace lfs::vis::gui {
                 .emit();
         }
         triggerCropFlash();
+        clearCropToolOverlayState();
+        crop_tool_initialized_ = false;
+        python::cancel_active_operator();
+        UnifiedToolRegistry::instance().setActiveTool("");
     }
 
     void GizmoManager::setupEvents() {
         using namespace lfs::core::events;
 
-        ui::NodeSelected::when([this](const auto&) {
-            python::cancel_active_operator();
+        ui::NodeSelected::when([this](const auto& event) {
+            const bool keep_crop_operator =
+                UnifiedToolRegistry::instance().getActiveTool() == "builtin.cropbox" &&
+                event.type == "CropBox";
+            if (!keep_crop_operator)
+                python::cancel_active_operator();
             if (auto* const t = viewer_->getAlignTool())
                 t->setEnabled(false);
             if (auto* const sm = viewer_->getSceneManager())
@@ -586,12 +650,13 @@ namespace lfs::vis::gui {
         });
 
         cmd::ApplyCropBox::when([this](const auto&) {
-            if (isCropToolActive()) {
+            auto* const sm = viewer_->getSceneManager();
+            if (isCropToolActive() &&
+                (!sm || sm->getSelectedNodeType() != core::NodeType::CROPBOX)) {
                 applyActiveCropTool();
                 return;
             }
 
-            auto* const sm = viewer_->getSceneManager();
             if (!sm)
                 return;
 
@@ -603,13 +668,20 @@ namespace lfs::vis::gui {
             if (!cropbox_node || !cropbox_node->cropbox)
                 return;
 
-            const glm::mat4 world_transform = scene_coords::nodeDataWorldTransform(sm->getScene(), cropbox_id);
-
-            lfs::geometry::BoundingBox crop_box;
-            crop_box.setBounds(cropbox_node->cropbox->min, cropbox_node->cropbox->max);
-            crop_box.setworld2BBox(glm::inverse(world_transform));
-            cmd::CropPLY{.crop_box = crop_box, .inverse = cropbox_node->cropbox->inverse}.emit();
+            core::CropBoxData data = *cropbox_node->cropbox;
+            data.enabled = true;
+            sm->getScene().setCropBoxData(cropbox_id, data);
+            sm->getScene().notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+            if (auto* rm = viewer_->getRenderingManager()) {
+                auto settings = rm->getSettings();
+                settings.show_crop_box = true;
+                settings.use_crop_box = false;
+                settings.desaturate_cropping = true;
+                rm->updateSettings(settings, DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+            }
             triggerCropFlash();
+            python::cancel_active_operator();
+            UnifiedToolRegistry::instance().setActiveTool("");
         });
 
         cmd::ApplyEllipsoid::when([this](const auto&) {
@@ -690,6 +762,30 @@ namespace lfs::vis::gui {
         const std::string gizmo_type = ctx.editor ? ctx.editor->getGizmoType() : std::string{};
         const bool is_crop_tool = active_tool_id == "builtin.cropbox";
 
+        if (is_crop_tool && scene_manager && has_selected_node &&
+            scene_manager->getSelectedNodeType() != core::NodeType::CROPBOX) {
+            auto parent_id = cap::resolveCropBoxParentId(*scene_manager, std::nullopt);
+            if (parent_id) {
+                auto cropbox_id = cap::ensureCropBox(*scene_manager, rendering_manager, *parent_id);
+                if (cropbox_id) {
+                    if (const auto* cropbox_node = scene_manager->getScene().getNodeById(*cropbox_id)) {
+                        if (rendering_manager) {
+                            auto settings = rendering_manager->getSettings();
+                            settings.show_crop_box = true;
+                            settings.use_crop_box = false;
+                            settings.desaturate_cropping = true;
+                            rendering_manager->updateSettings(settings, DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+                        }
+                        scene_manager->selectNode(cropbox_node->name);
+                        if (ctx.editor) {
+                            ctx.editor->setActiveOperator("builtin.cropbox", gizmo_type.empty() ? "translate" : gizmo_type);
+                        }
+                        UnifiedToolRegistry::instance().setActiveTool("builtin.cropbox");
+                    }
+                }
+            }
+        }
+
         ToolStateStamp stamp;
         stamp.valid = true;
         stamp.ui_hidden = ui_hidden;
@@ -728,8 +824,9 @@ namespace lfs::vis::gui {
             }
             show_node_gizmo_ = is_transform_tool;
             if (is_crop_tool) {
-                if (ensureCropToolState())
-                    updateCropToolOverlayState();
+                crop_tool_initialized_ = false;
+                crop_tool_target_node_id_ = core::NULL_NODE;
+                clearCropToolOverlayState();
             } else {
                 crop_tool_initialized_ = false;
                 crop_tool_target_node_id_ = core::NULL_NODE;
@@ -1440,11 +1537,6 @@ namespace lfs::vis::gui {
     }
 
     void GizmoManager::renderCropBoxGizmo(const UIContext& ctx, const ViewportLayout& viewport) {
-        if (isCropToolActive() && crop_tool_shape_ == CropToolShape::Box) {
-            renderCropToolBoxGizmo(ctx, viewport);
-            return;
-        }
-
         auto* const render_manager = ctx.viewer->getRenderingManager();
         auto* const scene_manager = ctx.viewer->getSceneManager();
         if (!render_manager || !scene_manager)

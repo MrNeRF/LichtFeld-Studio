@@ -230,7 +230,9 @@ class PanelSpace(enum.Enum):
 
     BOTTOM_DOCK = 5
 
-    STATUS_BAR = 6
+    LEFT_DOCK = 6
+
+    STATUS_BAR = 7
 
 class PanelHeightMode(enum.Enum):
     FILL = 0
@@ -2111,6 +2113,9 @@ def set_exit_popup_open(open: bool) -> None:
 
 def get_active_tool() -> str:
     """Get the currently active tool id from C++ EditorContext"""
+
+def is_tool_available(id: str) -> bool:
+    """Check whether a builtin tool is currently available"""
 
 def set_active_tool(id: str) -> None:
     """Set the active tool via C++ event"""

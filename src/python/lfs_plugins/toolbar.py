@@ -80,6 +80,23 @@ def _ui_label(key, fallback=""):
     return fallback or ""
 
 
+def _current_selected_node_types() -> tuple[str, ...]:
+    try:
+        import lichtfeld as lf
+
+        scene = lf.scene.current()
+        selected_names = lf.get_selected_node_names() or []
+        node_types: list[str] = []
+        for name in selected_names:
+            node = scene.get_node(name)
+            node_type = getattr(getattr(node, "type", None), "name", "")
+            if node_type:
+                node_types.append(node_type)
+        return tuple(node_types)
+    except Exception:
+        return ()
+
+
 def _keymap_shortcut(action_id, fallback=""):
     if not action_id:
         return fallback or ""
@@ -121,6 +138,7 @@ def _panel_enabled(panel_id):
 def _button_record(button_id, action, value, icon_src, *,
                    tooltip_key="", tooltip_text="", action_id="",
                    shortcut_text="", selected=False, enabled=True):
+    enabled = bool(enabled)
     return {
         "button_id": button_id,
         "action": action,
@@ -131,6 +149,7 @@ def _button_record(button_id, action, value, icon_src, *,
         "shortcut_text": _keymap_shortcut(action_id, shortcut_text),
         "selected": selected,
         "enabled": enabled,
+        "opacity": "1" if enabled else "0.25",
     }
 
 
@@ -522,6 +541,13 @@ class _GizmoToolbarController:
     def _activate_crop_tool(self, gizmo_type="translate"):
         import lichtfeld as lf
 
+        if self._active_crop_shape() == "box":
+            selected = lf.get_selected_node_names() or []
+            if selected:
+                add_cropbox = getattr(lf.ui, "add_cropbox", None)
+                if callable(add_cropbox):
+                    add_cropbox(selected[0])
+
         lf.ui.set_active_operator(self._CROP_TOOL_ID, gizmo_type)
 
     def _build_submode_records(self, active_tool_id, tool_def):
@@ -616,7 +642,10 @@ class _GizmoToolbarController:
             if lf.ui.get_active_tool() == value:
                 ToolRegistry.clear_active()
             else:
-                ToolRegistry.set_active(value)
+                if value == self._CROP_TOOL_ID:
+                    self._activate_crop_tool("translate")
+                else:
+                    ToolRegistry.set_active(value)
             return
 
         if action == "crop_object":
@@ -634,15 +663,25 @@ class _GizmoToolbarController:
             return
 
         if action == "crop_trim":
+            if self._active_crop_shape() == "box":
+                fit_cropbox = getattr(lf.ui, "fit_cropbox_to_scene", None)
+                if callable(fit_cropbox):
+                    fit_cropbox(True)
+                    return
             fit_crop = getattr(lf.ui, "fit_crop_tool", None)
             if callable(fit_crop):
                 fit_crop(True)
             return
 
         if action == "crop_apply":
-            apply_crop = getattr(lf.ui, "apply_crop_tool", None)
-            if callable(apply_crop):
-                apply_crop()
+            if self._active_crop_shape() == "box":
+                apply_cropbox = getattr(lf.ui, "apply_cropbox", None)
+                if callable(apply_cropbox):
+                    apply_cropbox()
+                    return
+            apply_crop_tool = getattr(lf.ui, "apply_crop_tool", None)
+            if callable(apply_crop_tool):
+                apply_crop_tool()
             return
 
         if action == "submode":
@@ -1193,8 +1232,13 @@ class _ViewportToolbarController:
             else bool(call(False, has_scene_getter)) if callable(has_scene_getter) else False
         )
         num_gaussians = int(getattr(ui_context, "num_gaussians", 0) or 0)
+        has_selection = bool(getattr(ui_context, "has_selection", False)) if ui_context is not None else False
         selected_getter = getattr(lf, "get_selected_node_names", None)
         selected_nodes = tuple(call([], selected_getter) or []) if callable(selected_getter) else ()
+        selected_node_types = _current_selected_node_types()
+        can_transform_selection = bool(
+            call(False, getattr(lf, "can_transform_selection", None))
+        )
 
         asset_manager_enabled = bool(
             call(
@@ -1227,7 +1271,10 @@ class _ViewportToolbarController:
             pivot_mode,
             has_scene,
             num_gaussians,
+            has_selection,
             selected_nodes,
+            selected_node_types,
+            can_transform_selection,
             tool_ids,
             str(call("orbit", lf.get_camera_navigation_mode)).lower() if hasattr(lf, "get_camera_navigation_mode") else "orbit",
             bool(call(False, lf.is_fullscreen)) if hasattr(lf, "is_fullscreen") else False,

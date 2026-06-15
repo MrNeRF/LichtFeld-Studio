@@ -185,7 +185,7 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleTrainingCompleted() {
-        markDirty(DirtyFlag::OVERLAY);
+        markDirty(DirtyFlag::SPLATS | DirtyFlag::CAMERA | DirtyFlag::OVERLAY);
     }
 
     void RenderingManager::handleSceneLoaded() {

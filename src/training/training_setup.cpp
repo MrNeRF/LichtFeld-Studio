@@ -578,6 +578,9 @@ namespace lfs::training {
         lfs::core::NodeId parent_id = lfs::core::NULL_NODE;
         const lfs::core::PointCloud* point_cloud = nullptr;
         glm::mat4 node_transform{1.0f};
+        lfs::core::CropBoxData preserved_cropbox_data;
+        glm::mat4 preserved_cropbox_transform{1.0f};
+        bool has_preserved_cropbox = false;
 
         for (const auto* node : scene.getNodes()) {
             if (node->type == lfs::core::NodeType::POINTCLOUD && node->point_cloud) {
@@ -600,11 +603,23 @@ namespace lfs::training {
                 cropbox_id = scene.getCropBoxForSplat(point_cloud_node_id);
                 if (cropbox_id != lfs::core::NULL_NODE) {
                     cropbox_data = scene.getCropBoxData(cropbox_id);
+                    if (const auto* cropbox_node = scene.getNodeById(cropbox_id);
+                        cropbox_node && cropbox_node->cropbox) {
+                        preserved_cropbox_data = *cropbox_node->cropbox;
+                        preserved_cropbox_transform =
+                            cropbox_node->parent_id == point_cloud_node_id
+                                ? cropbox_node->transform()
+                                : glm::inverse(scene.getWorldTransform(point_cloud_node_id)) *
+                                      scene.getWorldTransform(cropbox_id);
+                        has_preserved_cropbox = true;
+                    }
                 }
             }
 
             if (cropbox_data && cropbox_data->enabled) {
-                const glm::mat4 world_to_cropbox = glm::inverse(scene.getWorldTransform(cropbox_id));
+                const glm::mat4 pointcloud_to_cropbox =
+                    has_preserved_cropbox ? glm::inverse(preserved_cropbox_transform)
+                                          : glm::inverse(scene.getWorldTransform(cropbox_id));
                 const auto& means = point_cloud->means;
                 const auto& colors = point_cloud->colors;
                 const size_t num_points = point_cloud->size();
@@ -621,7 +636,7 @@ namespace lfs::training {
 
                 for (size_t i = 0; i < num_points; ++i) {
                     const glm::vec3 pos(means_ptr[i * 3], means_ptr[i * 3 + 1], means_ptr[i * 3 + 2]);
-                    const glm::vec4 local_pos = world_to_cropbox * glm::vec4(pos, 1.0f);
+                    const glm::vec4 local_pos = pointcloud_to_cropbox * glm::vec4(pos, 1.0f);
                     const glm::vec3 local = glm::vec3(local_pos) / local_pos.w;
 
                     bool inside = local.x >= cropbox_data->min.x && local.x <= cropbox_data->max.x &&
@@ -718,11 +733,18 @@ namespace lfs::training {
             return result;
         }
         LOG_INFO("Created training model with {} gaussians", model->size());
-        scene.addSplat("Model", std::move(model), parent_id);
+        const lfs::core::NodeId model_id = scene.addSplat("Model", std::move(model), parent_id);
         if (node_transform != glm::mat4{1.0f}) {
             scene.setNodeTransform("Model", node_transform);
         }
         scene.setTrainingModelNode("Model");
+        if (has_preserved_cropbox && model_id != lfs::core::NULL_NODE) {
+            const lfs::core::NodeId model_cropbox_id = scene.addCropBox("Model_cropbox", model_id);
+            if (model_cropbox_id != lfs::core::NULL_NODE) {
+                scene.setCropBoxData(model_cropbox_id, preserved_cropbox_data);
+                scene.setNodeTransform("Model_cropbox", preserved_cropbox_transform);
+            }
+        }
 
         return {};
     }
