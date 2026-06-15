@@ -5,6 +5,8 @@
 #include "runner.hpp"
 #include "package_manager.hpp"
 #include "python_buffer_analysis.hpp"
+#include "core/event_bridge/localization_manager.hpp"
+#include "visualizer/gui/string_keys.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -34,6 +36,11 @@ namespace lfs::python {
     static bool g_we_initialized_python = false;
 
     namespace {
+        template <typename... Args>
+        std::string format_runtime(const char* fmt, Args&&... args) {
+            return std::vformat(std::string_view{fmt}, std::make_format_args(args...));
+        }
+
         struct EnsureInitializedRegistrar {
             EnsureInitializedRegistrar() { set_ensure_initialized_callback(ensure_initialized); }
         };
@@ -741,21 +748,20 @@ _add_dll_dirs()
             LOG_INFO("Plugin autoload: {} plugin(s) enabled for startup", to_load.size());
         }
 
-        python::notify_startup_plugin_load_state(true, 0.0f,
-                                                "Discovering startup plugins...");
-
         if (to_load.empty()) {
-            python::notify_startup_plugin_load_state(
-                false, 1.0f, "Loaded plugins 0/0");
             mark_plugins_loaded();
             return;
         }
+
+        python::notify_startup_plugin_load_state(
+            true, 0.0f, LOC(lichtfeld::Strings::Startup::DISCOVERING_PLUGINS));
 
         const std::size_t total = to_load.size();
         for (std::size_t index = 0; index < total; ++index) {
             const auto& name = to_load[index];
             const float start_progress = static_cast<float>(index) / static_cast<float>(total);
-            const auto start_stage = std::format("Loading plugin {}/{}: {}", index + 1, total, name);
+            const auto start_stage =
+                format_runtime(LOC(lichtfeld::Strings::Startup::LOADING_PLUGIN), index + 1, total, name);
             python::notify_startup_plugin_load_state(
                 true, start_progress, start_stage.c_str());
             const GilAcquire gil;
@@ -768,10 +774,12 @@ _add_dll_dirs()
             if (index + 1 < total) {
                 const auto& next_name = to_load[index + 1];
                 const auto end_stage =
-                    std::format("Loading plugin {}/{}: {}", index + 2, total, next_name);
+                    format_runtime(LOC(lichtfeld::Strings::Startup::LOADING_PLUGIN), index + 2, total, next_name);
                 python::notify_startup_plugin_load_state(true, end_progress, end_stage.c_str());
             } else {
-                python::notify_startup_plugin_load_state(false, 1.0f, "Loaded");
+                const auto loaded_stage =
+                    format_runtime(LOC(lichtfeld::Strings::Startup::LOADED_PLUGINS), total, total);
+                python::notify_startup_plugin_load_state(false, 1.0f, loaded_stage.c_str());
             }
         }
 
@@ -802,7 +810,8 @@ _add_dll_dirs()
             if (!can_acquire_gil()) {
                 LOG_WARN("Python GIL state not ready, skipping plugin preload");
                 g_plugin_preload_running.store(false, std::memory_order_release);
-                python::notify_startup_plugin_load_state(false, 1.0f, "Startup plugin loading skipped");
+                python::notify_startup_plugin_load_state(
+                    false, 1.0f, LOC(lichtfeld::Strings::Startup::PLUGIN_LOADING_SKIPPED));
                 python::request_redraw();
                 return true;
             }
@@ -813,13 +822,15 @@ _add_dll_dirs()
                 if (!ensure_python_bridge_ready_locked()) {
                     LOG_WARN("Python bridge not ready, skipping plugin preload");
                     g_plugin_preload_running.store(false, std::memory_order_release);
-                    python::notify_startup_plugin_load_state(false, 1.0f, "Startup plugin loading skipped");
+                    python::notify_startup_plugin_load_state(
+                        false, 1.0f, LOC(lichtfeld::Strings::Startup::PLUGIN_LOADING_SKIPPED));
                     python::request_redraw();
                     return true;
                 }
                 if (are_plugins_loaded()) {
                     g_plugin_preload_running.store(false, std::memory_order_release);
-                    python::notify_startup_plugin_load_state(false, 1.0f, "Loaded");
+                    const auto loaded_stage = format_runtime(LOC(lichtfeld::Strings::Startup::LOADED_PLUGINS), 0, 0);
+                    python::notify_startup_plugin_load_state(false, 1.0f, loaded_stage.c_str());
                     python::request_redraw();
                     return true;
                 }
@@ -833,10 +844,11 @@ _add_dll_dirs()
             if (g_plugin_preload_to_load.empty()) {
                 mark_plugins_loaded();
                 g_plugin_preload_running.store(false, std::memory_order_release);
-                python::notify_startup_plugin_load_state(false, 1.0f, "Loaded");
+                const auto loaded_stage = format_runtime(LOC(lichtfeld::Strings::Startup::LOADED_PLUGINS), 0, 0);
+                python::notify_startup_plugin_load_state(false, 1.0f, loaded_stage.c_str());
             } else {
-                python::notify_startup_plugin_load_state(true, 0.0f,
-                                                        "Discovering startup plugins...");
+                python::notify_startup_plugin_load_state(
+                    true, 0.0f, LOC(lichtfeld::Strings::Startup::DISCOVERING_PLUGINS));
             }
             python::request_redraw();
             return true;
@@ -848,7 +860,8 @@ _add_dll_dirs()
             g_plugin_preload_to_load.clear();
             g_plugin_preload_discovered = false;
             g_plugin_preload_running.store(false, std::memory_order_release);
-            python::notify_startup_plugin_load_state(false, 1.0f, "Loaded");
+            const auto loaded_stage = format_runtime(LOC(lichtfeld::Strings::Startup::LOADED_PLUGINS), total, total);
+            python::notify_startup_plugin_load_state(false, 1.0f, loaded_stage.c_str());
             python::request_redraw();
             return true;
         }
@@ -856,7 +869,8 @@ _add_dll_dirs()
         const std::size_t index = g_plugin_preload_index;
         const auto name = g_plugin_preload_to_load[index];
         const float start_progress = static_cast<float>(index) / static_cast<float>(total);
-        const auto start_stage = std::format("Loading plugin {}/{}: {}", index + 1, total, name);
+        const auto start_stage =
+            format_runtime(LOC(lichtfeld::Strings::Startup::LOADING_PLUGIN), index + 1, total, name);
         python::notify_startup_plugin_load_state(true, start_progress, start_stage.c_str());
 
         {
@@ -872,14 +886,15 @@ _add_dll_dirs()
         const float end_progress = static_cast<float>(g_plugin_preload_index) / static_cast<float>(total);
         if (g_plugin_preload_index < total) {
             const auto& next_name = g_plugin_preload_to_load[g_plugin_preload_index];
-            const auto end_stage =
-                std::format("Loading plugin {}/{}: {}", g_plugin_preload_index + 1, total, next_name);
+            const auto end_stage = format_runtime(
+                LOC(lichtfeld::Strings::Startup::LOADING_PLUGIN), g_plugin_preload_index + 1, total, next_name);
             python::notify_startup_plugin_load_state(true, end_progress, end_stage.c_str());
         } else {
             g_plugin_preload_to_load.clear();
             g_plugin_preload_discovered = false;
             g_plugin_preload_running.store(false, std::memory_order_release);
-            python::notify_startup_plugin_load_state(false, 1.0f, "Loaded");
+            const auto loaded_stage = format_runtime(LOC(lichtfeld::Strings::Startup::LOADED_PLUGINS), total, total);
+            python::notify_startup_plugin_load_state(false, 1.0f, loaded_stage.c_str());
         }
         python::request_redraw();
         return true;
@@ -920,7 +935,7 @@ _add_dll_dirs()
     }
 
     void join_plugin_preload() {
-        // Startup plugin preload now runs on the main thread in incremental steps.
+        // Startup plugin preload runs on the main thread in incremental steps.
     }
 
     void finalize() {

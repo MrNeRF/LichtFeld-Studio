@@ -1350,6 +1350,10 @@
   "startup": {
     "supported_by": "サポート",
     "click_to_continue": "クリックして続行",
+    "discovering_plugins": "起動プラグインを検索中...",
+    "loading_plugin": "読み込み中 {}/{}: {}",
+    "loaded_plugins": "起動プラグインを読み込みました {}/{}",
+    "plugin_loading_skipped": "起動プラグインの読み込みをスキップしました",
     "drop_files_title": "ファイルをここにドロップして開始",
     "drop_files_subtitle": "PLY、SOG、SPZ、RAD、USD、COLMAPデータセット、またはプロジェクトファイル",
     "drop_files_hint": "または ファイル > データセットをインポート / PLYをインポート を使用",

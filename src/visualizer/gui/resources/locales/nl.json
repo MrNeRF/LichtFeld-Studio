@@ -1350,6 +1350,10 @@
   "startup": {
     "supported_by": "Ondersteund door",
     "click_to_continue": "Klik ergens om door te gaan",
+    "discovering_plugins": "Opstartplugins worden gezocht...",
+    "loading_plugin": "Laden {}/{}: {}",
+    "loaded_plugins": "Opstartplugins geladen {}/{}",
+    "plugin_loading_skipped": "Het laden van opstartplugins is overgeslagen",
     "drop_files_title": "Sleep bestanden hierheen om te beginnen",
     "drop_files_subtitle": "PLY, SOG, SPZ, RAD, USD, COLMAP dataset of Projectbestand",
     "drop_files_hint": "Of gebruik Bestand > Dataset Importeren / PLY Importeren",

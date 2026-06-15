@@ -85,20 +85,45 @@ body {
 
 #plugin-load-row {
     display: flex;
-    flex-direction: column;
     align-items: center;
-    gap: 6dp;
-    margin-top: 18dp;
-    width: 100%;
+    justify-content: center;
+    margin-top: 14dp;
+    width: 388dp;
+    height: 18dp;
+}
+
+#plugin-load-stage-cell,
+#plugin-load-percent-cell {
+    width: 134dp;
+    overflow: hidden;
+}
+
+#plugin-load-stage-cell {
+    text-align: left;
+}
+
+#plugin-load-percent-cell {
+    text-align: right;
 }
 
 #plugin-load-stage {
-    max-width: 320dp;
-    text-align: center;
+    display: block;
+    width: 134dp;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#plugin-load-track-cell {
+    width: 120dp;
+    display: flex;
+    justify-content: center;
+    align-items: center;
 }
 
 #plugin-load-track {
-    width: 300dp;
+    width: 120dp;
     height: 8dp;
     border-width: 1dp;
     border-color: rgba(255, 255, 255, 0.15);
@@ -112,6 +137,12 @@ body {
     height: 100%;
     background-color: rgb(85, 171, 255);
     border-radius: 999dp;
+}
+
+#plugin-load-percent {
+    display: block;
+    width: 134dp;
+    text-align: right;
 }
 
 select {

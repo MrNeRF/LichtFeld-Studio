@@ -1350,6 +1350,10 @@
   "startup": {
     "supported_by": "Soutenu par",
     "click_to_continue": "Cliquez n'importe où pour continuer",
+    "discovering_plugins": "Recherche des plugins de démarrage...",
+    "loading_plugin": "Chargement {}/{} : {}",
+    "loaded_plugins": "Plugins de démarrage chargés {}/{}",
+    "plugin_loading_skipped": "Chargement des plugins de démarrage ignoré",
     "drop_files_title": "Déposez des fichiers ici pour commencer",
     "drop_files_subtitle": "PLY, SOG, SPZ, RAD, USD, dataset COLMAP ou fichier de projet",
     "drop_files_hint": "Ou utilisez Fichier > Importer Dataset / Importer PLY",

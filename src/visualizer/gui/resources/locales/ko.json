@@ -1350,6 +1350,10 @@
   "startup": {
     "supported_by": "지원:",
     "click_to_continue": "계속하려면 아무 곳이나 클릭",
+    "discovering_plugins": "시작 플러그인을 찾는 중...",
+    "loading_plugin": "로드 중 {}/{}: {}",
+    "loaded_plugins": "시작 플러그인을 불러왔습니다 {}/{}",
+    "plugin_loading_skipped": "시작 플러그인 로드를 건너뛰었습니다",
     "drop_files_title": "시작하려면 파일을 여기에 드롭하세요",
     "drop_files_subtitle": "PLY, SOG, SPZ, RAD, USD, COLMAP 데이터셋 또는 프로젝트 파일",
     "drop_files_hint": "또는 파일 > 데이터셋 가져오기 / PLY 가져오기 사용",

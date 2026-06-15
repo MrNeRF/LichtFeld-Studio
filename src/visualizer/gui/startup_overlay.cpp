@@ -22,6 +22,7 @@
 #include <RmlUi/Core/Elements/ElementFormControlSelect.h>
 #include <RmlUi/Core/Input.h>
 #include <algorithm>
+#include <charconv>
 #include <cassert>
 #include <cmath>
 #include <cstdlib>
@@ -267,6 +268,42 @@ namespace lfs::vis::gui {
         return out;
     }
 
+    template <typename... Args>
+    static std::string formatRuntime(const char* fmt, Args&&... args) {
+        return std::vformat(std::string_view{fmt}, std::make_format_args(args...));
+    }
+
+    static bool extractProgressCounts(const std::string& input, std::size_t& current, std::size_t& total) {
+        std::size_t found = 0;
+        const char* const begin = input.data();
+        const char* const end = begin + input.size();
+        const char* it = begin;
+        while (it < end) {
+            if (!std::isdigit(static_cast<unsigned char>(*it))) {
+                ++it;
+                continue;
+            }
+
+            const char* num_begin = it;
+            while (it < end && std::isdigit(static_cast<unsigned char>(*it)))
+                ++it;
+
+            std::size_t value = 0;
+            const auto [ptr, ec] = std::from_chars(num_begin, it, value);
+            if (ec != std::errc{})
+                return false;
+
+            if (found == 0) {
+                current = value;
+            } else if (found == 1) {
+                total = value;
+                return true;
+            }
+            ++found;
+        }
+        return false;
+    }
+
     void StartupOverlay::populateLanguages() {
         auto* select_el = document_->GetElementById("lang-select");
         if (!select_el)
@@ -305,6 +342,7 @@ namespace lfs::vis::gui {
 
         set_text("supported-text", lichtfeld::Strings::Startup::SUPPORTED_BY);
         set_text("lang-label", lichtfeld::Strings::Preferences::LANGUAGE);
+        has_applied_plugin_load_state_ = false;
         updateClickHintUI();
     }
 
@@ -320,7 +358,7 @@ namespace lfs::vis::gui {
             hint->SetInnerRML(LOC(lichtfeld::Strings::Startup::CLICK_TO_CONTINUE));
             hint->SetProperty("visibility", "visible");
         } else {
-            hint->SetInnerRML("");
+            hint->SetInnerRML(LOC(lichtfeld::Strings::Startup::CLICK_TO_CONTINUE));
             hint->SetProperty("visibility", "hidden");
         }
     }
@@ -359,7 +397,18 @@ namespace lfs::vis::gui {
         }
 
         row->SetProperty("display", "flex");
-        stage->SetInnerRML(escapeRmlText(current.stage));
+        if (plugin_load_complete_) {
+            std::size_t current_count = 0;
+            std::size_t total_count = 0;
+            if (extractProgressCounts(current.stage, current_count, total_count)) {
+                stage->SetInnerRML(
+                    formatRuntime(LOC(lichtfeld::Strings::Startup::LOADED_PLUGINS), current_count, total_count));
+            } else {
+                stage->SetInnerRML(escapeRmlText(current.stage));
+            }
+        } else {
+            stage->SetInnerRML(escapeRmlText(current.stage));
+        }
         percent->SetInnerRML(std::format("{:.0f}%", current.progress * 100.0f));
         fill->SetProperty("width", std::format("{:.1f}%", current.progress * 100.0f));
         updateClickHintUI();
@@ -588,18 +637,19 @@ namespace lfs::vis::gui {
             refresh_cache = true;
         }
 
-        if (updatePluginLoadUI())
-            refresh_cache = true;
-
         if (size_changed) {
             width_ = ctx_w;
             height_ = ctx_h;
+            rml_manager_->releaseCachedVulkanContext(direct_cache_);
             rml_context_->SetDimensions(Rml::Vector2i(ctx_w, ctx_h));
             document_->SetProperty("width", std::format("{}px", ctx_w));
             document_->SetProperty("height", std::format("{}px", ctx_h));
             last_mouse_valid_ = false;
             refresh_cache = true;
         }
+
+        if (updatePluginLoadUI())
+            refresh_cache = true;
 
         bool updated_this_frame = false;
         if (refresh_cache) {

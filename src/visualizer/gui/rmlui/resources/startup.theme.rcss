@@ -20,6 +20,16 @@ body.vulkan-compat #overlay-box {
     color: @{text_dim};
 }
 
+#plugin-load-stage {
+    color: @{text};
+    font-size: 10dp;
+}
+
+#plugin-load-percent {
+    color: @{text_dim};
+    font-size: 10dp;
+}
+
 .hint-text {
     color: @{alpha(text_dim,0.50)};
 }

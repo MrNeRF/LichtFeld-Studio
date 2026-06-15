@@ -831,6 +831,10 @@ namespace lichtfeld::Strings {
     namespace Startup {
         inline constexpr const char* SUPPORTED_BY = "startup.supported_by";
         inline constexpr const char* CLICK_TO_CONTINUE = "startup.click_to_continue";
+        inline constexpr const char* DISCOVERING_PLUGINS = "startup.discovering_plugins";
+        inline constexpr const char* LOADING_PLUGIN = "startup.loading_plugin";
+        inline constexpr const char* LOADED_PLUGINS = "startup.loaded_plugins";
+        inline constexpr const char* PLUGIN_LOADING_SKIPPED = "startup.plugin_loading_skipped";
         inline constexpr const char* DROP_FILES_TITLE = "startup.drop_files_title";
         inline constexpr const char* DROP_FILES_SUBTITLE = "startup.drop_files_subtitle";
         inline constexpr const char* DROP_FILES_HINT = "startup.drop_files_hint";

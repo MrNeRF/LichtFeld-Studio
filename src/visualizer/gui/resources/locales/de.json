@@ -1350,6 +1350,10 @@
   "startup": {
     "supported_by": "Unterstützt von",
     "click_to_continue": "Klicken Sie irgendwo um fortzufahren",
+    "discovering_plugins": "Startup-Plugins werden gesucht...",
+    "loading_plugin": "Laden {}/{}: {}",
+    "loaded_plugins": "Startup-Plugins geladen {}/{}",
+    "plugin_loading_skipped": "Startup-Plugin-Ladevorgang übersprungen",
     "drop_files_title": "Dateien hier ablegen um zu starten",
     "drop_files_subtitle": "PLY, SOG, SPZ, RAD, USD, COLMAP Datensatz oder Projektdatei",
     "drop_files_hint": "Oder Datei > Datensatz importieren / PLY importieren verwenden",

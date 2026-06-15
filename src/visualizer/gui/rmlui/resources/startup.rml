@@ -30,12 +30,17 @@
       <select id="lang-select"></select>
     </div>
     <div id="plugin-load-row">
-      <span id="plugin-load-label" class="dim-text">Loading startup plugins</span>
-      <span id="plugin-load-stage" class="plugin-stage"></span>
-      <div id="plugin-load-track">
-        <div id="plugin-load-fill"></div>
+      <div id="plugin-load-stage-cell">
+        <span id="plugin-load-stage" class="plugin-stage"></span>
       </div>
-      <span id="plugin-load-percent" class="dim-text"></span>
+      <div id="plugin-load-track-cell">
+        <div id="plugin-load-track">
+          <div id="plugin-load-fill"></div>
+        </div>
+      </div>
+      <div id="plugin-load-percent-cell">
+        <span id="plugin-load-percent" class="dim-text"></span>
+      </div>
     </div>
     <span id="click-hint" class="hint-text"></span>
   </div>
