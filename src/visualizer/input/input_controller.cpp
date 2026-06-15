@@ -2381,6 +2381,7 @@ namespace lfs::vis {
 
         for (const auto* node : scene.getNodes()) {
             if (node->type == core::NodeType::GROUP || node->type == core::NodeType::PLY_SEQUENCE ||
+                node->type == core::NodeType::DATASET ||
                 node->type == core::NodeType::CAMERA_GROUP ||
                 node->type == core::NodeType::IMAGE_GROUP)
                 continue;
