@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "io/formats/rad_packed_page.hpp"
 #include "lod_pool_quant.hpp"
 
@@ -36,12 +37,12 @@ namespace lfs::vis {
     // pass through bit-exact; everything else lands as f16 — no new loss over
     // the file. Launched on the upload engine's stream between the slot copy
     // and the timeline signal.
-    cudaError_t launchLodPageDequant(const std::uint8_t* device_slot,
-                                     const lfs::io::RadPagePackedDesc& desc,
-                                     const LodPoolDeviceView& pool,
-                                     std::uint32_t page,
-                                     std::uint32_t page_splats,
-                                     cudaStream_t stream);
+    LFS_VIS_API cudaError_t launchLodPageDequant(const std::uint8_t* device_slot,
+                                                 const lfs::io::RadPagePackedDesc& desc,
+                                                 const LodPoolDeviceView& pool,
+                                                 std::uint32_t page,
+                                                 std::uint32_t page_splats,
+                                                 cudaStream_t stream);
 
     // fp32 source tensors for the in-core / pinned-root D2D fill path.
     // Pointers are pre-offset to the page's first splat; layouts match the
@@ -63,10 +64,10 @@ namespace lfs::vis {
     // Quantizes resident fp32 tensors into one canonical pool page (two
     // passes: per-band |max| reduction into the page frame, then the
     // quantizing scatter). Same canonical writers as the streamed path.
-    cudaError_t launchLodPageQuantizeFromTensors(const LodPageTensorSources& src,
-                                                 const LodPoolDeviceView& pool,
-                                                 std::uint32_t page,
-                                                 std::uint32_t page_splats,
-                                                 cudaStream_t stream);
+    LFS_VIS_API cudaError_t launchLodPageQuantizeFromTensors(const LodPageTensorSources& src,
+                                                             const LodPoolDeviceView& pool,
+                                                             std::uint32_t page,
+                                                             std::uint32_t page_splats,
+                                                             cudaStream_t stream);
 
 } // namespace lfs::vis
