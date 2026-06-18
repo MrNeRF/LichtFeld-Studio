@@ -20,6 +20,7 @@
 #include "core/splat_data_transform.hpp"
 #include "core/tensor/internal/gpu_slab_allocator.hpp"
 #include "core/tensor/internal/size_bucketed_pool.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "io/cache_image_loader.hpp"
 #include "io/cuda/image_format_kernels.cuh"
 #include "io/exporter.hpp"
@@ -32,9 +33,12 @@
 #include "rasterization/gsplat_rasterizer.hpp"
 #include "strategies/mcmc.hpp"
 #include "strategies/strategy_factory.hpp"
+#include "strategies/strategy_utils.hpp"
 #include "training/kernels/camera_loss_heatmap.cuh"
+#include "training/kernels/depth_loss.hpp"
 #include "training/kernels/grad_alpha.hpp"
 #include "training/kernels/mrnf_kernels.hpp"
+#include "training/training_setup.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -42,9 +46,11 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <cuda_runtime.h>
 #include <expected>
+#include <format>
 #include <limits>
 #include <memory>
 #include <numeric>
@@ -77,6 +83,41 @@ namespace lfs::training {
             return value != "0" && value != "false" && value != "FALSE" &&
                    value != "off" && value != "OFF" &&
                    value != "no" && value != "NO";
+        }
+
+        [[nodiscard]] int env_int_or_default(const char* name, const int fallback) {
+            const char* raw = std::getenv(name);
+            if (!raw || raw[0] == '\0') {
+                return fallback;
+            }
+
+            char* end = nullptr;
+            const long parsed = std::strtol(raw, &end, 10);
+            if (end == raw || parsed <= 0 || parsed > std::numeric_limits<int>::max()) {
+                return fallback;
+            }
+            return static_cast<int>(parsed);
+        }
+
+        [[nodiscard]] kernels::DepthLossMode depth_loss_mode_from_name(const std::string_view mode) {
+            if (mode == "adaptive-warped-l1") {
+                return kernels::DepthLossMode::AdaptiveWarpedL1;
+            }
+            if (mode == "pearson") {
+                return kernels::DepthLossMode::PearsonAbs;
+            }
+            LOG_WARN("Unknown depth loss mode '{}'; using adaptive-warped-l1", mode);
+            return kernels::DepthLossMode::AdaptiveWarpedL1;
+        }
+
+        [[nodiscard]] const char* depth_loss_mode_name(const kernels::DepthLossMode mode) {
+            switch (mode) {
+            case kernels::DepthLossMode::AdaptiveWarpedL1:
+                return "adaptive-warped-l1";
+            case kernels::DepthLossMode::PearsonAbs:
+            default:
+                return "pearson";
+            }
         }
 
         [[nodiscard]] double bytes_to_mib(const size_t bytes) {
@@ -285,9 +326,14 @@ namespace lfs::training {
             const auto mask_mode = opt_params.mask_mode;
             const bool use_masking =
                 mask_mode == lfs::core::param::MaskMode::Segment ||
-                mask_mode == lfs::core::param::MaskMode::Ignore;
+                mask_mode == lfs::core::param::MaskMode::Ignore ||
+                mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore;
 
-            if (use_masking && opt_params.use_alpha_as_mask && camera.has_alpha()) {
+            // Sidecar mask file wins when present; alpha-as-mask is only used as fallback
+            // (some datasets ship RGBA images with a degenerate constant alpha alongside
+            // real per-pixel masks in masks/, and we must not let the alpha channel mask
+            // them out).
+            if (use_masking && !camera.has_mask() && opt_params.use_alpha_as_mask && camera.has_alpha()) {
                 return load_alpha_masked_metrics_inputs(camera, gt_config, opt_params);
             }
 
@@ -365,6 +411,37 @@ namespace lfs::training {
             add_tensor_entry(entries, "masked.grad_img", workspace.grad_img);
             add_tensor_entry(entries, "masked.masked_loss", workspace.masked_loss);
             add_tensor_entry(entries, "masked.mask_sum", workspace.mask_sum);
+            return sum_entry_bytes(entries);
+        }
+
+        [[nodiscard]] size_t decoupled_fused_workspace_bytes(const kernels::DecoupledFusedL1SSIMWorkspace& workspace) {
+            std::vector<std::pair<std::string, size_t>> entries;
+            add_tensor_entry(entries, "decoupled.ssim_map", workspace.ssim_map);
+            add_tensor_entry(entries, "decoupled.app_dm_dmu1", workspace.app_dm_dmu1);
+            add_tensor_entry(entries, "decoupled.raw_dm_dmu1", workspace.raw_dm_dmu1);
+            add_tensor_entry(entries, "decoupled.raw_dm_dsigma1_sq", workspace.raw_dm_dsigma1_sq);
+            add_tensor_entry(entries, "decoupled.raw_dm_dsigma12", workspace.raw_dm_dsigma12);
+            add_tensor_entry(entries, "decoupled.zero_terms", workspace.zero_terms);
+            add_tensor_entry(entries, "decoupled.grad_corrected", workspace.grad_corrected);
+            add_tensor_entry(entries, "decoupled.grad_raw", workspace.grad_raw);
+            add_tensor_entry(entries, "decoupled.reduction_temp", workspace.reduction_temp);
+            add_tensor_entry(entries, "decoupled.reduction_result", workspace.reduction_result);
+            return sum_entry_bytes(entries);
+        }
+
+        [[nodiscard]] size_t masked_decoupled_fused_workspace_bytes(const kernels::MaskedDecoupledFusedL1SSIMWorkspace& workspace) {
+            std::vector<std::pair<std::string, size_t>> entries;
+            add_tensor_entry(entries, "masked_decoupled.ssim_map", workspace.ssim_map);
+            add_tensor_entry(entries, "masked_decoupled.app_dm_dmu1", workspace.app_dm_dmu1);
+            add_tensor_entry(entries, "masked_decoupled.raw_dm_dmu1", workspace.raw_dm_dmu1);
+            add_tensor_entry(entries, "masked_decoupled.raw_dm_dsigma1_sq", workspace.raw_dm_dsigma1_sq);
+            add_tensor_entry(entries, "masked_decoupled.raw_dm_dsigma12", workspace.raw_dm_dsigma12);
+            add_tensor_entry(entries, "masked_decoupled.zero_terms", workspace.zero_terms);
+            add_tensor_entry(entries, "masked_decoupled.grad_corrected", workspace.grad_corrected);
+            add_tensor_entry(entries, "masked_decoupled.grad_raw", workspace.grad_raw);
+            add_tensor_entry(entries, "masked_decoupled.reduction_temp", workspace.reduction_temp);
+            add_tensor_entry(entries, "masked_decoupled.masked_loss", workspace.masked_loss);
+            add_tensor_entry(entries, "masked_decoupled.mask_sum", workspace.mask_sum);
             return sum_entry_bytes(entries);
         }
 
@@ -475,6 +552,155 @@ namespace lfs::training {
             }
         }
 
+        [[nodiscard]] bool live_vram_profiler_enabled() {
+            return lfs::diagnostics::VramProfiler::instance().enabled();
+        }
+
+        void record_vram_current(std::string_view scope,
+                                 std::string_view label,
+                                 const size_t bytes,
+                                 const bool publish_zero = false,
+                                 const lfs::diagnostics::VramAllocationMethod method =
+                                     lfs::diagnostics::VramAllocationMethod::External) {
+            if (bytes == 0 && !publish_zero) {
+                return;
+            }
+            lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(scope, label, bytes, method);
+        }
+
+        void record_vram_tensor(std::string_view scope,
+                                std::string_view label,
+                                const lfs::core::Tensor& tensor) {
+            const auto method =
+                tensor.device() == lfs::core::Device::CUDA && !tensor.is_external_storage()
+                    ? lfs::diagnostics::VramAllocationMethod::Direct
+                    : lfs::diagnostics::VramAllocationMethod::External;
+            record_vram_current(scope, label, tensor_reserved_bytes(tensor), false, method);
+        }
+
+        void record_vram_entries(std::string_view scope,
+                                 const std::vector<std::pair<std::string, size_t>>& entries) {
+            for (const auto& [name, bytes] : entries) {
+                record_vram_current(scope, name, bytes);
+            }
+        }
+
+        void record_pipeline_vram_breakdown(const std::shared_ptr<lfs::io::PipelinedImageLoader>& loader) {
+            if (!loader) {
+                record_vram_current("io.pipeline", "output_queue.images", 0, true);
+                record_vram_current("io.pipeline", "output_queue.masks", 0, true);
+                record_vram_current("io.pipeline", "pending.images", 0, true);
+                record_vram_current("io.pipeline", "pending.masks", 0, true);
+                return;
+            }
+
+            const auto stats = loader->get_gpu_memory_stats();
+            record_vram_current("io.pipeline", "output_queue.images", stats.output_image_bytes, true);
+            record_vram_current("io.pipeline", "output_queue.masks", stats.output_mask_bytes, true);
+            record_vram_current("io.pipeline", "pending.images", stats.pending_image_bytes, true);
+            record_vram_current("io.pipeline", "pending.masks", stats.pending_mask_bytes, true);
+        }
+
+        void record_splat_vram_breakdown(const lfs::core::SplatData& splat) {
+            std::vector<std::pair<std::string, size_t>> entries;
+            add_tensor_entry(entries, "means", splat.means());
+            add_tensor_entry(entries, "sh0", splat.sh0());
+            add_tensor_entry(entries, "shN", splat.shN());
+            add_tensor_entry(entries, "scaling", splat.scaling_raw());
+            add_tensor_entry(entries, "rotation", splat.rotation_raw());
+            add_tensor_entry(entries, "opacity", splat.opacity_raw());
+            add_tensor_entry(entries, "deleted", splat.deleted());
+            add_tensor_entry(entries, "densification_info", splat._densification_info);
+            record_vram_entries("model.gaussians", entries);
+        }
+
+        void record_optimizer_vram_breakdown(const AdamOptimizer& optimizer) {
+            for (const auto type : AdamOptimizer::all_param_types()) {
+                const auto* state = optimizer.get_state(type);
+                if (!state) {
+                    continue;
+                }
+                const std::string prefix =
+                    type == ParamType::Means      ? "means"
+                    : type == ParamType::Sh0      ? "sh0"
+                    : type == ParamType::ShN      ? "shN"
+                    : type == ParamType::Scaling  ? "scaling"
+                    : type == ParamType::Rotation ? "rotation"
+                                                  : "opacity";
+                record_vram_tensor("optimizer.adam", prefix + ".grad", state->grad);
+                record_vram_tensor("optimizer.adam", prefix + ".exp_avg", state->exp_avg);
+                record_vram_tensor("optimizer.adam", prefix + ".exp_avg_sq", state->exp_avg_sq);
+            }
+        }
+
+        void record_fastgs_vram_breakdown(const FastRasterizeContext& ctx,
+                                          const RenderOutput& output,
+                                          const lfs::core::Tensor& gt_tile,
+                                          const lfs::core::Tensor& bg_tile,
+                                          const lfs::core::Tensor& tile_error_map,
+                                          const bool run_gaussian_backward,
+                                          const std::size_t num_primitives) {
+            constexpr std::string_view scope = "rasterizer.fastgs";
+            record_vram_current(scope, "forward.per_primitive_buffers", ctx.forward_ctx.per_primitive_buffers_size);
+            record_vram_current(scope, "forward.per_tile_buffers", ctx.forward_ctx.per_tile_buffers_size);
+            record_vram_current(scope, "forward.sorted_indices_live", ctx.forward_ctx.sorted_primitive_indices_size);
+            // Sort scratch is released after forward, and sort_total includes sorted_indices_live.
+            // Clear these legacy live rows so the HUD does not count transient/duplicate bytes
+            // as retained process VRAM.
+            record_vram_current(scope, "forward.sort_scratch_transient", 0, true);
+            record_vram_current(scope, "forward.sort_total_transient", 0, true);
+            record_vram_current(scope, "backward.grad_mean2d_helper", num_primitives * 2 * sizeof(float));
+            record_vram_current(scope, "backward.grad_conic_helper", num_primitives * 3 * sizeof(float));
+            record_vram_current(scope,
+                                "backward.fused_grad_opacity_helper",
+                                run_gaussian_backward && ctx.forward_ctx.grad_opacity_helper
+                                    ? num_primitives * sizeof(float)
+                                    : 0,
+                                true);
+            record_vram_current(scope,
+                                "backward.fused_grad_color_helper",
+                                run_gaussian_backward && ctx.forward_ctx.grad_color_helper
+                                    ? num_primitives * 3 * sizeof(float)
+                                    : 0,
+                                true);
+            record_vram_tensor(scope, "output.image", output.image);
+            record_vram_tensor(scope, "output.alpha", output.alpha);
+            record_vram_tensor(scope, "saved.bg_color", ctx.bg_color);
+            record_vram_tensor("train.inputs", "gt_tile", gt_tile);
+            record_vram_tensor("train.inputs", "background_tile", bg_tile);
+            record_vram_tensor("train.losses", "densification_error_map.live", tile_error_map);
+        }
+
+        void record_gsplat_vram_breakdown(const GsplatRasterizeContext& ctx,
+                                          const RenderOutput& output,
+                                          const lfs::core::Tensor& gt_tile,
+                                          const lfs::core::Tensor& bg_tile,
+                                          const lfs::core::Tensor& tile_error_map) {
+            constexpr std::string_view scope = "rasterizer.gsplat";
+            if (auto* arena = lfs::core::GlobalArenaManager::instance().try_get_arena()) {
+                std::size_t frame_bytes = 0;
+                for (const auto& buffer : arena->get_frame_buffers(ctx.frame_id)) {
+                    frame_bytes += buffer.size;
+                }
+                record_vram_current(scope, "arena.frame_buffers", frame_bytes);
+                const auto info = arena->get_memory_info();
+                record_vram_current(scope, "arena.capacity", info.arena_capacity);
+                record_vram_current(scope, "arena.current_usage", info.current_usage);
+                record_vram_current(scope, "arena.peak_usage", info.peak_usage);
+            }
+            record_vram_current(scope, "forward.isect_ids", static_cast<std::size_t>(ctx.n_isects) * sizeof(std::int64_t));
+            record_vram_current(scope, "forward.flatten_ids", static_cast<std::size_t>(ctx.n_isects) * sizeof(std::int32_t));
+            record_vram_tensor(scope, "output.image", output.image);
+            record_vram_tensor(scope, "output.alpha", output.alpha);
+            record_vram_tensor(scope, "camera.K_tensor", ctx.K_tensor);
+            record_vram_tensor(scope, "camera.radial_cuda", ctx.radial_cuda);
+            record_vram_tensor(scope, "camera.tangential_cuda", ctx.tangential_cuda);
+            record_vram_tensor(scope, "camera.thin_prism_cuda", ctx.thin_prism_cuda);
+            record_vram_tensor("train.inputs", "gt_tile", gt_tile);
+            record_vram_tensor("train.inputs", "background_tile", bg_tile);
+            record_vram_tensor("train.losses", "densification_error_map.live", tile_error_map);
+        }
+
         void syncTrainingSceneTopology(lfs::core::Scene* const scene,
                                        const lfs::core::SplatData& model) {
             if (!scene) {
@@ -580,6 +806,27 @@ namespace lfs::training {
                 return config;
             }
 
+            constexpr float NON_JPEG_THRESHOLD = 0.1f;
+            constexpr size_t JPEG_HOT_OUTPUT_QUEUE_SIZE = 2;
+            constexpr size_t JPEG_HOT_DECODER_POOL_SIZE = 2;
+            const float non_jpeg_ratio = dataset ? dataset->get_non_jpeg_ratio() : 0.0f;
+            if (non_jpeg_ratio <= NON_JPEG_THRESHOLD) {
+                if (config.output_queue_size > JPEG_HOT_OUTPUT_QUEUE_SIZE) {
+                    LOG_INFO(
+                        "Reducing JPEG image ready queue {} -> {} (hot path keeps compressed prefetch)",
+                        config.output_queue_size,
+                        JPEG_HOT_OUTPUT_QUEUE_SIZE);
+                    config.output_queue_size = JPEG_HOT_OUTPUT_QUEUE_SIZE;
+                }
+                if (config.decoder_pool_size > JPEG_HOT_DECODER_POOL_SIZE) {
+                    LOG_INFO(
+                        "Reducing nvImageCodec decoder pool {} -> {} for JPEG hot path",
+                        config.decoder_pool_size,
+                        JPEG_HOT_DECODER_POOL_SIZE);
+                    config.decoder_pool_size = JPEG_HOT_DECODER_POOL_SIZE;
+                }
+            }
+
             const size_t per_ready_image_bytes = estimate.max_image_bytes +
                                                  (estimate.masks_possible ? estimate.max_image_bytes / 3 : 0);
             constexpr size_t MIN_PIPELINE_BUDGET_BYTES = 256ULL * 1024 * 1024;
@@ -637,13 +884,6 @@ namespace lfs::training {
             return r;
         }
     } // namespace
-
-    // Tile configuration for memory-efficient training
-    enum class TileMode {
-        One = 1, // 1 tile  - 1x1 - Render full image (no tiling)
-        Two = 2, // 2 tiles - 2x1 - Two horizontal tiles
-        Four = 4 // 4 tiles - 2x2 - Four tiles in a grid
-    };
 
     void Trainer::cleanup() {
         LOG_DEBUG("Cleaning up trainer for re-initialization");
@@ -1148,6 +1388,12 @@ namespace lfs::training {
             return {};
         }
 
+        // Segment and ignore does not support mask invert
+        if (opt.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore && opt.invert_masks) {
+            LOG_WARN("invert_masks is ignored in SegmentAndIgnore mode (would scramble the mask bands)");
+            params_.optimization.invert_masks = false;
+        }
+
         size_t alpha_count = 0;
         size_t masks_found = 0;
         for (const auto& cam : train_dataset_->get_cameras()) {
@@ -1157,6 +1403,13 @@ namespace lfs::training {
                 ++masks_found;
         }
 
+        // Sidecar masks take precedence over the alpha channel (see dataset prefetch),
+        // so report them first; alpha-as-mask only covers cameras without a sidecar.
+        if (masks_found > 0) {
+            LOG_INFO("Found {} masks{}", masks_found, opt.invert_masks ? " (inverted)" : "");
+            return {};
+        }
+
         if (opt.use_alpha_as_mask && alpha_count > 0) {
             LOG_INFO("Using alpha channel as mask source ({}/{} cameras){}",
                      alpha_count, train_dataset_->get_cameras().size(),
@@ -1164,20 +1417,15 @@ namespace lfs::training {
             return {};
         }
 
-        if (masks_found == 0) {
-            const auto path_str = lfs::core::path_to_utf8(params_.dataset.data_path);
-            if (opt.use_alpha_as_mask) {
-                return std::unexpected(std::format(
-                    "Mask mode enabled with use_alpha_as_mask but no images have alpha and no mask files found in {}/masks/",
-                    path_str));
-            }
+        const auto path_str = lfs::core::path_to_utf8(params_.dataset.data_path);
+        if (opt.use_alpha_as_mask) {
             return std::unexpected(std::format(
-                "Mask mode enabled but no masks found in {}/masks/",
+                "Mask mode enabled with use_alpha_as_mask but no images have alpha and no mask files found in {}/masks/",
                 path_str));
         }
-
-        LOG_INFO("Found {} masks{}", masks_found, opt.invert_masks ? " (inverted)" : "");
-        return {};
+        return std::unexpected(std::format(
+            "Mask mode enabled but no masks found in {}/masks/",
+            path_str));
     }
 
     std::expected<Trainer::MaskLossResult, std::string> Trainer::compute_photometric_loss_with_mask(
@@ -1193,10 +1441,16 @@ namespace lfs::training {
 
         const auto mode = opt_params.mask_mode;
         const Tensor mask_2d = mask.ndim() == 3 ? mask.squeeze(0) : mask;
-        const auto mask_as_float = [&]() -> Tensor {
-            return (mask_2d.dtype() == DataType::UInt8 || mask_2d.dtype() == DataType::Bool)
-                       ? mask_2d.to(DataType::Float32)
-                       : mask_2d;
+        Tensor mask_2d_th = mask_2d;
+        if (mode == param::MaskMode::SegmentAndIgnore) {
+            mask_2d_th = mask_2d_th.masked_fill(mask_2d_th <= 250, 0);  // Set all Ignore and Segment to 0
+            mask_2d_th = mask_2d_th.masked_fill(mask_2d_th > 250, 255); // Keep everything > 250
+        }
+
+        const auto mask_as_float = [](const Tensor t) -> Tensor {
+            return (t.dtype() == DataType::UInt8 || t.dtype() == DataType::Bool)
+                       ? t.gt(0).to(DataType::Float32)
+                       : t;
         };
 
         Tensor loss, grad_corrected, grad_raw, grad_alpha;
@@ -1205,10 +1459,10 @@ namespace lfs::training {
             raw_rendered.numel() > 0 &&
             opt_params.lambda_dssim > 0.0f;
 
-        if (mode == param::MaskMode::Segment || mode == param::MaskMode::Ignore) {
+        if (mode == param::MaskMode::Segment || mode == param::MaskMode::Ignore || mode == param::MaskMode::SegmentAndIgnore) {
             if (use_decoupled_appearance_loss) {
                 auto [loss_tensor, ctx] = lfs::training::kernels::masked_decoupled_fused_l1_ssim_forward(
-                    corrected, raw_rendered, gt_image, mask_2d, opt_params.lambda_dssim,
+                    corrected, raw_rendered, gt_image, mask_2d_th, opt_params.lambda_dssim,
                     masked_decoupled_fused_workspace_);
                 auto grads = lfs::training::kernels::masked_decoupled_fused_l1_ssim_backward(
                     ctx, masked_decoupled_fused_workspace_);
@@ -1225,7 +1479,7 @@ namespace lfs::training {
                 }
             } else {
                 auto [loss_tensor, ctx] = lfs::training::kernels::masked_fused_l1_ssim_forward(
-                    corrected, gt_image, mask_2d, opt_params.lambda_dssim, masked_fused_workspace_);
+                    corrected, gt_image, mask_2d_th, opt_params.lambda_dssim, masked_fused_workspace_);
 
                 grad_corrected = lfs::training::kernels::masked_fused_l1_ssim_backward(ctx, masked_fused_workspace_);
                 loss = loss_tensor;
@@ -1236,10 +1490,19 @@ namespace lfs::training {
             }
 
             // Segment: opacity penalty for background
-            if (mode == param::MaskMode::Segment && alpha.is_valid()) {
+            if ((mode == param::MaskMode::Segment || mode == param::MaskMode::SegmentAndIgnore) && alpha.is_valid()) {
+                Tensor mask_2d_th_segment = mask_2d;
+                if (mode == param::MaskMode::SegmentAndIgnore) {
+                    // Values used for ignore (<128) do not contribute to opacity penalty
+                    // Values in the range 128<=x<=250 contribute to the opacity penalty
+                    // Values > 250 are kept
+                    mask_2d_th_segment = mask_2d_th_segment.masked_fill(mask_2d_th_segment < 128, 255);
+                    mask_2d_th_segment = mask_2d_th_segment.masked_fill(mask_2d_th_segment >= 128 && mask_2d_th_segment <= 250, 0);
+                    mask_2d_th_segment = mask_2d_th_segment.masked_fill(mask_2d_th_segment > 250, 255);
+                }
+                const Tensor mask_2d_th_segment_f = mask_as_float(mask_2d_th_segment);
                 const Tensor alpha_2d = alpha.ndim() == 3 ? alpha.squeeze(0) : alpha;
-                const Tensor mask_f = mask_as_float();
-                const Tensor bg_mask = Tensor::full(mask_f.shape(), 1.0f, mask_f.device()) - mask_f;
+                const Tensor bg_mask = Tensor::full(mask_2d_th_segment_f.shape(), 1.0f, mask_2d_th_segment_f.device()) - mask_2d_th_segment_f;
                 const Tensor penalty_weights = bg_mask.pow(opt_params.mask_opacity_penalty_power);
                 const Tensor penalty = (alpha_2d * penalty_weights).mean() * opt_params.mask_opacity_penalty_weight;
 
@@ -1261,7 +1524,7 @@ namespace lfs::training {
             // Alpha should match mask
             if (alpha.is_valid()) {
                 const Tensor alpha_2d = alpha.ndim() == 3 ? alpha.squeeze(0) : alpha;
-                const Tensor mask_f = mask_as_float();
+                const Tensor mask_f = mask_as_float(mask_2d_th);
                 const Tensor alpha_loss = (alpha_2d - mask_f).abs().mean() * ALPHA_CONSISTENCY_WEIGHT;
                 loss = loss + alpha_loss;
                 grad_alpha = (alpha_2d - mask_f).sign() * (ALPHA_CONSISTENCY_WEIGHT / static_cast<float>(alpha_2d.numel()));
@@ -1646,7 +1909,6 @@ namespace lfs::training {
             memory_breakdown_logged_first_batch_ = false;
             memory_breakdown_logged_first_raster_ = false;
             memory_breakdown_logged_first_step_ = false;
-            fastgs_tiling_warning_logged_ = false;
 
             if (params_.optimization.enable_sparsity) {
                 const size_t stop_refine_limit = static_cast<size_t>(std::max(0, get_regular_iterations()));
@@ -1766,6 +2028,13 @@ namespace lfs::training {
             // Re-initialize strategy with new parameters
             strategy_->set_training_dataset(train_dataset_);
             strategy_->initialize(get_runtime_optimization_params());
+            apply_frozen_ranges_to_optimizer(splat, strategy_->get_optimizer());
+            {
+                std::unique_lock<std::shared_mutex> render_lock(render_mutex_);
+                if (auto result = ensureModelTensorAllocatorStorage(splat, "strategy initialization"); !result) {
+                    return std::unexpected(result.error());
+                }
+            }
             LOG_DEBUG("Strategy initialized");
 
             // Initialize bilateral grid if enabled
@@ -1937,7 +2206,7 @@ namespace lfs::training {
             LOG_INFO("Visualization: {}", params.optimization.headless ? "disabled" : "enabled");
             LOG_INFO("Strategy: {}", params.optimization.strategy);
             if (params.optimization.mask_mode != lfs::core::param::MaskMode::None) {
-                static constexpr const char* MASK_MODE_NAMES[] = {"none", "segment", "ignore", "alpha_consistent"};
+                static constexpr const char* MASK_MODE_NAMES[] = {"none", "segment", "ignore", "segment_and_ignore", "alpha_consistent"};
                 LOG_INFO("Mask mode: {}", MASK_MODE_NAMES[static_cast<int>(params.optimization.mask_mode)]);
             }
             if (current_iteration_ > 0) {
@@ -2062,6 +2331,24 @@ namespace lfs::training {
     void Trainer::setCameraLossHeatmap(std::shared_ptr<CameraLossHeatmapState> heatmap) {
         std::lock_guard<std::mutex> lock(camera_loss_heatmap_mutex_);
         camera_loss_heatmap_ = std::move(heatmap);
+    }
+
+    std::expected<void, std::string> Trainer::ensureModelTensorAllocatorStorage(
+        lfs::core::SplatData& model,
+        const std::string_view reason) {
+        if (!splat_tensor_allocator_) {
+            return {};
+        }
+
+        if (auto result = lfs::training::migrateTrainingModelToAllocator(
+                params_, model, splat_tensor_allocator_);
+            !result) {
+            return std::unexpected(std::format(
+                "Failed to keep training model in Vulkan-external storage after {}: {}",
+                reason,
+                result.error()));
+        }
+        return {};
     }
 
     std::expected<Trainer::CameraMetricsSnapshot, std::string> Trainer::computeCameraMetrics(
@@ -2472,6 +2759,14 @@ namespace lfs::training {
         RenderMode render_mode,
         std::stop_token stop_token) {
         try {
+            LFS_VRAM_SCOPE("train.step");
+            LOG_VRAM_DIFF("train.step");
+            if (live_vram_profiler_enabled()) {
+                auto& profiler = lfs::diagnostics::VramProfiler::instance();
+                profiler.beginIteration(iter);
+                profiler.sampleCudaMemory();
+            }
+
             if (params_.optimization.gut) {
                 if (cam->camera_model_type() == core::CameraModelType::ORTHO) {
                     return std::unexpected("Training on cameras with ortho model is not supported yet.");
@@ -2530,59 +2825,45 @@ namespace lfs::training {
                 return StepResult::Stop;
             }
 
-            nvtxRangePush("background_for_step");
-            lfs::core::Tensor& bg = background_for_step(iter);
-            nvtxRangePop();
+            lfs::core::Tensor* bg_ptr = nullptr;
+            {
+                nvtxRangePush("background_for_step");
+                LFS_VRAM_SCOPE("train.background");
+                LOG_VRAM_DIFF("train.background");
+                bg_ptr = &background_for_step(iter);
+                nvtxRangePop();
+            }
+            lfs::core::Tensor& bg = *bg_ptr;
 
             lfs::core::Tensor bg_image;
             if (params_.optimization.bg_mode == lfs::core::param::BackgroundMode::Image) {
+                LFS_VRAM_SCOPE("train.background_image");
+                LOG_VRAM_DIFF("train.background_image");
                 bg_image = get_background_image_for_camera(cam->image_width(), cam->image_height());
             } else if (params_.optimization.bg_mode == lfs::core::param::BackgroundMode::Random) {
+                LFS_VRAM_SCOPE("train.random_background");
+                LOG_VRAM_DIFF("train.random_background");
                 bg_image = get_random_background_for_camera(cam->image_width(), cam->image_height(), iter);
             }
 
-            // Configurable tile-based training to reduce peak memory in 3DGUT.
-            const int full_width = cam->image_width();
-            const int full_height = cam->image_height();
             const bool fastgs_path = !params_.optimization.gut;
-
-            // Read tile mode from parameters (1=1 tile, 2=2 tiles, 4=4 tiles)
-            const TileMode requested_tile_mode = static_cast<TileMode>(params_.optimization.tile_mode);
-            TileMode tile_mode = requested_tile_mode;
-            if (fastgs_path && requested_tile_mode != TileMode::One) {
-                if (!fastgs_tiling_warning_logged_) {
-                    LOG_WARN("tile_mode={} was requested, but tiled training is only available for 3DGUT. 3DGS/FastGS will render full images with tile_mode=1.",
-                             params_.optimization.tile_mode);
-                    fastgs_tiling_warning_logged_ = true;
-                }
-                tile_mode = TileMode::One;
-            }
-
-            // Determine tile configuration
-            int tile_rows = 1, tile_cols = 1;
-            switch (tile_mode) {
-            case TileMode::One:
-                tile_rows = 1;
-                tile_cols = 1;
-                break;
-            case TileMode::Two:
-                tile_rows = 2;
-                tile_cols = 1;
-                break;
-            case TileMode::Four:
-                tile_rows = 2;
-                tile_cols = 2;
-                break;
-            }
-
-            const int tile_width = full_width / tile_cols;
-            const int tile_height = full_height / tile_rows;
-            const int num_tiles = tile_rows * tile_cols;
 
             if (!loss_accumulator_.is_valid()) {
                 loss_accumulator_ = core::Tensor::zeros({1}, core::Device::CUDA);
             } else {
                 loss_accumulator_.zero_();
+            }
+            if (live_vram_profiler_enabled() && strategy_) {
+                record_splat_vram_breakdown(strategy_->get_model());
+                record_optimizer_vram_breakdown(strategy_->get_optimizer());
+                record_vram_tensor("train.persistent", "loss_accumulator", loss_accumulator_);
+                record_vram_tensor("train.persistent", "pipelined_mask", pipelined_mask_);
+                record_vram_tensor("train.persistent", "pipelined_depth", pipelined_depth_);
+                record_vram_tensor("train.persistent", "background", background_);
+                record_vram_tensor("train.persistent", "background_mix_buffer", bg_mix_buffer_);
+                record_vram_tensor("train.persistent", "background_image_base", bg_image_base_);
+                record_vram_current("train.persistent", "background_image_cache", bg_image_cache_bytes(bg_image_cache_));
+                record_pipeline_vram_breakdown(getActiveImageLoader());
             }
             auto& loss_tensor_gpu = loss_accumulator_;
             RenderOutput r_output;
@@ -2592,7 +2873,7 @@ namespace lfs::training {
             const bool in_sparsification = get_active_sparsify_steps() > 0 &&
                                            iter > get_sparsity_boundary_iteration();
 
-            // Determine controller phase before tile loop (does not depend on tile results)
+            // Determine controller phase before render (does not depend on render results)
             const bool known_ppisp_camera = ppisp_ && ppisp_->is_known_camera(cam->camera_id());
             const int ppisp_cam_idx = known_ppisp_camera ? ppisp_->camera_index(cam->camera_id()) : -1;
             const int ppisp_activation_step = params_.optimization.resolved_ppisp_controller_activation_step(get_total_iterations());
@@ -2626,9 +2907,21 @@ namespace lfs::training {
 
             bool fastgs_strategy_hooks_at_start = false;
             if (fastgs_path && !in_sparsification) {
+                LFS_VRAM_SCOPE("train.strategy.fastgs_pre_step");
+                LOG_VRAM_DIFF("train.strategy.fastgs_pre_step");
                 strategy_->pre_step(iter, r_output);
 
-                std::unique_lock<std::shared_mutex> lock(render_mutex_);
+                // Only exclude the render thread when this step actually mutates model
+                // topology (grow/prune → tensor reallocation, moving pointers). In-place
+                // parameter updates are ordered against the viewer's reads by the
+                // CUDA↔Vulkan interop semaphore, so render_mutex_ is redundant there.
+                // Holding it every iteration deadlocks at startup: the render holds a
+                // read-lock across its synchronous GPU readback while waiting for the
+                // first step's output, which this write-lock — taken before that step —
+                // blocks. See trainer.cpp step() lock below; both must be gated.
+                std::unique_lock<std::shared_mutex> lock(render_mutex_, std::defer_lock);
+                if (strategy_->is_refining(iter))
+                    lock.lock();
                 auto& model = strategy_->get_model();
                 const size_t model_size_before = static_cast<size_t>(model.size());
                 strategy_->post_backward(iter, r_output);
@@ -2644,6 +2937,9 @@ namespace lfs::training {
                 if (static_cast<size_t>(model.size()) != model_size_before) {
                     syncTrainingSceneTopology(scene_, model);
                 }
+                if (auto result = ensureModelTensorAllocatorStorage(model, "fastgs strategy post_backward"); !result) {
+                    return std::unexpected(result.error());
+                }
             }
 
             FastGSFusedExtraGradients fused_extra_gradients;
@@ -2651,6 +2947,8 @@ namespace lfs::training {
             lfs::core::Tensor fused_opacity_reg_loss_gpu;
             lfs::core::Tensor sparsity_loss_gpu;
             if (fastgs_path) {
+                LFS_VRAM_SCOPE("train.regularizers.fastgs_forward_only");
+                LOG_VRAM_DIFF("train.regularizers.fastgs_forward_only");
                 auto& model = strategy_->get_model();
                 if (run_fastgs_gaussian_backward) {
                     fused_extra_gradients.scale_reg_weight = params_.optimization.scale_reg;
@@ -2692,43 +2990,13 @@ namespace lfs::training {
                 }
             }
 
-            // Loop over tiles (row-major order)
-            for (int tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
-                const int tile_row = tile_idx / tile_cols;
-                const int tile_col = tile_idx % tile_cols;
-                const int tile_x_offset = tile_col * tile_width;
-                const int tile_y_offset = tile_row * tile_height;
+            {
+                nvtxRangePush("rasterize");
 
-                nvtxRangePush(std::format("tile_{}x{}", tile_row, tile_col).c_str());
-
-                // Extract GT image tile
-                lfs::core::Tensor gt_tile;
-                if (num_tiles == 1) {
-                    // No tiling - use full image
-                    gt_tile = gt_image;
-                } else if (gt_image.shape()[0] == 3) {
-                    // CHW layout: gt_image is [3, H, W]
-                    // Slice both height and width dimensions
-                    auto tile_h = gt_image.slice(1, tile_y_offset, tile_y_offset + tile_height);
-                    gt_tile = tile_h.slice(2, tile_x_offset, tile_x_offset + tile_width);
-                } else {
-                    // HWC layout: gt_image is [H, W, 3]
-                    auto tile_h = gt_image.slice(0, tile_y_offset, tile_y_offset + tile_height);
-                    gt_tile = tile_h.slice(1, tile_x_offset, tile_x_offset + tile_width);
-                }
-
-                // Extract background image tile (if using background image)
+                lfs::core::Tensor gt_tile = gt_image;
                 lfs::core::Tensor bg_tile;
                 if (bg_image.is_valid() && !bg_image.is_empty()) {
-                    if (num_tiles == 1) {
-                        // No tiling - use full image
-                        bg_tile = bg_image;
-                    } else {
-                        // CHW layout: bg_image is [3, H, W]
-                        // Slice both height and width dimensions
-                        auto tile_h = bg_image.slice(1, tile_y_offset, tile_y_offset + tile_height);
-                        bg_tile = tile_h.slice(2, tile_x_offset, tile_x_offset + tile_width);
-                    }
+                    bg_tile = bg_image;
                 }
 
                 // Render the tile
@@ -2739,57 +3007,58 @@ namespace lfs::training {
                 std::optional<FastRasterizeContext> fast_ctx;
                 std::optional<GsplatRasterizeContext> gsplat_ctx;
 
-                if (params_.optimization.gut) {
-                    const int tw = (num_tiles > 1) ? tile_width : 0;
-                    const int th = (num_tiles > 1) ? tile_height : 0;
-                    auto rasterize_result = gsplat_rasterize_forward(
-                        *cam, strategy_->get_model(), bg,
-                        tile_x_offset, tile_y_offset, tw, th,
-                        1.0f, false, GsplatRenderMode::RGB, true, bg_tile);
+                {
+                    LFS_VRAM_SCOPE("train.rasterize_forward");
+                    LOG_VRAM_DIFF("train.rasterize_forward");
+                    if (params_.optimization.gut) {
+                        auto rasterize_result = gsplat_rasterize_forward(
+                            *cam, strategy_->get_model(), bg,
+                            0, 0, 0, 0,
+                            1.0f, false, GsplatRenderMode::RGB, true, bg_tile);
 
-                    if (!rasterize_result) {
-                        nvtxRangePop(); // rasterize_forward
-                        nvtxRangePop(); // tile
-                        return std::unexpected(rasterize_result.error());
-                    }
-
-                    output = std::move(rasterize_result->first);
-                    gsplat_ctx.emplace(std::move(rasterize_result->second));
-                } else {
-                    // Standard 3DGS/FastGS mode renders full images; tiling is 3DGUT-only.
-                    auto rasterize_result = fast_rasterize_forward(
-                        *cam, strategy_->get_model(), bg,
-                        tile_x_offset, tile_y_offset,
-                        (num_tiles > 1) ? tile_width : 0, // 0 means full image
-                        (num_tiles > 1) ? tile_height : 0,
-                        params_.optimization.mip_filter, bg_tile);
-
-                    // Check for OOM error
-                    if (!rasterize_result) {
-                        const std::string& error = rasterize_result.error();
-                        if (error.find("OUT_OF_MEMORY") != std::string::npos) {
+                        if (!rasterize_result) {
                             nvtxRangePop(); // rasterize_forward
                             nvtxRangePop(); // tile
+                            return std::unexpected(rasterize_result.error());
+                        }
 
-                            LOG_ERROR("OUT OF MEMORY in 3DGS/FastGS training. Tiling is only available for 3DGUT; enable --gut to use tiled training.");
-                            LOG_ERROR("Arena error: {}", error);
-                            return std::unexpected(error);
-                        } else {
+                        output = std::move(rasterize_result->first);
+                        gsplat_ctx.emplace(std::move(rasterize_result->second));
+                    } else {
+                        auto rasterize_result = fast_rasterize_forward(
+                            *cam, strategy_->get_model(), bg,
+                            0, 0, 0, 0,
+                            params_.optimization.mip_filter, bg_tile);
+
+                        // Check for OOM error
+                        if (!rasterize_result) {
+                            const std::string& error = rasterize_result.error();
+                            if (error.find("OUT_OF_MEMORY") != std::string::npos) {
+                                nvtxRangePop(); // rasterize_forward
+                                nvtxRangePop(); // rasterize
+
+                                LOG_ERROR("OUT OF MEMORY in 3DGS/FastGS training.");
+                                LOG_ERROR("Arena error: {}", error);
+                                return std::unexpected(error);
+                            }
                             // Non-OOM error - propagate
                             nvtxRangePop();
                             nvtxRangePop();
                             return std::unexpected(error);
                         }
-                    }
 
-                    output = std::move(rasterize_result->first);
-                    fast_ctx.emplace(std::move(rasterize_result->second));
+                        output = std::move(rasterize_result->first);
+                        fast_ctx.emplace(std::move(rasterize_result->second));
 
-                    if (fast_ctx->forward_ctx.n_instances == 0) {
-                        fast_ctx->release_forward_context();
-                        nvtxRangePop();
-                        nvtxRangePop();
-                        continue;
+                        if (fast_ctx->forward_ctx.n_instances == 0) {
+                            fast_ctx->release_forward_context();
+                            nvtxRangePop();
+                            nvtxRangePop();
+                            LOG_DEBUG("Skipping iteration {} - no visible primitives", iter);
+                            return iter < get_total_iterations() && !stop_requested_.load() && !stop_token.stop_requested()
+                                       ? StepResult::Continue
+                                       : StepResult::Stop;
+                        }
                     }
                 }
 
@@ -2827,16 +3096,25 @@ namespace lfs::training {
                     // Controller phase: forward through ISP with controller params, photometric loss,
                     // backward only through controller (base params frozen)
                     nvtxRangePush("controller_phase");
+                    LFS_VRAM_SCOPE("train.controller_phase");
+                    LOG_VRAM_DIFF("train.controller_phase");
                     auto tile_context_guard = makeScopeGuard(cleanup_tile_context);
 
                     lfs::core::Tensor corrected_image = output.image;
                     if (bilateral_grid_ && params_.optimization.use_bilateral_grid) {
+                        LFS_VRAM_SCOPE("train.bilateral_grid.forward");
+                        LOG_VRAM_DIFF("train.bilateral_grid.forward");
                         corrected_image = bilateral_grid_->apply(output.image, cam->uid());
                     }
                     auto ppisp_input = corrected_image;
 
-                    auto pred = ppisp_controller_pool_->predict(ppisp_cam_idx, corrected_image.unsqueeze(0), 1.0f);
-                    corrected_image = ppisp_->apply_with_controller_params(corrected_image, pred, ppisp_cam_idx);
+                    lfs::core::Tensor pred;
+                    {
+                        LFS_VRAM_SCOPE("train.ppisp_controller.forward");
+                        LOG_VRAM_DIFF("train.ppisp_controller.forward");
+                        pred = ppisp_controller_pool_->predict(ppisp_cam_idx, corrected_image.unsqueeze(0), 1.0f);
+                        corrected_image = ppisp_->apply_with_controller_params(corrected_image, pred, ppisp_cam_idx);
+                    }
                     const lfs::core::Tensor raw_loss_input = output.image;
 
                     // Photometric loss
@@ -2844,56 +3122,74 @@ namespace lfs::training {
                     lfs::core::Tensor tile_loss;
                     lfs::core::Tensor tile_grad;
 
-                    const bool use_mask = params_.optimization.mask_mode != lfs::core::param::MaskMode::None &&
-                                          (cam->has_mask() || (params_.optimization.use_alpha_as_mask && cam->has_alpha()));
-                    if (use_mask) {
-                        lfs::core::Tensor mask;
-                        if (pipelined_mask_.is_valid() && pipelined_mask_.numel() > 0) {
-                            mask = pipelined_mask_;
+                    {
+                        LFS_VRAM_SCOPE("train.photometric_loss");
+                        LOG_VRAM_DIFF("train.photometric_loss");
+                        const bool use_mask = params_.optimization.mask_mode != lfs::core::param::MaskMode::None &&
+                                              (cam->has_mask() || (params_.optimization.use_alpha_as_mask && cam->has_alpha()));
+                        if (use_mask) {
+                            lfs::core::Tensor mask;
+                            if (pipelined_mask_.is_valid() && pipelined_mask_.numel() > 0) {
+                                mask = pipelined_mask_;
+                            } else {
+                                mask = cam->load_and_get_mask(
+                                    params_.dataset.resize_factor,
+                                    params_.dataset.max_width,
+                                    params_.optimization.invert_masks,
+                                    params_.optimization.mask_threshold,
+                                    params_.optimization.mask_mode != lfs::core::param::MaskMode::SegmentAndIgnore);
+                            }
+
+                            lfs::core::Tensor mask_tile = mask;
+
+                            auto result = compute_photometric_loss_with_mask(
+                                corrected_image, gt_tile, mask_tile, output.alpha, params_.optimization, raw_loss_input);
+                            if (!result) {
+                                nvtxRangePop();
+                                nvtxRangePop();
+                                nvtxRangePop();
+                                return std::unexpected(result.error());
+                            }
+                            tile_loss = result->loss;
+                            tile_grad = result->grad_corrected;
                         } else {
-                            mask = cam->load_and_get_mask(
-                                params_.dataset.resize_factor,
-                                params_.dataset.max_width,
-                                params_.optimization.invert_masks,
-                                params_.optimization.mask_threshold);
+                            auto result = compute_photometric_loss_with_gradient(
+                                corrected_image, gt_tile, params_.optimization, raw_loss_input);
+                            if (!result) {
+                                nvtxRangePop();
+                                nvtxRangePop();
+                                nvtxRangePop();
+                                return std::unexpected(result.error());
+                            }
+                            tile_loss = result->loss;
+                            tile_grad = result->grad_corrected;
                         }
-
-                        lfs::core::Tensor mask_tile = mask;
-                        if (num_tiles > 1 && mask.ndim() == 2) {
-                            auto tile_h = mask.slice(0, tile_y_offset, tile_y_offset + tile_height);
-                            mask_tile = tile_h.slice(1, tile_x_offset, tile_x_offset + tile_width);
-                        }
-
-                        auto result = compute_photometric_loss_with_mask(
-                            corrected_image, gt_tile, mask_tile, output.alpha, params_.optimization, raw_loss_input);
-                        if (!result) {
-                            nvtxRangePop();
-                            nvtxRangePop();
-                            nvtxRangePop();
-                            return std::unexpected(result.error());
-                        }
-                        tile_loss = result->loss;
-                        tile_grad = result->grad_corrected;
-                    } else {
-                        auto result = compute_photometric_loss_with_gradient(
-                            corrected_image, gt_tile, params_.optimization, raw_loss_input);
-                        if (!result) {
-                            nvtxRangePop();
-                            nvtxRangePop();
-                            nvtxRangePop();
-                            return std::unexpected(result.error());
-                        }
-                        tile_loss = result->loss;
-                        tile_grad = result->grad_corrected;
                     }
 
                     loss_tensor_gpu = loss_tensor_gpu + tile_loss;
                     tiles_processed++;
                     nvtxRangePop(); // compute_photometric_loss
+                    if (live_vram_profiler_enabled()) {
+                        record_vram_tensor("train.losses", "controller.tile_loss", tile_loss);
+                        record_vram_tensor("train.losses", "controller.tile_grad", tile_grad);
+                        record_vram_tensor("train.appearance", "ppisp_controller.prediction", pred);
+                        record_vram_current("train.losses", "photometric.workspaces",
+                                            photometric_workspace_bytes(photometric_loss_));
+                        record_vram_current("train.losses", "masked_fused.workspace",
+                                            masked_fused_workspace_bytes(masked_fused_workspace_));
+                        record_vram_current("train.losses", "decoupled_fused.workspace",
+                                            decoupled_fused_workspace_bytes(decoupled_fused_workspace_));
+                        record_vram_current("train.losses", "masked_decoupled_fused.workspace",
+                                            masked_decoupled_fused_workspace_bytes(masked_decoupled_fused_workspace_));
+                    }
 
                     // ISP backward for controller params
-                    auto ctrl_grad = ppisp_->backward_with_controller_params(ppisp_input, tile_grad, pred, ppisp_cam_idx);
-                    ppisp_controller_pool_->backward(ppisp_cam_idx, ctrl_grad);
+                    {
+                        LFS_VRAM_SCOPE("train.ppisp_controller.backward");
+                        LOG_VRAM_DIFF("train.ppisp_controller.backward");
+                        auto ctrl_grad = ppisp_->backward_with_controller_params(ppisp_input, tile_grad, pred, ppisp_cam_idx);
+                        ppisp_controller_pool_->backward(ppisp_cam_idx, ctrl_grad);
+                    }
 
                     nvtxRangePop(); // controller_phase
                 } else {
@@ -2903,6 +3199,8 @@ namespace lfs::training {
                     lfs::core::Tensor corrected_image = output.image;
                     if (bilateral_grid_ && params_.optimization.use_bilateral_grid) {
                         nvtxRangePush("bilateral_grid_forward");
+                        LFS_VRAM_SCOPE("train.bilateral_grid.forward");
+                        LOG_VRAM_DIFF("train.bilateral_grid.forward");
                         corrected_image = bilateral_grid_->apply(output.image, cam->uid());
                         nvtxRangePop();
                     }
@@ -2910,6 +3208,8 @@ namespace lfs::training {
                     lfs::core::Tensor ppisp_input;
                     if (ppisp_ && params_.optimization.use_ppisp) {
                         nvtxRangePush("ppisp_forward");
+                        LFS_VRAM_SCOPE("train.ppisp.forward");
+                        LOG_VRAM_DIFF("train.ppisp.forward");
                         ppisp_input = corrected_image;
                         corrected_image = ppisp_->apply(ppisp_input, cam->camera_id(), cam->uid());
                         nvtxRangePop();
@@ -2932,6 +3232,7 @@ namespace lfs::training {
                     lfs::core::Tensor tile_grad;
                     lfs::core::Tensor tile_grad_raw;
                     lfs::core::Tensor tile_grad_alpha;
+                    lfs::core::Tensor tile_grad_depth;
                     lfs::core::Tensor tile_error_map;
                     lfs::core::Tensor mask_tile;
 
@@ -2941,52 +3242,188 @@ namespace lfs::training {
                     const bool used_masked_fused =
                         use_mask &&
                         (params_.optimization.mask_mode == lfs::core::param::MaskMode::Segment ||
-                         params_.optimization.mask_mode == lfs::core::param::MaskMode::Ignore) &&
+                         params_.optimization.mask_mode == lfs::core::param::MaskMode::Ignore ||
+                         params_.optimization.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore) &&
                         params_.optimization.lambda_dssim > 0.0f;
-                    if (use_mask) {
-                        lfs::core::Tensor mask;
-                        if (pipelined_mask_.is_valid() && pipelined_mask_.numel() > 0) {
-                            mask = pipelined_mask_;
+                    {
+                        LFS_VRAM_SCOPE("train.photometric_loss");
+                        LOG_VRAM_DIFF("train.photometric_loss");
+                        if (use_mask) {
+                            lfs::core::Tensor mask;
+                            if (pipelined_mask_.is_valid() && pipelined_mask_.numel() > 0) {
+                                mask = pipelined_mask_;
+                            } else {
+                                mask = cam->load_and_get_mask(
+                                    params_.dataset.resize_factor,
+                                    params_.dataset.max_width,
+                                    params_.optimization.invert_masks,
+                                    params_.optimization.mask_threshold,
+                                    params_.optimization.mask_mode != lfs::core::param::MaskMode::SegmentAndIgnore);
+                            }
+
+                            mask_tile = mask;
+
+                            auto result = compute_photometric_loss_with_mask(
+                                corrected_image, gt_tile, mask_tile, output.alpha, params_.optimization, raw_loss_input);
+                            if (!result) {
+                                nvtxRangePop();
+                                nvtxRangePop();
+                                return std::unexpected(result.error());
+                            }
+                            tile_loss = result->loss;
+                            tile_grad = result->grad_corrected;
+                            tile_grad_raw = result->grad_raw;
+                            tile_grad_alpha = result->grad_alpha;
                         } else {
-                            mask = cam->load_and_get_mask(
+                            auto result = compute_photometric_loss_with_gradient(
+                                corrected_image, gt_tile, params_.optimization, raw_loss_input);
+                            if (!result) {
+                                nvtxRangePop();
+                                nvtxRangePop();
+                                return std::unexpected(result.error());
+                            }
+                            tile_loss = result->loss;
+                            tile_grad = result->grad_corrected;
+                            tile_grad_raw = result->grad_raw;
+                        }
+                    }
+
+                    if (run_fastgs_gaussian_backward &&
+                        params_.optimization.use_depth_loss &&
+                        params_.optimization.depth_loss_weight > 0.0f &&
+                        output.depth.is_valid() &&
+                        output.depth.numel() > 0 &&
+                        output.alpha.is_valid() &&
+                        output.alpha.numel() > 0) {
+                        LFS_VRAM_SCOPE("train.depth_loss");
+                        LOG_VRAM_DIFF("train.depth_loss");
+
+                        lfs::core::Tensor target_depth;
+                        if (pipelined_depth_.is_valid() && pipelined_depth_.numel() > 0) {
+                            target_depth = pipelined_depth_;
+                        } else if (cam->has_depth()) {
+                            target_depth = cam->load_and_get_depth(
                                 params_.dataset.resize_factor,
-                                params_.dataset.max_width,
-                                params_.optimization.invert_masks,
-                                params_.optimization.mask_threshold);
+                                params_.dataset.max_width);
                         }
 
-                        mask_tile = mask;
-                        if (num_tiles > 1 && mask.ndim() == 2) {
-                            auto tile_h = mask.slice(0, tile_y_offset, tile_y_offset + tile_height);
-                            mask_tile = tile_h.slice(1, tile_x_offset, tile_x_offset + tile_width);
-                        }
+                        if (target_depth.is_valid() && target_depth.numel() > 0) {
+                            if (target_depth.ndim() == 3 && target_depth.shape()[0] == 1) {
+                                target_depth = target_depth.squeeze(0);
+                            }
+                            if (target_depth.device() != lfs::core::Device::CUDA) {
+                                target_depth = target_depth.cuda();
+                            }
+                            if (!target_depth.is_contiguous()) {
+                                target_depth = target_depth.contiguous();
+                            }
 
-                        auto result = compute_photometric_loss_with_mask(
-                            corrected_image, gt_tile, mask_tile, output.alpha, params_.optimization, raw_loss_input);
-                        if (!result) {
-                            nvtxRangePop();
-                            nvtxRangePop();
-                            return std::unexpected(result.error());
+                            lfs::core::Tensor rendered_depth = output.depth;
+                            if (rendered_depth.ndim() == 3 && rendered_depth.shape()[0] == 1) {
+                                rendered_depth = rendered_depth.squeeze(0);
+                            }
+                            if (!rendered_depth.is_contiguous()) {
+                                rendered_depth = rendered_depth.contiguous();
+                            }
+
+                            lfs::core::Tensor rendered_alpha = output.alpha;
+                            if (rendered_alpha.ndim() == 3 && rendered_alpha.shape()[0] == 1) {
+                                rendered_alpha = rendered_alpha.squeeze(0);
+                            }
+                            if (!rendered_alpha.is_contiguous()) {
+                                rendered_alpha = rendered_alpha.contiguous();
+                            }
+
+                            const bool depth_shape_matches =
+                                target_depth.ndim() == 2 &&
+                                rendered_depth.ndim() == 2 &&
+                                rendered_alpha.ndim() == 2 &&
+                                target_depth.shape()[0] == rendered_depth.shape()[0] &&
+                                target_depth.shape()[1] == rendered_depth.shape()[1] &&
+                                target_depth.shape()[0] == rendered_alpha.shape()[0] &&
+                                target_depth.shape()[1] == rendered_alpha.shape()[1];
+
+                            if (depth_shape_matches) {
+                                const size_t num_depth_pixels = rendered_depth.numel();
+                                const size_t depth_partials =
+                                    lfs::training::kernels::depth_loss_partial_count(num_depth_pixels);
+                                const cudaStream_t depth_stream = rendered_depth.stream();
+                                const auto depth_loss_mode =
+                                    depth_loss_mode_from_name(params_.optimization.depth_loss_mode);
+
+                                if (!depth_loss_scalar_.is_valid()) {
+                                    depth_loss_scalar_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
+                                }
+                                depth_loss_scalar_.set_stream(depth_stream);
+                                if (!depth_loss_grad_.is_valid() ||
+                                    depth_loss_grad_.shape() != rendered_depth.shape()) {
+                                    depth_loss_grad_ = lfs::core::Tensor::empty(rendered_depth.shape(), lfs::core::Device::CUDA);
+                                }
+                                depth_loss_grad_.set_stream(depth_stream);
+                                if (!depth_loss_partials_.is_valid() ||
+                                    depth_loss_partials_.shape()[0] != depth_partials) {
+                                    depth_loss_partials_ = lfs::core::Tensor::empty({depth_partials}, lfs::core::Device::CUDA);
+                                }
+                                depth_loss_partials_.set_stream(depth_stream);
+
+                                lfs::training::kernels::launch_depth_loss(
+                                    rendered_depth.ptr<float>(),
+                                    rendered_alpha.ptr<float>(),
+                                    target_depth.ptr<float>(),
+                                    depth_loss_grad_.ptr<float>(),
+                                    depth_loss_scalar_.ptr<float>(),
+                                    depth_loss_partials_.ptr<float>(),
+                                    num_depth_pixels,
+                                    params_.optimization.depth_loss_weight,
+                                    depth_loss_mode,
+                                    depth_stream);
+
+                                static const bool depth_loss_diag = env_flag_enabled("LFS_DEPTH_LOSS_DIAG");
+                                static const int depth_loss_diag_interval =
+                                    env_int_or_default("LFS_DEPTH_LOSS_DIAG_INTERVAL", 50);
+                                if (depth_loss_diag && (iter == 1 || iter % depth_loss_diag_interval == 0)) {
+                                    const auto depth_grad_abs = depth_loss_grad_.abs();
+                                    const float valid_count = depth_loss_partials_.slice(0, 0, 1).item<float>();
+                                    const float scale_or_norm = depth_loss_partials_.slice(0, 3, 4).item<float>();
+                                    const float depth_corr = depth_loss_partials_.slice(0, 4, 5).item<float>();
+                                    const float valid_fraction = num_depth_pixels > 0
+                                                                     ? valid_count / static_cast<float>(num_depth_pixels)
+                                                                     : 0.0f;
+                                    LOG_INFO("[DEPTH_LOSS] iter={} mode={} camera='{}' loss={:.6f} corr={:.6f} scale_or_norm={:.6f} valid_pixels={:.0f} valid_fraction={:.3f} target_depth_min={:.6f} target_depth_max={:.6f} target_depth_mean={:.6f} depth_accum_min={:.6f} depth_accum_max={:.6f} depth_accum_mean={:.6f} alpha_accum_min={:.6f} alpha_accum_max={:.6f} alpha_accum_mean={:.6f} grad_depth_abs_max={:.6e} grad_depth_abs_mean={:.6e}",
+                                             iter,
+                                             depth_loss_mode_name(depth_loss_mode),
+                                             cam->image_name(),
+                                             depth_loss_scalar_.item<float>(),
+                                             depth_corr,
+                                             scale_or_norm,
+                                             valid_count,
+                                             valid_fraction,
+                                             target_depth.min().item<float>(),
+                                             target_depth.max().item<float>(),
+                                             target_depth.mean().item<float>(),
+                                             rendered_depth.min().item<float>(),
+                                             rendered_depth.max().item<float>(),
+                                             rendered_depth.mean().item<float>(),
+                                             rendered_alpha.min().item<float>(),
+                                             rendered_alpha.max().item<float>(),
+                                             rendered_alpha.mean().item<float>(),
+                                             depth_grad_abs.max().item<float>(),
+                                             depth_grad_abs.mean().item<float>());
+                                }
+
+                                tile_grad_depth = depth_loss_grad_;
+                                tile_loss = tile_loss + depth_loss_scalar_;
+                            } else {
+                                LOG_WARN("Skipping depth loss for '{}': rendered depth shape and target depth shape differ",
+                                         cam->image_name());
+                            }
                         }
-                        tile_loss = result->loss;
-                        tile_grad = result->grad_corrected;
-                        tile_grad_raw = result->grad_raw;
-                        tile_grad_alpha = result->grad_alpha;
-                    } else {
-                        auto result = compute_photometric_loss_with_gradient(
-                            corrected_image, gt_tile, params_.optimization, raw_loss_input);
-                        if (!result) {
-                            nvtxRangePop();
-                            nvtxRangePop();
-                            return std::unexpected(result.error());
-                        }
-                        tile_loss = result->loss;
-                        tile_grad = result->grad_corrected;
-                        tile_grad_raw = result->grad_raw;
                     }
 
                     // 2) Extract error map from workspace's ssim_map
                     if (use_pixel_error_densification) {
+                        LFS_VRAM_SCOPE("train.densification_error_map");
+                        LOG_VRAM_DIFF("train.densification_error_map");
                         if (use_ssim_error && params_.optimization.lambda_dssim > 0.0f) {
                             lfs::core::Tensor ssim_map;
                             if (used_masked_fused && raw_loss_input.is_valid()) {
@@ -3047,6 +3484,12 @@ namespace lfs::training {
                         }
 
                         if (use_mask &&
+                            params_.optimization.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore) {
+                            const auto mask_for_error = mask_tile.gt(250).to(lfs::core::DataType::Float32);
+                            tile_error_map.mul_(mask_for_error);
+                        }
+
+                        if (use_mask &&
                             (params_.optimization.mask_mode == lfs::core::param::MaskMode::Segment ||
                              params_.optimization.mask_mode == lfs::core::param::MaskMode::Ignore)) {
                             const auto mask_for_error =
@@ -3059,9 +3502,42 @@ namespace lfs::training {
                     }
 
                     if (tile_error_map.is_valid() && core::param::is_mrnf_strategy(params_.optimization.strategy)) {
+                        LFS_VRAM_SCOPE("train.densification_error_map");
+                        LOG_VRAM_DIFF("train.densification_error_map.normalize");
                         const float map_mean = tile_error_map.mean().item();
                         if (map_mean > 1e-6f)
                             tile_error_map.div_(map_mean);
+                    }
+
+                    if (live_vram_profiler_enabled()) {
+                        if (fast_ctx) {
+                            record_fastgs_vram_breakdown(*fast_ctx,
+                                                         output,
+                                                         gt_tile,
+                                                         bg_tile,
+                                                         tile_error_map,
+                                                         run_fastgs_gaussian_backward,
+                                                         static_cast<std::size_t>(strategy_->get_model().size()));
+                        } else if (gsplat_ctx) {
+                            record_gsplat_vram_breakdown(*gsplat_ctx, output, gt_tile, bg_tile, tile_error_map);
+                        }
+                        record_vram_tensor("train.losses", "tile_loss", tile_loss);
+                        record_vram_tensor("train.losses", "tile_grad_corrected", tile_grad);
+                        record_vram_tensor("train.losses", "tile_grad_raw", tile_grad_raw);
+                        record_vram_tensor("train.losses", "tile_grad_alpha", tile_grad_alpha);
+                        record_vram_tensor("train.losses", "densification_error_map.live", tile_error_map);
+                        record_vram_current("train.losses", "photometric.workspaces",
+                                            photometric_workspace_bytes(photometric_loss_));
+                        record_vram_current("train.losses", "masked_fused.workspace",
+                                            masked_fused_workspace_bytes(masked_fused_workspace_));
+                        record_vram_current("train.losses", "decoupled_fused.workspace",
+                                            decoupled_fused_workspace_bytes(decoupled_fused_workspace_));
+                        record_vram_current("train.losses", "masked_decoupled_fused.workspace",
+                                            masked_decoupled_fused_workspace_bytes(masked_decoupled_fused_workspace_));
+                        record_vram_current("train.losses", "densification_ssim.workspace",
+                                            ssim_map_workspace_bytes(densification_ssim_workspace_));
+                        record_vram_tensor("train.losses", "densification_error_map.buffer", densification_error_map_);
+                        record_vram_tensor("train.losses", "edge_map_buffer", edge_map_buffer_);
                     }
 
                     if (memory_breakdown_enabled_ && !memory_breakdown_logged_first_raster_ && fast_ctx) {
@@ -3093,6 +3569,7 @@ namespace lfs::training {
                         }
                         fastgs_entries.emplace_back("render.output_image", tensor_reserved_bytes(output.image));
                         fastgs_entries.emplace_back("render.output_alpha", tensor_reserved_bytes(output.alpha));
+                        fastgs_entries.emplace_back("render.output_depth", tensor_reserved_bytes(output.depth));
                         fastgs_entries.emplace_back("train.gt_tile", tensor_reserved_bytes(gt_tile));
                         if (bg_image.is_valid() && !bg_image.is_empty()) {
                             fastgs_entries.emplace_back("train.background_image", tensor_reserved_bytes(bg_image));
@@ -3121,6 +3598,9 @@ namespace lfs::training {
                         add_tensor_entry(trainer_entries, "trainer.densification_error_map", densification_error_map_);
                         add_tensor_entry(trainer_entries, "trainer.loss_accumulator", loss_accumulator_);
                         add_tensor_entry(trainer_entries, "trainer.pipelined_mask", pipelined_mask_);
+                        add_tensor_entry(trainer_entries, "trainer.pipelined_depth", pipelined_depth_);
+                        add_tensor_entry(trainer_entries, "trainer.depth_loss_grad", depth_loss_grad_);
+                        add_tensor_entry(trainer_entries, "trainer.depth_loss_partials", depth_loss_partials_);
                         log_entry_bytes("trainer_pool_backed_live", trainer_entries);
 
                         if (auto loader = getActiveImageLoader()) {
@@ -3133,12 +3613,10 @@ namespace lfs::training {
                                      stats.prefetch_queue_size);
                         }
 
-                        LOG_INFO("[MEM] fastgs counts instances={}, image={}x{}, tile_mode={}, num_tiles={}",
+                        LOG_INFO("[MEM] fastgs counts instances={}, image={}x{}",
                                  fast_ctx->forward_ctx.n_instances,
                                  output.width,
-                                 output.height,
-                                 static_cast<int>(tile_mode),
-                                 num_tiles);
+                                 output.height);
                         memory_breakdown_logged_first_raster_ = true;
                     }
 
@@ -3149,6 +3627,8 @@ namespace lfs::training {
                     lfs::core::Tensor raster_grad = tile_grad;
                     if (ppisp_ && params_.optimization.use_ppisp) {
                         nvtxRangePush("ppisp_backward");
+                        LFS_VRAM_SCOPE("train.ppisp.backward");
+                        LOG_VRAM_DIFF("train.ppisp.backward");
                         raster_grad = ppisp_->backward(ppisp_input, raster_grad, cam->camera_id(), cam->uid());
                         if (ppisp_frozen) {
                             ppisp_->zero_grad();
@@ -3158,6 +3638,8 @@ namespace lfs::training {
 
                     if (bilateral_grid_ && params_.optimization.use_bilateral_grid) {
                         nvtxRangePush("bilateral_grid_backward");
+                        LFS_VRAM_SCOPE("train.bilateral_grid.backward");
+                        LOG_VRAM_DIFF("train.bilateral_grid.backward");
                         raster_grad = bilateral_grid_->backward(output.image, raster_grad, cam->uid());
                         nvtxRangePop();
                     }
@@ -3167,35 +3649,45 @@ namespace lfs::training {
                     }
 
                     nvtxRangePush("rasterize_backward");
-                    if (gsplat_ctx) {
-                        auto grad_alpha = tile_grad_alpha.is_valid()
-                                              ? tile_grad_alpha
-                                              : lfs::core::Tensor::zeros_like(output.alpha);
-                        tile_context_guard.release();
-                        gsplat_rasterize_backward(*gsplat_ctx, raster_grad, grad_alpha,
-                                                  strategy_->get_model(), strategy_->get_optimizer(),
-                                                  use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{});
-                    } else {
-                        tile_context_guard.release();
-                        if (run_fastgs_gaussian_backward) {
-                            fast_rasterize_backward(*fast_ctx, raster_grad, strategy_->get_model(),
-                                                    strategy_->get_optimizer(), tile_grad_alpha,
-                                                    use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{},
-                                                    densification_type,
-                                                    iter,
-                                                    fused_extra_gradients);
+                    {
+                        LFS_VRAM_SCOPE("train.rasterize_backward");
+                        LOG_VRAM_DIFF("train.rasterize_backward");
+                        if (gsplat_ctx) {
+                            auto grad_alpha = tile_grad_alpha.is_valid()
+                                                  ? tile_grad_alpha
+                                                  : lfs::core::Tensor::zeros_like(output.alpha);
+                            tile_context_guard.release();
+                            gsplat_rasterize_backward(*gsplat_ctx, raster_grad, grad_alpha,
+                                                      strategy_->get_model(), strategy_->get_optimizer(),
+                                                      use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{});
                         } else {
-                            cleanup_tile_context();
+                            tile_context_guard.release();
+                            if (run_fastgs_gaussian_backward) {
+                                // Topology-only locking (see post_backward/step above): the
+                                // fused backward updates params in place; the interop
+                                // semaphore orders those against the viewer's reads, so the
+                                // render thread is only excluded on reallocation iterations.
+                                std::unique_lock<std::shared_mutex> model_write_lock(render_mutex_, std::defer_lock);
+                                if (strategy_->is_refining(iter))
+                                    model_write_lock.lock();
+                                fast_rasterize_backward(*fast_ctx, raster_grad, strategy_->get_model(),
+                                                        strategy_->get_optimizer(), tile_grad_alpha,
+                                                        use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{},
+                                                        densification_type,
+                                                        iter,
+                                                        fused_extra_gradients,
+                                                        tile_grad_depth,
+                                                        tile_grad_depth.is_valid() && tile_grad_depth.numel() > 0);
+                            } else {
+                                cleanup_tile_context();
+                            }
                         }
                     }
                     nvtxRangePop();
                 }
 
-                nvtxRangePop(); // End tile
+                nvtxRangePop(); // End rasterize
             }
-
-            if (tiles_processed > 1)
-                loss_tensor_gpu = loss_tensor_gpu / static_cast<float>(tiles_processed);
 
             if (tiles_processed == 0) {
                 LOG_DEBUG("Skipping iteration {} - no visible primitives", iter);
@@ -3210,6 +3702,8 @@ namespace lfs::training {
             if (in_controller_phase) {
                 // Controller phase: only update controller weights
                 nvtxRangePush("controller_optimizer_step");
+                LFS_VRAM_SCOPE("train.optimizer.ppisp_controller_step");
+                LOG_VRAM_DIFF("train.optimizer.ppisp_controller_step");
                 ppisp_controller_pool_->optimizer_step(ppisp_cam_idx);
                 ppisp_controller_pool_->zero_grad();
                 ppisp_controller_pool_->scheduler_step(ppisp_cam_idx);
@@ -3219,6 +3713,8 @@ namespace lfs::training {
 
                 if (params_.optimization.scale_reg > 0.0f) {
                     nvtxRangePush("compute_scale_reg_loss");
+                    LFS_VRAM_SCOPE("train.regularizers.scale_loss");
+                    LOG_VRAM_DIFF("train.regularizers.scale_loss");
                     if (fastgs_path) {
                         loss_tensor_gpu = loss_tensor_gpu + fused_scale_reg_loss_gpu;
                     } else {
@@ -3233,6 +3729,8 @@ namespace lfs::training {
 
                 if (params_.optimization.opacity_reg > 0.0f) {
                     nvtxRangePush("compute_opacity_reg_loss");
+                    LFS_VRAM_SCOPE("train.regularizers.opacity_loss");
+                    LOG_VRAM_DIFF("train.regularizers.opacity_loss");
                     if (fastgs_path) {
                         loss_tensor_gpu = loss_tensor_gpu + fused_opacity_reg_loss_gpu;
                     } else {
@@ -3247,6 +3745,8 @@ namespace lfs::training {
 
                 if (bilateral_grid_ && params_.optimization.use_bilateral_grid) {
                     nvtxRangePush("bilateral_grid_tv_and_step");
+                    LFS_VRAM_SCOPE("train.bilateral_grid.tv_and_step");
+                    LOG_VRAM_DIFF("train.bilateral_grid.tv_and_step");
                     const float tv_weight = params_.optimization.tv_loss_weight;
 
                     loss_tensor_gpu = loss_tensor_gpu + bilateral_grid_->tv_loss_gpu() * tv_weight;
@@ -3260,6 +3760,8 @@ namespace lfs::training {
 
                 if (ppisp_ && params_.optimization.use_ppisp && !ppisp_frozen) {
                     nvtxRangePush("ppisp_reg_and_step");
+                    LFS_VRAM_SCOPE("train.ppisp.reg_and_step");
+                    LOG_VRAM_DIFF("train.ppisp.reg_and_step");
 
                     loss_tensor_gpu = loss_tensor_gpu + ppisp_->reg_loss_gpu();
                     ppisp_->reg_backward();
@@ -3276,6 +3778,8 @@ namespace lfs::training {
                 sparsity_optimizer_->should_apply_loss(iter) &&
                 (!fastgs_path || update_gaussians_this_iter)) {
                 nvtxRangePush("sparsity_loss");
+                LFS_VRAM_SCOPE("train.regularizers.sparsity_loss");
+                LOG_VRAM_DIFF("train.regularizers.sparsity_loss");
                 if (!run_fastgs_gaussian_backward) {
                     auto sparsity_result = compute_sparsity_loss_forward(iter, strategy_->get_model());
                     if (!sparsity_result) {
@@ -3343,7 +3847,16 @@ namespace lfs::training {
             {
                 DeferredEvents deferred;
                 {
-                    std::unique_lock<std::shared_mutex> lock(render_mutex_);
+                    // Same rationale as the post_backward lock above: only block the
+                    // render thread when topology actually changes this iteration. The
+                    // optimizer step's in-place writes are ordered against the viewer by
+                    // the interop semaphore (the render waits for the step's signal before
+                    // reading), so the CPU write-lock is needed only for reallocation.
+                    std::unique_lock<std::shared_mutex> lock(render_mutex_, std::defer_lock);
+                    if (strategy_->is_refining(iter))
+                        lock.lock();
+                    LFS_VRAM_SCOPE("train.optimizer.strategy_step");
+                    LOG_VRAM_DIFF("train.optimizer.strategy_step");
                     auto& model = strategy_->get_model();
                     const size_t model_size_before = static_cast<size_t>(model.size());
 
@@ -3393,6 +3906,9 @@ namespace lfs::training {
 
                     if (static_cast<size_t>(model.size()) != model_size_before) {
                         syncTrainingSceneTopology(scene_, model);
+                    }
+                    if (auto result = ensureModelTensorAllocatorStorage(model, "strategy step"); !result) {
+                        return std::unexpected(result.error());
                     }
                 }
 
@@ -3480,6 +3996,12 @@ namespace lfs::training {
                     ctx, get_total_iterations(), is_paused_.load(), is_running_.load(), stop_requested_.load(),
                     lfs::training::TrainingPhase::SafeControl);
                 lfs::training::ControlBoundary::instance().notify(lfs::training::ControlHook::PostStep, ctx);
+            }
+
+            if (live_vram_profiler_enabled() && strategy_) {
+                record_splat_vram_breakdown(strategy_->get_model());
+                record_optimizer_vram_breakdown(strategy_->get_optimizer());
+                lfs::diagnostics::VramProfiler::instance().sampleCudaMemory();
             }
 
             if (memory_breakdown_enabled_ && !memory_breakdown_logged_first_step_) {
@@ -3592,24 +4114,35 @@ namespace lfs::training {
             pipelined_config = tunePipelinedLoaderConfig(pipelined_config, train_dataset_);
 
             const bool alpha_available = scene_ && scene_->imagesHaveAlpha();
-            PipelinedMaskConfig mask_pipeline_config;
+            PipelinedAuxiliaryImageConfig aux_pipeline_config;
+            aux_pipeline_config.load_depths =
+                params_.optimization.use_depth_loss &&
+                params_.optimization.depth_loss_weight > 0.0f;
+            if (aux_pipeline_config.load_depths) {
+                LOG_INFO("Depth loss enabled (mode={}, weight={})",
+                         depth_loss_mode_name(depth_loss_mode_from_name(params_.optimization.depth_loss_mode)),
+                         params_.optimization.depth_loss_weight);
+            }
             if (params_.optimization.mask_mode != lfs::core::param::MaskMode::None) {
-                mask_pipeline_config.invert_masks = params_.optimization.invert_masks;
-                mask_pipeline_config.mask_threshold = params_.optimization.mask_threshold;
+                aux_pipeline_config.invert_masks = params_.optimization.invert_masks;
+                aux_pipeline_config.mask_threshold = params_.optimization.mask_threshold;
+                if (params_.optimization.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore) {
+                    aux_pipeline_config.mask_threshold = 0.0f;
+                }
                 if (params_.optimization.use_alpha_as_mask && alpha_available) {
-                    mask_pipeline_config.use_alpha_as_mask = true;
-                    mask_pipeline_config.load_masks = true;
+                    aux_pipeline_config.use_alpha_as_mask = true;
+                    aux_pipeline_config.load_masks = true;
                     LOG_INFO("Alpha-as-mask enabled (invert={}, threshold={})",
-                             mask_pipeline_config.invert_masks, mask_pipeline_config.mask_threshold);
+                             aux_pipeline_config.invert_masks, aux_pipeline_config.mask_threshold);
                 } else {
-                    mask_pipeline_config.load_masks = true;
+                    aux_pipeline_config.load_masks = true;
                     LOG_INFO("Mask file loading enabled (invert={}, threshold={})",
-                             mask_pipeline_config.invert_masks, mask_pipeline_config.mask_threshold);
+                             aux_pipeline_config.invert_masks, aux_pipeline_config.mask_threshold);
                 }
             }
 
             auto train_dataloader = create_infinite_pipelined_dataloader(
-                train_dataset_, pipelined_config, mask_pipeline_config);
+                train_dataset_, pipelined_config, aux_pipeline_config);
             auto active_image_loader_guard = makeScopeGuard([this]() {
                 clearActiveImageLoader();
             });
@@ -3660,6 +4193,7 @@ namespace lfs::training {
 
                 // Store pipelined mask for use in train_step
                 pipelined_mask_ = example.mask.has_value() ? std::move(*example.mask) : lfs::core::Tensor();
+                pipelined_depth_ = example.depth.has_value() ? std::move(*example.depth) : lfs::core::Tensor();
 
                 if (memory_breakdown_enabled_ && !memory_breakdown_logged_first_batch_) {
                     const auto snapshot = capture_vram_snapshot(true);
@@ -3668,12 +4202,13 @@ namespace lfs::training {
                     const size_t channels = gt_image.ndim() > 2 ? gt_image.shape()[0] : 1;
                     const size_t height = gt_image.ndim() > 2 ? gt_image.shape()[1] : gt_image.shape()[0];
                     const size_t width = gt_image.ndim() > 2 ? gt_image.shape()[2] : gt_image.shape()[1];
-                    LOG_INFO("[MEM] first_batch gt_image={}x{}x{} = {:.2f} MiB, mask = {:.2f} MiB, output_queue={}, pending_pairs={}, in_flight={}",
+                    LOG_INFO("[MEM] first_batch gt_image={}x{}x{} = {:.2f} MiB, mask = {:.2f} MiB, depth = {:.2f} MiB, output_queue={}, pending_pairs={}, in_flight={}",
                              channels,
                              height,
                              width,
                              bytes_to_mib(tensor_reserved_bytes(gt_image)),
                              bytes_to_mib(tensor_reserved_bytes(pipelined_mask_)),
+                             bytes_to_mib(tensor_reserved_bytes(pipelined_depth_)),
                              stats.output_queue_size,
                              stats.pending_pairs_count,
                              train_dataloader->get_loader_shared()->in_flight_count());
@@ -3827,7 +4362,8 @@ namespace lfs::training {
         PPISPControllerPool* controller_to_save = controller_pool_for_save(iter_num);
 
         if (save_checkpoint_file) {
-            auto ckpt_result = lfs::training::save_checkpoint(save_path, iter_num, *strategy_, params_,
+            auto ckpt_result = lfs::training::save_checkpoint(save_path, iter_num, *strategy_,
+                                                              params_for_checkpoint_save(),
                                                               bilateral_grid_.get(), ppisp_.get(), controller_to_save);
             if (!ckpt_result) {
                 LOG_WARN("Failed to save checkpoint: {}", ckpt_result.error());
@@ -3860,7 +4396,8 @@ namespace lfs::training {
 
         PPISPControllerPool* controller_to_save = controller_pool_for_save(iteration);
 
-        return lfs::training::save_checkpoint(params_.dataset.output_path, iteration, *strategy_, params_,
+        return lfs::training::save_checkpoint(params_.dataset.output_path, iteration, *strategy_,
+                                              params_for_checkpoint_save(),
                                               bilateral_grid_.get(), ppisp_.get(), controller_to_save);
     }
 
@@ -3872,7 +4409,8 @@ namespace lfs::training {
 
         PPISPControllerPool* controller_to_save = controller_pool_for_save(iteration);
 
-        return lfs::training::save_checkpoint(output_path, iteration, *strategy_, params_,
+        return lfs::training::save_checkpoint(output_path, iteration, *strategy_,
+                                              params_for_checkpoint_save(),
                                               bilateral_grid_.get(), ppisp_.get(), controller_to_save);
     }
 
@@ -3931,6 +4469,15 @@ namespace lfs::training {
                    : nullptr;
     }
 
+    lfs::core::param::TrainingParameters Trainer::params_for_checkpoint_save() const {
+        auto params = params_;
+        if (scene_) {
+            const auto disabled = scene_->getTrainingDisabledCameraUids();
+            params.disabled_camera_uids.assign(disabled.begin(), disabled.end());
+        }
+        return params;
+    }
+
     void Trainer::save_final_ply_and_checkpoint(const int iteration) {
         save_ply(params_.dataset.output_path, params_.dataset.output_name, iteration, /*join=*/true,
                  /*save_checkpoint=*/false);
@@ -3984,9 +4531,17 @@ namespace lfs::training {
 
         auto result = lfs::training::load_checkpoint(
             checkpoint_path, *strategy_, params_, bilateral_grid_.get(), ppisp_.get(),
-            ppisp_controller_pool_.get());
+            ppisp_controller_pool_.get(), splat_tensor_allocator_);
         if (!result) {
             return result;
+        }
+        {
+            std::unique_lock<std::shared_mutex> render_lock(render_mutex_);
+            if (auto storage_result = ensureModelTensorAllocatorStorage(
+                    strategy_->get_model(), "checkpoint load");
+                !storage_result) {
+                return std::unexpected(storage_result.error());
+            }
         }
 
         if (params_.optimization.enable_sparsity) {

@@ -152,7 +152,6 @@ namespace lfs::core {
             opt_json["random"] = random;
             opt_json["init_num_pts"] = init_num_pts;
             opt_json["init_extent"] = init_extent;
-            opt_json["tile_mode"] = tile_mode;
             opt_json["enable_sparsity"] = enable_sparsity;
             opt_json["sparsify_steps"] = sparsify_steps;
             opt_json["init_rho"] = init_rho;
@@ -167,13 +166,16 @@ namespace lfs::core {
             }
 
             // Mask parameters
-            static constexpr const char* MASK_MODE_NAMES[] = {"none", "segment", "ignore", "alpha_consistent"};
+            static constexpr const char* MASK_MODE_NAMES[] = {"none", "segment", "ignore", "segment_and_ignore", "alpha_consistent"};
             opt_json["mask_mode"] = MASK_MODE_NAMES[static_cast<int>(mask_mode)];
             opt_json["invert_masks"] = invert_masks;
             opt_json["mask_opacity_penalty_weight"] = mask_opacity_penalty_weight;
             opt_json["mask_opacity_penalty_power"] = mask_opacity_penalty_power;
             opt_json["mask_threshold"] = mask_threshold;
             opt_json["use_alpha_as_mask"] = use_alpha_as_mask;
+            opt_json["use_depth_loss"] = use_depth_loss;
+            opt_json["depth_loss_weight"] = depth_loss_weight;
+            opt_json["depth_loss_mode"] = depth_loss_mode;
 
             // MRNF strategy parameters
             opt_json["growth_grad_threshold"] = growth_grad_threshold;
@@ -194,12 +196,31 @@ namespace lfs::core {
                 return "GUT and igs+ strategy cannot be used together";
             if (ppisp_freeze_from_sidecar && !use_ppisp)
                 return "PPISP sidecar freeze requires PPISP enabled";
+            if (depth_loss_mode != "pearson" && depth_loss_mode != "adaptive-warped-l1")
+                return "depth_loss_mode must be 'pearson' or 'adaptive-warped-l1'";
             return {};
         }
 
         std::string TrainingParameters::validate() const {
             if (auto error = optimization.validate(); !error.empty()) {
                 return error;
+            }
+            if (!add_splat_paths.empty()) {
+                if (resume_checkpoint.has_value()) {
+                    return "--add-splat cannot be used together with --resume";
+                }
+                if (!add_splat_freeze.empty() && add_splat_freeze.size() != add_splat_paths.size()) {
+                    return "--add-splat freeze metadata is inconsistent";
+                }
+                for (const auto& path : add_splat_paths) {
+                    if (path.empty()) {
+                        return "--add-splat path cannot be empty";
+                    }
+                    if (!std::filesystem::exists(path)) {
+                        return std::format("Added splat does not exist: '{}'",
+                                           lfs::core::path_to_utf8(path));
+                    }
+                }
             }
             if (optimization.ppisp_freeze_from_sidecar && !resume_checkpoint.has_value()) {
                 if (optimization.ppisp_sidecar_path.empty()) {
@@ -424,9 +445,6 @@ namespace lfs::core {
             if (json.contains("init_extent")) {
                 params.init_extent = json["init_extent"];
             }
-            if (json.contains("tile_mode")) {
-                params.tile_mode = json["tile_mode"];
-            }
             if (json.contains("enable_sparsity")) {
                 params.enable_sparsity = json["enable_sparsity"];
             }
@@ -477,6 +495,8 @@ namespace lfs::core {
                     params.mask_mode = MaskMode::Segment;
                 } else if (mode == "ignore") {
                     params.mask_mode = MaskMode::Ignore;
+                } else if (mode == "segment_and_ignore") {
+                    params.mask_mode = MaskMode::SegmentAndIgnore;
                 } else if (mode == "alpha_consistent") {
                     params.mask_mode = MaskMode::AlphaConsistent;
                 }
@@ -495,6 +515,15 @@ namespace lfs::core {
             }
             if (json.contains("use_alpha_as_mask")) {
                 params.use_alpha_as_mask = json["use_alpha_as_mask"];
+            }
+            if (json.contains("use_depth_loss")) {
+                params.use_depth_loss = json["use_depth_loss"];
+            }
+            if (json.contains("depth_loss_weight")) {
+                params.depth_loss_weight = json["depth_loss_weight"];
+            }
+            if (json.contains("depth_loss_mode")) {
+                params.depth_loss_mode = json["depth_loss_mode"];
             }
 
             // MRNF strategy parameters
@@ -555,6 +584,7 @@ namespace lfs::core {
 
                 nlohmann::json json;
                 json["dataset"] = params.dataset.to_json();
+                json["server"] = params.server.to_json();
                 json["optimization"] = opt_copy.to_json();
 
                 const auto now = std::chrono::system_clock::now();
@@ -614,6 +644,31 @@ namespace lfs::core {
             loading_json["print_status_freq_num"] = print_status_freq_num;
 
             return loading_json;
+        }
+
+        nlohmann::json ServerConfig::to_json() const {
+            nlohmann::json json;
+            json["tcp_server_connection_port"] = tcp_server_connection_port;
+            json["tcp_broadcast_connection_port"] = tcp_broadcast_connection_port;
+            json["tcp_connection"] = tcp_connection;
+
+            return json;
+        }
+
+        ServerConfig ServerConfig::from_json(const nlohmann::json& j) {
+            ServerConfig server;
+
+            if (j.contains("tcp_server_connection_port")) {
+                server.tcp_server_connection_port = j["tcp_server_connection_port"].get<int>();
+            }
+            if (j.contains("tcp_broadcast_connection_port")) {
+                server.tcp_broadcast_connection_port = j["tcp_broadcast_connection_port"].get<int>();
+            }
+            if (j.contains("tcp_connection")) {
+                server.tcp_connection = j["tcp_connection"].get<bool>();
+            }
+
+            return server;
         }
 
         nlohmann::json DatasetConfig::to_json() const {

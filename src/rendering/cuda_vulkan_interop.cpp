@@ -8,6 +8,7 @@
 #include "image_layout.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cstring>
 #include <format>
 #include <mutex>
@@ -297,6 +298,7 @@ namespace lfs::rendering {
         cuda_array_ = std::exchange(other.cuda_array_, nullptr);
         surface_ = std::exchange(other.surface_, 0);
         cuda_timeline_ = std::exchange(other.cuda_timeline_, nullptr);
+        last_signaled_ = std::exchange(other.last_signaled_, 0);
         extent_ = std::exchange(other.extent_, {});
         format_ = std::exchange(other.format_, CudaVulkanImageFormat::Rgba8Unorm);
         staging_tensor_ = std::move(other.staging_tensor_);
@@ -394,6 +396,12 @@ namespace lfs::rendering {
             return failCuda("cudaCreateSurfaceObject", status);
         }
 
+        // cudaExternalSemaphoreHandleDesc has no initialValue field; the imported timeline starts at
+        // whatever value Vulkan created it with. Our signal contract is monotonic from 1, which only
+        // holds when the Vulkan-side initial value is 0.
+        assert(semaphore.initial_value == 0 &&
+               "CUDA timeline import assumes Vulkan initialValue==0; first signal is value 1");
+
         cudaExternalSemaphoreHandleDesc semaphore_desc{};
         semaphore_desc.type = kCudaExternalSemaphoreHandleType;
 #ifdef _WIN32
@@ -410,6 +418,7 @@ namespace lfs::rendering {
 #ifndef _WIN32
         semaphore_handle.release();
 #endif
+        last_signaled_ = semaphore.initial_value;
 
         extent_ = image.extent;
         format_ = image.format;
@@ -436,6 +445,7 @@ namespace lfs::rendering {
             cudaDestroyExternalSemaphore(cuda_timeline_);
             cuda_timeline_ = nullptr;
         }
+        last_signaled_ = 0;
         extent_ = {};
         format_ = CudaVulkanImageFormat::Rgba8Unorm;
     }
@@ -543,6 +553,9 @@ namespace lfs::rendering {
             return fail("CUDA/Vulkan timeline semaphore is not initialized");
         }
 
+        assert(value > last_signaled_ && "Vulkan timeline signal values must strictly increase");
+        last_signaled_ = value;
+
         cudaExternalSemaphoreSignalParams params{};
         params.params.fence.value = value;
         const cudaError_t status = cudaSignalExternalSemaphoresAsync(&cuda_timeline_, &params, 1, stream);
@@ -581,6 +594,7 @@ namespace lfs::rendering {
         }
         reset();
         cuda_timeline_ = std::exchange(other.cuda_timeline_, nullptr);
+        last_signaled_ = std::exchange(other.last_signaled_, 0);
         last_error_ = std::move(other.last_error_);
         return *this;
     }
@@ -595,6 +609,11 @@ namespace lfs::rendering {
         if (!nativeHandleValid(semaphore.semaphore_handle)) {
             return fail("CUDA timeline semaphore import requires a valid handle");
         }
+
+        // cudaExternalSemaphoreHandleDesc has no initialValue field; our signal contract is monotonic
+        // from 1, which only holds when the Vulkan-side initial value is 0.
+        assert(semaphore.initial_value == 0 &&
+               "CUDA timeline import assumes Vulkan initialValue==0; first signal is value 1");
 
         NativeHandleOwner semaphore_handle(semaphore.semaphore_handle);
 
@@ -613,6 +632,7 @@ namespace lfs::rendering {
 #ifndef _WIN32
         semaphore_handle.release();
 #endif
+        last_signaled_ = semaphore.initial_value;
         return true;
     }
 
@@ -621,6 +641,7 @@ namespace lfs::rendering {
             cudaDestroyExternalSemaphore(cuda_timeline_);
             cuda_timeline_ = nullptr;
         }
+        last_signaled_ = 0;
     }
 
     bool CudaTimelineSemaphore::cudaSignal(const std::uint64_t value, const cudaStream_t stream) const {
@@ -628,6 +649,9 @@ namespace lfs::rendering {
         if (cuda_timeline_ == nullptr) {
             return fail("CUDA timeline semaphore is not initialized");
         }
+        assert(value > last_signaled_ && "Vulkan timeline signal values must strictly increase");
+        last_signaled_ = value;
+
         cudaExternalSemaphoreSignalParams params{};
         params.params.fence.value = value;
         return failCuda("cudaSignalExternalSemaphoresAsync",

@@ -17,7 +17,6 @@ namespace lfs::vis::op {
 
         constexpr std::array<OpInfo, static_cast<size_t>(BuiltinOp::_Count)> OP_INFO = {{
             {"selection.stroke", "Selection Stroke"},
-            {"brush.stroke", "Brush Stroke"},
             {"transform.set", "Set Transform"},
             {"transform.translate", "Translate"},
             {"transform.rotate", "Rotate"},
@@ -50,7 +49,6 @@ namespace lfs::vis::op {
             {"builtin.rotate", "Rotate"},
             {"builtin.scale", "Scale"},
             {"builtin.mirror", "Mirror"},
-            {"builtin.brush", "Brush"},
             {"builtin.align", "Align"},
         }};
 

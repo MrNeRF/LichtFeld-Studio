@@ -1,0 +1,61 @@
+<rml>
+<head>
+  <link type="text/template" href="floating_window.rml"/>
+  <link type="text/rcss" href="import_dialog.rcss"/>
+  <link type="text/rcss" href="url_import_panel.rcss"/>
+</head>
+<body template="floating-window" data-model="url_import">
+
+  <span class="impdlg-subtitle text-muted">@tr:asset_manager.url_import.subtitle</span>
+  <div class="separator"></div>
+
+  <form id="url-import-form" class="impdlg-form">
+    <div class="impdlg-control-group">
+      <span class="impdlg-field-label text-muted">@tr:asset_manager.url_import.url_label</span>
+      <div class="impdlg-control-main">
+        <div class="impdlg-control-row">
+          <input type="text" class="impdlg-input urlimp-input" data-value="url_import_url" placeholder="https://..." />
+        </div>
+      </div>
+    </div>
+
+    <div class="urlimp-help">
+      <div id="url-import-formats-header" class="section-header urlimp-formats-header" data-event-click="toggle_formats">
+        <span id="url-import-formats-arrow" class="section-arrow">&#x25B6;</span>
+        <span>@tr:asset_manager.url_import.supported_sources</span>
+      </div>
+      <div id="url-import-formats-content" class="section-content collapsed urlimp-formats-content">
+        <div class="urlimp-hint-group">
+          <div class="urlimp-hint-title">@tr:asset_manager.url_import.asset_files_title</div>
+          <div class="urlimp-hint-line">@tr:asset_manager.url_import.asset_files_line</div>
+        </div>
+
+        <div class="urlimp-hint-group">
+          <div class="urlimp-hint-title">@tr:asset_manager.url_import.archives_title</div>
+          <div class="urlimp-hint-line">@tr:asset_manager.url_import.archives_line</div>
+        </div>
+
+        <div class="urlimp-hint-group">
+          <div class="urlimp-hint-title">@tr:asset_manager.url_import.providers_title</div>
+          <div class="urlimp-hint-line">@tr:asset_manager.url_import.providers_line</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="urlimp-progress" data-if="url_import_show_progress">
+      <progress class="urlimp-progress-bar" data-if="url_import_show_progress_bar" value="{{url_import_progress}}" max="1"></progress>
+      <span class="urlimp-status text-muted">{{url_import_status}}</span>
+    </div>
+
+    <div class="urlimp-warning" data-if="url_import_has_warning">{{url_import_warning_text}}</div>
+
+    <div class="impdlg-buttons">
+      <button type="button" class="btn btn--secondary impdlg-action-btn" data-event-click="do_cancel">@tr:common.cancel</button>
+      <button type="button" class="btn btn--primary impdlg-action-btn" data-event-click="do_load"
+              data-attrif-disabled="!url_import_button_enabled">{{url_import_button_text}}</button>
+    </div>
+    <input class="submit-proxy" type="submit" />
+  </form>
+
+</body>
+</rml>

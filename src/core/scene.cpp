@@ -5,6 +5,7 @@
 #include "core/scene.hpp"
 #include "core/camera.hpp"
 #include "core/cuda/memory_arena.hpp"
+#include "core/cuda/sh_layout.cuh"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -23,6 +24,34 @@
 #include <set>
 
 namespace lfs::core {
+
+    namespace {
+        std::string makeUniqueNodeName(const std::unordered_map<std::string, NodeId>& existing_names,
+                                       const std::string& base_name) {
+            std::string unique_name = base_name;
+            int counter = 2;
+            while (existing_names.contains(unique_name)) {
+                unique_name = base_name + "_" + std::to_string(counter++);
+            }
+            return unique_name;
+        }
+
+        [[nodiscard]] bool tensor_uses_vulkan_external_storage(const Tensor& tensor) {
+            if (!tensor.is_valid() || tensor.numel() == 0)
+                return true;
+            return tensor.is_external_storage() &&
+                   tensor.external_storage_kind() == "vulkan_external_buffer";
+        }
+
+        [[nodiscard]] bool splat_uses_vulkan_external_storage(const SplatData& model) {
+            return tensor_uses_vulkan_external_storage(model.means_raw()) &&
+                   tensor_uses_vulkan_external_storage(model.sh0_raw()) &&
+                   tensor_uses_vulkan_external_storage(model.scaling_raw()) &&
+                   tensor_uses_vulkan_external_storage(model.rotation_raw()) &&
+                   tensor_uses_vulkan_external_storage(model.opacity_raw()) &&
+                   tensor_uses_vulkan_external_storage(model.shN_raw());
+        }
+    } // namespace
 
     SceneNode::SceneNode(Scene* scene) : scene_(scene) {
         initObservables(scene);
@@ -133,51 +162,90 @@ namespace lfs::core {
         return result;
     }
 
-    void Scene::addNode(const std::string& name, std::unique_ptr<lfs::core::SplatData> model) {
-        if (name.empty()) {
+    NodeId Scene::insertNode(std::unique_ptr<SceneNode> node) {
+        if (!node) {
+            LOG_WARN("Cannot add null scene node");
+            return NULL_NODE;
+        }
+        if (node->name.empty()) {
             LOG_WARN("Cannot add node with empty name");
-            return;
+            return NULL_NODE;
+        }
+        if (name_to_id_.contains(node->name)) {
+            LOG_WARN("Cannot add duplicate node '{}'", node->name);
+            return NULL_NODE;
+        }
+        if (node->parent_id != NULL_NODE && !getNodeById(node->parent_id)) {
+            LOG_WARN("Cannot add node '{}': parent id {} does not exist", node->name, node->parent_id);
+            return NULL_NODE;
         }
 
-        if (consolidated_) {
-            LOG_DEBUG("Adding node invalidates consolidation");
+        if (consolidated_ && node->type == NodeType::SPLAT) {
+            LOG_DEBUG("Adding splat node invalidates consolidation");
             consolidated_ = false;
-            consolidated_node_ids_.clear();
+            consolidated_node_slots_.clear();
+            ++consolidated_generation_;
             cached_combined_.reset();
+            single_node_model_ = nullptr;
         }
 
-        const size_t gaussian_count = static_cast<size_t>(model->size());
-        const glm::vec3 centroid = computeCentroid(model.get());
+        const NodeId id = next_node_id_++;
+        node->id = id;
+        const NodeId parent_id = node->parent_id;
+        const std::string name = node->name;
 
-        auto name_it = name_to_id_.find(name);
-        if (name_it != name_to_id_.end()) {
-            auto* existing = getNodeById(name_it->second);
-            assert(existing);
-            existing->model = std::move(model);
-            existing->gaussian_count.store(gaussian_count, std::memory_order_release);
-            existing->centroid = centroid;
-        } else {
-            const NodeId id = next_node_id_++;
-            auto node = std::make_unique<SceneNode>();
-            node->id = id;
-            node->type = NodeType::SPLAT;
-            node->name = name;
-            node->model = std::move(model);
-            node->gaussian_count.store(gaussian_count, std::memory_order_release);
-            node->centroid = centroid;
-
-            id_to_index_[id] = nodes_.size();
-            name_to_id_[name] = id;
-            node->initObservables(this);
-            nodes_.push_back(std::move(node));
+        if (parent_id != NULL_NODE) {
+            auto* parent = getNodeById(parent_id);
+            assert(parent);
+            parent->children.push_back(id);
         }
 
+        id_to_index_[id] = nodes_.size();
+        name_to_id_[name] = id;
+        node->initObservables(this);
+        nodes_.push_back(std::move(node));
         notifyMutation(MutationType::NODE_ADDED);
-        LOG_DEBUG("Added node '{}': {} gaussians", name, gaussian_count);
+        return id;
     }
 
     void Scene::removeNode(const std::string& name, const bool keep_children) {
         removeNodeInternal(name, keep_children, false);
+    }
+
+    std::vector<std::unique_ptr<lfs::core::SplatData>> Scene::detachSplatModelsForRemoval(
+        const std::string& name,
+        const bool keep_children) {
+        std::vector<std::unique_ptr<lfs::core::SplatData>> detached;
+
+        const NodeId root_id = getNodeIdByName(name);
+        if (root_id == NULL_NODE) {
+            return detached;
+        }
+
+        std::vector<NodeId> pending{root_id};
+        while (!pending.empty()) {
+            const NodeId id = pending.back();
+            pending.pop_back();
+
+            auto* node = getNodeById(id);
+            if (!node) {
+                continue;
+            }
+
+            if (node->model) {
+                detached.push_back(std::move(node->model));
+            }
+
+            if (!keep_children) {
+                pending.insert(pending.end(), node->children.begin(), node->children.end());
+            }
+        }
+
+        if (!detached.empty()) {
+            invalidateCache();
+            single_node_model_ = nullptr;
+        }
+        return detached;
     }
 
     void Scene::removeNodeInternal(const std::string& name, const bool keep_children, [[maybe_unused]] const bool force) {
@@ -233,9 +301,16 @@ namespace lfs::core {
         const std::string name_copy = name;
         const bool removed_training_model = (training_model_node_ == name_copy);
 
+        removeConsolidatedNodeData(id);
+
         name_to_id_.erase(name_it);
         id_to_index_.erase(id);
         nodes_.erase(nodes_.begin() + static_cast<ptrdiff_t>(removed_index));
+        invalidateCache();
+        single_node_model_ = nullptr;
+        if (!consolidated_) {
+            cached_combined_.reset();
+        }
 
         for (auto& [node_id, index] : id_to_index_) {
             if (index > removed_index)
@@ -260,8 +335,26 @@ namespace lfs::core {
     }
 
     void Scene::replaceNodeModel(const std::string& name, std::unique_ptr<lfs::core::SplatData> model) {
+        if (!model) {
+            LOG_WARN("replaceNodeModel: model for node '{}' is null", name);
+            return;
+        }
+
         auto* node = getMutableNode(name);
         if (node) {
+            if (node->type != NodeType::SPLAT) {
+                LOG_WARN("replaceNodeModel: node '{}' is not a splat node", name);
+                return;
+            }
+
+            if (consolidated_) {
+                consolidated_ = false;
+                consolidated_node_slots_.clear();
+                ++consolidated_generation_;
+            }
+            cached_combined_.reset();
+            single_node_model_ = nullptr;
+
             const size_t gaussian_count = static_cast<size_t>(model->size());
             const glm::vec3 centroid = computeCentroid(model.get());
             LOG_DEBUG("replaceNodeModel '{}': {} -> {} gaussians",
@@ -277,30 +370,44 @@ namespace lfs::core {
         }
     }
 
+    std::unique_ptr<lfs::core::SplatData> Scene::swapNodeModel(
+        const std::string& name, std::unique_ptr<lfs::core::SplatData> model) {
+        auto* node = getMutableNode(name);
+        if (!node) {
+            LOG_WARN("swapNodeModel: node '{}' not found", name);
+            return model;
+        }
+
+        const size_t gaussian_count = model ? static_cast<size_t>(model->size()) : 0;
+        const glm::vec3 centroid = model ? computeCentroid(model.get()) : node->centroid;
+        auto previous = std::move(node->model);
+        node->model = std::move(model);
+        node->gaussian_count.store(gaussian_count, std::memory_order_release);
+        node->centroid = centroid;
+        notifyMutation(MutationType::MODEL_CHANGED);
+        return previous;
+    }
+
     void Scene::setNodeVisibility(const std::string& name, const bool visible) {
         auto it = name_to_id_.find(name);
         if (it != name_to_id_.end()) {
-            setNodeVisibilityById(it->second, visible);
+            setNodeVisibility(it->second, visible);
         }
     }
 
-    void Scene::setNodeLocked(const std::string& name, const bool locked) {
-        auto* node = getMutableNode(name);
-        if (node) {
-            node->locked.set(locked, false);
-        }
-    }
-
-    void Scene::setNodeVisibilityById(const NodeId id, const bool visible) {
+    void Scene::setNodeVisibility(const NodeId id, const bool visible) {
         const auto idx_it = id_to_index_.find(id);
         if (idx_it == id_to_index_.end())
             return;
 
         SceneNode* node = nodes_[idx_it->second].get();
         node->visible.set(visible, false);
+    }
 
-        for (const NodeId child_id : node->children) {
-            setNodeVisibilityById(child_id, visible);
+    void Scene::setNodeLocked(const std::string& name, const bool locked) {
+        auto* node = getMutableNode(name);
+        if (node) {
+            node->locked.set(locked, false);
         }
     }
 
@@ -331,7 +438,8 @@ namespace lfs::core {
         model_cache_valid_.store(false, std::memory_order_release);
         transform_cache_valid_.store(false, std::memory_order_release);
         consolidated_ = false;
-        consolidated_node_ids_.clear();
+        consolidated_node_slots_.clear();
+        ++consolidated_generation_;
 
         resetSelectionState();
 
@@ -358,21 +466,47 @@ namespace lfs::core {
         Transaction txn(*this);
         std::string hidden_name, shown_name;
 
+        const auto has_ancestor = [this](const NodeId node_id, const NodeId ancestor_id) {
+            const auto* node = getNodeById(node_id);
+            while (node && node->parent_id != NULL_NODE) {
+                if (node->parent_id == ancestor_id)
+                    return true;
+                node = getNodeById(node->parent_id);
+            }
+            return false;
+        };
+
+        const auto is_cycle_candidate = [this](const std::unique_ptr<SceneNode>& n) {
+            return n->type == NodeType::SPLAT && n->model &&
+                   (n->parent_id == NULL_NODE || isNodeEffectivelyVisible(n->parent_id));
+        };
+
         auto visible = std::find_if(nodes_.begin(), nodes_.end(),
-                                    [](const std::unique_ptr<SceneNode>& n) { return n->visible; });
+                                    [this](const std::unique_ptr<SceneNode>& n) {
+                                        return n->type == NodeType::SPLAT && n->model &&
+                                               isNodeEffectivelyVisible(n->id);
+                                    });
 
         if (visible != nodes_.end()) {
+            auto next = visible;
+            do {
+                next = nodes_.begin() + ((std::distance(nodes_.begin(), next) + 1) % nodes_.size());
+                if (next == visible)
+                    return EMPTY_PAIR;
+            } while (!is_cycle_candidate(*next) || has_ancestor((*next)->id, (*visible)->id));
+
             (*visible)->visible = false;
             hidden_name = (*visible)->name;
-
-            const auto next_index = (std::distance(nodes_.begin(), visible) + 1) % nodes_.size();
-            const auto next = nodes_.begin() + next_index;
 
             (*next)->visible = true;
             shown_name = (*next)->name;
         } else {
-            nodes_[0]->visible = true;
-            shown_name = nodes_[0]->name;
+            auto first_splat = std::find_if(nodes_.begin(), nodes_.end(),
+                                            is_cycle_candidate);
+            if (first_splat == nodes_.end())
+                return EMPTY_PAIR;
+            (*first_splat)->visible = true;
+            shown_name = (*first_splat)->name;
         }
 
         return {hidden_name, shown_name};
@@ -384,17 +518,38 @@ namespace lfs::core {
     }
 
     size_t Scene::consolidateNodeModels() {
-        rebuildCacheIfNeeded();
+        const size_t loaded_splat_count = std::count_if(
+            nodes_.begin(), nodes_.end(),
+            [](const std::unique_ptr<SceneNode>& node) {
+                return node->type == NodeType::SPLAT && node->model;
+            });
+        if (loaded_splat_count < 2) {
+            return 0;
+        }
+        if (export_pin_count_.load(std::memory_order_acquire) > 0) {
+            return 0;
+        }
+
+        model_cache_valid_.store(false, std::memory_order_release);
+        cached_combined_.reset();
+        single_node_model_ = nullptr;
+        cached_transform_indices_.reset();
+        cached_visible_selection_indices_.reset();
+        rebuildModelCacheIfNeeded(/*include_hidden_splats=*/true);
 
         if (single_node_model_ || !cached_combined_) {
             return 0;
         }
 
-        consolidated_node_ids_.clear();
+        consolidated_node_slots_.clear();
         size_t consolidated = 0;
+        size_t consolidated_gaussians = 0;
         for (auto& node : nodes_) {
-            if (node->model && isNodeEffectivelyVisible(node->id)) {
-                consolidated_node_ids_.push_back(node->id);
+            if (node->type == NodeType::SPLAT && node->model) {
+                const size_t gaussian_count = static_cast<size_t>(node->model->size());
+                consolidated_node_slots_.push_back({.id = node->id,
+                                                    .gaussian_count = gaussian_count});
+                consolidated_gaussians += gaussian_count;
                 node->model.reset();
                 ++consolidated;
             }
@@ -403,26 +558,291 @@ namespace lfs::core {
         if (consolidated > 0) {
             consolidated_ = true;
             constexpr size_t BYTES_PER_GAUSSIAN = 3 * 4 + 1 * 3 * 4 + 3 * 4 + 4 * 4 + 1 * 4;
-            const size_t saved_mb = getTotalGaussianCount() * BYTES_PER_GAUSSIAN / (1024 * 1024);
+            const size_t saved_mb = consolidated_gaussians * BYTES_PER_GAUSSIAN / (1024 * 1024);
             LOG_INFO("Consolidated {} nodes, saved ~{} MB VRAM", consolidated, saved_mb);
-            notifyMutation(MutationType::MODEL_CHANGED);
+            ++consolidated_generation_;
+            notifyMutation(MutationType::VISIBILITY_CHANGED);
         }
 
         return consolidated;
     }
 
+    void Scene::removeConsolidatedNodeData(const NodeId id) {
+        if (!consolidated_ || consolidated_node_slots_.empty()) {
+            return;
+        }
+
+        std::lock_guard<std::mutex> lock(combined_model_mutex_);
+
+        const auto slot_it = std::find_if(consolidated_node_slots_.begin(), consolidated_node_slots_.end(),
+                                          [id](const ConsolidatedNodeSlot& slot) { return slot.id == id; });
+        if (slot_it == consolidated_node_slots_.end()) {
+            return;
+        }
+
+        slot_it->id = NULL_NODE;
+        ++consolidated_generation_;
+        cached_transform_indices_.reset();
+        cached_visible_selection_indices_.reset();
+        model_cache_valid_.store(false, std::memory_order_release);
+        transform_cache_valid_.store(false, std::memory_order_release);
+    }
+
+    std::optional<Scene::ConsolidatedCompactionSnapshot> Scene::captureConsolidatedCompaction() const {
+        if (!consolidated_) {
+            return std::nullopt;
+        }
+
+        std::lock_guard<std::mutex> lock(combined_model_mutex_);
+        if (!cached_combined_ || consolidated_node_slots_.empty()) {
+            return std::nullopt;
+        }
+
+        bool has_removed_slot = false;
+        auto slots = consolidated_node_slots_;
+        for (auto& slot : slots) {
+            if (slot.id == NULL_NODE || !getNodeById(slot.id)) {
+                slot.id = NULL_NODE;
+                has_removed_slot = true;
+            }
+        }
+
+        if (!has_removed_slot) {
+            return std::nullopt;
+        }
+
+        return ConsolidatedCompactionSnapshot{
+            .model = cached_combined_,
+            .slots = std::move(slots),
+            .generation = consolidated_generation_,
+            .allocator = combined_model_allocator_,
+        };
+    }
+
+    std::shared_ptr<lfs::core::SplatData> Scene::compactConsolidatedSnapshot(
+        const ConsolidatedCompactionSnapshot& snapshot,
+        std::vector<ConsolidatedNodeSlot>& compacted_slots) {
+        compacted_slots.clear();
+
+        const auto& source = snapshot.model;
+        if (!source || source->size() == 0 || snapshot.slots.empty()) {
+            return nullptr;
+        }
+
+        struct LiveRange {
+            size_t src_start = 0;
+            size_t count = 0;
+            size_t dst_start = 0;
+        };
+
+        const size_t old_size = static_cast<size_t>(source->size());
+        std::vector<LiveRange> live_ranges;
+        live_ranges.reserve(snapshot.slots.size());
+
+        size_t src_offset = 0;
+        size_t dst_offset = 0;
+        for (const auto& slot : snapshot.slots) {
+            if (src_offset >= old_size) {
+                break;
+            }
+
+            const size_t count = std::min(slot.gaussian_count, old_size - src_offset);
+            if (slot.id != NULL_NODE && count > 0) {
+                live_ranges.push_back({.src_start = src_offset,
+                                       .count = count,
+                                       .dst_start = dst_offset});
+                compacted_slots.push_back({.id = slot.id, .gaussian_count = count});
+                dst_offset += count;
+            }
+            src_offset += slot.gaussian_count;
+        }
+
+        const size_t new_size = dst_offset;
+        if (new_size == 0) {
+            return nullptr;
+        }
+
+        const auto device = source->means_raw().device();
+        const auto& alloc = snapshot.allocator;
+        const auto alloc_param = [&](TensorShape shape, const size_t rows, const std::string_view name) -> Tensor {
+            return alloc ? alloc(std::move(shape), rows, DataType::Float32, name)
+                         : Tensor::empty(std::move(shape), device);
+        };
+        const auto copy_live_ranges = [&](const Tensor& src, const std::string_view name) {
+            auto dims = src.shape().dims();
+            dims[0] = new_size;
+            Tensor dst = alloc_param(TensorShape(dims), new_size, name);
+            for (const auto& range : live_ranges) {
+                dst.slice(0, range.dst_start, range.dst_start + range.count) =
+                    src.slice(0, range.src_start, range.src_start + range.count);
+            }
+            return dst;
+        };
+
+        Tensor deleted;
+        if (source->has_deleted_mask() && source->deleted().numel() == old_size) {
+            deleted = Tensor::empty({new_size}, device, DataType::Bool);
+            for (const auto& range : live_ranges) {
+                deleted.slice(0, range.dst_start, range.dst_start + range.count) =
+                    source->deleted().slice(0, range.src_start, range.src_start + range.count);
+            }
+        }
+
+        Tensor shN;
+        const auto layout_rest = static_cast<std::uint32_t>(source->max_sh_coeffs_rest());
+        if (layout_rest > 0 && source->shN_raw().is_valid() && source->shN_raw().numel() > 0) {
+            const size_t shN_floats = lfs::core::sh_swizzled_float_count(new_size, layout_rest);
+            if (alloc) {
+                shN = alloc(TensorShape({shN_floats}), shN_floats, DataType::Float32, "SplatData.shN");
+                shN.zero_();
+            } else {
+                shN = Tensor::zeros_direct(TensorShape({shN_floats}), shN_floats, Device::CUDA);
+            }
+            for (const auto& range : live_ranges) {
+                lfs::core::shN_swizzled_copy_range(
+                    source->shN_raw().ptr<float>(),
+                    shN.ptr<float>(),
+                    range.src_start,
+                    range.count,
+                    range.dst_start,
+                    layout_rest,
+                    layout_rest,
+                    shN.stream());
+            }
+        } else {
+            shN = Tensor::zeros({0}, Device::CUDA);
+        }
+
+        auto compacted = std::make_shared<lfs::core::SplatData>(
+            source->get_max_sh_degree(),
+            copy_live_ranges(source->means_raw(), "SplatData.means"),
+            copy_live_ranges(source->sh0_raw(), "SplatData.sh0"),
+            std::move(shN),
+            copy_live_ranges(source->scaling_raw(), "SplatData.scaling"),
+            copy_live_ranges(source->rotation_raw(), "SplatData.rotation"),
+            copy_live_ranges(source->opacity_raw(), "SplatData.opacity"),
+            source->get_scene_scale(),
+            lfs::core::SplatData::ShNLayout::Swizzled);
+        compacted->set_active_sh_degree(source->get_active_sh_degree());
+        compacted->set_tensor_allocator(snapshot.allocator);
+
+        if (deleted.is_valid()) {
+            compacted->deleted() = std::move(deleted);
+        }
+
+        const auto& frozen_ranges = source->frozen_ranges();
+        if (!frozen_ranges.empty()) {
+            const auto add_range = [](std::vector<SplatData::FrozenRange>& ranges, const size_t start, const size_t end) {
+                if (end <= start) {
+                    return;
+                }
+                if (!ranges.empty() && ranges.back().start + ranges.back().count == start) {
+                    ranges.back().count += end - start;
+                } else {
+                    ranges.push_back({.start = start, .count = end - start});
+                }
+            };
+            std::vector<SplatData::FrozenRange> remapped_ranges;
+            for (const auto& range : frozen_ranges) {
+                if (range.count == 0 || range.start >= old_size) {
+                    continue;
+                }
+                const size_t old_range_end = std::min(old_size, range.start + range.count);
+                for (const auto& live : live_ranges) {
+                    const size_t live_end = live.src_start + live.count;
+                    const size_t overlap_start = std::max(range.start, live.src_start);
+                    const size_t overlap_end = std::min(old_range_end, live_end);
+                    if (overlap_end <= overlap_start) {
+                        continue;
+                    }
+                    const size_t remapped_start = live.dst_start + (overlap_start - live.src_start);
+                    add_range(remapped_ranges, remapped_start, remapped_start + (overlap_end - overlap_start));
+                }
+            }
+            compacted->set_frozen_ranges(std::move(remapped_ranges));
+        }
+
+        cudaDeviceSynchronize();
+
+        LOG_INFO("Consolidated compaction removed {} gaussians ({} -> {})",
+                 old_size - new_size,
+                 old_size,
+                 new_size);
+        return compacted;
+    }
+
+    bool Scene::installConsolidatedCompaction(const std::shared_ptr<lfs::core::SplatData>& model,
+                                              std::vector<ConsolidatedNodeSlot> slots,
+                                              const uint64_t generation) {
+        std::lock_guard<std::mutex> lock(combined_model_mutex_);
+        if (!consolidated_ || generation != consolidated_generation_) {
+            return false;
+        }
+
+        if (!model || slots.empty()) {
+            cached_combined_.reset();
+            consolidated_node_slots_.clear();
+            consolidated_ = false;
+        } else {
+            cached_combined_ = model;
+            consolidated_node_slots_ = std::move(slots);
+            consolidated_ = true;
+        }
+        ++consolidated_generation_;
+
+        cached_transform_indices_.reset();
+        cached_visible_selection_indices_.reset();
+        model_cache_valid_.store(false, std::memory_order_release);
+        transform_cache_valid_.store(false, std::memory_order_release);
+        return true;
+    }
+
+    void Scene::rebuildConsolidatedTransformIndices() const {
+        if (!consolidated_ || !cached_combined_ || consolidated_node_slots_.empty()) {
+            cached_transform_indices_.reset();
+            return;
+        }
+
+        std::vector<int> transform_indices;
+        for (size_t slot = 0; slot < consolidated_node_slots_.size(); ++slot) {
+            const size_t count = consolidated_node_slots_[slot].gaussian_count;
+            transform_indices.insert(transform_indices.end(), count, static_cast<int>(slot));
+        }
+
+        const size_t combined_size = static_cast<size_t>(cached_combined_->size());
+        if (transform_indices.size() != combined_size) {
+            LOG_WARN("Consolidated transform-index rebuild skipped: {} indices for {} gaussians",
+                     transform_indices.size(),
+                     combined_size);
+            cached_transform_indices_.reset();
+            return;
+        }
+
+        cached_transform_indices_ = std::make_shared<Tensor>(
+            Tensor::from_vector(
+                transform_indices,
+                TensorShape({transform_indices.size()}),
+                Device::CPU)
+                .cuda());
+    }
+
     std::vector<bool> Scene::getNodeVisibilityMask() const {
-        if (!consolidated_ || consolidated_node_ids_.empty()) {
+        if (!consolidated_ || consolidated_node_slots_.empty()) {
             return {};
         }
 
         std::vector<bool> mask;
-        mask.reserve(consolidated_node_ids_.size());
-        for (const NodeId id : consolidated_node_ids_) {
-            if (const auto* node = getNodeById(id)) {
-                mask.push_back(node->visible.get());
+        mask.reserve(consolidated_node_slots_.size());
+        for (const auto& slot : consolidated_node_slots_) {
+            if (slot.id != NULL_NODE) {
+                const auto* node = getNodeById(slot.id);
+                if (!node) {
+                    mask.push_back(false);
+                    continue;
+                }
+                mask.push_back(isNodeEffectivelyVisible(node->id));
             } else {
-                mask.push_back(true);
+                mask.push_back(false);
             }
         }
         return mask;
@@ -544,9 +964,39 @@ namespace lfs::core {
     std::vector<const SceneNode*> Scene::getVisibleNodes() const {
         std::vector<const SceneNode*> visible;
         for (const auto& node : nodes_) {
-            if (node->visible && node->model) {
+            if (node->model && isNodeEffectivelyVisible(node->id)) {
                 visible.push_back(node.get());
             }
+        }
+        return visible;
+    }
+
+    std::vector<Scene::VisibleSplatNodeSlot> Scene::getVisibleSplatNodeSlots() const {
+        std::vector<VisibleSplatNodeSlot> visible;
+
+        if (consolidated_ && !consolidated_node_slots_.empty()) {
+            visible.reserve(consolidated_node_slots_.size());
+            for (size_t slot_index = 0; slot_index < consolidated_node_slots_.size(); ++slot_index) {
+                const auto& slot = consolidated_node_slots_[slot_index];
+                const auto* node = slot.id == NULL_NODE ? nullptr : getNodeById(slot.id);
+                if (!node || node->type != NodeType::SPLAT ||
+                    slot.gaussian_count == 0 ||
+                    !isNodeEffectivelyVisible(node->id)) {
+                    continue;
+                }
+                visible.push_back({.node = node, .slot_index = slot_index});
+            }
+            return visible;
+        }
+
+        size_t slot_index = 0;
+        for (const auto& node : nodes_) {
+            if (node->type != NodeType::SPLAT || !node->model ||
+                !isNodeEffectivelyVisible(node->id)) {
+                continue;
+            }
+            visible.push_back({.node = node.get(), .slot_index = slot_index});
+            ++slot_index;
         }
         return visible;
     }
@@ -603,20 +1053,35 @@ namespace lfs::core {
         return (it != name_to_id_.end()) ? it->second : NULL_NODE;
     }
 
+    void Scene::setCombinedModelAllocator(SplatTensorAllocator allocator) {
+        std::lock_guard<std::mutex> lock(combined_model_mutex_);
+        combined_model_allocator_ = std::move(allocator);
+        model_cache_valid_.store(false, std::memory_order_release);
+    }
+
     void Scene::rebuildModelCacheIfNeeded() const {
-        if (model_cache_valid_.load(std::memory_order_acquire))
+        rebuildModelCacheIfNeeded(false);
+    }
+
+    void Scene::rebuildModelCacheIfNeeded(const bool include_hidden_splats) const {
+        if (!include_hidden_splats && model_cache_valid_.load(std::memory_order_acquire))
+            return;
+
+        std::lock_guard<std::mutex> lock(combined_model_mutex_);
+        if (!include_hidden_splats && model_cache_valid_.load(std::memory_order_acquire))
             return;
 
         if (export_pin_count_.load(std::memory_order_acquire) > 0)
             return;
 
-        if (consolidated_ && cached_combined_) {
+        if (!include_hidden_splats && consolidated_ && cached_combined_) {
             cached_visible_selection_indices_.reset();
+            rebuildConsolidatedTransformIndices();
             model_cache_valid_.store(true, std::memory_order_release);
             return;
         }
 
-        LOG_DEBUG("Rebuilding combined model cache");
+        LOG_DEBUG("Rebuilding combined model cache{}", include_hidden_splats ? " for consolidation" : "");
 
         single_node_model_ = nullptr;
 
@@ -631,14 +1096,17 @@ namespace lfs::core {
             const size_t node_size = node->model
                                          ? static_cast<size_t>(node->model->size())
                                          : node->gaussian_count.load(std::memory_order_acquire);
-            if (node->model && isNodeEffectivelyVisible(node->id)) {
+            if (node->model && (include_hidden_splats || isNodeEffectivelyVisible(node->id))) {
                 visible_nodes.push_back(node.get());
                 visible_selection_offsets.push_back(full_selection_count);
             }
             full_selection_count += node_size;
         }
 
-        LOG_DEBUG("rebuildModelCache: {} visible of {} nodes", visible_nodes.size(), nodes_.size());
+        LOG_DEBUG("rebuildModelCache: {} {} of {} nodes",
+                  visible_nodes.size(),
+                  include_hidden_splats ? "loaded" : "visible",
+                  nodes_.size());
 
         if (visible_nodes.empty()) {
             cached_combined_.reset();
@@ -649,7 +1117,10 @@ namespace lfs::core {
             return;
         }
 
-        if (visible_nodes.size() == 1) {
+        if (visible_nodes.size() == 1 &&
+            (!combined_model_allocator_ ||
+             visible_nodes[0]->model->lod_tree ||
+             splat_uses_vulkan_external_storage(*visible_nodes[0]->model))) {
             const auto* node = visible_nodes[0];
             single_node_model_ = node->model.get();
             cached_combined_.reset();
@@ -679,6 +1150,7 @@ namespace lfs::core {
         struct ModelStats {
             size_t total_gaussians = 0;
             int max_sh_degree = 0;
+            int max_active_sh_degree = 0;
             float total_scene_scale = 0.0f;
             bool has_shN = false;
         };
@@ -694,30 +1166,50 @@ namespace lfs::core {
             stats.total_gaussians += node_size;
 
             const auto& shN_tensor = model->shN_raw();
-            if (shN_tensor.is_valid() && shN_tensor.ndim() >= 2 && shN_tensor.size(1) > 0) {
-                const int shN_coeffs = static_cast<int>(shN_tensor.size(1));
-                const int sh_degree = std::clamp(
-                    static_cast<int>(std::round(std::sqrt(shN_coeffs + 1))) - 1, 0, 3);
-                stats.max_sh_degree = std::max(stats.max_sh_degree, sh_degree);
+            const auto model_layout_rest = model->max_sh_coeffs_rest();
+            if (shN_tensor.is_valid() && shN_tensor.numel() > 0 && model_layout_rest > 0) {
+                stats.max_sh_degree = std::max(stats.max_sh_degree, model->get_max_sh_degree());
             }
+            stats.max_active_sh_degree = std::max(stats.max_active_sh_degree, model->get_active_sh_degree());
 
             stats.total_scene_scale += model->get_scene_scale();
-            stats.has_shN = stats.has_shN || (shN_tensor.numel() > 0 && shN_tensor.size(1) > 0);
+            stats.has_shN = stats.has_shN || (shN_tensor.numel() > 0 && model_layout_rest > 0);
         }
 
         const lfs::core::Device device = visible_nodes[0]->model->means_raw().device();
         constexpr int SH0_COEFFS = 1;
-        const int shN_coeffs = (stats.max_sh_degree > 0)
-                                   ? ((stats.max_sh_degree + 1) * (stats.max_sh_degree + 1) - 1)
-                                   : 0;
+        const auto dst_layout_rest = sh_rest_coefficients_for_degree(stats.max_sh_degree);
+        const size_t shN_swizzled_floats = lfs::core::sh_swizzled_float_count(stats.total_gaussians, dst_layout_rest);
 
         using lfs::core::Tensor;
-        Tensor means = Tensor::empty({static_cast<size_t>(stats.total_gaussians), 3}, device);
-        Tensor sh0 = Tensor::empty({static_cast<size_t>(stats.total_gaussians), static_cast<size_t>(SH0_COEFFS), 3}, device);
-        Tensor shN = (shN_coeffs > 0) ? Tensor::zeros({static_cast<size_t>(stats.total_gaussians), static_cast<size_t>(shN_coeffs), 3}, device) : Tensor::empty({static_cast<size_t>(stats.total_gaussians), 0, 3}, device);
-        Tensor opacity = Tensor::empty({static_cast<size_t>(stats.total_gaussians), 1}, device);
-        Tensor scaling = Tensor::empty({static_cast<size_t>(stats.total_gaussians), 3}, device);
-        Tensor rotation = Tensor::empty({static_cast<size_t>(stats.total_gaussians), 4}, device);
+        const size_t total = stats.total_gaussians;
+        const auto& alloc = combined_model_allocator_;
+        const auto alloc_param = [&](TensorShape shape, const size_t rows, const std::string_view name) -> Tensor {
+            return alloc ? alloc(std::move(shape), rows, lfs::core::DataType::Float32, name)
+                         : Tensor::empty(std::move(shape), device);
+        };
+        Tensor means = alloc_param(TensorShape({total, 3}), total, "SplatData.means");
+        Tensor sh0 = alloc_param(TensorShape({total, static_cast<size_t>(SH0_COEFFS), 3}), total, "SplatData.sh0");
+        // shN needs zeroing: copy_contiguous leaves the swizzled block-padding lanes untouched.
+        Tensor shN;
+        if (shN_swizzled_floats > 0) {
+            if (alloc) {
+                shN = alloc(TensorShape({shN_swizzled_floats}),
+                            shN_swizzled_floats,
+                            lfs::core::DataType::Float32,
+                            "SplatData.shN");
+                shN.zero_();
+            } else {
+                shN = Tensor::zeros_direct(TensorShape({shN_swizzled_floats}),
+                                           shN_swizzled_floats,
+                                           lfs::core::Device::CUDA);
+            }
+        } else {
+            shN = Tensor::zeros({0}, lfs::core::Device::CUDA);
+        }
+        Tensor opacity = alloc_param(TensorShape({total, 1}), total, "SplatData.opacity");
+        Tensor scaling = alloc_param(TensorShape({total, 3}), total, "SplatData.scaling");
+        Tensor rotation = alloc_param(TensorShape({total, 4}), total, "SplatData.rotation");
 
         const bool has_any_deleted = std::any_of(visible_nodes.begin(), visible_nodes.end(),
                                                  [](const SceneNode* node) { return node->model->has_deleted_mask(); });
@@ -743,15 +1235,17 @@ namespace lfs::core {
             sh0.slice(0, offset, offset + size) = model->sh0_raw();
             opacity.slice(0, offset, offset + size) = model->opacity_raw();
 
-            if (shN_coeffs > 0) {
-                const auto& model_shN = model->shN_raw();
-                const int model_shN_coeffs = (model_shN.is_valid() && model_shN.ndim() >= 2)
-                                                 ? static_cast<int>(model_shN.size(1))
-                                                 : 0;
-                if (model_shN_coeffs > 0) {
-                    const int coeffs_to_copy = std::min(model_shN_coeffs, shN_coeffs);
-                    shN.slice(0, offset, offset + size).slice(1, 0, coeffs_to_copy) =
-                        model_shN.slice(1, 0, coeffs_to_copy);
+            if (stats.max_sh_degree > 0 && model->shN_raw().is_valid() && model->shN_raw().numel() > 0) {
+                const auto model_layout_rest = static_cast<std::uint32_t>(model->max_sh_coeffs_rest());
+                if (model_layout_rest > 0) {
+                    lfs::core::shN_swizzled_copy_contiguous(
+                        model->shN_raw().ptr<float>(),
+                        shN.ptr<float>(),
+                        size,
+                        offset,
+                        model_layout_rest,
+                        dst_layout_rest,
+                        shN.stream());
                 }
             }
 
@@ -781,7 +1275,7 @@ namespace lfs::core {
                 Tensor::from_vector(visible_indices, {stats.total_gaussians}, lfs::core::Device::CPU).cuda());
         }
 
-        cached_combined_ = std::make_unique<lfs::core::SplatData>(
+        cached_combined_ = std::make_shared<lfs::core::SplatData>(
             stats.max_sh_degree,
             std::move(means),
             std::move(sh0),
@@ -789,7 +1283,10 @@ namespace lfs::core {
             std::move(scaling),
             std::move(rotation),
             std::move(opacity),
-            stats.total_scene_scale / visible_nodes.size());
+            stats.total_scene_scale / visible_nodes.size(),
+            lfs::core::SplatData::ShNLayout::Swizzled);
+        cached_combined_->set_active_sh_degree(stats.max_active_sh_degree);
+        cached_combined_->set_tensor_allocator(combined_model_allocator_);
 
         if (has_any_deleted) {
             cached_combined_->deleted() = std::move(deleted);
@@ -804,6 +1301,17 @@ namespace lfs::core {
             return;
 
         cached_transforms_.clear();
+        if (consolidated_ && !consolidated_node_slots_.empty()) {
+            cached_transforms_.reserve(consolidated_node_slots_.size());
+            for (const auto& slot : consolidated_node_slots_) {
+                cached_transforms_.push_back(slot.id != NULL_NODE && getNodeById(slot.id)
+                                                 ? getWorldTransform(slot.id)
+                                                 : glm::mat4(1.0f));
+            }
+            transform_cache_valid_.store(true, std::memory_order_release);
+            return;
+        }
+
         for (const auto& node : nodes_) {
             if (node->model && isNodeEffectivelyVisible(node->id)) {
                 cached_transforms_.push_back(getWorldTransform(node->id));
@@ -852,9 +1360,20 @@ namespace lfs::core {
     }
 
     int Scene::getVisibleNodeIndex(const std::string& name) const {
+        if (consolidated_ && !consolidated_node_slots_.empty()) {
+            for (size_t index = 0; index < consolidated_node_slots_.size(); ++index) {
+                const auto& slot = consolidated_node_slots_[index];
+                const auto* node = slot.id == NULL_NODE ? nullptr : getNodeById(slot.id);
+                if (node && node->name == name && isNodeEffectivelyVisible(node->id)) {
+                    return static_cast<int>(index);
+                }
+            }
+            return -1;
+        }
+
         int index = 0;
         for (const auto& node : nodes_) {
-            if (!node->visible || !node->model)
+            if (!node->model || !isNodeEffectivelyVisible(node->id))
                 continue;
             if (node->name == name)
                 return index;
@@ -866,9 +1385,21 @@ namespace lfs::core {
     int Scene::getVisibleNodeIndex(const NodeId node_id) const {
         if (node_id == NULL_NODE)
             return -1;
+
+        if (consolidated_ && !consolidated_node_slots_.empty()) {
+            for (size_t index = 0; index < consolidated_node_slots_.size(); ++index) {
+                const auto& slot = consolidated_node_slots_[index];
+                const auto* node = slot.id == NULL_NODE ? nullptr : getNodeById(slot.id);
+                if (node && node->id == node_id && isNodeEffectivelyVisible(node->id)) {
+                    return static_cast<int>(index);
+                }
+            }
+            return -1;
+        }
+
         int index = 0;
         for (const auto& node : nodes_) {
-            if (!node->visible || !node->model)
+            if (!node->model || !isNodeEffectivelyVisible(node->id))
                 continue;
             if (node->id == node_id)
                 return index;
@@ -878,16 +1409,25 @@ namespace lfs::core {
     }
 
     std::vector<bool> Scene::getSelectedNodeMask(const std::string& selected_node_name) const {
+        const auto consolidated_visible_count = [&]() -> std::optional<size_t> {
+            if (consolidated_ && !consolidated_node_slots_.empty()) {
+                return consolidated_node_slots_.size();
+            }
+            return std::nullopt;
+        }();
         const size_t visible_count = std::count_if(nodes_.begin(), nodes_.end(),
-                                                   [](const auto& n) { return n->visible && n->model; });
+                                                   [this](const auto& n) {
+                                                       return n->model && isNodeEffectivelyVisible(n->id);
+                                                   });
+        const size_t mask_count = consolidated_visible_count.value_or(visible_count);
 
         if (selected_node_name.empty()) {
-            return std::vector<bool>(visible_count, false);
+            return std::vector<bool>(mask_count, false);
         }
 
         const SceneNode* selected = getNode(selected_node_name);
         if (!selected) {
-            return std::vector<bool>(visible_count, false);
+            return std::vector<bool>(mask_count, false);
         }
 
         if (selected->type == NodeType::CROPBOX && selected->parent_id != NULL_NODE) {
@@ -905,10 +1445,20 @@ namespace lfs::core {
             return false;
         };
 
+        if (consolidated_visible_count) {
+            std::vector<bool> mask(consolidated_node_slots_.size(), false);
+            for (size_t slot_index = 0; slot_index < consolidated_node_slots_.size(); ++slot_index) {
+                const auto& slot = consolidated_node_slots_[slot_index];
+                const auto* node = slot.id == NULL_NODE ? nullptr : getNodeById(slot.id);
+                mask[slot_index] = node && isSelectedOrDescendant(node);
+            }
+            return mask;
+        }
+
         std::vector<bool> mask;
         mask.reserve(visible_count);
         for (const auto& node : nodes_) {
-            if (node->visible && node->model) {
+            if (node->model && isNodeEffectivelyVisible(node->id)) {
                 mask.push_back(isSelectedOrDescendant(node.get()));
             }
         }
@@ -916,11 +1466,20 @@ namespace lfs::core {
     }
 
     std::vector<bool> Scene::getSelectedNodeMask(const std::vector<std::string>& selected_node_names) const {
+        const auto consolidated_visible_count = [&]() -> std::optional<size_t> {
+            if (consolidated_ && !consolidated_node_slots_.empty()) {
+                return consolidated_node_slots_.size();
+            }
+            return std::nullopt;
+        }();
         const size_t visible_count = std::count_if(nodes_.begin(), nodes_.end(),
-                                                   [](const auto& n) { return n->visible && n->model; });
+                                                   [this](const auto& n) {
+                                                       return n->model && isNodeEffectivelyVisible(n->id);
+                                                   });
+        const size_t mask_count = consolidated_visible_count.value_or(visible_count);
 
         if (selected_node_names.empty()) {
-            return std::vector<bool>(visible_count, false);
+            return std::vector<bool>(mask_count, false);
         }
 
         std::set<NodeId> selected_ids;
@@ -938,7 +1497,7 @@ namespace lfs::core {
         }
 
         if (selected_ids.empty()) {
-            return std::vector<bool>(visible_count, false);
+            return std::vector<bool>(mask_count, false);
         }
 
         const auto isSelectedOrDescendant = [this, &selected_ids](const SceneNode* node) {
@@ -949,10 +1508,20 @@ namespace lfs::core {
             return false;
         };
 
+        if (consolidated_visible_count) {
+            std::vector<bool> mask(consolidated_node_slots_.size(), false);
+            for (size_t slot_index = 0; slot_index < consolidated_node_slots_.size(); ++slot_index) {
+                const auto& slot = consolidated_node_slots_[slot_index];
+                const auto* node = slot.id == NULL_NODE ? nullptr : getNodeById(slot.id);
+                mask[slot_index] = node && isSelectedOrDescendant(node);
+            }
+            return mask;
+        }
+
         std::vector<bool> mask;
         mask.reserve(visible_count);
         for (const auto& node : nodes_) {
-            if (node->visible && node->model) {
+            if (node->model && isNodeEffectivelyVisible(node->id)) {
                 mask.push_back(isSelectedOrDescendant(node.get()));
             }
         }
@@ -1009,6 +1578,7 @@ namespace lfs::core {
                 selection_mask_.reset();
                 has_selection_ = false;
             }
+            selection_group_counts_dirty_ = true;
         }
         events::state::SelectionChanged{.has_selection = has_selection, .count = count}.emit();
         notifyMutation(MutationType::SELECTION_CHANGED);
@@ -1048,8 +1618,60 @@ namespace lfs::core {
             if (!has_selection_) {
                 selection_mask_.reset();
             }
+            selection_group_counts_dirty_ = true;
         }
         events::state::SelectionChanged{.has_selection = has_selection, .count = count}.emit();
+        notifyMutation(MutationType::SELECTION_CHANGED);
+    }
+
+    void Scene::setSelectionMaskWithGroupCounts(std::shared_ptr<lfs::core::Tensor> mask,
+                                                const size_t selected_count,
+                                                const SelectionGroupCounts& group_counts) {
+        size_t count = selected_count;
+        bool has_selection = false;
+        const size_t expected_size = currentSelectionCapacity();
+        if (mask && mask->is_valid() && mask->numel() > 0 &&
+            mask->numel() != expected_size) {
+            const auto* visible_model = getCombinedModel();
+            const auto visible_indices = getVisibleSelectionIndices();
+            if (visible_model && static_cast<size_t>(visible_model->size()) == mask->numel() &&
+                visible_indices && visible_indices->is_valid() && visible_indices->numel() == mask->numel()) {
+                auto expanded = lfs::core::Tensor::zeros({expected_size}, mask->device(), mask->dtype());
+                expanded.index_copy_(0, *visible_indices, *mask);
+                mask = std::make_shared<lfs::core::Tensor>(std::move(expanded));
+            } else {
+                LOG_WARN("Ignoring selection_mask with stale size: scene has {}, mask has {}",
+                         expected_size, mask->numel());
+                mask.reset();
+                count = 0;
+            }
+        }
+
+        {
+            std::unique_lock lock(selection_mutex_);
+            selection_mask_ = std::move(mask);
+            const bool valid =
+                selection_mask_ && selection_mask_->is_valid() && selection_mask_->numel() > 0;
+
+            has_selection_ = valid && count > 0;
+            has_selection = has_selection_;
+            if (!has_selection_) {
+                selection_mask_.reset();
+                count = 0;
+            }
+        }
+
+        if (has_selection) {
+            applySelectionGroupCounts(group_counts);
+        } else {
+            clearSelectionGroupCounts();
+        }
+        selection_group_counts_dirty_ = false;
+
+        events::state::SelectionChanged{
+            .has_selection = has_selection,
+            .count = static_cast<int>(std::min(count, static_cast<size_t>(std::numeric_limits<int>::max())))}
+            .emit();
         notifyMutation(MutationType::SELECTION_CHANGED);
     }
 
@@ -1059,6 +1681,8 @@ namespace lfs::core {
             selection_mask_.reset();
             has_selection_ = false;
         }
+        clearSelectionGroupCounts();
+        selection_group_counts_dirty_ = false;
         events::state::SelectionChanged{.has_selection = false, .count = 0}.emit();
         notifyMutation(MutationType::SELECTION_CHANGED);
     }
@@ -1111,6 +1735,7 @@ namespace lfs::core {
             if (has_selection_) {
                 count = static_cast<int>(selection_mask_->ne(0).to(core::DataType::Float32).sum_scalar());
             }
+            selection_group_counts_dirty_ = false;
         }
 
         selection_groups_ = snapshot.groups;
@@ -1121,14 +1746,42 @@ namespace lfs::core {
         notifyMutation(MutationType::SELECTION_CHANGED);
     }
 
-    bool Scene::renameNode(const std::string& old_name, const std::string& new_name) {
-        if (old_name == new_name)
+    bool Scene::renameNode(const NodeId id, const std::string& new_name) {
+        auto* node = getNodeById(id);
+        if (!node) {
+            LOG_WARN("Scene: Cannot find node id {} to rename", id);
+            return false;
+        }
+
+        if (new_name.empty()) {
+            LOG_WARN("Cannot rename node '{}' to empty name", node->name);
+            return false;
+        }
+
+        if (node->name == new_name)
             return true;
 
         if (name_to_id_.contains(new_name)) {
-            LOG_WARN("Cannot rename '{}' to '{}' - name exists", old_name, new_name);
+            LOG_WARN("Cannot rename '{}' to '{}' - name exists", node->name, new_name);
             return false;
         }
+
+        const std::string old_name = node->name;
+        name_to_id_.erase(old_name);
+        name_to_id_[new_name] = id;
+        node->name = new_name;
+
+        if (training_model_node_ == old_name)
+            training_model_node_ = new_name;
+
+        notifyMutation(MutationType::NODE_RENAMED);
+        LOG_DEBUG("Renamed node '{}' to '{}'", old_name, new_name);
+        return true;
+    }
+
+    bool Scene::renameNode(const std::string& old_name, const std::string& new_name) {
+        if (old_name.empty())
+            return false;
 
         auto it = name_to_id_.find(old_name);
         if (it == name_to_id_.end()) {
@@ -1136,17 +1789,7 @@ namespace lfs::core {
             return false;
         }
 
-        const NodeId id = it->second;
-        name_to_id_.erase(it);
-        name_to_id_[new_name] = id;
-
-        auto* node = getNodeById(id);
-        assert(node);
-        node->name = new_name;
-
-        notifyMutation(MutationType::NODE_RENAMED);
-        LOG_DEBUG("Renamed node '{}' to '{}'", old_name, new_name);
-        return true;
+        return renameNode(it->second, new_name);
     }
 
     size_t Scene::applyDeleted() {
@@ -1193,6 +1836,18 @@ namespace lfs::core {
         const auto it = std::find_if(selection_groups_.begin(), selection_groups_.end(),
                                      [id](const SelectionGroup& g) { return g.id == id; });
         return (it != selection_groups_.end()) ? &(*it) : nullptr;
+    }
+
+    void Scene::applySelectionGroupCounts(const SelectionGroupCounts& group_counts) {
+        for (auto& group : selection_groups_) {
+            group.count = group_counts[group.id];
+        }
+    }
+
+    void Scene::clearSelectionGroupCounts() {
+        for (auto& group : selection_groups_) {
+            group.count = 0;
+        }
     }
 
     uint8_t Scene::addSelectionGroup(const std::string& name, const glm::vec3& color) {
@@ -1277,15 +1932,18 @@ namespace lfs::core {
     }
 
     void Scene::updateSelectionGroupCounts() {
-        for (auto& group : selection_groups_) {
-            group.count = 0;
+        if (!selection_group_counts_dirty_) {
+            return;
         }
+        clearSelectionGroupCounts();
 
         std::shared_ptr<lfs::core::Tensor> selection_mask;
         {
             std::shared_lock lock(selection_mutex_);
-            if (!selection_mask_ || !selection_mask_->is_valid())
+            if (!selection_mask_ || !selection_mask_->is_valid()) {
+                selection_group_counts_dirty_ = false;
                 return;
+            }
             selection_mask = selection_mask_;
         }
 
@@ -1299,6 +1957,7 @@ namespace lfs::core {
                 group->count++;
             }
         }
+        selection_group_counts_dirty_ = false;
     }
 
     void Scene::clearSelectionGroup(const uint8_t id) {
@@ -1334,6 +1993,7 @@ namespace lfs::core {
         if (auto* group = findGroup(id)) {
             group->count = 0;
         }
+        selection_group_counts_dirty_ = true;
         notifyMutation(MutationType::SELECTION_CHANGED);
     }
 
@@ -1346,48 +2006,64 @@ namespace lfs::core {
         }
         selection_groups_.clear();
         next_group_id_ = 1;
+        selection_group_counts_dirty_ = false;
         addSelectionGroup("Group 1", glm::vec3(0.0f));
         notifyMutation(MutationType::SELECTION_CHANGED);
     }
 
     NodeId Scene::addGroup(const std::string& name, const NodeId parent) {
-        const NodeId id = next_node_id_++;
         auto node = std::make_unique<SceneNode>();
-        node->id = id;
         node->parent_id = parent;
         node->type = NodeType::GROUP;
         node->name = name;
 
-        if (parent != NULL_NODE) {
-            if (auto* p = getNodeById(parent)) {
-                p->children.push_back(id);
-            }
-        }
+        const NodeId id = insertNode(std::move(node));
+        if (id != NULL_NODE)
+            LOG_DEBUG("Added group node '{}' (id={})", name, id);
+        return id;
+    }
 
-        id_to_index_[id] = nodes_.size();
-        name_to_id_[name] = id;
-        node->initObservables(this);
-        nodes_.push_back(std::move(node));
-        notifyMutation(MutationType::NODE_ADDED);
+    NodeId Scene::addPlySequence(const std::string& name, const NodeId parent, const size_t frame_count) {
+        auto node = std::make_unique<SceneNode>();
+        node->parent_id = parent;
+        node->type = NodeType::PLY_SEQUENCE;
+        node->name = name;
+        node->gaussian_count.store(frame_count, std::memory_order_release);
 
-        LOG_DEBUG("Added group node '{}' (id={})", name, id);
+        const NodeId id = insertNode(std::move(node));
+        if (id != NULL_NODE)
+            LOG_DEBUG("Added PLY sequence node '{}' (id={})", name, id);
+        return id;
+    }
+
+    NodeId Scene::addSplatPlaceholder(const std::string& name, const NodeId parent) {
+        auto node = std::make_unique<SceneNode>();
+        node->parent_id = parent;
+        node->type = NodeType::SPLAT;
+        node->name = name;
+        node->gaussian_count.store(0, std::memory_order_release);
+
+        const NodeId id = insertNode(std::move(node));
+        if (id != NULL_NODE)
+            LOG_DEBUG("Added splat placeholder node '{}' (id={})", name, id);
         return id;
     }
 
     NodeId Scene::addSplat(const std::string& name, std::unique_ptr<lfs::core::SplatData> model, const NodeId parent) {
-        if (consolidated_) {
-            LOG_DEBUG("Adding splat invalidates consolidation");
-            consolidated_ = false;
-            consolidated_node_ids_.clear();
-            cached_combined_.reset();
+        if (!model) {
+            LOG_WARN("Cannot add splat node '{}': model is null", name);
+            return NULL_NODE;
+        }
+
+        if (getNodeIdByName(name) != NULL_NODE) {
+            LOG_WARN("Cannot add duplicate splat node '{}'", name);
+            return NULL_NODE;
         }
 
         const size_t gaussian_count = static_cast<size_t>(model->size());
         const glm::vec3 centroid = computeCentroid(model.get());
 
-        const NodeId id = next_node_id_++;
         auto node = std::make_unique<SceneNode>();
-        node->id = id;
         node->parent_id = parent;
         node->type = NodeType::SPLAT;
         node->name = name;
@@ -1395,19 +2071,9 @@ namespace lfs::core {
         node->gaussian_count.store(gaussian_count, std::memory_order_release);
         node->centroid = centroid;
 
-        if (parent != NULL_NODE) {
-            if (auto* p = getNodeById(parent)) {
-                p->children.push_back(id);
-            }
-        }
-
-        id_to_index_[id] = nodes_.size();
-        name_to_id_[name] = id;
-        node->initObservables(this);
-        nodes_.push_back(std::move(node));
-        notifyMutation(MutationType::NODE_ADDED);
-
-        LOG_DEBUG("Added splat node '{}' (id={}, {} gaussians)", name, id, gaussian_count);
+        const NodeId id = insertNode(std::move(node));
+        if (id != NULL_NODE)
+            LOG_DEBUG("Added splat node '{}' (id={}, {} gaussians)", name, id, gaussian_count);
         return id;
     }
 
@@ -1432,9 +2098,7 @@ namespace lfs::core {
             return sum / static_cast<float>(point_count);
         }();
 
-        const NodeId id = next_node_id_++;
         auto node = std::make_unique<SceneNode>();
-        node->id = id;
         node->parent_id = parent;
         node->type = NodeType::POINTCLOUD;
         node->name = name;
@@ -1442,19 +2106,9 @@ namespace lfs::core {
         node->gaussian_count.store(point_count, std::memory_order_release);
         node->centroid = centroid;
 
-        if (parent != NULL_NODE) {
-            if (auto* p = getNodeById(parent)) {
-                p->children.push_back(id);
-            }
-        }
-
-        id_to_index_[id] = nodes_.size();
-        name_to_id_[name] = id;
-        node->initObservables(this);
-        nodes_.push_back(std::move(node));
-        notifyMutation(MutationType::NODE_ADDED);
-
-        LOG_DEBUG("Added point cloud node '{}' (id={}, {} points)", name, id, point_count);
+        const NodeId id = insertNode(std::move(node));
+        if (id != NULL_NODE)
+            LOG_DEBUG("Added point cloud node '{}' (id={}, {} points)", name, id, point_count);
         return id;
     }
 
@@ -1464,13 +2118,7 @@ namespace lfs::core {
             return NULL_NODE;
         }
 
-        std::string unique_name = name;
-        if (name_to_id_.contains(unique_name)) {
-            int counter = 2;
-            while (name_to_id_.contains(unique_name)) {
-                unique_name = name + "_" + std::to_string(counter++);
-            }
-        }
+        const std::string unique_name = makeUniqueNodeName(name_to_id_, name);
 
         const int64_t nv = mesh_data->vertex_count();
         const glm::vec3 centroid = [&] {
@@ -1486,9 +2134,7 @@ namespace lfs::core {
             return result;
         }();
 
-        const NodeId id = next_node_id_++;
         auto node = std::make_unique<SceneNode>();
-        node->id = id;
         node->parent_id = parent;
         node->type = NodeType::MESH;
         node->name = unique_name;
@@ -1497,19 +2143,9 @@ namespace lfs::core {
         node->gaussian_count.store(static_cast<size_t>(nv), std::memory_order_release);
         node->centroid = centroid;
 
-        if (parent != NULL_NODE) {
-            if (auto* p = getNodeById(parent)) {
-                p->children.push_back(id);
-            }
-        }
-
-        id_to_index_[id] = nodes_.size();
-        name_to_id_[unique_name] = id;
-        node->initObservables(this);
-        nodes_.push_back(std::move(node));
-        notifyMutation(MutationType::NODE_ADDED);
-
-        LOG_DEBUG("Added mesh node '{}' (id={}, {} vertices, {} faces)", unique_name, id, nv, nf);
+        const NodeId id = insertNode(std::move(node));
+        if (id != NULL_NODE)
+            LOG_DEBUG("Added mesh node '{}' (id={}, {} vertices, {} faces)", unique_name, id, nv, nf);
         return id;
     }
 
@@ -1517,21 +2153,23 @@ namespace lfs::core {
         assert(parent_id != NULL_NODE && "CropBox must have a parent splat node");
 
         const auto* parent = getNodeById(parent_id);
-        if (parent) {
-            for (const NodeId child_id : parent->children) {
-                const auto* child = getNodeById(child_id);
-                if (child && child->type == NodeType::CROPBOX) {
-                    return child_id;
-                }
+        if (!parent) {
+            LOG_WARN("Cannot add cropbox '{}': parent id {} does not exist", name, parent_id);
+            return NULL_NODE;
+        }
+        for (const NodeId child_id : parent->children) {
+            const auto* child = getNodeById(child_id);
+            if (child && child->type == NodeType::CROPBOX) {
+                return child_id;
             }
         }
 
-        const NodeId id = next_node_id_++;
+        const std::string unique_name = makeUniqueNodeName(name_to_id_, name);
+
         auto node = std::make_unique<SceneNode>();
-        node->id = id;
         node->parent_id = parent_id;
         node->type = NodeType::CROPBOX;
-        node->name = name;
+        node->name = unique_name;
         node->cropbox = std::make_unique<CropBoxData>();
 
         glm::vec3 bounds_min, bounds_max;
@@ -1540,17 +2178,9 @@ namespace lfs::core {
             node->cropbox->max = bounds_max;
         }
 
-        id_to_index_[id] = nodes_.size();
-        name_to_id_[name] = id;
-        node->initObservables(this);
-        nodes_.push_back(std::move(node));
-
-        if (auto* mutable_parent = getNodeById(parent_id)) {
-            mutable_parent->children.push_back(id);
-        }
-
-        notifyMutation(MutationType::NODE_ADDED);
-        LOG_DEBUG("Added cropbox node '{}' (id={}) as child of node id={}", name, id, parent_id);
+        const NodeId id = insertNode(std::move(node));
+        if (id != NULL_NODE)
+            LOG_DEBUG("Added cropbox node '{}' (id={}) as child of node id={}", unique_name, id, parent_id);
         return id;
     }
 
@@ -1558,21 +2188,23 @@ namespace lfs::core {
         assert(parent_id != NULL_NODE && "Ellipsoid must have a parent splat node");
 
         const auto* parent = getNodeById(parent_id);
-        if (parent) {
-            for (const NodeId child_id : parent->children) {
-                const auto* child = getNodeById(child_id);
-                if (child && child->type == NodeType::ELLIPSOID) {
-                    return child_id;
-                }
+        if (!parent) {
+            LOG_WARN("Cannot add ellipsoid '{}': parent id {} does not exist", name, parent_id);
+            return NULL_NODE;
+        }
+        for (const NodeId child_id : parent->children) {
+            const auto* child = getNodeById(child_id);
+            if (child && child->type == NodeType::ELLIPSOID) {
+                return child_id;
             }
         }
 
-        const NodeId id = next_node_id_++;
+        const std::string unique_name = makeUniqueNodeName(name_to_id_, name);
+
         auto node = std::make_unique<SceneNode>();
-        node->id = id;
         node->parent_id = parent_id;
         node->type = NodeType::ELLIPSOID;
-        node->name = name;
+        node->name = unique_name;
         node->ellipsoid = std::make_unique<EllipsoidData>();
 
         glm::vec3 bounds_min, bounds_max;
@@ -1583,77 +2215,43 @@ namespace lfs::core {
             node->local_transform = glm::translate(glm::mat4(1.0f), center);
         }
 
-        id_to_index_[id] = nodes_.size();
-        name_to_id_[name] = id;
-        node->initObservables(this);
-        nodes_.push_back(std::move(node));
-
-        if (auto* mutable_parent = getNodeById(parent_id)) {
-            mutable_parent->children.push_back(id);
-        }
-
-        notifyMutation(MutationType::NODE_ADDED);
-        LOG_DEBUG("Added ellipsoid node '{}' (id={}) as child of node id={}", name, id, parent_id);
+        const NodeId id = insertNode(std::move(node));
+        if (id != NULL_NODE)
+            LOG_DEBUG("Added ellipsoid node '{}' (id={}) as child of node id={}", unique_name, id, parent_id);
         return id;
     }
 
     NodeId Scene::addDataset(const std::string& name) {
-        const NodeId id = next_node_id_++;
         auto node = std::make_unique<SceneNode>();
-        node->id = id;
         node->parent_id = NULL_NODE;
         node->type = NodeType::DATASET;
         node->name = name;
 
-        id_to_index_[id] = nodes_.size();
-        name_to_id_[name] = id;
-        node->initObservables(this);
-        nodes_.push_back(std::move(node));
-
-        notifyMutation(MutationType::NODE_ADDED);
-        LOG_DEBUG("Added dataset node '{}' (id={})", name, id);
+        const NodeId id = insertNode(std::move(node));
+        if (id != NULL_NODE)
+            LOG_DEBUG("Added dataset node '{}' (id={})", name, id);
         return id;
     }
 
     NodeId Scene::addCameraGroup(const std::string& name, const NodeId parent, const size_t camera_count) {
-        const NodeId id = next_node_id_++;
         auto node = std::make_unique<SceneNode>();
-        node->id = id;
         node->parent_id = parent;
         node->type = NodeType::CAMERA_GROUP;
         node->name = name;
         node->gaussian_count.store(camera_count, std::memory_order_release);
 
-        if (parent != NULL_NODE) {
-            if (auto* p = getNodeById(parent)) {
-                p->children.push_back(id);
-            }
-        }
-
-        id_to_index_[id] = nodes_.size();
-        name_to_id_[name] = id;
-        node->initObservables(this);
-        nodes_.push_back(std::move(node));
-
-        notifyMutation(MutationType::NODE_ADDED);
-        LOG_DEBUG("Added camera group '{}' (id={}, {} cameras)", name, id, camera_count);
+        const NodeId id = insertNode(std::move(node));
+        if (id != NULL_NODE)
+            LOG_DEBUG("Added camera group '{}' (id={}, {} cameras)", name, id, camera_count);
         return id;
     }
 
     NodeId Scene::addCamera(const std::string& name, const NodeId parent, std::shared_ptr<lfs::core::Camera> camera) {
         assert(camera && "Camera object cannot be null");
 
-        std::string unique_name = name;
-        if (name_to_id_.contains(unique_name)) {
-            int counter = 2;
-            while (name_to_id_.contains(unique_name)) {
-                unique_name = name + "_" + std::to_string(counter++);
-            }
-        }
+        const std::string unique_name = makeUniqueNodeName(name_to_id_, name);
 
-        const NodeId id = next_node_id_++;
         auto node = std::make_unique<SceneNode>();
-        node->id = id;
         node->parent_id = parent;
         node->type = NodeType::CAMERA;
         node->name = unique_name;
@@ -1661,51 +2259,25 @@ namespace lfs::core {
         node->camera_uid = node->camera->uid();
         node->image_path = lfs::core::path_to_utf8(node->camera->image_path());
         node->mask_path = lfs::core::path_to_utf8(node->camera->mask_path());
+        node->depth_path = lfs::core::path_to_utf8(node->camera->depth_path());
 
-        if (parent != NULL_NODE) {
-            if (auto* p = getNodeById(parent)) {
-                p->children.push_back(id);
-            }
-        }
-
-        id_to_index_[id] = nodes_.size();
-        name_to_id_[unique_name] = id;
-        node->initObservables(this);
-        nodes_.push_back(std::move(node));
-        notifyMutation(MutationType::NODE_ADDED);
-
+        const NodeId id = insertNode(std::move(node));
         return id;
     }
 
     NodeId Scene::addKeyframeGroup(const std::string& name, const NodeId parent) {
-        const NodeId id = next_node_id_++;
         auto node = std::make_unique<SceneNode>();
-        node->id = id;
         node->parent_id = parent;
         node->type = NodeType::KEYFRAME_GROUP;
         node->name = name;
 
-        if (parent != NULL_NODE) {
-            if (auto* p = getNodeById(parent)) {
-                p->children.push_back(id);
-            }
-        }
-
-        id_to_index_[id] = nodes_.size();
-        name_to_id_[name] = id;
-        node->initObservables(this);
-        nodes_.push_back(std::move(node));
-
-        notifyMutation(MutationType::NODE_ADDED);
-        return id;
+        return insertNode(std::move(node));
     }
 
     NodeId Scene::addKeyframe(const std::string& name, const NodeId parent, std::unique_ptr<KeyframeData> data) {
         assert(data && "KeyframeData cannot be null");
 
-        const NodeId id = next_node_id_++;
         auto node = std::make_unique<SceneNode>();
-        node->id = id;
         node->parent_id = parent;
         node->type = NodeType::KEYFRAME;
         node->name = name;
@@ -1717,19 +2289,7 @@ namespace lfs::core {
         transform[3] = glm::vec4(kf.position, 1.0f);
         node->local_transform = transform;
 
-        if (parent != NULL_NODE) {
-            if (auto* p = getNodeById(parent)) {
-                p->children.push_back(id);
-            }
-        }
-
-        id_to_index_[id] = nodes_.size();
-        name_to_id_[name] = id;
-        node->initObservables(this);
-        nodes_.push_back(std::move(node));
-        notifyMutation(MutationType::NODE_ADDED);
-
-        return id;
+        return insertNode(std::move(node));
     }
 
     void Scene::removeKeyframeNodes() {
@@ -1777,6 +2337,8 @@ namespace lfs::core {
             NodeId new_id = NULL_NODE;
             if (src_type == NodeType::GROUP) {
                 new_id = addGroup(new_name, parent_id);
+            } else if (src_type == NodeType::PLY_SEQUENCE) {
+                new_id = addPlySequence(new_name, parent_id, src->gaussian_count.load(std::memory_order_acquire));
             } else if (src_type == NodeType::CROPBOX) {
                 const auto* src_for_cropbox = getNodeById(src_id);
                 if (src_for_cropbox && src_for_cropbox->cropbox && parent_id != NULL_NODE) {
@@ -1813,9 +2375,11 @@ namespace lfs::core {
                     const auto& model = *src_for_model->model;
                     auto cloned = std::make_unique<lfs::core::SplatData>(
                         model.get_max_sh_degree(),
-                        model.means_raw().clone(), model.sh0_raw().clone(), model.shN_raw().clone(),
+                        model.means_raw().clone(), model.sh0_raw().clone(),
+                        model.shN_raw().is_valid() ? model.shN_raw().clone() : lfs::core::Tensor{},
                         model.scaling_raw().clone(), model.rotation_raw().clone(), model.opacity_raw().clone(),
-                        model.get_scene_scale());
+                        model.get_scene_scale(),
+                        lfs::core::SplatData::ShNLayout::Swizzled);
                     cloned->set_active_sh_degree(model.get_active_sh_degree());
                     new_id = addSplat(new_name, std::move(cloned), parent_id);
                 }
@@ -1857,7 +2421,7 @@ namespace lfs::core {
             const auto* const node = getNodeById(id);
             if (!node)
                 return;
-            if (node->type == NodeType::SPLAT && node->model && node->visible) {
+            if (node->type == NodeType::SPLAT && node->model && isNodeEffectivelyVisible(node->id)) {
                 splats.emplace_back(node->model.get(), getWorldTransform(id));
             }
             for (const NodeId cid : node->children)
@@ -1897,55 +2461,220 @@ namespace lfs::core {
         }
 
         int max_sh = 0;
+        int max_active_sh = 0;
         for (const auto& [model, _] : splats) {
             max_sh = std::max(max_sh, model->get_max_sh_degree());
+            max_active_sh = std::max(max_active_sh, model->get_active_sh_degree());
         }
 
         static const glm::mat4 IDENTITY{1.0f};
-        if (splats.size() == 1 && splats[0].second == IDENTITY) {
-            const auto* const src = splats[0].first;
+        const bool all_identity = std::all_of(
+            splats.begin(), splats.end(),
+            [](const auto& entry) { return entry.second == IDENTITY; });
 
-            if (src->has_deleted_mask()) {
-                const auto keep_mask = src->deleted().logical_not();
+        const auto clone_filtered_swizzled = [](const lfs::core::SplatData& src)
+            -> std::unique_ptr<lfs::core::SplatData> {
+            if (!src.has_deleted_mask()) {
+                const int active_sh = src.get_active_sh_degree();
                 auto result = std::make_unique<lfs::core::SplatData>(
-                    src->get_max_sh_degree(),
-                    src->means_raw().index_select(0, keep_mask),
-                    src->sh0_raw().index_select(0, keep_mask),
-                    src->shN_raw().is_valid() ? src->shN_raw().index_select(0, keep_mask) : lfs::core::Tensor(),
-                    src->scaling_raw().index_select(0, keep_mask),
-                    src->rotation_raw().index_select(0, keep_mask),
-                    src->opacity_raw().index_select(0, keep_mask),
-                    src->get_scene_scale());
-                result->set_active_sh_degree(src->get_active_sh_degree());
-                return result;
-            } else if (storage_mode == MergeStorageMode::BorrowSingleIdentity) {
-                auto result = std::make_unique<lfs::core::SplatData>(
-                    src->get_max_sh_degree(),
-                    src->means_raw(),
-                    src->sh0_raw(),
-                    src->shN_raw().is_valid() ? src->shN_raw() : lfs::core::Tensor(),
-                    src->scaling_raw(),
-                    src->rotation_raw(),
-                    src->opacity_raw(),
-                    src->get_scene_scale());
-                result->set_active_sh_degree(src->get_active_sh_degree());
-                return result;
-            } else {
-                auto result = std::make_unique<lfs::core::SplatData>(
-                    src->get_max_sh_degree(),
-                    src->means_raw().clone(),
-                    src->sh0_raw().clone(),
-                    src->shN_raw().is_valid() ? src->shN_raw().clone() : lfs::core::Tensor(),
-                    src->scaling_raw().clone(),
-                    src->rotation_raw().clone(),
-                    src->opacity_raw().clone(),
-                    src->get_scene_scale());
-                result->set_active_sh_degree(src->get_active_sh_degree());
+                    src.get_max_sh_degree(),
+                    src.means_raw().clone(),
+                    src.sh0_raw().clone(),
+                    src.shN_raw().is_valid() ? src.shN_raw().clone() : lfs::core::Tensor{},
+                    src.scaling_raw().clone(),
+                    src.rotation_raw().clone(),
+                    src.opacity_raw().clone(),
+                    src.get_scene_scale(),
+                    lfs::core::SplatData::ShNLayout::Swizzled);
+                result->set_active_sh_degree(active_sh);
                 return result;
             }
+
+            const auto keep_mask = src.deleted().logical_not();
+            const size_t visible = static_cast<size_t>(keep_mask.sum_scalar());
+            if (visible == 0) {
+                return nullptr;
+            }
+
+            lfs::core::Tensor shN;
+            const int active_sh = src.get_active_sh_degree();
+            const auto layout_rest = static_cast<std::uint32_t>(src.max_sh_coeffs_rest());
+            if (layout_rest > 0 && src.shN_raw().is_valid() && src.shN_raw().numel() > 0) {
+                auto kept_indices = keep_mask.nonzero();
+                if (kept_indices.ndim() == 2) {
+                    kept_indices = kept_indices.squeeze(1);
+                }
+                kept_indices = kept_indices.to(lfs::core::DataType::Int32);
+                shN = lfs::core::Tensor::zeros_direct(
+                    lfs::core::TensorShape({lfs::core::sh_swizzled_float_count(visible, layout_rest)}),
+                    lfs::core::sh_swizzled_float_count(visible, layout_rest),
+                    lfs::core::Device::CUDA);
+                lfs::core::shN_swizzled_gather_self(
+                    src.shN_raw().ptr<float>(),
+                    shN.ptr<float>(),
+                    kept_indices.ptr<int>(),
+                    visible,
+                    0,
+                    layout_rest,
+                    shN.stream());
+            }
+
+            auto result = std::make_unique<lfs::core::SplatData>(
+                src.get_max_sh_degree(),
+                src.means_raw().index_select(0, keep_mask).contiguous(),
+                src.sh0_raw().index_select(0, keep_mask).contiguous(),
+                std::move(shN),
+                src.scaling_raw().index_select(0, keep_mask).contiguous(),
+                src.rotation_raw().index_select(0, keep_mask).contiguous(),
+                src.opacity_raw().index_select(0, keep_mask).contiguous(),
+                src.get_scene_scale(),
+                lfs::core::SplatData::ShNLayout::Swizzled);
+            result->set_active_sh_degree(active_sh);
+            return result;
+        };
+
+        if (all_identity) {
+            if (splats.size() == 1) {
+                const auto* const src = splats[0].first;
+
+                if (storage_mode == MergeStorageMode::BorrowSingleIdentity && !src->has_deleted_mask()) {
+                    const int active_sh = src->get_active_sh_degree();
+                    auto result = std::make_unique<lfs::core::SplatData>(
+                        src->get_max_sh_degree(),
+                        src->means_raw(),
+                        src->sh0_raw(),
+                        src->shN_raw().is_valid() ? src->shN_raw() : lfs::core::Tensor{},
+                        src->scaling_raw(),
+                        src->rotation_raw(),
+                        src->opacity_raw(),
+                        src->get_scene_scale(),
+                        lfs::core::SplatData::ShNLayout::Swizzled);
+                    result->set_active_sh_degree(active_sh);
+                    return result;
+                }
+
+                return clone_filtered_swizzled(*src);
+            }
+
+            size_t total_visible = 0;
+            int max_active_sh_identity = 0;
+            int max_storage_sh = 0;
+            bool has_shN = false;
+            float total_scale = 0.0f;
+            const auto device = splats.front().first->means_raw().device();
+
+            for (const auto& [model, _] : splats) {
+                const size_t visible = model->has_deleted_mask()
+                                           ? static_cast<size_t>(model->visible_count())
+                                           : static_cast<size_t>(model->size());
+                total_visible += visible;
+                total_scale += model->get_scene_scale();
+                max_active_sh_identity = std::max(max_active_sh_identity, model->get_active_sh_degree());
+                max_storage_sh = std::max(max_storage_sh, model->get_max_sh_degree());
+                has_shN = has_shN || (model->max_sh_coeffs_rest() > 0 &&
+                                      model->shN_raw().is_valid() && model->shN_raw().numel() > 0);
+            }
+
+            if (total_visible == 0) {
+                return nullptr;
+            }
+
+            const auto dst_layout_rest = sh_rest_coefficients_for_degree(max_storage_sh);
+            lfs::core::Tensor means = lfs::core::Tensor::empty({total_visible, 3}, device);
+            lfs::core::Tensor sh0 = lfs::core::Tensor::empty({total_visible, 1, 3}, device);
+            lfs::core::Tensor scaling = lfs::core::Tensor::empty({total_visible, 3}, device);
+            lfs::core::Tensor rotation = lfs::core::Tensor::empty({total_visible, 4}, device);
+            lfs::core::Tensor opacity = lfs::core::Tensor::empty({total_visible, 1}, device);
+            lfs::core::Tensor shN = has_shN
+                                        ? lfs::core::Tensor::zeros_direct(
+                                              lfs::core::TensorShape({lfs::core::sh_swizzled_float_count(total_visible, dst_layout_rest)}),
+                                              lfs::core::sh_swizzled_float_count(total_visible, dst_layout_rest),
+                                              lfs::core::Device::CUDA)
+                                        : lfs::core::Tensor{};
+
+            size_t offset = 0;
+            for (const auto& [model, _] : splats) {
+                const bool has_deleted = model->has_deleted_mask();
+                const lfs::core::Tensor keep_mask = has_deleted ? model->deleted().logical_not() : lfs::core::Tensor{};
+                const size_t visible = has_deleted
+                                           ? static_cast<size_t>(keep_mask.sum_scalar())
+                                           : static_cast<size_t>(model->size());
+                if (visible == 0) {
+                    continue;
+                }
+
+                if (has_deleted) {
+                    means.slice(0, offset, offset + visible) = model->means_raw().index_select(0, keep_mask);
+                    sh0.slice(0, offset, offset + visible) = model->sh0_raw().index_select(0, keep_mask);
+                    scaling.slice(0, offset, offset + visible) = model->scaling_raw().index_select(0, keep_mask);
+                    rotation.slice(0, offset, offset + visible) = model->rotation_raw().index_select(0, keep_mask);
+                    opacity.slice(0, offset, offset + visible) = model->opacity_raw().index_select(0, keep_mask);
+                } else {
+                    means.slice(0, offset, offset + visible) = model->means_raw();
+                    sh0.slice(0, offset, offset + visible) = model->sh0_raw();
+                    scaling.slice(0, offset, offset + visible) = model->scaling_raw();
+                    rotation.slice(0, offset, offset + visible) = model->rotation_raw();
+                    opacity.slice(0, offset, offset + visible) = model->opacity_raw();
+                }
+
+                const auto src_layout_rest = static_cast<std::uint32_t>(model->max_sh_coeffs_rest());
+                if (shN.is_valid() && src_layout_rest > 0 && model->shN_raw().is_valid() && model->shN_raw().numel() > 0) {
+                    if (has_deleted) {
+                        auto kept_indices = keep_mask.nonzero();
+                        if (kept_indices.ndim() == 2) {
+                            kept_indices = kept_indices.squeeze(1);
+                        }
+                        kept_indices = kept_indices.to(lfs::core::DataType::Int32);
+                        auto compact_shN = lfs::core::Tensor::zeros_direct(
+                            lfs::core::TensorShape({lfs::core::sh_swizzled_float_count(visible, src_layout_rest)}),
+                            lfs::core::sh_swizzled_float_count(visible, src_layout_rest),
+                            lfs::core::Device::CUDA);
+                        lfs::core::shN_swizzled_gather_self(
+                            model->shN_raw().ptr<float>(),
+                            compact_shN.ptr<float>(),
+                            kept_indices.ptr<int>(),
+                            visible,
+                            0,
+                            src_layout_rest,
+                            compact_shN.stream());
+                        lfs::core::shN_swizzled_copy_contiguous(
+                            compact_shN.ptr<float>(),
+                            shN.ptr<float>(),
+                            visible,
+                            offset,
+                            src_layout_rest,
+                            dst_layout_rest,
+                            shN.stream());
+                    } else {
+                        lfs::core::shN_swizzled_copy_contiguous(
+                            model->shN_raw().ptr<float>(),
+                            shN.ptr<float>(),
+                            visible,
+                            offset,
+                            src_layout_rest,
+                            dst_layout_rest,
+                            shN.stream());
+                    }
+                }
+
+                offset += visible;
+            }
+
+            auto result = std::make_unique<lfs::core::SplatData>(
+                max_storage_sh,
+                std::move(means),
+                std::move(sh0),
+                std::move(shN),
+                std::move(scaling),
+                std::move(rotation),
+                std::move(opacity),
+                total_scale / static_cast<float>(splats.size()),
+                lfs::core::SplatData::ShNLayout::Swizzled);
+            result->set_active_sh_degree(max_active_sh_identity);
+            return result;
         }
 
-        const int shN_coeffs = (max_sh > 0) ? ((max_sh + 1) * (max_sh + 1) - 1) : 0;
+        const int shN_coeffs = static_cast<int>(sh_rest_coefficients_for_degree(max_sh));
         std::vector<lfs::core::Tensor> means_list, sh0_list, shN_list, scaling_list, rotation_list, opacity_list;
         means_list.reserve(splats.size());
         sh0_list.reserve(splats.size());
@@ -1954,106 +2683,117 @@ namespace lfs::core {
         opacity_list.reserve(splats.size());
         if (shN_coeffs > 0)
             shN_list.reserve(splats.size());
+        std::vector<size_t> shN_sizes;
+        if (shN_coeffs > 0)
+            shN_sizes.reserve(splats.size());
+        std::vector<std::uint32_t> shN_layout_rests;
+        if (shN_coeffs > 0)
+            shN_layout_rests.reserve(splats.size());
 
         float total_scale = 0.0f;
+        size_t total_count = 0;
 
         for (const auto& [model, world_transform] : splats) {
-            lfs::core::Tensor means, sh0, shN, scaling, rotation, opacity;
-            if (model->has_deleted_mask()) {
-                const auto keep_mask = model->deleted().logical_not();
-                means = model->means_raw().index_select(0, keep_mask);
-                sh0 = model->sh0_raw().index_select(0, keep_mask);
-                shN = model->shN_raw().is_valid() ? model->shN_raw().index_select(0, keep_mask) : lfs::core::Tensor();
-                scaling = model->scaling_raw().index_select(0, keep_mask);
-                rotation = model->rotation_raw().index_select(0, keep_mask);
-                opacity = model->opacity_raw().index_select(0, keep_mask);
-            } else {
-                means = model->means_raw().clone();
-                sh0 = model->sh0_raw().clone();
-                shN = model->shN_raw().is_valid() ? model->shN_raw().clone() : lfs::core::Tensor();
-                scaling = model->scaling_raw().clone();
-                rotation = model->rotation_raw().clone();
-                opacity = model->opacity_raw().clone();
+            auto transformed = clone_filtered_swizzled(*model);
+            if (!transformed || transformed->size() == 0) {
+                total_scale += model->get_scene_scale();
+                continue;
             }
 
-            lfs::core::SplatData transformed(
-                model->get_max_sh_degree(),
-                std::move(means),
-                std::move(sh0),
-                std::move(shN),
-                std::move(scaling),
-                std::move(rotation),
-                std::move(opacity),
-                model->get_scene_scale());
-
             try {
-                lfs::core::transform(transformed, world_transform);
+                lfs::core::transform(*transformed, world_transform);
             } catch (const std::exception& e) {
                 LOG_ERROR("Failed to transform splat data while merging scene nodes: {}", e.what());
                 return nullptr;
             }
 
-            means_list.push_back(transformed.means_raw().clone());
-            sh0_list.push_back(transformed.sh0_raw().clone());
-            scaling_list.push_back(transformed.scaling_raw().clone());
-            rotation_list.push_back(transformed.rotation_raw().clone());
-            opacity_list.push_back(transformed.opacity_raw().clone());
+            means_list.push_back(transformed->means_raw().clone());
+            sh0_list.push_back(transformed->sh0_raw().clone());
+            scaling_list.push_back(transformed->scaling_raw().clone());
+            rotation_list.push_back(transformed->rotation_raw().clone());
+            opacity_list.push_back(transformed->opacity_raw().clone());
 
             if (shN_coeffs > 0) {
-                const auto& src_shN = transformed.shN_raw();
-                const int src_coeffs = (src_shN.is_valid() && src_shN.ndim() >= 2)
-                                           ? static_cast<int>(src_shN.size(1))
-                                           : 0;
-
-                if (src_coeffs == shN_coeffs) {
-                    shN_list.push_back(src_shN.clone());
-                } else if (src_coeffs > 0) {
-                    const int copy_coeffs = std::min(src_coeffs, shN_coeffs);
-                    auto padded = lfs::core::Tensor::zeros(
-                        {transformed.size(), static_cast<size_t>(shN_coeffs), 3},
-                        lfs::core::Device::CUDA);
-                    padded.slice(1, 0, copy_coeffs).copy_from(src_shN.slice(1, 0, copy_coeffs));
-                    shN_list.push_back(std::move(padded));
-                } else {
-                    shN_list.push_back(lfs::core::Tensor::zeros(
-                        {transformed.size(), static_cast<size_t>(shN_coeffs), 3},
-                        lfs::core::Device::CUDA));
-                }
+                shN_sizes.push_back(static_cast<size_t>(transformed->size()));
+                shN_layout_rests.push_back(static_cast<std::uint32_t>(transformed->max_sh_coeffs_rest()));
+                shN_list.push_back(transformed->shN_raw().is_valid()
+                                       ? transformed->shN_raw().clone()
+                                       : lfs::core::Tensor{});
             }
 
+            total_count += static_cast<size_t>(transformed->size());
             total_scale += model->get_scene_scale();
+        }
+
+        if (means_list.empty() || total_count == 0) {
+            return nullptr;
+        }
+
+        lfs::core::Tensor merged_shN;
+        if (shN_coeffs > 0) {
+            merged_shN = lfs::core::Tensor::zeros_direct(
+                lfs::core::TensorShape({lfs::core::sh_swizzled_float_count(total_count, shN_coeffs)}),
+                lfs::core::sh_swizzled_float_count(total_count, shN_coeffs),
+                lfs::core::Device::CUDA);
+
+            size_t offset = 0;
+            for (size_t i = 0; i < shN_list.size(); ++i) {
+                const size_t count = shN_sizes[i];
+                const auto src_layout_rest = shN_layout_rests[i];
+                if (src_layout_rest > 0 && shN_list[i].is_valid() && shN_list[i].numel() > 0) {
+                    lfs::core::shN_swizzled_copy_contiguous(
+                        shN_list[i].ptr<float>(),
+                        merged_shN.ptr<float>(),
+                        count,
+                        offset,
+                        src_layout_rest,
+                        static_cast<std::uint32_t>(shN_coeffs),
+                        merged_shN.stream());
+                }
+                offset += count;
+            }
         }
 
         auto result = std::make_unique<lfs::core::SplatData>(
             max_sh,
             lfs::core::Tensor::cat(means_list, 0),
             lfs::core::Tensor::cat(sh0_list, 0),
-            (shN_coeffs > 0) ? lfs::core::Tensor::cat(shN_list, 0) : lfs::core::Tensor(),
+            std::move(merged_shN),
             lfs::core::Tensor::cat(scaling_list, 0),
             lfs::core::Tensor::cat(rotation_list, 0),
             lfs::core::Tensor::cat(opacity_list, 0),
-            total_scale / static_cast<float>(splats.size()));
-        result->set_active_sh_degree(max_sh);
+            total_scale / static_cast<float>(splats.size()),
+            lfs::core::SplatData::ShNLayout::Swizzled);
+        result->set_active_sh_degree(max_active_sh);
 
         return result;
     }
 
-    void Scene::reparent(const NodeId node_id, const NodeId new_parent) {
+    bool Scene::reparent(const NodeId node_id, const NodeId new_parent) {
         auto* node = getNodeById(node_id);
         if (!node)
-            return;
+            return false;
 
         if (new_parent != NULL_NODE) {
             NodeId check = new_parent;
             while (check != NULL_NODE) {
                 if (check == node_id) {
                     LOG_WARN("Cannot reparent: would create cycle");
-                    return;
+                    return false;
                 }
                 const auto* check_node = getNodeById(check);
-                check = check_node ? check_node->parent_id : NULL_NODE;
+                if (!check_node) {
+                    LOG_WARN("Cannot reparent: parent id {} does not exist", new_parent);
+                    return false;
+                }
+                check = check_node->parent_id;
             }
         }
+
+        if (node->parent_id == new_parent)
+            return false;
+
+        const glm::mat4 old_world = getWorldTransform(node_id);
 
         if (node->parent_id != NULL_NODE) {
             if (auto* old_parent = getNodeById(node->parent_id)) {
@@ -2069,8 +2809,138 @@ namespace lfs::core {
             }
         }
 
+        // Keep the node visually in place: re-express its world pose in the new parent's frame.
+        const glm::mat4 new_parent_world =
+            new_parent == NULL_NODE ? glm::mat4(1.0f) : getWorldTransform(new_parent);
+        node->local_transform.set(glm::inverse(new_parent_world) * old_world, false);
+
         markTransformDirty(node_id);
         notifyMutation(MutationType::NODE_REPARENTED);
+        return true;
+    }
+
+    // `index` is expressed in the destination sibling list *as it currently is* (including the
+    // moving node when it is already a sibling); the self-removal adjustment is applied internally
+    // so callers can pass the raw row index they computed. index < 0 appends. Root order is the
+    // position among root nodes within `nodes_`, so a root move reshuffles storage and rebuilds
+    // id_to_index_; combined-model/transform caches are id-keyed and refreshed via notifyMutation.
+    bool Scene::moveNode(const NodeId node_id, const NodeId new_parent, const int index) {
+        auto* node = getNodeById(node_id);
+        if (!node)
+            return false;
+
+        if (new_parent != NULL_NODE) {
+            NodeId check = new_parent;
+            while (check != NULL_NODE) {
+                if (check == node_id) {
+                    LOG_WARN("Cannot move: would create cycle");
+                    return false;
+                }
+                const auto* check_node = getNodeById(check);
+                if (!check_node) {
+                    LOG_WARN("Cannot move: parent id {} does not exist", new_parent);
+                    return false;
+                }
+                check = check_node->parent_id;
+            }
+        }
+
+        const NodeId old_parent = node->parent_id;
+        const glm::mat4 old_world = getWorldTransform(node_id);
+
+        // Keep the node visually in place across a parent change by re-expressing its world pose
+        // in the new parent's frame. Pure reorders (same parent) leave the transform untouched.
+        const auto preserveWorldTransform = [&] {
+            const glm::mat4 new_parent_world =
+                new_parent == NULL_NODE ? glm::mat4(1.0f) : getWorldTransform(new_parent);
+            node->local_transform.set(glm::inverse(new_parent_world) * old_world, false);
+        };
+
+        if (new_parent != NULL_NODE) {
+            auto* parent = getNodeById(new_parent);
+            assert(parent);
+            auto& children = parent->children;
+
+            if (old_parent == new_parent) {
+                const auto existing = std::find(children.begin(), children.end(), node_id);
+                assert(existing != children.end());
+                const int old_index = static_cast<int>(std::distance(children.begin(), existing));
+                int target = index < 0 ? static_cast<int>(children.size()) - 1 : index;
+                if (target > old_index)
+                    --target;
+                target = std::clamp(target, 0, static_cast<int>(children.size()) - 1);
+                if (target == old_index)
+                    return false;
+                children.erase(existing);
+                children.insert(children.begin() + static_cast<ptrdiff_t>(target), node_id);
+                notifyMutation(MutationType::NODE_REPARENTED);
+                return true;
+            }
+
+            if (old_parent != NULL_NODE) {
+                if (auto* op = getNodeById(old_parent)) {
+                    auto& oc = op->children;
+                    oc.erase(std::remove(oc.begin(), oc.end(), node_id), oc.end());
+                }
+            }
+            node->parent_id = new_parent;
+            const int target = std::clamp(index < 0 ? static_cast<int>(children.size()) : index,
+                                          0, static_cast<int>(children.size()));
+            children.insert(children.begin() + static_cast<ptrdiff_t>(target), node_id);
+
+            preserveWorldTransform();
+            markTransformDirty(node_id);
+            notifyMutation(MutationType::NODE_REPARENTED);
+            return true;
+        }
+
+        const bool was_root = (old_parent == NULL_NODE);
+        if (old_parent != NULL_NODE) {
+            if (auto* op = getNodeById(old_parent)) {
+                auto& oc = op->children;
+                oc.erase(std::remove(oc.begin(), oc.end(), node_id), oc.end());
+            }
+        }
+        node->parent_id = NULL_NODE;
+
+        const size_t src_idx = id_to_index_.at(node_id);
+        std::vector<size_t> root_storage;
+        size_t current_root_index = 0;
+        for (size_t i = 0; i < nodes_.size(); ++i) {
+            if (i == src_idx)
+                continue;
+            if (nodes_[i]->parent_id == NULL_NODE) {
+                if (i < src_idx)
+                    ++current_root_index;
+                root_storage.push_back(i);
+            }
+        }
+
+        int final_idx = index < 0 ? static_cast<int>(root_storage.size()) : index;
+        if (was_root && current_root_index < static_cast<size_t>(final_idx))
+            --final_idx;
+        final_idx = std::clamp(final_idx, 0, static_cast<int>(root_storage.size()));
+        if (was_root && static_cast<size_t>(final_idx) == current_root_index)
+            return false;
+
+        const size_t dest_idx = static_cast<size_t>(final_idx) >= root_storage.size()
+                                    ? nodes_.size()
+                                    : root_storage[static_cast<size_t>(final_idx)];
+
+        auto ptr = std::move(nodes_[src_idx]);
+        nodes_.erase(nodes_.begin() + static_cast<ptrdiff_t>(src_idx));
+        size_t insert_pos = dest_idx > src_idx ? dest_idx - 1 : dest_idx;
+        insert_pos = std::min(insert_pos, nodes_.size());
+        nodes_.insert(nodes_.begin() + static_cast<ptrdiff_t>(insert_pos), std::move(ptr));
+
+        for (size_t i = 0; i < nodes_.size(); ++i)
+            id_to_index_[nodes_[i]->id] = i;
+
+        if (!was_root)
+            preserveWorldTransform();
+        markTransformDirty(node_id);
+        notifyMutation(MutationType::NODE_REPARENTED);
+        return true;
     }
 
     const glm::mat4& Scene::getWorldTransform(const NodeId node_id) const {
@@ -2316,17 +3186,15 @@ namespace lfs::core {
         for (const auto& node : nodes_) {
             if (node->type != NodeType::CROPBOX)
                 continue;
-            if (!node->visible)
+            if (!isNodeEffectivelyVisible(node->id))
                 continue;
             if (!node->cropbox)
-                continue;
-
-            if (node->parent_id != NULL_NODE && !isNodeEffectivelyVisible(node->parent_id))
                 continue;
 
             RenderableCropBox rcb;
             rcb.node_id = node->id;
             rcb.parent_splat_id = node->parent_id;
+            rcb.parent_node_index = getVisibleNodeIndex(node->parent_id);
             rcb.data = node->cropbox.get();
             rcb.world_transform = getWorldTransform(node->id);
             rcb.local_transform = node->local_transform.get();
@@ -2400,17 +3268,15 @@ namespace lfs::core {
         for (const auto& node : nodes_) {
             if (node->type != NodeType::ELLIPSOID)
                 continue;
-            if (!node->visible)
+            if (!isNodeEffectivelyVisible(node->id))
                 continue;
             if (!node->ellipsoid)
-                continue;
-
-            if (node->parent_id != NULL_NODE && !isNodeEffectivelyVisible(node->parent_id))
                 continue;
 
             RenderableEllipsoid rel;
             rel.node_id = node->id;
             rel.parent_splat_id = node->parent_id;
+            rel.parent_node_index = getVisibleNodeIndex(node->parent_id);
             rel.data = node->ellipsoid.get();
             rel.world_transform = getWorldTransform(node->id);
             rel.local_transform = node->local_transform.get();
@@ -2452,7 +3318,21 @@ namespace lfs::core {
     }
 
     void Scene::setTrainingModel(std::unique_ptr<lfs::core::SplatData> splat_data, const std::string& name) {
-        addNode(name, std::move(splat_data));
+        if (const NodeId existing_id = getNodeIdByName(name); existing_id != NULL_NODE) {
+            const auto* existing = getNodeById(existing_id);
+            if (!existing || existing->type != NodeType::SPLAT) {
+                LOG_WARN("Cannot set training model '{}': existing node is not a splat", name);
+                return;
+            }
+            replaceNodeModel(name, std::move(splat_data));
+            setTrainingModelNode(name);
+            LOG_INFO("Replaced training model node '{}' from checkpoint", name);
+            return;
+        }
+
+        const NodeId id = addSplat(name, std::move(splat_data));
+        if (id == NULL_NODE)
+            return;
         setTrainingModelNode(name);
         LOG_INFO("Created training model node '{}' from checkpoint", name);
     }
@@ -2476,7 +3356,7 @@ namespace lfs::core {
         if (name_it == name_to_id_.end())
             return nullptr;
         SceneNode* node = getNodeById(name_it->second);
-        if (!node || !isNodeEffectivelyVisible(node->id))
+        if (!node)
             return nullptr;
         return node->model.get();
     }
@@ -2485,9 +3365,17 @@ namespace lfs::core {
         if (training_model_node_.empty())
             return nullptr;
         const auto* node = getNode(training_model_node_);
-        if (!node || !isNodeEffectivelyVisible(node->id))
+        if (!node)
             return nullptr;
         return node->model.get();
+    }
+
+    bool Scene::isTrainingModelEffectivelyVisible() const {
+        if (training_model_node_.empty())
+            return false;
+
+        const auto* node = getNode(training_model_node_);
+        return node && node->model && isNodeEffectivelyVisible(node->id);
     }
 
     size_t Scene::getTrainingModelGaussianCount() const {
@@ -2495,7 +3383,7 @@ namespace lfs::core {
             return 0;
 
         const auto* node = getNode(training_model_node_);
-        if (!node || !node->model || !isNodeEffectivelyVisible(node->id))
+        if (!node || !node->model)
             return 0;
 
         // UI/status polling must not touch the live training SplatData while the
@@ -2504,6 +3392,17 @@ namespace lfs::core {
     }
 
     size_t Scene::getVisibleGaussianCount() const {
+        if (consolidated_ && !consolidated_node_slots_.empty()) {
+            size_t total = 0;
+            for (const auto& slot : consolidated_node_slots_) {
+                const auto* node = slot.id == NULL_NODE ? nullptr : getNodeById(slot.id);
+                if (node && isNodeEffectivelyVisible(node->id)) {
+                    total += slot.gaussian_count;
+                }
+            }
+            return total;
+        }
+
         const auto* model = getCombinedModel();
         if (!model) {
             return 0;
@@ -2546,7 +3445,7 @@ namespace lfs::core {
             return counts;
         }
 
-        std::vector<size_t> slot_counts(consolidated_node_ids_.size(), 0);
+        std::vector<size_t> slot_counts(consolidated_node_slots_.size(), 0);
         const int* transform_indices = transform_indices_cpu.ptr<int>();
         const bool* deleted = deleted_cpu.ptr<bool>();
 
@@ -2558,8 +3457,11 @@ namespace lfs::core {
             ++slot_counts[slot];
         }
 
-        for (size_t slot = 0; slot < consolidated_node_ids_.size(); ++slot) {
-            counts[consolidated_node_ids_[slot]] = slot_counts[slot];
+        for (size_t slot = 0; slot < consolidated_node_slots_.size(); ++slot) {
+            const NodeId id = consolidated_node_slots_[slot].id;
+            if (id != NULL_NODE) {
+                counts[id] = slot_counts[slot];
+            }
         }
 
         return counts;
@@ -2614,7 +3516,14 @@ namespace lfs::core {
     }
 
     void Scene::setCameraTrainingEnabled(const std::string& name, bool enabled) {
-        auto* node = getMutableNode(name);
+        const NodeId id = getNodeIdByName(name);
+        if (id == NULL_NODE)
+            return;
+        setCameraTrainingEnabled(id, enabled);
+    }
+
+    void Scene::setCameraTrainingEnabled(const NodeId id, const bool enabled) {
+        auto* node = getNodeById(id);
         if (node && node->type == NodeType::CAMERA && node->training_enabled != enabled) {
             node->training_enabled = enabled;
             notifyMutation(MutationType::VISIBILITY_CHANGED);

@@ -60,6 +60,14 @@ namespace lfs::vis {
             return fmt::format("{:.2g}x", speed);
         }
 
+        [[nodiscard]] std::string formatSequenceFps(const float fps) {
+            const float clamped = std::clamp(fps, MIN_SEQUENCE_FPS, MAX_SEQUENCE_FPS);
+            const float rounded = std::round(clamped);
+            if (std::abs(clamped - rounded) < 0.01f)
+                return fmt::format("{} fps", static_cast<int>(rounded));
+            return fmt::format("{:.2f} fps", clamped);
+        }
+
         [[nodiscard]] std::string formatPresetShort(const lfs::io::video::VideoPreset preset) {
             return lfs::io::video::getPresetInfo(preset).name;
         }
@@ -95,6 +103,23 @@ namespace lfs::vis {
             return signature;
         }
 
+        [[nodiscard]] int milli(const float value) {
+            return static_cast<int>(std::lround(value * 1000.0f));
+        }
+
+        [[nodiscard]] bool hasInputActivity(const PanelInputState& input) {
+            for (int i = 0; i < 3; ++i) {
+                if (input.mouse_down[i] || input.mouse_clicked[i] || input.mouse_released[i])
+                    return true;
+            }
+            return input.mouse_wheel != 0.0f ||
+                   !input.keys_pressed.empty() ||
+                   !input.keys_released.empty() ||
+                   !input.text_codepoints.empty() ||
+                   !input.text_inputs.empty() ||
+                   input.has_text_editing;
+        }
+
         [[nodiscard]] float clampCenteredSpan(const float center,
                                               const float extent,
                                               const float span) {
@@ -123,6 +148,7 @@ namespace lfs::vis {
         transport_listener_.panel = this;
         quality_scrub_listener_.panel = this;
         duration_listener_.panel = this;
+        sequence_fps_listener_.panel = this;
     }
 
     RmlSequencerPanel::~RmlSequencerPanel() = default;
@@ -191,6 +217,8 @@ namespace lfs::vis {
             panel->save_path_requested_ = true;
         else if (id == "btn-load-path")
             panel->load_path_requested_ = true;
+        else if (id == "btn-load-sequence")
+            panel->load_sequence_requested_ = true;
         else if (id == "btn-export")
             panel->export_requested_ = true;
         else if (id == "btn-dock-toggle")
@@ -251,6 +279,10 @@ namespace lfs::vis {
 
     void RmlSequencerPanel::destroyGraphicsResources() {
         clearPendingComposite();
+        if (rml_manager_)
+            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+        direct_cache_dirty_ = true;
+        last_render_signature_.reset();
         unregisterFilmStripSources();
         clearFilmThumbPool();
         if (el_film_strip_gaps_)
@@ -263,6 +295,8 @@ namespace lfs::vis {
             el_film_strip_sprockets_top_->SetInnerRML("");
         if (el_film_strip_sprockets_bottom_)
             el_film_strip_sprockets_bottom_->SetInnerRML("");
+        if (el_sequence_strip_)
+            el_sequence_strip_->SetInnerRML("");
     }
 
     void RmlSequencerPanel::clearPendingComposite() {
@@ -274,6 +308,7 @@ namespace lfs::vis {
         el_floating_header_ = nullptr;
         el_ruler_ = nullptr;
         el_track_bar_ = nullptr;
+        el_sequence_strip_ = nullptr;
         el_keyframes_ = nullptr;
         el_playhead_ = nullptr;
         el_playhead_handle_ = nullptr;
@@ -308,6 +343,9 @@ namespace lfs::vis {
         el_btn_film_strip_ = nullptr;
         el_btn_preview_ = nullptr;
         el_speed_label_ = nullptr;
+        el_sequence_fps_field_ = nullptr;
+        el_sequence_fps_display_ = nullptr;
+        el_sequence_fps_input_ = nullptr;
         el_format_label_ = nullptr;
         el_resolution_info_ = nullptr;
         el_quality_scrub_ = nullptr;
@@ -317,9 +355,11 @@ namespace lfs::vis {
         el_duration_field_ = nullptr;
         el_duration_input_ = nullptr;
         duration_editing_ = false;
+        sequence_fps_editing_ = false;
         el_btn_equirect_ = nullptr;
         el_btn_save_ = nullptr;
         el_btn_load_ = nullptr;
+        el_btn_load_sequence_ = nullptr;
         el_btn_export_ = nullptr;
         el_btn_clear_ = nullptr;
         el_transport_dock_sep_ = nullptr;
@@ -336,6 +376,10 @@ namespace lfs::vis {
             return;
 
         clearPendingComposite();
+        if (rml_manager_)
+            rml_manager_->releaseCachedVulkanContext(direct_cache_);
+        direct_cache_dirty_ = true;
+        last_render_signature_.reset();
         unregisterFilmStripSources();
         clearFilmThumbPool();
         if (document_) {
@@ -383,6 +427,95 @@ namespace lfs::vis {
         (void)screen_h;
     }
 
+    RmlSequencerPanel::RenderSignature RmlSequencerPanel::makeRenderSignature(
+        const int width,
+        const int height,
+        const std::size_t theme_signature,
+        std::string language) const {
+        return {
+            .width = width,
+            .height = height,
+            .dp_milli = milli(cached_dp_ratio_),
+            .floating = floating_,
+            .film_strip_attached = film_strip_attached_,
+            .theme_signature = theme_signature,
+            .language = std::move(language),
+            .timeline_revision = controller_.timelineRevision(),
+            .selection_revision = controller_.selectionRevision(),
+            .selected_keyframes_signature = selectedKeyframeSignature(selected_keyframes_),
+            .playhead_milli = milli(controller_.playhead()),
+            .zoom_milli = milli(zoom_level_),
+            .pan_milli = milli(pan_offset_),
+            .playback_speed_milli = milli(ui_state_.playback_speed),
+            .sequence_fps_milli = milli(ui_state_.sequence_fps),
+            .sequence_frame_count = controller_.hasPlySequence() ? controller_.plySequence()->frames.size() : 0,
+            .sequence_node_name = controller_.hasPlySequence() ? controller_.plySequence()->node_name : "",
+            .snap_interval_milli = milli(ui_state_.snap_interval),
+            .pip_scale_milli = milli(ui_state_.pip_preview_scale),
+            .state = static_cast<int>(controller_.state()),
+            .loop_mode = static_cast<int>(controller_.loopMode()),
+            .preset = static_cast<int>(ui_state_.preset),
+            .custom_width = ui_state_.custom_width,
+            .custom_height = ui_state_.custom_height,
+            .framerate = ui_state_.framerate,
+            .quality = ui_state_.quality,
+            .follow_playback = ui_state_.follow_playback,
+            .show_camera_path = ui_state_.show_camera_path,
+            .snap_to_grid = ui_state_.snap_to_grid,
+            .show_film_strip = ui_state_.show_film_strip,
+            .show_pip_preview = ui_state_.show_pip_preview,
+            .equirectangular = ui_state_.equirectangular,
+        };
+    }
+
+    bool RmlSequencerPanel::canReuseCachedRender(const RenderSignature& signature,
+                                                 const PanelInputState& input,
+                                                 const int width,
+                                                 const int height) const {
+        return !direct_cache_dirty_ &&
+               direct_cache_.texture != 0 &&
+               direct_cache_.width == width &&
+               direct_cache_.height == height &&
+               last_render_signature_.has_value() &&
+               *last_render_signature_ == signature &&
+               !hasInputActivity(input) &&
+               !tooltip_.needsFrame() &&
+               !quality_scrub_active_ &&
+               !quality_scrub_editing_ &&
+               !duration_editing_ &&
+               !sequence_fps_editing_;
+    }
+
+    void RmlSequencerPanel::queueCachedRender(const float context_x,
+                                              const float context_y,
+                                              const float panel_width,
+                                              const float total_height,
+                                              const int width,
+                                              const int height,
+                                              const bool refresh) {
+        if (!rml_manager_ || !rml_context_)
+            return;
+        rml_manager_->queueCachedVulkanContext({
+            .context = rml_context_,
+            .cache = &direct_cache_,
+            .cache_width = width,
+            .cache_height = height,
+            .offset_x = context_x,
+            .offset_y = context_y,
+            .draw_width = panel_width,
+            .draw_height = total_height,
+            .refresh = refresh,
+            .foreground = floating_,
+            .clip_enabled = true,
+            .clip = {
+                .x1 = context_x,
+                .y1 = context_y,
+                .x2 = context_x + panel_width,
+                .y2 = context_y + total_height,
+            },
+        });
+    }
+
     void RmlSequencerPanel::initContext(const int width, const int height) {
         if (rml_context_)
             return;
@@ -413,6 +546,7 @@ namespace lfs::vis {
         el_floating_header_ = document_->GetElementById("floating-header");
         el_ruler_ = document_->GetElementById("ruler");
         el_track_bar_ = document_->GetElementById("track-bar");
+        el_sequence_strip_ = document_->GetElementById("sequence-strip");
         el_keyframes_ = document_->GetElementById("keyframes");
         el_playhead_ = document_->GetElementById("playhead");
         el_playhead_handle_ = document_->GetElementById("playhead-handle");
@@ -448,6 +582,9 @@ namespace lfs::vis {
         el_btn_film_strip_ = document_->GetElementById("btn-film-strip");
         el_btn_preview_ = document_->GetElementById("btn-preview");
         el_speed_label_ = document_->GetElementById("speed-label");
+        el_sequence_fps_field_ = document_->GetElementById("sequence-fps-field");
+        el_sequence_fps_display_ = document_->GetElementById("sequence-fps-display");
+        el_sequence_fps_input_ = document_->GetElementById("sequence-fps-input");
         el_format_label_ = document_->GetElementById("format-label");
         el_resolution_info_ = document_->GetElementById("resolution-info");
         el_quality_scrub_ = document_->GetElementById("quality-scrub");
@@ -459,6 +596,7 @@ namespace lfs::vis {
         el_btn_equirect_ = document_->GetElementById("btn-equirect");
         el_btn_save_ = document_->GetElementById("btn-save-path");
         el_btn_load_ = document_->GetElementById("btn-load-path");
+        el_btn_load_sequence_ = document_->GetElementById("btn-load-sequence");
         el_btn_export_ = document_->GetElementById("btn-export");
         el_btn_clear_ = document_->GetElementById("btn-clear");
         el_transport_dock_sep_ = document_->GetElementById("dock-toggle-sep");
@@ -467,7 +605,7 @@ namespace lfs::vis {
         el_btn_close_panel_ = document_->GetElementById("btn-close-panel");
         el_close_panel_label_ = document_->GetElementById("close-panel-label");
 
-        elements_cached_ = el_ruler_ && el_keyframes_ && el_playhead_ && el_playhead_handle_ &&
+        elements_cached_ = el_ruler_ && el_sequence_strip_ && el_keyframes_ && el_playhead_ && el_playhead_handle_ &&
                            el_current_time_ && el_duration_ && el_play_icon_ &&
                            el_btn_loop_ && el_timeline_ && el_header_ &&
                            el_easing_stripe_ && el_easing_segments_ &&
@@ -489,7 +627,7 @@ namespace lfs::vis {
                                    "btn-loop", "btn-add",
                                    "btn-camera-path", "btn-snap", "btn-follow",
                                    "btn-film-strip", "btn-preview", "btn-equirect", "btn-speed",
-                                   "btn-format", "btn-save-path", "btn-load-path",
+                                   "btn-format", "btn-save-path", "btn-load-path", "btn-load-sequence",
                                    "btn-export", "btn-clear", "btn-dock-toggle",
                                    "btn-close-panel"}) {
             auto* el = document_->GetElementById(btn_id);
@@ -514,6 +652,13 @@ namespace lfs::vis {
         if (el_duration_input_) {
             el_duration_input_->AddEventListener(Rml::EventId::Change, &duration_listener_);
             el_duration_input_->AddEventListener(Rml::EventId::Blur, &duration_listener_);
+        }
+
+        if (el_sequence_fps_field_)
+            el_sequence_fps_field_->AddEventListener(Rml::EventId::Click, &sequence_fps_listener_);
+        if (el_sequence_fps_input_) {
+            el_sequence_fps_input_->AddEventListener(Rml::EventId::Change, &sequence_fps_listener_);
+            el_sequence_fps_input_->AddEventListener(Rml::EventId::Blur, &sequence_fps_listener_);
         }
     }
 
@@ -624,8 +769,13 @@ namespace lfs::vis {
                 el_keyframes_->RemoveChild(keyframe_elements_.back());
                 keyframe_elements_.pop_back();
             }
-            if (el_hint_)
-                el_hint_->SetInnerRML(LOC(lichtfeld::Strings::Sequencer::EMPTY_HINT));
+            if (el_hint_) {
+                if (controller_.hasPlySequence()) {
+                    el_hint_->SetInnerRML("");
+                } else {
+                    el_hint_->SetInnerRML(LOC(lichtfeld::Strings::Sequencer::EMPTY_HINT));
+                }
+            }
             return;
         }
 
@@ -663,6 +813,53 @@ namespace lfs::vis {
             el->SetProperty("background-color", colorToRml(fill));
             el->SetProperty("border-color", selected ? colorToRml(p.text) : colorToRml(fill));
         }
+    }
+
+    void RmlSequencerPanel::rebuildPlySequenceClip() {
+        if (!elements_cached_ || !el_sequence_strip_)
+            return;
+
+        const auto* const sequence = controller_.plySequence();
+        const float timeline_width = timelineWidth();
+        if (!sequence || sequence->frames.empty() || timeline_width <= 0.0f) {
+            el_sequence_strip_->SetInnerRML("");
+            return;
+        }
+
+        const float duration = sequence->duration();
+        if (duration <= 0.0f) {
+            el_sequence_strip_->SetInnerRML("");
+            return;
+        }
+
+        const float start_x = timeToX(0.0f, 0.0f, timeline_width);
+        const float end_x = timeToX(duration, 0.0f, timeline_width);
+        const float width = std::max(2.0f * cached_dp_ratio_, end_x - start_x);
+        const std::string label = Rml::StringUtilities::EncodeRml(
+            fmt::format("{}  {} frames @ {}",
+                        sequence->node_name.empty() ? "PLY Sequence" : sequence->node_name,
+                        sequence->frames.size(),
+                        formatSequenceFps(sequence->fps)));
+
+        std::string html;
+        html.reserve(2048);
+        html += fmt::format(
+            "<div class=\"sequence-clip\" style=\"left: {:.1f}px; width: {:.1f}px;\">",
+            start_x,
+            width);
+        html += fmt::format("<span class=\"sequence-clip-label\">{}</span>", label);
+
+        const float tick_spacing = width / static_cast<float>(sequence->frames.size());
+        if (sequence->frames.size() <= 240 && tick_spacing >= 3.0f * cached_dp_ratio_) {
+            for (size_t i = 1; i < sequence->frames.size(); ++i) {
+                html += fmt::format(
+                    "<div class=\"sequence-frame-tick\" style=\"left: {:.1f}px;\"></div>",
+                    static_cast<float>(i) * tick_spacing);
+            }
+        }
+
+        html += "</div>";
+        el_sequence_strip_->SetInnerRML(html);
     }
 
     void RmlSequencerPanel::rebuildRuler() {
@@ -754,6 +951,12 @@ namespace lfs::vis {
         return request;
     }
 
+    bool RmlSequencerPanel::consumeLoadSequenceRequest() {
+        const bool request = load_sequence_requested_;
+        load_sequence_requested_ = false;
+        return request;
+    }
+
     bool RmlSequencerPanel::consumeDockToggleRequest() {
         const bool request = dock_toggle_requested_;
         dock_toggle_requested_ = false;
@@ -777,7 +980,8 @@ namespace lfs::vis {
             return;
 
         const bool has_camera_keyframes = controller_.timeline().realKeyframeCount() > 0;
-        const bool has_any_state = has_camera_keyframes || controller_.timeline().hasAnimationClip();
+        const bool has_sequence = controller_.hasPlySequence();
+        const bool has_any_state = has_camera_keyframes || controller_.timeline().hasAnimationClip() || has_sequence;
 
         if (el_btn_camera_path_)
             el_btn_camera_path_->SetClass("active", ui_state_.show_camera_path);
@@ -793,6 +997,10 @@ namespace lfs::vis {
             el_btn_equirect_->SetClass("active", ui_state_.equirectangular);
         if (el_speed_label_)
             el_speed_label_->SetInnerRML(formatSpeed(ui_state_.playback_speed));
+        if (!sequence_fps_editing_)
+            syncSequenceFpsDisplay();
+        if (el_sequence_fps_field_)
+            el_sequence_fps_field_->SetClass("active", has_sequence);
         if (el_format_label_)
             el_format_label_->SetInnerRML(formatPresetShort(ui_state_.preset));
         if (el_resolution_info_) {
@@ -808,6 +1016,8 @@ namespace lfs::vis {
 
         if (el_btn_save_)
             el_btn_save_->SetClass("disabled", !has_camera_keyframes);
+        if (el_btn_load_sequence_)
+            el_btn_load_sequence_->SetClass("active", has_sequence);
         if (el_btn_export_)
             el_btn_export_->SetClass("disabled", !has_camera_keyframes);
         if (el_btn_clear_)
@@ -872,11 +1082,25 @@ namespace lfs::vis {
         if (!rml_context_ || !document_)
             return;
 
+        const std::size_t theme_signature = gui::rml_theme::currentThemeSignature();
+        auto language = lfs::event::LocalizationManager::getInstance().getCurrentLanguage();
+        const float context_x = panel_x - input.screen_x;
+        const float context_y = panel_y - input.screen_y;
+        rml_manager_->trackContextFrame(rml_context_,
+                                        static_cast<int>(context_x),
+                                        static_cast<int>(context_y));
+
+        const RenderSignature signature =
+            makeRenderSignature(w, h, theme_signature, language);
+        if (canReuseCachedRender(signature, input, w, h)) {
+            queueCachedRender(context_x, context_y, panel_width, cached_total_height_, w, h, false);
+            return;
+        }
+
         syncTheme();
 
-        const auto& lang = lfs::event::LocalizationManager::getInstance().getCurrentLanguage();
-        if (lang != last_language_) {
-            last_language_ = lang;
+        if (language != last_language_) {
+            last_language_ = std::move(language);
             last_keyframe_count_ = static_cast<size_t>(-1);
         }
 
@@ -914,6 +1138,7 @@ namespace lfs::vis {
             updatePlayhead();
             updateTimeDisplay();
             rebuildKeyframes();
+            rebuildPlySequenceClip();
             rebuildRuler();
             rebuildEasingStripe(timeline_pos.x, tl_width);
             updateTimelineGuides(timeline_pos.x, tl_width, film_strip);
@@ -931,22 +1156,11 @@ namespace lfs::vis {
             tooltip_.apply(body, local_mx, local_my, w, h);
         }
 
-        const float context_x = panel_x - input.screen_x;
-        const float context_y = panel_y - input.screen_y;
-        rml_manager_->trackContextFrame(rml_context_,
-                                        static_cast<int>(context_x),
-                                        static_cast<int>(context_y));
         rml_context_->SetDimensions(Rml::Vector2i(w, h));
         rml_context_->Update();
-        rml_manager_->queueVulkanContext(rml_context_,
-                                         context_x,
-                                         context_y,
-                                         floating_,
-                                         true,
-                                         context_x,
-                                         context_y,
-                                         context_x + panel_width,
-                                         context_y + cached_total_height_);
+        queueCachedRender(context_x, context_y, panel_width, cached_total_height_, w, h, true);
+        last_render_signature_ = signature;
+        direct_cache_dirty_ = false;
     }
 
     // ── Quality Scrub Field ──────────────────────────────────
@@ -1108,6 +1322,64 @@ namespace lfs::vis {
         if (el_duration_field_)
             el_duration_field_->SetClass("is-editing", false);
         syncDurationDisplay();
+    }
+
+    // ── PLY Sequence FPS Field ─────────────────────────────
+
+    void RmlSequencerPanel::SequenceFpsEditListener::ProcessEvent(Rml::Event& event) {
+        assert(panel);
+        const auto event_id = event.GetId();
+        auto* el = event.GetCurrentElement();
+        if (!el)
+            return;
+
+        if (event_id == Rml::EventId::Click && el->GetId() == "sequence-fps-field") {
+            if (event.GetParameter<int>("button", 0) != 0)
+                return;
+            panel->enterSequenceFpsEdit();
+            event.StopPropagation();
+        } else if (event_id == Rml::EventId::Change && el->GetId() == "sequence-fps-input") {
+            if (event.GetParameter<bool>("linebreak", false))
+                panel->exitSequenceFpsEdit(true);
+        } else if (event_id == Rml::EventId::Blur && el->GetId() == "sequence-fps-input") {
+            panel->exitSequenceFpsEdit(true);
+        }
+    }
+
+    void RmlSequencerPanel::syncSequenceFpsDisplay() {
+        if (!el_sequence_fps_display_ || sequence_fps_editing_)
+            return;
+        el_sequence_fps_display_->SetInnerRML(formatSequenceFps(ui_state_.sequence_fps));
+    }
+
+    void RmlSequencerPanel::enterSequenceFpsEdit() {
+        if (!el_sequence_fps_field_ || !el_sequence_fps_input_ || sequence_fps_editing_)
+            return;
+
+        sequence_fps_editing_ = true;
+        el_sequence_fps_field_->SetClass("is-editing", true);
+        el_sequence_fps_input_->SetAttribute("value", fmt::format("{:.2f}", ui_state_.sequence_fps));
+        el_sequence_fps_input_->Focus();
+    }
+
+    void RmlSequencerPanel::exitSequenceFpsEdit(const bool commit) {
+        if (!sequence_fps_editing_)
+            return;
+
+        if (commit && el_sequence_fps_input_) {
+            const auto text = el_sequence_fps_input_->GetAttribute<Rml::String>("value", "");
+            char* end = nullptr;
+            const float parsed = std::strtof(text.c_str(), &end);
+            if (end != text.c_str()) {
+                ui_state_.sequence_fps = std::clamp(parsed, MIN_SEQUENCE_FPS, MAX_SEQUENCE_FPS);
+                controller_.setPlySequenceFps(ui_state_.sequence_fps);
+            }
+        }
+
+        sequence_fps_editing_ = false;
+        if (el_sequence_fps_field_)
+            el_sequence_fps_field_->SetClass("is-editing", false);
+        syncSequenceFpsDisplay();
     }
 
 } // namespace lfs::vis

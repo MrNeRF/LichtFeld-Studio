@@ -10,19 +10,120 @@
 #include "core/services.hpp"
 #include "core/tensor.hpp"
 #include "python/python_runtime.hpp"
+#include "rendering/vulkan_external_tensor.hpp"
 #include "training/training_setup.hpp"
+#include "visualizer/visualizer_impl.hpp"
+#include "window/vulkan_context.hpp"
+#include "window/window_manager.hpp"
+
+#include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <cuda_runtime.h>
+#include <format>
 #include <stdexcept>
+#include <thread>
+#include <utility>
 
 namespace lfs::vis {
 
     using namespace lfs::core::events;
 
+    namespace {
+        [[nodiscard]] lfs::core::SplatTensorAllocator makeVulkanTrainingTensorAllocator(VisualizerImpl* viewer) {
+            if (!viewer || !viewer->getWindowManager()) {
+                return {};
+            }
+            auto* const context = viewer->getWindowManager()->getVulkanContext();
+            if (!context || !context->externalMemoryInteropEnabled()) {
+                return {};
+            }
+
+            return [context](lfs::core::TensorShape shape,
+                             const size_t capacity,
+                             const lfs::core::DataType dtype,
+                             const std::string_view name) -> lfs::core::Tensor {
+                const std::string debug_name{name};
+                auto tensor = makeVulkanExternalTensor(
+                    *context,
+                    std::move(shape),
+                    dtype,
+                    capacity,
+                    debug_name.c_str());
+                if (!tensor) {
+                    throw lfs::core::TensorError(std::format(
+                        "Vulkan-external training tensor allocation failed for '{}': {}",
+                        debug_name,
+                        tensor.error()));
+                }
+                tensor->set_name(debug_name);
+                return std::move(*tensor);
+            };
+        }
+    } // namespace
+
     TrainerManager::TrainerManager() {
         setupEventHandlers();
         setupStateMachineCallbacks();
         LOG_DEBUG("TrainerManager created");
+    }
+
+    lfs::core::SplatTensorAllocator TrainerManager::createTrainingSplatTensorAllocator(
+        const lfs::core::param::TrainingParameters& params,
+        const std::size_t min_capacity) {
+        splat_storage_.reset();
+        lfs::core::SplatTensorAllocator tensor_allocator;
+
+        const std::size_t configured_capacity =
+            params.optimization.max_cap > 0
+                ? static_cast<std::size_t>(params.optimization.max_cap)
+                : 0;
+        const std::size_t exportable_capacity = std::max(configured_capacity, min_capacity);
+        const int sh_degree = params.optimization.sh_degree;
+
+        VulkanContext* vk_ctx = nullptr;
+        if (viewer_ && viewer_->getWindowManager()) {
+            vk_ctx = viewer_->getWindowManager()->getVulkanContext();
+        }
+        const bool vulkan_interop_available =
+            vk_ctx && vk_ctx->externalMemoryInteropEnabled();
+
+        if (vulkan_interop_available && exportable_capacity > 0) {
+            auto storage_result =
+                lfs::core::SplatExportableStorage::create(exportable_capacity, sh_degree);
+            if (storage_result) {
+                splat_storage_ = std::move(*storage_result);
+                auto interop_alloc_result =
+                    makeSplatExportableInteropAllocator(*vk_ctx, *splat_storage_);
+                if (interop_alloc_result) {
+                    tensor_allocator = std::move(*interop_alloc_result);
+                    LOG_INFO("Training tensors share one CUDA-exportable VMM block "
+                             "imported into Vulkan (capacity={}, sh_degree={}, "
+                             "block={} MiB) — zero-copy viewer interop",
+                             exportable_capacity,
+                             sh_degree,
+                             splat_storage_->block->size >> 20);
+                } else {
+                    LOG_WARN("Exportable-interop allocator failed ({}); dropping storage "
+                             "and falling back to legacy Vulkan-external allocator",
+                             interop_alloc_result.error());
+                    splat_storage_.reset();
+                }
+            } else {
+                LOG_WARN("SplatExportableStorage creation failed ({}); falling back to "
+                         "legacy Vulkan-external allocator",
+                         storage_result.error());
+            }
+        }
+
+        if (!tensor_allocator) {
+            tensor_allocator = makeVulkanTrainingTensorAllocator(viewer_);
+            if (tensor_allocator) {
+                LOG_INFO("Training model tensors will use Vulkan-external CUDA storage");
+            }
+        }
+
+        return tensor_allocator;
     }
 
     void TrainerManager::setupStateMachineCallbacks() {
@@ -212,12 +313,45 @@ namespace lfs::vis {
         }
 
         if (trainer_->isInitialized()) {
+            const auto& params = trainer_->getParams();
+            auto* model = scene_ ? scene_->getTrainingModel() : nullptr;
+            const std::size_t model_size = model ? static_cast<std::size_t>(model->size()) : 0;
+            auto tensor_allocator = scene_ ? createTrainingSplatTensorAllocator(params, model_size)
+                                           : lfs::core::SplatTensorAllocator{};
+            const bool force_reallocation = splat_storage_.has_value();
+            if (scene_ && tensor_allocator) {
+                trainer_->setSplatTensorAllocator(tensor_allocator);
+                if (model) {
+                    if (auto result = lfs::training::migrateTrainingModelToAllocator(
+                            params, *model, tensor_allocator, force_reallocation);
+                        !result) {
+                        LOG_ERROR("Failed to migrate initialized training model: {}", result.error());
+                        last_error_ = result.error();
+                        state::TrainingCompleted{
+                            .iteration = getCurrentIteration(),
+                            .final_loss = 0.0f,
+                            .elapsed_seconds = 0.0f,
+                            .success = false,
+                            .user_stopped = false,
+                            .error = last_error_}
+                            .emit();
+                        if (!state_machine_.transitionToFinished(FinishReason::Error)) {
+                            LOG_WARN("Failed to transition to Finished(Error)");
+                        }
+                        return false;
+                    }
+                }
+            }
             LOG_DEBUG("Resuming from iteration {}", trainer_->get_current_iteration());
         } else {
             const auto& params = trainer_->getParams();
 
             if (scene_) {
-                if (auto result = lfs::training::initializeTrainingModel(params, *scene_); !result) {
+                auto tensor_allocator = createTrainingSplatTensorAllocator(params);
+                trainer_->setSplatTensorAllocator(tensor_allocator);
+                if (auto result = lfs::training::initializeTrainingModel(
+                        params, *scene_, std::move(tensor_allocator));
+                    !result) {
                     LOG_ERROR("Failed to initialize model: {}", result.error());
                     last_error_ = result.error();
 
@@ -239,6 +373,7 @@ namespace lfs::vis {
                     }
                     return false;
                 }
+                lfs::core::Tensor::log_storage_memory("After training model initialization");
             }
 
             if (auto result = trainer_->initialize(params); !result) {
@@ -263,6 +398,7 @@ namespace lfs::vis {
                 }
                 return false;
             }
+            lfs::core::Tensor::log_storage_memory("After trainer initialization");
 
             // Match headless mode: release init-time cached pool allocations before the
             // first training batch spins up image decoders and render workspaces.
@@ -346,22 +482,146 @@ namespace lfs::vis {
     }
 
     void TrainerManager::pauseTrainingTemporary() {
-        if (!isRunning())
+        if (!isRunning() || !trainer_) {
             return;
-
-        if (trainer_) {
-            trainer_->request_pause();
-            LOG_TRACE("Training temporarily paused at iteration {}", getCurrentIteration());
         }
+
+        const int iteration = getCurrentIteration();
+        const bool was_paused = trainer_->is_paused();
+        {
+            std::lock_guard lock(temporary_pause_mutex_);
+            if (temporary_pause_depth_ == 0) {
+                temporary_pause_initially_paused_ = was_paused && !temporary_pause_resume_in_flight_;
+                temporary_pause_resume_in_flight_ = false;
+            }
+            ++temporary_pause_depth_;
+        }
+
+        trainer_->request_pause();
+        LOG_TRACE("Training temporary pause requested at iteration {}", iteration);
+    }
+
+    TrainerManager::TemporaryPauseResult
+    TrainerManager::pauseTrainingTemporaryAndWait(const std::chrono::milliseconds timeout) {
+        if (!isRunning() || !trainer_) {
+            return {};
+        }
+
+        const int start_iteration = getCurrentIteration();
+        const bool was_paused = trainer_->is_paused();
+        {
+            std::lock_guard lock(temporary_pause_mutex_);
+            if (temporary_pause_depth_ == 0) {
+                temporary_pause_initially_paused_ = was_paused && !temporary_pause_resume_in_flight_;
+                temporary_pause_resume_in_flight_ = false;
+            }
+            ++temporary_pause_depth_;
+        }
+
+        const auto release_failed_lease = [&]() -> bool {
+            bool resume_training = false;
+            bool initially_paused = false;
+            const bool can_resume = isRunning() && trainer_ != nullptr;
+            {
+                std::lock_guard lock(temporary_pause_mutex_);
+                if (temporary_pause_depth_ == 0) {
+                    LOG_WARN("Temporary training pause lease release underflow");
+                    return false;
+                }
+                initially_paused = temporary_pause_initially_paused_;
+                --temporary_pause_depth_;
+                resume_training = temporary_pause_depth_ == 0 && !initially_paused;
+                if (temporary_pause_depth_ == 0) {
+                    temporary_pause_initially_paused_ = false;
+                    temporary_pause_resume_in_flight_ = resume_training && can_resume;
+                }
+            }
+            return resume_training;
+        };
+
+        trainer_->request_pause();
+
+        const auto pause_start = std::chrono::steady_clock::now();
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (isRunning() && !trainer_->is_paused()) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                LOG_WARN("Timed out waiting for temporary training pause: start_iteration={}, current_iteration={}, waited_ms={}, was_paused={}",
+                         start_iteration,
+                         getCurrentIteration(),
+                         timeout.count(),
+                         was_paused);
+                const bool resume_training = release_failed_lease();
+                if (resume_training && isRunning() && trainer_) {
+                    trainer_->request_resume();
+                }
+                return {};
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+
+        if (!isRunning()) {
+            (void)release_failed_lease();
+            return {};
+        }
+
+        const auto paused_at = std::chrono::steady_clock::now();
+        const double pause_wait_ms = std::chrono::duration<double, std::milli>(paused_at - pause_start).count();
+        const auto sync_start = std::chrono::steady_clock::now();
+        const cudaError_t sync_status = cudaDeviceSynchronize();
+        const auto sync_ms =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - sync_start)
+                .count();
+        if (sync_status != cudaSuccess) {
+            LOG_WARN("CUDA sync after temporary training pause failed: error={}, sync_ms={:.1f}, start_iteration={}, current_iteration={}",
+                     cudaGetErrorString(sync_status),
+                     sync_ms,
+                     start_iteration,
+                     getCurrentIteration());
+            const bool resume_training = release_failed_lease();
+            if (resume_training && isRunning() && trainer_) {
+                trainer_->request_resume();
+            }
+            return {};
+        }
+
+        LOG_DEBUG("Training temporarily paused and synchronized: start_iteration={}, current_iteration={}, pause_wait_ms={:.1f}, sync_ms={:.1f}",
+                  start_iteration,
+                  getCurrentIteration(),
+                  pause_wait_ms,
+                  sync_ms);
+        return {
+            .synchronized = true,
+            .resume_required = true,
+        };
     }
 
     void TrainerManager::resumeTrainingTemporary() {
-        if (!isRunning())
-            return;
+        const bool running = isRunning();
+        const int iteration = getCurrentIteration();
+        const bool trainer_present = trainer_ != nullptr;
+        bool resume_training = false;
+        bool root_initially_paused = false;
+        {
+            std::lock_guard lock(temporary_pause_mutex_);
+            if (temporary_pause_depth_ == 0) {
+                LOG_WARN("Temporary training resume ignored without active lease: iteration={}, running={}, trainer_present={}",
+                         iteration,
+                         running,
+                         trainer_present);
+                return;
+            }
+            root_initially_paused = temporary_pause_initially_paused_;
+            --temporary_pause_depth_;
+            resume_training = temporary_pause_depth_ == 0 && !root_initially_paused;
+            if (temporary_pause_depth_ == 0) {
+                temporary_pause_initially_paused_ = false;
+                temporary_pause_resume_in_flight_ = resume_training && running && trainer_present;
+            }
+        }
 
-        if (trainer_) {
+        if (resume_training && running && trainer_) {
             trainer_->request_resume();
-            LOG_TRACE("Training resumed from temporary pause at iteration {}", getCurrentIteration());
+            LOG_TRACE("Training resumed from temporary pause at iteration {}", iteration);
         }
     }
 
@@ -382,12 +642,17 @@ namespace lfs::vis {
             trainer_->request_stop();
         }
 
-        if (training_thread_ && training_thread_->joinable()) {
+        const bool has_thread = training_thread_ && training_thread_->joinable();
+        if (has_thread) {
             training_thread_->request_stop();
         }
 
         state::TrainingStopped{.iteration = getCurrentIteration(), .user_requested = true}.emit();
         LOG_INFO("Training stop requested at iteration {}", getCurrentIteration());
+
+        if (!has_thread) {
+            handleTrainingComplete(true);
+        }
     }
 
     void TrainerManager::requestSaveCheckpoint() {

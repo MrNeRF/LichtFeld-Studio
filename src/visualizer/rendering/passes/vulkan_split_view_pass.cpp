@@ -5,13 +5,17 @@
 #include "vulkan_split_view_pass.hpp"
 
 #include "core/logger.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "rendering/image_layout.hpp"
+#include "window/vulkan_barrier2.hpp"
 #include "window/vulkan_context.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <format>
 #include <limits>
+#include <string>
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 #include <vk_mem_alloc.h>
@@ -152,6 +156,7 @@ namespace lfs::vis {
             // via vkResetCommandBuffer instead of vkAllocate/Free per upload.
             VkCommandBuffer cmd = VK_NULL_HANDLE;
             VkFence fence = VK_NULL_HANDLE;
+            std::string image_vram_label;
         };
         PanelImage left{};
         PanelImage right{};
@@ -441,6 +446,12 @@ namespace lfs::vis {
                 p.view = VK_NULL_HANDLE;
             }
             if (p.image != VK_NULL_HANDLE) {
+                if (!p.image_vram_label.empty()) {
+                    lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                        "vulkan.split_view.panel_image",
+                        p.image_vram_label,
+                        0);
+                }
                 vmaDestroyImage(allocator, p.image, p.alloc);
                 p.image = VK_NULL_HANDLE;
                 p.alloc = VK_NULL_HANDLE;
@@ -468,6 +479,7 @@ namespace lfs::vis {
             // memcpy reading from it — so we must NOT clear pack_bytes here.
             p.width = 0;
             p.height = 0;
+            p.image_vram_label.clear();
             p.uploaded_tensor = nullptr;
         }
 
@@ -540,9 +552,16 @@ namespace lfs::vis {
             img.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             VmaAllocationCreateInfo ai{};
             ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-            if (vmaCreateImage(allocator, &img, &ai, &p.image, &p.alloc, nullptr) != VK_SUCCESS) {
+            VmaAllocationInfo allocation_info{};
+            if (vmaCreateImage(allocator, &img, &ai, &p.image, &p.alloc, &allocation_info) != VK_SUCCESS) {
                 return false;
             }
+            const char* const side = &p == &left ? "left" : "right";
+            p.image_vram_label = std::format("{}:{}x{}", side, w, h);
+            lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                "vulkan.split_view.panel_image",
+                p.image_vram_label,
+                static_cast<std::size_t>(allocation_info.size));
             VkImageViewCreateInfo vi{};
             vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
             vi.image = p.image;
@@ -619,25 +638,13 @@ namespace lfs::vis {
             const VkImageLayout old_layout = (panel.uploaded_tensor != nullptr)
                                                  ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
                                                  : VK_IMAGE_LAYOUT_UNDEFINED;
-            VkImageMemoryBarrier to_dst{};
-            to_dst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            to_dst.oldLayout = old_layout;
-            to_dst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            to_dst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            to_dst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            to_dst.image = panel.image;
-            to_dst.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            to_dst.subresourceRange.levelCount = 1;
-            to_dst.subresourceRange.layerCount = 1;
-            to_dst.srcAccessMask =
-                old_layout == VK_IMAGE_LAYOUT_UNDEFINED ? 0 : VK_ACCESS_SHADER_READ_BIT;
-            to_dst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            const VkPipelineStageFlags src_stage =
-                old_layout == VK_IMAGE_LAYOUT_UNDEFINED
-                    ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
-                    : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-            vkCmdPipelineBarrier(panel.cmd, src_stage, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                 0, 0, nullptr, 0, nullptr, 1, &to_dst);
+            const bool was_undefined = old_layout == VK_IMAGE_LAYOUT_UNDEFINED;
+            cmdImageBarrier2(panel.cmd, panel.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                             old_layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                             was_undefined ? VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT
+                                           : VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                             was_undefined ? VK_ACCESS_2_NONE : VK_ACCESS_2_SHADER_READ_BIT,
+                             VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
 
             VkBufferImageCopy region{};
             region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -646,21 +653,10 @@ namespace lfs::vis {
             vkCmdCopyBufferToImage(panel.cmd, panel.staging_buffer, panel.image,
                                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-            VkImageMemoryBarrier to_read{};
-            to_read.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            to_read.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            to_read.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            to_read.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            to_read.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            to_read.image = panel.image;
-            to_read.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            to_read.subresourceRange.levelCount = 1;
-            to_read.subresourceRange.layerCount = 1;
-            to_read.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            to_read.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            vkCmdPipelineBarrier(panel.cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                                 0, 0, nullptr, 0, nullptr, 1, &to_read);
+            cmdImageBarrier2(panel.cmd, panel.image, VK_IMAGE_ASPECT_COLOR_BIT,
+                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                             VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
 
             if (vkEndCommandBuffer(panel.cmd) != VK_SUCCESS) {
                 return false;

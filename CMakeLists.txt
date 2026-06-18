@@ -32,6 +32,33 @@ endif()
 
 project(LichtFeld-Studio VERSION 0.5.2 LANGUAGES CUDA CXX C)
 
+# On Linux, hide symbols pulled in from third-party image / compression static
+# archives so they don't escape into the dynamic symbol tables of the binaries
+# we ship. Without this, every .so/exe we build re-exports e.g.
+# png_destroy_read_struct from its statically-linked libpng16. When the GTK
+# file-chooser dialog asks gdk-pixbuf to decode a PNG icon, gdk-pixbuf
+# allocates a png_struct against the system libpng but the dynamic linker
+# resolves png_destroy_read_struct to one of our re-exported copies; the two
+# libpng versions have incompatible png_struct layouts and the icon-decode
+# path crashes inside free(). The list is targeted at libraries with known
+# clashes against system loaders (libpng + libz for gdk-pixbuf, libjpeg /
+# libtiff / libwebp for the same code path); our own static archives
+# (lfs_tensor_kernels, lfs_core_cuda, ...) stay exported so the rest of our
+# .so graph keeps resolving cross-module symbols.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # ld accepts comma- or colon-separated archive lists for --exclude-libs,
+    # but the comma form collides with the way `-Wl,` itself splits on commas
+    # (each comma becomes a separate ld argument). Use colons so the whole
+    # list reaches ld as a single argument.
+    set(_LFS_EXCLUDE_STATIC_ARCHIVES
+        "libpng16.a:libpng.a:libz.a:libjpeg.a:libturbojpeg.a:libtiff.a:libwebp.a:libwebpdecoder.a:libsharpyuv.a:liblzma.a:libdeflate.a:libzstd.a"
+    )
+    string(APPEND CMAKE_EXE_LINKER_FLAGS    " -Wl,--exclude-libs,${_LFS_EXCLUDE_STATIC_ARCHIVES}")
+    string(APPEND CMAKE_SHARED_LINKER_FLAGS " -Wl,--exclude-libs,${_LFS_EXCLUDE_STATIC_ARCHIVES}")
+    string(APPEND CMAKE_MODULE_LINKER_FLAGS " -Wl,--exclude-libs,${_LFS_EXCLUDE_STATIC_ARCHIVES}")
+    unset(_LFS_EXCLUDE_STATIC_ARCHIVES)
+endif()
+
 # The application ships CUDA DLLs and links CUDA::cudart throughout the target graph.
 # Keep CUDA language targets on the shared runtime as well; MSVC otherwise adds
 # cudart_static.lib implicitly, which collides with cudart.lib when linking DLLs.
@@ -102,11 +129,10 @@ file(WRITE "${CMAKE_BINARY_DIR}/include/git_version.h"
 # Setup
 get_filename_component(PROJ_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}" ABSOLUTE)
 
-option(ENABLE_VULKAN_VIEWER "Resolve and link required Vulkan viewer dependencies" ON)
-set(ENABLE_VULKAN_VIEWER ON CACHE BOOL "Vulkan viewer dependencies are required" FORCE)
 option(BUILD_TESTS "Build tests" OFF)
 option(BUILD_UNICODE_TEST_ONLY "Build only Unicode path test (no CUDA)" OFF)
 option(ENABLE_ALLOCATION_PROFILING "Enable tensor allocation profiling" OFF)
+option(LFS_FAST_COMPILE "Optimize measured slow C++ components for build speed instead of runtime speed (WIN32 only)" OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # Debug options
@@ -300,7 +326,7 @@ enable_language(CUDA)
 find_package(CUDAToolkit 12.8 REQUIRED)
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --extended-lambda --expt-relaxed-constexpr")
 if(WIN32)
-    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --diag-suppress 221,1394,1388 -Xcompiler=/wd4267")
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --diag-suppress 221,1394,1388 -Xcompiler=/wd4267 -Xcompiler=/Zc:preprocessor")
 endif()
 
 # Create nvToolsExt target BEFORE finding Torch (PyTorch expects this)
@@ -334,23 +360,22 @@ message(STATUS "CUDA Toolkit ${CUDAToolkit_VERSION} found at ${CUDAToolkit_TARGE
 # Find packages
 find_package(TBB REQUIRED)
 find_package(Threads REQUIRED)
-if(ENABLE_VULKAN_VIEWER)
-    find_package(Vulkan REQUIRED)
-    find_package(VulkanMemoryAllocator CONFIG REQUIRED)
-    find_package(volk CONFIG REQUIRED)
-endif()
+find_package(Vulkan REQUIRED)
+find_package(VulkanMemoryAllocator CONFIG REQUIRED)
+find_package(volk CONFIG REQUIRED)
 find_package(SDL3 REQUIRED)
 lfs_validate_linux_sdl_video_backends()
 find_package(glm REQUIRED)
 find_package(imgui REQUIRED)
 find_package(implot REQUIRED)
-find_package(nfd CONFIG REQUIRED)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/SetupNativeFileDialog.cmake")
 find_package(nlohmann_json REQUIRED)
 find_package(args REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(Freetype REQUIRED)
 find_package(WebP REQUIRED)
 find_package(LibArchive REQUIRED)
+find_package(libdeflate CONFIG REQUIRED)
 find_package(OpenImageIO REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(pxr CONFIG REQUIRED)
@@ -366,12 +391,6 @@ target_compile_definitions(glm::glm INTERFACE GLM_FORCE_DEPTH_ZERO_TO_ONE)
 # use it here as the global default CUDA architecture list too
 if(LichtFeld-Studio_CUDA_ARCH)
     set(CMAKE_CUDA_ARCHITECTURES "${LichtFeld-Studio_CUDA_ARCH}" CACHE STRING "CUDA architectures" FORCE)
-endif()
-
-if(ENABLE_VULKAN_VIEWER)
-    set(LFS_VULKAN_VIEWER_ENABLED 1)
-else()
-    set(LFS_VULKAN_VIEWER_ENABLED 0)
 endif()
 
 # Create configuration header (static options)
@@ -409,12 +428,14 @@ add_subdirectory(external EXCLUDE_FROM_ALL)
 # =============================================================================
 # LIBRARY MODULES
 # =============================================================================
+add_subdirectory(src/diagnostics) # Shared diagnostics/profiling module
 add_subdirectory(src/core)       # Core module (lfs::core namespace)
 add_subdirectory(src/training)   # Training module (lfs::training namespace)
 add_subdirectory(src/io)         # I/O module (lfs::io namespace)
 add_subdirectory(src/rendering)  # Rendering module (lfs::rendering namespace)
 add_subdirectory(src/sequencer)  # Sequencer module (lfs::sequencer namespace)
 add_subdirectory(src/visualizer) # Visualizer module (lfs::vis namespace)
+add_subdirectory(src/tcp)        # TCP event server (ZMQ responder + publisher)
 add_subdirectory(src/geometry)   # Geometry utilities
 add_subdirectory(src/mcp)        # MCP server (AI agent integration)
 add_subdirectory(src/python)
@@ -453,6 +474,7 @@ target_include_directories(${PROJECT_NAME}
         ${CMAKE_CURRENT_SOURCE_DIR}/src              # For training/, visualizer/, etc.
         ${CMAKE_CURRENT_SOURCE_DIR}/src/visualizer   # For internal visualizer headers used by GUI MCP
         ${CMAKE_CURRENT_SOURCE_DIR}/src/rendering/include  # For rendering headers (MCP GUI tools)
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/tcp          # For tcp event server
         ${CMAKE_CURRENT_SOURCE_DIR}/external         # For external headers
 
         ${CUDAToolkit_INCLUDE_DIRS}
@@ -460,11 +482,12 @@ target_include_directories(${PROJECT_NAME}
 
 if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
     set(LFS_APP_INTERNAL_LINK_LIBS
-        "$<LINK_GROUP:RESCAN,lfs_visualizer,lfs_mcp,lfs_sequencer,lfs_rendering_tensor,lfs_training,lfs_geometry,lfs_core,lfs_io,lfs_video,fastlfs_backend,lfs_python_utils>"
+        "$<LINK_GROUP:RESCAN,lfs_visualizer,lfs_mcp,lfs_sequencer,lfs_rendering_tensor,lfs_training,lfs_geometry,lfs_core,lfs_io,lfs_video,fastlfs_backend,lfs_python_utils,lfs_tcp>"
     )
 else()
     set(LFS_APP_INTERNAL_LINK_LIBS
         lfs_visualizer
+        lfs_tcp
         lfs_mcp
         lfs_sequencer
         lfs_rendering_tensor
@@ -483,36 +506,35 @@ target_link_libraries(${PROJECT_NAME}
         ${LFS_APP_INTERNAL_LINK_LIBS}
 
         CUDA::cudart
+        CUDA::curand
         spdlog::spdlog
         taywee::args
         OpenImageIO::OpenImageIO
         SDL3::SDL3
 )
 
-if(ENABLE_VULKAN_VIEWER)
-    target_link_libraries(${PROJECT_NAME}
-            PRIVATE
-            Vulkan::Vulkan
-            GPUOpen::VulkanMemoryAllocator
-            volk::volk_headers)
+target_link_libraries(${PROJECT_NAME}
+        PRIVATE
+        Vulkan::Vulkan
+        GPUOpen::VulkanMemoryAllocator
+        volk::volk_headers)
 
-    if(BUILD_PORTABLE AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        get_filename_component(_lfs_vulkan_loader_realpath "${Vulkan_LIBRARY}" REALPATH)
-        get_filename_component(_lfs_vulkan_loader_realname "${_lfs_vulkan_loader_realpath}" NAME)
-        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E make_directory
-                    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/lib"
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${_lfs_vulkan_loader_realpath}"
-                    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/lib/${_lfs_vulkan_loader_realname}"
-                COMMAND ${CMAKE_COMMAND} -E create_symlink
-                    "${_lfs_vulkan_loader_realname}"
-                    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/lib/libvulkan.so.1"
-                COMMAND ${CMAKE_COMMAND} -E create_symlink
-                    "libvulkan.so.1"
-                    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/lib/libvulkan.so"
-                COMMENT "Copying Vulkan loader to portable runtime directory")
-    endif()
+if(BUILD_PORTABLE AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    get_filename_component(_lfs_vulkan_loader_realpath "${Vulkan_LIBRARY}" REALPATH)
+    get_filename_component(_lfs_vulkan_loader_realname "${_lfs_vulkan_loader_realpath}" NAME)
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/lib"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_lfs_vulkan_loader_realpath}"
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/lib/${_lfs_vulkan_loader_realname}"
+            COMMAND ${CMAKE_COMMAND} -E create_symlink
+                "${_lfs_vulkan_loader_realname}"
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/lib/libvulkan.so.1"
+            COMMAND ${CMAKE_COMMAND} -E create_symlink
+                "libvulkan.so.1"
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/lib/libvulkan.so"
+            COMMENT "Copying Vulkan loader to portable runtime directory")
 endif()
 
 # The app embeds Python and loads the nanobind module at runtime for panels,
@@ -692,6 +714,28 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMENT "Creating resource directory structure"
 )
 
+if(TARGET lfs_vulkan_rasterizer)
+    get_target_property(_LFS_VULKAN_RASTERIZER_SPV_DIR
+        lfs_vulkan_rasterizer
+        LFS_VULKAN_RASTERIZER_SPV_DIR)
+    if(_LFS_VULKAN_RASTERIZER_SPV_DIR)
+        # The runtime loads SPIR-V from the resource dir first, so staging must
+        # follow every shader rebuild. A POST_BUILD on the executable misses
+        # shader-only edits (no relink → stale staged shaders); an always-run
+        # staging target costs one timestamp compare per build.
+        add_custom_target(lfs_stage_vulkan_shaders ALL
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "${RESOURCE_DIR}/shaders/vulkan_rasterizer"
+            COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+                "${_LFS_VULKAN_RASTERIZER_SPV_DIR}"
+                "${RESOURCE_DIR}/shaders/vulkan_rasterizer"
+            COMMENT "Staging Vulkan rasterizer shaders"
+        )
+        add_dependencies(lfs_stage_vulkan_shaders lfs_vulkan_rasterizer_shaders)
+        add_dependencies(${PROJECT_NAME} lfs_stage_vulkan_shaders)
+    endif()
+endif()
+
 # Copy visualizer icons
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
@@ -844,6 +888,9 @@ if(UNIX)
                 "$ORIGIN/lib"
                 "${CUDAToolkit_LIBRARY_DIR}"
         )
+        if(TARGET OpenMeshCore)
+            list(APPEND _lichtfeld_runtime_rpath_common "$<TARGET_FILE_DIR:OpenMeshCore>")
+        endif()
         set(_lichtfeld_runtime_rpath_release "${_lichtfeld_runtime_rpath_common}")
         set(_lichtfeld_runtime_rpath_debug "${_lichtfeld_runtime_rpath_common}")
         if(DEFINED VCPKG_TARGET_TRIPLET)
@@ -943,7 +990,34 @@ configure_build_type(lfs_rendering)
 configure_build_type(lfs_visualizer)
 configure_build_type(lfs_io)
 configure_build_type(lfs_geometry)
+configure_build_type(lfs_tcp)
 configure_build_type(${PROJECT_NAME})
+
+if(LFS_FAST_COMPILE AND MSVC)
+    function(lfs_enable_fast_cxx_compile target)
+        if(TARGET ${target})
+            target_compile_options(${target} PRIVATE
+                $<$<COMPILE_LANGUAGE:CXX>:/Od>
+                $<$<COMPILE_LANGUAGE:CXX>:/Ob0>
+            )
+        endif()
+    endfunction()
+
+    # curated list of components to optimize for fast compilation (WIN32 only)
+    # CUDA-heavy regressions stay on their target defaults.
+    foreach(_lfs_fast_target IN ITEMS
+        lfs_visualizer
+        lfs_py
+        lfs_core
+        lfs_training
+        lfs_io
+        lfs_mcp
+        Zep
+        OpenMeshCore
+    )
+        lfs_enable_fast_cxx_compile(${_lfs_fast_target})
+    endforeach()
+endif()
 
 # Set the default startup project in Visual Studio to LichtFeld-Studio
 # (without this, VS defaults to ALL_BUILD when opening the solution)
@@ -971,11 +1045,8 @@ message(STATUS "===========================================")
 message(STATUS "Build Configuration:")
 message(STATUS "  CUDA Version: ${CUDAToolkit_VERSION}")
 message(STATUS "  CUDA Archs: ${CMAKE_CUDA_ARCHITECTURES}")
-message(STATUS "  Vulkan Viewer Dependencies: ${ENABLE_VULKAN_VIEWER}")
-if(ENABLE_VULKAN_VIEWER)
-    message(STATUS "  Vulkan Found: ${Vulkan_FOUND}")
-    message(STATUS "  Vulkan Include Dirs: ${Vulkan_INCLUDE_DIRS}")
-endif()
+message(STATUS "  Vulkan Found: ${Vulkan_FOUND}")
+message(STATUS "  Vulkan Include Dirs: ${Vulkan_INCLUDE_DIRS}")
 message(STATUS "  FreeType Found: ${FREETYPE_FOUND}")
 message(STATUS "  WebP Found: ${WebP_FOUND}")
 message(STATUS "  LibArchive Found: ${LibArchive_FOUND}")
@@ -1010,6 +1081,10 @@ install(TARGETS lfs_core
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
+install(TARGETS lfs_diagnostics
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
 install(TARGETS lfs_logger
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
@@ -1029,6 +1104,12 @@ install(TARGETS lfs_mcp
 install(FILES "${CMAKE_SOURCE_DIR}/LICENSE" DESTINATION ".")
 
 set(INSTALL_RESOURCE_DIR "${CMAKE_INSTALL_DATADIR}/LichtFeld-Studio")
+if(_LFS_VULKAN_RASTERIZER_SPV_DIR)
+    install(DIRECTORY "${_LFS_VULKAN_RASTERIZER_SPV_DIR}/"
+            DESTINATION "${INSTALL_RESOURCE_DIR}/shaders/vulkan_rasterizer"
+            FILES_MATCHING
+            PATTERN "*.spv")
+endif()
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/icon" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/fonts" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
 install(FILES "${CMAKE_SOURCE_DIR}/src/rendering/resources/assets/JetBrainsMono-Regular.ttf" DESTINATION "${INSTALL_RESOURCE_DIR}/assets/fonts")
@@ -1097,7 +1178,7 @@ endif()
 if(BUILD_PORTABLE)
     # Exclusion patterns for system libraries
     # nvcuda.dll is provided by the NVIDIA GPU driver, not the CUDA Toolkit
-    set(_PRE_EXCLUDE [[api-ms-.*]] [[ext-ms-.*]] [[API-MS-.*]] [[EXT-MS-.*]] [[nvcuda[.]dll]])
+    set(_PRE_EXCLUDE [[api-ms-.*]] [[ext-ms-.*]] [[API-MS-.*]] [[EXT-MS-.*]] [[nvcuda[.]dll]] [[libcuda[.]so.*]])
     set(_POST_EXCLUDE
             [[.*[Ss]ystem32.*]] [[.*[Ww]indows.*]]
             [[/lib/x86_64-linux-gnu/.*]] [[/lib64/ld-linux.*]] [[/usr/lib.*]]

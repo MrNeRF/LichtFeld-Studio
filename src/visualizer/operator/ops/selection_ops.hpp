@@ -12,7 +12,7 @@ namespace lfs::vis::op {
 
     class LFS_VIS_API SelectionStrokeOperator : public Operator {
     public:
-        static const OperatorDescriptor DESCRIPTOR;
+        static LFS_LOCAL_SYMBOL const OperatorDescriptor DESCRIPTOR;
 
         [[nodiscard]] const OperatorDescriptor& descriptor() const override { return DESCRIPTOR; }
         [[nodiscard]] bool poll(const OperatorContext& ctx, const OperatorProperties* props = nullptr) const override;

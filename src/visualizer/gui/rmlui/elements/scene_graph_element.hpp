@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -42,13 +43,18 @@ namespace lfs::vis::gui {
         [[nodiscard]] static bool ownsContextMenuAction(std::string_view action);
 
     protected:
-        void OnRender() override;
+        void OnUpdate() override;
         void OnResize() override;
         bool GetIntrinsicDimensions(Rml::Vector2f& dimensions, float& ratio) override;
         void ProcessDefaultAction(Rml::Event& event) override;
 
     private:
         struct RenameInputListener : Rml::EventListener {
+            SceneGraphElement* owner = nullptr;
+            void ProcessEvent(Rml::Event& event) override;
+        };
+
+        struct DragListener : Rml::EventListener {
             SceneGraphElement* owner = nullptr;
             void ProcessEvent(Rml::Event& event) override;
         };
@@ -68,6 +74,7 @@ namespace lfs::vis::gui {
             bool draggable = false;
             bool has_mask = false;
             bool deletable = false;
+            std::optional<std::string> camera_loss_icon_color;
         };
 
         struct FlatRow {
@@ -86,6 +93,7 @@ namespace lfs::vis::gui {
             std::string padding_left_dp;
             bool has_mask = false;
             bool deletable = false;
+            std::optional<std::string> camera_loss_icon_color;
         };
 
         struct RowSlot {
@@ -108,6 +116,7 @@ namespace lfs::vis::gui {
         void ensureRowPool(size_t count);
         void clear();
         void markStateDirty();
+        void claimRenameTextInputFocus() const;
         void captureRenameBuffer();
         void rebuildFlatRows(const core::Scene& scene);
         bool syncSelectionFromScene(const core::Scene& scene, lfs::vis::SceneManager* scene_manager);
@@ -115,6 +124,7 @@ namespace lfs::vis::gui {
                                   std::unordered_map<core::NodeId, NodeSnapshot>& snapshots,
                                   std::vector<core::NodeId>& root_ids);
         bool syncTrainingTopologyLabel(const core::Scene& scene, bool update_cached_rows);
+        bool syncCameraLossIconColors(const core::Scene& scene, bool update_cached_rows);
         void appendSnapshotRows(core::NodeId node_id, int depth, std::vector<FlatRow>& rows,
                                 const std::string& filter_text_lower) const;
         void appendVisibleSubtreeRows(core::NodeId node_id, int depth,
@@ -136,7 +146,7 @@ namespace lfs::vis::gui {
         void handleSecondaryClick(core::NodeId node_id, float mouse_x, float mouse_y);
         bool activateNode(core::NodeId node_id);
         bool moveSelection(int delta, bool extend);
-        std::vector<std::string> rangeSelectionNames(core::NodeId a, core::NodeId b) const;
+        std::vector<core::NodeId> rangeSelectionIds(core::NodeId a, core::NodeId b) const;
         core::NodeId selectionCursor() const;
         bool isTextInputTarget(Rml::Element* target) const;
         RowSlot* rowSlotFromTarget(Rml::Element* target);
@@ -144,11 +154,19 @@ namespace lfs::vis::gui {
         core::NodeId nodeIdFromTarget(Rml::Element* target) const;
         void toggleExpand(core::NodeId node_id);
         void toggleModelsSection();
-        bool setDropTarget(core::NodeId node_id);
+        void updateDropTarget(RowSlot* hovered_slot, core::NodeId hovered_id, float mouse_y);
+        void clearDropState();
+        void commitDrop();
+        void showDragGhost(core::NodeId node_id, float mouse_x, float mouse_y);
+        void moveDragGhost(float mouse_x, float mouse_y);
+        void hideDragGhost();
+        void handleDragEvent(Rml::Event& event);
+        [[nodiscard]] bool isValidDropContainer(core::NodeId container_id) const;
+        [[nodiscard]] int siblingIndexOf(core::NodeId node_id) const;
         void showContextMenu(core::NodeId node_id, float mouse_x, float mouse_y);
         void showModelsHeaderContextMenu(float mouse_x, float mouse_y);
         bool isModelsHeaderTarget(Rml::Element* target) const;
-        std::vector<std::string> deletableSelectedNodeNames() const;
+        std::vector<core::NodeId> deletableSelectedNodeIds() const;
         void deleteSelectedNodes();
         void toggleChildrenTraining(core::NodeId group_id, bool enabled);
         void toggleSelectedTraining(bool enabled);
@@ -174,9 +192,15 @@ namespace lfs::vis::gui {
         core::NodeId rename_node_id_ = core::NULL_NODE;
         std::string rename_buffer_;
         RenameInputListener rename_input_listener_;
+        DragListener drag_listener_;
         core::NodeId context_menu_node_id_ = core::NULL_NODE;
         core::NodeId drag_source_id_ = core::NULL_NODE;
-        core::NodeId drop_target_id_ = core::NULL_NODE;
+        core::NodeId drop_into_group_id_ = core::NULL_NODE;
+        core::NodeId drop_parent_id_ = core::NULL_NODE;
+        int drop_index_ = -1;
+        bool drop_valid_ = false;
+        Rml::Element* insertion_line_ = nullptr;
+        Rml::Element* drag_ghost_ = nullptr;
         bool models_collapsed_ = false;
         bool scene_has_nodes_ = false;
         size_t root_count_ = 0;

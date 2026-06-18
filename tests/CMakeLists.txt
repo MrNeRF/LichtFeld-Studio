@@ -83,6 +83,7 @@ message(STATUS "Tests: LibTorch ${Torch_VERSION} found for tensor comparison tes
 # Benchmark sources (performance measurement focused)
 set(BENCHMARK_FILES
     benchmark_background_blend.cpp
+    benchmark_rad_io.cpp
     benchmark_grad_alpha_layout.cpp
     benchmark_pipelined_loader.cpp
     benchmark_slice_assignment.cpp
@@ -90,7 +91,7 @@ set(BENCHMARK_FILES
     benchmark_scheduler.cpp
     benchmark_losses.cpp
     benchmark_ppisp_controller.cpp
-    benchmark_selection_modes.cpp
+    benchmark_reactive_store.cpp
     # profile_adam_optimizer.cpp  # Disabled - missing header
     test_tensor_benchmark.cpp
     test_memory_pool_benchmark.cpp
@@ -119,6 +120,7 @@ set(TEST_FILES
     test_tensor_basic.cpp
     test_tensor_ops.cpp
     test_tensor_memory.cpp
+    test_allocator_policy.cpp
     test_tensor_reduction.cpp
     test_tensor_reduction_alignment.cpp
     test_isolation.cpp
@@ -205,6 +207,7 @@ set(TEST_FILES
     test_mask_loss.cpp
     test_checkpoint_resume.cpp
     test_argument_parser.cpp
+    test_logger.cpp
     test_parameter_manager.cpp
     test_mcp_protocol.cpp
     test_mcp_app_utils.cpp
@@ -213,6 +216,9 @@ set(TEST_FILES
     test_view_info_json.cpp
     test_video_export_utils.cpp
     test_visualizer_post_work.cpp
+    test_panel_registry_animation_demand.cpp
+    test_panel_layout_render_demand.cpp
+    test_reactive_store.cpp
     test_video_color_convert.cpp
     test_python_integration.cpp
     test_python_lsp_client.cpp
@@ -243,6 +249,7 @@ set(TEST_FILES
     test_torch_conversion.cpp
     test_fastgs_kernels.cpp
     test_fastgs_fuzz.cpp
+    test_sh_swizzle_layout.cpp
     test_python_io.cpp
     test_extended_unary_ops_vs_torch.cpp
     # test_property_system.cpp  # Disabled: needs API update after merge
@@ -287,10 +294,17 @@ set(TEST_FILES
     test_rotated_sh_correctness.cpp
     test_tensor_stream.cpp
     test_tensor_memory_planner.cpp
+    test_vram_profiler_metrics.cpp
 )
-if(ENABLE_VULKAN_VIEWER)
-    list(APPEND TEST_FILES test_vksplat_input_packer.cpp)
-endif()
+list(APPEND TEST_FILES test_vksplat_input_packer.cpp)
+list(APPEND TEST_FILES test_lod_page_cache.cpp)
+list(APPEND TEST_FILES test_lod_page_dequant.cpp)
+list(APPEND TEST_FILES test_lod_upload_engine.cpp)
+list(APPEND TEST_FILES test_lod_builder_bench.cpp)
+list(APPEND TEST_FILES test_octree_lod.cpp)
+list(APPEND TEST_FILES test_ply_to_rad_lod.cpp)
+list(APPEND TEST_FILES test_rad_gpu_encode.cpp)
+list(APPEND TEST_FILES test_rad_meta_sidecar.cpp)
 
 # Build test sources list
 set(TEST_SOURCES test_main.cpp)
@@ -391,9 +405,7 @@ target_link_libraries(lichtfeld_tests PRIVATE
     spdlog::spdlog
 )
 
-if(ENABLE_VULKAN_VIEWER)
-    target_link_libraries(lichtfeld_tests PRIVATE lfs_vksplat_fwd Vulkan::Vulkan)
-endif()
+target_link_libraries(lichtfeld_tests PRIVATE lfs_vulkan_rasterizer Vulkan::Vulkan)
 
 # Compiler options for CUDA debugging
 target_compile_options(lichtfeld_tests PRIVATE

@@ -8,12 +8,14 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "cuda/image_format_kernels.cuh"
+#include "diagnostics/vram_profiler.hpp"
 #include "io/nvcodec_image_loader.hpp"
 
 #include <cuda_runtime.h>
 #include <stb_image.h>
 
 #include <algorithm>
+#include <exception>
 #include <fstream>
 #include <random>
 
@@ -23,6 +25,40 @@ namespace lfs::io {
 
         constexpr int CACHE_HASH_LENGTH = 8;
         constexpr int DEFAULT_DECODER_POOL_SIZE = 8;
+
+        [[nodiscard]] size_t tensor_reserved_bytes(const lfs::core::Tensor& tensor) {
+            if (!tensor.is_valid()) {
+                return 0;
+            }
+
+            if (tensor.capacity() == 0 || tensor.ndim() == 0) {
+                return tensor.bytes();
+            }
+
+            size_t row_elems = 1;
+            if (tensor.ndim() > 1) {
+                for (size_t dim = 1; dim < tensor.ndim(); ++dim) {
+                    row_elems *= tensor.shape()[dim];
+                }
+            }
+
+            return tensor.capacity() * row_elems * lfs::core::dtype_size(tensor.dtype());
+        }
+
+        void subtract_clamped(std::atomic<size_t>& value, const size_t amount) {
+            if (amount == 0) {
+                return;
+            }
+
+            auto current = value.load(std::memory_order_relaxed);
+            while (current > 0) {
+                const size_t next = current > amount ? current - amount : 0;
+                if (value.compare_exchange_weak(
+                        current, next, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+                    return;
+                }
+            }
+        }
 
         struct NvCodecLoaderCacheEntry {
             std::shared_ptr<NvCodecImageLoader> instance;
@@ -164,12 +200,13 @@ namespace lfs::io {
             }
         }
 
-        lfs::core::Tensor binarize_mask(lfs::core::Tensor mask) {
+        lfs::core::Tensor process_mask(lfs::core::Tensor mask, bool binarize) {
             if (!mask.is_valid())
                 return {};
             if (mask.dtype() == lfs::core::DataType::UInt8 || mask.dtype() == lfs::core::DataType::Bool)
                 return mask.contiguous();
-            return mask.ge(0.5f).to(lfs::core::DataType::UInt8).contiguous();
+            mask = binarize ? mask.ge(0.5f) : mask * 255.f;
+            return mask.to(lfs::core::DataType::UInt8).contiguous();
         }
 
         [[nodiscard]] bool is_jpeg_file_signature(const std::filesystem::path& path) {
@@ -197,6 +234,16 @@ namespace lfs::io {
             }
             const bool regular = std::filesystem::is_regular_file(path, ec);
             return !ec && regular;
+        }
+
+        [[nodiscard]] std::string describe_current_exception(const char* fallback) {
+            try {
+                throw;
+            } catch (const std::exception& e) {
+                return e.what();
+            } catch (...) {
+                return fallback;
+            }
         }
 
         [[nodiscard]] lfs::core::Tensor decode_cached_rgb_tensor(
@@ -229,10 +276,15 @@ namespace lfs::io {
     } // namespace
 
     PipelinedImageLoader::PipelinedImageLoader(PipelinedLoaderConfig config)
-        : config_(std::move(config)) {
+        : config_(std::move(config)),
+          output_queue_(std::max<size_t>(1, config_.output_queue_size)) {
 
-        LOG_INFO("[PipelinedImageLoader] batch_size={}, prefetch={}, io_threads={}, cold_threads={}",
-                 config_.jpeg_batch_size, config_.prefetch_count, config_.io_threads, config_.cold_process_threads);
+        LOG_INFO("[PipelinedImageLoader] batch_size={}, prefetch={}, output_queue={}, io_threads={}, cold_threads={}",
+                 config_.jpeg_batch_size,
+                 config_.prefetch_count,
+                 config_.output_queue_size,
+                 config_.io_threads,
+                 config_.cold_process_threads);
 
         const bool nvcodec_available = is_nvcodec_available();
 
@@ -326,21 +378,26 @@ namespace lfs::io {
 
     ReadyImage PipelinedImageLoader::get() {
         auto result = output_queue_.pop();
+        release_output_ready_bytes(result);
         in_flight_.fetch_sub(1, std::memory_order_acq_rel);
         return result;
     }
 
     std::optional<ReadyImage> PipelinedImageLoader::try_get() {
         auto result = output_queue_.try_pop();
-        if (result)
+        if (result) {
+            release_output_ready_bytes(*result);
             in_flight_.fetch_sub(1, std::memory_order_acq_rel);
+        }
         return result;
     }
 
     std::optional<ReadyImage> PipelinedImageLoader::try_get_for(std::chrono::milliseconds timeout) {
         auto result = output_queue_.try_pop_for(timeout);
-        if (result)
+        if (result) {
+            release_output_ready_bytes(*result);
             in_flight_.fetch_sub(1, std::memory_order_acq_rel);
+        }
         return result;
     }
 
@@ -361,6 +418,7 @@ namespace lfs::io {
             std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
             pending_pairs_.clear();
         }
+        reset_pipeline_gpu_bytes();
         in_flight_ = 0;
     }
 
@@ -377,7 +435,25 @@ namespace lfs::io {
         s.hot_queue_size = hot_queue_.size();
         s.cold_queue_size = cold_queue_.size();
         s.output_queue_size = output_queue_.size();
+        const auto gpu_stats = get_gpu_memory_stats();
+        s.output_image_bytes = gpu_stats.output_image_bytes;
+        s.output_mask_bytes = gpu_stats.output_mask_bytes;
+        s.output_depth_bytes = gpu_stats.output_depth_bytes;
+        s.pending_image_bytes = gpu_stats.pending_image_bytes;
+        s.pending_mask_bytes = gpu_stats.pending_mask_bytes;
+        s.pending_depth_bytes = gpu_stats.pending_depth_bytes;
         return s;
+    }
+
+    PipelinedImageLoader::GpuMemoryStats PipelinedImageLoader::get_gpu_memory_stats() const {
+        return {
+            .output_image_bytes = output_image_bytes_.load(std::memory_order_acquire),
+            .output_mask_bytes = output_mask_bytes_.load(std::memory_order_acquire),
+            .output_depth_bytes = output_depth_bytes_.load(std::memory_order_acquire),
+            .pending_image_bytes = pending_image_bytes_.load(std::memory_order_acquire),
+            .pending_mask_bytes = pending_mask_bytes_.load(std::memory_order_acquire),
+            .pending_depth_bytes = pending_depth_bytes_.load(std::memory_order_acquire),
+        };
     }
 
     lfs::core::Tensor PipelinedImageLoader::load_image_immediate(
@@ -427,9 +503,10 @@ namespace lfs::io {
                     auto tensor = decode_cached_rgb_tensor(nvcodec, data, params, true);
                     if (tensor.is_valid() && tensor.numel() > 0)
                         return tensor;
-                } catch (const std::exception& e) {
+                } catch (...) {
                     LOG_DEBUG("[PipelinedImageLoader] Immediate JPEG decode fallback for {}: {}",
-                              lfs::core::path_to_utf8(path), e.what());
+                              lfs::core::path_to_utf8(path),
+                              describe_current_exception("non-standard nvImageCodec exception"));
                 }
             }
         } else {
@@ -457,6 +534,7 @@ namespace lfs::io {
                 img_data, lfs::core::TensorShape({H, W, C}),
                 lfs::core::Device::CPU, lfs::core::DataType::UInt8);
             auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::CUDA);
+            gpu_uint8.set_name("io.image.gpu_staging");
             if (used_stbi)
                 stbi_image_free(img_data);
             else
@@ -466,6 +544,7 @@ namespace lfs::io {
                 decoded = lfs::core::Tensor::empty(
                     lfs::core::TensorShape({C, H, W}),
                     lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                decoded.set_name("io.image.gpu_uint8");
                 cuda::launch_uint8_hwc_to_uint8_chw(
                     reinterpret_cast<const uint8_t*>(gpu_uint8.data_ptr()),
                     reinterpret_cast<uint8_t*>(decoded.data_ptr()),
@@ -474,6 +553,7 @@ namespace lfs::io {
                 decoded = lfs::core::Tensor::zeros(
                     lfs::core::TensorShape({C, H, W}),
                     lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+                decoded.set_name("io.image.gpu_float");
                 cuda::launch_uint8_hwc_to_float32_chw(
                     reinterpret_cast<const uint8_t*>(gpu_uint8.data_ptr()),
                     reinterpret_cast<float*>(decoded.data_ptr()),
@@ -493,9 +573,10 @@ namespace lfs::io {
                         if (tensor.is_valid() && tensor.numel() > 0)
                             return tensor;
                     }
-                } catch (const std::exception& e) {
+                } catch (...) {
                     LOG_DEBUG("[PipelinedImageLoader] Immediate cache write skipped for {}: {}",
-                              lfs::core::path_to_utf8(path), e.what());
+                              lfs::core::path_to_utf8(path),
+                              describe_current_exception("non-standard nvImageCodec exception"));
                 }
             }
         }
@@ -527,6 +608,7 @@ namespace lfs::io {
                 decoded = lfs::core::Tensor::zeros(
                     lfs::core::TensorShape({C, H, W}),
                     lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+                decoded.set_name("io.image.gpu_float");
                 cuda::launch_uint8_hwc_to_float32_chw(
                     reinterpret_cast<const uint8_t*>(gpu_uint8.data_ptr()),
                     reinterpret_cast<float*>(decoded.data_ptr()),
@@ -696,39 +778,129 @@ namespace lfs::io {
         files_being_written_.erase(cache_key);
     }
 
+    void PipelinedImageLoader::add_output_ready_bytes(const ReadyImage& ready) {
+        output_image_bytes_.fetch_add(tensor_reserved_bytes(ready.tensor), std::memory_order_acq_rel);
+        if (ready.mask) {
+            output_mask_bytes_.fetch_add(tensor_reserved_bytes(*ready.mask), std::memory_order_acq_rel);
+        }
+        if (ready.depth) {
+            output_depth_bytes_.fetch_add(tensor_reserved_bytes(*ready.depth), std::memory_order_acq_rel);
+        }
+    }
+
+    void PipelinedImageLoader::release_output_ready_bytes(const ReadyImage& ready) {
+        subtract_clamped(output_image_bytes_, tensor_reserved_bytes(ready.tensor));
+        if (ready.mask) {
+            subtract_clamped(output_mask_bytes_, tensor_reserved_bytes(*ready.mask));
+        }
+        if (ready.depth) {
+            subtract_clamped(output_depth_bytes_, tensor_reserved_bytes(*ready.depth));
+        }
+    }
+
+    void PipelinedImageLoader::push_output_ready(ReadyImage ready) {
+        const size_t image_bytes = tensor_reserved_bytes(ready.tensor);
+        const size_t mask_bytes = ready.mask ? tensor_reserved_bytes(*ready.mask) : 0;
+        const size_t depth_bytes = ready.depth ? tensor_reserved_bytes(*ready.depth) : 0;
+        output_image_bytes_.fetch_add(image_bytes, std::memory_order_acq_rel);
+        if (mask_bytes > 0) {
+            output_mask_bytes_.fetch_add(mask_bytes, std::memory_order_acq_rel);
+        }
+        if (depth_bytes > 0) {
+            output_depth_bytes_.fetch_add(depth_bytes, std::memory_order_acq_rel);
+        }
+        if (!output_queue_.push(std::move(ready))) {
+            subtract_clamped(output_image_bytes_, image_bytes);
+            subtract_clamped(output_mask_bytes_, mask_bytes);
+            subtract_clamped(output_depth_bytes_, depth_bytes);
+        }
+    }
+
+    void PipelinedImageLoader::erase_pending_pair_locked(
+        PendingPairIterator it) {
+        if (it == pending_pairs_.end()) {
+            return;
+        }
+
+        subtract_clamped(pending_image_bytes_, it->second.image_bytes);
+        subtract_clamped(pending_mask_bytes_, it->second.mask_bytes);
+        subtract_clamped(pending_depth_bytes_, it->second.depth_bytes);
+        pending_pairs_.erase(it);
+    }
+
+    void PipelinedImageLoader::reset_pipeline_gpu_bytes() {
+        output_image_bytes_.store(0, std::memory_order_release);
+        output_mask_bytes_.store(0, std::memory_order_release);
+        output_depth_bytes_.store(0, std::memory_order_release);
+        pending_image_bytes_.store(0, std::memory_order_release);
+        pending_mask_bytes_.store(0, std::memory_order_release);
+        pending_depth_bytes_.store(0, std::memory_order_release);
+    }
+
+    void PipelinedImageLoader::try_push_ready_locked(const size_t sequence_id, PendingPairIterator it) {
+        auto& pair = it->second;
+        const bool image_ready = pair.image.has_value();
+        const bool mask_has_value = pair.mask.has_value();
+        const bool depth_has_value = pair.depth.has_value();
+        const bool mask_ready = !pair.mask_expected || mask_has_value;
+        const bool depth_ready = !pair.depth_expected || depth_has_value;
+
+        if (!image_ready || !mask_ready || !depth_ready) {
+            return;
+        }
+
+        ReadyImage ready{sequence_id,
+                         std::move(*pair.image),
+                         mask_has_value ? std::optional(std::move(*pair.mask)) : std::nullopt,
+                         pair.stream,
+                         depth_has_value ? std::optional(std::move(*pair.depth)) : std::nullopt};
+        erase_pending_pair_locked(it);
+        push_output_ready(std::move(ready));
+
+        std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+        ++stats_.total_images_loaded;
+        if (mask_has_value) {
+            ++stats_.masks_loaded;
+        }
+        if (depth_has_value) {
+            ++stats_.depths_loaded;
+        }
+    }
+
     void PipelinedImageLoader::try_complete_pair(
         size_t sequence_id,
         std::optional<lfs::core::Tensor> image,
         std::optional<lfs::core::Tensor> mask,
-        cudaStream_t stream) {
+        cudaStream_t stream,
+        std::optional<lfs::core::Tensor> depth) {
 
         std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
-        auto& pair = pending_pairs_[sequence_id];
+        auto insert_result = pending_pairs_.try_emplace(sequence_id);
+        auto it = insert_result.first;
+        auto& pair = it->second;
 
-        if (image)
+        if (image) {
+            subtract_clamped(pending_image_bytes_, pair.image_bytes);
             pair.image = std::move(*image);
-        if (mask)
+            pair.image_bytes = tensor_reserved_bytes(*pair.image);
+            pending_image_bytes_.fetch_add(pair.image_bytes, std::memory_order_acq_rel);
+        }
+        if (mask) {
+            subtract_clamped(pending_mask_bytes_, pair.mask_bytes);
             pair.mask = std::move(*mask);
+            pair.mask_bytes = tensor_reserved_bytes(*pair.mask);
+            pending_mask_bytes_.fetch_add(pair.mask_bytes, std::memory_order_acq_rel);
+        }
+        if (depth) {
+            subtract_clamped(pending_depth_bytes_, pair.depth_bytes);
+            pair.depth = std::move(*depth);
+            pair.depth_bytes = tensor_reserved_bytes(*pair.depth);
+            pending_depth_bytes_.fetch_add(pair.depth_bytes, std::memory_order_acq_rel);
+        }
         if (stream)
             pair.stream = stream;
 
-        const bool image_ready = pair.image.has_value();
-        const bool mask_has_value = pair.mask.has_value();
-        const bool mask_ready = !pair.mask_expected || mask_has_value;
-
-        if (image_ready && mask_ready) {
-            output_queue_.push({sequence_id,
-                                std::move(*pair.image),
-                                mask_has_value ? std::optional(std::move(*pair.mask)) : std::nullopt,
-                                pair.stream});
-            pending_pairs_.erase(sequence_id);
-
-            std::lock_guard<std::mutex> stats_lock(stats_mutex_);
-            ++stats_.total_images_loaded;
-            if (mask_has_value) {
-                ++stats_.masks_loaded;
-            }
-        }
+        try_push_ready_locked(sequence_id, it);
     }
 
     void PipelinedImageLoader::prefetch_thread_func() {
@@ -742,14 +914,17 @@ namespace lfs::io {
 
             {
                 std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
-                pending_pairs_[request.sequence_id].mask_expected =
-                    request.mask_path.has_value() || request.extract_alpha_as_mask;
+                auto& pending = pending_pairs_[request.sequence_id];
+                pending.mask_expected = request.mask_path.has_value() || request.extract_alpha_as_mask;
+                pending.depth_expected = request.depth_path.has_value();
             }
 
             auto fail_image_request = [&] {
                 {
                     std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
-                    pending_pairs_.erase(request.sequence_id);
+                    if (auto it = pending_pairs_.find(request.sequence_id); it != pending_pairs_.end()) {
+                        erase_pending_pair_locked(it);
+                    }
                 }
                 in_flight_.fetch_sub(1, std::memory_order_acq_rel);
             };
@@ -758,14 +933,36 @@ namespace lfs::io {
                 std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
                 if (auto it = pending_pairs_.find(request.sequence_id); it != pending_pairs_.end()) {
                     it->second.mask_expected = false;
-                    if (it->second.image.has_value()) {
-                        output_queue_.push({request.sequence_id,
-                                            std::move(*it->second.image),
-                                            std::nullopt,
-                                            it->second.stream});
-                        pending_pairs_.erase(it);
-                    }
+                    try_push_ready_locked(request.sequence_id, it);
                 }
+            };
+
+            auto mark_depth_unavailable = [&] {
+                std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
+                if (auto it = pending_pairs_.find(request.sequence_id); it != pending_pairs_.end()) {
+                    it->second.depth_expected = false;
+                    try_push_ready_locked(request.sequence_id, it);
+                }
+            };
+
+            auto enqueue_depth_request = [&] {
+                if (!request.depth_path) {
+                    return;
+                }
+                if (!is_regular_file_no_throw(*request.depth_path)) {
+                    LOG_DEBUG("[PipelinedImageLoader] Skipping missing depth {}", lfs::core::path_to_utf8(*request.depth_path));
+                    mark_depth_unavailable();
+                    return;
+                }
+
+                PrefetchedImage depth_result;
+                depth_result.sequence_id = request.sequence_id;
+                depth_result.path = *request.depth_path;
+                depth_result.params = request.params;
+                depth_result.is_depth = true;
+                depth_result.needs_processing = true;
+                depth_result.undistort = request.undistort;
+                cold_queue_.push(std::move(depth_result));
             };
 
             if (!is_regular_file_no_throw(request.path)) {
@@ -815,6 +1012,7 @@ namespace lfs::io {
                     std::lock_guard<std::mutex> lock(stats_mutex_);
                     ++stats_.cold_path_misses;
                 }
+                enqueue_depth_request();
                 continue;
             }
 
@@ -866,48 +1064,61 @@ namespace lfs::io {
                 LOG_ERROR("[PipelinedImageLoader] Prefetch error {}: {}", lfs::core::path_to_utf8(request.path), e.what());
                 // Clean up pending_pairs_ entry to prevent memory leak
                 fail_image_request();
-                continue; // Skip mask processing if image failed
+                continue; // Skip auxiliary image processing if image failed
             }
 
             if (request.mask_path) {
                 if (!is_regular_file_no_throw(*request.mask_path)) {
                     LOG_DEBUG("[PipelinedImageLoader] Skipping missing mask {}", lfs::core::path_to_utf8(*request.mask_path));
                     mark_mask_unavailable();
-                    continue;
-                }
+                } else {
+                    PrefetchedImage mask_result;
+                    mask_result.sequence_id = request.sequence_id;
+                    mask_result.path = *request.mask_path;
+                    mask_result.params = request.params;
+                    mask_result.cache_key = make_mask_cache_key(*request.mask_path, request.params);
+                    mask_result.is_mask = true;
+                    mask_result.mask_params = request.mask_params;
+                    mask_result.undistort = request.undistort;
 
-                PrefetchedImage mask_result;
-                mask_result.sequence_id = request.sequence_id;
-                mask_result.path = *request.mask_path;
-                mask_result.params = request.params;
-                mask_result.cache_key = make_mask_cache_key(*request.mask_path, request.params);
-                mask_result.is_mask = true;
-                mask_result.mask_params = request.mask_params;
-                mask_result.undistort = request.undistort;
-
-                try {
-                    if (auto cached = get_from_jpeg_cache(mask_result.cache_key)) {
-                        mask_result.jpeg_data = cached;
-                        mask_result.is_cache_hit = true;
-                        hot_queue_.push(std::move(mask_result));
-                        std::lock_guard<std::mutex> lock(stats_mutex_);
-                        ++stats_.mask_cache_hits;
-                    } else if (config_.use_filesystem_cache) {
-                        const auto fs_path = get_fs_cache_path(mask_result.cache_key);
-                        auto done_path = fs_path;
-                        done_path += ".done";
-                        std::error_code cache_ec;
-                        const bool cache_ready =
-                            std::filesystem::exists(fs_path, cache_ec) && !cache_ec &&
-                            std::filesystem::exists(done_path, cache_ec) && !cache_ec;
-                        if (cache_ready) {
-                            auto data = std::make_shared<std::vector<uint8_t>>(read_file(fs_path));
-                            put_in_jpeg_cache(mask_result.cache_key, data);
-                            mask_result.jpeg_data = data;
+                    try {
+                        if (auto cached = get_from_jpeg_cache(mask_result.cache_key)) {
+                            mask_result.jpeg_data = cached;
                             mask_result.is_cache_hit = true;
                             hot_queue_.push(std::move(mask_result));
                             std::lock_guard<std::mutex> lock(stats_mutex_);
                             ++stats_.mask_cache_hits;
+                        } else if (config_.use_filesystem_cache) {
+                            const auto fs_path = get_fs_cache_path(mask_result.cache_key);
+                            auto done_path = fs_path;
+                            done_path += ".done";
+                            std::error_code cache_ec;
+                            const bool cache_ready =
+                                std::filesystem::exists(fs_path, cache_ec) && !cache_ec &&
+                                std::filesystem::exists(done_path, cache_ec) && !cache_ec;
+                            if (cache_ready) {
+                                auto data = std::make_shared<std::vector<uint8_t>>(read_file(fs_path));
+                                put_in_jpeg_cache(mask_result.cache_key, data);
+                                mask_result.jpeg_data = data;
+                                mask_result.is_cache_hit = true;
+                                hot_queue_.push(std::move(mask_result));
+                                std::lock_guard<std::mutex> lock(stats_mutex_);
+                                ++stats_.mask_cache_hits;
+                            } else {
+                                mask_result.raw_bytes = read_file(*request.mask_path);
+                                mask_result.is_original_jpeg = is_jpeg_data(mask_result.raw_bytes);
+                                mask_result.is_cache_hit = false;
+
+                                {
+                                    std::lock_guard<std::mutex> lock(stats_mutex_);
+                                    stats_.total_bytes_read += mask_result.raw_bytes.size();
+                                }
+
+                                mask_result.needs_processing = true;
+                                cold_queue_.push(std::move(mask_result));
+                                std::lock_guard<std::mutex> lock(stats_mutex_);
+                                ++stats_.mask_cache_misses;
+                            }
                         } else {
                             mask_result.raw_bytes = read_file(*request.mask_path);
                             mask_result.is_original_jpeg = is_jpeg_data(mask_result.raw_bytes);
@@ -923,31 +1134,20 @@ namespace lfs::io {
                             std::lock_guard<std::mutex> lock(stats_mutex_);
                             ++stats_.mask_cache_misses;
                         }
-                    } else {
-                        mask_result.raw_bytes = read_file(*request.mask_path);
-                        mask_result.is_original_jpeg = is_jpeg_data(mask_result.raw_bytes);
-                        mask_result.is_cache_hit = false;
-
-                        {
-                            std::lock_guard<std::mutex> lock(stats_mutex_);
-                            stats_.total_bytes_read += mask_result.raw_bytes.size();
-                        }
-
-                        mask_result.needs_processing = true;
-                        cold_queue_.push(std::move(mask_result));
-                        std::lock_guard<std::mutex> lock(stats_mutex_);
-                        ++stats_.mask_cache_misses;
+                    } catch (const std::exception& e) {
+                        LOG_WARN("[PipelinedImageLoader] Mask prefetch error {}: {} - continuing without mask",
+                                 lfs::core::path_to_utf8(*request.mask_path), e.what());
+                        mark_mask_unavailable();
                     }
-                } catch (const std::exception& e) {
-                    LOG_WARN("[PipelinedImageLoader] Mask prefetch error {}: {} - continuing without mask",
-                             lfs::core::path_to_utf8(*request.mask_path), e.what());
-                    mark_mask_unavailable();
                 }
             }
+
+            enqueue_depth_request();
         }
     }
 
     void PipelinedImageLoader::gpu_batch_decode_thread_func() {
+        LFS_VRAM_SCOPE("io.image_loader");
         std::vector<PrefetchedImage> batch;
         batch.reserve(config_.jpeg_batch_size);
 
@@ -993,7 +1193,7 @@ namespace lfs::io {
                                 throw std::runtime_error("Invalid mask tensor");
                             }
 
-                            mask_tensor = binarize_mask(std::move(mask_tensor));
+                            mask_tensor = process_mask(std::move(mask_tensor), batch[i].mask_params.threshold > 0);
                             try_complete_pair(batch[i].sequence_id, std::nullopt, std::move(mask_tensor), nullptr);
 
                         } else {
@@ -1022,15 +1222,16 @@ namespace lfs::io {
                                     put_in_jpeg_cache(
                                         batch[i].cache_key,
                                         std::make_shared<std::vector<uint8_t>>(std::move(jpeg_bytes)));
-                                } catch (const std::exception& e) {
+                                } catch (...) {
                                     LOG_DEBUG("[PipelinedImageLoader] Derived cache write skipped for {}: {}",
-                                              lfs::core::path_to_utf8(batch[i].path), e.what());
+                                              lfs::core::path_to_utf8(batch[i].path),
+                                              describe_current_exception("non-standard nvImageCodec exception"));
                                 }
                             }
 
                             try_complete_pair(batch[i].sequence_id, std::move(tensor), std::nullopt, nullptr);
                         }
-                    } catch (const std::exception&) {
+                    } catch (...) {
                         auto& item = batch[i];
                         item.is_cache_hit = false;
                         item.needs_processing = true;
@@ -1040,17 +1241,19 @@ namespace lfs::io {
                             } catch (...) {
                                 // Clean up pending_pairs_ to prevent memory leak
                                 std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
-                                if (item.is_mask) {
+                                if (item.is_mask || item.is_depth) {
                                     if (auto it = pending_pairs_.find(item.sequence_id); it != pending_pairs_.end()) {
-                                        it->second.mask_expected = false;
-                                        if (it->second.image.has_value()) {
-                                            output_queue_.push({item.sequence_id, std::move(*it->second.image),
-                                                                std::nullopt, it->second.stream});
-                                            pending_pairs_.erase(it);
+                                        if (item.is_mask) {
+                                            it->second.mask_expected = false;
+                                        } else {
+                                            it->second.depth_expected = false;
                                         }
+                                        try_push_ready_locked(item.sequence_id, it);
                                     }
                                 } else {
-                                    pending_pairs_.erase(item.sequence_id);
+                                    if (auto it = pending_pairs_.find(item.sequence_id); it != pending_pairs_.end()) {
+                                        erase_pending_pair_locked(it);
+                                    }
                                     in_flight_.fetch_sub(1, std::memory_order_acq_rel);
                                 }
                                 continue;
@@ -1064,8 +1267,9 @@ namespace lfs::io {
                 ++stats_.gpu_batch_decodes;
                 stats_.total_decode_calls += batch.size();
 
-            } catch (const std::exception& e) {
-                LOG_ERROR("[PipelinedImageLoader] Batch decode error: {}", e.what());
+            } catch (...) {
+                LOG_ERROR("[PipelinedImageLoader] Batch decode error: {}",
+                          describe_current_exception("non-standard nvImageCodec exception"));
                 for (auto& item : batch) {
                     item.is_cache_hit = false;
                     item.needs_processing = true;
@@ -1075,17 +1279,19 @@ namespace lfs::io {
                         } catch (...) {
                             // Clean up pending_pairs_ to prevent memory leak
                             std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
-                            if (item.is_mask) {
+                            if (item.is_mask || item.is_depth) {
                                 if (auto it = pending_pairs_.find(item.sequence_id); it != pending_pairs_.end()) {
-                                    it->second.mask_expected = false;
-                                    if (it->second.image.has_value()) {
-                                        output_queue_.push({item.sequence_id, std::move(*it->second.image),
-                                                            std::nullopt, it->second.stream});
-                                        pending_pairs_.erase(it);
+                                    if (item.is_mask) {
+                                        it->second.mask_expected = false;
+                                    } else {
+                                        it->second.depth_expected = false;
                                     }
+                                    try_push_ready_locked(item.sequence_id, it);
                                 }
                             } else {
-                                pending_pairs_.erase(item.sequence_id);
+                                if (auto it = pending_pairs_.find(item.sequence_id); it != pending_pairs_.end()) {
+                                    erase_pending_pair_locked(it);
+                                }
                                 in_flight_.fetch_sub(1, std::memory_order_acq_rel);
                             }
                             continue;
@@ -1188,35 +1394,35 @@ namespace lfs::io {
                             save_to_fs_cache(alpha_key, alpha_jpeg);
                             put_in_jpeg_cache(alpha_key,
                                               std::make_shared<std::vector<uint8_t>>(std::move(alpha_jpeg)));
-                        } catch (const std::exception&) {
+                        } catch (...) {
                         }
                     }
 
-                    alpha = binarize_mask(std::move(alpha));
+                    alpha = process_mask(std::move(alpha), item.alpha_mask_params.threshold > 0);
                     if (const cudaError_t err = cudaStreamSynchronize(nullptr); err != cudaSuccess) {
                         throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
                     }
 
                     try_complete_pair(item.sequence_id, std::move(rgb), std::move(alpha), nullptr);
 
-                } else if (item.is_mask) {
-                    lfs::core::Tensor mask_tensor;
+                } else if (item.is_mask || item.is_depth) {
+                    lfs::core::Tensor aux_tensor;
                     bool used_gpu = false;
 
                     if (is_nvcodec_available()) {
                         try {
-                            mask_tensor = nvcodec->load_image_gpu(
+                            aux_tensor = nvcodec->load_image_gpu(
                                 item.path, item.params.resize_factor, item.params.max_width,
                                 nullptr, DecodeFormat::Grayscale);
                             used_gpu = true;
-                        } catch (const std::exception&) {
+                        } catch (...) {
                         }
                     }
 
                     if (!used_gpu) {
                         const auto [gray_data, src_w, src_h] = load_grayscale_stb(item.path);
                         if (!gray_data)
-                            throw std::runtime_error("Failed to decode mask");
+                            throw std::runtime_error(item.is_mask ? "Failed to decode mask" : "Failed to decode depth");
 
                         int target_w = src_w;
                         int target_h = src_h;
@@ -1242,51 +1448,61 @@ namespace lfs::io {
                         stbi_image_free(gray_data);
 
                         if (target_w != src_w || target_h != src_h) {
-                            mask_tensor = lfs::core::lanczos_resize_grayscale(gpu_uint8, target_h, target_w, 2, nullptr);
+                            aux_tensor = lfs::core::lanczos_resize_grayscale(gpu_uint8, target_h, target_w, 2, nullptr);
                         } else {
-                            mask_tensor = lfs::core::Tensor::zeros(
+                            aux_tensor = lfs::core::Tensor::zeros(
                                 lfs::core::TensorShape({static_cast<size_t>(target_h), static_cast<size_t>(target_w)}),
                                 lfs::core::Device::CUDA, lfs::core::DataType::Float32);
                             cuda::launch_uint8_hw_to_float32_hw(
-                                gpu_uint8.ptr<uint8_t>(), mask_tensor.ptr<float>(), target_h, target_w, nullptr);
+                                gpu_uint8.ptr<uint8_t>(), aux_tensor.ptr<float>(), target_h, target_w, nullptr);
                         }
                         cudaStreamSynchronize(nullptr);
                     }
 
-                    const size_t H = mask_tensor.shape()[0];
-                    const size_t W = mask_tensor.shape()[1];
-                    float* const mask_ptr = static_cast<float*>(mask_tensor.data_ptr());
+                    const size_t H = aux_tensor.shape()[0];
+                    const size_t W = aux_tensor.shape()[1];
 
-                    if (item.mask_params.invert) {
-                        cuda::launch_mask_invert(mask_ptr, H, W, nullptr);
-                    }
-                    if (item.mask_params.threshold > 0) {
-                        cuda::launch_mask_threshold(mask_ptr, H, W, item.mask_params.threshold, nullptr);
+                    if (item.is_mask) {
+                        float* const mask_ptr = static_cast<float*>(aux_tensor.data_ptr());
+                        if (item.mask_params.invert) {
+                            cuda::launch_mask_invert(mask_ptr, H, W, nullptr);
+                        }
+                        if (item.mask_params.threshold > 0) {
+                            cuda::launch_mask_threshold(mask_ptr, H, W, item.mask_params.threshold, nullptr);
+                        }
                     }
                     if (item.undistort) {
                         const auto scaled = lfs::core::scale_undistort_params(
                             *item.undistort,
                             static_cast<int>(W), static_cast<int>(H));
-                        mask_tensor = lfs::core::undistort_mask(mask_tensor, scaled, nullptr);
+                        aux_tensor = lfs::core::undistort_mask(aux_tensor, scaled, nullptr);
                     }
 
-                    if (is_nvcodec_available()) {
+                    if (item.is_mask && is_nvcodec_available()) {
                         try {
                             auto jpeg_bytes = nvcodec->encode_grayscale_to_jpeg(
-                                mask_tensor, config_.cache_jpeg_quality, nullptr);
+                                aux_tensor, config_.cache_jpeg_quality, nullptr);
                             save_to_fs_cache(item.cache_key, jpeg_bytes);
                             put_in_jpeg_cache(item.cache_key,
                                               std::make_shared<std::vector<uint8_t>>(std::move(jpeg_bytes)));
-                        } catch (const std::exception&) {
+                        } catch (...) {
                         }
                     }
 
-                    mask_tensor = binarize_mask(std::move(mask_tensor));
+                    if (item.is_mask) {
+                        aux_tensor = process_mask(std::move(aux_tensor), item.mask_params.threshold > 0);
+                    } else {
+                        aux_tensor = aux_tensor.contiguous();
+                    }
                     if (const cudaError_t err = cudaStreamSynchronize(nullptr); err != cudaSuccess) {
                         throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
                     }
 
-                    try_complete_pair(item.sequence_id, std::nullopt, std::move(mask_tensor), nullptr);
+                    if (item.is_mask) {
+                        try_complete_pair(item.sequence_id, std::nullopt, std::move(aux_tensor), nullptr);
+                    } else {
+                        try_complete_pair(item.sequence_id, std::nullopt, std::nullopt, nullptr, std::move(aux_tensor));
+                    }
 
                 } else {
                     lfs::core::Tensor decoded;
@@ -1298,7 +1514,7 @@ namespace lfs::io {
                                 item.path, item.params.resize_factor, item.params.max_width,
                                 nullptr, DecodeFormat::RGB, item.params.output_uint8);
                             used_gpu = true;
-                        } catch (const std::exception&) {
+                        } catch (...) {
                         }
                     }
 
@@ -1371,17 +1587,18 @@ namespace lfs::io {
                             save_to_fs_cache(item.cache_key, jpeg_bytes);
                             put_in_jpeg_cache(item.cache_key,
                                               std::make_shared<std::vector<uint8_t>>(std::move(jpeg_bytes)));
-                        } catch (const std::exception&) {
+                        } catch (...) {
                         }
                     }
 
                     try_complete_pair(item.sequence_id, std::move(decoded), std::nullopt, nullptr);
                 }
 
-            } catch (const std::exception& e) {
+            } catch (...) {
+                const auto message = describe_current_exception("non-standard image loader exception");
                 if (item.alpha_as_mask) {
                     LOG_WARN("[PipelinedImageLoader] Alpha-as-mask failed {}: {} - loading as RGB",
-                             lfs::core::path_to_utf8(item.path), e.what());
+                             lfs::core::path_to_utf8(item.path), message);
                     try {
                         auto [img_data, width, height, channels] = lfs::core::load_image(
                             item.path, item.params.resize_factor, item.params.max_width);
@@ -1421,36 +1638,38 @@ namespace lfs::io {
                             }
                         }
                         try_complete_pair(item.sequence_id, std::move(decoded), std::nullopt, nullptr);
-                    } catch (const std::exception& e2) {
+                    } catch (...) {
                         LOG_ERROR("[PipelinedImageLoader] RGB fallback also failed {}: {}",
-                                  lfs::core::path_to_utf8(item.path), e2.what());
+                                  lfs::core::path_to_utf8(item.path),
+                                  describe_current_exception("non-standard RGB fallback exception"));
                         std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
-                        pending_pairs_.erase(item.sequence_id);
+                        if (auto it = pending_pairs_.find(item.sequence_id); it != pending_pairs_.end()) {
+                            erase_pending_pair_locked(it);
+                        }
                         in_flight_.fetch_sub(1, std::memory_order_acq_rel);
                     }
-                } else if (item.is_mask) {
-                    LOG_WARN("[PipelinedImageLoader] Cold process mask error {}: {} - continuing without mask",
-                             lfs::core::path_to_utf8(item.path), e.what());
-                    // Mark mask as no longer expected so image can still be delivered
+                } else if (item.is_mask || item.is_depth) {
+                    LOG_WARN("[PipelinedImageLoader] Cold process {} error {}: {} - continuing without it",
+                             item.is_mask ? "mask" : "depth",
+                             lfs::core::path_to_utf8(item.path), message);
                     std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
                     if (auto it = pending_pairs_.find(item.sequence_id); it != pending_pairs_.end()) {
-                        it->second.mask_expected = false;
-                        // If image is already ready, deliver it now
-                        if (it->second.image.has_value()) {
-                            output_queue_.push({item.sequence_id,
-                                                std::move(*it->second.image),
-                                                std::nullopt,
-                                                it->second.stream});
-                            pending_pairs_.erase(it);
+                        if (item.is_mask) {
+                            it->second.mask_expected = false;
+                        } else {
+                            it->second.depth_expected = false;
                         }
+                        try_push_ready_locked(item.sequence_id, it);
                     }
                 } else {
                     LOG_ERROR("[PipelinedImageLoader] Cold process error {}: {}",
-                              lfs::core::path_to_utf8(item.path), e.what());
+                              lfs::core::path_to_utf8(item.path), message);
                     // Clean up pending_pairs_ to prevent memory leak
                     {
                         std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
-                        pending_pairs_.erase(item.sequence_id);
+                        if (auto it = pending_pairs_.find(item.sequence_id); it != pending_pairs_.end()) {
+                            erase_pending_pair_locked(it);
+                        }
                     }
                     in_flight_.fetch_sub(1, std::memory_order_acq_rel);
                 }

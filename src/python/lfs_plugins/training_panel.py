@@ -4,6 +4,7 @@
 
 import os
 import re
+import threading
 import time
 from typing import Any, Optional
 
@@ -12,7 +13,7 @@ import lichtfeld as lf
 from . import rml_widgets as w
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
-from .ui.state import AppState
+from .ui import RuntimeState, PanelStateBinding
 
 # Asset Manager integration (optional)
 try:
@@ -68,6 +69,15 @@ def _is_mrnf_strategy(strategy):
     return strategy in ("mrnf", "mnrf", "lfs")
 
 
+DEPTH_LOSS_MODE_VALUES = ("pearson", "adaptive-warped-l1")
+DEFAULT_DEPTH_LOSS_MODE = "adaptive-warped-l1"
+
+
+def _depth_loss_mode_or_default(mode):
+    mode = str(mode or "")
+    return mode if mode in DEPTH_LOSS_MODE_VALUES else DEFAULT_DEPTH_LOSS_MODE
+
+
 LOCALE_KEYS = {
     "hdr_basic_params": "training.section.basic_params",
     "hdr_advanced_params": "training.section.advanced_params",
@@ -93,6 +103,9 @@ LOCALE_KEYS = {
     "opacity_penalty_power": "training.masking.penalty_power",
     "mask_threshold": "training.masking.threshold",
     "use_alpha_as_mask": "training_params.use_alpha_as_mask",
+    "use_depth_loss": "training_params.use_depth_loss",
+    "depth_loss_mode": "training_params.depth_loss_mode",
+    "depth_loss_weight": "training_params.depth_loss_weight",
     "sparsity": "training_params.sparsity",
     "gut": "training_params.gut",
     "undistort": "training_params.undistort",
@@ -173,7 +186,10 @@ LOCALE_KEYS = {
     "mask_none": "training.options.mask.none",
     "mask_segment": "training.options.mask.segment",
     "mask_ignore": "training.options.mask.ignore",
+    "mask_segment_and_ignore": "training.options.mask.segment_and_ignore",
     "mask_alpha_consistent": "training.options.mask.alpha_consistent",
+    "depth_loss_pearson": "training.options.depth_loss.pearson",
+    "depth_loss_adaptive_warped_l1": "training.options.depth_loss.adaptive_warped_l1",
     "bg_option_color": "training.options.bg.color",
     "bg_option_modulation": "training.options.bg.modulation",
     "bg_option_image": "training.options.bg.image",
@@ -197,6 +213,7 @@ PARAM_BOOL_PROPS = [
     "use_bilateral_grid",
     "invert_masks",
     "use_alpha_as_mask",
+    "use_depth_loss",
     "enable_sparsity",
     "gut",
     "undistort",
@@ -237,6 +254,7 @@ NUM_PROP_DEFS = [
     ("mask_opacity_penalty_weight", float, "%.3f", 0, None, 0.1),
     ("mask_opacity_penalty_power", float, "%.3f", 0.5, None, 0.1),
     ("mask_threshold", float, "%.3f", 0, 1, 0.05),
+    ("depth_loss_weight", float, "%.3f", 0, 100, 0.1),
     ("opacity_reg", float, "%.4f", 0, None, 0.001),
     ("scale_reg", float, "%.4f", 0, None, 0.001),
     ("tv_loss_weight", float, "%.1f", 0, None, 0.5),
@@ -379,7 +397,7 @@ class TrainingPanel(Panel):
     order = 20
     template = "rmlui/training.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
-    update_interval_ms = 16
+    update_policy = "dirty"
 
     def __init__(self):
         self._handle = None
@@ -417,6 +435,10 @@ class TrainingPanel(Panel):
         self._psnr_tick_mid = ""
         self._psnr_tick_min = ""
         self._last_panel_label = ""
+        self._reactive_binding = PanelStateBinding()
+        self._deferred_update_pending = False
+        self._deferred_update_deadline = None
+        self._deferred_update_generation = 0
         self._escape_revert = w.EscapeRevertController()
         self._scrub_fields = ScrubFieldController(
             SCRUB_FIELD_DEFS,
@@ -482,7 +504,7 @@ class TrainingPanel(Panel):
         model.bind_func("label_ppisp_sidecar_clear", lambda: tr("training_panel.clear"))
 
         def _btn_start():
-            it = AppState.iteration.value
+            it = RuntimeState.iteration.value
             return (
                 tr("training_panel.resume_training")
                 if it > 0
@@ -493,19 +515,19 @@ class TrainingPanel(Panel):
 
     def _bind_visibility(self, model, p, d):
         def _state():
-            return AppState.trainer_state.value
+            return RuntimeState.trainer_state.value
 
         def _iteration():
-            return AppState.iteration.value
+            return RuntimeState.iteration.value
 
-        model.bind_func("show_no_trainer", lambda: not AppState.has_trainer.value)
+        model.bind_func("show_no_trainer", lambda: not RuntimeState.has_trainer.value)
         model.bind_func(
             "show_no_params",
-            lambda: AppState.has_trainer.value and not (p() and p().has_params()),
+            lambda: RuntimeState.has_trainer.value and not (p() and p().has_params()),
         )
         model.bind_func(
             "show_main",
-            lambda: AppState.has_trainer.value and p() is not None and p().has_params(),
+            lambda: RuntimeState.has_trainer.value and p() is not None and p().has_params(),
         )
 
         for state_name in [
@@ -539,7 +561,15 @@ class TrainingPanel(Panel):
         )
         model.bind_func(
             "dep_mask_segment",
-            lambda: p() is not None and p().has_params() and p().mask_mode.value == 1,
+            lambda: p() is not None and p().has_params() and (p().mask_mode.value == 1 or p().mask_mode.value == 3),
+        )
+        model.bind_func(
+            "dep_mask_threshold",
+            lambda: p() is not None and p().has_params() and p().mask_mode.value != 3,
+        )
+        model.bind_func(
+            "dep_depth_loss",
+            lambda: p() is not None and p().has_params() and p().use_depth_loss,
         )
         model.bind_func(
             "dep_ppisp", lambda: p() is not None and p().has_params() and p().ppisp
@@ -606,7 +636,7 @@ class TrainingPanel(Panel):
         )
         model.bind_func(
             "show_progress",
-            lambda: AppState.max_iterations.value > 0 and _iteration() > 0,
+            lambda: RuntimeState.max_iterations.value > 0 and _iteration() > 0,
         )
         model.bind_func("has_dataset", lambda: d() is not None and d().has_params())
         model.bind_func(
@@ -647,8 +677,8 @@ class TrainingPanel(Panel):
     def _bind_disabled(self, model, p):
         def _params_edit_locked():
             return not (
-                AppState.trainer_state.value == "ready"
-                and AppState.iteration.value == 0
+                RuntimeState.trainer_state.value == "ready"
+                and RuntimeState.iteration.value == 0
             )
 
         model.bind_func("struct_disabled", _params_edit_locked)
@@ -717,6 +747,15 @@ class TrainingPanel(Panel):
             "mask_mode_str",
             lambda: str(p().mask_mode.value) if p() and p().has_params() else "0",
             lambda v: self._set_mask_mode(v),
+        )
+        model.bind(
+            "depth_loss_mode_str",
+            lambda: (
+                _depth_loss_mode_or_default(p().depth_loss_mode)
+                if p() and p().has_params()
+                else DEFAULT_DEPTH_LOSS_MODE
+            ),
+            lambda v: self._set_depth_loss_mode(v),
         )
         model.bind(
             "bg_mode_str",
@@ -992,8 +1031,8 @@ class TrainingPanel(Panel):
 
     def _bind_status(self, model, p):
         def _status_mode():
-            state = AppState.trainer_state.value
-            it = AppState.iteration.value
+            state = RuntimeState.trainer_state.value
+            it = RuntimeState.iteration.value
             labels = {
                 "idle": tr("training_panel.idle"),
                 "ready": tr("status.ready") if it == 0 else tr("training_panel.resume"),
@@ -1004,20 +1043,20 @@ class TrainingPanel(Panel):
                 "stopped": tr("status.stopped"),
                 "error": tr("status.error"),
             }
-            return f"{tr('status.mode')}: {labels.get(state, tr('status.unknown'))}"
+            return f"{tr('status.mode')} {labels.get(state, tr('status.unknown'))}"
 
         def _status_iteration():
-            it = AppState.iteration.value
+            it = RuntimeState.iteration.value
             _rate_tracker.add_sample(it)
             rate = _rate_tracker.get_rate()
             return f"{tr('status.iteration')} {it:,} ({rate:.1f} {tr('training_panel.iters_per_sec')})"
 
         def _status_gaussians():
-            return tr("progress.num_splats") % f"{AppState.num_gaussians.value:,}"
+            return tr("progress.num_splats") % f"{RuntimeState.num_gaussians.value:,}"
 
         def _progress_text():
-            it = AppState.iteration.value
-            mx = AppState.max_iterations.value
+            it = RuntimeState.iteration.value
+            mx = RuntimeState.max_iterations.value
             return f"{it:,}/{mx:,}" if mx > 0 else ""
 
         def _error_message():
@@ -1144,6 +1183,84 @@ class TrainingPanel(Panel):
         self._psnr_graph_el = doc.get_element_by_id("psnr-graph-el")
         self._scrub_fields.mount(doc)
         self._sync_section_states()
+        self._subscribe_reactive_state()
+        self._request_reactive_update()
+
+    def _subscribe_reactive_state(self):
+        if self._reactive_binding.active:
+            return
+
+        native_signals = (
+            RuntimeState.training_running,
+            RuntimeState.training_state,
+            RuntimeState.trainer_loaded,
+            RuntimeState.iteration,
+            RuntimeState.total_iterations,
+            RuntimeState.loss,
+            RuntimeState.eval_psnr,
+            RuntimeState.num_gaussians,
+            RuntimeState.scene_generation,
+            RuntimeState.language_generation,
+        )
+        self._reactive_binding.set_handle(self._handle).watch(*native_signals)
+
+    def _unsubscribe_reactive_state(self):
+        self._reactive_binding.close()
+
+    def _request_reactive_update(self):
+        if self._handle:
+            w.request_model_update(self._handle)
+
+    def _schedule_deferred_update(self, delay_seconds):
+        delay_seconds = max(0.0, float(delay_seconds))
+        deadline = time.monotonic() + delay_seconds
+        if (
+            self._deferred_update_pending
+            and self._deferred_update_deadline is not None
+            and self._deferred_update_deadline <= deadline
+        ):
+            return
+        self._deferred_update_generation += 1
+        self._deferred_update_pending = True
+        self._deferred_update_deadline = deadline
+        generation = self._deferred_update_generation
+
+        def fire():
+            def request_on_ui_thread():
+                if generation != self._deferred_update_generation:
+                    return
+                self._deferred_update_pending = False
+                self._deferred_update_deadline = None
+                self._request_reactive_update()
+
+            try:
+                scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
+                if scheduler is None:
+                    scheduler = getattr(lf.ui, "_run_on_ui_thread", None)
+                if callable(scheduler):
+                    scheduler(request_on_ui_thread)
+                else:
+                    self._deferred_update_pending = False
+                    self._deferred_update_deadline = None
+            except Exception:
+                self._deferred_update_pending = False
+                self._deferred_update_deadline = None
+
+        timer = threading.Timer(delay_seconds, fire)
+        timer.daemon = True
+        timer.start()
+
+    def _cancel_deferred_updates(self):
+        self._deferred_update_generation += 1
+        self._deferred_update_pending = False
+        self._deferred_update_deadline = None
+
+    def _mark_checkpoint_saved(self):
+        self._checkpoint_saved_time = time.time()
+        self._last_checkpoint_saved_visible = True
+        if self._handle:
+            self._handle.dirty("show_checkpoint_saved")
+        self._schedule_deferred_update(2.05)
 
     def on_update(self, doc):
         if not self._handle:
@@ -1151,7 +1268,7 @@ class TrainingPanel(Panel):
         self._sync_panel_label()
 
         dirty = False
-        state = AppState.trainer_state.value
+        state = RuntimeState.trainer_state.value
         if state != self._last_state:
             self._last_state = state
             if state == "ready":
@@ -1160,7 +1277,7 @@ class TrainingPanel(Panel):
             self._handle.dirty_all()
             dirty = True
         else:
-            it = AppState.iteration.value
+            it = RuntimeState.iteration.value
             if it != self._last_iteration:
                 self._last_iteration = it
                 self._handle.dirty("status_iteration")
@@ -1168,7 +1285,7 @@ class TrainingPanel(Panel):
                 self._handle.dirty("show_progress")
                 dirty = True
 
-            ng = AppState.num_gaussians.value
+            ng = RuntimeState.num_gaussians.value
             if ng != self._last_num_gaussians:
                 self._last_num_gaussians = ng
                 self._handle.dirty("status_gaussians")
@@ -1183,7 +1300,7 @@ class TrainingPanel(Panel):
                 self._handle.dirty("show_checkpoint_saved")
                 dirty = True
 
-        if state == "ready" and AppState.iteration.value == 0:
+        if state == "ready" and RuntimeState.iteration.value == 0:
             params = lf.optimization_params()
             if params and params.has_params():
                 if self._try_auto_scale_steps(params):
@@ -1191,7 +1308,7 @@ class TrainingPanel(Panel):
                     self._handle.dirty_all()
                     dirty = True
 
-        self._update_step_repeat()
+        dirty |= self._update_step_repeat()
         dirty |= self._update_progress()
         dirty |= self._update_save_steps(doc)
         dirty |= self._update_color_swatch(doc)
@@ -1201,8 +1318,8 @@ class TrainingPanel(Panel):
         return dirty
 
     def _update_progress(self):
-        it = AppState.iteration.value
-        mx = AppState.max_iterations.value
+        it = RuntimeState.iteration.value
+        mx = RuntimeState.max_iterations.value
         frac = it / mx if mx > 0 and it > 0 else 0.0
         if frac != self._last_progress_frac:
             self._last_progress_frac = frac
@@ -1217,9 +1334,18 @@ class TrainingPanel(Panel):
         if not params or not params.has_params():
             return False
 
-        state = AppState.trainer_state.value
-        can_edit = state == "ready" and AppState.iteration.value == 0
+        state = RuntimeState.trainer_state.value
+        can_edit = state == "ready" and RuntimeState.iteration.value == 0
         if not can_edit:
+            return False
+
+        return self._refresh_save_steps_model(params)
+
+    def _refresh_save_steps_model(self, params=None):
+        if params is None:
+            params = lf.optimization_params()
+        if not self._handle or not params or not params.has_params():
+            self._last_save_steps = None
             return False
 
         steps = list(params.save_steps)
@@ -1254,6 +1380,8 @@ class TrainingPanel(Panel):
             self._handle.dirty_all()
 
     def on_unmount(self, doc):
+        self._unsubscribe_reactive_state()
+        self._cancel_deferred_updates()
         doc.remove_data_model("training")
         self._handle = None
         self._doc = None
@@ -1371,6 +1499,15 @@ class TrainingPanel(Panel):
 
     # ── Setters ────────────────────────────────────────────
 
+    def _sync_render_setting(self, prop, val):
+        rs = lf.get_render_settings()
+        if not rs:
+            return
+        if prop == "gut":
+            rs.set("raster_backend", "3dgut" if val else "3dgs")
+            return
+        rs.set(prop, val)
+
     def _set_bool_prop(self, prop, val):
         params = lf.optimization_params()
         if not params or not params.has_params():
@@ -1390,9 +1527,8 @@ class TrainingPanel(Panel):
         setattr(params, prop, val)
         if prop == "enable_eval" and val:
             self._sync_eval_steps_with_save_steps(params)
-        rs = lf.get_render_settings()
-        if rs and prop in RENDER_SYNC:
-            rs.set(RENDER_SYNC[prop], val)
+        if prop in RENDER_SYNC:
+            self._sync_render_setting(RENDER_SYNC[prop], val)
         if self._handle:
             self._sync_text_bufs()
             self._handle.dirty_all()
@@ -1453,6 +1589,14 @@ class TrainingPanel(Panel):
             pass
         if self._handle:
             self._sync_text_bufs()
+            self._handle.dirty_all()
+
+    def _set_depth_loss_mode(self, val_str):
+        params = lf.optimization_params()
+        if not params or not params.has_params():
+            return
+        params.depth_loss_mode = _depth_loss_mode_or_default(val_str)
+        if self._handle:
             self._handle.dirty_all()
 
     def _set_bg_mode(self, val_str):
@@ -1647,6 +1791,7 @@ class TrainingPanel(Panel):
         self._step_repeat_dir = direction
         self._step_repeat_start = now
         self._step_repeat_last = now
+        self._schedule_deferred_update(0.15)
 
     def _on_number_input_change(self, event):
         if not event.get_bool_parameter("linebreak", False):
@@ -1725,14 +1870,18 @@ class TrainingPanel(Panel):
 
     def _update_step_repeat(self):
         if not self._step_repeat_prop:
-            return
+            return False
         now = time.monotonic()
         if now - self._step_repeat_start < 0.15:
-            return
+            self._schedule_deferred_update(0.15 - (now - self._step_repeat_start))
+            return False
         if now - self._step_repeat_last < 0.01:
-            return
+            self._schedule_deferred_update(0.01 - (now - self._step_repeat_last))
+            return False
         self._step_repeat_last = now
         self._apply_num_step(self._step_repeat_prop, self._step_repeat_dir)
+        self._schedule_deferred_update(0.01)
+        return True
 
     def _get_section_elements(self, name):
         if not self._doc:
@@ -1809,9 +1958,9 @@ class TrainingPanel(Panel):
             lf.switch_to_edit_mode()
         elif action == "save_checkpoint":
             lf.save_checkpoint()
-            self._checkpoint_saved_time = time.time()
+            self._mark_checkpoint_saved()
         elif action == "browse_bg":
-            selected = lf.ui.open_image_file_dialog("")
+            selected = lf.ui.open_image_dialog("")
             if selected:
                 params = lf.optimization_params()
                 if params and params.has_params():
@@ -1850,7 +1999,7 @@ class TrainingPanel(Panel):
                 params.add_save_step(self._new_save_step)
                 if params.enable_eval:
                     self._sync_eval_steps_with_save_steps(params)
-                self._last_save_steps = None
+                self._refresh_save_steps_model(params)
 
     def _action_start(self):
         params = lf.optimization_params()
@@ -1939,9 +2088,9 @@ class TrainingPanel(Panel):
         if not ASSET_MANAGER_AVAILABLE:
             return
         try:
-            from pathlib import Path
+            from .asset_index import resolve_asset_manager_storage_path
 
-            storage_path = Path.home() / ".lichtfeld" / "asset_manager"
+            storage_path = resolve_asset_manager_storage_path()
             storage_path.mkdir(parents=True, exist_ok=True)
             self._asset_index = AssetIndex(library_path=storage_path / "library.json")
             self._asset_index.load()
@@ -1983,7 +2132,7 @@ class TrainingPanel(Panel):
             params.remove_save_step(step_to_remove)
             if params.enable_eval:
                 self._remove_from_eval_steps(params, step_to_remove)
-            self._last_save_steps = None
+            self._refresh_save_steps_model(params)
 
     def _sync_eval_steps_with_save_steps(self, params):
         if not params or not params.has_params():
@@ -2098,7 +2247,7 @@ class TrainingPanel(Panel):
                 tr("training_panel.save_checkpoint"), "primary", FULL_WIDTH
             ):
                 lf.save_checkpoint()
-                self._checkpoint_saved_time = time.time()
+                self._mark_checkpoint_saved()
 
             if time.time() - self._checkpoint_saved_time < 2.0:
                 theme = lf.ui.theme()
@@ -2269,6 +2418,7 @@ class TrainingPanel(Panel):
                 tr("training.options.mask.none"),
                 tr("training.options.mask.segment"),
                 tr("training.options.mask.ignore"),
+                tr("training.options.mask.segment_and_ignore"),
                 tr("training.options.mask.alpha_consistent"),
             ]
             changed, new_idx = layout.combo("##py_mask_mode", mask_idx, mask_mode_items)
@@ -2277,6 +2427,59 @@ class TrainingPanel(Panel):
             layout.pop_item_width()
             if layout.is_item_hovered():
                 layout.set_tooltip(tr("training.tooltip.mask_mode"))
+
+            layout.table_next_row()
+            layout.table_next_column()
+            layout.label(tr("training_params.use_depth_loss"))
+            layout.table_next_column()
+            changed, new_val = layout.checkbox(
+                "##py_use_depth_loss", params.use_depth_loss
+            )
+            if changed:
+                params.use_depth_loss = new_val
+            if layout.is_item_hovered():
+                layout.set_tooltip(tr("training.tooltip.use_depth_loss"))
+
+            if params.use_depth_loss:
+                layout.table_next_row()
+                layout.table_next_column()
+                layout.label(tr("training_params.depth_loss_mode"))
+                layout.table_next_column()
+                layout.push_item_width(-1)
+                depth_loss_mode = _depth_loss_mode_or_default(params.depth_loss_mode)
+                depth_loss_mode_idx = DEPTH_LOSS_MODE_VALUES.index(depth_loss_mode)
+                depth_loss_mode_items = [
+                    tr("training.options.depth_loss.pearson"),
+                    tr("training.options.depth_loss.adaptive_warped_l1"),
+                ]
+                changed, new_idx = layout.combo(
+                    "##py_depth_loss_mode",
+                    depth_loss_mode_idx,
+                    depth_loss_mode_items,
+                )
+                if changed and 0 <= new_idx < len(DEPTH_LOSS_MODE_VALUES):
+                    params.depth_loss_mode = DEPTH_LOSS_MODE_VALUES[new_idx]
+                layout.pop_item_width()
+                if layout.is_item_hovered():
+                    layout.set_tooltip(tr("training.tooltip.depth_loss_mode"))
+
+                layout.table_next_row()
+                layout.table_next_column()
+                layout.label(tr("training_params.depth_loss_weight"))
+                layout.table_next_column()
+                layout.push_item_width(-1)
+                changed, new_val = layout.input_float(
+                    "##py_depth_loss_weight",
+                    params.depth_loss_weight,
+                    0.1,
+                    0.5,
+                    "%.3f",
+                )
+                if changed:
+                    params.depth_loss_weight = max(0.0, new_val)
+                layout.pop_item_width()
+                if layout.is_item_hovered():
+                    layout.set_tooltip(tr("training.tooltip.depth_loss_weight"))
 
             if params.mask_mode.value != 0:
                 layout.table_next_row()
@@ -2492,7 +2695,7 @@ class TrainingPanel(Panel):
                 if layout.button(
                     tr("training_params.bg_image_browse") + "##py_bg_browse"
                 ):
-                    selected = lf.ui.open_image_file_dialog("")
+                    selected = lf.ui.open_image_dialog("")
                     if selected:
                         params.bg_image_path = selected
                 layout.same_line()
@@ -3289,16 +3492,16 @@ class TrainingPanel(Panel):
             "error": tr("status.error"),
         }
         unknown_state = tr("status.unknown")
-        layout.label(f"{tr('status.mode')}: {state_labels.get(state, unknown_state)}")
+        layout.label(f"{tr('status.mode')} {state_labels.get(state, unknown_state)}")
 
         _rate_tracker.add_sample(iteration)
         rate = _rate_tracker.get_rate()
         layout.label(
             f"{tr('status.iteration')} {iteration:,} ({rate:.1f} {tr('training_panel.iters_per_sec')})"
         )
-        layout.label(tr("progress.num_splats") % f"{AppState.num_gaussians.value:,}")
+        layout.label(tr("progress.num_splats") % f"{RuntimeState.num_gaussians.value:,}")
 
-        max_iter = AppState.max_iterations.value
+        max_iter = RuntimeState.max_iterations.value
         if max_iter > 0 and iteration > 0:
             layout.progress_bar(iteration / max_iter, f"{iteration:,}/{max_iter:,}")
 

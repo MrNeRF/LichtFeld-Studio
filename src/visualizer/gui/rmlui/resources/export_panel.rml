@@ -24,7 +24,7 @@
       <div class="separator"></div>
 
       <!-- Model selection -->
-      <div class="ep-section">
+      <div class="ep-section" data-if="show_model_selection">
         <span class="ep-section-title">@tr:export_dialog.models</span>
         <div class="ep-toggle-row">
           <button id="btn-select-all" type="button" class="btn btn--secondary ep-small-btn">@tr:export.all</button>
@@ -49,7 +49,7 @@
       <div class="separator"></div>
 
       <!-- SH Degree -->
-      <div class="ep-section">
+      <div class="ep-section" data-if="show_sh_degree">
         <div class="setting-row setting-row--aligned">
           <span class="setting-row__label-col">@tr:export_dialog.sh_degree</span>
           <div class="setting-row__control-col setting-row__control-col--slider">
@@ -70,43 +70,13 @@
               <input type="checkbox" data-attrif-checked="rad_flip_y" data-event-change="toggle_rad_flip_y" />
             </div>
           </div>
-          <div class="setting-row setting-row--aligned">
-            <span class="setting-row__label-col">@tr:export_dialog.rad_customize_lod</span>
-            <div class="setting-row__control-col">
-              <input type="checkbox" data-attrif-checked="rad_customize_lod" data-event-change="toggle_rad_customize_lod" />
-            </div>
-          </div>
-          <div data-if="rad_customize_lod">
-            <!-- Collapsible LOD Levels Section -->
-            <div class="section-header text-accent" id="hdr-rad-lod" data-event-click="toggle_section('rad_lod')">
-              <span class="section-arrow text-accent" id="arrow-rad-lod">&#x25B6;</span>
-              <span class="text-accent">@tr:export_dialog.rad_lod_levels</span>
-            </div>
-            <div class="section-content collapsed" id="sec-rad-lod">
-              <div data-for="lod : rad_lod_list">
-                <div class="setting-row" data-attr-data-lod-index="it_index">
-                  <input type="text" class="number-input" data-value="lod.value" data-event-change="update_lod_value" />
-                  <span class="text-default">%</span>
-                  <button class="btn btn--secondary" data-tooltip="export.tooltip.rad_lod_remove" data-event-click="remove_rad_lod(it_index)">@tr:common.remove</button>
-                </div>
-              </div>
-            </div>
-            <div class="separator"></div>
-            <!-- Add new LOD level -->
-            <div class="setting-row" data-tooltip="export.tooltip.rad_lod_input">
-              <input type="text" id="rad-new-lod" class="number-input" data-value="rad_new_lod_str" />
-              <button class="num-step-btn" data-event-mousedown="num_step_rad_lod(-1)">-</button>
-              <button class="num-step-btn" data-event-mousedown="num_step_rad_lod(1)">+</button>
-              <button class="btn btn--secondary" data-tooltip="export.tooltip.rad_lod_add" data-event-click="add_rad_lod">@tr:common.add</button>
-            </div>
-          </div>
         </div>
       </div>
 
       <div class="separator"></div>
 
       <!-- Action buttons -->
-      <span id="export-error" class="ep-error hidden" data-class-hidden="can_export">@tr:export.select_at_least_one</span>
+      <span id="export-error" class="ep-error hidden" data-class-hidden="can_export">{{ export_error_text }}</span>
       <div class="ep-buttons">
         <input id="btn-export" class="btn btn--primary ep-action-btn"
                type="submit"

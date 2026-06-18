@@ -38,6 +38,8 @@ namespace lfs::vis::gui {
                            const PanelInputState* input) override;
         bool supportsDirectDraw() const override { return true; }
         void drawDirect(float x, float y, float w, float h, const PanelDrawContext& ctx) override;
+        bool drawDirectCached(float x, float y, float w, float h,
+                              const PanelDrawContext& ctx) override;
         float getDirectDrawHeight() const override;
         void setInputClipY(float y_min, float y_max) override;
         void setInput(const PanelInputState* input) override;
@@ -90,6 +92,9 @@ namespace lfs::vis::gui {
         uint64_t last_prepare_frame_ = 0;
         bool content_dirty_ = false;
         bool has_update_interval_ = false;
+        bool dirty_driven_updates_ = false;
+        bool warned_non_bool_scene_changed_ = false;
+        bool warned_non_bool_update_ = false;
         int update_interval_ms_ = 100;
         std::chrono::steady_clock::time_point next_update_at_{};
         std::string last_language_;

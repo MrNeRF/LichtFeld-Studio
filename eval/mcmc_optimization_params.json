@@ -44,7 +44,6 @@
   "random": false,
   "init_num_pts": 100000,
   "init_extent": 3.0,
-  "tile_mode": 1,
   "mask_mode": "none",
   "invert_masks": false,
   "mask_opacity_penalty_weight": 1.0,

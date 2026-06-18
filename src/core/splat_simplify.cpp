@@ -5,12 +5,11 @@
 #include "core/splat_simplify.hpp"
 #include "core/splat_simplify_history.hpp"
 
+#include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
 #include "core/splat_data.hpp"
-#include "nanoflann.hpp"
 
 #include <tbb/blocked_range.h>
-#include <tbb/enumerable_thread_specific.h>
 #include <tbb/parallel_for.h>
 
 #include <algorithm>
@@ -21,6 +20,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -35,23 +35,7 @@ namespace lfs::core {
         constexpr float kMinProb = 1e-6f;
         constexpr float kMinEval = 1e-18f;
         constexpr int kJacobiIterations = 32;
-
-        struct PointCloudAdaptor {
-            const float* points = nullptr;
-            size_t num_points = 0;
-
-            [[nodiscard]] inline size_t kdtree_get_point_count() const { return num_points; }
-            [[nodiscard]] inline double kdtree_get_pt(const size_t idx, const size_t dim) const {
-                return static_cast<double>(points[idx * 3 + dim]);
-            }
-            template <class BBOX>
-            bool kdtree_get_bbox(BBOX&) const { return false; }
-        };
-
-        using KDTree = nanoflann::KDTreeSingleIndexAdaptor<
-            nanoflann::L2_Simple_Adaptor<double, PointCloudAdaptor>,
-            PointCloudAdaptor,
-            3>;
+        constexpr float kEllipsoidAreaP = 1.6075f;
 
         struct SplatSimplifyWorkset {
             Tensor means;
@@ -77,23 +61,9 @@ namespace lfs::core {
             std::vector<float> appearance;
         };
 
-        struct CacheEntry {
-            std::array<float, 9> R{};
-            float mass = 0.0f;
-        };
-
         struct Eigen3x3 {
             std::array<float, 3> values{};
             std::array<float, 9> vectors{};
-        };
-
-        struct SimplifyScratch {
-            std::vector<CacheEntry> cache;
-            std::vector<float> costs;
-            std::vector<size_t> order;
-            std::vector<uint8_t> used_rows;
-            std::vector<int> keep_idx;
-            std::vector<std::pair<int, int>> pairs;
         };
 
         struct SimplifyHistoryState {
@@ -133,7 +103,41 @@ namespace lfs::core {
 
             const auto means = select_or_clone(input.means_raw()).to(device).contiguous();
             const auto sh0 = select_or_clone(input.sh0_raw()).to(device).contiguous();
-            const auto shN = input.shN_raw().is_valid() ? select_or_clone(input.shN_raw()).to(device).contiguous() : Tensor{};
+            Tensor shN;
+            if (input.shN_raw().is_valid() && input.shN_raw().numel() > 0 &&
+                input.max_sh_coeffs_rest() > 0) {
+                if (has_deleted) {
+                    auto keep_indices = keep_mask.nonzero();
+                    if (keep_indices.ndim() == 2)
+                        keep_indices = keep_indices.squeeze(1);
+                    const size_t keep_count = static_cast<size_t>(keep_indices.numel());
+                    const size_t layout_rest = input.max_sh_coeffs_rest();
+                    shN = Tensor::empty({keep_count, layout_rest, 3}, input.shN_raw().device());
+                    if (keep_indices.dtype() == DataType::Int64) {
+                        shN_swizzled_gather_to_linear_i64(
+                            input.shN_raw().ptr<float>(),
+                            keep_indices.ptr<int64_t>(),
+                            shN.ptr<float>(),
+                            keep_count,
+                            static_cast<uint32_t>(layout_rest),
+                            static_cast<uint32_t>(layout_rest));
+                    } else {
+                        auto keep_i32 = keep_indices.dtype() == DataType::Int32
+                                            ? keep_indices
+                                            : keep_indices.to(DataType::Int32);
+                        shN_swizzled_gather_to_linear(
+                            input.shN_raw().ptr<float>(),
+                            keep_i32.ptr<int>(),
+                            shN.ptr<float>(),
+                            keep_count,
+                            static_cast<uint32_t>(layout_rest),
+                            static_cast<uint32_t>(layout_rest));
+                    }
+                    shN = shN.to(device).contiguous();
+                } else {
+                    shN = input.shN_canonical().to(device).contiguous();
+                }
+            }
             const auto scaling = select_or_clone(input.scaling_raw()).to(device).contiguous();
             const auto rotation = select_or_clone(input.rotation_raw()).to(device).contiguous();
             const auto opacity = select_or_clone(input.opacity_raw()).to(device).contiguous();
@@ -205,8 +209,7 @@ namespace lfs::core {
             history.tree.source_scene_scale = input.scene_scale;
             history.tree.target_count = target_count;
             history.tree.requested_ratio = options.ratio;
-            history.tree.requested_knn_k = options.knn_k;
-            history.tree.requested_merge_cap = options.merge_cap;
+            history.tree.requested_lod_base = options.lod_base;
             history.tree.requested_opacity_prune_threshold = options.opacity_prune_threshold;
 
             history.current_node_ids.resize(static_cast<size_t>(input.size()));
@@ -308,8 +311,6 @@ namespace lfs::core {
                                 const float vy,
                                 const float vz,
                                 std::array<float, 9>& out) {
-            // Match NumPy's `np.matmul(R * v[None, :], R.T)` by first scaling
-            // columns, then multiplying by the transposed rotation.
             const std::array<float, 3> variance = {vx, vy, vz};
             std::array<float, 9> scaled{};
             for (int row = 0; row < 3; ++row) {
@@ -396,7 +397,7 @@ namespace lfs::core {
             if (src.app_dim > 0) {
                 std::copy_n(src.appearance.begin() + static_cast<ptrdiff_t>(src_row * src.app_dim),
                             src.app_dim,
-                            dst.appearance.begin() + static_cast<ptrdiff_t>(dst_row * src.app_dim));
+                            dst.appearance.begin() + static_cast<ptrdiff_t>(dst_row * dst.app_dim));
             }
         }
 
@@ -442,40 +443,11 @@ namespace lfs::core {
             return out;
         }
 
-        void build_cache(const NativeRows& rows, std::vector<CacheEntry>& cache) {
-            cache.resize(static_cast<size_t>(rows.count));
-            tbb::parallel_for(tbb::blocked_range<int>(0, rows.count), [&](const tbb::blocked_range<int>& range) {
-                for (int i = range.begin(); i != range.end(); ++i) {
-                    auto& entry = cache[static_cast<size_t>(i)];
-                    const size_t i3 = static_cast<size_t>(i) * 3;
-                    const size_t i4 = static_cast<size_t>(i) * 4;
-
-                    const float sx = std::max(rows.scales[i3 + 0], kMinScale);
-                    const float sy = std::max(rows.scales[i3 + 1], kMinScale);
-                    const float sz = std::max(rows.scales[i3 + 2], kMinScale);
-
-                    const float qw = rows.rotation[i4 + 0];
-                    const float qx = rows.rotation[i4 + 1];
-                    const float qy = rows.rotation[i4 + 2];
-                    const float qz = rows.rotation[i4 + 3];
-                    quat_to_rotmat(qw, qx, qy, qz, entry.R);
-
-                    const float alpha = rows.opacity[static_cast<size_t>(i)];
-                    const float scale_prod = strict_prod3(sx, sy, sz);
-                    entry.mass = strict_add(strict_mul(strict_mul(kTwoPiPow1p5, alpha), scale_prod), 1e-12f);
-                }
-            });
-        }
-
-        [[nodiscard]] float compute_edge_cost_euclidean(const NativeRows& rows,
-                                                        const int i,
-                                                        const int j) {
-            const size_t i3 = static_cast<size_t>(i) * 3;
-            const size_t j3 = static_cast<size_t>(j) * 3;
-            const float dx = strict_sub(rows.means[i3 + 0], rows.means[j3 + 0]);
-            const float dy = strict_sub(rows.means[i3 + 1], rows.means[j3 + 1]);
-            const float dz = strict_sub(rows.means[i3 + 2], rows.means[j3 + 2]);
-            return std::sqrt(strict_add(strict_add(strict_mul(dx, dx), strict_mul(dy, dy)), strict_mul(dz, dz)));
+        [[nodiscard]] float ellipsoid_area(const float sx, const float sy, const float sz) {
+            const float t1 = std::pow(sx * sy, kEllipsoidAreaP);
+            const float t2 = std::pow(sx * sz, kEllipsoidAreaP);
+            const float t3 = std::pow(sy * sz, kEllipsoidAreaP);
+            return 4.0f * static_cast<float>(M_PI) * std::pow((t1 + t2 + t3) / 3.0f, 1.0f / kEllipsoidAreaP);
         }
 
         [[nodiscard]] Eigen3x3 sort_eigendecomposition(const Eigen3x3& out) {
@@ -641,248 +613,280 @@ namespace lfs::core {
             rotmat_to_quat(eig.vectors, rotation_raw);
         }
 
-        [[nodiscard]] std::vector<std::pair<int, int>> build_knn_union_edges(const NativeRows& rows, const int knn_k) {
-            if (rows.count <= 1 || knn_k <= 0)
-                return {};
-
-            const int k_eff = std::min(std::max(1, knn_k), std::max(1, rows.count - 1));
-            PointCloudAdaptor cloud{rows.means.data(), static_cast<size_t>(rows.count)};
-            KDTree index(3, cloud, nanoflann::KDTreeSingleIndexAdaptorParams(10));
-            index.buildIndex();
-
-            tbb::enumerable_thread_specific<std::vector<std::uint64_t>> local_edge_keys;
-
-            tbb::parallel_for(tbb::blocked_range<int>(0, rows.count), [&](const tbb::blocked_range<int>& range) {
-                std::vector<size_t> ret_indices;
-                std::vector<double> out_dists_sqr;
-                auto& edge_keys = local_edge_keys.local();
-                if (edge_keys.empty())
-                    edge_keys.reserve(static_cast<size_t>(range.size()) * static_cast<size_t>(k_eff));
-
-                for (int i = range.begin(); i != range.end(); ++i) {
-                    const size_t query_count = static_cast<size_t>(std::min(rows.count, k_eff + 1));
-                    ret_indices.assign(query_count, 0);
-                    out_dists_sqr.assign(query_count, 0.0);
-                    nanoflann::KNNResultSet<double> result_set(query_count);
-                    result_set.init(ret_indices.data(), out_dists_sqr.data());
-                    const double query[3] = {
-                        static_cast<double>(rows.means[static_cast<size_t>(i) * 3 + 0]),
-                        static_cast<double>(rows.means[static_cast<size_t>(i) * 3 + 1]),
-                        static_cast<double>(rows.means[static_cast<size_t>(i) * 3 + 2]),
-                    };
-                    index.findNeighbors(result_set, query, nanoflann::SearchParameters(0.0f, true));
-
-                    const size_t take = std::min(static_cast<size_t>(k_eff), result_set.size() > 0 ? result_set.size() - 1 : size_t{0});
-                    for (size_t j = 0; j < take; ++j) {
-                        const int neighbor = static_cast<int>(ret_indices[j + 1]);
-                        if (neighbor < 0 || neighbor == i)
-                            continue;
-                        const int u = std::min(i, neighbor);
-                        const int v = std::max(i, neighbor);
-                        edge_keys.push_back(
-                            (static_cast<std::uint64_t>(static_cast<std::uint32_t>(u)) << 32) |
-                            static_cast<std::uint32_t>(v));
-                    }
+        void compute_bounds(const NativeRows& rows, float out_min[3], float out_max[3]) {
+            if (rows.count == 0) {
+                for (int i = 0; i < 3; ++i) {
+                    out_min[i] = 0.0f;
+                    out_max[i] = 0.0f;
                 }
-            });
-
-            size_t total_edge_keys = 0;
-            for (const auto& local : local_edge_keys)
-                total_edge_keys += local.size();
-
-            std::vector<std::uint64_t> edge_keys;
-            edge_keys.reserve(total_edge_keys);
-            for (const auto& local : local_edge_keys)
-                edge_keys.insert(edge_keys.end(), local.begin(), local.end());
-
-            std::sort(edge_keys.begin(), edge_keys.end());
-            edge_keys.erase(std::unique(edge_keys.begin(), edge_keys.end()), edge_keys.end());
-
-            std::vector<std::pair<int, int>> edges;
-            edges.reserve(edge_keys.size());
-            for (const std::uint64_t key : edge_keys) {
-                const int u = static_cast<int>(key >> 32);
-                const int v = static_cast<int>(key & 0xffffffffU);
-                edges.emplace_back(u, v);
+                return;
             }
-            return edges;
-        }
-
-        void compute_edge_costs(const NativeRows& rows,
-                                const std::vector<std::pair<int, int>>& edges,
-                                std::vector<float>& costs) {
-            costs.assign(edges.size(), std::numeric_limits<float>::infinity());
-            tbb::parallel_for(tbb::blocked_range<size_t>(0, edges.size()), [&](const tbb::blocked_range<size_t>& range) {
-                for (size_t i = range.begin(); i != range.end(); ++i) {
-                    const auto [u, v] = edges[i];
-                    costs[i] = compute_edge_cost_euclidean(rows, u, v);
+            for (int i = 0; i < 3; ++i) {
+                out_min[i] = rows.means[static_cast<size_t>(i)];
+                out_max[i] = rows.means[static_cast<size_t>(i)];
+            }
+            for (int r = 1; r < rows.count; ++r) {
+                const size_t r3 = static_cast<size_t>(r) * 3;
+                for (int i = 0; i < 3; ++i) {
+                    out_min[i] = std::min(out_min[i], rows.means[r3 + i]);
+                    out_max[i] = std::max(out_max[i], rows.means[r3 + i]);
                 }
-            });
-        }
-
-        void greedy_pairs_from_edges(const std::vector<std::pair<int, int>>& edges,
-                                     const std::vector<float>& costs,
-                                     const int count,
-                                     const int max_pairs,
-                                     std::vector<size_t>& order,
-                                     std::vector<uint8_t>& used,
-                                     std::vector<std::pair<int, int>>& pairs) {
-            order.clear();
-            order.reserve(edges.size());
-            for (size_t i = 0; i < costs.size(); ++i) {
-                if (std::isfinite(costs[i]))
-                    order.push_back(i);
-            }
-            std::stable_sort(order.begin(), order.end(), [&](const size_t lhs, const size_t rhs) {
-                return costs[lhs] < costs[rhs];
-            });
-
-            used.assign(static_cast<size_t>(count), uint8_t{0});
-            pairs.clear();
-            pairs.reserve(static_cast<size_t>(std::max(0, max_pairs)));
-            for (const size_t edge_idx : order) {
-                const auto [u, v] = edges[edge_idx];
-                if (used[static_cast<size_t>(u)] || used[static_cast<size_t>(v)])
-                    continue;
-                used[static_cast<size_t>(u)] = 1;
-                used[static_cast<size_t>(v)] = 1;
-                pairs.emplace_back(u, v);
-                if (max_pairs > 0 && static_cast<int>(pairs.size()) >= max_pairs)
-                    break;
             }
         }
 
-        [[nodiscard]] NativeRows merge_pairs(const NativeRows& input,
-                                             const std::vector<CacheEntry>& cache,
-                                             const std::vector<std::pair<int, int>>& pairs,
-                                             std::vector<uint8_t>& used,
-                                             std::vector<int>& keep_idx) {
-            if (pairs.empty())
-                return input;
+        [[nodiscard]] float compute_voxel_size(const NativeRows& rows, int target_count) {
+            float min[3], max[3];
+            compute_bounds(rows, min, max);
+            float volume = 1.0f;
+            int active_dims = 0;
+            for (int axis = 0; axis < 3; ++axis) {
+                const float extent = max[axis] - min[axis];
+                if (extent > 1e-6f) {
+                    volume *= extent;
+                    ++active_dims;
+                }
+            }
+            if (active_dims == 0)
+                return 1.0f;
+            return std::pow(volume / std::max(1, target_count), 1.0f / static_cast<float>(active_dims)) * 1.2f;
+        }
 
-            used.assign(static_cast<size_t>(input.count), uint8_t{0});
-            for (const auto [u, v] : pairs) {
-                used[static_cast<size_t>(u)] = 1;
-                used[static_cast<size_t>(v)] = 1;
+        [[nodiscard]] int pass_target_count_for(const int current_count,
+                                                const int final_target_count,
+                                                const float lod_base) {
+            const float base = std::max(lod_base, 1.01f);
+            const int lod_target = static_cast<int>(std::ceil(static_cast<float>(current_count) / base));
+            return std::clamp(std::max(final_target_count, lod_target), 1, std::max(1, current_count - 1));
+        }
+
+        struct VoxelKey {
+            int64_t x, y, z;
+            bool operator==(const VoxelKey& other) const {
+                return x == other.x && y == other.y && z == other.z;
+            }
+        };
+
+        struct VoxelKeyHash {
+            std::size_t operator()(const VoxelKey& k) const noexcept {
+                // Simple hash combining
+                std::size_t h = static_cast<std::size_t>(k.x);
+                h = h * 31 + static_cast<std::size_t>(k.y);
+                h = h * 31 + static_cast<std::size_t>(k.z);
+                return h;
+            }
+        };
+
+        [[nodiscard]] std::vector<std::vector<int>> group_into_voxels(
+            const NativeRows& rows,
+            float voxel_size,
+            const float bounds_min[3]) {
+            std::vector<std::vector<int>> groups;
+            if (voxel_size <= 0.0f || rows.count == 0)
+                return groups;
+
+            std::unordered_map<VoxelKey, std::vector<int>, VoxelKeyHash> cells;
+            cells.reserve(static_cast<size_t>(rows.count));
+
+            const float inv_size = 1.0f / voxel_size;
+            for (int i = 0; i < rows.count; ++i) {
+                const size_t i3 = static_cast<size_t>(i) * 3;
+                VoxelKey key;
+                key.x = static_cast<int64_t>(std::floor((rows.means[i3 + 0] - bounds_min[0]) * inv_size));
+                key.y = static_cast<int64_t>(std::floor((rows.means[i3 + 1] - bounds_min[1]) * inv_size));
+                key.z = static_cast<int64_t>(std::floor((rows.means[i3 + 2] - bounds_min[2]) * inv_size));
+                cells[key].push_back(i);
             }
 
+            groups.reserve(cells.size());
+            for (auto& [key, indices] : cells) {
+                std::sort(indices.begin(), indices.end());
+                groups.push_back(std::move(indices));
+            }
+            std::sort(groups.begin(), groups.end(), [](const auto& lhs, const auto& rhs) {
+                return lhs.front() < rhs.front();
+            });
+            return groups;
+        }
+
+        [[nodiscard]] NativeRows merge_voxel_groups(
+            const NativeRows& input,
+            const std::vector<std::vector<int>>& groups,
+            std::vector<int>& keep_idx,
+            SimplifyHistoryState* history,
+            int pass_index) {
             keep_idx.clear();
             keep_idx.reserve(static_cast<size_t>(input.count));
-            for (int i = 0; i < input.count; ++i) {
-                if (!used[static_cast<size_t>(i)])
-                    keep_idx.push_back(i);
+
+            // Count output rows
+            int out_count = 0;
+            for (const auto& group : groups) {
+                if (group.size() == 1) {
+                    keep_idx.push_back(group[0]);
+                    ++out_count;
+                } else if (group.size() > 1) {
+                    ++out_count;
+                }
             }
 
             NativeRows out;
-            out.count = static_cast<int>(keep_idx.size() + pairs.size());
+            out.count = out_count;
             out.app_dim = input.app_dim;
             out.means.resize(static_cast<size_t>(out.count) * 3);
             out.scales.resize(static_cast<size_t>(out.count) * 3);
             out.rotation.resize(static_cast<size_t>(out.count) * 4);
             out.opacity.resize(static_cast<size_t>(out.count));
             out.appearance.resize(static_cast<size_t>(out.count) * static_cast<size_t>(out.app_dim));
+            // Rebuild current_node_ids from the output of this pass
+            std::vector<int32_t> next_node_ids;
+            if (history)
+                next_node_ids.reserve(static_cast<size_t>(out_count));
 
-            tbb::parallel_for(tbb::blocked_range<int>(0, static_cast<int>(keep_idx.size())), [&](const tbb::blocked_range<int>& range) {
-                for (int dst_row = range.begin(); dst_row != range.end(); ++dst_row)
-                    copy_row(input, keep_idx[static_cast<size_t>(dst_row)], out, dst_row);
-            });
+            int out_row = 0;
+            for (const auto& group : groups) {
+                if (group.empty())
+                    continue;
 
-            tbb::parallel_for(tbb::blocked_range<int>(0, static_cast<int>(pairs.size())), [&](const tbb::blocked_range<int>& range) {
-                for (int pair_idx = range.begin(); pair_idx != range.end(); ++pair_idx) {
-                    const auto [i, j] = pairs[static_cast<size_t>(pair_idx)];
-                    const auto& cache_i = cache[static_cast<size_t>(i)];
-                    const auto& cache_j = cache[static_cast<size_t>(j)];
-                    const size_t i3 = static_cast<size_t>(i) * 3;
-                    const size_t j3 = static_cast<size_t>(j) * 3;
-
-                    const float sxi = std::max(input.scales[i3 + 0], kMinScale);
-                    const float syi = std::max(input.scales[i3 + 1], kMinScale);
-                    const float szi = std::max(input.scales[i3 + 2], kMinScale);
-                    const float sxj = std::max(input.scales[j3 + 0], kMinScale);
-                    const float syj = std::max(input.scales[j3 + 1], kMinScale);
-                    const float szj = std::max(input.scales[j3 + 2], kMinScale);
-
-                    const float alpha_i = input.opacity[static_cast<size_t>(i)];
-                    const float alpha_j = input.opacity[static_cast<size_t>(j)];
-                    const float wi = cache_i.mass;
-                    const float wj = cache_j.mass;
-                    const float W = std::max(wi + wj, 1e-12f);
-
-                    const int out_row = static_cast<int>(keep_idx.size()) + pair_idx;
-                    const size_t o3 = static_cast<size_t>(out_row) * 3;
-                    const size_t o4 = static_cast<size_t>(out_row) * 4;
-
-                    out.means[o3 + 0] = (wi * input.means[i3 + 0] + wj * input.means[j3 + 0]) / W;
-                    out.means[o3 + 1] = (wi * input.means[i3 + 1] + wj * input.means[j3 + 1]) / W;
-                    out.means[o3 + 2] = (wi * input.means[i3 + 2] + wj * input.means[j3 + 2]) / W;
-
-                    std::array<float, 9> sig_i{};
-                    std::array<float, 9> sig_j{};
-                    sigma_from_rot_var(cache_i.R, sxi * sxi, syi * syi, szi * szi, sig_i);
-                    sigma_from_rot_var(cache_j.R, sxj * sxj, syj * syj, szj * szj, sig_j);
-
-                    const float dix = input.means[i3 + 0] - out.means[o3 + 0];
-                    const float diy = input.means[i3 + 1] - out.means[o3 + 1];
-                    const float diz = input.means[i3 + 2] - out.means[o3 + 2];
-                    const float djx = input.means[j3 + 0] - out.means[o3 + 0];
-                    const float djy = input.means[j3 + 1] - out.means[o3 + 1];
-                    const float djz = input.means[j3 + 2] - out.means[o3 + 2];
-
-                    sig_i[0] += dix * dix;
-                    sig_i[1] += dix * diy;
-                    sig_i[2] += dix * diz;
-                    sig_i[3] += diy * dix;
-                    sig_i[4] += diy * diy;
-                    sig_i[5] += diy * diz;
-                    sig_i[6] += diz * dix;
-                    sig_i[7] += diz * diy;
-                    sig_i[8] += diz * diz;
-                    sig_j[0] += djx * djx;
-                    sig_j[1] += djx * djy;
-                    sig_j[2] += djx * djz;
-                    sig_j[3] += djy * djx;
-                    sig_j[4] += djy * djy;
-                    sig_j[5] += djy * djz;
-                    sig_j[6] += djz * djx;
-                    sig_j[7] += djz * djy;
-                    sig_j[8] += djz * djz;
-
-                    std::array<float, 9> sigma{};
-                    for (int a = 0; a < 9; ++a) {
-                        sigma[static_cast<size_t>(a)] =
-                            (wi * sig_i[static_cast<size_t>(a)] + wj * sig_j[static_cast<size_t>(a)]) / W;
+                if (group.size() == 1) {
+                    copy_row(input, group[0], out, out_row);
+                    if (history) {
+                        next_node_ids.push_back(history->current_node_ids[static_cast<size_t>(group[0])]);
                     }
-                    sigma[1] = sigma[3] = 0.5f * (sigma[1] + sigma[3]);
-                    sigma[2] = sigma[6] = 0.5f * (sigma[2] + sigma[6]);
-                    sigma[5] = sigma[7] = 0.5f * (sigma[5] + sigma[7]);
-                    sigma[0] += kEpsCov;
-                    sigma[4] += kEpsCov;
-                    sigma[8] += kEpsCov;
-
-                    std::array<float, 3> scaling_raw{};
-                    std::array<float, 4> rotation{};
-                    decompose_sigma_to_raw_scale_quat(sigma, scaling_raw, rotation);
-
-                    out.scales[o3 + 0] = activated_scale(scaling_raw[0]);
-                    out.scales[o3 + 1] = activated_scale(scaling_raw[1]);
-                    out.scales[o3 + 2] = activated_scale(scaling_raw[2]);
-                    out.rotation[o4 + 0] = rotation[0];
-                    out.rotation[o4 + 1] = rotation[1];
-                    out.rotation[o4 + 2] = rotation[2];
-                    out.rotation[o4 + 3] = rotation[3];
-                    out.opacity[static_cast<size_t>(out_row)] = alpha_i + alpha_j - alpha_i * alpha_j;
-
-                    const size_t ai = static_cast<size_t>(i) * static_cast<size_t>(input.app_dim);
-                    const size_t aj = static_cast<size_t>(j) * static_cast<size_t>(input.app_dim);
-                    const size_t ao = static_cast<size_t>(out_row) * static_cast<size_t>(input.app_dim);
-                    for (int k = 0; k < input.app_dim; ++k) {
-                        out.appearance[ao + static_cast<size_t>(k)] =
-                            (wi * input.appearance[ai + static_cast<size_t>(k)] +
-                             wj * input.appearance[aj + static_cast<size_t>(k)]) /
-                            W;
-                    }
+                    ++out_row;
+                    continue;
                 }
-            });
+
+                // Compute weights and total weight (volume-based, not area-based)
+                std::vector<float> weights;
+                weights.reserve(group.size());
+                float total_weight = 0.0f;
+                for (int idx : group) {
+                    const size_t idx3 = static_cast<size_t>(idx) * 3;
+                    const float sx = std::max(input.scales[idx3 + 0], kMinScale);
+                    const float sy = std::max(input.scales[idx3 + 1], kMinScale);
+                    const float sz = std::max(input.scales[idx3 + 2], kMinScale);
+                    const float alpha = input.opacity[static_cast<size_t>(idx)];
+                    const float volume = sx * sy * sz;
+                    const float w = volume * alpha;
+                    weights.push_back(w);
+                    total_weight += w;
+                }
+                if (total_weight < 1e-30f)
+                    total_weight = 1e-30f;
+                for (float& w : weights)
+                    w /= total_weight;
+
+                // Compute weighted center
+                const size_t o3 = static_cast<size_t>(out_row) * 3;
+                float cx = 0.0f, cy = 0.0f, cz = 0.0f;
+                for (size_t g = 0; g < group.size(); ++g) {
+                    const int idx = group[g];
+                    const size_t idx3 = static_cast<size_t>(idx) * 3;
+                    cx += weights[g] * input.means[idx3 + 0];
+                    cy += weights[g] * input.means[idx3 + 1];
+                    cz += weights[g] * input.means[idx3 + 2];
+                }
+                out.means[o3 + 0] = cx;
+                out.means[o3 + 1] = cy;
+                out.means[o3 + 2] = cz;
+
+                // Compute blended covariance
+                std::array<float, 9> sigma{};
+                for (size_t g = 0; g < group.size(); ++g) {
+                    const int idx = group[g];
+                    const size_t idx3 = static_cast<size_t>(idx) * 3;
+                    const size_t idx4 = static_cast<size_t>(idx) * 4;
+
+                    const float sx = std::max(input.scales[idx3 + 0], kMinScale);
+                    const float sy = std::max(input.scales[idx3 + 1], kMinScale);
+                    const float sz = std::max(input.scales[idx3 + 2], kMinScale);
+
+                    float qw = input.rotation[idx4 + 0];
+                    float qx = input.rotation[idx4 + 1];
+                    float qy = input.rotation[idx4 + 2];
+                    float qz = input.rotation[idx4 + 3];
+                    std::array<float, 9> R{};
+                    quat_to_rotmat(qw, qx, qy, qz, R);
+
+                    std::array<float, 9> sig{};
+                    sigma_from_rot_var(R, sx * sx, sy * sy, sz * sz, sig);
+
+                    // Add delta outer product
+                    const float dx = input.means[idx3 + 0] - cx;
+                    const float dy = input.means[idx3 + 1] - cy;
+                    const float dz = input.means[idx3 + 2] - cz;
+                    sig[0] += dx * dx;
+                    sig[1] += dx * dy;
+                    sig[2] += dx * dz;
+                    sig[3] += dy * dx;
+                    sig[4] += dy * dy;
+                    sig[5] += dy * dz;
+                    sig[6] += dz * dx;
+                    sig[7] += dz * dy;
+                    sig[8] += dz * dz;
+
+                    // Accumulate weighted
+                    for (int a = 0; a < 9; ++a)
+                        sigma[static_cast<size_t>(a)] += weights[g] * sig[static_cast<size_t>(a)];
+                }
+
+                sigma[1] = sigma[3] = 0.5f * (sigma[1] + sigma[3]);
+                sigma[2] = sigma[6] = 0.5f * (sigma[2] + sigma[6]);
+                sigma[5] = sigma[7] = 0.5f * (sigma[5] + sigma[7]);
+                sigma[0] += kEpsCov;
+                sigma[4] += kEpsCov;
+                sigma[8] += kEpsCov;
+
+                std::array<float, 3> scaling_raw{};
+                std::array<float, 4> rotation{};
+                decompose_sigma_to_raw_scale_quat(sigma, scaling_raw, rotation);
+
+                out.scales[o3 + 0] = activated_scale(scaling_raw[0]);
+                out.scales[o3 + 1] = activated_scale(scaling_raw[1]);
+                out.scales[o3 + 2] = activated_scale(scaling_raw[2]);
+                const size_t o4 = static_cast<size_t>(out_row) * 4;
+                out.rotation[o4 + 0] = rotation[0];
+                out.rotation[o4 + 1] = rotation[1];
+                out.rotation[o4 + 2] = rotation[2];
+                out.rotation[o4 + 3] = rotation[3];
+
+                // Opacity: union of coverage for independent Gaussians
+                float merged_opacity = 1.0f;
+                for (int idx : group) {
+                    merged_opacity *= (1.0f - input.opacity[static_cast<size_t>(idx)]);
+                }
+                merged_opacity = 1.0f - merged_opacity;
+                out.opacity[static_cast<size_t>(out_row)] = std::clamp(merged_opacity, 0.0f, 1.0f);
+
+                // Appearance weighted average
+                const size_t ao = static_cast<size_t>(out_row) * static_cast<size_t>(input.app_dim);
+                for (int k = 0; k < input.app_dim; ++k)
+                    out.appearance[ao + static_cast<size_t>(k)] = 0.0f;
+                for (size_t g = 0; g < group.size(); ++g) {
+                    const int idx = group[g];
+                    const size_t ai = static_cast<size_t>(idx) * static_cast<size_t>(input.app_dim);
+                    for (int k = 0; k < input.app_dim; ++k)
+                        out.appearance[ao + static_cast<size_t>(k)] += weights[g] * input.appearance[ai + static_cast<size_t>(k)];
+                }
+
+                // History tracking: decompose N-way merge into sequential binary merges
+                if (history) {
+                    int current_node = history->current_node_ids[static_cast<size_t>(group[0])];
+                    for (size_t g = 1; g < group.size(); ++g) {
+                        const int next_node = history->current_node_ids[static_cast<size_t>(group[g])];
+                        history->tree.merge_left.push_back(current_node);
+                        history->tree.merge_right.push_back(next_node);
+                        history->tree.merge_pass.push_back(pass_index);
+                        const int merged_node = static_cast<int>(history->tree.leaf_count() + history->tree.merge_count() - 1);
+                        current_node = merged_node;
+                    }
+                    next_node_ids.push_back(current_node);
+                }
+
+                ++out_row;
+            }
+
+            if (history)
+                history->current_node_ids = std::move(next_node_ids);
 
             return out;
         }
@@ -893,11 +897,6 @@ namespace lfs::core {
                 static_cast<int>(std::ceil(static_cast<double>(input_count) * clamped_ratio)),
                 1,
                 std::max(1, input_count));
-        }
-
-        [[nodiscard]] int pass_merge_cap_for(const int input_count, const double merge_cap) {
-            const double clamped_merge_cap = std::clamp(merge_cap, 0.01, 0.5);
-            return std::max(1, static_cast<int>(clamped_merge_cap * static_cast<double>(input_count)));
         }
 
         [[nodiscard]] float progress_for_count(const int input_count, const int target_count, const int current_count) {
@@ -920,8 +919,7 @@ namespace lfs::core {
 
                 const int input_count = current.count;
                 const int target_count = target_count_for(input_count, options.ratio);
-                const int pass_merge_cap = pass_merge_cap_for(input_count, options.merge_cap);
-                SimplifyScratch scratch;
+                std::vector<int> keep_idx;
                 if (history)
                     *history = make_history_state(input, options, target_count);
 
@@ -930,7 +928,7 @@ namespace lfs::core {
                 current = prune_by_opacity(
                     current,
                     options.opacity_prune_threshold,
-                    history ? &scratch.keep_idx : nullptr);
+                    history ? &keep_idx : nullptr);
 
                 if (current.count == 0)
                     return std::unexpected("Splat simplify: input has no visible gaussians");
@@ -941,7 +939,7 @@ namespace lfs::core {
                     pruned_ids.reserve(history->current_node_ids.size());
 
                     std::vector<uint8_t> kept_mask(history->current_node_ids.size(), uint8_t{0});
-                    for (const int idx : scratch.keep_idx) {
+                    for (const int idx : keep_idx) {
                         if (idx >= 0 && static_cast<size_t>(idx) < kept_mask.size())
                             kept_mask[static_cast<size_t>(idx)] = 1;
                     }
@@ -970,56 +968,48 @@ namespace lfs::core {
                     const float pass_progress = progress_for_count(input_count, target_count, current.count);
                     const std::string pass_prefix = "Pass " + std::to_string(pass + 1) + ": ";
 
-                    if (!report_progress(progress, pass_progress, pass_prefix + "building kNN graph"))
+                    if (!report_progress(progress, pass_progress, pass_prefix + "building voxel grid"))
                         return std::unexpected("Cancelled");
-                    const auto edges = build_knn_union_edges(current, options.knn_k);
-                    if (edges.empty())
-                        return std::unexpected(
-                            "Splat simplify stalled at " + std::to_string(current.count) +
-                            " gaussians (target " + std::to_string(target_count) + ")");
 
-                    if (!report_progress(progress, pass_progress + 0.01f, pass_prefix + "computing edge costs"))
-                        return std::unexpected("Cancelled");
-                    compute_edge_costs(current, edges, scratch.costs);
-
-                    if (!report_progress(progress, pass_progress + 0.02f, pass_prefix + "selecting pairs"))
-                        return std::unexpected("Cancelled");
-                    const int merges_needed = current.count - target_count;
-                    const int max_pairs_this_pass = merges_needed > 0 ? std::min(merges_needed, pass_merge_cap) : 0;
-                    greedy_pairs_from_edges(
-                        edges,
-                        scratch.costs,
+                    float bounds_min[3], bounds_max[3];
+                    compute_bounds(current, bounds_min, bounds_max);
+                    const int pass_target_count = pass_target_count_for(
                         current.count,
-                        max_pairs_this_pass,
-                        scratch.order,
-                        scratch.used_rows,
-                        scratch.pairs);
-                    if (scratch.pairs.empty()) {
+                        target_count,
+                        options.lod_base);
+                    float voxel_size = compute_voxel_size(current, pass_target_count);
+
+                    // If we're not reducing enough, increase voxel size
+                    bool reduced = false;
+                    for (int attempt = 0; attempt < 10 && !reduced; ++attempt) {
+                        auto groups = group_into_voxels(current, voxel_size, bounds_min);
+
+                        int merge_count = 0;
+                        for (const auto& g : groups)
+                            if (g.size() > 1)
+                                ++merge_count;
+
+                        if (merge_count == 0) {
+                            // No merges possible with this voxel size, increase it
+                            voxel_size *= 1.5f;
+                            continue;
+                        }
+
+                        if (!report_progress(progress,
+                                             pass_progress + 0.02f,
+                                             pass_prefix + "merging " + std::to_string(merge_count) + " voxels"))
+                            return std::unexpected("Cancelled");
+
+                        current = merge_voxel_groups(current, groups, keep_idx, history, pass);
+                        reduced = true;
+                    }
+
+                    if (!reduced) {
                         return std::unexpected(
                             "Splat simplify stalled at " + std::to_string(current.count) +
                             " gaussians (target " + std::to_string(target_count) + ")");
                     }
 
-                    if (!report_progress(progress,
-                                         pass_progress + 0.03f,
-                                         pass_prefix + "merging " + std::to_string(scratch.pairs.size()) + " pairs"))
-                        return std::unexpected("Cancelled");
-                    build_cache(current, scratch.cache);
-                    current = merge_pairs(current, scratch.cache, scratch.pairs, scratch.used_rows, scratch.keep_idx);
-                    if (history) {
-                        std::vector<int32_t> next_ids;
-                        next_ids.reserve(static_cast<size_t>(current.count));
-                        for (const int keep_row : scratch.keep_idx) {
-                            next_ids.push_back(history->current_node_ids[static_cast<size_t>(keep_row)]);
-                        }
-                        for (const auto [left_row, right_row] : scratch.pairs) {
-                            history->tree.merge_left.push_back(history->current_node_ids[static_cast<size_t>(left_row)]);
-                            history->tree.merge_right.push_back(history->current_node_ids[static_cast<size_t>(right_row)]);
-                            history->tree.merge_pass.push_back(pass);
-                            next_ids.push_back(input_count + history->tree.merge_count() - 1);
-                        }
-                        history->current_node_ids = std::move(next_ids);
-                    }
                     ++pass;
                 }
 
@@ -1028,7 +1018,7 @@ namespace lfs::core {
                 (void)report_progress(progress, 1.0f, "Complete");
                 return workset_from_rows(current, input);
             } catch (const std::exception& e) {
-                return std::unexpected(e.what());
+                return std::unexpected(std::string("Splat simplify failed: ") + e.what());
             }
         }
 

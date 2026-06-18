@@ -52,6 +52,48 @@ def bind_select_all_on_focus(element):
     return element
 
 
+def bind_committed_text_input(
+    element,
+    key,
+    *,
+    escape_revert=None,
+    capture=None,
+    restore=None,
+    commit=None,
+    on_focus=None,
+    on_blur=None,
+):
+    """Bind common panel-style text input behavior to a retained input element."""
+    if element is None:
+        return None
+
+    bind_select_all_on_focus(element)
+
+    if escape_revert is not None and capture is not None and restore is not None:
+        escape_revert.bind(element, key, capture, restore)
+
+    if on_focus is not None:
+        element.add_event_listener("focus", lambda _event, k=str(key): on_focus(k))
+
+    if commit is not None:
+        def _commit_on_linebreak(event, k=str(key)):
+            if not event.get_bool_parameter("linebreak", False):
+                return
+            commit(k)
+
+        def _commit_on_blur(_event, k=str(key)):
+            commit(k)
+            if on_blur is not None:
+                on_blur(k)
+
+        element.add_event_listener("change", _commit_on_linebreak)
+        element.add_event_listener("blur", _commit_on_blur)
+    elif on_blur is not None:
+        element.add_event_listener("blur", lambda _event, k=str(key): on_blur(k))
+
+    return element
+
+
 @dataclass
 class _EscapeRevertBinding:
     element: object
@@ -471,3 +513,12 @@ def icon_button(container, id, icon_src, selected=False,
         btn.set_attribute("title", tooltip)
 
     return btn
+
+
+def request_model_update(handle):
+    """Schedule a dirty-policy panel update without dirtying every model variable."""
+    request_update = getattr(handle, "request_update", None)
+    if callable(request_update):
+        request_update()
+    else:
+        handle.dirty_all()

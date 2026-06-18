@@ -41,7 +41,6 @@ namespace lfs::vis {
         Rotate,
         Scale,
         Mirror,
-        Brush,
         Align
     };
 
@@ -51,7 +50,8 @@ namespace lfs::vis {
         Rectangle,
         Polygon,
         Lasso,
-        Rings
+        Rings,
+        Color
     };
 
     // Transform coordinate space

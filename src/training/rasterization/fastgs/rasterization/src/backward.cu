@@ -14,13 +14,14 @@ void fast_lfs::rasterization::backward(
     const float* densification_error_map,
     const float* grad_image,
     const float* grad_alpha,
+    const float* grad_depth,
     const float* image,
     const float* alpha,
     const float3* means,
     const float3* scales_raw,
     const float4* rotations_raw,
     const float* raw_opacities,
-    const float3* sh_coefficients_rest,
+    const float4* sh_coefficients_rest,
     const float4* w2c,
     const float3* cam_position,
     char* per_primitive_buffers_blob,
@@ -30,12 +31,13 @@ void fast_lfs::rasterization::backward(
     float3* grad_color_helper,
     float2* grad_mean2d_helper,
     float* grad_conic_helper,
+    float* grad_depth_helper,
     float4* grad_w2c,
     float* densification_info,
     const int n_primitives,
     const int n_instances,
     const int active_sh_bases,
-    const int total_bases_sh_rest,
+    const int sh_layout_bases,
     const int width,
     const int height,
     const float fx,
@@ -44,15 +46,19 @@ void fast_lfs::rasterization::backward(
     const float cy,
     bool mip_filter,
     DensificationType densification_type,
-    FusedAdamSettings fused_adam) {
+    FusedAdamSettings fused_adam,
+    bool detach_depth_weights) {
     const dim3 grid(div_round_up(width, config::tile_width), div_round_up(height, config::tile_height), 1);
-    const int n_tiles = grid.x * grid.y;
+    const uint64_t n_tiles_u64 = static_cast<uint64_t>(grid.x) * static_cast<uint64_t>(grid.y);
+    const int n_tiles = checked_to_int(n_tiles_u64, "n_tiles exceeds int range");
+    const uint sh_layout_slots = kernels::shSlotsForBases(static_cast<uint>(sh_layout_bases));
 
     // These blobs are from the arena and are guaranteed to be valid
     PerPrimitiveBuffers per_primitive_buffers = PerPrimitiveBuffers::from_blob(per_primitive_buffers_blob, n_primitives);
     PerTileBuffers per_tile_buffers = PerTileBuffers::from_blob(per_tile_buffers_blob, n_tiles);
+    auto* fastgs_status = per_primitive_buffers.forward_status;
 
-    if (n_instances != 0) {
+    if (n_instances > 0) {
         // Backward blend (template dispatch eliminates densification branch from inner loop)
         auto launch_blend_backward = [&]<DensificationType DENS_TYPE>() {
             kernels::backward::blend_backward_cu<DENS_TYPE><<<n_tiles, config::block_size_blend_backward>>>(
@@ -61,22 +67,28 @@ void fast_lfs::rasterization::backward(
                 per_primitive_buffers.mean2d,
                 per_primitive_buffers.conic_opacity,
                 per_primitive_buffers.color,
+                per_primitive_buffers.depths,
                 grad_image,
                 grad_alpha,
+                grad_depth,
                 image,
                 alpha,
                 per_tile_buffers.n_contributions,
                 per_tile_buffers.final_transmittance,
                 grad_mean2d_helper,
                 grad_conic_helper,
+                grad_depth_helper,
                 grad_opacity_helper,
                 grad_color_helper,
                 densification_info,
                 densification_error_map,
+                fastgs_status,
+                static_cast<uint>(n_instances),
                 n_primitives,
                 width,
                 height,
-                grid.x);
+                grid.x,
+                detach_depth_weights);
         };
         if (densification_type == DensificationType::MRNF && densification_info != nullptr) {
             launch_blend_backward.template operator()<DensificationType::MRNF>();
@@ -85,9 +97,19 @@ void fast_lfs::rasterization::backward(
         } else {
             launch_blend_backward.template operator()<DensificationType::None>();
         }
-        CHECK_CUDA(config::debug, "blend_backward")
+        check_cuda_with_fastgs_status(cudaGetLastError(), "blend_backward", fastgs_status, "blend_backward", static_cast<uint64_t>(n_primitives), n_tiles_u64);
+        if constexpr (config::debug) {
+            check_cuda_with_fastgs_status(cudaDeviceSynchronize(), "blend_backward", fastgs_status, "blend_backward", static_cast<uint64_t>(n_primitives), n_tiles_u64);
+            throw_if_fastgs_forward_status(fastgs_status, "blend_backward", static_cast<uint64_t>(n_primitives), n_tiles_u64);
+        } else {
+            sync_fastgs_phase_if_requested("blend_backward", fastgs_status, "blend_backward", static_cast<uint64_t>(n_primitives), n_tiles_u64);
+        }
+    }
 
-        // Backward preprocess
+    // Backward preprocess — runs UNCONDITIONALLY now (handles both visible primitives'
+    // backward + Adam, and invisible primitives' Adam-only momentum decay via the
+    // vksplat-style fold). Replaces the previous adam_step_invisible launches.
+    if (n_primitives > 0) {
         auto launch_preprocess_backward = [&]<bool MIP_FILTER, int ACTIVE_SH_BASES>() {
             kernels::backward::preprocess_backward_cu<MIP_FILTER, ACTIVE_SH_BASES><<<div_round_up(n_primitives, config::block_size_preprocess_backward), config::block_size_preprocess_backward>>>(
                 means,
@@ -100,18 +122,19 @@ void fast_lfs::rasterization::backward(
                 per_primitive_buffers.n_touched_tiles,
                 grad_mean2d_helper,
                 grad_conic_helper,
+                grad_depth_helper,
                 grad_opacity_helper,
                 grad_color_helper,
                 grad_w2c,
                 (densification_error_map == nullptr && densification_type == DensificationType::None) ? densification_info : nullptr,
                 n_primitives,
-                total_bases_sh_rest,
                 static_cast<float>(width),
                 static_cast<float>(height),
                 fx,
                 fy,
                 cx,
                 cy,
+                sh_layout_slots,
                 fused_adam);
         };
         auto launch_preprocess_backward_for_mip = [&]<int ACTIVE_SH_BASES>() {
@@ -130,27 +153,12 @@ void fast_lfs::rasterization::backward(
         } else {
             launch_preprocess_backward_for_mip.template operator()<16>();
         }
-        CHECK_CUDA(config::debug, "preprocess_backward")
+        check_cuda_with_fastgs_status(cudaGetLastError(), "preprocess_backward", fastgs_status, "preprocess_backward", static_cast<uint64_t>(n_primitives), n_tiles_u64);
+        if constexpr (config::debug) {
+            check_cuda_with_fastgs_status(cudaDeviceSynchronize(), "preprocess_backward", fastgs_status, "preprocess_backward", static_cast<uint64_t>(n_primitives), n_tiles_u64);
+            throw_if_fastgs_forward_status(fastgs_status, "preprocess_backward", static_cast<uint64_t>(n_primitives), n_tiles_u64);
+        } else {
+            sync_fastgs_phase_if_requested("preprocess_backward", fastgs_status, "preprocess_backward", static_cast<uint64_t>(n_primitives), n_tiles_u64);
+        }
     }
-
-    auto launch_invisible = [&](const FusedAdamParam& param, const char* name, const int extra_grad_kind = 0) {
-        if (!param.enabled || param.n_elements <= 0 || param.n_attributes <= 0)
-            return;
-        kernels::backward::adam_step_invisible<<<div_round_up(param.n_elements, config::block_size_adam_step_invisible), config::block_size_adam_step_invisible>>>(
-            per_primitive_buffers.n_touched_tiles,
-            param,
-            fused_adam,
-            extra_grad_kind,
-            fused_adam.beta1,
-            fused_adam.beta2,
-            fused_adam.eps);
-        CHECK_CUDA(config::debug, name)
-    };
-
-    launch_invisible(fused_adam.means, "adam_step_invisible (means)");
-    launch_invisible(fused_adam.scaling, "adam_step_invisible (scaling)", 1);
-    launch_invisible(fused_adam.rotation, "adam_step_invisible (rotation)");
-    launch_invisible(fused_adam.opacity, "adam_step_invisible (opacity)", 2);
-    launch_invisible(fused_adam.sh0, "adam_step_invisible (sh0)");
-    launch_invisible(fused_adam.shN, "adam_step_invisible (shN)");
 }

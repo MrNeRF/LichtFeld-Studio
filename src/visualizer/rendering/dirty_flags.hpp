@@ -20,9 +20,10 @@ namespace lfs::vis {
         constexpr DirtyMask SELECTION = 1 << 6;
         constexpr DirtyMask BACKGROUND = 1 << 7;
         constexpr DirtyMask SPLIT_VIEW = 1 << 8;
-        constexpr DirtyMask LAST_ = SPLIT_VIEW;
+        constexpr DirtyMask SPLIT_POSITION = 1 << 9;
+        constexpr DirtyMask LAST_ = SPLIT_POSITION;
         constexpr DirtyMask ALL = (LAST_ << 1) - 1;
-        static_assert(ALL == 0x1FF, "Update LAST_ when adding new flags");
+        static_assert(ALL == 0x3FF, "Update LAST_ when adding new flags");
     } // namespace DirtyFlag
 
 } // namespace lfs::vis

@@ -3,7 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "mcmc.hpp"
+#include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "kernels/mcmc_kernels.hpp"
 #include "strategy_utils.hpp"
 #include <algorithm>
@@ -82,20 +84,27 @@ namespace lfs::training {
                 return;
             }
 
-            const auto& shape = state->exp_avg.shape();
-            if (has_zero_dimension(shape)) {
+            // Quantised moments: zero the per-primitive scales (a zero scale dequantises every
+            // moment of that primitive to zero) — correct for both contiguous and swizzled shN.
+            if (!state->exp_avg_scale.is_valid() || state->exp_avg_scale.numel() == 0) {
                 return;
             }
+            auto scale_zeros = lfs::core::Tensor::zeros(
+                lfs::core::TensorShape({indices.numel()}), state->exp_avg_scale.device());
+            state->exp_avg_scale.index_put_(indices, scale_zeros);
+            state->exp_avg_sq_scale.index_put_(indices, scale_zeros);
 
-            std::vector<size_t> dims = {static_cast<size_t>(indices.numel())};
-            for (size_t i = 1; i < shape.rank(); ++i) {
-                dims.push_back(shape[i]);
-            }
-
-            auto zeros = lfs::core::Tensor::zeros(lfs::core::TensorShape(dims), state->exp_avg.device());
-            state->exp_avg.index_put_(indices, zeros);
-            state->exp_avg_sq.index_put_(indices, zeros);
-            if (state->grad.is_valid()) {
+            // grad is transient (re-zeroed each step); only the contiguous case is handled here.
+            if (param_type != ParamType::ShN && state->grad.is_valid() && state->grad.numel() > 0) {
+                const auto& shape = state->grad.shape();
+                if (has_zero_dimension(shape)) {
+                    return;
+                }
+                std::vector<size_t> dims = {static_cast<size_t>(indices.numel())};
+                for (size_t i = 1; i < shape.rank(); ++i) {
+                    dims.push_back(shape[i]);
+                }
+                auto zeros = lfs::core::Tensor::zeros(lfs::core::TensorShape(dims), state->grad.device());
                 state->grad.index_put_(indices, zeros);
             }
         }
@@ -113,12 +122,16 @@ namespace lfs::training {
         const lfs::core::Tensor& dead_indices,
         ParamType param_type) {
 
-        // Reset optimizer state (exp_avg and exp_avg_sq) for relocated Gaussians
-        // Use GPU version for efficiency (indices already on GPU)
+        // Reset optimizer state (exp_avg and exp_avg_sq) for rows whose params changed.
+        // Source rows get adjusted opacity/scaling; destination rows receive fresh params.
         _optimizer->relocate_params_at_indices_gpu(
             param_type,
             sampled_indices.ptr<int64_t>(),
             sampled_indices.numel());
+        _optimizer->relocate_params_at_indices_gpu(
+            param_type,
+            dead_indices.ptr<int64_t>(),
+            dead_indices.numel());
     }
 
     void MCMC::ensure_densification_info_shape() {
@@ -128,13 +141,16 @@ namespace lfs::training {
             info.ndim() != 2 ||
             info.shape()[0] < 2 ||
             info.shape()[1] != n) {
-            _splat_data->_densification_info = lfs::core::Tensor::zeros({2, n}, _splat_data->means().device());
+            _splat_data->_densification_info =
+                lfs::core::Tensor::zeros({2, n}, _splat_data->means().device());
+            _splat_data->_densification_info.set_name("splat.densification_info");
         }
 
         if (!_error_score_max.is_valid() ||
             _error_score_max.ndim() != 1 ||
             _error_score_max.numel() != n) {
             _error_score_max = lfs::core::Tensor::zeros({n}, _splat_data->means().device());
+            _error_score_max.set_name("mcmc.error_score_max");
             _error_score_windows = 0;
         }
     }
@@ -146,14 +162,17 @@ namespace lfs::training {
         if (!_error_score_max.is_valid() ||
             _error_score_max.ndim() != 1 ||
             _error_score_max.numel() != n) {
-            return Tensor::ones({n}, _splat_data->means().device());
+            return zero_frozen_scores(
+                *_splat_data,
+                Tensor::ones({n}, _splat_data->means().device()));
         }
 
-        return _error_score_max.clamp_min(1e-12f);
+        return zero_frozen_scores(*_splat_data, _error_score_max.clamp_min(1e-12f));
     }
 
     int MCMC::relocate_gs() {
         LOG_TIMER("MCMC::relocate_gs");
+        LFS_TRACE("kernel.mcmc.relocate");
         using namespace lfs::core;
 
         // Get opacities (handle both [N] and [N, 1] shapes)
@@ -175,6 +194,7 @@ namespace lfs::training {
                 opacities,
                 _splat_data->rotation_raw(),
                 _params->min_opacity);
+            dead_mask = exclude_frozen_from_mask(*_splat_data, dead_mask);
             dead_indices = dead_mask.nonzero().squeeze(-1);
             n_dead = dead_indices.numel();
         }
@@ -200,6 +220,10 @@ namespace lfs::training {
             // Get source tensors (contiguous)
             Tensor opacities_contig = opacities.contiguous();
             const Tensor sampling_weights = get_sampling_weights();
+            const auto alive_weights = sampling_weights.index_select(0, alive_indices);
+            if (alive_weights.count_nonzero() == 0) {
+                return 0;
+            }
             Tensor scaling_raw_contig = _splat_data->scaling_raw().contiguous(); // Pass raw scaling, kernel applies exp()
 
             // Allocate outputs
@@ -287,23 +311,46 @@ namespace lfs::training {
                 opacity_dim,
                 N);
 
-            // Copy sampled params to dead slots
-            const size_t sh_coeffs = (_splat_data->shN().is_valid() && _splat_data->shN().ndim() >= 2)
-                                         ? _splat_data->shN().shape()[1]
-                                         : 0;
+            // Copy sampled params to dead slots. shN is stored swizzled, so the legacy
+            // kernel skips it and the selected rows are copied below.
             mcmc::launch_copy_gaussian_params(
                 sampled_idxs.ptr<int64_t>(),
                 dead_indices.ptr<int64_t>(),
                 _splat_data->means().ptr<float>(),
                 _splat_data->sh0().ptr<float>(),
-                _splat_data->shN().ptr<float>(),
+                /*shN=*/nullptr,
                 _splat_data->scaling_raw().ptr<float>(),
                 _splat_data->rotation_raw().ptr<float>(),
                 _splat_data->opacity_raw().ptr<float>(),
                 dead_indices.numel(),
-                sh_coeffs,
+                /*sh_coeffs=*/0,
                 opacity_dim,
                 N);
+
+            // Swizzled shN gather: at each dst primitive (dead_indices[i]) write the
+            // shN slot of src primitive (sampled_idxs[i]). Use in-swizzled-domain copies
+            // so _shN's reserved capacity is preserved (no realloc).
+            if (_splat_data->shN().is_valid() && _splat_data->shN().numel() > 0 &&
+                _splat_data->max_sh_coeffs_rest() > 0 && dead_indices.numel() > 0) {
+                using namespace lfs::core;
+                const auto layout_rest = static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
+                const size_t n_pairs = dead_indices.numel();
+                Tensor staged = Tensor::empty({n_pairs, static_cast<size_t>(layout_rest), 3},
+                                              _splat_data->shN().device());
+                shN_swizzled_gather_to_linear_i64(
+                    _splat_data->shN().ptr<float>(),
+                    sampled_idxs.ptr<int64_t>(),
+                    staged.ptr<float>(),
+                    n_pairs,
+                    layout_rest,
+                    layout_rest);
+                auto dead_i32 = dead_indices.dtype() == DataType::Int32
+                                    ? dead_indices
+                                    : dead_indices.to(DataType::Int32);
+                shN_swizzled_scatter_linear(
+                    _splat_data->shN().ptr<float>(), dead_i32.ptr<int>(),
+                    staged.ptr<float>(), n_pairs, layout_rest, layout_rest);
+            }
         }
 
         // Update optimizer states for all parameters
@@ -326,6 +373,7 @@ namespace lfs::training {
 
     int MCMC::add_new_gs() {
         LOG_TIMER("MCMC::add_new_gs");
+        LFS_TRACE("kernel.densify.duplicate");
         using namespace lfs::core;
 
         if (!_optimizer) {
@@ -362,6 +410,9 @@ namespace lfs::training {
             auto scaling_raw_contig = _splat_data->scaling_raw().contiguous(); // Pass raw scaling, kernel applies exp()
             auto opacities_contig = opacities.contiguous();
             const auto sampling_weights = get_sampling_weights();
+            if (sampling_weights.count_nonzero() == 0) {
+                return 0;
+            }
 
             // Allocate output tensors
             sampled_idxs = Tensor::empty({n_new}, Device::CUDA, DataType::Int64);
@@ -472,12 +523,19 @@ namespace lfs::training {
             return 0;
         }
 
-        const int n_new = sampled_idxs.numel();
-        if (n_new == 0)
-            return 0;
-
         // Ensure indices are Int64 (test may pass Int32)
         Tensor sampled_idxs_i64 = (sampled_idxs.dtype() == DataType::Int64) ? sampled_idxs : sampled_idxs.to(DataType::Int64);
+
+        const size_t required = _splat_data->size();
+        if (auto frozen_mask = make_frozen_mask(*_splat_data, required, sampled_idxs_i64.device());
+            frozen_mask.is_valid()) {
+            auto trainable = frozen_mask.index_select(0, sampled_idxs_i64).logical_not();
+            sampled_idxs_i64 = sampled_idxs_i64.masked_select(trainable);
+        }
+
+        const int n_new = sampled_idxs_i64.numel();
+        if (n_new == 0)
+            return 0;
 
         // Get opacities
         auto opacities = _splat_data->get_opacity();
@@ -487,7 +545,6 @@ namespace lfs::training {
         auto sampled_scales = _splat_data->get_scaling().index_select(0, sampled_idxs_i64);
 
         // Ensure cached ones buffer covers current model size
-        const size_t required = _splat_data->size();
         if (!_ones_int32.is_valid() || _ones_int32.numel() < required) {
             _ones_int32 = Tensor::ones({required}, Device::CUDA, DataType::Int32);
         }
@@ -568,6 +625,7 @@ namespace lfs::training {
 
     void MCMC::inject_noise() {
         LOG_TIMER("MCMC::inject_noise");
+        LFS_TRACE("kernel.mcmc.add_noise");
         using namespace lfs::core;
 
         // Get current learning rate from optimizer (after scheduler has updated it)
@@ -588,12 +646,18 @@ namespace lfs::training {
         // Call CUDA add_noise kernel (uses first size() elements of buffer)
         {
             LOG_TIMER("inject_noise_cuda_kernel");
+            const auto frozen_mask = make_frozen_mask(
+                *_splat_data,
+                static_cast<size_t>(_splat_data->size()),
+                Device::CUDA);
             mcmc::launch_add_noise_kernel(
                 _splat_data->opacity_raw().ptr<float>(),
                 _splat_data->scaling_raw().ptr<float>(),
                 _splat_data->rotation_raw().ptr<float>(),
                 _noise_buffer.ptr<float>(),
                 _splat_data->means().ptr<float>(),
+                frozen_mask.is_valid() ? frozen_mask.ptr<bool>() : nullptr,
+                frozen_mask.is_valid() ? frozen_mask.numel() : 0,
                 current_lr,
                 _splat_data->size());
         }
@@ -645,11 +709,14 @@ namespace lfs::training {
             if (n_added > 0) {
                 LOG_DEBUG("MCMC: Added {} new Gaussians at iteration {} (total: {})",
                           n_added, iter, _splat_data->size());
+                LFS_COUNTER_ADD("strategy.mcmc.added", n_added);
             }
             // Release cached pool memory to avoid bloat (important after add_new_gs)
             lfs::core::Tensor::trim_memory_pool();
 
             const size_t n = static_cast<size_t>(_splat_data->size());
+            LFS_GAUGE("model.gaussians.live", n);
+            LFS_GAUGE("model.gaussians.capacity", deleted_mask_capacity(*_splat_data));
 
             if (_error_score_max.numel() < n) {
                 const size_t n_new = n - _error_score_max.numel();
@@ -661,10 +728,13 @@ namespace lfs::training {
             ++_error_score_windows;
             if (_error_score_windows >= 2) {
                 _error_score_max = lfs::core::Tensor::zeros({n}, _splat_data->means().device());
+                _error_score_max.set_name("mcmc.error_score_max");
                 _error_score_windows = 0;
             }
 
-            _splat_data->_densification_info = lfs::core::Tensor::zeros({2, n}, _splat_data->means().device());
+            _splat_data->_densification_info =
+                lfs::core::Tensor::zeros({2, n}, _splat_data->means().device());
+            _splat_data->_densification_info.set_name("splat.densification_info");
         }
 
         // Inject noise to positions every iteration
@@ -697,7 +767,8 @@ namespace lfs::training {
             return;
         }
 
-        const int n_remove = mask.to(DataType::Int32).sum().template item<int>();
+        const auto prune_mask = exclude_frozen_from_mask(*_splat_data, mask);
+        const int n_remove = prune_mask.to(DataType::Int32).sum().template item<int>();
 
         LOG_INFO("MCMC::remove_gaussians called: mask size={}, n_remove={}, current size={}",
                  mask.numel(), n_remove, _splat_data->size());
@@ -708,8 +779,9 @@ namespace lfs::training {
         }
 
         LOG_DEBUG("MCMC: Removing {} Gaussians", n_remove);
+        LFS_COUNTER_ADD("strategy.mcmc.pruned", n_remove);
 
-        const Tensor prune_indices = mask.nonzero().squeeze(-1);
+        const Tensor prune_indices = prune_mask.nonzero().squeeze(-1);
 
         set_deleted_mask_rows(*_splat_data, prune_indices, true);
 
@@ -751,24 +823,40 @@ namespace lfs::training {
                 // ELIMINATE ALL POOL ALLOCATIONS: Replace pool-allocated parameters with direct cudaMalloc versions
                 LOG_DEBUG("  Replacing pool-allocated parameters with direct cudaMalloc versions:");
 
-                auto replace_with_direct = [capacity](Tensor& param) {
-                    // Create new tensor with direct cudaMalloc (ZERO pool usage!)
+                // When init_model_from_pointcloud was called with capacity = max_cap, every
+                // param is already direct-allocated at that capacity. Re-allocating would briefly
+                // hold both old and new buffers (≈2× peak) before the cuda caching allocator
+                // releases the freed chunk — so only replace if the param's capacity is actually
+                // below the target.
+                auto ensure_capacity_direct = [capacity](Tensor& param) {
+                    if (param.capacity() >= capacity)
+                        return;
                     auto new_param = Tensor::zeros_direct(param.shape(), capacity);
-                    // Copy data from old pool-allocated tensor to new direct tensor
                     cudaMemcpy(new_param.ptr<float>(), param.ptr<float>(),
                                param.numel() * sizeof(float), cudaMemcpyDeviceToDevice);
-                    // Replace (old pool-allocated tensor gets freed)
                     param = new_param;
                 };
 
-                replace_with_direct(_splat_data->means());
-                replace_with_direct(_splat_data->sh0());
-                if (_splat_data->shN().is_valid() && _splat_data->shN().ndim() > 0) {
-                    replace_with_direct(_splat_data->shN());
+                // shN is 1D swizzled — its capacity must be in FLOATS, not row count.
+                const auto layout_rest = static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
+                auto ensure_shN_capacity_direct = [capacity, layout_rest](Tensor& param) {
+                    const size_t cap_floats = lfs::core::sh_swizzled_float_count(capacity, layout_rest);
+                    if (param.capacity() >= cap_floats)
+                        return;
+                    auto new_param = Tensor::zeros_direct(param.shape(), cap_floats);
+                    cudaMemcpy(new_param.ptr<float>(), param.ptr<float>(),
+                               param.numel() * sizeof(float), cudaMemcpyDeviceToDevice);
+                    param = new_param;
+                };
+
+                ensure_capacity_direct(_splat_data->means());
+                ensure_capacity_direct(_splat_data->sh0());
+                if (layout_rest > 0 && _splat_data->shN().is_valid() && _splat_data->shN().numel() > 0) {
+                    ensure_shN_capacity_direct(_splat_data->shN());
                 }
-                replace_with_direct(_splat_data->scaling_raw());
-                replace_with_direct(_splat_data->rotation_raw());
-                replace_with_direct(_splat_data->opacity_raw());
+                ensure_capacity_direct(_splat_data->scaling_raw());
+                ensure_capacity_direct(_splat_data->rotation_raw());
+                ensure_capacity_direct(_splat_data->opacity_raw());
 
                 // Pre-allocate noise buffer [max_cap, 3]
                 _noise_buffer = Tensor::zeros_direct(TensorShape({capacity, 3}), capacity);

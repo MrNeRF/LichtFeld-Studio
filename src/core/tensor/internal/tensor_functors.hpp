@@ -331,44 +331,60 @@ namespace lfs::core {
         struct floor_op {
             template <typename T>
             HOST_DEVICE constexpr T operator()(const T& x) const {
+                if constexpr (std::is_integral_v<T>)
+                    return x;
+                else {
 #ifdef __CUDA_ARCH__
-                return floorf(x);
+                    return floorf(x);
 #else
-                return std::floor(x);
+                    return std::floor(x);
 #endif
+                }
             }
         };
 
         struct ceil_op {
             template <typename T>
             HOST_DEVICE constexpr T operator()(const T& x) const {
+                if constexpr (std::is_integral_v<T>)
+                    return x;
+                else {
 #ifdef __CUDA_ARCH__
-                return ceilf(x);
+                    return ceilf(x);
 #else
-                return std::ceil(x);
+                    return std::ceil(x);
 #endif
+                }
             }
         };
 
         struct round_op {
             template <typename T>
             HOST_DEVICE constexpr T operator()(const T& x) const {
+                if constexpr (std::is_integral_v<T>)
+                    return x;
+                else {
 #ifdef __CUDA_ARCH__
-                return roundf(x);
+                    return roundf(x);
 #else
-                return std::round(x);
+                    return std::round(x);
 #endif
+                }
             }
         };
 
         struct trunc_op {
             template <typename T>
             HOST_DEVICE constexpr T operator()(const T& x) const {
+                if constexpr (std::is_integral_v<T>)
+                    return x;
+                else {
 #ifdef __CUDA_ARCH__
-                return truncf(x);
+                    return truncf(x);
 #else
-                return std::trunc(x);
+                    return std::trunc(x);
 #endif
+                }
             }
         };
 
@@ -475,11 +491,15 @@ namespace lfs::core {
         struct mod_op {
             template <typename T>
             HOST_DEVICE constexpr T operator()(const T& a, const T& b) const {
+                if constexpr (std::is_integral_v<T>)
+                    return a % b;
+                else {
 #ifdef __CUDA_ARCH__
-                return fmodf(a, b);
+                    return fmodf(a, b);
 #else
-                return std::fmod(a, b);
+                    return std::fmod(a, b);
 #endif
+                }
             }
         };
 
@@ -964,7 +984,7 @@ namespace lfs::core {
             HOST_DEVICE constexpr index_clamp_op(size_t s) : size(s) {}
             HOST_DEVICE constexpr size_t operator()(int idx) const {
                 if (idx < 0)
-                    idx += size;
+                    idx += static_cast<int>(size);
                 if (idx < 0)
                     return 0;
                 if (idx >= static_cast<int>(size))

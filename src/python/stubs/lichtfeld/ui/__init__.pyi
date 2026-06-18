@@ -11,7 +11,8 @@ from . import (
     mouse as mouse,
     ops as ops,
     rml as rml,
-    signals as signals
+    signals as signals,
+    store as store
 )
 import lichtfeld
 
@@ -229,7 +230,9 @@ class PanelSpace(enum.Enum):
 
     BOTTOM_DOCK = 5
 
-    STATUS_BAR = 6
+    LEFT_DOCK = 6
+
+    STATUS_BAR = 7
 
 class PanelHeightMode(enum.Enum):
     FILL = 0
@@ -278,6 +281,8 @@ class Panel:
     height_mode: PanelHeightMode = PanelHeightMode.FILL
 
     update_interval_ms: int = 100
+
+    update_policy: str = 'interval'
 
     @classmethod
     def poll(cls, context) -> bool: ...
@@ -952,7 +957,7 @@ def unregister_menu(cls: object) -> None:
 def unregister_all_menus() -> None:
     """Unregister all Python menus"""
 
-def show_context_menu(items: list, screen_x: float, screen_y: float) -> None: ...
+def show_context_menu(items: list, screen_x: float, screen_y: float, on_action: object | None = None) -> None: ...
 
 def poll_context_menu() -> str: ...
 
@@ -1892,7 +1897,7 @@ def open_folder_dialog(title: str = 'Select Folder', start_dir: str = '') -> str
 
 def open_ply_file_dialog(start_dir: str = '') -> str:
     """
-    Open a file dialog to select a splat file (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz). Returns empty string if cancelled.
+    Open a file dialog to select a splat file (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz). Returns empty string if cancelled.
     """
 
 def open_mesh_file_dialog(start_dir: str = '') -> str:
@@ -1920,6 +1925,11 @@ def open_csv_file_dialog() -> str:
     Open a file dialog to select a CSV file. Returns empty string if cancelled.
     """
 
+def open_xml_file_dialog() -> str:
+    """
+    Open a file dialog to select a Metashape XML file. Returns empty string if cancelled.
+    """
+
 def open_las_file_dialog() -> str:
     """
     Open a file dialog to select a LAS or LAZ point cloud file. Returns empty string if cancelled.
@@ -1938,6 +1948,16 @@ def save_laz_file_dialog(default_name: str = 'export') -> str:
 def save_json_file_dialog(default_name: str = 'config.json') -> str:
     """
     Open a save file dialog for JSON files. Returns empty string if cancelled.
+    """
+
+def save_png_file_dialog(default_name: str = 'export.png') -> str:
+    """
+    Open a save file dialog for PNG images. Returns empty string if cancelled.
+    """
+
+def save_jpg_file_dialog(default_name: str = 'export.jpg') -> str:
+    """
+    Open a save file dialog for JPEG images. Returns empty string if cancelled.
     """
 
 def save_ply_file_dialog(default_name: str = 'export') -> str:
@@ -1975,9 +1995,14 @@ def save_rad_file_dialog(default_name: str = 'export') -> str:
     Open a save file dialog for RAD files. Returns empty string if cancelled.
     """
 
-def open_dataset_folder_dialog() -> str:
+def open_dataset_folder_dialog(default_path: str = '') -> str:
     """
     Open a folder dialog to select a dataset. Returns empty string if cancelled.
+    """
+
+def select_colmap_sparse_folder_dialog(default_path: str = '') -> str:
+    """
+    Open a folder dialog to select the COLMAP sparse export folder. Returns empty string if cancelled.
     """
 
 def open_video_file_dialog() -> str:
@@ -1990,7 +2015,7 @@ def open_url(url: str) -> None:
 
 def set_tool(tool: str) -> None:
     """
-    Switch to a toolbar tool (none, selection, translate, rotate, scale, mirror, brush, align, cropbox)
+    Switch to a toolbar tool (none, selection, translate, rotate, scale, mirror, align, cropbox)
     """
 
 class Key(enum.Enum):
@@ -2143,6 +2168,18 @@ def reveal_in_file_manager(path: str) -> bool:
 
 def apply_cropbox() -> None:
     """Apply the selected cropbox"""
+
+def set_crop_tool_shape(shape: str) -> None:
+    """Set the active crop tool shape: box or ellipsoid"""
+
+def get_crop_tool_shape() -> str:
+    """Get the active crop tool shape"""
+
+def apply_crop_tool() -> None:
+    """Apply the active crop tool primitive"""
+
+def fit_crop_tool(use_percentile: bool = False) -> None:
+    """Fit the active crop tool primitive to the selected node"""
 
 def fit_cropbox_to_scene(use_percentile: bool = False) -> None:
     """Fit cropbox to scene bounds"""
@@ -2306,6 +2343,13 @@ class SequencerUIState:
     def show_film_strip(self, arg: bool, /) -> None: ...
 
     @property
+    def sequence_fps(self) -> float:
+        """Playback FPS for loaded PLY sequences"""
+
+    @sequence_fps.setter
+    def sequence_fps(self, arg: float, /) -> None: ...
+
+    @property
     def selected_keyframe(self) -> int: ...
 
 def get_sequencer_state() -> SequencerUIState:
@@ -2366,7 +2410,7 @@ def is_windows_platform() -> bool:
 
 def register_file_associations() -> bool:
     """
-    Register LichtFeld Studio as a supported handler for .ply, .sog, .spz, .usd, .usda, .usdc, .usdz files (Windows only)
+    Register LichtFeld Studio as a supported handler for .ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz files (Windows only)
     """
 
 def open_file_association_settings() -> bool:
@@ -2376,12 +2420,12 @@ def open_file_association_settings() -> bool:
 
 def unregister_file_associations() -> bool:
     """
-    Remove LichtFeld Studio file associations for .ply, .sog, .spz, .usd, .usda, .usdc, .usdz (Windows only)
+    Remove LichtFeld Studio file associations for .ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz (Windows only)
     """
 
 def are_file_associations_registered() -> bool:
     """
-    Check if LichtFeld Studio is the default handler for .ply, .sog, .spz, .usd, .usda, .usdc, .usdz (Windows only)
+    Check if LichtFeld Studio is the default handler for .ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz (Windows only)
     """
 
 def get_pivot_mode() -> int:
@@ -2480,6 +2524,17 @@ def get_ui_scale_preference() -> float:
 
 def set_clipboard_text(text: str) -> None:
     """Copy text to the system clipboard"""
+
+def has_clipboard_image() -> bool:
+    """Return True if the system clipboard holds an image"""
+
+def get_clipboard_image_texture() -> tuple:
+    """
+    Read an image from the clipboard as a UI texture, returns (texture_id, width, height)
+    """
+
+def save_clipboard_image(path: str) -> bool:
+    """Decode the clipboard image and write it to path; returns success"""
 
 def set_mouse_cursor_hand() -> None:
     """Set mouse cursor to hand pointer for this frame"""

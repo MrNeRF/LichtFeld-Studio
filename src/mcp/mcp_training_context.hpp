@@ -27,7 +27,6 @@ namespace lfs::mcp {
         struct SelectionWorkspace {
             core::Tensor& locked_groups_device_mask;
             core::Tensor& selection_scratch_buffer;
-            core::Tensor& selection_polygon_vertex_buffer;
             std::array<core::Tensor, 2>& selection_output_buffers;
             size_t& selection_output_buffer_index;
         };
@@ -88,7 +87,6 @@ namespace lfs::mcp {
             SelectionWorkspace workspace{
                 .locked_groups_device_mask = locked_groups_device_mask_,
                 .selection_scratch_buffer = selection_scratch_buffer_,
-                .selection_polygon_vertex_buffer = selection_polygon_vertex_buffer_,
                 .selection_output_buffers = selection_output_buffers_,
                 .selection_output_buffer_index = selection_output_buffer_index_,
             };
@@ -109,7 +107,6 @@ namespace lfs::mcp {
         core::param::TrainingParameters params_;
         core::Tensor locked_groups_device_mask_;
         core::Tensor selection_scratch_buffer_;
-        core::Tensor selection_polygon_vertex_buffer_;
         std::array<core::Tensor, 2> selection_output_buffers_;
         size_t selection_output_buffer_index_ = 0;
 

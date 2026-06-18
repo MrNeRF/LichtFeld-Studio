@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include <cstddef>
 #include <string>
 
@@ -16,6 +18,6 @@ namespace lfs::vis::gui {
         std::string device_name;
     };
 
-    GpuMemoryInfo queryGpuMemory();
+    LFS_VIS_API GpuMemoryInfo queryGpuMemory();
 
 } // namespace lfs::vis::gui

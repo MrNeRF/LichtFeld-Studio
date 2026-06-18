@@ -5,96 +5,6 @@
 </head>
 <body template="docked-panel" data-model="rendering">
 
-  <div id="transform-block" class="hidden">
-    <div class="section-header text-accent" id="hdr-transform" data-event-click="toggle_section('transform')">
-      <span class="section-arrow text-accent is-expanded" id="arrow-transform">&#x25B6;</span>
-      <span class="text-accent">{{transform_tool_label}}</span>
-    </div>
-    <div class="section-content" id="sec-transform">
-      <div class="rendering-transform-meta">
-        <span class="rendering-transform-meta__primary" data-if="transform_is_single">{{transform_node_name}}</span>
-        <span class="rendering-transform-meta__primary" data-if="transform_is_multi">{{transform_multi_label}}</span>
-        <span class="rendering-transform-meta__secondary">Space: {{transform_space_label}}</span>
-        <span class="rendering-transform-meta__secondary">Pivot: {{transform_pivot_label}}</span>
-      </div>
-
-      <div data-if="transform_show_translate">
-        <div class="rendering-transform-group-label">Position</div>
-        <div class="setting-row" data-tooltip="tooltip.transform_position_axis">
-          <span class="rendering-transform-axis-label">X</span>
-          <input type="text" class="number-input" id="transform-pos-x" data-value="transform_pos_x_str" />
-          <button class="num-step-btn" data-event-mousedown="transform_num_step('pos_x', -1)">-</button>
-          <button class="num-step-btn" data-event-mousedown="transform_num_step('pos_x', 1)">+</button>
-        </div>
-        <div class="setting-row" data-tooltip="tooltip.transform_position_axis">
-          <span class="rendering-transform-axis-label">Y</span>
-          <input type="text" class="number-input" id="transform-pos-y" data-value="transform_pos_y_str" />
-          <button class="num-step-btn" data-event-mousedown="transform_num_step('pos_y', -1)">-</button>
-          <button class="num-step-btn" data-event-mousedown="transform_num_step('pos_y', 1)">+</button>
-        </div>
-        <div class="setting-row" data-tooltip="tooltip.transform_position_axis">
-          <span class="rendering-transform-axis-label">Z</span>
-          <input type="text" class="number-input" id="transform-pos-z" data-value="transform_pos_z_str" />
-          <button class="num-step-btn" data-event-mousedown="transform_num_step('pos_z', -1)">-</button>
-          <button class="num-step-btn" data-event-mousedown="transform_num_step('pos_z', 1)">+</button>
-        </div>
-      </div>
-
-      <div data-if="transform_show_rotate">
-        <div class="rendering-transform-group-label">Rotation (degrees)</div>
-        <div class="setting-row" data-tooltip="tooltip.transform_rotation_axis">
-          <span class="rendering-transform-axis-label">X</span>
-          <input type="text" class="number-input" id="transform-rot-x" data-value="transform_rot_x_str" />
-          <button class="num-step-btn" data-event-mousedown="transform_num_step('rot_x', -1)">-</button>
-          <button class="num-step-btn" data-event-mousedown="transform_num_step('rot_x', 1)">+</button>
-        </div>
-        <div class="setting-row" data-tooltip="tooltip.transform_rotation_axis">
-          <span class="rendering-transform-axis-label">Y</span>
-          <input type="text" class="number-input" id="transform-rot-y" data-value="transform_rot_y_str" />
-          <button class="num-step-btn" data-event-mousedown="transform_num_step('rot_y', -1)">-</button>
-          <button class="num-step-btn" data-event-mousedown="transform_num_step('rot_y', 1)">+</button>
-        </div>
-        <div class="setting-row" data-tooltip="tooltip.transform_rotation_axis">
-          <span class="rendering-transform-axis-label">Z</span>
-          <input type="text" class="number-input" id="transform-rot-z" data-value="transform_rot_z_str" />
-          <button class="num-step-btn" data-event-mousedown="transform_num_step('rot_z', -1)">-</button>
-          <button class="num-step-btn" data-event-mousedown="transform_num_step('rot_z', 1)">+</button>
-        </div>
-      </div>
-
-      <div data-if="transform_show_scale">
-        <div class="rendering-transform-group-label">Scale</div>
-        <div class="setting-row" data-tooltip="tooltip.transform_scale_uniform">
-          <span class="rendering-transform-axis-label">U</span>
-          <input type="text" class="number-input" id="transform-scale-u" data-value="transform_scale_u_str" />
-          <button class="num-step-btn" data-event-mousedown="transform_num_step('scale_u', -1)">-</button>
-          <button class="num-step-btn" data-event-mousedown="transform_num_step('scale_u', 1)">+</button>
-        </div>
-        <div class="setting-row rendering-transform-scale-separator" data-tooltip="tooltip.transform_scale_axis">
-          <span class="rendering-transform-axis-label">X</span>
-          <input type="text" class="number-input" id="transform-scale-x" data-value="transform_scale_x_str" />
-          <button class="num-step-btn" data-event-mousedown="transform_num_step('scale_x', -1)">-</button>
-          <button class="num-step-btn" data-event-mousedown="transform_num_step('scale_x', 1)">+</button>
-        </div>
-        <div class="setting-row" data-tooltip="tooltip.transform_scale_axis">
-          <span class="rendering-transform-axis-label">Y</span>
-          <input type="text" class="number-input" id="transform-scale-y" data-value="transform_scale_y_str" />
-          <button class="num-step-btn" data-event-mousedown="transform_num_step('scale_y', -1)">-</button>
-          <button class="num-step-btn" data-event-mousedown="transform_num_step('scale_y', 1)">+</button>
-        </div>
-        <div class="setting-row" data-tooltip="tooltip.transform_scale_axis">
-          <span class="rendering-transform-axis-label">Z</span>
-          <input type="text" class="number-input" id="transform-scale-z" data-value="transform_scale_z_str" />
-          <button class="num-step-btn" data-event-mousedown="transform_num_step('scale_z', -1)">-</button>
-          <button class="num-step-btn" data-event-mousedown="transform_num_step('scale_z', 1)">+</button>
-        </div>
-      </div>
-
-      <button class="btn btn--secondary btn--full" data-tooltip="tooltip.transform_reset"
-              data-event-click="transform_action('reset')">{{transform_reset_label}}</button>
-    </div>
-  </div>
-
   <!-- Viewport -->
   <div class="section-header text-accent" id="hdr-viewport" data-event-click="toggle_section('viewport')">
     <span class="section-arrow text-accent is-expanded" id="arrow-viewport">&#x25B6;</span>
@@ -152,7 +62,7 @@
         <span class="setting-row__label-col">{{label_environment_rotation_degrees}}</span>
         <div class="setting-row__control-col setting-row__control-col--slider">
           <input type="range" class="setting-slider" data-value="environment_rotation_degrees" min="-180" max="180" step="0.1" />
-          <span class="slider-value">{{environment_rotation_degrees | format_float(1)}}&deg;</span>
+          <span class="slider-value">{{environment_rotation_degrees | format_float(1)}}&#176;</span>
         </div>
       </div>
     <div class="setting-row setting-row--aligned" data-tooltip="tooltip.voxel_size">
@@ -265,10 +175,8 @@
       <span class="setting-row__label-col">{{label_raster_backend}}</span>
       <div class="setting-row__control-col setting-row__control-col--fill">
         <select data-value="raster_backend">
-          <option value="fast_gs">fast_gs</option>
-          <option value="3dgut">3dgut</option>
-          <option value="vksplat" data-if="vksplat_available">vksplat (experimental)</option>
-          <option value="vksplat_3dgut" data-if="vksplat_available">vksplat 3dgut (experimental)</option>
+          <option value="3dgs">3DGS</option>
+          <option value="3dgut">3DGUT</option>
         </select>
       </div>
     </div>
@@ -286,6 +194,84 @@
           <option value="PSNR" data-tooltip="tooltip.opt.camera_metrics.psnr">PSNR</option>
           <option value="PSNR_SSIM" data-tooltip="tooltip.opt.camera_metrics.psnr_ssim">PSNR + SSIM</option>
         </select>
+      </div>
+    </div>
+  </div>
+
+  <!-- LOD -->
+  <div class="section-header text-accent" id="hdr-lod" data-event-click="toggle_section('lod')">
+    <span class="section-arrow text-accent is-expanded" id="arrow-lod">&#x25B6;</span>
+    <span class="text-accent">{{label_hdr_lod}}</span>
+  </div>
+  <div class="section-content collapsed" id="sec-lod">
+    <div class="setting-row setting-row--aligned" data-tooltip="tooltip.lod_enabled">
+      <span class="setting-row__label-col">{{label_lod_enabled}}</span>
+      <label class="setting-row__control-col setting-row__control-col--checkbox">
+        <input type="checkbox" data-checked="lod_enabled" />
+      </label>
+    </div>
+    <div data-if="lod_enabled">
+      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.lod_max_splats">
+        <span class="setting-row__label-col">{{label_lod_max_splats}}</span>
+        <div class="setting-row__control-col setting-row__control-col--slider">
+          <input type="range" class="setting-slider" data-value="lod_max_splats" min="1" max="5000000" step="10000" />
+          <span class="slider-value">{{lod_max_splats | format_int}}</span>
+        </div>
+      </div>
+      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.lod_page_pool_splats">
+        <span class="setting-row__label-col">{{label_lod_page_pool_splats}}</span>
+        <div class="setting-row__control-col setting-row__control-col--slider">
+          <input type="range" class="setting-slider" data-value="lod_page_pool_splats" min="0" max="100000000" step="1000000" />
+          <span class="slider-value">{{lod_page_pool_splats | format_int}}</span>
+        </div>
+      </div>
+      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.lod_pool_vram_fraction">
+        <span class="setting-row__label-col">{{label_lod_pool_vram_fraction}}</span>
+        <div class="setting-row__control-col setting-row__control-col--slider">
+          <input type="range" class="setting-slider" data-value="lod_pool_vram_fraction" min="0.05" max="0.9" step="0.05" />
+          <span class="slider-value">{{lod_pool_vram_fraction | format_float(2)}}</span>
+        </div>
+      </div>
+      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.lod_fade_frames">
+        <span class="setting-row__label-col">{{label_lod_fade_frames}}</span>
+        <div class="setting-row__control-col setting-row__control-col--slider">
+          <input type="range" class="setting-slider" data-value="lod_fade_frames" min="0" max="60" step="1" />
+          <span class="slider-value">{{lod_fade_frames | format_int}}</span>
+        </div>
+      </div>
+      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.lod_render_scale">
+        <span class="setting-row__label-col">{{label_lod_render_scale}}</span>
+        <div class="setting-row__control-col setting-row__control-col--slider">
+          <input type="range" class="setting-slider" data-value="lod_render_scale" min="0.1" max="5.0" step="0.1" />
+          <span class="slider-value">{{lod_render_scale | format_float(1)}}</span>
+        </div>
+      </div>
+      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.lod_cone_foveation">
+        <span class="setting-row__label-col">{{label_lod_cone_foveation}}</span>
+        <div class="setting-row__control-col setting-row__control-col--slider">
+          <input type="range" class="setting-slider" data-value="lod_cone_foveation" min="0.1" max="2.0" step="0.1" />
+          <span class="slider-value">{{lod_cone_foveation | format_float(1)}}</span>
+        </div>
+      </div>
+      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.lod_cone_inner_degrees">
+        <span class="setting-row__label-col">{{label_lod_cone_inner_degrees}}</span>
+        <div class="setting-row__control-col setting-row__control-col--slider">
+          <input type="range" class="setting-slider" data-value="lod_cone_inner_degrees" min="0" max="180" step="1" />
+          <span class="slider-value">{{lod_cone_inner_degrees | format_float(0)}}</span>
+        </div>
+      </div>
+      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.lod_cone_outer_degrees">
+        <span class="setting-row__label-col">{{label_lod_cone_outer_degrees}}</span>
+        <div class="setting-row__control-col setting-row__control-col--slider">
+          <input type="range" class="setting-slider" data-value="lod_cone_outer_degrees" min="0" max="180" step="1" />
+          <span class="slider-value">{{lod_cone_outer_degrees | format_float(0)}}</span>
+        </div>
+      </div>
+      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.lod_debug_mode">
+        <span class="setting-row__label-col">{{label_lod_debug_mode}}</span>
+        <label class="setting-row__control-col setting-row__control-col--checkbox">
+          <input type="checkbox" data-checked="lod_debug_mode" />
+        </label>
       </div>
     </div>
   </div>
@@ -311,18 +297,11 @@
           <span class="slider-value">{{simplify_target_count}}</span>
         </div>
       </div>
-      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.simplify_knn_k">
-        <span class="setting-row__label-col">{{label_simplify_knn_k}}</span>
+      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.simplify_lod_base">
+        <span class="setting-row__label-col">{{label_simplify_lod_base}}</span>
         <div class="setting-row__control-col setting-row__control-col--slider">
-          <input type="range" class="setting-slider" data-value="simplify_knn_k" min="1" max="64" step="1" />
-          <span class="slider-value">{{simplify_knn_k}}</span>
-        </div>
-      </div>
-      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.simplify_merge_cap">
-        <span class="setting-row__label-col">{{label_simplify_merge_cap}}</span>
-        <div class="setting-row__control-col setting-row__control-col--slider">
-          <input type="range" class="setting-slider" data-value="simplify_merge_cap" min="0.01" max="0.5" step="0.01" />
-          <span class="slider-value">{{simplify_merge_cap}}</span>
+          <input type="range" class="setting-slider" data-value="simplify_lod_base" min="0.1" max="10" step="0.1" />
+          <span class="slider-value">{{simplify_lod_base}}</span>
         </div>
       </div>
       <div class="setting-row setting-row--aligned" data-tooltip="tooltip.simplify_opacity_prune">

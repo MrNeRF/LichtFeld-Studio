@@ -13,13 +13,18 @@
                 data-class-disabled="!can_scroll_tabs_left"
                 data-event-click="scroll_tabs_left()">&lt;</button>
         <div id="tab-strip-viewport">
-            <button data-for="tab : tabs"
+            <div data-for="tab : tabs"
                 class="tab"
                 data-attr-id="tab.dom_id"
                 data-class-active="tab.id == active_tab"
+                data-class-closeable="tab.closeable"
                 data-event-click="tab_click(tab.id)">
-                {{ tab.label }}
-            </button>
+                <span class="tab-label">{{ tab.label }}</span>
+                <button class="tab-close"
+                        data-if="tab.closeable"
+                        data-tooltip="common.close"
+                        data-event-click="tab_close(tab.id)">&#215;</button>
+            </div>
         </div>
         <button id="tab-scroll-right"
                 class="tab-nav"

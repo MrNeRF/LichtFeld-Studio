@@ -7,6 +7,9 @@
 #include "py_ui.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <cstdlib>
+#include <string>
 
 namespace lfs::python {
 
@@ -15,6 +18,84 @@ namespace lfs::python {
             return (position == "prepend" || position == "PREPEND")
                        ? PyHookPosition::Prepend
                        : PyHookPosition::Append;
+        }
+
+        const char* position_name(const PyHookPosition position) {
+            return position == PyHookPosition::Prepend ? "prepend" : "append";
+        }
+
+        std::string python_string_attr(PyObject* obj, const char* attr) {
+            if (!obj)
+                return {};
+            PyObject* value = PyObject_GetAttrString(obj, attr);
+            if (!value) {
+                PyErr_Clear();
+                return {};
+            }
+
+            const char* text = PyUnicode_Check(value) ? PyUnicode_AsUTF8(value) : nullptr;
+            if (!text) {
+                PyErr_Clear();
+                Py_DECREF(value);
+                return {};
+            }
+
+            std::string result = text;
+            Py_DECREF(value);
+            return result;
+        }
+
+        std::string callback_name(const nb::object& callback) {
+            PyObject* obj = callback.ptr();
+            std::string qualname = python_string_attr(obj, "__qualname__");
+            if (qualname.empty())
+                qualname = python_string_attr(obj, "__name__");
+            if (qualname.empty())
+                qualname = "<callable>";
+
+            std::string module = python_string_attr(obj, "__module__");
+            if (!module.empty() && qualname != "<callable>")
+                return module + "." + qualname;
+            return qualname;
+        }
+
+        bool is_first_party_hook(const nb::object& callback) {
+            const std::string module = python_string_attr(callback.ptr(), "__module__");
+            return module == "lfs_plugins" || module.starts_with("lfs_plugins.");
+        }
+
+        void warn_deprecated_ui_hooks_once(const nb::object& callback) {
+            if (std::getenv("LFS_NO_DEPRECATION_WARNINGS"))
+                return;
+
+            if (is_first_party_hook(callback))
+                return;
+
+            static std::atomic_bool warned{false};
+            if (warned.exchange(true, std::memory_order_acq_rel))
+                return;
+
+            LOG_WARN("Python UI hooks are deprecated and will be removed after the reactive "
+                     "RmlUi state migration. Use lfs_plugins.ui.RuntimeState and "
+                     "Rml data-model updates instead. Set LFS_NO_DEPRECATION_WARNINGS=1 "
+                     "to suppress this warning.");
+        }
+        bool consume_document_dirty_with_attribution(Rml::ElementDocument* document,
+                                                     const std::string& panel,
+                                                     const std::string& section,
+                                                     const PyHookPosition position,
+                                                     const std::string& callback,
+                                                     const char* source) {
+            if (!document || !consume_document_dirty(document))
+                return false;
+
+            LOG_PERF("python_document_hook_dirty panel={} section={} position={} callback={} source={}",
+                     panel,
+                     section,
+                     position_name(position),
+                     callback,
+                     source);
+            return true;
         }
     } // namespace
 
@@ -29,7 +110,8 @@ namespace lfs::python {
                                     PyHookPosition position) {
         std::lock_guard lock(mutex_);
         const std::string key = panel + ":" + section;
-        hooks_[key].push_back({std::move(callback), position});
+        const std::string name = callback_name(callback);
+        hooks_[key].push_back({std::move(callback), position, name});
     }
 
     void PyUIHookRegistry::remove_hook(const std::string& panel,
@@ -64,45 +146,52 @@ namespace lfs::python {
     void PyUIHookRegistry::invoke(const std::string& panel,
                                   const std::string& section,
                                   PyHookPosition position) {
-        invoke_document(panel, section, nullptr, position);
+        (void)invoke_document(panel, section, nullptr, position);
     }
 
-    void PyUIHookRegistry::invoke_document(const std::string& panel,
+    bool PyUIHookRegistry::invoke_document(const std::string& panel,
                                            const std::string& section,
                                            Rml::ElementDocument* document,
                                            PyHookPosition position) {
         nb::gil_scoped_acquire gil;
-        std::vector<nb::object> callbacks;
+        std::vector<HookEntry> callbacks;
         {
             std::lock_guard lock(mutex_);
             const std::string key = panel + ":" + section;
             auto it = hooks_.find(key);
             if (it == hooks_.end()) {
-                return;
+                return consume_document_dirty_with_attribution(
+                    document, panel, section, position, "<none>", "no_hooks");
             }
             for (const auto& entry : it->second) {
                 if (entry.position == position) {
-                    callbacks.push_back(entry.callback);
+                    callbacks.push_back(entry);
                 }
             }
         }
 
         if (callbacks.empty()) {
-            return;
+            return consume_document_dirty_with_attribution(
+                document, panel, section, position, "<none>", "no_callbacks");
         }
 
-        for (const auto& cb : callbacks) {
+        bool dirty = consume_document_dirty_with_attribution(
+            document, panel, section, position, "<pre_hooks>", "before_callbacks");
+        for (const auto& entry : callbacks) {
             try {
                 if (document) {
-                    cb(PyRmlDocument(document));
+                    entry.callback(PyRmlDocument(document));
                 } else {
                     PyUILayout layout;
-                    cb(layout);
+                    entry.callback(layout);
                 }
             } catch (const std::exception& e) {
                 LOG_ERROR("Hook {}:{} error: {}", panel, section, e.what());
             }
+            dirty |= consume_document_dirty_with_attribution(
+                document, panel, section, position, entry.name, "after_callback");
         }
+        return dirty;
     }
 
     bool PyUIHookRegistry::has_hooks(const std::string& panel, const std::string& section) const {
@@ -110,6 +199,19 @@ namespace lfs::python {
         const std::string key = panel + ":" + section;
         auto it = hooks_.find(key);
         return it != hooks_.end() && !it->second.empty();
+    }
+
+    bool PyUIHookRegistry::has_hooks(const std::string& panel,
+                                     const std::string& section,
+                                     const PyHookPosition position) const {
+        std::lock_guard lock(mutex_);
+        const std::string key = panel + ":" + section;
+        auto it = hooks_.find(key);
+        if (it == hooks_.end())
+            return false;
+        return std::any_of(it->second.begin(), it->second.end(), [position](const HookEntry& entry) {
+            return entry.position == position;
+        });
     }
 
     std::vector<std::string> PyUIHookRegistry::get_hook_points() const {
@@ -133,6 +235,7 @@ namespace lfs::python {
             "add_hook",
             [](const std::string& panel, const std::string& section,
                nb::object callback, const std::string& position) {
+                warn_deprecated_ui_hooks_once(callback);
                 PyUIHookRegistry::instance().add_hook(panel, section, callback, parse_position(position));
             },
             nb::arg("panel"), nb::arg("section"), nb::arg("callback"),
@@ -180,6 +283,7 @@ namespace lfs::python {
             "hook",
             [](const std::string& panel, const std::string& section, const std::string& position) {
                 return nb::cpp_function([panel, section, position](nb::object func) {
+                    warn_deprecated_ui_hooks_once(func);
                     PyUIHookRegistry::instance().add_hook(panel, section, func, parse_position(position));
                     return func;
                 });

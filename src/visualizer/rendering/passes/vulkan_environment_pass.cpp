@@ -6,13 +6,17 @@
 
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "internal/resource_paths.hpp"
+#include "window/vulkan_barrier2.hpp"
 #include "window/vulkan_context.hpp"
 
 #include <OpenImageIO/imageio.h>
 #include <array>
 #include <cstring>
+#include <format>
 #include <limits>
+#include <string>
 #include <vector>
 #include <vk_mem_alloc.h>
 
@@ -85,6 +89,7 @@ namespace lfs::vis {
         VkImage image = VK_NULL_HANDLE;
         VmaAllocation image_alloc = VK_NULL_HANDLE;
         VkImageView image_view = VK_NULL_HANDLE;
+        std::string image_vram_label;
         std::filesystem::path loaded_path;
         bool load_failed_for_path = false;
 
@@ -150,10 +155,17 @@ namespace lfs::vis {
                 image_view = VK_NULL_HANDLE;
             }
             if (image != VK_NULL_HANDLE) {
+                if (!image_vram_label.empty()) {
+                    lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                        "vulkan.environment.image",
+                        image_vram_label,
+                        0);
+                }
                 vmaDestroyImage(allocator, image, image_alloc);
                 image = VK_NULL_HANDLE;
                 image_alloc = VK_NULL_HANDLE;
             }
+            image_vram_label.clear();
             loaded_path.clear();
         }
 
@@ -430,9 +442,18 @@ namespace lfs::vis {
             img.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             VmaAllocationCreateInfo ai{};
             ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-            if (vmaCreateImage(allocator, &img, &ai, &image, &image_alloc, nullptr) != VK_SUCCESS) {
+            VmaAllocationInfo allocation_info{};
+            if (vmaCreateImage(allocator, &img, &ai, &image, &image_alloc, &allocation_info) != VK_SUCCESS) {
                 return false;
             }
+            image_vram_label = std::format("env:{}:{}x{}",
+                                           lfs::core::path_to_utf8(path),
+                                           w,
+                                           h);
+            lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                "vulkan.environment.image",
+                image_vram_label,
+                static_cast<std::size_t>(allocation_info.size));
 
             const VkDeviceSize bytes = static_cast<VkDeviceSize>(rgba.size()) * sizeof(std::uint16_t);
             VkBuffer staging = VK_NULL_HANDLE;
@@ -466,20 +487,10 @@ namespace lfs::vis {
                 return false;
             }
 
-            VkImageMemoryBarrier to_dst{};
-            to_dst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            to_dst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            to_dst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            to_dst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            to_dst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            to_dst.image = image;
-            to_dst.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            to_dst.subresourceRange.levelCount = 1;
-            to_dst.subresourceRange.layerCount = 1;
-            to_dst.srcAccessMask = 0;
-            to_dst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                 0, 0, nullptr, 0, nullptr, 1, &to_dst);
+            cmdImageBarrier2(cb, image, VK_IMAGE_ASPECT_COLOR_BIT,
+                             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                             VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_ACCESS_2_NONE,
+                             VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
 
             VkBufferImageCopy region{};
             region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -487,20 +498,10 @@ namespace lfs::vis {
             region.imageExtent = {static_cast<std::uint32_t>(w), static_cast<std::uint32_t>(h), 1};
             vkCmdCopyBufferToImage(cb, staging, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-            VkImageMemoryBarrier to_shader{};
-            to_shader.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            to_shader.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            to_shader.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            to_shader.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            to_shader.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            to_shader.image = image;
-            to_shader.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            to_shader.subresourceRange.levelCount = 1;
-            to_shader.subresourceRange.layerCount = 1;
-            to_shader.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            to_shader.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                                 0, 0, nullptr, 0, nullptr, 1, &to_shader);
+            cmdImageBarrier2(cb, image, VK_IMAGE_ASPECT_COLOR_BIT,
+                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                             VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
 
             const bool ok = endCmds(cb);
             vmaDestroyBuffer(allocator, staging, staging_alloc);

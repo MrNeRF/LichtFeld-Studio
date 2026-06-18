@@ -35,7 +35,7 @@ namespace lfs::vis {
         bool init();
 
         void showWindow();
-        void updateWindowSize();
+        void updateWindowSize(const char* reason = "manual");
         void swapBuffers();
         void pollEvents();
         void waitEvents(double timeout_seconds);
@@ -49,7 +49,7 @@ namespace lfs::vis {
         glm::ivec2 getWindowSize() const { return window_size_; }
         glm::ivec2 getFramebufferSize() const { return framebuffer_size_; }
         bool isFullscreen() const { return is_fullscreen_; }
-        void toggleFullscreen();
+        void setFullscreen(bool fullscreen);
         GraphicsBackend graphicsBackend() const { return graphics_backend_; }
         bool isVulkan() const { return true; }
 

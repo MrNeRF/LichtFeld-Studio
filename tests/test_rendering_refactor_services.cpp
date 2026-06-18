@@ -5,9 +5,12 @@
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
 #include "core/events.hpp"
+#include "core/image_io.hpp"
+#include "core/image_loader.hpp"
 #include "core/point_cloud.hpp"
 #include "core/services.hpp"
 #include "core/tensor.hpp"
+#include "io/cache_image_loader.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "visualizer/rendering/render_pass.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
@@ -18,7 +21,9 @@
 #include "visualizer/rendering/viewport_request_builder.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 
+#include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
@@ -74,6 +79,24 @@ namespace lfs::vis {
                     EXPECT_NEAR(actual[col][row], expected[col][row], epsilon);
                 }
             }
+        }
+
+        void ensureCameraImageLoader() {
+            static bool initialized = false;
+            if (initialized) {
+                return;
+            }
+
+            lfs::io::CacheLoader::getInstance(false, false);
+            lfs::core::set_image_loader([](const lfs::core::ImageLoadParams& p) {
+                return lfs::io::CacheLoader::getInstance().load_cached_image(
+                    p.path,
+                    {.resize_factor = p.resize_factor,
+                     .max_width = p.max_width,
+                     .cuda_stream = p.stream,
+                     .output_uint8 = p.output_uint8});
+            });
+            initialized = true;
         }
     } // namespace
 
@@ -245,6 +268,59 @@ namespace lfs::vis {
         EXPECT_FALSE(render_camera->equirectangular);
     }
 
+    TEST(CameraImageLoadTest, PreviewLoadsCanAvoidMutatingCameraImageDimensions) {
+        using lfs::core::Camera;
+        using lfs::core::CameraModelType;
+        using lfs::core::DataType;
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+
+        ensureCameraImageLoader();
+
+        const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+        const auto image_path = std::filesystem::temp_directory_path() /
+                                ("lfs_camera_preview_" + std::to_string(now) + ".png");
+        auto image = Tensor::zeros({size_t{6}, size_t{8}, size_t{3}}, Device::CPU, DataType::UInt8);
+        ASSERT_NO_THROW(lfs::core::save_image(image_path, image));
+
+        Camera camera(
+            Tensor::from_vector(
+                {1.0f, 0.0f, 0.0f,
+                 0.0f, 1.0f, 0.0f,
+                 0.0f, 0.0f, 1.0f},
+                {size_t{3}, size_t{3}},
+                Device::CPU),
+            Tensor::from_vector({0.0f, 0.0f, 0.0f}, {size_t{3}}, Device::CPU),
+            500.0f,
+            500.0f,
+            4.0f,
+            3.0f,
+            Tensor(),
+            Tensor(),
+            CameraModelType::PINHOLE,
+            "preview.png",
+            image_path,
+            {},
+            8,
+            6,
+            42);
+
+        auto preview = camera.load_and_get_image(-1, 4, false, false);
+        ASSERT_TRUE(preview.is_valid());
+        ASSERT_EQ(preview.ndim(), 3);
+        EXPECT_EQ(static_cast<int>(preview.shape()[1]), 3);
+        EXPECT_EQ(static_cast<int>(preview.shape()[2]), 4);
+        EXPECT_EQ(camera.image_width(), 8);
+        EXPECT_EQ(camera.image_height(), 6);
+
+        auto published = camera.load_and_get_image(-1, 4, false, true);
+        ASSERT_TRUE(published.is_valid());
+        EXPECT_EQ(camera.image_width(), 4);
+        EXPECT_EQ(camera.image_height(), 3);
+
+        std::filesystem::remove(image_path);
+    }
+
     TEST(SplitViewServiceTest, SharedCameraPoseHelperNormalizesSceneRotationAndAppliesVisualizerAxes) {
         const glm::mat3 world_to_camera = glm::mat3(1.0f);
         const glm::vec3 world_to_camera_translation(0.0f, 0.0f, 0.0f);
@@ -389,6 +465,25 @@ namespace lfs::vis {
         EXPECT_EQ(state.point_cloud->size(), 1);
         EXPECT_EQ(state.point_cloud_transform,
                   lfs::rendering::dataWorldTransformToVisualizerWorld(glm::mat4(1.0f)));
+    }
+
+    TEST_F(SceneManagerRenderStateTest, HiddenDatasetTrainingModelStaysResidentAndIsCulledByMask) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::Dataset);
+
+        auto& scene = manager.getScene();
+        scene.addSplat("Model", makeTestSplat(0.0f));
+        scene.setTrainingModelNode("Model");
+
+        scene.setNodeVisibility("Model", false);
+
+        const auto state = manager.buildRenderState();
+        ASSERT_NE(state.combined_model, nullptr);
+        EXPECT_EQ(state.combined_model->size(), 1u);
+        EXPECT_EQ(state.visible_splat_count, 0u);
+        ASSERT_EQ(state.node_visibility_mask.size(), 1u);
+        EXPECT_FALSE(state.node_visibility_mask[0]);
+        EXPECT_EQ(manager.getModelForRendering(), state.combined_model);
     }
 
     TEST_F(SceneManagerRenderStateTest, PointCloudTransformIsTrackedSeparatelyFromModelTransforms) {
@@ -743,6 +838,49 @@ namespace lfs::vis {
         EXPECT_EQ(scene.getVisibleNodeIndex(bike_id), 1);
     }
 
+    TEST(ViewportRequestBuilderTest, PointCloudRequestCarriesSelectionOverlay) {
+        using lfs::core::DataType;
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+
+        Viewport viewport(640, 480);
+        SceneRenderState scene_state;
+        scene_state.selection_mask = std::make_shared<Tensor>(
+            Tensor::zeros({size_t{2}}, Device::CPU, DataType::UInt8));
+        scene_state.selection_mask->ptr<std::uint8_t>()[0] = 1;
+
+        Tensor preview_selection =
+            Tensor::zeros({size_t{2}}, Device::CPU, DataType::UInt8);
+        preview_selection.ptr<std::uint8_t>()[1] = 1;
+
+        RenderSettings settings;
+        settings.selection_color_committed = {0.25f, 0.5f, 0.75f};
+        settings.selection_color_preview = {0.1f, 0.9f, 0.2f};
+        settings.voxel_size = 0.02f;
+
+        const FrameContext ctx{
+            .viewport = viewport,
+            .scene_state = scene_state,
+            .settings = settings,
+            .render_size = {640, 480},
+            .viewport_pos = {0, 0},
+            .cursor_preview =
+                {.add_mode = false,
+                 .preview_selection = &preview_selection},
+        };
+        const std::vector<glm::mat4> transforms{glm::mat4(1.0f)};
+
+        const auto request = buildPointCloudRenderRequest(ctx, {640, 480}, transforms);
+
+        EXPECT_EQ(request.overlay.selection_mask, scene_state.selection_mask);
+        EXPECT_EQ(request.overlay.transient_mask.mask, &preview_selection);
+        EXPECT_FALSE(request.overlay.transient_mask.additive);
+        EXPECT_EQ(request.overlay.selection_colors[1], glm::vec4(settings.selection_color_committed, 1.0f));
+        EXPECT_EQ(request.overlay.selection_colors[lfs::rendering::kSelectionPreviewColorIndex],
+                  glm::vec4(settings.selection_color_preview, 1.0f));
+        EXPECT_EQ(request.render.voxel_size, settings.voxel_size);
+    }
+
     TEST(ViewportFrameLifecycleServiceTest, ResizeActiveDefersFullRefreshUntilDebounceCompletes) {
         ViewportFrameLifecycleService service;
 
@@ -907,6 +1045,65 @@ namespace lfs::vis {
         EXPECT_TRUE(right_request.overlay.cursor.enabled);
     }
 
+    TEST(ViewportRequestBuilderTest, TrainingSuppressesInteractiveSelectionOverlayButKeepsRenderMarkers) {
+        using lfs::core::DataType;
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+
+        Viewport viewport(640, 480);
+        SceneRenderState scene_state;
+        scene_state.selection_mask = std::make_shared<Tensor>(
+            Tensor::zeros({size_t{2}}, Device::CPU, DataType::UInt8));
+        scene_state.selected_node_mask = {true, false};
+
+        Tensor preview_selection =
+            Tensor::zeros({size_t{2}}, Device::CPU, DataType::UInt8);
+
+        RenderSettings settings;
+        settings.show_rings = true;
+        settings.show_center_markers = true;
+        settings.desaturate_unselected = true;
+        settings.selection_color_center_marker = glm::vec3(0.25f, 0.5f, 0.75f);
+
+        const FrameContext ctx{
+            .viewport = viewport,
+            .scene_state = scene_state,
+            .settings = settings,
+            .render_size = {640, 480},
+            .viewport_pos = {0, 0},
+            .training_active = true,
+            .cursor_preview =
+                {.active = true,
+                 .x = 120.0f,
+                 .y = 80.0f,
+                 .radius = 24.0f,
+                 .add_mode = true,
+                 .preview_selection = &preview_selection,
+                 .focused_gaussian_id = 1,
+                 .selection_mode = SelectionPreviewMode::Rings},
+            .selection_flash_intensity = 0.75f,
+        };
+
+        const auto request = buildViewportRenderRequest(ctx, {640, 480});
+
+        EXPECT_TRUE(request.overlay.markers.show_rings);
+        EXPECT_TRUE(request.overlay.markers.show_center_markers);
+        EXPECT_EQ(request.overlay.selection_colors[0], glm::vec4(settings.selection_color_center_marker, 1.0f));
+        EXPECT_FALSE(request.overlay.cursor.enabled);
+        EXPECT_EQ(request.overlay.emphasis.mask, nullptr);
+        EXPECT_EQ(request.overlay.emphasis.transient_mask.mask, nullptr);
+        EXPECT_FALSE(request.overlay.emphasis.transient_mask.additive);
+        EXPECT_TRUE(request.overlay.emphasis.emphasized_node_mask.empty());
+        EXPECT_FALSE(request.overlay.emphasis.dim_non_emphasized);
+        EXPECT_FLOAT_EQ(request.overlay.emphasis.flash_intensity, 0.0f);
+        EXPECT_EQ(request.overlay.emphasis.focused_gaussian_id, -1);
+
+        const std::vector<glm::mat4> transforms{glm::mat4(1.0f)};
+        const auto point_cloud_request = buildPointCloudRenderRequest(ctx, {640, 480}, transforms);
+        EXPECT_EQ(point_cloud_request.overlay.selection_mask, nullptr);
+        EXPECT_EQ(point_cloud_request.overlay.transient_mask.mask, nullptr);
+    }
+
     TEST_F(RenderingManagerEventsTest, SceneLoadedDisablesGtComparison) {
         RenderingManager manager;
         lfs::core::events::cmd::ToggleGTComparison{}.emit();
@@ -1022,6 +1219,26 @@ namespace lfs::vis {
         EXPECT_EQ(manager.getGridPlaneForPanel(SplitViewPanelId::Left), 0);
         EXPECT_EQ(manager.getGridPlaneForPanel(SplitViewPanelId::Right), 2);
         EXPECT_EQ(manager.getSettings().grid_plane, 2);
+    }
+
+    TEST_F(RenderingManagerEventsTest, RenderSettingsChangedEquirectangularForcesGutBackend) {
+        using Backend = lfs::rendering::GaussianRasterBackend;
+
+        RenderingManager manager;
+        auto settings = manager.getSettings();
+        settings.raster_backend = Backend::ThreeDgs;
+        settings.gut = false;
+        settings.equirectangular = false;
+        manager.updateSettings(settings);
+
+        auto event = lfs::core::events::ui::RenderSettingsChanged{};
+        event.equirectangular = true;
+        event.emit();
+
+        settings = manager.getSettings();
+        EXPECT_TRUE(settings.equirectangular);
+        EXPECT_EQ(settings.raster_backend, Backend::ThreeDgut);
+        EXPECT_TRUE(settings.gut);
     }
 
 } // namespace lfs::vis

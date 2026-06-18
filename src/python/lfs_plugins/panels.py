@@ -19,12 +19,14 @@ def register_builtin_panels():
 
         lf.register_class(TrainingPanel)
 
-        from .import_panels import DatasetImportPanel, ResumeCheckpointPanel
+        from .import_panels import DatasetImportPanel, ResumeCheckpointPanel, URLImportPanel
 
         lf.register_class(DatasetImportPanel)
         lf.ui.set_panel_enabled("lfs.dataset_import", False)
         lf.register_class(ResumeCheckpointPanel)
         lf.ui.set_panel_enabled("lfs.resume_checkpoint", False)
+        lf.register_class(URLImportPanel)
+        lf.ui.set_panel_enabled("lfs.url_import", False)
 
         from . import selection_groups
 

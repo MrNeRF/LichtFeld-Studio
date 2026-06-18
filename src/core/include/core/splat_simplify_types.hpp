@@ -10,9 +10,8 @@
 namespace lfs::core {
 
     struct SplatSimplifyOptions {
-        double ratio = 0.1;
-        int knn_k = 16;
-        double merge_cap = 0.5;
+        double ratio = 0.5;
+        float lod_base = 2.0f;
         float opacity_prune_threshold = 0.1f;
     };
 

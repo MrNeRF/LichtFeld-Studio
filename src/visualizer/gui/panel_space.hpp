@@ -15,6 +15,7 @@ namespace lfs::vis::gui {
         MainPanelTab,
         SceneHeader,
         BottomDock,
+        LeftDock,
         StatusBar
     };
 

@@ -39,17 +39,18 @@ namespace lfs::python {
     std::vector<std::string> get_registered_hook_points();
 
     using PythonHookInvoker = void (*)(const char* panel, const char* section, bool prepend);
-    using PythonDocumentHookInvoker = void (*)(const char* panel, const char* section,
+    using PythonDocumentHookInvoker = bool (*)(const char* panel, const char* section,
                                                void* document, bool prepend);
-    using PythonHookChecker = bool (*)(const char* panel, const char* section);
+    using PythonHookChecker = bool (*)(const char* panel, const char* section, bool prepend);
 
     LFS_VIS_API void set_python_hook_invoker(PythonHookInvoker invoker);
     LFS_VIS_API void set_python_document_hook_invoker(PythonDocumentHookInvoker invoker);
     LFS_VIS_API void set_python_hook_checker(PythonHookChecker checker);
     LFS_VIS_API void clear_python_hook_invoker();
     LFS_VIS_API void invoke_python_hooks(const std::string& panel, const std::string& section, bool prepend);
-    LFS_VIS_API void invoke_python_document_hooks(const std::string& panel, const std::string& section,
+    LFS_VIS_API bool invoke_python_document_hooks(const std::string& panel, const std::string& section,
                                                   void* document, bool prepend);
     LFS_VIS_API bool has_python_hooks(const std::string& panel, const std::string& section);
+    LFS_VIS_API bool has_python_hooks(const std::string& panel, const std::string& section, bool prepend);
 
 } // namespace lfs::python

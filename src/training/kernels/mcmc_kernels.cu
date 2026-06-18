@@ -151,11 +151,15 @@ namespace lfs::training::mcmc {
         const float* raw_quats,
         const float* noise,
         float* means,
+        const bool* frozen_mask,
+        size_t frozen_mask_size,
         float current_lr,
         size_t N) {
 
         size_t idx = threadIdx.x + blockIdx.x * blockDim.x;
         if (idx >= N)
+            return;
+        if (frozen_mask != nullptr && idx < frozen_mask_size && frozen_mask[idx])
             return;
 
         size_t idx_3d = 3 * idx;
@@ -193,6 +197,8 @@ namespace lfs::training::mcmc {
         const float* raw_quats,
         const float* noise,
         float* means,
+        const bool* frozen_mask,
+        size_t frozen_mask_size,
         float current_lr,
         size_t N,
         void* stream) {
@@ -212,6 +218,8 @@ namespace lfs::training::mcmc {
             raw_quats,
             noise,
             means,
+            frozen_mask,
+            frozen_mask_size,
             current_lr,
             N);
     }

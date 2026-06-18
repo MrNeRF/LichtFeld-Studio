@@ -8,6 +8,7 @@
 #include "core/tensor.hpp"
 #include "io/error.hpp"
 #include <chrono>
+#include <cstddef>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -32,6 +33,10 @@ namespace lfs::io {
     using lfs::core::PointCloud;
     using lfs::core::SplatData;
     using lfs::core::Tensor;
+    using SplatTensorAllocator = std::function<Tensor(lfs::core::TensorShape shape,
+                                                      size_t capacity,
+                                                      lfs::core::DataType dtype,
+                                                      std::string_view name)>;
 
     // Progress callback type
     using ProgressCallback = std::function<void(float percentage, const std::string& message)>;
@@ -60,12 +65,19 @@ namespace lfs::io {
         CentralizeDataset centralize = CentralizeDataset::Off;
         ProgressCallback progress = nullptr;
         CancelCallback cancel_requested = nullptr;
+        SplatTensorAllocator splat_tensor_allocator = {};
     };
 
     class LoadCancelledError : public std::runtime_error {
     public:
         using std::runtime_error::runtime_error;
     };
+
+    // Re-home a splat's tensors into the Vulkan-external allocator the renderer requires (it
+    // rejects an input-copy fallback). No-op if already allocator-backed or allocator is empty.
+    // The loader runs this for file imports; in-memory callers (e.g. the Python API) must too.
+    [[nodiscard]] LFS_IO_API Result<void> migrateSplatTensorsToAllocator(
+        SplatData& model, const SplatTensorAllocator& allocator);
 
     [[nodiscard]] inline bool is_load_cancel_requested(const LoadOptions& options) {
         return options.cancel_requested && options.cancel_requested();

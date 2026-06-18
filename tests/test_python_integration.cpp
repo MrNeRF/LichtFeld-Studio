@@ -758,7 +758,7 @@ result_values = [float(view.fov_x), float(view.fov_y)]
     EXPECT_FLOAT_EQ(result.values[1], 60.0f);
 }
 
-TEST_F(PythonIntegrationTest, RenderViewAppliesVisualizerSceneTransforms) {
+TEST_F(PythonIntegrationTest, RenderViewRequiresActiveVisualizerRenderer) {
     lfs::core::Scene scene;
     scene.addSplat("single", makeSingleWhiteSplat(0.0f, 0.0f, 2.0f));
     const lfs::python::SceneContextGuard scene_guard(&scene);
@@ -768,34 +768,13 @@ import lichtfeld as lf
 rotation, translation = lf.look_at((0.0, 0.0, 0.0), (0.0, 0.0, -1.0))
 img = lf.render_view(rotation, translation, 64, 64, fov=60.0)
 result_shape = (1,)
-result_values = [float(img.max().cpu().item())]
+result_values = [1.0 if img is None else 0.0]
 )PY");
 
     ASSERT_EQ(result.shape.size(), static_cast<size_t>(1));
     EXPECT_EQ(result.shape[0], 1);
     ASSERT_EQ(result.values.size(), static_cast<size_t>(1));
-    EXPECT_GT(result.values[0], 0.01f);
-}
-
-TEST_F(PythonIntegrationTest, RenderViewMatchesViewportVerticalOrientation) {
-    lfs::core::Scene scene;
-    scene.addSplat("single", makeSingleWhiteSplat(0.0f, -0.75f, 2.0f));
-    const lfs::python::SceneContextGuard scene_guard(&scene);
-
-    const auto result = runPythonTensorSnippet(R"PY(
-import lichtfeld as lf
-rotation, translation = lf.look_at((0.0, 0.0, 0.0), (0.0, 0.0, -1.0))
-img = lf.render_view(rotation, translation, 64, 64, fov=60.0).cpu().tolist()
-top = sum(pixel[0] for row in img[:32] for pixel in row)
-bottom = sum(pixel[0] for row in img[32:] for pixel in row)
-result_shape = (2,)
-result_values = [float(top), float(bottom)]
-)PY");
-
-    ASSERT_EQ(result.shape.size(), static_cast<size_t>(1));
-    EXPECT_EQ(result.shape[0], 2);
-    ASSERT_EQ(result.values.size(), static_cast<size_t>(2));
-    EXPECT_GT(result.values[0], result.values[1]);
+    EXPECT_FLOAT_EQ(result.values[0], 1.0f);
 }
 
 TEST_F(PythonIntegrationTest, CaptureViewportMatchesViewportVerticalOrientation) {
@@ -1058,21 +1037,21 @@ TEST_F(PythonIntegrationTest, DecoratorHookContextUsesLiveHookSnapshot) {
 
     const auto result = runPythonHookContextSnippet(
         R"PY(
-	import lichtfeld as lf
-	records = []
-	
-	@lf.on_post_step
-	def _hook(hook):
-	    ctx = lf.context()
-	    records.append((
-	        hook["iter"],
-	        hook["iteration"],
-	        hook["num_splats"],
-	        hook["num_gaussians"],
-	        ctx.iteration,
-	        ctx.num_gaussians,
-	    ))
-	)PY",
+import lichtfeld as lf
+records = []
+
+@lf.on_post_step
+def _hook(hook):
+    ctx = lf.context()
+    records.append((
+        hook["iter"],
+        hook["iteration"],
+        hook["num_splats"],
+        hook["num_gaussians"],
+        ctx.iteration,
+        ctx.num_gaussians,
+    ))
+)PY",
         stale_snapshot,
         live_callback);
 
@@ -1103,23 +1082,23 @@ TEST_F(PythonIntegrationTest, ScopedHandlerHookContextUsesLiveHookSnapshot) {
 
     const auto result = runPythonHookContextSnippet(
         R"PY(
-	import lichtfeld as lf
-	records = []
-	handler = lf.ScopedHandler()
-	
-	def _hook(hook):
-	    ctx = lf.context()
-	    records.append((
-	        hook["iter"],
-	        hook["iteration"],
-	        hook["num_splats"],
-	        hook["num_gaussians"],
-	        ctx.iteration,
-	        ctx.num_gaussians,
-	    ))
-	
-	handler.on_post_step(_hook)
-	)PY",
+import lichtfeld as lf
+records = []
+handler = lf.ScopedHandler()
+
+def _hook(hook):
+    ctx = lf.context()
+    records.append((
+        hook["iter"],
+        hook["iteration"],
+        hook["num_splats"],
+        hook["num_gaussians"],
+        ctx.iteration,
+        ctx.num_gaussians,
+    ))
+
+handler.on_post_step(_hook)
+)PY",
         stale_snapshot,
         live_callback);
 

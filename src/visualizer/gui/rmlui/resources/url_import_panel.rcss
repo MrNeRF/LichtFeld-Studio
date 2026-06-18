@@ -1,0 +1,110 @@
+/* URL import floating panel */
+
+#content-wrap {
+    overflow-y: auto;
+    min-width: 0;
+}
+
+#content {
+    min-width: 0;
+}
+
+.urlimp-input {
+    min-width: 320dp;
+}
+
+.urlimp-help {
+    margin-bottom: 8dp;
+}
+
+.urlimp-formats-header {
+    margin: 0;
+    padding: 8dp 10dp;
+    border-width: 1dp;
+    border-color: #514a42;
+    border-radius: 4dp 4dp 0 0;
+    background-color: #2b2825;
+    color: #d8d0c3;
+}
+
+.urlimp-formats-content {
+    margin: 0;
+    padding: 10dp;
+    border-width: 0 1dp 1dp 1dp;
+    border-color: #514a42;
+    border-radius: 0 0 4dp 4dp;
+    background-color: #24221f;
+}
+
+.urlimp-formats-content.collapsed {
+    padding-top: 0;
+    padding-bottom: 0;
+    border-top-width: 0;
+}
+
+.urlimp-hint-group + .urlimp-hint-group {
+    margin-top: 10dp;
+}
+
+.urlimp-hint-title {
+    font-size: 10dp;
+    font-weight: bold;
+    color: #d8d0c3;
+    margin-bottom: 4dp;
+}
+
+.urlimp-hint-line {
+    font-size: 10dp;
+    line-height: 1.5;
+    color: #a9a093;
+}
+
+.urlimp-path {
+    font-family: "JetBrains Mono";
+    color: #d8d0c3;
+}
+
+.urlimp-hint-optional {
+    color: #a9a093;
+    font-size: 10dp;
+}
+
+.urlimp-progress {
+    display: flex;
+    flex-direction: column;
+    gap: 8dp;
+    margin-bottom: 8dp;
+}
+
+.urlimp-progress-bar {
+    width: 100%;
+    height: 8dp;
+    background-color: #302d29;
+}
+
+.urlimp-progress-bar::-webkit-progress-bar {
+    background-color: #302d29;
+    border-radius: 4dp;
+}
+
+.urlimp-progress-bar::-webkit-progress-value {
+    background-color: #c79552;
+    border-radius: 4dp;
+}
+
+.urlimp-status {
+    font-size: 10dp;
+    line-height: 1.4;
+}
+
+.urlimp-warning {
+    margin-bottom: 8dp;
+    padding: 8dp 10dp;
+    border-width: 1dp;
+    border-color: #8f4b46;
+    border-radius: 4dp;
+    background-color: rgba(143, 75, 70, 0.14);
+    color: #e0a8a2;
+    font-size: 10dp;
+    line-height: 1.4;
+}

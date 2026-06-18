@@ -85,7 +85,7 @@ class ToolDef:
         id: Unique tool identifier (e.g., "builtin.translate").
         label: Display label.
         icon: Icon name.
-        group: Toolbar group for organization ("select", "transform", "paint", "utility").
+        group: Toolbar group for organization ("select", "transform", "utility").
         order: Sort order within group.
         description: Tooltip text.
         shortcut: Keyboard shortcut.

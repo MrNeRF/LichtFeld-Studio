@@ -26,9 +26,8 @@ namespace lfs::core {
 
         int target_count = 0;
         int post_prune_count = 0;
-        double requested_ratio = 0.1;
-        int requested_knn_k = 16;
-        double requested_merge_cap = 0.5;
+        double requested_ratio = 0.5;
+        float requested_lod_base = 2.0f;
         float requested_opacity_prune_threshold = 0.1f;
 
         std::vector<int32_t> final_roots;

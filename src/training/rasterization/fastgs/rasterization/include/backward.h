@@ -15,13 +15,14 @@ namespace fast_lfs::rasterization {
         const float* densification_error_map,
         const float* grad_image,
         const float* grad_alpha,
+        const float* grad_depth,
         const float* image,
         const float* alpha,
         const float3* means,
         const float3* scales_raw,
         const float4* rotations_raw,
         const float* raw_opacities,
-        const float3* sh_coefficients_rest,
+        const float4* sh_coefficients_rest, // compact float4-packed swizzled layout
         const float4* w2c,
         const float3* cam_position,
         char* per_primitive_buffers_blob,
@@ -31,12 +32,13 @@ namespace fast_lfs::rasterization {
         float3* grad_color_helper,
         float2* grad_mean2d_helper,
         float* grad_conic_helper,
+        float* grad_depth_helper,
         float4* grad_w2c,
         float* densification_info,
         const int n_primitives,
         const int n_instances,
         const int active_sh_bases,
-        const int total_bases_sh_rest,
+        const int sh_layout_bases,
         const int width,
         const int height,
         const float fx,
@@ -45,6 +47,7 @@ namespace fast_lfs::rasterization {
         const float cy,
         bool mip_filter,
         DensificationType densification_type = DensificationType::None,
-        FusedAdamSettings fused_adam = {});
+        FusedAdamSettings fused_adam = {},
+        bool detach_depth_weights = false);
 
 }

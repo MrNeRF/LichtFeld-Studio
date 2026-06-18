@@ -6,6 +6,7 @@
 #include "core/path_utils.hpp"
 #include <fstream>
 #include <nlohmann/json.hpp>
+#include <utility>
 
 namespace lfs::core {
 
@@ -44,7 +45,8 @@ namespace lfs::core {
     }
 
     std::expected<SplatData, std::string> load_checkpoint_splat_data(
-        const std::filesystem::path& path) {
+        const std::filesystem::path& path,
+        SplatTensorAllocator tensor_allocator) {
 
         try {
             std::ifstream file;
@@ -58,7 +60,7 @@ namespace lfs::core {
             file.seekg(type_len, std::ios::cur);
 
             SplatData splat;
-            splat.deserialize(file);
+            splat.deserialize(file, std::move(tensor_allocator));
 
             LOG_DEBUG("SplatData loaded: {} Gaussians, iter {}", header->num_gaussians, header->iteration);
             return splat;
@@ -92,6 +94,12 @@ namespace lfs::core {
                     }
                     if (params_json.contains("init_path")) {
                         params.init_path = params_json["init_path"].get<std::string>();
+                    }
+                    if (params_json.contains("server")) {
+                        params.server = param::ServerConfig::from_json(params_json["server"]);
+                    }
+                    if (params_json.contains("disabled_camera_uids")) {
+                        params.disabled_camera_uids = params_json["disabled_camera_uids"].get<std::vector<int>>();
                     }
                 } else {
                     params.optimization = param::OptimizationParameters::from_json(params_json);

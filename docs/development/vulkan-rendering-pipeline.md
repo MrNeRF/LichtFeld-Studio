@@ -16,7 +16,7 @@ trainer (CUDA)            VulkanContext               viewport pass            R
      │  CUDA → VkBuffer        │  cudaMemcpyAsync +        │                       │                        │
      │  (external memory)      │  cudaStreamSynchronize    │                       │                        │
      │                         │                           │                       │                        │
-     │                         │  vksplat compute pipeline (12 dispatches)         │                        │
+     │                         │  Vulkan rasterizer pipeline (12 dispatches)        │                        │
      │                         │  → output_image_ (VkImage, R8G8B8A8_UNORM,        │                        │
      │                         │     external memory) in SHADER_READ_ONLY layout   │                        │
      │                         │                           │                       │                        │
@@ -102,9 +102,9 @@ External images created via `VulkanContext::createExternalImage` must be registe
 | Vulkan device + swapchain + frame ring | `src/visualizer/window/vulkan_context.{cpp,hpp}` |
 | Image transition tracker (sync2) | `src/visualizer/window/vulkan_image_barrier_tracker.{cpp,hpp}` |
 | CUDA↔Vulkan interop primitives | `src/rendering/cuda_vulkan_interop.{cpp,hpp,cu}` |
-| vksplat compute rasterizer (forward only) | `src/rendering/rasterizer/vksplat_fwd/src/{gs_pipeline,gs_renderer,buffer,perf_timer}.cpp` |
-| vksplat shader sources (Slang + GLSL) | `src/rendering/rasterizer/vksplat_fwd/shader/src/{slang,radix_sort}/` |
-| vksplat shader build rules | `src/rendering/rasterizer/vksplat_fwd/CMakeLists.txt` (slangc + glslang) |
+| Vulkan compute rasterizer (forward only) | `src/rendering/rasterizer/vulkan/src/{gs_pipeline,gs_renderer,buffer,perf_timer}.cpp` |
+| Vulkan rasterizer shader sources (Slang + GLSL) | `src/rendering/rasterizer/vulkan/shader/src/{slang,radix_sort}/` |
+| Vulkan rasterizer shader build rules | `src/rendering/rasterizer/vulkan/CMakeLists.txt` (slangc + glslang) |
 | Splat input packer (CPU + GPU) | `src/visualizer/rendering/vksplat_input_packer.{cpp,hpp}` |
 | Per-frame ring + plug-in for vksplat | `src/visualizer/rendering/vksplat_viewport_renderer.{cpp,hpp}` |
 | Viewport pass (scene compose + overlays) | `src/visualizer/rendering/passes/vulkan_viewport_pass.cpp` |
@@ -123,4 +123,4 @@ External images created via `VulkanContext::createExternalImage` must be registe
 
 The codebase used to support CPU-staging fallbacks for both the scene image and vksplat inputs. Those paths are gone. Failure to acquire external interop now hard-fails at `VulkanContext::createDevice()` rather than silently dropping to a slower path. There is no `--no-interop` CLI flag, no `LFS_NO_VK_CUDA_INTEROP` env var, no `LFS_VULKAN_NO_INTEROP_FALLBACK` build option.
 
-vksplat_fwd no longer carries its standalone Python-module init path (own `VkInstance`/`VkPhysicalDevice`/`VkDevice` creation): `initializeExternal` is the only entry point and the visualizer always supplies the Vulkan + VMA handles.
+vulkan no longer carries its standalone Python-module init path (own `VkInstance`/`VkPhysicalDevice`/`VkDevice` creation): `initializeExternal` is the only entry point and the visualizer always supplies the Vulkan + VMA handles.

@@ -19,6 +19,18 @@
 namespace lfs::vis {
 
     constexpr int GPU_ALIGNMENT = 16;
+    inline constexpr std::size_t DEFAULT_LOD_MAX_SPLATS = 2'500'000;
+    inline constexpr float DEFAULT_LOD_PIXEL_SCALE_LIMIT = 0.0001f;
+    inline constexpr float DEFAULT_LOD_RENDER_SCALE = 1.0f;
+    inline constexpr float DEFAULT_LOD_BEHIND_CAMERA_FOVEATION = 0.2f;
+    inline constexpr float DEFAULT_LOD_CONE_FOVEATION = 0.4f;
+    inline constexpr float DEFAULT_LOD_CONE_INNER_DEGREES = 90.0f;
+    inline constexpr float DEFAULT_LOD_CONE_OUTER_DEGREES = 120.0f;
+    inline constexpr float DEFAULT_LOD_OUTSIDE_VIEW_FOVEATION = 0.05f;
+    inline constexpr float DEFAULT_LOD_PREFETCH_PIXEL_SCALE_RATIO = 0.65f;
+    inline constexpr std::size_t DEFAULT_LOD_PAGE_POOL_SPLATS = 0; // 0 = auto (derived from lod_max_splats)
+    inline constexpr float DEFAULT_LOD_POOL_VRAM_FRACTION = 0.15f; // out-of-core page pool share of free VRAM
+    inline constexpr int DEFAULT_LOD_FADE_FRAMES = 12;             // fade-in of newly streamed pages (0 = off)
 
     enum class SplitViewMode {
         Disabled,
@@ -106,7 +118,8 @@ namespace lfs::vis {
         Rectangle,
         Polygon,
         Lasso,
-        Rings
+        Rings,
+        Color
     };
 
     struct PPISPOverrides {
@@ -220,11 +233,16 @@ namespace lfs::vis {
         float split_position = 0.5f;
         size_t split_view_offset = 0;
 
-        lfs::rendering::GaussianRasterBackend raster_backend = lfs::rendering::GaussianRasterBackend::FastGs;
+        lfs::rendering::GaussianRasterBackend raster_backend = lfs::rendering::GaussianRasterBackend::ThreeDgs;
         bool gut = false;
         bool equirectangular = false;
         bool orthographic = false;
         float ortho_scale = 100.0f; // Pixels per world unit (larger = more zoomed in)
+        bool depth_view = false;
+        float depth_view_min = lfs::rendering::DEFAULT_DEPTH_VIEW_MIN;
+        float depth_view_max = lfs::rendering::DEFAULT_DEPTH_VIEW_MAX;
+        lfs::rendering::DepthVisualizationMode depth_visualization_mode =
+            lfs::rendering::DepthVisualizationMode::Palette;
 
         // Selection colors (RGB: committed=219,83,83 preview=0,222,76 center=0,154,187)
         glm::vec3 selection_color_committed{0.859f, 0.325f, 0.325f};
@@ -250,7 +268,57 @@ namespace lfs::vis {
         glm::vec3 depth_filter_min = glm::vec3(-50.0f, -10000.0f, 0.0f);
         glm::vec3 depth_filter_max = glm::vec3(50.0f, 10000.0f, 100.0f);
         lfs::geometry::EuclideanTransform depth_filter_transform;
+
+        // ---- LOD (Spark-style) ----
+        bool lod_enabled = false;                       // Master toggle
+        bool lod_auto_enable_rad = false;               // Keep LOD off by default, even for .rad
+        size_t lod_max_splats = DEFAULT_LOD_MAX_SPLATS; // Spark desktop default
+        float lod_render_scale = DEFAULT_LOD_RENDER_SCALE;
+        float lod_behind_camera_penalty = DEFAULT_LOD_BEHIND_CAMERA_FOVEATION;
+        float lod_cone_foveation = DEFAULT_LOD_CONE_FOVEATION;
+        float lod_cone_inner_degrees = DEFAULT_LOD_CONE_INNER_DEGREES;
+        float lod_cone_outer_degrees = DEFAULT_LOD_CONE_OUTER_DEGREES;
+        size_t lod_page_pool_splats = DEFAULT_LOD_PAGE_POOL_SPLATS;    // VRAM page-pool budget for RAD streaming (0 = auto)
+        float lod_pool_vram_fraction = DEFAULT_LOD_POOL_VRAM_FRACTION; // out-of-core pool share of free VRAM
+        int lod_fade_frames = DEFAULT_LOD_FADE_FRAMES;                 // newly streamed pages fade in over N frames
+        bool lod_debug_colors = false;                                 // Per-level color tinting
     };
+
+    inline void sanitizeDepthViewSettings(RenderSettings& settings) {
+        constexpr float kMinGap = 1.0e-4f;
+
+        if (!std::isfinite(settings.depth_view_min)) {
+            settings.depth_view_min = lfs::rendering::DEFAULT_DEPTH_VIEW_MIN;
+        }
+        if (!std::isfinite(settings.depth_view_max)) {
+            settings.depth_view_max = lfs::rendering::DEFAULT_DEPTH_VIEW_MAX;
+        }
+        settings.depth_view_min = std::clamp(
+            settings.depth_view_min,
+            0.0f,
+            lfs::rendering::MAX_DEPTH_VIEW_DISTANCE - kMinGap);
+        settings.depth_view_max = std::clamp(
+            settings.depth_view_max,
+            settings.depth_view_min + kMinGap,
+            lfs::rendering::MAX_DEPTH_VIEW_DISTANCE);
+
+        switch (settings.depth_visualization_mode) {
+        case lfs::rendering::DepthVisualizationMode::Palette:
+        case lfs::rendering::DepthVisualizationMode::Grayscale:
+            break;
+        default:
+            settings.depth_visualization_mode = lfs::rendering::DepthVisualizationMode::Palette;
+            break;
+        }
+    }
+
+    inline void enforceProjectionBackend(RenderSettings& settings) {
+        if (!settings.equirectangular) {
+            return;
+        }
+        settings.raster_backend = lfs::rendering::GaussianRasterBackend::ThreeDgut;
+        settings.gut = true;
+    }
 
     [[nodiscard]] inline bool environmentBackgroundEnabled(const RenderSettings& settings) {
         return settings.environment_mode == EnvironmentBackgroundMode::Equirectangular &&

@@ -119,6 +119,7 @@ namespace lfs::rendering {
         cudaArray_t cuda_array_ = nullptr;
         cudaSurfaceObject_t surface_ = 0;
         cudaExternalSemaphore_t cuda_timeline_ = nullptr;
+        mutable std::uint64_t last_signaled_ = 0;
         CudaVulkanExtent2D extent_{};
         CudaVulkanImageFormat format_ = CudaVulkanImageFormat::Rgba8Unorm;
         mutable lfs::core::Tensor staging_tensor_;
@@ -156,6 +157,7 @@ namespace lfs::rendering {
         [[nodiscard]] bool failCuda(const char* operation, cudaError_t status) const;
 
         cudaExternalSemaphore_t cuda_timeline_ = nullptr;
+        mutable std::uint64_t last_signaled_ = 0;
         mutable std::string last_error_;
     };
 

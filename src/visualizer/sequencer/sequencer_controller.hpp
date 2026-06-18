@@ -7,13 +7,34 @@
 #include "sequencer/keyframe.hpp"
 #include "sequencer/timeline.hpp"
 #include <algorithm>
+#include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace lfs::vis {
 
     inline constexpr float MIN_PLAYBACK_SPEED = 0.1f;
     inline constexpr float MAX_PLAYBACK_SPEED = 4.0f;
+    inline constexpr float DEFAULT_SEQUENCE_FPS = 24.0f;
+    inline constexpr float MIN_SEQUENCE_FPS = 1.0f;
+    inline constexpr float MAX_SEQUENCE_FPS = 240.0f;
+
+    struct PlySequenceFrame {
+        std::filesystem::path path;
+        std::string node_name;
+    };
+
+    struct PlySequenceClip {
+        std::filesystem::path directory;
+        std::string node_name;
+        std::vector<PlySequenceFrame> frames;
+        float fps = DEFAULT_SEQUENCE_FPS;
+
+        [[nodiscard]] float duration() const {
+            return frames.empty() ? 0.0f : static_cast<float>(frames.size()) / std::max(fps, MIN_SEQUENCE_FPS);
+        }
+    };
 
     enum class PlaybackState : uint8_t {
         STOPPED,
@@ -71,6 +92,21 @@ namespace lfs::vis {
         bool saveToJson(const std::string& path) const;
         bool loadFromJson(const std::string& path);
 
+        void setPlySequence(std::filesystem::path directory,
+                            std::string node_name,
+                            std::vector<std::filesystem::path> paths,
+                            std::vector<std::string> node_names,
+                            float fps = DEFAULT_SEQUENCE_FPS);
+        void clearPlySequence();
+        [[nodiscard]] bool hasPlySequence() const { return ply_sequence_.has_value() && !ply_sequence_->frames.empty(); }
+        [[nodiscard]] const PlySequenceClip* plySequence() const { return hasPlySequence() ? &*ply_sequence_ : nullptr; }
+        [[nodiscard]] float plySequenceFps() const { return ply_sequence_ ? ply_sequence_->fps : DEFAULT_SEQUENCE_FPS; }
+        void setPlySequenceFps(float fps);
+        bool setPlySequenceFrameNodeName(size_t frame_index, std::string node_name);
+        [[nodiscard]] float plySequenceDuration() const { return ply_sequence_ ? ply_sequence_->duration() : 0.0f; }
+        [[nodiscard]] std::optional<size_t> plySequenceFrameIndex(float time) const;
+        [[nodiscard]] std::optional<size_t> currentPlySequenceFrameIndex() const { return plySequenceFrameIndex(playhead_); }
+
         bool selectKeyframe(size_t index);
         bool selectKeyframeById(sequencer::KeyframeId id);
         void deselectKeyframe();
@@ -81,6 +117,7 @@ namespace lfs::vis {
         [[nodiscard]] PlaybackState state() const { return state_; }
         [[nodiscard]] bool isPlaying() const { return state_ == PlaybackState::PLAYING; }
         [[nodiscard]] bool isStopped() const { return state_ == PlaybackState::STOPPED; }
+        [[nodiscard]] bool hasPlayableContent() const;
 
         [[nodiscard]] float clipDuration() const { return timeline_.clipDuration(); }
         void setClipDuration(float duration);
@@ -99,12 +136,14 @@ namespace lfs::vis {
 
     private:
         [[nodiscard]] bool isFirstRealKeyframe(sequencer::KeyframeId id) const;
+        [[nodiscard]] float playbackStartTime() const;
         void rebuildLoopKeyframe();
         void removeLoopKeyframe();
         void markTimelineChanged();
         void markSelectionChanged();
 
         sequencer::Timeline timeline_;
+        std::optional<PlySequenceClip> ply_sequence_;
         PlaybackState state_ = PlaybackState::STOPPED;
         LoopMode loop_mode_ = LoopMode::ONCE;
 

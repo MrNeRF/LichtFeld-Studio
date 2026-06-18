@@ -9,12 +9,14 @@
 
 set(LFS_CORE_CUDA_SOURCES
     memory_arena.cu
+    exportable_storage.cpp
     lanczos_resize/lanczos_resize.cu
     undistort/undistort.cu
     kernels/kmeans_new.cu
     kernels/kdtree_kmeans.cu
     kernels/morton_encoding_new.cu
     kernels/selection_ops.cu
+    kernels/sh_layout.cu
     tensor_debug.cu
 )
 
@@ -39,6 +41,7 @@ target_link_libraries(lfs_core_cuda
         CUDA::cudart
         CUDA::cuda_driver
         CUDA::curand
+        lfs_diagnostics
         spdlog::spdlog
         glm::glm
         OpenMP::OpenMP_CXX
@@ -66,4 +69,4 @@ if(MSVC)
     )
 endif()
 
-message(STATUS "✓ lfs_core_cuda library configured (memory arena, lanczos resize, core kernels)")
+message(STATUS "[ok] lfs_core_cuda library configured (memory arena, lanczos resize, core kernels)")

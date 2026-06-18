@@ -99,8 +99,7 @@ namespace lfs::vis::gui {
             controller_.seek(kf->time);
 
             auto& vp = viewer_->getViewport();
-            vp.camera.R = glm::mat3_cast(kf->rotation);
-            vp.camera.t = kf->position;
+            vp.setViewMatrix(glm::mat3_cast(kf->rotation), kf->position);
 
             if (auto* rm = viewer_->getRenderingManager()) {
                 rm->setFocalLength(kf->focal_length_mm);

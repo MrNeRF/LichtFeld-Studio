@@ -21,6 +21,7 @@
 #include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
 #include "io/exporter.hpp"
+#include "io/formats/colmap.hpp"
 #include "mcp/llm_client.hpp"
 #include "mcp/mcp_tools.hpp"
 #include "mcp/render_capture_utils.hpp"
@@ -28,7 +29,7 @@
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
 #include "rendering/coordinate_conventions.hpp"
-#include "rendering/gs_rasterizer_tensor.hpp"
+#include "rendering/render_constants.hpp"
 #include "sequencer/keyframe.hpp"
 #include "training/training_manager.hpp"
 #include "visualizer/gui/html_viewer_export.hpp"
@@ -43,6 +44,7 @@
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer/visualizer.hpp"
 #include "visualizer/visualizer_impl.hpp"
+#include "visualizer/window/vulkan_context.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -80,7 +82,7 @@ namespace lfs::app {
         const core::SceneNode* find_first_visible_splat_node(const core::Scene& scene) {
             for (const auto* node : scene.getNodes()) {
                 if (node->type == core::NodeType::SPLAT && node->model &&
-                    static_cast<bool>(node->visible))
+                    scene.isNodeEffectivelyVisible(node->id))
                     return node;
             }
             return nullptr;
@@ -107,35 +109,12 @@ namespace lfs::app {
             int camera_index = 0,
             int width = 0,
             int height = 0) {
-
-            auto* model = scene.getTrainingModel();
-            if (!model) {
-                const auto* node = find_first_visible_splat_node(scene);
-                if (node)
-                    model = node->model.get();
-            }
-            if (!model)
-                return std::unexpected("No model to render");
-
-            auto cameras = scene.getAllCameras();
-            if (cameras.empty())
-                return std::unexpected("No cameras available");
-
-            if (camera_index < 0 || camera_index >= static_cast<int>(cameras.size()))
-                camera_index = 0;
-
-            auto& camera = cameras[camera_index];
-            if (!camera)
-                return std::unexpected("Failed to get camera");
-
-            core::Tensor bg = core::Tensor::zeros({3}, core::Device::CUDA);
-
-            try {
-                auto [image, alpha] = rendering::rasterize_tensor(*camera, *model, bg);
-                return mcp::encode_render_tensor_to_base64(std::move(image), width, height);
-            } catch (const std::exception& e) {
-                return std::unexpected(std::string("Render failed: ") + e.what());
-            }
+            (void)scene;
+            (void)camera_index;
+            (void)width;
+            (void)height;
+            return std::unexpected(
+                "Camera-index CUDA scene rendering has been removed; use live Vulkan viewport capture");
         }
 
         template <typename F>
@@ -192,10 +171,25 @@ namespace lfs::app {
             vis::Visualizer* viewer,
             int width = 0,
             int height = 0) {
-            (void)viewer;
-            (void)width;
-            (void)height;
-            return std::unexpected("Full-window capture needs a Vulkan swapchain readback path; use render.capture for viewport capture");
+            auto* const viewer_impl = dynamic_cast<vis::VisualizerImpl*>(viewer);
+            if (!viewer_impl)
+                return std::unexpected("Full-window capture requires a GUI visualizer");
+
+            auto* const window_manager = viewer_impl->getWindowManager();
+            auto* const vulkan_context = window_manager ? window_manager->getVulkanContext() : nullptr;
+            if (!vulkan_context)
+                return std::unexpected("Full-window capture requires a Vulkan window");
+
+            auto capture = vulkan_context->captureActiveFrameRgba();
+            if (!capture)
+                return std::unexpected(capture.error());
+
+            return mcp::encode_pixels_to_base64(capture->rgba.data(),
+                                                capture->width,
+                                                capture->height,
+                                                4,
+                                                width,
+                                                height);
         }
 
         json selection_state_json(core::Scene& scene, const int max_indices = 100000) {
@@ -242,6 +236,8 @@ namespace lfs::app {
                 return "pointcloud";
             case core::NodeType::GROUP:
                 return "group";
+            case core::NodeType::PLY_SEQUENCE:
+                return "ply_sequence";
             case core::NodeType::CROPBOX:
                 return "crop_box";
             case core::NodeType::ELLIPSOID:
@@ -597,10 +593,13 @@ namespace lfs::app {
                                  {"show_pivot", settings.show_pivot},
                                  {"split_view_mode", settings.split_view_mode},
                                  {"split_position", settings.split_position},
-                                 {"gut", settings.gut},
+                                 {"raster_backend", std::string(lfs::rendering::gaussianRasterBackendId(static_cast<lfs::rendering::GaussianRasterBackend>(settings.raster_backend)))},
                                  {"equirectangular", settings.equirectangular},
                                  {"orthographic", settings.orthographic},
                                  {"ortho_scale", settings.ortho_scale},
+                                 {"depth_view_min", settings.depth_view_min},
+                                 {"depth_view_max", settings.depth_view_max},
+                                 {"depth_visualization_mode", static_cast<int>(settings.depth_visualization_mode)},
                                  {"selection_color_committed", json::array({settings.selection_color_committed[0], settings.selection_color_committed[1], settings.selection_color_committed[2]})},
                                  {"selection_color_preview", json::array({settings.selection_color_preview[0], settings.selection_color_preview[1], settings.selection_color_preview[2]})},
                                  {"selection_color_center_marker", json::array({settings.selection_color_center_marker[0], settings.selection_color_center_marker[1], settings.selection_color_center_marker[2]})},
@@ -651,6 +650,23 @@ namespace lfs::app {
                     field = args[key].get<std::string>();
                     touched = true;
                 }
+            };
+
+            const auto set_raster_backend = [&args, &touched](vis::RenderSettingsProxy& settings)
+                -> std::expected<void, std::string> {
+                if (!args.contains("raster_backend"))
+                    return {};
+                const auto& value = args["raster_backend"];
+                if (!value.is_string())
+                    return std::unexpected("Field 'raster_backend' must be '3dgs' or '3dgut'");
+                const std::string backend_id = value.get<std::string>();
+                if (!lfs::rendering::isGaussianRasterBackendId(backend_id))
+                    return std::unexpected("Field 'raster_backend' must be '3dgs' or '3dgut'");
+                const auto backend = lfs::rendering::gaussianRasterBackendFromId(backend_id);
+                settings.raster_backend = static_cast<int>(backend);
+                settings.gut = lfs::rendering::isGutBackend(backend);
+                touched = true;
+                return {};
             };
 
             const auto set_vec3 = [&args, &touched](const char* key,
@@ -714,10 +730,14 @@ namespace lfs::app {
             set_bool("show_pivot", settings.show_pivot);
             set_int("split_view_mode", settings.split_view_mode);
             set_float("split_position", settings.split_position);
-            set_bool("gut", settings.gut);
+            if (auto result = set_raster_backend(settings); !result)
+                return std::unexpected(result.error());
             set_bool("equirectangular", settings.equirectangular);
             set_bool("orthographic", settings.orthographic);
             set_float("ortho_scale", settings.ortho_scale);
+            set_float("depth_view_min", settings.depth_view_min);
+            set_float("depth_view_max", settings.depth_view_max);
+            set_int("depth_visualization_mode", settings.depth_visualization_mode);
             set_bool("depth_clip_enabled", settings.depth_clip_enabled);
             set_float("depth_clip_far", settings.depth_clip_far);
             set_bool("mesh_wireframe", settings.mesh_wireframe);
@@ -1142,6 +1162,7 @@ namespace lfs::app {
                 {"image_name", node.camera->image_name()},
                 {"image_path", core::path_to_utf8(node.camera->image_path())},
                 {"mask_path", core::path_to_utf8(node.camera->mask_path())},
+                {"depth_path", core::path_to_utf8(node.camera->depth_path())},
                 {"camera_width", node.camera->camera_width()},
                 {"camera_height", node.camera->camera_height()},
                 {"image_width", node.camera->image_width()},
@@ -1447,8 +1468,73 @@ namespace lfs::app {
                     return std::unexpected(result.error().message);
                 break;
             }
+            case core::ExportFormat::COLMAP:
+                return std::unexpected("COLMAP export uses scene.export_colmap");
             }
 
+            return {};
+        }
+
+        io::ColmapWriteFormat parse_colmap_write_format(const std::string& value) {
+            if (value == "binary")
+                return io::ColmapWriteFormat::Binary;
+            if (value == "text")
+                return io::ColmapWriteFormat::Text;
+            return io::ColmapWriteFormat::Auto;
+        }
+
+        std::expected<void, std::string> export_colmap_reconstruction_from_scene(
+            const vis::SceneManager& scene_manager,
+            const std::filesystem::path& source_path,
+            const std::filesystem::path& output_sparse_path,
+            const io::ColmapWriteFormat format) {
+            const auto& scene = scene_manager.getScene();
+            auto cameras = scene.getAllCameras();
+            if (cameras.empty()) {
+                return std::unexpected("Scene has no COLMAP cameras to export");
+            }
+
+            std::vector<io::ColmapCameraWriteData> camera_exports;
+            camera_exports.reserve(cameras.size());
+            for (const auto& camera : cameras) {
+                if (!camera)
+                    continue;
+                camera_exports.push_back(io::ColmapCameraWriteData{
+                    .camera = camera,
+                    .data_world_transform = scene.getCameraSceneTransformByUid(camera->uid()).value_or(glm::mat4(1.0f)),
+                });
+            }
+
+            const core::PointCloud* point_cloud = nullptr;
+            glm::mat4 point_cloud_transform{1.0f};
+            for (const auto* node : scene.getNodes()) {
+                if (!node || node->type != core::NodeType::POINTCLOUD || !node->point_cloud ||
+                    !scene.isNodeEffectivelyVisible(node->id)) {
+                    continue;
+                }
+                point_cloud = node->point_cloud.get();
+                point_cloud_transform = scene.getWorldTransform(node->id);
+                break;
+            }
+            if (!point_cloud) {
+                for (const auto* node : scene.getNodes()) {
+                    if (node && node->type == core::NodeType::DATASET) {
+                        point_cloud_transform = scene.getWorldTransform(node->id);
+                        break;
+                    }
+                }
+            }
+
+            auto result = io::write_colmap_reconstruction(
+                source_path,
+                output_sparse_path,
+                camera_exports,
+                point_cloud,
+                point_cloud_transform,
+                io::ColmapWriteOptions{.format = format});
+            if (!result) {
+                return std::unexpected(result.error().message);
+            }
             return {};
         }
 
@@ -2145,6 +2231,7 @@ namespace lfs::app {
                         {"environment_map_path", json{{"type", "string"}}},
                         {"environment_exposure", json{{"type", "number"}}},
                         {"environment_rotation_degrees", json{{"type", "number"}}},
+                        {"raster_backend", json{{"type", "string"}, {"enum", json::array({"3dgs", "3dgut"})}}},
                         {"antialiasing", json{{"type", "boolean"}}},
                         {"show_grid", json{{"type", "boolean"}}},
                         {"show_camera_frustums", json{{"type", "boolean"}}},
@@ -2206,12 +2293,16 @@ namespace lfs::app {
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
                     const auto& scene = scene_manager->getScene();
-                    if (!scene.getNode(name))
+                    const auto* const node = scene.getNode(name);
+                    if (!node)
                         return json{{"error", "Node not found: " + name}};
 
-                    core::events::cmd::SetPLYVisibility{.name = name, .visible = visible}.emit();
-                    if (const auto* const node = scene.getNode(name))
-                        return json{{"success", true}, {"node", node_summary_json(scene, *node)}};
+                    core::events::cmd::SetNodeVisibilityById{
+                        .node_id = node->id,
+                        .visible = visible}
+                        .emit();
+                    if (const auto* const updated = scene.getNodeById(node->id))
+                        return json{{"success", true}, {"node", node_summary_json(scene, *updated)}};
                     return json{{"success", true}, {"name", name}, {"visible", visible}};
                 });
             });
@@ -2264,12 +2355,14 @@ namespace lfs::app {
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
                     const auto& scene = scene_manager->getScene();
-                    if (!scene.getNode(old_name))
+                    const auto* const node = scene.getNode(old_name);
+                    if (!node)
                         return json{{"error", "Node not found: " + old_name}};
 
-                    core::events::cmd::RenamePLY{.old_name = old_name, .new_name = new_name}.emit();
-                    if (const auto* const node = scene.getNode(new_name))
-                        return json{{"success", true}, {"node", node_summary_json(scene, *node)}};
+                    core::events::cmd::RenameNodeById{.node_id = node->id, .new_name = new_name}.emit();
+                    if (const auto* const updated = scene.getNodeById(node->id);
+                        updated && updated->name == new_name)
+                        return json{{"success", true}, {"node", node_summary_json(scene, *updated)}};
                     return json{{"error", "Rename did not produce a node named: " + new_name}};
                 });
             });
@@ -2293,14 +2386,26 @@ namespace lfs::app {
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
                     const auto& scene = scene_manager->getScene();
-                    if (!scene.getNode(name))
+                    const auto* const node = scene.getNode(name);
+                    if (!node)
                         return json{{"error", "Node not found: " + name}};
-                    if (parent && !scene.getNode(*parent))
-                        return json{{"error", "Parent node not found: " + *parent}};
+                    core::NodeId parent_id = core::NULL_NODE;
+                    if (parent) {
+                        const auto* const parent_node = scene.getNode(*parent);
+                        if (!parent_node)
+                            return json{{"error", "Parent node not found: " + *parent}};
+                        parent_id = parent_node->id;
+                    }
 
-                    core::events::cmd::ReparentNode{.node_name = name, .new_parent_name = parent.value_or("")}.emit();
-                    if (const auto* const node = scene.getNode(name))
-                        return json{{"success", true}, {"node", node_summary_json(scene, *node)}};
+                    core::events::cmd::ReparentNodeById{
+                        .node_id = node->id,
+                        .new_parent_id = parent_id}
+                        .emit();
+                    if (const auto* const updated = scene.getNodeById(node->id);
+                        updated && updated->parent_id == parent_id)
+                        return json{{"success", true}, {"node", node_summary_json(scene, *updated)}};
+                    if (scene.getNodeById(node->id))
+                        return json{{"error", "Reparent did not move node: " + name}};
                     return json{{"error", "Node disappeared after reparent: " + name}};
                 });
             });
@@ -2324,8 +2429,13 @@ namespace lfs::app {
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
                     const auto& scene = scene_manager->getScene();
-                    if (parent && !scene.getNode(*parent))
-                        return json{{"error", "Parent node not found: " + *parent}};
+                    core::NodeId parent_id = core::NULL_NODE;
+                    if (parent) {
+                        const auto* const parent_node = scene.getNode(*parent);
+                        if (!parent_node)
+                            return json{{"error", "Parent node not found: " + *parent}};
+                        parent_id = parent_node->id;
+                    }
 
                     std::unordered_set<std::string> before;
                     for (const auto* const node : scene.getNodes()) {
@@ -2333,7 +2443,7 @@ namespace lfs::app {
                             before.insert(node->name);
                     }
 
-                    core::events::cmd::AddGroup{.name = name, .parent_name = parent.value_or("")}.emit();
+                    core::events::cmd::AddGroupByParentId{.name = name, .parent_id = parent_id}.emit();
 
                     for (const auto* const node : scene.getNodes()) {
                         if (node && node->type == core::NodeType::GROUP && !before.contains(node->name))
@@ -2361,7 +2471,8 @@ namespace lfs::app {
                     if (!scene_manager)
                         return json{{"error", "Scene manager not initialized"}};
                     const auto& scene = scene_manager->getScene();
-                    if (!scene.getNode(name))
+                    const auto* const node = scene.getNode(name);
+                    if (!node)
                         return json{{"error", "Node not found: " + name}};
 
                     std::unordered_set<std::string> before;
@@ -2370,7 +2481,7 @@ namespace lfs::app {
                             before.insert(node->name);
                     }
 
-                    core::events::cmd::DuplicateNode{.name = name}.emit();
+                    core::events::cmd::DuplicateNodeById{.node_id = node->id}.emit();
 
                     json nodes = json::array();
                     for (const auto* const node : scene.getNodes()) {
@@ -2413,7 +2524,7 @@ namespace lfs::app {
                             before.insert(node->name);
                     }
 
-                    core::events::cmd::MergeGroup{.name = name}.emit();
+                    core::events::cmd::MergeGroupById{.node_id = group->id}.emit();
 
                     for (const auto* const node : scene.getNodes()) {
                         if (node && !before.contains(node->name))
@@ -2711,6 +2822,54 @@ namespace lfs::app {
 
         registry.register_tool(
             McpTool{
+                .name = "scene.export_colmap",
+                .description = "Write the current scene camera and sparse point cloud transforms to COLMAP sparse files",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"path", json{{"type", "string"}, {"description", "Destination COLMAP sparse directory"}}},
+                        {"source_path", json{{"type", "string"}, {"description", "Optional source COLMAP dataset or sparse directory; defaults to the loaded dataset path"}}},
+                        {"format", json{{"type", "string"}, {"description", "Output format: auto, binary, or text"}}}},
+                    .required = {"path"}}},
+            [viewer_impl](const json& args) -> json {
+                const std::filesystem::path path = args["path"].get<std::string>();
+                const auto source_arg = optional_string_arg(args, "source_path");
+                const auto format = parse_colmap_write_format(args.value("format", "auto"));
+
+                return post_and_wait(viewer_impl, [viewer_impl, path, source_arg, format]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+
+                    std::filesystem::path source_path;
+                    if (source_arg && !source_arg->empty()) {
+                        source_path = *source_arg;
+                    } else {
+                        source_path = scene_manager->getDatasetPath();
+                    }
+                    if (source_path.empty()) {
+                        return json{{"error", "No source COLMAP path provided and no dataset path is loaded"}};
+                    }
+
+                    if (auto result = export_colmap_reconstruction_from_scene(
+                            *scene_manager, source_path, path, format);
+                        !result) {
+                        return json{{"error", result.error()}};
+                    }
+
+                    return json{
+                        {"success", true},
+                        {"started", false},
+                        {"completed", true},
+                        {"format", "colmap"},
+                        {"path", core::path_to_utf8(path)},
+                        {"source_path", core::path_to_utf8(source_path)},
+                    };
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
                 .name = "scene.export_status",
                 .description = "Report the export execution mode for scene exports",
                 .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
@@ -2786,11 +2945,10 @@ namespace lfs::app {
                 if (num_vertices < 3)
                     return json{{"error", "Polygon requires at least 3 vertices"}};
 
-                std::vector<float> vertex_data;
-                vertex_data.reserve(num_vertices * 2);
+                std::vector<glm::vec2> vertex_data;
+                vertex_data.reserve(num_vertices);
                 for (const auto& pt : points) {
-                    vertex_data.push_back(pt[0].get<float>());
-                    vertex_data.push_back(pt[1].get<float>());
+                    vertex_data.emplace_back(pt[0].get<float>(), pt[1].get<float>());
                 }
 
                 const std::string mode = args.value("mode", "replace");
@@ -2822,11 +2980,10 @@ namespace lfs::app {
                 if (num_vertices < 3)
                     return json{{"error", "Lasso requires at least 3 points"}};
 
-                std::vector<float> vertex_data;
-                vertex_data.reserve(num_vertices * 2);
+                std::vector<glm::vec2> vertex_data;
+                vertex_data.reserve(num_vertices);
                 for (const auto& pt : points) {
-                    vertex_data.push_back(pt[0].get<float>());
-                    vertex_data.push_back(pt[1].get<float>());
+                    vertex_data.emplace_back(pt[0].get<float>(), pt[1].get<float>());
                 }
 
                 const std::string mode = args.value("mode", "replace");
@@ -2989,7 +3146,7 @@ namespace lfs::app {
                     for (const auto* const node : scene.getNodes()) {
                         if (!node)
                             continue;
-                        if (!include_hidden && !static_cast<bool>(node->visible))
+                        if (!include_hidden && !scene.isNodeEffectivelyVisible(node->id))
                             continue;
                         if (!include_auxiliary) {
                             switch (node->type) {
@@ -3943,6 +4100,20 @@ namespace lfs::app {
 
                     json field_payloads = json::object();
                     for (const auto& field_name : fields) {
+                        // shN is stored swizzled; expose canonical [N, K, 3] view here.
+                        if (field_name == "shN") {
+                            if (!node->model->shN_raw().is_valid() ||
+                                node->model->shN_raw().numel() == 0 ||
+                                node->model->max_sh_coeffs_rest() == 0) {
+                                field_payloads[field_name] = tensor_payload_json(
+                                    core::Tensor::zeros({static_cast<size_t>(resolved_indices.size()), 0, 3},
+                                                        core::Device::CUDA));
+                                continue;
+                            }
+                            const core::Tensor canon = node->model->shN_canonical();
+                            field_payloads[field_name] = tensor_payload_json(canon.index_select(0, index_tensor));
+                            continue;
+                        }
                         const auto* const field = resolve_gaussian_field(*node->model, field_name);
                         if (!field)
                             return json{{"error", "Unsupported gaussian field: " + field_name}};
@@ -4054,6 +4225,21 @@ namespace lfs::app {
                 .save_path = [](const std::string& path) { return python::save_camera_path(path); },
                 .load_path = [](const std::string& path) { return python::load_camera_path(path); },
                 .set_playback_speed = [](const float speed) { python::set_playback_speed(speed); },
+                .load_ply_sequence =
+                    [](const std::string& directory, const float fps) {
+                        core::events::cmd::SequencerLoadPlySequence{.directory = directory, .fps = fps}.emit();
+                    },
+                .scrub_to_time =
+                    [viewer_impl](const float time) {
+                        auto* const gui_manager = viewer_impl ? viewer_impl->getGuiManager() : nullptr;
+                        if (gui_manager)
+                            gui_manager->sequencer().seek(time);
+                    },
+                .ply_sequence_status =
+                    [viewer_impl]() -> std::string {
+                    auto* const gui_manager = viewer_impl ? viewer_impl->getGuiManager() : nullptr;
+                    return gui_manager ? gui_manager->sequencerUI().plyPlayerStatusJson() : std::string{};
+                },
             });
 
         // --- Plugin tools ---

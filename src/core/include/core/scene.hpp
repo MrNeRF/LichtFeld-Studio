@@ -10,11 +10,13 @@
 #include "core/mesh_data.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include <array>
 #include <atomic>
 #include <cassert>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <shared_mutex>
 #include <string>
@@ -41,7 +43,8 @@ namespace lfs::core {
         IMAGE,          // Individual image file reference (not loaded, just path)
         MESH,           // Triangle mesh (imported via Assimp, processed via OpenMesh)
         KEYFRAME_GROUP, // Container for keyframe nodes (camera animation)
-        KEYFRAME        // Individual camera animation keyframe
+        KEYFRAME,       // Individual camera animation keyframe
+        PLY_SEQUENCE    // Container for ordered PLY sequence frames
     };
 
     struct CropBoxData {
@@ -112,6 +115,7 @@ namespace lfs::core {
 
         std::string image_path;
         std::string mask_path;
+        std::string depth_path;
 
         mutable glm::mat4 world_transform{1.0f};
         mutable bool transform_dirty = true;
@@ -128,6 +132,7 @@ namespace lfs::core {
 
     class LFS_CORE_API Scene {
     public:
+        using SelectionGroupCounts = std::array<size_t, 256>;
         using Node = SceneNode;
 
         struct SelectionStateSnapshot {
@@ -179,18 +184,29 @@ namespace lfs::core {
         Scene(Scene&&) = default;
         Scene& operator=(Scene&&) = default;
 
-        void addNode(const std::string& name, std::unique_ptr<lfs::core::SplatData> model);
         void removeNode(const std::string& name, bool keep_children = false);
+        [[nodiscard]] std::vector<std::unique_ptr<lfs::core::SplatData>> detachSplatModelsForRemoval(
+            const std::string& name,
+            bool keep_children = false);
         void replaceNodeModel(const std::string& name, std::unique_ptr<lfs::core::SplatData> model);
+        // Swap a node's model in place, returning the previous model so the caller can
+        // recycle its (e.g. Vulkan-external) backing storage. Cheap: no disk/parse/upload,
+        // just a pointer swap + MODEL_CHANGED. Used by the PLY-sequence streaming player.
+        [[nodiscard]] std::unique_ptr<lfs::core::SplatData> swapNodeModel(
+            const std::string& name, std::unique_ptr<lfs::core::SplatData> model);
         void setNodeVisibility(const std::string& name, bool visible);
+        void setNodeVisibility(NodeId id, bool visible);
         void setNodeLocked(const std::string& name, bool locked);
         void setNodeTransform(const std::string& name, const glm::mat4& transform);
         glm::mat4 getNodeTransform(const std::string& name) const;
+        bool renameNode(NodeId id, const std::string& new_name);
         bool renameNode(const std::string& old_name, const std::string& new_name);
         void clear();
         std::pair<std::string, std::string> cycleVisibilityWithNames();
 
         NodeId addGroup(const std::string& name, NodeId parent = NULL_NODE);
+        NodeId addPlySequence(const std::string& name, NodeId parent = NULL_NODE, size_t frame_count = 0);
+        NodeId addSplatPlaceholder(const std::string& name, NodeId parent = NULL_NODE);
         NodeId addSplat(const std::string& name, std::unique_ptr<lfs::core::SplatData> model, NodeId parent = NULL_NODE);
         NodeId addPointCloud(const std::string& name, std::shared_ptr<lfs::core::PointCloud> point_cloud, NodeId parent = NULL_NODE);
         NodeId addMesh(const std::string& name, std::shared_ptr<lfs::core::MeshData> mesh_data, NodeId parent = NULL_NODE);
@@ -202,7 +218,8 @@ namespace lfs::core {
         NodeId addKeyframeGroup(const std::string& name, NodeId parent = NULL_NODE);
         NodeId addKeyframe(const std::string& name, NodeId parent, std::unique_ptr<KeyframeData> data);
         void removeKeyframeNodes();
-        void reparent(NodeId node, NodeId new_parent);
+        [[nodiscard]] bool reparent(NodeId node, NodeId new_parent);
+        [[nodiscard]] bool moveNode(NodeId node, NodeId new_parent, int index);
         [[nodiscard]] std::string duplicateNode(const std::string& name);
         [[nodiscard]] std::string mergeGroup(const std::string& group_name);
         [[nodiscard]] const glm::mat4& getWorldTransform(NodeId node) const;
@@ -223,6 +240,7 @@ namespace lfs::core {
         struct RenderableCropBox {
             NodeId node_id = NULL_NODE;
             NodeId parent_splat_id = NULL_NODE;
+            int parent_node_index = -1;
             const CropBoxData* data = nullptr;
             glm::mat4 world_transform{1.0f};
             glm::mat4 local_transform{1.0f};
@@ -238,6 +256,7 @@ namespace lfs::core {
         struct RenderableEllipsoid {
             NodeId node_id = NULL_NODE;
             NodeId parent_splat_id = NULL_NODE;
+            int parent_node_index = -1;
             const EllipsoidData* data = nullptr;
             glm::mat4 world_transform{1.0f};
             glm::mat4 local_transform{1.0f};
@@ -245,9 +264,39 @@ namespace lfs::core {
         [[nodiscard]] std::vector<RenderableEllipsoid> getVisibleEllipsoids() const;
 
         const lfs::core::SplatData* getCombinedModel() const;
+
+        void setCombinedModelAllocator(SplatTensorAllocator allocator);
+
         size_t consolidateNodeModels();
         [[nodiscard]] bool isConsolidated() const { return consolidated_; }
         [[nodiscard]] std::vector<bool> getNodeVisibilityMask() const;
+
+        struct ConsolidatedNodeSlot {
+            NodeId id = NULL_NODE;
+            size_t gaussian_count = 0;
+        };
+
+        struct ConsolidatedCompactionSnapshot {
+            std::shared_ptr<const lfs::core::SplatData> model;
+            std::vector<ConsolidatedNodeSlot> slots;
+            uint64_t generation = 0;
+            SplatTensorAllocator allocator;
+        };
+
+        [[nodiscard]] std::optional<ConsolidatedCompactionSnapshot> captureConsolidatedCompaction() const;
+        [[nodiscard]] static std::shared_ptr<lfs::core::SplatData> compactConsolidatedSnapshot(
+            const ConsolidatedCompactionSnapshot& snapshot,
+            std::vector<ConsolidatedNodeSlot>& compacted_slots);
+        [[nodiscard]] bool installConsolidatedCompaction(const std::shared_ptr<lfs::core::SplatData>& model,
+                                                         std::vector<ConsolidatedNodeSlot> slots,
+                                                         uint64_t generation);
+
+        struct VisibleSplatNodeSlot {
+            const SceneNode* node = nullptr;
+            size_t slot_index = 0;
+        };
+        [[nodiscard]] std::vector<VisibleSplatNodeSlot> getVisibleSplatNodeSlots() const;
+
         [[nodiscard]] std::shared_ptr<lfs::core::Tensor> getVisibleSelectionIndices() const;
         [[nodiscard]] std::shared_ptr<lfs::core::Tensor> getVisibleSelectionMask() const;
 
@@ -285,6 +334,9 @@ namespace lfs::core {
         std::shared_ptr<lfs::core::Tensor> getSelectionMask() const;
         void setSelection(const std::vector<size_t>& selected_indices);
         void setSelectionMask(std::shared_ptr<lfs::core::Tensor> mask);
+        void setSelectionMaskWithGroupCounts(std::shared_ptr<lfs::core::Tensor> mask,
+                                             size_t selected_count,
+                                             const SelectionGroupCounts& group_counts);
         void clearSelection();
         bool hasSelection() const;
         [[nodiscard]] SelectionStateMetadata captureSelectionStateMetadata() const;
@@ -301,6 +353,7 @@ namespace lfs::core {
         [[nodiscard]] uint8_t getActiveSelectionGroup() const { return active_selection_group_; }
         [[nodiscard]] const std::vector<SelectionGroup>& getSelectionGroups() const { return selection_groups_; }
         [[nodiscard]] const SelectionGroup* getSelectionGroup(uint8_t id) const;
+        [[nodiscard]] bool selectionGroupCountsDirty() const { return selection_group_counts_dirty_; }
         void updateSelectionGroupCounts();
         void clearSelectionGroup(uint8_t id);
         void resetSelectionState();
@@ -323,11 +376,13 @@ namespace lfs::core {
         [[nodiscard]] std::vector<std::shared_ptr<lfs::core::Camera>> getActiveCameras() const;
         [[nodiscard]] size_t getActiveCameraCount() const;
         void setCameraTrainingEnabled(const std::string& name, bool enabled);
+        void setCameraTrainingEnabled(NodeId id, bool enabled);
 
         [[nodiscard]] std::unordered_set<int> getTrainingDisabledCameraUids() const;
 
         [[nodiscard]] lfs::core::SplatData* getTrainingModel();
         [[nodiscard]] const lfs::core::SplatData* getTrainingModel() const;
+        [[nodiscard]] bool isTrainingModelEffectivelyVisible() const;
         [[nodiscard]] size_t getTrainingModelGaussianCount() const;
         [[nodiscard]] size_t getVisibleGaussianCount() const;
         [[nodiscard]] std::unordered_map<NodeId, size_t> getActiveGaussianCountsByNode() const;
@@ -379,17 +434,24 @@ namespace lfs::core {
         uint32_t pending_mutations_ = 0;
         int transaction_depth_ = 0;
         void flushMutations();
+        void removeConsolidatedNodeData(NodeId id);
+        void rebuildConsolidatedTransformIndices() const;
+        [[nodiscard]] NodeId insertNode(std::unique_ptr<SceneNode> node);
         mutable std::atomic<int> export_pin_count_{0};
-        mutable std::unique_ptr<lfs::core::SplatData> cached_combined_;
+        mutable std::shared_ptr<lfs::core::SplatData> cached_combined_;
         mutable std::shared_ptr<lfs::core::Tensor> cached_transform_indices_;
         mutable std::shared_ptr<lfs::core::Tensor> cached_visible_selection_indices_;
         mutable std::atomic<bool> model_cache_valid_{false};
         mutable const lfs::core::SplatData* single_node_model_ = nullptr;
 
+        mutable std::mutex combined_model_mutex_;
+        SplatTensorAllocator combined_model_allocator_;
+
         mutable std::vector<glm::mat4> cached_transforms_;
         mutable std::atomic<bool> transform_cache_valid_{false};
         mutable bool consolidated_ = false;
-        mutable std::vector<NodeId> consolidated_node_ids_;
+        mutable std::vector<ConsolidatedNodeSlot> consolidated_node_slots_;
+        mutable uint64_t consolidated_generation_ = 0;
 
         mutable std::shared_mutex selection_mutex_;
         mutable std::shared_ptr<lfs::core::Tensor> selection_mask_;
@@ -398,18 +460,21 @@ namespace lfs::core {
         std::vector<SelectionGroup> selection_groups_;
         uint8_t active_selection_group_ = 1;
         uint8_t next_group_id_ = 1;
+        bool selection_group_counts_dirty_ = true;
 
         void rebuildCacheIfNeeded() const;
         void rebuildModelCacheIfNeeded() const;
+        void rebuildModelCacheIfNeeded(bool include_hidden_splats) const;
         void rebuildTransformCacheIfNeeded() const;
         void updateWorldTransform(const SceneNode& node) const;
         void removeNodeInternal(const std::string& name, bool keep_children, bool force);
-        void setNodeVisibilityById(NodeId id, bool visible);
         [[nodiscard]] size_t currentSelectionCapacity() const;
         void resizeSelectionIfSizeMismatch(size_t expected_size);
 
         SelectionGroup* findGroup(uint8_t id);
         const SelectionGroup* findGroup(uint8_t id) const;
+        void applySelectionGroupCounts(const SelectionGroupCounts& group_counts);
+        void clearSelectionGroupCounts();
 
         std::shared_ptr<lfs::core::PointCloud> initial_point_cloud_;
         lfs::core::Tensor scene_center_;

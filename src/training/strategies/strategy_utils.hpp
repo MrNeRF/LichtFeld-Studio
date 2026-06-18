@@ -27,6 +27,41 @@ namespace lfs::training {
         const lfs::core::param::OptimizationParameters& params,
         AdamOptimizer& optimizer);
 
+    // Build the row mask for splats loaded via --add-splat ... --freeze.
+    // Invalid/empty means no frozen rows for the requested size.
+    lfs::core::Tensor make_frozen_mask(
+        const lfs::core::SplatData& splat_data,
+        size_t n,
+        lfs::core::Device device);
+
+    lfs::core::Tensor make_trainable_mask(
+        const lfs::core::SplatData& splat_data,
+        size_t n,
+        lfs::core::Device device);
+
+    lfs::core::Tensor exclude_frozen_from_mask(
+        const lfs::core::SplatData& splat_data,
+        const lfs::core::Tensor& mask);
+
+    lfs::core::Tensor zero_frozen_scores(
+        const lfs::core::SplatData& splat_data,
+        const lfs::core::Tensor& scores);
+
+    void zero_frozen_scores_inplace(
+        const lfs::core::SplatData& splat_data,
+        lfs::core::Tensor& scores);
+
+    size_t frozen_row_count(const lfs::core::SplatData& splat_data, size_t n);
+
+    void apply_frozen_ranges_to_optimizer(
+        const lfs::core::SplatData& splat_data,
+        AdamOptimizer& optimizer);
+
+    void remap_frozen_ranges_after_compaction(
+        lfs::core::SplatData& splat_data,
+        const lfs::core::Tensor& kept_old_indices,
+        size_t old_size);
+
     // Function types for parameter and optimizer state updates
     using ParamUpdateFn = std::function<lfs::core::Tensor(const int, const lfs::core::Tensor&)>;
     using OptimizerUpdateFn = std::function<void(

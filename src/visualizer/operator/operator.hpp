@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "operator_context.hpp"
 #include "operator_flags.hpp"
 #include "operator_id.hpp"

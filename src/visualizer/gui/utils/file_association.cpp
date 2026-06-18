@@ -33,7 +33,7 @@ namespace lfs::vis::gui {
             L"Software\\LichtFeldStudio\\Capabilities\\FileAssociations";
         constexpr wchar_t REGISTERED_APPLICATIONS_PATH[] = L"Software\\RegisteredApplications";
         constexpr wchar_t APPLICATION_DESCRIPTION[] =
-            L"LichtFeld Studio supports PLY, SOG, SPZ, USD, USDA, USDC, and USDZ splat files.";
+            L"LichtFeld Studio supports PLY, SOG, SPZ, RAD, USD, USDA, USDC, and USDZ splat files.";
 
         constexpr std::array<ExtInfo, 7> EXTENSIONS = {{
             {L".ply", L"LichtFeldStudio.ply", L"PLY Point Cloud"},

@@ -11,6 +11,7 @@ import lichtfeld as lf
 from . import rml_widgets
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
+from .ui import RuntimeState, native_value as _native_store_value
 
 __lfs_panel_classes__ = ["Mesh2SplatPanel"]
 __lfs_panel_ids__ = ["native.mesh2splat"]
@@ -32,7 +33,7 @@ class Mesh2SplatPanel(Panel):
     template = "rmlui/mesh2splat_panel.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
     size = (420, 0)
-    update_interval_ms = 100
+    update_policy = "dirty"
 
     _RESOLUTION_OPTIONS = (128, 256, 512, 1024, 2048, 4096)
     _MIN_RESOLUTION = 16
@@ -50,6 +51,7 @@ class Mesh2SplatPanel(Panel):
         self._last_progress_stage = ""
         self._last_active = False
         self._error_text = ""
+        self._reactive_unsubscribers = []
         self._scrub_fields = ScrubFieldController(
             SCRUB_FIELD_DEFS,
             self._get_scrub_value,
@@ -99,6 +101,33 @@ class Mesh2SplatPanel(Panel):
         self._refresh_scene_state(force=True)
         self._sync_conversion_state(force=True)
         self._scrub_fields.mount(doc)
+        self._subscribe_reactive_state()
+
+    def _subscribe_reactive_state(self):
+        if self._reactive_unsubscribers:
+            return
+
+        native_signals = (
+            RuntimeState.scene_generation,
+            RuntimeState.mesh2splat_state,
+        )
+        self._reactive_unsubscribers = [
+            signal.subscribe(lambda _value: self._request_reactive_update())
+            for signal in native_signals
+        ]
+
+    def _unsubscribe_reactive_state(self):
+        for unsubscribe in self._reactive_unsubscribers:
+            try:
+                unsubscribe()
+            except Exception:
+                pass
+        self._reactive_unsubscribers = []
+
+    def _request_reactive_update(self):
+        self._last_mesh_key = None
+        if self._handle:
+            rml_widgets.request_model_update(self._handle)
 
     def on_update(self, doc):
         del doc
@@ -114,6 +143,7 @@ class Mesh2SplatPanel(Panel):
         return dirty
 
     def on_unmount(self, doc):
+        self._unsubscribe_reactive_state()
         doc.remove_data_model("mesh2splat")
         self._handle = None
         self._scrub_fields.unmount()
@@ -274,14 +304,28 @@ class Mesh2SplatPanel(Panel):
         except (TypeError, ValueError):
             return "0%"
 
+    def _conversion_state(self) -> dict[str, object]:
+        state = _native_store_value("mesh2splat_state", None)
+        if isinstance(state, dict):
+            return state
+        return {
+            "active": bool(getattr(lf, "is_mesh2splat_active", lambda: False)()),
+            "progress": getattr(lf, "get_mesh2splat_progress", lambda: 0.0)(),
+            "stage": getattr(lf, "get_mesh2splat_stage", lambda: "")() or "",
+            "error": getattr(lf, "get_mesh2splat_error", lambda: "")() or "",
+        }
+
+    def _conversion_active(self) -> bool:
+        return bool(self._conversion_state().get("active", False))
+
     def _sync_conversion_state(self, force: bool) -> bool:
-        active = bool(lf.is_mesh2splat_active())
-        progress_value = f"{max(0.0, min(1.0, float(lf.get_mesh2splat_progress()))):.4f}".rstrip("0").rstrip(".")
+        state = self._conversion_state()
+        active = bool(state.get("active", False))
+        progress_value = f"{max(0.0, min(1.0, float(state.get('progress', 0.0)))):.4f}".rstrip("0").rstrip(".")
         if not progress_value:
             progress_value = "0"
-        stage = str(getattr(lf, "get_mesh2splat_stage", lambda: "")() or "")
-        error_text = ""
-        error_text = str(lf.get_mesh2splat_error() or "")
+        stage = str(state.get("stage", "") or "")
+        error_text = str(state.get("error", "") or "")
 
         changed = force or (
             active != self._last_active or
@@ -346,7 +390,7 @@ class Mesh2SplatPanel(Panel):
         self._request_reconvert_if_needed()
 
     def _request_reconvert_if_needed(self):
-        if self._has_initial_conversion and not lf.is_mesh2splat_active():
+        if self._has_initial_conversion and not self._conversion_active():
             self._start_conversion()
 
     def _start_conversion(self):

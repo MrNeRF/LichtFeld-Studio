@@ -11,10 +11,20 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <limits>
+#include <stdexcept>
+#include <string>
 
 namespace lfs::training {
 
     namespace {
+        [[nodiscard]] int checked_dim_to_int(size_t value, const char* name) {
+            if (value > static_cast<size_t>(std::numeric_limits<int>::max())) {
+                throw std::overflow_error(std::string(name) + " exceeds int range");
+            }
+            return static_cast<int>(value);
+        }
+
         [[nodiscard]] bool has_background_image(const core::Tensor& bg_image) {
             return bg_image.is_valid() && !bg_image.is_empty();
         }
@@ -85,7 +95,7 @@ namespace lfs::training {
      *   - raw_rotations.tensor : float32 [N, 4] - Raw rotation quaternions (pre-normalization)
      *   - raw_opacities.tensor : float32 [N, 1] - Raw opacity values (pre-sigmoid)
      *   - sh0.tensor           : float32 [N, 3] - DC spherical harmonic coefficients
-     *   - shN.tensor           : float32 [N, K, 3] - Higher-order SH coefficients (K = total_bases_sh_rest)
+     *   - shN.tensor           : float32 [swizzled_floats] - vksplat swizzled higher-order SH
      *   - w2c.tensor           : float32 [1, 4, 4] - World-to-camera transformation matrix
      *   - cam_position.tensor  : float32 [3] - Camera position in world coordinates
      *   - params.json          : JSON file with scalar parameters and tensor shapes
@@ -104,12 +114,11 @@ namespace lfs::training {
      * @param raw_rotations Raw rotation quaternions [N, 4]
      * @param raw_opacities Raw opacity values [N, 1]
      * @param sh0 DC spherical harmonic coefficients [N, 3]
-     * @param shN Higher-order SH coefficients [N, K, 3]
+     * @param shN Higher-order SH coefficients in vksplat swizzled layout
      * @param w2c World-to-camera transform [1, 4, 4]
      * @param cam_position Camera position [3]
      * @param n_primitives Number of Gaussians
      * @param active_sh_bases Number of active SH bases: (sh_degree+1)^2
-     * @param total_bases_sh_rest Total higher-order SH bases (K dimension of shN)
      * @param width Render width in pixels
      * @param height Render height in pixels
      * @param fx Focal length x
@@ -131,7 +140,6 @@ namespace lfs::training {
         const core::Tensor& cam_position,
         int n_primitives,
         int active_sh_bases,
-        int total_bases_sh_rest,
         int width,
         int height,
         float fx,
@@ -177,7 +185,7 @@ namespace lfs::training {
             if (sh0.is_valid())
                 core::save_tensor(sh0, dump_dir + "/sh0.tensor"); // [N, 3]
             if (shN.is_valid())
-                core::save_tensor(shN, dump_dir + "/shN.tensor"); // [N, K, 3]
+                core::save_tensor(shN, dump_dir + "/shN.tensor"); // swizzled shN
             if (w2c.is_valid())
                 core::save_tensor(w2c, dump_dir + "/w2c.tensor"); // [1, 4, 4]
             if (cam_position.is_valid())
@@ -188,7 +196,7 @@ namespace lfs::training {
             // - error: The exception message
             // - n_primitives: Number of Gaussians (N)
             // - active_sh_bases: (sh_degree+1)^2, e.g., 1 for degree 0, 4 for degree 1
-            // - total_bases_sh_rest: K dimension of shN tensor
+            // - shN_layout: storage layout of the dumped higher-order SH tensor
             // - width, height: Render dimensions in pixels
             // - fx, fy, cx, cy: Camera intrinsics
             // - near_plane, far_plane: Clipping planes
@@ -199,7 +207,7 @@ namespace lfs::training {
                 params_file << "  \"error\": \"" << error_msg << "\",\n";
                 params_file << "  \"n_primitives\": " << n_primitives << ",\n";
                 params_file << "  \"active_sh_bases\": " << active_sh_bases << ",\n";
-                params_file << "  \"total_bases_sh_rest\": " << total_bases_sh_rest << ",\n";
+                params_file << "  \"shN_layout\": \"swizzled-sh-reorder-32\",\n";
                 params_file << "  \"width\": " << width << ",\n";
                 params_file << "  \"height\": " << height << ",\n";
                 params_file << "  \"fx\": " << fx << ",\n";
@@ -231,7 +239,12 @@ namespace lfs::training {
                 params_file << "  \"shN_shape\": [" << shN.shape()[0];
                 for (size_t i = 1; i < shN.ndim(); ++i)
                     params_file << ", " << shN.shape()[i];
-                params_file << "]\n";
+                params_file << "],\n";
+                // shN is stored in compact vksplat float4-packed swizzled layout
+                // (ceil(N/32) * active_slots * 32 * 4 floats). Crash-dump consumers should
+                // deswizzle via shAt(p, k) (returns a float4-slot index; multiply by 4 for the
+                // float offset) before interpreting as canonical [N, K, 3].
+                params_file << "  \"shN_layout\": \"swizzled-sh-reorder-32\"\n";
                 params_file << "}\n";
             }
 
@@ -276,6 +289,8 @@ namespace lfs::training {
 
         const int sh_degree = gaussian_model.get_active_sh_degree();
         const int active_sh_bases = (sh_degree + 1) * (sh_degree + 1);
+        const int max_sh_degree = gaussian_model.get_max_sh_degree();
+        const int sh_layout_bases = (max_sh_degree + 1) * (max_sh_degree + 1);
 
         constexpr float near_plane = 0.01f;
         constexpr float far_plane = 1e10f;
@@ -284,11 +299,7 @@ namespace lfs::training {
         const float* w2c_ptr = viewpoint_camera.world_view_transform_ptr();
         const float* cam_position_ptr = viewpoint_camera.cam_position_ptr();
 
-        const int n_primitives = static_cast<int>(means.shape()[0]);
-        const int total_bases_sh_rest = (shN.is_valid() && shN.ndim() >= 2)
-                                            ? static_cast<int>(shN.shape()[1])
-                                            : 0;
-
+        const int n_primitives = checked_dim_to_int(means.shape()[0], "n_primitives");
         if (n_primitives == 0) {
             return std::unexpected("n_primitives is 0 - model has no gaussians");
         }
@@ -296,6 +307,7 @@ namespace lfs::training {
         // Pre-allocate output tensors (reused across iterations)
         thread_local core::Tensor image;
         thread_local core::Tensor alpha;
+        thread_local core::Tensor depth;
         thread_local int last_width = -1;
         thread_local int last_height = -1;
 
@@ -303,6 +315,7 @@ namespace lfs::training {
         if (last_width != width || last_height != height) {
             image = core::Tensor::empty({3, static_cast<size_t>(height), static_cast<size_t>(width)});
             alpha = core::Tensor::empty({1, static_cast<size_t>(height), static_cast<size_t>(width)});
+            depth = core::Tensor::empty({1, static_cast<size_t>(height), static_cast<size_t>(width)});
             last_width = width;
             last_height = height;
         }
@@ -322,9 +335,10 @@ namespace lfs::training {
                 cam_position_ptr,
                 image.ptr<float>(),
                 alpha.ptr<float>(),
+                depth.ptr<float>(),
                 n_primitives,
                 active_sh_bases,
-                total_bases_sh_rest,
+                sh_layout_bases,
                 width,
                 height,
                 fx,
@@ -348,7 +362,6 @@ namespace lfs::training {
                 viewpoint_camera.cam_position(),
                 n_primitives,
                 active_sh_bases,
-                total_bases_sh_rest,
                 width,
                 height,
                 fx,
@@ -372,7 +385,6 @@ namespace lfs::training {
                 viewpoint_camera.cam_position(),
                 n_primitives,
                 active_sh_bases,
-                total_bases_sh_rest,
                 width,
                 height,
                 fx,
@@ -402,12 +414,14 @@ namespace lfs::training {
 
         render_output.image = image;
         render_output.alpha = alpha;
+        render_output.depth = depth;
         render_output.width = width;
         render_output.height = height;
 
         // Prepare context for backward
         ctx.image = image;
         ctx.alpha = alpha;
+        ctx.depth = depth;
         ctx.bg_color = bg_color; // Save bg_color for alpha gradient
         ctx.bg_image = bg_image; // Save bg_image for alpha gradient
 
@@ -423,7 +437,6 @@ namespace lfs::training {
         ctx.cam_position_ptr = cam_position_ptr;
 
         ctx.active_sh_bases = active_sh_bases;
-        ctx.total_bases_sh_rest = total_bases_sh_rest;
         ctx.width = width;
         ctx.height = height;
         ctx.focal_x = fx;
@@ -452,7 +465,9 @@ namespace lfs::training {
         const core::Tensor& pixel_error_map,
         DensificationType densification_type,
         int iteration,
-        const FastGSFusedExtraGradients& fused_extra_gradients) {
+        const FastGSFusedExtraGradients& fused_extra_gradients,
+        const core::Tensor& grad_depth,
+        bool detach_depth_weights) {
 
         // Compute grad_alpha from background blending: output = image + (1 - alpha) * bg
         int H, W;
@@ -460,12 +475,12 @@ namespace lfs::training {
 
         if (grad_image.shape()[0] == 3) {
             is_chw_layout = true;
-            H = static_cast<int>(grad_image.shape()[1]);
-            W = static_cast<int>(grad_image.shape()[2]);
+            H = checked_dim_to_int(grad_image.shape()[1], "grad_image height");
+            W = checked_dim_to_int(grad_image.shape()[2], "grad_image width");
         } else if (grad_image.shape()[2] == 3) {
             is_chw_layout = false;
-            H = static_cast<int>(grad_image.shape()[0]);
-            W = static_cast<int>(grad_image.shape()[1]);
+            H = checked_dim_to_int(grad_image.shape()[0], "grad_image height");
+            W = checked_dim_to_int(grad_image.shape()[1], "grad_image width");
         } else {
             throw std::runtime_error("Unexpected grad_image shape");
         }
@@ -506,7 +521,27 @@ namespace lfs::training {
             grad_alpha.add_(extra);
         }
 
-        const int n_primitives = static_cast<int>(ctx.means.shape()[0]);
+        core::Tensor grad_depth_2d;
+        const float* grad_depth_ptr = nullptr;
+        if (grad_depth.is_valid() && grad_depth.numel() > 0) {
+            grad_depth_2d = grad_depth;
+            if (grad_depth_2d.ndim() == 3 && grad_depth_2d.shape()[0] == 1) {
+                grad_depth_2d = grad_depth_2d.squeeze(0);
+            }
+            assert(grad_depth_2d.ndim() == 2 &&
+                   checked_dim_to_int(grad_depth_2d.shape()[0], "grad_depth height") == H &&
+                   checked_dim_to_int(grad_depth_2d.shape()[1], "grad_depth width") == W &&
+                   "grad_depth must have shape [H, W] or [1, H, W]");
+            if (grad_depth_2d.device() != core::Device::CUDA) {
+                grad_depth_2d = grad_depth_2d.cuda();
+            }
+            if (!grad_depth_2d.is_contiguous()) {
+                grad_depth_2d = grad_depth_2d.contiguous();
+            }
+            grad_depth_ptr = grad_depth_2d.ptr<float>();
+        }
+
+        const int n_primitives = checked_dim_to_int(ctx.means.shape()[0], "n_primitives");
         // densification_info has shape [2, N]
         const bool update_densification_info = gaussian_model._densification_info.ndim() == 2 &&
                                                gaussian_model._densification_info.shape()[1] >= static_cast<size_t>(n_primitives);
@@ -521,8 +556,8 @@ namespace lfs::training {
                 error_map_2d = error_map_2d.squeeze(0);
             }
             assert(error_map_2d.ndim() == 2 &&
-                   static_cast<int>(error_map_2d.shape()[0]) == H &&
-                   static_cast<int>(error_map_2d.shape()[1]) == W &&
+                   checked_dim_to_int(error_map_2d.shape()[0], "error_map height") == H &&
+                   checked_dim_to_int(error_map_2d.shape()[1], "error_map width") == W &&
                    "pixel_error_map must have shape [H, W] or [1, H, W]");
             if (error_map_2d.device() != core::Device::CUDA) {
                 error_map_2d = error_map_2d.cuda();
@@ -540,8 +575,12 @@ namespace lfs::training {
         auto convert_param = [](const FastGSFusedAdamParam& src) {
             fast_lfs::rasterization::FusedAdamParam dst;
             dst.param = src.param;
-            dst.exp_avg = src.exp_avg;
-            dst.exp_avg_sq = src.exp_avg_sq;
+            dst.exp_avg_q = src.exp_avg_q;
+            dst.exp_avg_sq_q = src.exp_avg_sq_q;
+            dst.exp_avg_scale = src.exp_avg_scale;
+            dst.exp_avg_sq_scale = src.exp_avg_sq_scale;
+            dst.frozen_mask = src.frozen_mask;
+            dst.frozen_mask_size = src.frozen_mask_size;
             dst.n_elements = src.n_elements;
             dst.n_attributes = src.n_attributes;
             dst.step_size = src.step_size;
@@ -576,6 +615,7 @@ namespace lfs::training {
             use_pixel_error_densification ? error_map_2d.ptr<float>() : nullptr,
             grad_image.ptr<float>(),
             grad_alpha.ptr<float>(),
+            grad_depth_ptr,
             raw_image.ptr<float>(),
             ctx.alpha.ptr<float>(),
             ctx.means.ptr<float>(),
@@ -589,7 +629,7 @@ namespace lfs::training {
             nullptr,
             n_primitives,
             ctx.active_sh_bases,
-            ctx.total_bases_sh_rest,
+            ctx.forward_ctx.sh_layout_bases,
             ctx.width,
             ctx.height,
             ctx.focal_x,
@@ -598,7 +638,8 @@ namespace lfs::training {
             ctx.center_y,
             ctx.mip_filter,
             densification_type,
-            &fused_adam);
+            &fused_adam,
+            detach_depth_weights);
 
         ctx.mark_forward_context_released();
 

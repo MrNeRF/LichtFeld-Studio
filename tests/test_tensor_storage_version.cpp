@@ -5,6 +5,7 @@
 
 #include "core/tensor.hpp"
 #include <thread>
+#include <vector>
 
 using namespace lfs::core;
 
@@ -155,6 +156,84 @@ TEST_F(TensorStorageVersionTest, ZerosDirectHasStorageMeta) {
     auto t = Tensor::zeros_direct({10, 3}, 100, Device::CUDA);
 
     EXPECT_NE(t.ptr<float>(), nullptr);
+}
+
+TEST_F(TensorStorageVersionTest, ExternalOwnerSurvivesThroughViews) {
+    struct Owner {
+        explicit Owner(bool* destroyed_flag)
+            : destroyed(destroyed_flag) {}
+        ~Owner() { *destroyed = true; }
+        bool* destroyed;
+    };
+
+    bool destroyed = false;
+    std::vector<float> storage(4 * 3, 1.0f);
+    Tensor view;
+
+    {
+        auto owner = std::make_shared<Owner>(&destroyed);
+        auto* const owner_ptr = owner.get();
+        auto t = Tensor::from_external_owner(
+            storage.data(),
+            {2, 3},
+            Device::CPU,
+            DataType::Float32,
+            std::move(owner),
+            4,
+            nullptr,
+            "test_external_buffer");
+
+        EXPECT_TRUE(t.is_external_storage());
+        EXPECT_EQ(t.external_storage_kind(), "test_external_buffer");
+        EXPECT_EQ(t.external_storage_owner().get(), static_cast<void*>(owner_ptr));
+
+        view = t.slice(0, 0, 1);
+        EXPECT_TRUE(view.is_external_storage());
+        EXPECT_EQ(view.external_storage_owner().get(), static_cast<void*>(owner_ptr));
+    }
+
+    EXPECT_FALSE(destroyed);
+    view = Tensor();
+    EXPECT_TRUE(destroyed);
+}
+
+TEST_F(TensorStorageVersionTest, ExternalStorageReserveCannotReallocate) {
+    std::vector<float> storage(4 * 3, 1.0f);
+    auto owner = std::make_shared<int>(7);
+    auto t = Tensor::from_external_owner(
+        storage.data(),
+        {2, 3},
+        Device::CPU,
+        DataType::Float32,
+        std::move(owner),
+        4,
+        nullptr,
+        "test_external_buffer");
+
+    EXPECT_NO_THROW(t.reserve(4));
+    EXPECT_THROW(t.reserve(5), TensorError);
+}
+
+TEST_F(TensorStorageVersionTest, ExternalStorageAppendWithinCapacityIsAllowed) {
+    std::vector<float> storage(4 * 3, 1.0f);
+    auto owner = std::make_shared<int>(7);
+    auto t = Tensor::from_external_owner(
+        storage.data(),
+        {2, 3},
+        Device::CPU,
+        DataType::Float32,
+        std::move(owner),
+        4,
+        nullptr,
+        "test_external_buffer");
+
+    t.append_zeros(1);
+
+    EXPECT_EQ(t.shape()[0], 3);
+    EXPECT_EQ(t.capacity(), 4);
+    EXPECT_EQ(storage[2 * 3], 0.0f);
+    EXPECT_EQ(storage[2 * 3 + 1], 0.0f);
+    EXPECT_EQ(storage[2 * 3 + 2], 0.0f);
 }
 
 // TensorRowProxy tests

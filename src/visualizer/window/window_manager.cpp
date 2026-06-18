@@ -21,6 +21,29 @@
 namespace lfs::vis {
 
     namespace {
+        const char* windowEventName(const Uint32 event_type) {
+            switch (event_type) {
+            case SDL_EVENT_WINDOW_RESIZED:
+                return "WINDOW_RESIZED";
+            case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+                return "WINDOW_PIXEL_SIZE_CHANGED";
+            case SDL_EVENT_WINDOW_MINIMIZED:
+                return "WINDOW_MINIMIZED";
+            case SDL_EVENT_WINDOW_MAXIMIZED:
+                return "WINDOW_MAXIMIZED";
+            case SDL_EVENT_WINDOW_RESTORED:
+                return "WINDOW_RESTORED";
+            case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
+                return "WINDOW_ENTER_FULLSCREEN";
+            case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
+                return "WINDOW_LEAVE_FULLSCREEN";
+            case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
+                return "WINDOW_DISPLAY_SCALE_CHANGED";
+            default:
+                return "WINDOW_EVENT";
+            }
+        }
+
         bool eventTargetsWindow(const SDL_Event& event, const SDL_WindowID target_window_id) {
             if (target_window_id == 0)
                 return true;
@@ -28,6 +51,13 @@ namespace lfs::vis {
             switch (event.type) {
             case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
             case SDL_EVENT_WINDOW_FOCUS_LOST:
+            case SDL_EVENT_WINDOW_RESIZED:
+            case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+            case SDL_EVENT_WINDOW_MINIMIZED:
+            case SDL_EVENT_WINDOW_MAXIMIZED:
+            case SDL_EVENT_WINDOW_RESTORED:
+            case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
+            case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
             case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
                 return event.window.windowID == target_window_id;
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
@@ -224,14 +254,51 @@ namespace lfs::vis {
         }
     }
 
-    void WindowManager::updateWindowSize() {
+    void WindowManager::updateWindowSize(const char* const reason) {
+        if (!window_) {
+            return;
+        }
+
         int winW, winH, fbW, fbH;
         SDL_GetWindowSize(window_, &winW, &winH);
         SDL_GetWindowSizeInPixels(window_, &fbW, &fbH);
-        window_size_ = glm::ivec2(winW, winH);
-        framebuffer_size_ = glm::ivec2(fbW, fbH);
+        const glm::ivec2 next_window_size(winW, winH);
+        const glm::ivec2 next_framebuffer_size(fbW, fbH);
+        const bool size_changed = next_window_size != window_size_ ||
+                                  next_framebuffer_size != framebuffer_size_;
+
+        const auto flags = SDL_GetWindowFlags(window_);
+        if (size_changed) {
+            LOG_DEBUG("Window size update [{}]: logical {}x{} -> {}x{}, framebuffer {}x{} -> {}x{}, fullscreen={}, flags=0x{:x}",
+                      reason,
+                      window_size_.x,
+                      window_size_.y,
+                      next_window_size.x,
+                      next_window_size.y,
+                      framebuffer_size_.x,
+                      framebuffer_size_.y,
+                      next_framebuffer_size.x,
+                      next_framebuffer_size.y,
+                      is_fullscreen_,
+                      static_cast<unsigned>(flags));
+        } else {
+            LOG_DEBUG("Window size update [{}]: unchanged logical {}x{}, framebuffer {}x{}, fullscreen={}, flags=0x{:x}",
+                      reason,
+                      next_window_size.x,
+                      next_window_size.y,
+                      next_framebuffer_size.x,
+                      next_framebuffer_size.y,
+                      is_fullscreen_,
+                      static_cast<unsigned>(flags));
+        }
+
+        window_size_ = next_window_size;
+        framebuffer_size_ = next_framebuffer_size;
         if (vulkan_context_) {
             vulkan_context_->notifyFramebufferResized(fbW, fbH);
+        }
+        if (size_changed) {
+            lfs::core::events::ui::WindowResized{.width = fbW, .height = fbH}.emit();
         }
     }
 
@@ -330,6 +397,43 @@ namespace lfs::vis {
             }
             break;
 
+        case SDL_EVENT_WINDOW_RESIZED:
+        case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+        case SDL_EVENT_WINDOW_MINIMIZED:
+        case SDL_EVENT_WINDOW_MAXIMIZED:
+        case SDL_EVENT_WINDOW_RESTORED:
+            if (!eventTargetsWindow(event, main_window_id))
+                break;
+            LOG_DEBUG("SDL window event: {} data1={} data2={} fullscreen={}",
+                      windowEventName(event.type),
+                      event.window.data1,
+                      event.window.data2,
+                      is_fullscreen_);
+            updateWindowSize(windowEventName(event.type));
+            break;
+
+        case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
+            if (!eventTargetsWindow(event, main_window_id))
+                break;
+            is_fullscreen_ = true;
+            LOG_DEBUG("SDL window event: {} data1={} data2={}",
+                      windowEventName(event.type),
+                      event.window.data1,
+                      event.window.data2);
+            updateWindowSize(windowEventName(event.type));
+            break;
+
+        case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
+            if (!eventTargetsWindow(event, main_window_id))
+                break;
+            is_fullscreen_ = false;
+            LOG_DEBUG("SDL window event: {} data1={} data2={}",
+                      windowEventName(event.type),
+                      event.window.data1,
+                      event.window.data2);
+            updateWindowSize(windowEventName(event.type));
+            break;
+
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
         case SDL_EVENT_MOUSE_BUTTON_UP: {
             if (!eventTargetsWindow(event, main_window_id))
@@ -405,23 +509,52 @@ namespace lfs::vis {
         }
     }
 
-    void WindowManager::toggleFullscreen() {
+    void WindowManager::setFullscreen(const bool fullscreen) {
         if (!window_)
             return;
 
-        if (is_fullscreen_) {
-            SDL_SetWindowFullscreen(window_, false);
+        LOG_DEBUG("setFullscreen request: target={}, current={}, logical={}x{}, framebuffer={}x{}",
+                  fullscreen,
+                  is_fullscreen_,
+                  window_size_.x,
+                  window_size_.y,
+                  framebuffer_size_.x,
+                  framebuffer_size_.y);
+
+        if (fullscreen == is_fullscreen_) {
+            LOG_DEBUG("setFullscreen request already satisfied: fullscreen={}", is_fullscreen_);
+            return;
+        }
+
+        if (!fullscreen) {
+            if (!SDL_SetWindowFullscreen(window_, false)) {
+                LOG_WARN("Failed to leave fullscreen: {}", SDL_GetError());
+                return;
+            }
             SDL_SetWindowPosition(window_, windowed_pos_.x, windowed_pos_.y);
             SDL_SetWindowSize(window_, windowed_size_.x, windowed_size_.y);
             is_fullscreen_ = false;
+            LOG_DEBUG("setFullscreen leave requested: restoring windowed pos={}x{}, size={}x{}",
+                      windowed_pos_.x,
+                      windowed_pos_.y,
+                      windowed_size_.x,
+                      windowed_size_.y);
         } else {
             SDL_GetWindowPosition(window_, &windowed_pos_.x, &windowed_pos_.y);
             SDL_GetWindowSize(window_, &windowed_size_.x, &windowed_size_.y);
-            SDL_SetWindowFullscreen(window_, true);
+            if (!SDL_SetWindowFullscreen(window_, true)) {
+                LOG_WARN("Failed to enter fullscreen: {}", SDL_GetError());
+                return;
+            }
             is_fullscreen_ = true;
+            LOG_DEBUG("setFullscreen enter requested: saved windowed pos={}x{}, size={}x{}",
+                      windowed_pos_.x,
+                      windowed_pos_.y,
+                      windowed_size_.x,
+                      windowed_size_.y);
         }
 
-        updateWindowSize();
+        updateWindowSize(fullscreen ? "setFullscreen-enter" : "setFullscreen-leave");
         wakeEventLoop();
     }
 

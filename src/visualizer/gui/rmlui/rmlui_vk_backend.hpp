@@ -12,7 +12,9 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#ifndef VK_USE_PLATFORM_WIN32_KHR
 #define VK_USE_PLATFORM_WIN32_KHR
+#endif
 #include <windows.h>
 #endif
 
@@ -28,10 +30,12 @@
 
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #ifdef RMLUI_DEBUG
@@ -66,6 +70,7 @@ public:
         VkFormat color_format = VK_FORMAT_UNDEFINED;
         VkFormat depth_stencil_format = VK_FORMAT_UNDEFINED;
         VkExtent2D extent{};
+        bool host_image_copy = false;
     };
 
     bool Initialize(Rml::Vector<const char*> required_extensions, CreateSurfaceCallback create_surface_callback);
@@ -83,6 +88,7 @@ public:
     void ResetContextRenderState();
     void SetContextOffset(float offset_x, float offset_y);
     void SetContextClipRect(float x1, float y1, float x2, float y2);
+    void RenderTextureQuad(Rml::TextureHandle texture, float x, float y, float w, float h);
 
     void BeginFrame();
     void EndFrame();
@@ -107,6 +113,12 @@ public:
 
     /// Called by RmlUi when a texture is required by the library.
     Rml::TextureHandle LoadTexture(Rml::Vector2i& texture_dimensions, const Rml::String& source) override;
+    [[nodiscard]] uint64_t previewTextureGeneration() const {
+        return m_preview_texture_generation.load(std::memory_order_acquire);
+    }
+    [[nodiscard]] bool currentContextUsedPreviewTexture() const {
+        return m_current_context_used_preview_texture;
+    }
     /// Called by RmlUi when a texture is required to be built from an internally-generated sequence of pixels.
     Rml::TextureHandle GenerateTexture(Rml::Span<const Rml::byte> source_data, Rml::Vector2i source_dimensions) override;
     /// Called by RmlUi when a loaded texture is no longer required.
@@ -150,11 +162,15 @@ private:
     };
 
     struct texture_data_t {
-        VkImage m_p_vk_image;
-        VkImageView m_p_vk_image_view;
-        VkSampler m_p_vk_sampler;
-        VkDescriptorSet m_p_vk_descriptor_set;
-        VmaAllocation m_p_vma_allocation;
+        VkImage m_p_vk_image = VK_NULL_HANDLE;
+        VkImageView m_p_vk_image_view = VK_NULL_HANDLE;
+        VkSampler m_p_vk_sampler = VK_NULL_HANDLE;
+        VkDescriptorSet m_p_vk_descriptor_set = VK_NULL_HANDLE;
+        VmaAllocation m_p_vma_allocation = VK_NULL_HANDLE;
+        std::string m_vram_scope;
+        std::string m_vram_label;
+        VkDeviceSize m_vram_allocation_size = 0;
+        bool m_is_async_preview = false;
     };
 
     struct async_preview_result_t {
@@ -195,6 +211,8 @@ private:
         texture_data_t m_depth_stencil{};
         VkImageLayout m_color_layout = VK_IMAGE_LAYOUT_UNDEFINED;
         VkImageLayout m_depth_stencil_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        int width = 0;
+        int height = 0;
     };
 
     enum class active_render_target_t { None,
@@ -397,10 +415,12 @@ private:
         Rml::Array<CommandBuffersPerFrame, kNumFramesToBuffer> m_frames;
     };
 
+    // Grows on demand: when a pool is exhausted (VK_ERROR_OUT_OF_POOL_MEMORY / VK_ERROR_FRAGMENTED_POOL)
+    // a new identically-sized pool is created and the allocation retried. Each set remembers its owning
+    // pool so Free_Descriptors returns it to the correct pool.
     class DescriptorPoolManager {
     public:
-        DescriptorPoolManager() : m_allocated_descriptor_count{},
-                                  m_p_descriptor_pool{} {}
+        DescriptorPoolManager() = default;
         ~DescriptorPoolManager() {
             RMLUI_VK_ASSERTMSG(m_allocated_descriptor_count <= 0, "something is wrong. You didn't free some VkDescriptorSet");
         }
@@ -409,29 +429,22 @@ private:
                         uint32_t count_storage_buffer) noexcept {
             RMLUI_VK_ASSERTMSG(p_device, "you can't pass an invalid VkDevice here");
 
-            Rml::Array<VkDescriptorPoolSize, 5> sizes;
-            sizes[0] = {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, count_uniform_buffer};
-            sizes[1] = {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, count_uniform_buffer};
-            sizes[2] = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, count_image_sampler};
-            sizes[3] = {VK_DESCRIPTOR_TYPE_SAMPLER, count_sampler};
-            sizes[4] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, count_storage_buffer};
+            m_count_uniform_buffer = count_uniform_buffer;
+            m_count_image_sampler = count_image_sampler;
+            m_count_sampler = count_sampler;
+            m_count_storage_buffer = count_storage_buffer;
 
-            VkDescriptorPoolCreateInfo info = {};
-            info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-            info.pNext = nullptr;
-            info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-            info.maxSets = 1000;
-            info.poolSizeCount = static_cast<uint32_t>(sizes.size());
-            info.pPoolSizes = sizes.data();
-
-            auto status = vkCreateDescriptorPool(p_device, &info, nullptr, &m_p_descriptor_pool);
-            RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkCreateDescriptorPool");
+            CreatePool(p_device);
         }
 
         void Shutdown(VkDevice p_device) {
             RMLUI_VK_ASSERTMSG(p_device, "you can't pass an invalid VkDevice here");
 
-            vkDestroyDescriptorPool(p_device, m_p_descriptor_pool, nullptr);
+            for (VkDescriptorPool pool : m_pools) {
+                vkDestroyDescriptorPool(p_device, pool, nullptr);
+            }
+            m_pools.clear();
+            m_set_to_pool.clear();
         }
 
         uint32_t Get_AllocatedDescriptorCount() const noexcept { return m_allocated_descriptor_count; }
@@ -441,17 +454,20 @@ private:
             RMLUI_VK_ASSERTMSG(p_layouts, "you have to pass a valid and initialized VkDescriptorSetLayout (probably you must create it)");
             RMLUI_VK_ASSERTMSG(p_device, "you must pass a valid VkDevice here");
 
-            VkDescriptorSetAllocateInfo info = {};
-            info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            info.pNext = nullptr;
-            info.descriptorPool = m_p_descriptor_pool;
-            info.descriptorSetCount = descriptor_count_for_creation;
-            info.pSetLayouts = p_layouts;
-
-            auto status = vkAllocateDescriptorSets(p_device, &info, p_sets);
+            VkResult status = TryAlloc(p_device, p_layouts, p_sets, descriptor_count_for_creation);
+            if (status == VK_ERROR_OUT_OF_POOL_MEMORY || status == VK_ERROR_FRAGMENTED_POOL) {
+                CreatePool(p_device);
+                status = TryAlloc(p_device, p_layouts, p_sets, descriptor_count_for_creation);
+            }
             RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkAllocateDescriptorSets");
 
-            m_allocated_descriptor_count += descriptor_count_for_creation;
+            if (status == VkResult::VK_SUCCESS) {
+                const VkDescriptorPool owning_pool = m_pools.back();
+                for (uint32_t i = 0; i < descriptor_count_for_creation; ++i) {
+                    m_set_to_pool[p_sets[i]] = owning_pool;
+                }
+                m_allocated_descriptor_count += descriptor_count_for_creation;
+            }
 
             return status == VkResult::VK_SUCCESS;
         }
@@ -459,15 +475,70 @@ private:
         void Free_Descriptors(VkDevice p_device, VkDescriptorSet* p_sets, uint32_t descriptor_count = 1) noexcept {
             RMLUI_VK_ASSERTMSG(p_device, "you must pass a valid VkDevice here");
 
-            if (p_sets) {
-                m_allocated_descriptor_count -= descriptor_count;
-                vkFreeDescriptorSets(p_device, m_p_descriptor_pool, descriptor_count, p_sets);
+            if (!p_sets) {
+                return;
+            }
+            for (uint32_t i = 0; i < descriptor_count; ++i) {
+                VkDescriptorSet set = p_sets[i];
+                if (set == VK_NULL_HANDLE) {
+                    continue;
+                }
+                auto it = m_set_to_pool.find(set);
+                const VkDescriptorPool pool = (it != m_set_to_pool.end()) ? it->second
+                                                                          : (m_pools.empty() ? VK_NULL_HANDLE : m_pools.front());
+                if (pool != VK_NULL_HANDLE) {
+                    vkFreeDescriptorSets(p_device, pool, 1, &set);
+                }
+                if (it != m_set_to_pool.end()) {
+                    m_set_to_pool.erase(it);
+                }
+                m_allocated_descriptor_count -= 1;
             }
         }
 
     private:
-        int m_allocated_descriptor_count;
-        VkDescriptorPool m_p_descriptor_pool;
+        void CreatePool(VkDevice p_device) noexcept {
+            Rml::Array<VkDescriptorPoolSize, 5> sizes;
+            sizes[0] = {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, m_count_uniform_buffer};
+            sizes[1] = {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, m_count_uniform_buffer};
+            sizes[2] = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, m_count_image_sampler};
+            sizes[3] = {VK_DESCRIPTOR_TYPE_SAMPLER, m_count_sampler};
+            sizes[4] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, m_count_storage_buffer};
+
+            VkDescriptorPoolCreateInfo info = {};
+            info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+            info.pNext = nullptr;
+            info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+            info.maxSets = 1000;
+            info.poolSizeCount = static_cast<uint32_t>(sizes.size());
+            info.pPoolSizes = sizes.data();
+
+            VkDescriptorPool pool = VK_NULL_HANDLE;
+            auto status = vkCreateDescriptorPool(p_device, &info, nullptr, &pool);
+            RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkCreateDescriptorPool");
+            if (status == VkResult::VK_SUCCESS) {
+                m_pools.push_back(pool);
+            }
+        }
+
+        VkResult TryAlloc(VkDevice p_device, VkDescriptorSetLayout* p_layouts, VkDescriptorSet* p_sets,
+                          uint32_t descriptor_count_for_creation) noexcept {
+            VkDescriptorSetAllocateInfo info = {};
+            info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            info.pNext = nullptr;
+            info.descriptorPool = m_pools.back();
+            info.descriptorSetCount = descriptor_count_for_creation;
+            info.pSetLayouts = p_layouts;
+            return vkAllocateDescriptorSets(p_device, &info, p_sets);
+        }
+
+        int m_allocated_descriptor_count = 0;
+        uint32_t m_count_uniform_buffer = 0;
+        uint32_t m_count_image_sampler = 0;
+        uint32_t m_count_sampler = 0;
+        uint32_t m_count_storage_buffer = 0;
+        std::vector<VkDescriptorPool> m_pools;
+        std::unordered_map<VkDescriptorSet, VkDescriptorPool> m_set_to_pool;
     };
 
     struct PhysicalDeviceWrapper {
@@ -672,6 +743,7 @@ private:
     Rml::Vector2f m_context_offset;
     VkRect2D m_context_clip_scissor{};
     bool m_context_clip_enabled = false;
+    bool m_current_context_used_preview_texture = false;
     texture_data_t m_texture_depthstencil;
 
     Rml::Matrix4f m_projection;
@@ -684,7 +756,13 @@ private:
     Rml::Vector<VkShaderModule> m_shaders;
     Rml::Array<Rml::Vector<texture_data_t*>, kSwapchainBackBufferCount> m_pending_for_deletion_textures_by_frames;
     std::vector<std::shared_ptr<async_preview_state_t>> m_async_preview_textures;
+    std::atomic<uint64_t> m_preview_texture_generation{0};
     Rml::Vector<render_layer_t> m_render_layers;
+    Rml::CompiledGeometryHandle m_texture_quad_geometry = {};
+    float m_texture_quad_x = 0.0f;
+    float m_texture_quad_y = 0.0f;
+    float m_texture_quad_w = 0.0f;
+    float m_texture_quad_h = 0.0f;
     Rml::Array<Rml::Vector<VmaVirtualAllocation>, kSwapchainBackBufferCount> m_transient_shader_allocations_by_frame;
     VkImage m_external_swapchain_image = VK_NULL_HANDLE;
     VkImageView m_external_swapchain_image_view = VK_NULL_HANDLE;

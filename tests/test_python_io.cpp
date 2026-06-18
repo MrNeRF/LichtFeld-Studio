@@ -573,7 +573,7 @@ TEST_F(PythonIOTest, PlyLoadMapsExternalChannelMajorShOrderToInternalLayout) {
     EXPECT_FLOAT_EQ(sh0_ptr[1], 20.0f);
     EXPECT_FLOAT_EQ(sh0_ptr[2], 30.0f);
 
-    const auto shN = loaded->shN().cpu().contiguous();
+    const auto shN = loaded->shN_canonical_cpu().contiguous();
     ASSERT_TRUE(shN.is_valid());
     ASSERT_EQ(shN.ndim(), 3);
     ASSERT_EQ(shN.size(0), 1);

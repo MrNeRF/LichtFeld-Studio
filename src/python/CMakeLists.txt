@@ -213,6 +213,7 @@ nanobind_add_module(
     lfs/py_pipeline.cpp
     lfs/py_prop_registry.cpp
     lfs/py_signals.cpp
+    lfs/py_store.cpp
     lfs/py_rml.cpp
     lfs/rml_python_panel_adapter.cpp
     lfs/py_rml_im_mode_layout.cpp
@@ -242,11 +243,12 @@ target_compile_definitions(lfs_py PRIVATE
 
 if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
     set(LFS_PY_INTERNAL_LINK_LIBS
-        "$<LINK_GROUP:RESCAN,lfs_core,lfs_event_bridge,lfs_geometry,lfs_visualizer,lfs_mcp,lfs_python_runtime,lfs_training,lfs_io,lfs_rendering_tensor,lfs_sequencer>"
+        "$<LINK_GROUP:RESCAN,lfs_core,lfs_diagnostics,lfs_event_bridge,lfs_geometry,lfs_visualizer,lfs_mcp,lfs_python_runtime,lfs_training,lfs_io,lfs_rendering_tensor,lfs_sequencer>"
     )
 else()
     set(LFS_PY_INTERNAL_LINK_LIBS
         lfs_core
+        lfs_diagnostics
         lfs_event_bridge
         lfs_geometry
         lfs_visualizer
@@ -261,14 +263,15 @@ endif()
 
 target_link_libraries(lfs_py PRIVATE
     ${LFS_PY_INTERNAL_LINK_LIBS}
-    $<IF:$<PLATFORM_ID:Windows>,OpenMeshCore,OpenMeshCoreStatic>
-    $<IF:$<PLATFORM_ID:Windows>,OpenMeshTools,OpenMeshToolsStatic>
+    OpenMeshCore
+    OpenMeshTools
     OpenImageIO::OpenImageIO
     CUDA::cudart
     CUDA::curand
     ${CMAKE_DL_LIBS}
     imgui::imgui
     implot::implot
+    GPUOpen::VulkanMemoryAllocator
     $<IF:$<PLATFORM_ID:Windows>,RmlUi::RmlUi,lfs_rmlui>
 )
 
@@ -298,6 +301,7 @@ if(WIN32)
             "$<TARGET_FILE:lfs_python_runtime>"
             "$<TARGET_FILE:lfs_event_bridge>"
             "$<TARGET_FILE:lfs_core>"
+            "$<TARGET_FILE:lfs_diagnostics>"
             "$<TARGET_FILE:lfs_visualizer>"
             "$<TARGET_FILE:lfs_mcp>"
             "${CMAKE_CURRENT_BINARY_DIR}"

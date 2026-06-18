@@ -8,15 +8,17 @@ Asset Manager panel renders from.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Any, Optional
 
 import lichtfeld as lf
 
 try:
-    from .asset_index import AssetIndex
+    from .asset_index import AssetIndex, resolve_asset_manager_storage_path
     from .asset_scanner import AssetScanner
     from .asset_thumbnails import AssetThumbnails
 
@@ -29,9 +31,6 @@ except ImportError:
 
 _logger = logging.getLogger(__name__)
 _active_panel = None
-_DEFAULT_STORAGE_PATH = Path.home() / ".lichtfeld" / "asset_manager"
-
-
 def set_active_asset_manager_panel(panel) -> None:
     global _active_panel
     _active_panel = panel
@@ -48,8 +47,9 @@ def get_asset_manager_panel():
 
 
 def _storage_path() -> Path:
-    _DEFAULT_STORAGE_PATH.mkdir(parents=True, exist_ok=True)
-    return _DEFAULT_STORAGE_PATH
+    path = resolve_asset_manager_storage_path()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def load_asset_index(asset_index: Optional[AssetIndex] = None) -> Optional[AssetIndex]:
@@ -86,28 +86,19 @@ def metadata_to_asset_kwargs(metadata: dict[str, Any]) -> dict[str, Any]:
         "modified_at": metadata.get("modified"),
     }
 
-    if asset_type in ("ply", "rad", "sog", "spz", "mesh"):
+    if asset_type in ("ply_3dgs", "ply_pcl", "ply", "rad", "sog", "spz", "mesh"):
         kwargs["geometry_metadata"] = format_specific
-    elif asset_type == "checkpoint":
-        kwargs["training_metadata"] = format_specific
     elif asset_type == "dataset":
         kwargs["dataset_metadata"] = format_specific
-    elif asset_type in ("video", "mp4", "mov"):
-        normalized_video = dict(format_specific)
-        resolution = normalized_video.pop("resolution", None)
-        if resolution and "x" in resolution:
-            width, height = resolution.split("x", 1)
-            try:
-                normalized_video["width"] = int(width)
-                normalized_video["height"] = int(height)
-            except ValueError:
-                pass
-        duration = normalized_video.pop("duration", None)
-        if duration is not None:
-            normalized_video["duration_seconds"] = duration
-        kwargs["video_metadata"] = normalized_video
 
     return kwargs
+
+
+def _maybe_await(coro_or_result):
+    """Await if the value is a coroutine, otherwise return it directly."""
+    if asyncio.iscoroutine(coro_or_result):
+        return asyncio.run(coro_or_result)
+    return coro_or_result
 
 
 def _generate_thumbnail(
@@ -117,19 +108,61 @@ def _generate_thumbnail(
 ) -> None:
     if thumbnails is None or asset is None:
         return
-    try:
-        thumb_path = thumbnails.generate_placeholder(asset.type, asset.id)
-        index.update_asset(asset.id, thumbnail_path=str(thumb_path))
-    except Exception as exc:
-        _logger.debug("Failed to generate thumbnail for %s: %s", asset.id, exc)
+
+    def _do_generate() -> None:
+        try:
+            thumb_path = None
+            asset_path = getattr(asset, "absolute_path", "") or getattr(asset, "path", "")
+            if asset.type == "dataset" and hasattr(thumbnails, "generate_dataset_preview"):
+                thumb_path = _maybe_await(
+                    thumbnails.generate_dataset_preview(
+                        asset.type,
+                        asset.id,
+                        asset_path,
+                        getattr(asset, "dataset_metadata", {}) or {},
+                    )
+                )
+            elif hasattr(thumbnails, "generate_rendered_preview"):
+                thumb_path = _maybe_await(
+                    thumbnails.generate_rendered_preview(
+                        asset.type,
+                        asset.id,
+                        asset_path,
+                    )
+                )
+            if thumb_path is None:
+                thumb_path = _maybe_await(thumbnails.generate_placeholder(asset.type, asset.id))
+            index.update_asset(asset.id, thumbnail_path=str(thumb_path))
+        except Exception as exc:
+            _logger.debug("Failed to generate thumbnail for %s: %s", asset.id, exc)
+
+    threading.Thread(target=_do_generate, daemon=True).start()
 
 
 def derive_project_scene_names(dataset_path: str) -> tuple[str, str]:
     normalized = os.path.normpath(dataset_path)
     scene_name = os.path.basename(normalized) or "Untitled Dataset"
     parent_dir = os.path.basename(os.path.dirname(normalized))
-    project_name = parent_dir if parent_dir and parent_dir != "." else scene_name
-    return project_name, scene_name
+    folder_name = parent_dir if parent_dir and parent_dir != "." else scene_name
+    return folder_name, scene_name
+
+
+def _resolve_active_catalog_context(index: AssetIndex) -> tuple[Optional[str], Optional[str]]:
+    panel = get_asset_manager_panel()
+    if panel is None:
+        return None, None
+
+    folder_id = getattr(panel, "_selected_folder_id", None)
+    if not folder_id or folder_id not in index.folders:
+        return None, None
+
+    scene_id = getattr(panel, "_selected_scene_id", None)
+    if scene_id:
+        scene = index.scenes.get(scene_id)
+        if scene and scene.get("folder_id") == folder_id:
+            return folder_id, scene_id
+
+    return folder_id, None
 
 
 def ensure_dataset_catalog_context(
@@ -138,32 +171,43 @@ def ensure_dataset_catalog_context(
     asset_index: Optional[AssetIndex] = None,
     scanner: Optional[AssetScanner] = None,
     thumbnails: Optional[AssetThumbnails] = None,
+    folder_id: Optional[str] = None,
 ) -> dict[str, Optional[str]]:
     if not dataset_path:
-        return {"project_id": None, "scene_id": None, "asset_id": None}
+        return {"folder_id": None, "scene_id": None, "asset_id": None}
 
     index = load_asset_index(asset_index)
     scan = load_scanner(scanner)
     thumbs = load_thumbnails(thumbnails)
     if index is None:
-        return {"project_id": None, "scene_id": None, "asset_id": None}
+        return {"folder_id": None, "scene_id": None, "asset_id": None}
 
     normalized_path = os.path.abspath(dataset_path)
-    # Always use "Default" project for all imported assets
-    project = index.find_or_create_project("Default")
-    # Use derived scene name for organization within the Default project
-    _project_name, scene_name = derive_project_scene_names(normalized_path)
-    scene = index.find_or_create_scene(project.id, scene_name) if project else None
-    project_id = project.id if project else None
+    if not folder_id or folder_id not in index.folders:
+        _logger.warning(
+            "Cannot register dataset in Asset Manager without a selected folder: %s",
+            normalized_path,
+        )
+        return {"folder_id": None, "scene_id": None, "asset_id": None}
+
+    metadata = scan.scan_file(normalized_path) if scan else {}
+    if metadata.get("type") != "dataset":
+        _logger.warning(
+            "Cannot register dataset in Asset Manager: not a dataset root: %s",
+            normalized_path,
+        )
+        return {"folder_id": None, "scene_id": None, "asset_id": None}
+
+    _folder_name, scene_name = derive_project_scene_names(normalized_path)
+    scene = index.find_or_create_scene(folder_id, scene_name)
     scene_id = scene.id if scene else None
-    existing = index.find_asset_by_path(normalized_path)
+    existing = index.find_asset_by_path(normalized_path, folder_id=folder_id)
 
     asset = existing
     if asset is None or asset.type != "dataset":
-        metadata = scan.scan_file(normalized_path) if scan else {}
         asset_kwargs = metadata_to_asset_kwargs(metadata)
         asset = index.create_asset(
-            project_id=project_id,
+            folder_id=folder_id,
             name=Path(normalized_path).name,
             type="dataset",
             path=normalized_path,
@@ -176,7 +220,7 @@ def ensure_dataset_catalog_context(
             _generate_thumbnail(index, asset, thumbs)
     else:
         update_kwargs: dict[str, Any] = {
-            "project_id": project_id or asset.project_id,
+            "folder_id": folder_id or asset.folder_id,
             "scene_id": scene_id or asset.scene_id,
             "name": Path(normalized_path).name or asset.name,
             "role": asset.role or "source_dataset",
@@ -190,7 +234,7 @@ def ensure_dataset_catalog_context(
         index.update_scene(scene_id, dataset_asset_id=asset.id)
 
     return {
-        "project_id": project_id,
+        "folder_id": folder_id,
         "scene_id": scene_id,
         "asset_id": asset.id if asset is not None else None,
     }
@@ -206,6 +250,8 @@ def register_catalog_asset_path(
     asset_index: Optional[AssetIndex] = None,
     scanner: Optional[AssetScanner] = None,
     thumbnails: Optional[AssetThumbnails] = None,
+    folder_id: Optional[str] = None,
+    scene_id: Optional[str] = None,
 ) -> Optional[Any]:
     if not path or not ASSET_MANAGER_BACKEND_AVAILABLE:
         return None
@@ -217,45 +263,52 @@ def register_catalog_asset_path(
     if index is None:
         return None
 
+    active_folder_id, active_scene_id = _resolve_active_catalog_context(index)
+    folder_id = folder_id or active_folder_id
+    scene_id = scene_id or active_scene_id
+
     if is_dataset:
         context = ensure_dataset_catalog_context(
             normalized_path,
             asset_index=index,
             scanner=scan,
             thumbnails=thumbs,
+            folder_id=folder_id,
         )
         asset_id = context.get("asset_id")
         asset = index.get_asset(asset_id) if asset_id else None
         if asset is not None and select:
             select_asset_in_active_panel(
                 asset.id,
-                project_id=context.get("project_id"),
+                folder_id=context.get("folder_id"),
                 scene_id=context.get("scene_id"),
             )
         return asset
 
-    dataset_context = {"project_id": None, "scene_id": None, "asset_id": None}
+    dataset_context = {"folder_id": None, "scene_id": None, "asset_id": None}
     dataset_params = None
     try:
         dataset_params = lf.dataset_params()
     except Exception:
         dataset_params = None
 
-    if dataset_params and dataset_params.has_params() and dataset_params.data_path:
+    if folder_id and dataset_params and dataset_params.has_params() and dataset_params.data_path:
         dataset_context = ensure_dataset_catalog_context(
             dataset_params.data_path,
             asset_index=index,
             scanner=scan,
             thumbnails=thumbs,
+            folder_id=folder_id,
         )
 
-    project_id = dataset_context.get("project_id")
-    scene_id = dataset_context.get("scene_id")
-
-    if project_id is None:
-        # Always use "Default" project for imported assets
-        project = index.find_or_create_project("Default")
-        project_id = project.id if project else None
+    folder_id = folder_id or dataset_context.get("folder_id")
+    scene_id = scene_id or dataset_context.get("scene_id")
+    if not folder_id or folder_id not in index.folders:
+        _logger.warning(
+            "Cannot register asset in Asset Manager without a selected folder: %s",
+            normalized_path,
+        )
+        return None
 
     metadata = scan.scan_file(normalized_path) if scan else {}
     asset_kwargs = metadata_to_asset_kwargs(metadata)
@@ -263,7 +316,7 @@ def register_catalog_asset_path(
     detected_role = role or metadata.get("role") or "reference"
 
     asset = index.create_asset(
-        project_id=project_id,
+        folder_id=folder_id,
         name=Path(normalized_path).name,
         type=detected_type,
         path=normalized_path,
@@ -278,7 +331,7 @@ def register_catalog_asset_path(
     if asset is not None and select:
         select_asset_in_active_panel(
             asset.id,
-            project_id=project_id,
+            folder_id=folder_id,
             scene_id=scene_id,
         )
     elif asset is not None:
@@ -291,16 +344,45 @@ def refresh_active_panel() -> None:
     panel = get_asset_manager_panel()
     if panel is None:
         return
+    # Reload from disk so we pick up changes written by background threads
+    if hasattr(panel, "_asset_index") and panel._asset_index is not None:
+        try:
+            panel._asset_index.load()
+            library_path = getattr(panel._asset_index, "library_path", None)
+            if library_path is not None and library_path.exists():
+                panel._library_mtime = library_path.stat().st_mtime
+        except Exception:
+            pass
     try:
         panel.refresh_catalog()
     except Exception:
         _logger.debug("Failed to refresh active Asset Manager panel", exc_info=True)
 
 
+def update_thumbnail_from_current_camera(asset_id: str) -> bool:
+    """Update an asset's thumbnail using the current viewport camera pose.
+
+    Args:
+        asset_id: The ID of the asset to update.
+
+    Returns:
+        True if the thumbnail was updated successfully.
+    """
+    panel = get_asset_manager_panel()
+    if panel is None:
+        return False
+    try:
+        panel.on_update_thumbnail(None, None, [asset_id])
+        return True
+    except Exception:
+        _logger.debug("Failed to update thumbnail from camera", exc_info=True)
+        return False
+
+
 def select_asset_in_active_panel(
     asset_id: str,
     *,
-    project_id: Optional[str] = None,
+    folder_id: Optional[str] = None,
     scene_id: Optional[str] = None,
 ) -> None:
     panel = get_asset_manager_panel()
@@ -309,8 +391,8 @@ def select_asset_in_active_panel(
 
     try:
         panel._selected_asset_ids = {asset_id}
-        if project_id is not None:
-            panel._selected_project_id = project_id
+        if folder_id is not None:
+            panel._selected_folder_id = folder_id
         if scene_id is not None:
             panel._selected_scene_id = scene_id
         panel._update_selection_type()
@@ -522,9 +604,9 @@ def save_asset_to_catalog(node_name: str) -> bool:
                 return True
             return False
 
-        project = index.find_or_create_project("Default")
-        if project is None:
-            _logger.warning("Cannot save asset: failed to create project")
+        folder_id, scene_id = _resolve_active_catalog_context(index)
+        if not folder_id:
+            _logger.warning("Cannot save asset: create or select an Asset Manager folder first")
             return False
 
         if not abs_path and geometry_type in {"GROUP", "DATASET"}:
@@ -539,11 +621,12 @@ def save_asset_to_catalog(node_name: str) -> bool:
             )
             return False
         created = index.create_asset(
-            project_id=project.id,
+            folder_id=folder_id,
             name=geometry_name,
             type=_asset_type_from_node_type(geometry_type),
             path=rel_path,
             absolute_path=abs_path,
+            scene_id=scene_id,
             role="scene_reference",
             geometry_metadata=geometry_metadata,
             transform_metadata=transform_metadata,

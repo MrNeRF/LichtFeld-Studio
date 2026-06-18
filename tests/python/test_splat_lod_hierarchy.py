@@ -31,8 +31,7 @@ class _FakeMergeTree:
         requested_ratio: float,
         final_roots: list[int],
         pruned_leaf_ids: list[int],
-        merge_left: list[int],
-        merge_right: list[int],
+        merge_children: list[list[int]],
         merge_pass: list[int],
     ):
         self._leaf_count = leaf_count
@@ -41,15 +40,16 @@ class _FakeMergeTree:
         self.requested_ratio = requested_ratio
         self.final_roots = final_roots
         self.pruned_leaf_ids = pruned_leaf_ids
-        self.merge_left = merge_left
-        self.merge_right = merge_right
+        self.merge_children = merge_children
+        self.merge_left = [c[0] for c in merge_children]
+        self.merge_right = [c[1] for c in merge_children]
         self.merge_pass = merge_pass
 
     def leaf_count(self) -> int:
         return self._leaf_count
 
     def merge_count(self) -> int:
-        return len(self.merge_left)
+        return len(self.merge_children)
 
 
 class _FakeSimplifyResult:
@@ -92,13 +92,12 @@ def test_build_splat_lod_hierarchy_tracks_global_node_ids_across_levels(monkeypa
 
     calls = []
 
-    def _simplify(source_splat, *, ratio, knn_k, merge_cap, opacity_prune_threshold, progress=None):
+    def _simplify(source_splat, *, ratio, lod_base, opacity_prune_threshold, progress=None):
         calls.append(
             {
                 "source": source_splat.name,
                 "ratio": ratio,
-                "knn_k": knn_k,
-                "merge_cap": merge_cap,
+                "lod_base": lod_base,
                 "opacity_prune_threshold": opacity_prune_threshold,
             }
         )
@@ -112,8 +111,7 @@ def test_build_splat_lod_hierarchy_tracks_global_node_ids_across_levels(monkeypa
                     requested_ratio=0.75,
                     final_roots=[2, 3, 4],
                     pruned_leaf_ids=[],
-                    merge_left=[0],
-                    merge_right=[1],
+                    merge_children=[[0, 1]],
                     merge_pass=[0],
                 ),
             )
@@ -127,8 +125,7 @@ def test_build_splat_lod_hierarchy_tracks_global_node_ids_across_levels(monkeypa
                     requested_ratio=1.0,
                     final_roots=[3],
                     pruned_leaf_ids=[1],
-                    merge_left=[0],
-                    merge_right=[2],
+                    merge_children=[[0, 2]],
                     merge_pass=[0],
                 ),
             )
@@ -143,12 +140,11 @@ def test_build_splat_lod_hierarchy_tracks_global_node_ids_across_levels(monkeypa
         [5],
     ]
     assert hierarchy.merge_node_ids == [4, 5]
-    assert hierarchy.merge_left == [0, 2]
-    assert hierarchy.merge_right == [1, 4]
+    assert hierarchy.merge_children == [[0, 1], [2, 4]]
     assert hierarchy.created_lod == [1, 2]
     assert hierarchy.created_pass == [0, 0]
-    assert hierarchy.children(4) == (0, 1)
-    assert hierarchy.children(5) == (2, 4)
+    assert hierarchy.children(4) == [0, 1]
+    assert hierarchy.children(5) == [2, 4]
     assert hierarchy.children(0) is None
     assert hierarchy.levels[2].pruned_input_node_ids == [3]
 
@@ -156,20 +152,18 @@ def test_build_splat_lod_hierarchy_tracks_global_node_ids_across_levels(monkeypa
     assert payload["format"] == "lichtfeld.splat_lod_hierarchy/v1"
     assert payload["levels"][1]["new_merge_node_ids"] == [4]
     assert payload["levels"][2]["pruned_input_node_ids"] == [3]
-    assert payload["merge_nodes"]["left_child"] == [0, 2]
+    assert payload["merge_nodes"]["children"] == [[0, 1], [2, 4]]
     assert calls == [
         {
             "source": "lod0",
             "ratio": pytest.approx(0.75),
-            "knn_k": 16,
-            "merge_cap": pytest.approx(0.5),
+            "lod_base": pytest.approx(2.0),
             "opacity_prune_threshold": pytest.approx(0.1),
         },
         {
             "source": "lod1",
             "ratio": pytest.approx(1.0),
-            "knn_k": 16,
-            "merge_cap": pytest.approx(0.5),
+            "lod_base": pytest.approx(2.0),
             "opacity_prune_threshold": pytest.approx(0.1),
         },
     ]
@@ -181,7 +175,7 @@ def test_hierarchy_save_writes_sidecar_and_node_id_attributes(monkeypatch, tmp_p
 
     saved_plys = []
 
-    def _simplify(source_splat, *, ratio, knn_k, merge_cap, opacity_prune_threshold, progress=None):
+    def _simplify(source_splat, *, ratio, lod_base, opacity_prune_threshold, progress=None):
         assert source_splat is source
         return _FakeSimplifyResult(
             lod1,
@@ -192,8 +186,7 @@ def test_hierarchy_save_writes_sidecar_and_node_id_attributes(monkeypatch, tmp_p
                 requested_ratio=0.5,
                 final_roots=[4, 5],
                 pruned_leaf_ids=[],
-                merge_left=[0, 2],
-                merge_right=[1, 3],
+                merge_children=[[0, 1], [2, 3]],
                 merge_pass=[0, 0],
             ),
         )
@@ -239,7 +232,7 @@ def test_build_splat_lod_hierarchy_resolves_source_by_scene_node_name(monkeypatc
     source = _FakeSplatData("lod0", 4)
     node = SimpleNamespace(name="SourceNode", id=17, splat_data=lambda: source)
 
-    def _simplify(source_splat, *, ratio, knn_k, merge_cap, opacity_prune_threshold, progress=None):
+    def _simplify(source_splat, *, ratio, lod_base, opacity_prune_threshold, progress=None):
         assert source_splat is source
         return _FakeSimplifyResult(
             _FakeSplatData("lod1", 2),
@@ -250,8 +243,7 @@ def test_build_splat_lod_hierarchy_resolves_source_by_scene_node_name(monkeypatc
                 requested_ratio=0.5,
                 final_roots=[4, 5],
                 pruned_leaf_ids=[],
-                merge_left=[0, 2],
-                merge_right=[1, 3],
+                merge_children=[[0, 1], [2, 3]],
                 merge_pass=[0, 0],
             ),
         )
@@ -271,7 +263,7 @@ def test_build_splat_lod_hierarchy_uses_selected_scene_node_when_source_is_omitt
     source = _FakeSplatData("lod0", 2)
     node = SimpleNamespace(name="SelectedNode", id=9, splat_data=lambda: source)
 
-    def _simplify(source_splat, *, ratio, knn_k, merge_cap, opacity_prune_threshold, progress=None):
+    def _simplify(source_splat, *, ratio, lod_base, opacity_prune_threshold, progress=None):
         assert source_splat is source
         return _FakeSimplifyResult(
             _FakeSplatData("lod1", 1),
@@ -282,8 +274,7 @@ def test_build_splat_lod_hierarchy_uses_selected_scene_node_when_source_is_omitt
                 requested_ratio=0.5,
                 final_roots=[2],
                 pruned_leaf_ids=[],
-                merge_left=[0],
-                merge_right=[1],
+                merge_children=[[0, 1]],
                 merge_pass=[0],
             ),
         )

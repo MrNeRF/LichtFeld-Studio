@@ -53,3 +53,9 @@ lib/
 !external/tree-sitter/lib/src/query.c
 generatedSchema.usda
 plugInfo.json
+
+# Compiled SPIR-V shader binaries (regenerated from slang/glsl by CMake;
+# slangc + glslang are required by the build anyway, so checking these in
+# only creates merge-conflict churn).
+src/rendering/rasterizer/vulkan/shader/generated/*.spv
+src/rendering/rasterizer/vulkan/shader/radix_sort/*.spv

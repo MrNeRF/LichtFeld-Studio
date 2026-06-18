@@ -4,6 +4,7 @@
 #pragma once
 
 #include "gui/rmlui/rml_tooltip.hpp"
+#include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/sequencer_ui_state.hpp"
 #include "sequencer_controller.hpp"
 #include <RmlUi/Core/EventListener.h>
@@ -133,6 +134,7 @@ namespace lfs::vis {
         [[nodiscard]] bool consumeSavePathRequest();
         [[nodiscard]] bool consumeLoadPathRequest();
         [[nodiscard]] bool consumeExportRequest();
+        [[nodiscard]] bool consumeLoadSequenceRequest();
         [[nodiscard]] bool consumeDockToggleRequest();
         [[nodiscard]] bool consumeClosePanelRequest();
         [[nodiscard]] bool consumeClearRequest();
@@ -174,6 +176,7 @@ namespace lfs::vis {
         void updateTimeDisplay();
         void updateTransportSettings();
         void rebuildKeyframes();
+        void rebuildPlySequenceClip();
         void rebuildRuler();
         void rebuildEasingStripe(float timeline_x, float timeline_width);
         void rebuildFilmStrip(float timeline_x, float timeline_width,
@@ -231,21 +234,86 @@ namespace lfs::vis {
         void enterDurationEdit();
         void exitDurationEdit(bool commit);
 
+        struct SequenceFpsEditListener : Rml::EventListener {
+            RmlSequencerPanel* panel = nullptr;
+            void ProcessEvent(Rml::Event& event) override;
+        };
+
+        void syncSequenceFpsDisplay();
+        void enterSequenceFpsEdit();
+        void exitSequenceFpsEdit(bool commit);
+
+        struct RenderSignature {
+            int width = 0;
+            int height = 0;
+            int dp_milli = 1000;
+            bool floating = false;
+            bool film_strip_attached = false;
+            std::size_t theme_signature = 0;
+            std::string language;
+            uint64_t timeline_revision = 0;
+            uint64_t selection_revision = 0;
+            uint64_t selected_keyframes_signature = 0;
+            int playhead_milli = 0;
+            int zoom_milli = 1000;
+            int pan_milli = 0;
+            int playback_speed_milli = 1000;
+            int sequence_fps_milli = 24000;
+            std::size_t sequence_frame_count = 0;
+            std::string sequence_node_name;
+            int snap_interval_milli = 1000;
+            int pip_scale_milli = 1000;
+            int state = 0;
+            int loop_mode = 0;
+            int preset = 0;
+            int custom_width = 0;
+            int custom_height = 0;
+            int framerate = 0;
+            int quality = 0;
+            bool follow_playback = false;
+            bool show_camera_path = false;
+            bool snap_to_grid = false;
+            bool show_film_strip = false;
+            bool show_pip_preview = false;
+            bool equirectangular = false;
+
+            bool operator==(const RenderSignature&) const = default;
+        };
+
+        [[nodiscard]] RenderSignature makeRenderSignature(
+            int width,
+            int height,
+            std::size_t theme_signature,
+            std::string language) const;
+        [[nodiscard]] bool canReuseCachedRender(const RenderSignature& signature,
+                                                const PanelInputState& input,
+                                                int width,
+                                                int height) const;
+        void queueCachedRender(float context_x, float context_y,
+                               float panel_width, float total_height,
+                               int width, int height,
+                               bool refresh);
+
         SequencerController& controller_;
         gui::panels::SequencerUIState& ui_state_;
         gui::RmlUIManager* rml_manager_;
         TransportClickListener transport_listener_;
         QualityScrubListener quality_scrub_listener_;
         DurationEditListener duration_listener_;
+        SequenceFpsEditListener sequence_fps_listener_;
 
         bool quality_scrub_active_ = false;
         bool quality_scrub_dragging_ = false;
         bool quality_scrub_editing_ = false;
         float quality_scrub_start_x_ = 0.0f;
         bool duration_editing_ = false;
+        bool sequence_fps_editing_ = false;
 
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
+        gui::CachedVulkanContextRender direct_cache_;
+        std::optional<RenderSignature> last_render_signature_;
+        bool direct_cache_dirty_ = true;
         std::string base_rcss_;
         std::size_t last_theme_signature_ = 0;
         bool has_theme_signature_ = false;
@@ -256,6 +324,7 @@ namespace lfs::vis {
         Rml::Element* el_floating_header_ = nullptr;
         Rml::Element* el_ruler_ = nullptr;
         Rml::Element* el_track_bar_ = nullptr;
+        Rml::Element* el_sequence_strip_ = nullptr;
         Rml::Element* el_keyframes_ = nullptr;
         Rml::Element* el_playhead_ = nullptr;
         Rml::Element* el_playhead_handle_ = nullptr;
@@ -293,6 +362,9 @@ namespace lfs::vis {
         Rml::Element* el_btn_film_strip_ = nullptr;
         Rml::Element* el_btn_preview_ = nullptr;
         Rml::Element* el_speed_label_ = nullptr;
+        Rml::Element* el_sequence_fps_field_ = nullptr;
+        Rml::Element* el_sequence_fps_display_ = nullptr;
+        Rml::Element* el_sequence_fps_input_ = nullptr;
         Rml::Element* el_format_label_ = nullptr;
         Rml::Element* el_resolution_info_ = nullptr;
         Rml::Element* el_quality_scrub_ = nullptr;
@@ -304,6 +376,7 @@ namespace lfs::vis {
         Rml::Element* el_btn_equirect_ = nullptr;
         Rml::Element* el_btn_save_ = nullptr;
         Rml::Element* el_btn_load_ = nullptr;
+        Rml::Element* el_btn_load_sequence_ = nullptr;
         Rml::Element* el_btn_export_ = nullptr;
         Rml::Element* el_btn_clear_ = nullptr;
         Rml::Element* el_transport_dock_sep_ = nullptr;
@@ -363,6 +436,7 @@ namespace lfs::vis {
         // Request flags consumed by SequencerUIManager
         bool save_path_requested_ = false;
         bool load_path_requested_ = false;
+        bool load_sequence_requested_ = false;
         bool export_requested_ = false;
         bool dock_toggle_requested_ = false;
         bool close_panel_requested_ = false;

@@ -167,15 +167,13 @@ class SplatLodHierarchy:
     source_node_name: str | None
     source_node_id: int | None
     ratio: float
-    knn_k: int
-    merge_cap: float
+    lod_base: float
     opacity_prune_threshold: float
     max_levels: int | None
     min_points: int
     levels: list[SplatLodLevel] = field(default_factory=list)
     merge_node_ids: list[int] = field(default_factory=list)
-    merge_left: list[int] = field(default_factory=list)
-    merge_right: list[int] = field(default_factory=list)
+    merge_children: list[list[int]] = field(default_factory=list)
     created_lod: list[int] = field(default_factory=list)
     created_pass: list[int] = field(default_factory=list)
 
@@ -196,14 +194,14 @@ class SplatLodHierarchy:
     def is_leaf(self, node_id: int) -> bool:
         return int(node_id) < self.leaf_count
 
-    def children(self, node_id: int) -> tuple[int, int] | None:
+    def children(self, node_id: int) -> list[int] | None:
         node_id = int(node_id)
         if node_id < self.leaf_count:
             return None
         merge_offset = node_id - self.leaf_count
-        if merge_offset < 0 or merge_offset >= len(self.merge_left):
+        if merge_offset < 0 or merge_offset >= len(self.merge_children):
             raise KeyError(f"Unknown node id: {node_id}")
-        return int(self.merge_left[merge_offset]), int(self.merge_right[merge_offset])
+        return list(self.merge_children[merge_offset])
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -215,16 +213,14 @@ class SplatLodHierarchy:
             "leaf_count": int(self.leaf_count),
             "node_count": int(self.node_count),
             "ratio": float(self.ratio),
-            "knn_k": int(self.knn_k),
-            "merge_cap": float(self.merge_cap),
+            "lod_base": float(self.lod_base),
             "opacity_prune_threshold": float(self.opacity_prune_threshold),
             "max_levels": None if self.max_levels is None else int(self.max_levels),
             "min_points": int(self.min_points),
             "levels": [level.to_dict() for level in self.levels],
             "merge_nodes": {
                 "node_ids": list(self.merge_node_ids),
-                "left_child": list(self.merge_left),
-                "right_child": list(self.merge_right),
+                "children": [list(c) for c in self.merge_children],
                 "created_lod": list(self.created_lod),
                 "created_pass": list(self.created_pass),
             },
@@ -332,8 +328,7 @@ class SplatLodHierarchy:
 def build_splat_lod_hierarchy(
     source: Any = None,
     ratio: float = 0.5,
-    knn_k: int = 16,
-    merge_cap: float = 0.5,
+    lod_base: float = 2.0,
     opacity_prune_threshold: float = 0.1,
     max_levels: int | None = None,
     min_points: int = 1,
@@ -345,10 +340,8 @@ def build_splat_lod_hierarchy(
 
     if ratio <= 0.0 or ratio > 1.0:
         raise ValueError("ratio must be in the range (0, 1]")
-    if knn_k < 1:
-        raise ValueError("knn_k must be at least 1")
-    if merge_cap <= 0.0 or merge_cap > 0.5:
-        raise ValueError("merge_cap must be in the range (0, 0.5]")
+    if lod_base <= 1.0:
+        raise ValueError("lod_base must be > 1")
     if min_points < 1:
         raise ValueError("min_points must be at least 1")
     if max_levels is not None and max_levels < 1:
@@ -366,8 +359,7 @@ def build_splat_lod_hierarchy(
         source_node_name=source_node_name,
         source_node_id=source_node_id,
         ratio=float(ratio),
-        knn_k=int(knn_k),
-        merge_cap=float(merge_cap),
+        lod_base=float(lod_base),
         opacity_prune_threshold=float(opacity_prune_threshold),
         max_levels=None if max_levels is None else int(max_levels),
         min_points=int(min_points),
@@ -400,8 +392,7 @@ def build_splat_lod_hierarchy(
         result = lf.simplify_splat_data_with_history(
             previous_level.splat_data,
             ratio=float(target_count) / float(current_count),
-            knn_k=knn_k,
-            merge_cap=merge_cap,
+            lod_base=lod_base,
             opacity_prune_threshold=opacity_prune_threshold,
             progress=simplify_progress,
         )
@@ -441,8 +432,9 @@ def build_splat_lod_hierarchy(
                 raise RuntimeError(f"Invalid merge right child id {right_local} in LOD {target_lod_level}")
 
             hierarchy.merge_node_ids.append(int(node_id))
-            hierarchy.merge_left.append(int(local_to_global[left_local]))
-            hierarchy.merge_right.append(int(local_to_global[right_local]))
+            hierarchy.merge_children.append(
+                [int(local_to_global[left_local]), int(local_to_global[right_local])]
+            )
             hierarchy.created_lod.append(int(target_lod_level))
             hierarchy.created_pass.append(int(merge_pass[merge_index]))
 

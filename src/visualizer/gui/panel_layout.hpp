@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "gui/layout_state.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/ui_context.hpp"
@@ -60,7 +61,12 @@ namespace lfs::vis::gui {
         bool any_item_active = false;
     };
 
-    class PanelLayoutManager {
+    struct RightPanelRenderDemand {
+        bool scene_header_live = true;
+        bool active_tab_live = true;
+    };
+
+    class LFS_VIS_API PanelLayoutManager {
     public:
         PanelLayoutManager();
 
@@ -72,11 +78,28 @@ namespace lfs::vis::gui {
                               std::unordered_map<std::string, bool>& window_states,
                               std::string& focus_panel_name,
                               const PanelInputState& input,
-                              const ScreenState& screen);
+                              const ScreenState& screen,
+                              RightPanelRenderDemand demand = {});
+        void renderRightPanelCached(const UIContext& ctx, const PanelDrawContext& draw_ctx,
+                                    bool show_main_panel, bool ui_hidden,
+                                    std::unordered_map<std::string, bool>& window_states,
+                                    std::string& focus_panel_name,
+                                    const PanelInputState& input,
+                                    const ScreenState& screen);
 
         void renderBottomDock(const PanelDrawContext& draw_ctx, bool show_main_panel,
                               bool ui_hidden, const PanelInputState& input,
                               const ScreenState& screen);
+        void renderBottomDockCached(const PanelDrawContext& draw_ctx, bool show_main_panel,
+                                    bool ui_hidden, const PanelInputState& input,
+                                    const ScreenState& screen);
+
+        void renderLeftDock(const PanelDrawContext& draw_ctx, bool show_main_panel,
+                            bool ui_hidden, const PanelInputState& input,
+                            const ScreenState& screen);
+        void renderLeftDockCached(const PanelDrawContext& draw_ctx, bool show_main_panel,
+                                  bool ui_hidden, const PanelInputState& input,
+                                  const ScreenState& screen);
 
         ViewportLayout computeViewportLayout(bool show_main_panel, bool ui_hidden,
                                              bool python_console_visible,
@@ -84,7 +107,8 @@ namespace lfs::vis::gui {
 
         bool isResizingPanel() const {
             return python_console_resizing_ || python_console_hovering_edge_ ||
-                   bottom_dock_resizing_ || bottom_dock_hovering_edge_;
+                   bottom_dock_resizing_ || bottom_dock_hovering_edge_ ||
+                   left_dock_resizing_ || left_dock_hovering_edge_;
         }
 
         CursorRequest getCursorRequest() const { return cursor_request_; }
@@ -99,6 +123,9 @@ namespace lfs::vis::gui {
         float getBottomDockHeight() const { return bottom_dock_height_; }
         bool isBottomDockVisible() const { return bottom_dock_visible_; }
         float bottomDockTopY() const { return bottom_dock_top_y_; }
+        float getLeftDockWidth() const { return left_dock_width_; }
+        bool isLeftDockVisible() const { return left_dock_visible_; }
+        float leftDockRightX() const { return left_dock_right_x_; }
         bool isShowSequencer() const { return show_sequencer_; }
         void setShowSequencer(bool v) { show_sequencer_ = v; }
 
@@ -122,6 +149,8 @@ namespace lfs::vis::gui {
                                      const ScreenState& screen) const;
         float computeBottomDockReservedHeight(bool show_main_panel, bool ui_hidden,
                                               const ScreenState& screen) const;
+        float computeLeftDockReservedWidth(bool show_main_panel, bool ui_hidden,
+                                           const ScreenState& screen) const;
 
         float right_panel_width_ = 340.0f;
         float scene_panel_ratio_ = 0.4f;
@@ -135,12 +164,17 @@ namespace lfs::vis::gui {
         bool bottom_dock_visible_ = false;
         float bottom_dock_top_y_ = -1.0f;
 
+        float left_dock_width_ = 320.0f;
+        bool left_dock_resizing_ = false;
+        bool left_dock_hovering_edge_ = false;
+        bool left_dock_visible_ = false;
+        float left_dock_right_x_ = -1.0f;
+
         bool show_sequencer_ = false;
         std::string active_tab_id_;
 
         float tab_scroll_offset_ = 0.0f;
         float tab_content_total_h_ = 0.0f;
-        size_t background_preload_index_ = 0;
 
         CursorRequest cursor_request_ = CursorRequest::None;
         float prev_mouse_x_ = 0;
@@ -154,6 +188,9 @@ namespace lfs::vis::gui {
         static constexpr float BOTTOM_DOCK_DEFAULT_HEIGHT = 440.0f;
         static constexpr float BOTTOM_DOCK_MAX_RATIO = 0.65f;
         static constexpr float MIN_VIEWPORT_HEIGHT = 140.0f;
+        static constexpr float LEFT_DOCK_MIN_WIDTH = 180.0f;
+        static constexpr float LEFT_DOCK_DEFAULT_WIDTH = 320.0f;
+        static constexpr float ICON_BAR_WIDTH = 40.0f;
     };
 
 } // namespace lfs::vis::gui

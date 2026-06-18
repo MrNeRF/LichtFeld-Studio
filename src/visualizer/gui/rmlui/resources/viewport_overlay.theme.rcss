@@ -5,13 +5,52 @@
     border-radius: @{num(size.window_rounding)}dp;
 }
 
-.subtoolbar-container {
-    background-color: @{toolbar.sub_background};
-    border-radius: @{num(size.window_rounding)}dp;
+.shelf-background {
+    background-color: @{menu.background};
+}
+
+.viewport-split-divider {
+    background-color: @{menu.background};
+}
+
+.toolbar-vertical {
+    background-color: transparent;
+    border-radius: 0;
 }
 
 .toolbar-separator {
     background-color: @{alpha(border,0.39)};
+}
+
+.viewport-transform-panel {
+    background-color: @{toolbar.background};
+    border-color: @{overlay.border};
+}
+
+.viewport-export-status {
+    background-color: @{toolbar.background};
+    border-color: @{overlay.border};
+    color: @{text};
+}
+
+.viewport-transform-meta__tool,
+.viewport-transform-axis-label {
+    color: @{text};
+}
+
+.viewport-transform-meta__target {
+    color: @{text_dim};
+}
+
+.viewport-transform-axis--split {
+    border-color: @{alpha(border,0.30)};
+}
+
+.viewport-transform-option-group,
+.viewport-transform-tool-group,
+.viewport-selection-tool-group {
+    background-color: @{toolbar.sub_background};
+    border-color: @{alpha(border,0.39)};
 }
 
 .icon-btn img {
@@ -22,12 +61,28 @@
     background-color: @{viewport.hover_bg};
 }
 
+.toolbar-vertical .icon-btn:hover,
+.toolbar-hcenter .icon-btn:hover {
+    background-color: @{alpha(primary,0.16)};
+    border-color: @{alpha(primary,0.42)};
+}
+
 .icon-btn.selected {
     background-color: @{primary};
 }
 
+.toolbar-vertical .icon-btn.selected,
+.toolbar-hcenter .icon-btn.selected {
+    border-color: @{alpha(text,0.25)};
+}
+
 .icon-btn.selected:hover {
     background-color: @{viewport.selected_hover};
+}
+
+.toolbar-vertical .icon-btn.selected:hover,
+.toolbar-hcenter .icon-btn.selected:hover {
+    border-color: @{alpha(text,0.35)};
 }
 
 .icon-btn.selected img {
@@ -39,12 +94,203 @@
     border-color: @{viewport.metrics_border};
 }
 
+.viewport-lod-stats-card {
+    background-color: @{viewport.metrics_bg};
+    border-color: @{viewport.metrics_border};
+}
+
+.viewport-lod-stats-title,
+.viewport-lod-stats-value {
+    color: @{text};
+}
+
+.viewport-lod-stats-label {
+    color: @{text_dim};
+}
+
 .viewport-metrics-label {
     color: @{text_dim};
 }
 
 .viewport-metrics-value {
     color: @{text};
+}
+
+.vram-hud-card {
+    background-color: @{viewport.metrics_bg};
+    border-color: @{viewport.metrics_border};
+}
+
+.vram-hud-title,
+.vram-hud-summary-value,
+.vram-hud-tree-row span {
+    color: @{text};
+}
+
+.vram-hud-iteration,
+.vram-hud-throughput,
+.vram-hud-summary-label,
+.vram-hud-device,
+.vram-hud-counter-label,
+.vram-hud-topn-header,
+.vram-hud-topn-pct,
+.vram-hud-row-header span,
+.vram-hud-tree-row em,
+.vram-hud-empty,
+.vram-hud-expand-toggle {
+    color: @{text_dim};
+}
+
+.vram-hud-counter-value,
+.vram-hud-topn-name,
+.vram-hud-topn-bytes {
+    color: @{text};
+}
+
+.vram-hud-topn-row {
+    background-color: @{viewport.metrics_bg};
+    border-radius: 3dp;
+}
+
+.vram-hud-tree-row.has-children:hover {
+    background-color: @{viewport.hover_bg};
+}
+
+.vram-hud-expand-toggle:hover {
+    color: @{text};
+}
+
+.vram-hud-tree-row.scope-delta .vram-hud-col-delta {
+    color: @{primary};
+}
+
+.vram-hud-tree-row.scope-timer .vram-hud-col-time {
+    color: @{primary};
+}
+
+.vram-hud-tabs {
+    border-bottom-color: @{alpha(border,0.39)};
+}
+
+.vram-hud-tab {
+    background-color: transparent;
+    color: @{text_dim};
+}
+
+.vram-hud-tab:hover {
+    color: @{text};
+    background-color: @{viewport.hover_bg};
+}
+
+.vram-hud-tab.active {
+    color: @{text};
+    background-color: @{viewport.metrics_bg};
+}
+
+.vram-hud-counters-header,
+.vram-hud-breakdown-header {
+    color: @{text_dim};
+}
+
+.vram-hud-counters-empty {
+    color: @{text_dim};
+}
+
+.vram-hud-breakdown-name,
+.vram-hud-breakdown-bytes {
+    color: @{text};
+}
+
+.vram-hud-breakdown-pct {
+    color: @{text_dim};
+}
+
+.vram-hud-breakdown-row.unaccounted .vram-hud-breakdown-name,
+.vram-hud-breakdown-row.unaccounted .vram-hud-breakdown-bytes {
+    color: @{text_dim};
+}
+
+.vram-hud-breakdown-row.total {
+    border-top-color: @{alpha(border,0.39)};
+}
+
+.vram-hud-breakdown-row.total .vram-hud-breakdown-name,
+.vram-hud-breakdown-row.total .vram-hud-breakdown-bytes {
+    color: @{text};
+}
+
+.vram-hud-allocs-summary-label,
+.vram-hud-allocs-summary-value,
+.vram-hud-allocs-pct {
+    color: @{text_dim};
+}
+
+.vram-hud-allocs-name,
+.vram-hud-allocs-bytes {
+    color: @{text};
+}
+
+.vram-hud-allocs-row {
+    background-color: @{viewport.metrics_bg};
+    border-radius: 3dp;
+}
+
+.vram-hud-anno-summary-label,
+.vram-hud-anno-cat,
+.vram-hud-anno-row-header span {
+    color: @{text_dim};
+}
+
+.vram-hud-anno-summary-value,
+.vram-hud-anno-name,
+.vram-hud-anno-bytes,
+.vram-hud-anno-peak {
+    color: @{text};
+}
+
+.vram-hud-anno-wall,
+.vram-hud-anno-gpu,
+.vram-hud-anno-calls {
+    color: @{text_dim};
+}
+
+.vram-hud-anno-row {
+    background-color: @{viewport.metrics_bg};
+    border-radius: 3dp;
+}
+
+.vram-hud-summary {
+    border-bottom-width: 1dp;
+    border-bottom-color: @{alpha(border,0.39)};
+}
+
+#vram-hud-filter {
+    background-color: @{viewport.metrics_bg};
+    border-color: @{alpha(border,0.39)};
+    color: @{text};
+}
+
+#vram-hud-filter:focus {
+    border-color: @{primary};
+}
+
+.vram-hud-filter-clear {
+    background-color: @{viewport.metrics_bg};
+    border-color: @{alpha(border,0.39)};
+    color: @{text_dim};
+}
+
+.vram-hud-filter-clear:hover {
+    background-color: @{viewport.hover_bg};
+    color: @{text};
+}
+
+.vram-hud-resize {
+    background-color: @{alpha(border,0.39)};
+}
+
+.vram-hud-resize:hover {
+    background-color: @{primary};
 }
 
 .viewport-status-backdrop {

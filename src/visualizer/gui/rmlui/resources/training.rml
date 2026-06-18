@@ -89,14 +89,6 @@
           <option value="3" data-tooltip="training.tooltip.opt.sh_degree.3">3</option>
         </select>
       </div>
-      <div class="setting-row" data-tooltip="training.tooltip.tile_mode" data-if="dep_gut">
-        <span class="prop-label">{{label_tile_mode}}</span>
-        <select data-value="tile_mode_str">
-          <option value="1" data-tooltip="training.tooltip.opt.tile_mode.full">{{label_tile_full}}</option>
-          <option value="2" data-tooltip="training.tooltip.opt.tile_mode.half">{{label_tile_half}}</option>
-          <option value="4" data-tooltip="training.tooltip.opt.tile_mode.quarter">{{label_tile_quarter}}</option>
-        </select>
-      </div>
       <div class="setting-row" data-tooltip="training.tooltip.steps_scaler">
         <span class="prop-label">{{label_steps_scaler}}</span>
         <input type="text" class="number-input" data-value="steps_scaler_str" />
@@ -117,15 +109,33 @@
           <option value="0" data-tooltip="training.tooltip.opt.mask_mode.none">{{label_mask_none}}</option>
           <option value="1" data-tooltip="training.tooltip.opt.mask_mode.segment">{{label_mask_segment}}</option>
           <option value="2" data-tooltip="training.tooltip.opt.mask_mode.ignore">{{label_mask_ignore}}</option>
-          <option value="3" data-tooltip="training.tooltip.opt.mask_mode.alpha_consistent">{{label_mask_alpha_consistent}}</option>
+          <option value="3" data-tooltip="training.tooltip.opt.mask_mode.segment_and_ignore">{{label_mask_segment_and_ignore}}</option>
+          <option value="4" data-tooltip="training.tooltip.opt.mask_mode.alpha_consistent">{{label_mask_alpha_consistent}}</option>
         </select>
+      </div>
+      <div class="setting-row" data-tooltip="training.tooltip.use_depth_loss">
+        <span class="prop-label">{{label_use_depth_loss}}</span>
+        <input type="checkbox" data-checked="use_depth_loss" />
+      </div>
+      <div class="setting-row" data-tooltip="training.tooltip.depth_loss_mode" data-if="dep_depth_loss">
+        <span class="prop-label">{{label_depth_loss_mode}}</span>
+        <select data-value="depth_loss_mode_str">
+          <option value="pearson" data-tooltip="training.tooltip.opt.depth_loss_mode.pearson">{{label_depth_loss_pearson}}</option>
+          <option value="adaptive-warped-l1" data-tooltip="training.tooltip.opt.depth_loss_mode.adaptive_warped_l1">{{label_depth_loss_adaptive_warped_l1}}</option>
+        </select>
+      </div>
+      <div class="setting-row" data-tooltip="training.tooltip.depth_loss_weight" data-if="dep_depth_loss">
+        <span class="prop-label">{{label_depth_loss_weight}}</span>
+        <input type="text" class="number-input" data-value="depth_loss_weight_str" />
+        <button class="num-step-btn" data-event-mousedown="num_step('depth_loss_weight', -1)">-</button>
+        <button class="num-step-btn" data-event-mousedown="num_step('depth_loss_weight', 1)">+</button>
       </div>
       <div class="mask-settings-group" data-if="dep_mask_mode">
         <div class="setting-row" data-tooltip="training.tooltip.invert_masks">
           <span class="prop-label">{{label_invert_masks}}</span>
           <input type="checkbox" data-checked="invert_masks" />
         </div>
-        <div class="setting-row" data-tooltip="training.tooltip.mask_threshold">
+        <div class="setting-row" data-if="dep_mask_threshold" data-tooltip="training.tooltip.mask_threshold">
           <span class="prop-label">{{label_mask_threshold}}</span>
           <input type="text" class="number-input" data-value="mask_threshold_str" />
           <button class="num-step-btn" data-event-mousedown="num_step('mask_threshold', -1)">-</button>

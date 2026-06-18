@@ -127,12 +127,16 @@ namespace lfs::training::kernels {
 
     // Workspace for fused L1+SSIM (extends SSIMWorkspace)
     struct FusedL1SSIMWorkspace {
-        lfs::core::Tensor ssim_map;      // [N, 1, H, W] per-pixel channel-mean SSIM values
-        lfs::core::Tensor dm_dmu1;       // [N, C, H, W] SSIM partial derivative
-        lfs::core::Tensor dm_dsigma1_sq; // [N, C, H, W] SSIM partial derivative
-        lfs::core::Tensor dm_dsigma12;   // [N, C, H, W] SSIM partial derivative
+        lfs::core::Tensor ssim_map; // [N, 1, H, W] per-pixel channel-mean SSIM values
+        // SSIM partial derivatives, written by forward, read by backward only. Stored
+        // fp16: C1/C2 floor A and B so these stay bounded (no overflow), and the ~0.1%
+        // quantization is negligible at the typical 0.2 D-SSIM weight. Halves the bulk
+        // of the loss workspace at high resolution.
+        lfs::core::Tensor dm_dmu1;       // [N, C, H, W] fp16
+        lfs::core::Tensor dm_dsigma1_sq; // [N, C, H, W] fp16
+        lfs::core::Tensor dm_dsigma12;   // [N, C, H, W] fp16
 
-        // Backward pass buffer
+        // Backward pass buffer (final gradient stays fp32)
         lfs::core::Tensor grad_img; // [N, C, H, W] combined gradient
 
         // Tiny reduction buffers for valid-padding mean computation
@@ -148,9 +152,9 @@ namespace lfs::training::kernels {
                 std::vector<size_t> map_shape = shape;
                 map_shape[1] = 1;
                 ssim_map = lfs::core::Tensor::empty(lfs::core::TensorShape(map_shape), lfs::core::Device::CUDA);
-                dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
-                dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
-                dm_dsigma12 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+                dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
+                dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
+                dm_dsigma12 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA, lfs::core::DataType::Float16);
                 grad_img = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
                 reduction_temp = lfs::core::Tensor::empty({1024}, lfs::core::Device::CUDA);
                 reduction_result = lfs::core::Tensor::empty({1}, lfs::core::Device::CUDA);

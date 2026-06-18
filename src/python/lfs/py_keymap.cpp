@@ -12,6 +12,8 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
+#include <cstdint>
+
 namespace nb = nanobind;
 
 namespace lfs::python {
@@ -113,6 +115,7 @@ namespace lfs::python {
             .value("CAMERA_MOVE_UP", Action::CAMERA_MOVE_UP)
             .value("CAMERA_MOVE_DOWN", Action::CAMERA_MOVE_DOWN)
             .value("CAMERA_RESET_HOME", Action::CAMERA_RESET_HOME)
+            .value("CAMERA_SET_HOME", Action::CAMERA_SET_HOME)
             .value("CAMERA_FOCUS_SELECTION", Action::CAMERA_FOCUS_SELECTION)
             .value("CAMERA_SET_PIVOT", Action::CAMERA_SET_PIVOT)
             .value("CAMERA_NEXT_VIEW", Action::CAMERA_NEXT_VIEW)
@@ -140,7 +143,6 @@ namespace lfs::python {
             .value("TOGGLE_SELECTION_DEPTH_FILTER", Action::TOGGLE_SELECTION_DEPTH_FILTER)
             .value("TOGGLE_SELECTION_CROP_FILTER", Action::TOGGLE_SELECTION_CROP_FILTER)
             .value("BRUSH_RESIZE", Action::BRUSH_RESIZE)
-            .value("CYCLE_BRUSH_MODE", Action::CYCLE_BRUSH_MODE)
             .value("CONFIRM_POLYGON", Action::CONFIRM_POLYGON)
             .value("CANCEL_POLYGON", Action::CANCEL_POLYGON)
             .value("UNDO_POLYGON_VERTEX", Action::UNDO_POLYGON_VERTEX)
@@ -166,16 +168,15 @@ namespace lfs::python {
             .value("TOOL_ROTATE", Action::TOOL_ROTATE)
             .value("TOOL_SCALE", Action::TOOL_SCALE)
             .value("TOOL_MIRROR", Action::TOOL_MIRROR)
-            .value("TOOL_BRUSH", Action::TOOL_BRUSH)
             .value("TOOL_ALIGN", Action::TOOL_ALIGN)
             .value("PIE_MENU", Action::PIE_MENU)
-            .value("DEPTH_ADJUST_NEAR", Action::DEPTH_ADJUST_NEAR);
+            .value("DEPTH_ADJUST_NEAR", Action::DEPTH_ADJUST_NEAR)
+            .value("HISTOGRAM_ZOOM_MARKED", Action::HISTOGRAM_ZOOM_MARKED);
 
         // Expose ToolMode enum
         nb::enum_<ToolMode>(keymap, "ToolMode")
             .value("GLOBAL", ToolMode::GLOBAL)
             .value("SELECTION", ToolMode::SELECTION)
-            .value("BRUSH", ToolMode::BRUSH)
             .value("TRANSLATE", ToolMode::TRANSLATE)
             .value("ROTATE", ToolMode::ROTATE)
             .value("SCALE", ToolMode::SCALE)
@@ -224,6 +225,16 @@ namespace lfs::python {
             "Get action bound to a key in given mode");
 
         keymap.def(
+            "get_action_for_scroll",
+            [](ToolMode mode, int modifiers, std::vector<int> held_keys) {
+                if (!get_keymap_bindings())
+                    return Action::NONE;
+                return get_keymap_bindings()->getActionForScroll(mode, modifiers, held_keys);
+            },
+            nb::arg("mode"), nb::arg("modifiers") = 0, nb::arg("held_keys") = std::vector<int>{},
+            "Get action bound to a mouse scroll trigger in given mode");
+
+        keymap.def(
             "get_key_for_action",
             [](Action action, ToolMode mode) {
                 if (!get_keymap_bindings())
@@ -238,10 +249,20 @@ namespace lfs::python {
             [](Action action, ToolMode mode) {
                 if (!get_keymap_bindings())
                     return std::string();
-                return get_keymap_bindings()->getTriggerDescription(action, mode);
+                return get_keymap_bindings()->getLocalizedTriggerDescription(action, mode);
             },
             nb::arg("action"), nb::arg("mode") = ToolMode::GLOBAL,
             "Get human-readable description of action's trigger");
+
+        keymap.def(
+            "is_bound",
+            [](Action action, ToolMode mode) {
+                if (!get_keymap_bindings())
+                    return false;
+                return get_keymap_bindings()->getEffectiveTriggerForAction(action, mode).has_value();
+            },
+            nb::arg("action"), nb::arg("mode") = ToolMode::GLOBAL,
+            "Check whether an action has an effective binding");
 
         keymap.def(
             "get_trigger",
@@ -313,7 +334,7 @@ namespace lfs::python {
 
         keymap.def(
             "get_action_name",
-            [](Action action) { return getActionName(action); },
+            [](Action action) { return getLocalizedActionName(action); },
             nb::arg("action"),
             "Get display name for an action");
 
@@ -364,6 +385,15 @@ namespace lfs::python {
                 return get_keymap_bindings()->getCurrentProfileName();
             },
             "Get name of active keymap profile");
+
+        keymap.def(
+            "bindings_revision",
+            []() -> std::uint64_t {
+                if (!get_keymap_bindings())
+                    return 0;
+                return get_keymap_bindings()->getBindingsRevision();
+            },
+            "Get a monotonic revision for key binding changes");
 
         keymap.def(
             "load_profile",
@@ -476,7 +506,7 @@ namespace lfs::python {
                 for (const auto& [action, desc] : bindings) {
                     nb::dict d;
                     d["action"] = action;
-                    d["action_name"] = getActionName(action);
+                    d["action_name"] = getLocalizedActionName(action);
                     d["description"] = desc;
                     result.append(d);
                 }
@@ -502,19 +532,7 @@ namespace lfs::python {
 
         keymap.def(
             "get_tool_mode_name",
-            [](ToolMode mode) {
-                switch (mode) {
-                case ToolMode::GLOBAL: return "Global";
-                case ToolMode::SELECTION: return "Selection";
-                case ToolMode::BRUSH: return "Brush";
-                case ToolMode::TRANSLATE: return "Translate";
-                case ToolMode::ROTATE: return "Rotate";
-                case ToolMode::SCALE: return "Scale";
-                case ToolMode::ALIGN: return "Align";
-                case ToolMode::CROP_BOX: return "Crop Box";
-                default: return "Unknown";
-                }
-            },
+            [](ToolMode mode) { return getLocalizedToolModeName(mode); },
             nb::arg("mode"),
             "Get human-readable name for tool mode");
     }

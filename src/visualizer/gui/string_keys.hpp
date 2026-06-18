@@ -205,7 +205,6 @@ namespace lichtfeld::Strings {
             inline constexpr const char* ITERATIONS = "training.tooltip.iterations";
             inline constexpr const char* MAX_GAUSSIANS = "training.tooltip.max_gaussians";
             inline constexpr const char* SH_DEGREE = "training.tooltip.sh_degree";
-            inline constexpr const char* TILE_MODE = "training.tooltip.tile_mode";
             inline constexpr const char* STEPS_SCALER = "training.tooltip.steps_scaler";
             inline constexpr const char* BILATERAL_GRID = "training.tooltip.bilateral_grid";
             inline constexpr const char* MASK_MODE = "training.tooltip.mask_mode";
@@ -503,7 +502,6 @@ namespace lichtfeld::Strings {
         inline constexpr const char* ROTATE = "toolbar.rotate";
         inline constexpr const char* SCALE = "toolbar.scale";
         inline constexpr const char* MIRROR = "toolbar.mirror";
-        inline constexpr const char* PAINTING = "toolbar.painting";
         inline constexpr const char* ALIGN_3POINT = "toolbar.align_3point";
         inline constexpr const char* CROP_BOX = "toolbar.crop_box";
         inline constexpr const char* ELLIPSOID = "toolbar.ellipsoid";
@@ -522,6 +520,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* MIRROR_Z = "toolbar.mirror_z";
         inline constexpr const char* RESET_DEFAULT = "toolbar.reset_default";
         inline constexpr const char* HOME = "toolbar.home";
+        inline constexpr const char* FOCUS_SELECTION = "toolbar.focus_selection";
         inline constexpr const char* FULLSCREEN = "toolbar.fullscreen";
         inline constexpr const char* TOGGLE_UI = "toolbar.toggle_ui";
         inline constexpr const char* SPLAT_RENDERING = "toolbar.splat_rendering";
@@ -713,13 +712,11 @@ namespace lichtfeld::Strings {
         inline constexpr const char* TOOL_BINDINGS_HINT = "input_settings.tool_bindings_hint";
         inline constexpr const char* SECTION_NAVIGATION = "input_settings.section.navigation";
         inline constexpr const char* SECTION_SELECTION = "input_settings.section.selection";
-        inline constexpr const char* SECTION_BRUSH = "input_settings.section.brush";
         inline constexpr const char* SECTION_CROP_BOX = "input_settings.section.crop_box";
         inline constexpr const char* SECTION_EDITING = "input_settings.section.editing";
         inline constexpr const char* SECTION_VIEW = "input_settings.section.view";
         inline constexpr const char* MODE_GLOBAL = "input_settings.mode.global";
         inline constexpr const char* MODE_SELECTION = "input_settings.mode.selection";
-        inline constexpr const char* MODE_BRUSH = "input_settings.mode.brush";
         inline constexpr const char* MODE_TRANSLATE = "input_settings.mode.translate";
         inline constexpr const char* MODE_ROTATE = "input_settings.mode.rotate";
         inline constexpr const char* MODE_SCALE = "input_settings.mode.scale";
@@ -741,7 +738,6 @@ namespace lichtfeld::Strings {
         inline constexpr const char* ITERATIONS = "training_params.iterations";
         inline constexpr const char* MAX_GAUSSIANS = "training_params.max_gaussians";
         inline constexpr const char* SH_DEGREE = "training_params.sh_degree";
-        inline constexpr const char* TILE_MODE = "training_params.tile_mode";
         inline constexpr const char* STEPS_SCALER = "training_params.steps_scaler";
         inline constexpr const char* BILATERAL_GRID = "training_params.bilateral_grid";
         inline constexpr const char* MASK_MODE = "training_params.mask_mode";

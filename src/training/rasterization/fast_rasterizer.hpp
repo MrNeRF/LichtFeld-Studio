@@ -39,6 +39,7 @@ namespace lfs::training {
 
         lfs::core::Tensor image;
         lfs::core::Tensor alpha;
+        lfs::core::Tensor depth;
         lfs::core::Tensor bg_color; // Saved for alpha gradient computation
 
         // Gaussian parameters (saved to avoid re-fetching in backward)
@@ -55,7 +56,6 @@ namespace lfs::training {
         fast_lfs::rasterization::ForwardContext forward_ctx = {};
 
         int active_sh_bases = 0;
-        int total_bases_sh_rest = 0;
         int width = 0;
         int height = 0;
         float focal_x = 0.0f;
@@ -101,6 +101,7 @@ namespace lfs::training {
         void move_from(FastRasterizeContext&& other) noexcept {
             image = std::move(other.image);
             alpha = std::move(other.alpha);
+            depth = std::move(other.depth);
             bg_color = std::move(other.bg_color);
             means = std::move(other.means);
             raw_scales = std::move(other.raw_scales);
@@ -111,7 +112,6 @@ namespace lfs::training {
             cam_position_ptr = std::exchange(other.cam_position_ptr, nullptr);
             forward_ctx = std::exchange(other.forward_ctx, {});
             active_sh_bases = std::exchange(other.active_sh_bases, 0);
-            total_bases_sh_rest = std::exchange(other.total_bases_sh_rest, 0);
             width = std::exchange(other.width, 0);
             height = std::exchange(other.height, 0);
             focal_x = std::exchange(other.focal_x, 0.0f);
@@ -165,7 +165,9 @@ namespace lfs::training {
         const lfs::core::Tensor& pixel_error_map = {},
         DensificationType densification_type = DensificationType::None,
         int iteration = 0,
-        const FastGSFusedExtraGradients& fused_extra_gradients = {});
+        const FastGSFusedExtraGradients& fused_extra_gradients = {},
+        const lfs::core::Tensor& grad_depth = {},
+        bool detach_depth_weights = false);
 
     // Convenience wrapper for inference (no backward needed)
     inline RenderOutput fast_rasterize(

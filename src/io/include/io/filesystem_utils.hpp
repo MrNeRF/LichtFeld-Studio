@@ -66,6 +66,20 @@ namespace lfs::io {
         ".mask.png",
     };
 
+    inline constexpr std::array<const char*, 2> DEPTH_SEARCH_FOLDERS = {
+        "depth",
+        "depths",
+    };
+
+    inline constexpr std::array<const char*, 6> DEPTH_SEARCH_EXTENSIONS = {
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".tif",
+        ".tiff",
+        ".depth.png",
+    };
+
     // Safe filesystem operations that don't throw
     inline bool safe_exists(const fs::path& path) {
         std::error_code ec;
@@ -323,6 +337,89 @@ namespace lfs::io {
         std::vector<RecursiveFileCache> dir_indices_;
     };
 
+    // Pre-scanned directory cache for fast case-insensitive depth-map lookups.
+    class DepthDirCache {
+    public:
+        explicit DepthDirCache(const fs::path& base_path,
+                               const CancelCallback& cancel_requested = nullptr) {
+            for (const auto* folder : DEPTH_SEARCH_FOLDERS) {
+                detail::throw_if_scan_cancel_requested(cancel_requested,
+                                                       "Depth directory scan cancelled");
+                const fs::path depth_dir = base_path / folder;
+                if (!safe_is_directory(depth_dir))
+                    continue;
+
+                dir_indices_.emplace_back(depth_dir, cancel_requested);
+            }
+        }
+
+        [[nodiscard]] FileLookupResult lookup(const std::string& image_name) const {
+            if (dir_indices_.empty())
+                return {};
+
+            const std::vector<fs::path> lookup_keys = build_lookup_keys(image_name);
+            bool saw_ambiguous_match = false;
+
+            for (const auto& dir_index : dir_indices_) {
+                for (const auto& key : lookup_keys) {
+                    if (auto result = dir_index.lookup(key); result.found()) {
+                        return result;
+                    } else if (result.ambiguous()) {
+                        saw_ambiguous_match = true;
+                    }
+                }
+            }
+
+            if (saw_ambiguous_match) {
+                return FileLookupResult{LookupStatus::Ambiguous, {}};
+            }
+
+            return {};
+        }
+
+        [[nodiscard]] fs::path find(const std::string& image_name) const {
+            if (auto result = lookup(image_name); result.found()) {
+                return result.path;
+            }
+            return {};
+        }
+
+    private:
+        static std::vector<fs::path> build_lookup_keys(const std::string& image_name) {
+            const fs::path img_path = lfs::core::utf8_to_path(image_name);
+            const fs::path stem_path = img_path.parent_path() / img_path.stem();
+
+            std::vector<fs::path> keys;
+            std::unordered_set<std::string> seen_keys;
+            keys.reserve(1 + 2 * DEPTH_SEARCH_EXTENSIONS.size());
+
+            auto append_key = [&](const fs::path& key) {
+                const std::string normalized_key = detail::normalize_lookup_key(key);
+                if (seen_keys.insert(normalized_key).second) {
+                    keys.push_back(key);
+                }
+            };
+
+            append_key(img_path);
+
+            for (const auto* ext : DEPTH_SEARCH_EXTENSIONS) {
+                fs::path target = stem_path;
+                target += ext;
+                append_key(target);
+            }
+
+            for (const auto* ext : DEPTH_SEARCH_EXTENSIONS) {
+                fs::path target = img_path;
+                target += ext;
+                append_key(target);
+            }
+
+            return keys;
+        }
+
+        std::vector<RecursiveFileCache> dir_indices_;
+    };
+
     inline bool paths_equivalent_or_lexically_equal(const fs::path& lhs, const fs::path& rhs) {
         if (lhs.empty() || rhs.empty()) {
             return false;
@@ -382,9 +479,12 @@ namespace lfs::io {
         fs::path images_path;
         fs::path sparse_path;
         fs::path masks_path;
+        fs::path depths_path;
         bool has_masks = false;
+        bool has_depths = false;
         int image_count = 0;
         int mask_count = 0;
+        int depth_count = 0;
     };
 
     inline DatasetInfo detect_dataset_info(const fs::path& base_path) {
@@ -431,6 +531,15 @@ namespace lfs::io {
                 info.masks_path = base_path / name;
                 info.has_masks = true;
                 info.mask_count = count_image_files(info.masks_path, true);
+                break;
+            }
+        }
+
+        for (const auto* name : DEPTH_SEARCH_FOLDERS) {
+            if (safe_is_directory(base_path / name)) {
+                info.depths_path = base_path / name;
+                info.has_depths = true;
+                info.depth_count = count_image_files(info.depths_path, true);
                 break;
             }
         }

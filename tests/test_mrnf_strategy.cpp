@@ -3,6 +3,7 @@
 
 class MRNFStrategyTest_EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores_Test;
 class MRNFStrategyTest_GrowAndSplitResetsOptimizerStateForParents_Test;
+class MRNFStrategyTest_SHDegree0KeepsShNEmptyAndFusedAdamUsableAfterGrowth_Test;
 class MRNFStrategyTest_GrowAndSplitUsesIgsPlusSplitRule_Test;
 class MRNFStrategyTest_GrowAndSplitWithoutMaxCapExtendsBookkeepingMasks_Test;
 class MRNFStrategyTest_GrowAndSplitReplacementSkipsZeroWeightCandidates_Test;
@@ -12,11 +13,13 @@ class MRNFStrategyTest_SerializeRoundTripPreservesLrScheduleState_Test;
 class MRNFStrategyTest_DeserializeResizesTransientBuffersToLoadedModel_Test;
 class MRNFStrategyTest_SetOptimizationParamsRecomputesDecayFromCurrentState_Test;
 
+#include "core/cuda/sh_layout.cuh"
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "training/strategies/mrnf.hpp"
 
 #include <cmath>
+#include <cstdint>
 #include <gtest/gtest.h>
 #include <sstream>
 #include <vector>
@@ -26,7 +29,7 @@ using namespace lfs::training;
 
 namespace {
 
-    SplatData create_mrnf_test_splat_data(const int n_gaussians = 10) {
+    SplatData create_mrnf_test_splat_data(const int n_gaussians = 10, const int sh_degree = 3) {
         const size_t n = static_cast<size_t>(n_gaussians);
         std::vector<float> means_data(n_gaussians * 3, 0.0f);
         for (int i = 0; i < n_gaussians; ++i) {
@@ -34,10 +37,10 @@ namespace {
         }
 
         std::vector<float> sh0_data(n_gaussians * 3, 0.5f);
-        std::vector<float> shN_data(n_gaussians * 15 * 3, 0.0f);
         std::vector<float> scaling_data(n_gaussians * 3, 0.0f);
         std::vector<float> rotation_data(n_gaussians * 4, 0.0f);
         std::vector<float> opacity_data(n_gaussians, 0.0f);
+        const size_t sh_rest = sh_rest_coefficients_for_degree(sh_degree);
 
         for (int i = 0; i < n_gaussians; ++i) {
             rotation_data[i * 4 + 0] = 1.0f; // identity quaternion
@@ -45,12 +48,12 @@ namespace {
 
         auto means = Tensor::from_vector(means_data, TensorShape({n, 3}), Device::CUDA);
         auto sh0 = Tensor::from_vector(sh0_data, TensorShape({n, 1, 3}), Device::CUDA);
-        auto shN = Tensor::from_vector(shN_data, TensorShape({n, 15, 3}), Device::CUDA);
+        auto shN = Tensor::zeros(TensorShape({n, sh_rest, 3}), Device::CUDA);
         auto scaling = Tensor::from_vector(scaling_data, TensorShape({n, 3}), Device::CUDA);
         auto rotation = Tensor::from_vector(rotation_data, TensorShape({n, 4}), Device::CUDA);
         auto opacity = Tensor::from_vector(opacity_data, TensorShape({n, 1}), Device::CUDA);
 
-        return SplatData(3, means, sh0, shN, scaling, rotation, opacity, 1.0f);
+        return SplatData(sh_degree, means, sh0, shN, scaling, rotation, opacity, 1.0f);
     }
 
 } // namespace
@@ -116,6 +119,116 @@ TEST(MRNFStrategyTest, RemoveGaussiansKeepsOptimizerStateUsable) {
     });
 }
 
+TEST(MRNFStrategyTest, QuantizedShNFirstMomentStartsAtSignedZeroPoint) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+
+    auto opt_params = param::OptimizationParameters::mrnf_defaults();
+    opt_params.iterations = 10'000;
+    opt_params.sh_degree_interval = 10'000;
+    opt_params.max_cap = 32;
+
+    strategy.initialize(opt_params);
+
+    const auto* shN_state = strategy.get_optimizer().get_state(ParamType::ShN);
+    ASSERT_NE(shN_state, nullptr);
+    ASSERT_TRUE(shN_state->exp_avg.is_valid());
+    ASSERT_TRUE(shN_state->exp_avg_sq.is_valid());
+    ASSERT_EQ(shN_state->exp_avg.dtype(), DataType::UInt8);
+    ASSERT_EQ(shN_state->exp_avg_sq.dtype(), DataType::UInt8);
+
+    const auto exp_avg_cpu = shN_state->exp_avg.cpu();
+    const auto exp_avg_sq_cpu = shN_state->exp_avg_sq.cpu();
+    const auto* exp_avg = exp_avg_cpu.ptr<std::uint8_t>();
+    const auto* exp_avg_sq = exp_avg_sq_cpu.ptr<std::uint8_t>();
+    for (size_t i = 0; i < exp_avg_cpu.numel(); ++i) {
+        EXPECT_EQ(exp_avg[i], static_cast<std::uint8_t>(128));
+    }
+    for (size_t i = 0; i < exp_avg_sq_cpu.numel(); ++i) {
+        EXPECT_EQ(exp_avg_sq[i], static_cast<std::uint8_t>(0));
+    }
+}
+
+TEST(MRNFStrategyTest, RemoveGaussiansCompactsQuantizedAdamScalesAndPreservesShNDtype) {
+    auto splat_data = create_mrnf_test_splat_data();
+    MRNF strategy(splat_data);
+
+    auto opt_params = param::OptimizationParameters::mrnf_defaults();
+    opt_params.iterations = 10'000;
+    opt_params.sh_degree_interval = 10'000;
+    opt_params.max_cap = 32;
+
+    strategy.initialize(opt_params);
+
+    auto set_scale_rows = [](AdamParamState* state, const size_t rows, const float offset) {
+        ASSERT_NE(state, nullptr);
+        std::vector<float> first(rows);
+        std::vector<float> second(rows);
+        for (size_t i = 0; i < rows; ++i) {
+            first[i] = offset + static_cast<float>(i);
+            second[i] = offset + 100.0f + static_cast<float>(i);
+        }
+        state->exp_avg_scale = Tensor::from_vector(first, TensorShape({rows}), Device::CUDA);
+        state->exp_avg_sq_scale = Tensor::from_vector(second, TensorShape({rows}), Device::CUDA);
+    };
+
+    constexpr size_t initial_rows = 10;
+    set_scale_rows(strategy.get_optimizer().get_state_mutable(ParamType::Means), initial_rows, 10.0f);
+    set_scale_rows(strategy.get_optimizer().get_state_mutable(ParamType::ShN), initial_rows, 20.0f);
+
+    const auto remove_mask = Tensor::from_vector(
+        std::vector<bool>{false, true, false, true, false, false, false, false, false, false},
+        TensorShape({initial_rows}),
+        Device::CUDA);
+
+    strategy.remove_gaussians(remove_mask);
+
+    const std::vector<float> expected_means{10.0f, 12.0f, 14.0f, 15.0f, 16.0f, 17.0f, 18.0f, 19.0f};
+    const std::vector<float> expected_shN{20.0f, 22.0f, 24.0f, 25.0f, 26.0f, 27.0f, 28.0f, 29.0f};
+
+    auto expect_scale_rows = [](const AdamParamState* state,
+                                const std::vector<float>& expected,
+                                const size_t expected_capacity) {
+        ASSERT_NE(state, nullptr);
+        ASSERT_TRUE(state->exp_avg_scale.is_valid());
+        ASSERT_TRUE(state->exp_avg_sq_scale.is_valid());
+        EXPECT_EQ(state->exp_avg_scale.numel(), expected.size());
+        EXPECT_EQ(state->exp_avg_sq_scale.numel(), expected.size());
+        EXPECT_EQ(state->exp_avg_scale.capacity(), expected_capacity);
+        EXPECT_EQ(state->exp_avg_sq_scale.capacity(), expected_capacity);
+
+        const auto exp_avg_scale_cpu = state->exp_avg_scale.cpu();
+        const auto exp_avg_sq_scale_cpu = state->exp_avg_sq_scale.cpu();
+        const float* exp_avg_scale = exp_avg_scale_cpu.ptr<float>();
+        const float* exp_avg_sq_scale = exp_avg_sq_scale_cpu.ptr<float>();
+        for (size_t i = 0; i < expected.size(); ++i) {
+            EXPECT_FLOAT_EQ(exp_avg_scale[i], expected[i]);
+            EXPECT_FLOAT_EQ(exp_avg_sq_scale[i], expected[i] + 100.0f);
+        }
+    };
+
+    const auto* means_state = strategy.get_optimizer().get_state(ParamType::Means);
+    const auto* shN_state = strategy.get_optimizer().get_state(ParamType::ShN);
+    expect_scale_rows(means_state, expected_means, 32);
+    expect_scale_rows(shN_state, expected_shN, 32);
+
+    ASSERT_NE(shN_state, nullptr);
+    ASSERT_TRUE(shN_state->exp_avg.is_valid());
+    ASSERT_TRUE(shN_state->exp_avg_sq.is_valid());
+    EXPECT_EQ(shN_state->exp_avg.dtype(), DataType::UInt8);
+    EXPECT_EQ(shN_state->exp_avg_sq.dtype(), DataType::UInt8);
+    EXPECT_EQ(shN_state->size,
+              sh_swizzled_float_count(expected_shN.size(), static_cast<uint32_t>(splat_data.max_sh_coeffs_rest())));
+    EXPECT_EQ(shN_state->capacity,
+              sh_swizzled_float_count(32, static_cast<uint32_t>(splat_data.max_sh_coeffs_rest())));
+
+    const auto exp_avg_cpu = shN_state->exp_avg.cpu();
+    const auto* exp_avg = exp_avg_cpu.ptr<std::uint8_t>();
+    for (size_t i = 0; i < exp_avg_cpu.numel(); ++i) {
+        EXPECT_EQ(exp_avg[i], static_cast<std::uint8_t>(128));
+    }
+}
+
 TEST(MRNFStrategyTest, GrowAndSplitResetsOptimizerStateForParents) {
     auto splat_data = create_mrnf_test_splat_data();
     MRNF strategy(splat_data);
@@ -132,8 +245,10 @@ TEST(MRNFStrategyTest, GrowAndSplitResetsOptimizerStateForParents) {
 
     auto* means_state = strategy.get_optimizer().get_state_mutable(ParamType::Means);
     ASSERT_NE(means_state, nullptr);
-    means_state->exp_avg.fill_(5.0f);
-    means_state->exp_avg_sq.fill_(6.0f);
+    // grad is allocated lazily via get_grad(); force allocation before fill.
+    strategy.get_optimizer().get_grad(ParamType::Means);
+    means_state->exp_avg_scale.fill_(5.0f);
+    means_state->exp_avg_sq_scale.fill_(6.0f);
     means_state->grad.fill_(7.0f);
 
     strategy._refine_weight_max = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
@@ -151,30 +266,148 @@ TEST(MRNFStrategyTest, GrowAndSplitResetsOptimizerStateForParents) {
 
     const auto exp_avg_cpu = means_state->exp_avg.cpu();
     const auto exp_avg_sq_cpu = means_state->exp_avg_sq.cpu();
+    const auto exp_avg_scale_cpu = means_state->exp_avg_scale.cpu();
+    const auto exp_avg_sq_scale_cpu = means_state->exp_avg_sq_scale.cpu();
     const auto grad_cpu = means_state->grad.cpu();
 
-    const float* exp_avg_ptr = exp_avg_cpu.ptr<float>();
-    const float* exp_avg_sq_ptr = exp_avg_sq_cpu.ptr<float>();
+    const auto* exp_avg_ptr = exp_avg_cpu.ptr<std::uint8_t>();
+    const auto* exp_avg_sq_ptr = exp_avg_sq_cpu.ptr<std::uint8_t>();
+    const float* exp_avg_scale_ptr = exp_avg_scale_cpu.ptr<float>();
+    const float* exp_avg_sq_scale_ptr = exp_avg_sq_scale_cpu.ptr<float>();
     const float* grad_ptr = grad_cpu.ptr<float>();
 
     for (int c = 0; c < 3; ++c) {
-        EXPECT_FLOAT_EQ(exp_avg_ptr[c], 0.0f);
-        EXPECT_FLOAT_EQ(exp_avg_sq_ptr[c], 0.0f);
+        EXPECT_EQ(exp_avg_ptr[c], static_cast<std::uint8_t>(128));
+        EXPECT_EQ(exp_avg_sq_ptr[c], static_cast<std::uint8_t>(0));
         EXPECT_FLOAT_EQ(grad_ptr[c], 0.0f);
     }
+    EXPECT_FLOAT_EQ(exp_avg_scale_ptr[0], 0.0f);
+    EXPECT_FLOAT_EQ(exp_avg_sq_scale_ptr[0], 0.0f);
 
     for (int c = 0; c < 3; ++c) {
-        EXPECT_FLOAT_EQ(exp_avg_ptr[3 + c], 5.0f);
-        EXPECT_FLOAT_EQ(exp_avg_sq_ptr[3 + c], 6.0f);
         EXPECT_FLOAT_EQ(grad_ptr[3 + c], 7.0f);
     }
+    EXPECT_FLOAT_EQ(exp_avg_scale_ptr[1], 5.0f);
+    EXPECT_FLOAT_EQ(exp_avg_sq_scale_ptr[1], 6.0f);
 
     const size_t child_offset = initial_size * 3;
     for (int c = 0; c < 3; ++c) {
-        EXPECT_FLOAT_EQ(exp_avg_ptr[child_offset + c], 0.0f);
-        EXPECT_FLOAT_EQ(exp_avg_sq_ptr[child_offset + c], 0.0f);
+        EXPECT_EQ(exp_avg_ptr[child_offset + c], static_cast<std::uint8_t>(128));
+        EXPECT_EQ(exp_avg_sq_ptr[child_offset + c], static_cast<std::uint8_t>(0));
         EXPECT_FLOAT_EQ(grad_ptr[child_offset + c], 0.0f);
     }
+    EXPECT_FLOAT_EQ(exp_avg_scale_ptr[initial_size], 0.0f);
+    EXPECT_FLOAT_EQ(exp_avg_sq_scale_ptr[initial_size], 0.0f);
+}
+
+TEST(MRNFStrategyTest, SHDegree0KeepsShNEmptyAndFusedAdamUsableAfterGrowth) {
+    auto splat_data = create_mrnf_test_splat_data(10, 0);
+    MRNF strategy(splat_data);
+
+    auto opt_params = param::OptimizationParameters::mrnf_defaults();
+    opt_params.iterations = 10'000;
+    opt_params.sh_degree_interval = 10'000;
+    opt_params.max_cap = 32;
+    opt_params.growth_grad_threshold = 0.5f;
+    opt_params.grow_fraction = 1.0f;
+    opt_params.grow_until_iter = 10'000;
+
+    strategy.initialize(opt_params);
+
+    ASSERT_TRUE(splat_data.shN().is_valid());
+    EXPECT_EQ(splat_data.shN().numel(), 0u);
+    auto* shN_state = strategy.get_optimizer().get_state_mutable(ParamType::ShN);
+    ASSERT_NE(shN_state, nullptr);
+    EXPECT_EQ(shN_state->size, 0u);
+
+    EXPECT_NO_THROW({
+        const auto fused = strategy.get_optimizer().prepare_fastgs_fused_adam(457);
+        EXPECT_TRUE(fused.means.enabled);
+        EXPECT_FALSE(fused.shN.enabled);
+    });
+
+    strategy._refine_weight_max = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
+    strategy._vis_count = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
+
+    const auto split_idx = Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
+    strategy._refine_weight_max.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
+    strategy._vis_count.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
+
+    const size_t initial_size = splat_data.size();
+    strategy.grow_and_split(1, 0);
+
+    EXPECT_EQ(splat_data.size(), initial_size + 1);
+    EXPECT_EQ(splat_data.shN().numel(), 0u);
+    EXPECT_EQ(shN_state->size, 0u);
+    EXPECT_NO_THROW({
+        const auto fused = strategy.get_optimizer().prepare_fastgs_fused_adam(457);
+        EXPECT_TRUE(fused.means.enabled);
+        EXPECT_FALSE(fused.shN.enabled);
+    });
+}
+
+TEST(MRNFStrategyTest, ShNReservationTracksMaxDegreeAndMaxCap) {
+    constexpr int n_gaussians = 10;
+    constexpr size_t max_cap = 70;
+
+    const auto make_params = [] {
+        auto opt_params = param::OptimizationParameters::mrnf_defaults();
+        opt_params.iterations = 10'000;
+        opt_params.sh_degree_interval = 10'000;
+        opt_params.max_cap = static_cast<int>(max_cap);
+        return opt_params;
+    };
+
+    const auto expect_shN_capacity = [](const SplatData& splat_data,
+                                        const AdamOptimizer& optimizer,
+                                        const int max_degree) {
+        const auto layout_rest = static_cast<uint32_t>(sh_rest_coefficients_for_degree(max_degree));
+        const size_t expected_logical =
+            sh_swizzled_float_count(static_cast<size_t>(n_gaussians), layout_rest);
+        const size_t expected_capacity = sh_swizzled_float_count(max_cap, layout_rest);
+
+        ASSERT_TRUE(splat_data.shN().is_valid());
+        EXPECT_EQ(splat_data.shN().numel(), expected_logical);
+        EXPECT_EQ(splat_data.shN().capacity(), expected_capacity);
+
+        const auto* state = optimizer.get_state(ParamType::ShN);
+        ASSERT_NE(state, nullptr);
+        EXPECT_EQ(state->size, expected_logical);
+        EXPECT_EQ(state->capacity, expected_capacity);
+        if (layout_rest == 0) {
+            EXPECT_FALSE(state->exp_avg.is_valid());
+            EXPECT_FALSE(state->exp_avg_sq.is_valid());
+        } else {
+            ASSERT_TRUE(state->exp_avg.is_valid());
+            ASSERT_TRUE(state->exp_avg_sq.is_valid());
+            EXPECT_EQ(state->exp_avg.numel(), expected_logical);
+            EXPECT_EQ(state->exp_avg.capacity(), expected_capacity);
+            EXPECT_EQ(state->exp_avg_sq.numel(), expected_logical);
+            EXPECT_EQ(state->exp_avg_sq.capacity(), expected_capacity);
+        }
+    };
+
+    for (const int sh_degree : {0, 1, 2, 3}) {
+        auto splat_data = create_mrnf_test_splat_data(n_gaussians, sh_degree);
+        MRNF strategy(splat_data);
+
+        strategy.initialize(make_params());
+
+        expect_shN_capacity(splat_data, strategy.get_optimizer(), sh_degree);
+    }
+
+    auto scheduled_splat = create_mrnf_test_splat_data(n_gaussians, 1);
+    scheduled_splat.set_active_sh_degree(0);
+    MRNF scheduled_strategy(scheduled_splat);
+
+    scheduled_strategy.initialize(make_params());
+    expect_shN_capacity(scheduled_splat, scheduled_strategy.get_optimizer(), 1);
+    EXPECT_FALSE(scheduled_strategy.get_optimizer().prepare_fastgs_fused_adam(1001).shN.enabled);
+
+    scheduled_splat.increment_sh_degree();
+    const auto fused = scheduled_strategy.get_optimizer().prepare_fastgs_fused_adam(1001);
+    EXPECT_TRUE(fused.shN.enabled);
+    expect_shN_capacity(scheduled_splat, scheduled_strategy.get_optimizer(), 1);
 }
 
 TEST(MRNFStrategyTest, GrowAndSplitUsesIgsPlusSplitRule) {

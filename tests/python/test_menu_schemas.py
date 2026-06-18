@@ -29,17 +29,33 @@ def _install_lichtfeld_stub(monkeypatch):
 
     ui = SimpleNamespace(
         tr=lambda key: f"tr:{key}",
+        themes=lambda: [
+            {"id": "dark", "name": "Dark", "label_key": "menu.view.theme.dark", "order": 0},
+            {"id": "light", "name": "Light", "label_key": "menu.view.theme.light", "order": 1},
+        ],
         get_theme=lambda: state["theme"],
         set_theme=lambda theme: state.__setitem__("theme", theme),
         get_ui_scale_preference=lambda: state["ui_scale"],
         set_ui_scale=lambda scale: state.__setitem__("ui_scale", scale),
         show_python_console=lambda: state.__setitem__("python_console_shown", state["python_console_shown"] + 1),
+        toggle_system_console=lambda: state.__setitem__("python_console_shown", state["python_console_shown"] + 1),
+        set_panel_enabled=lambda _panel_id, _enabled: None,
         is_windows_platform=lambda: False,
         are_file_associations_registered=lambda: False,
+    )
+    keymap = SimpleNamespace(
+        Action=SimpleNamespace(UNDO="undo", REDO="redo"),
+        ToolMode=SimpleNamespace(GLOBAL="global"),
+        get_trigger_description=lambda action, _mode: {
+            "undo": "Ctrl+Z",
+            "redo": "Ctrl+Shift+Z",
+        }.get(action, "Unbound"),
     )
 
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = ui
+    lf_stub.keymap = keymap
+    lf_stub.reset_camera = lambda: None
     lf_stub.undo = SimpleNamespace(
         can_undo=lambda: True,
         can_redo=lambda: False,
@@ -77,7 +93,7 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     }
 
     edit_items = edit_mod.EditMenu().menu_items()
-    assert len(edit_items) == 2
+    assert len(edit_items) == 4
     assert edit_items[0]["type"] == "item"
     assert edit_items[0]["label"] == "Undo"
     edit_items[0]["callback"]()
@@ -85,11 +101,14 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert edit_items[1]["type"] == "item"
     assert edit_items[1]["label"] == "Redo"
     assert edit_items[1]["enabled"] is False
-    assert all(item["label"] in {"Undo", "Redo"} for item in edit_items)
+    assert edit_items[2]["type"] == "separator"
+    assert edit_items[3]["label"] == "tr:menu.edit.input_settings"
 
     view_items = view_mod.ViewMenu().menu_items()
     assert view_items[0]["type"] == "submenu"
     assert view_items[1]["type"] == "submenu"
-    assert view_items[3]["shortcut"] == "Ctrl+`"
-    view_items[3]["callback"]()
+    assert view_items[0]["items"][0]["selected"] is True
+    assert view_items[1]["items"][1]["label"] == "100%"
+    assert view_items[4]["label"] == "tr:main_panel.console"
+    view_items[4]["callback"]()
     assert state["python_console_shown"] == 1

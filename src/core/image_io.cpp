@@ -11,6 +11,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include <algorithm>
+#include <cctype>
 #include <condition_variable>
 #include <filesystem>
 #include <iostream>
@@ -22,6 +23,8 @@
 #include <vector>
 
 namespace {
+
+    constexpr int DEFAULT_JPEG_QUALITY = 95;
 
     // Run once: set global OIIO attributes (threading, etc.)
     std::once_flag g_oiio_once;
@@ -145,7 +148,9 @@ namespace {
         return combo.contiguous();
     }
 
-    void write_prepared_image(const std::filesystem::path& path, const lfs::core::Tensor& image) {
+    void write_prepared_image(const std::filesystem::path& path,
+                              const lfs::core::Tensor& image,
+                              const int jpeg_quality) {
         init_oiio();
         if (image.ndim() != 3)
             throw std::runtime_error("save_image: expected a 3D HxWxC tensor");
@@ -174,7 +179,7 @@ namespace {
         auto ext = path.extension().string();
         std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
         if (ext == ".jpg" || ext == ".jpeg")
-            spec.attribute("CompressionQuality", 95);
+            spec.attribute("CompressionQuality", std::clamp(jpeg_quality, 1, 100));
 
         if (!out->open(path_utf8, spec)) {
             auto e = out->geterror();
@@ -513,7 +518,20 @@ namespace lfs::core {
     }
 
     void save_image(const std::filesystem::path& path, lfs::core::Tensor image) {
-        write_prepared_image(path, prepare_image_for_write(std::move(image)));
+        write_prepared_image(path,
+                             prepare_image_for_write(std::move(image)),
+                             DEFAULT_JPEG_QUALITY);
+    }
+
+    void save_image_u8(const std::filesystem::path& path,
+                       lfs::core::Tensor image,
+                       const int jpeg_quality) {
+        if (image.ndim() == 4)
+            image = image.squeeze(0);
+        if (image.ndim() == 3 && image.shape()[0] <= 4 && image.shape()[2] > 4)
+            image = image.permute({1, 2, 0});
+        image = image.to(lfs::core::Device::CPU).to(lfs::core::DataType::UInt8).contiguous();
+        write_prepared_image(path, image, jpeg_quality);
     }
 
     void save_image(const std::filesystem::path& path,
@@ -522,7 +540,9 @@ namespace lfs::core {
                     int separator_width) {
         if (images.empty())
             throw std::runtime_error("No images provided");
-        write_prepared_image(path, prepare_image_grid_for_write(images, horizontal, separator_width));
+        write_prepared_image(path,
+                             prepare_image_grid_for_write(images, horizontal, separator_width),
+                             DEFAULT_JPEG_QUALITY);
     }
 
     void free_image(unsigned char* img) { std::free(img); }
@@ -724,7 +744,7 @@ namespace lfs::core::image_io {
     void BatchImageSaver::process_task(const SaveTask& t) {
         try {
             assert(!t.images.empty());
-            write_prepared_image(t.path, t.images[0]);
+            write_prepared_image(t.path, t.images[0], DEFAULT_JPEG_QUALITY);
         } catch (const std::exception& e) {
             LOG_ERROR("[BatchImageSaver] Error saving {}: {}", lfs::core::path_to_utf8(t.path), e.what());
         }
@@ -738,7 +758,7 @@ namespace lfs::core::image_io {
             });
             if (stop_) {
                 assert(!task.images.empty());
-                write_prepared_image(task.path, task.images[0]);
+                write_prepared_image(task.path, task.images[0], DEFAULT_JPEG_QUALITY);
                 return;
             }
             task_queue_.push(std::move(task));

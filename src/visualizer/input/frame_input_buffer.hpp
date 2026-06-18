@@ -30,6 +30,10 @@ namespace lfs::vis {
         int text_editing_start = -1;
         int text_editing_length = -1;
         bool has_text_editing = false;
+        bool had_event = false;
+        bool mouse_moved = false;
+        bool window_event = false;
+        bool user_event = false;
         SDL_Keymod key_mods = SDL_KMOD_NONE;
         int window_w = 0;
         int window_h = 0;
@@ -47,13 +51,26 @@ namespace lfs::vis {
             text_editing_start = -1;
             text_editing_length = -1;
             has_text_editing = false;
+            had_event = false;
+            mouse_moved = false;
+            window_event = false;
+            user_event = false;
         }
 
         void processEvent(const SDL_Event& event, const SDL_WindowID target_window_id = 0) {
             if (!matchesWindow(event, target_window_id))
                 return;
 
+            had_event = true;
+            if (event.type >= SDL_EVENT_WINDOW_FIRST && event.type <= SDL_EVENT_WINDOW_LAST)
+                window_event = true;
+            else if (event.type == SDL_EVENT_USER)
+                user_event = true;
+
             switch (event.type) {
+            case SDL_EVENT_MOUSE_MOTION:
+                mouse_moved = true;
+                break;
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
             case SDL_EVENT_MOUSE_BUTTON_UP: {
                 const int idx = buttonIndex(event.button.button);
@@ -111,11 +128,12 @@ namespace lfs::vis {
             if (target_window_id == 0)
                 return true;
 
-            switch (event.type) {
-            case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
-            case SDL_EVENT_WINDOW_FOCUS_LOST:
-            case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
+            if (event.type >= SDL_EVENT_WINDOW_FIRST && event.type <= SDL_EVENT_WINDOW_LAST)
                 return event.window.windowID == target_window_id;
+
+            switch (event.type) {
+            case SDL_EVENT_MOUSE_MOTION:
+                return event.motion.windowID == target_window_id;
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
             case SDL_EVENT_MOUSE_BUTTON_UP:
                 return event.button.windowID == target_window_id;

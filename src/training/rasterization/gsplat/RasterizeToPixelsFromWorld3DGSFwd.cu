@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include <cinttypes>
 #include <cooperative_groups.h>
 #include <cstdio>
 #include <cuda_runtime.h>
@@ -395,7 +396,7 @@ namespace gsplat_lfs {
         if (err != cudaSuccess) {
             fprintf(stderr,
                     "GSPLAT ERROR: Failed to set maximum shared memory size "
-                    "(requested %ld bytes), try lowering tile_size. CUDA error: %s\n",
+                    "(requested %" PRId64 " bytes), try lowering tile_size. CUDA error: %s\n",
                     shmem_size, cudaGetErrorString(err));
             return;
         }

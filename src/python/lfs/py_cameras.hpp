@@ -42,7 +42,9 @@ namespace lfs::python {
         std::string image_name() const;
         std::string image_path() const;
         std::string mask_path() const;
+        std::string depth_path() const;
         bool has_mask() const;
+        bool has_depth() const;
         int uid() const;
 
         // Render/view contract: visualizer camera pose and derived view matrix.
@@ -61,6 +63,7 @@ namespace lfs::python {
         PyTensor load_image(int resize_factor = 1, int max_width = 0, bool output_uint8 = false);
         PyTensor load_mask(int resize_factor = 1, int max_width = 0,
                            bool invert = false, float threshold = 0.5f);
+        PyTensor load_depth(int resize_factor = 1, int max_width = 0);
 
         // Access underlying camera
         core::Camera* camera();

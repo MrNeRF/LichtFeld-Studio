@@ -41,7 +41,6 @@ namespace lfs::vis::gui {
             {"builtin.rotate", "Rotate", "rotation", ToolType::Rotate},
             {"builtin.scale", "Scale", "scaling", ToolType::Scale},
             {"builtin.mirror", "Mirror", "mirror", ToolType::Mirror},
-            {"builtin.brush", "Paint", "painting", ToolType::Brush},
             {"builtin.align", "Align", "align", ToolType::Align},
             {"builtin.cropbox", "Crop Box", "cropbox", ToolType::None},
             {"builtin.ellipsoid", "Crop Ellipsoid", "blob", ToolType::None},

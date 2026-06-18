@@ -7,13 +7,13 @@
 #include "core/logger.hpp"
 #include "point_cloud_vulkan_renderer.hpp"
 #include "rendering/ppisp_overrides_utils.hpp"
-#include "rendering/rasterizer/rasterization/include/rasterization_api_tensor.h"
-#include "rendering/rasterizer/rasterization/include/rasterization_config.h"
 #include "rendering/rendering.hpp"
+#include "rendering/selection_ops.hpp"
 #include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
+#include "visualizer/app_store.hpp"
 #include "vksplat_viewport_renderer.hpp"
 
 #include <algorithm>
@@ -34,6 +34,30 @@ namespace lfs::vis {
                    old_settings.apply_appearance_correction != new_settings.apply_appearance_correction ||
                    old_settings.ppisp_mode != new_settings.ppisp_mode ||
                    !ppispOverridesEqual(old_settings.ppisp_overrides, new_settings.ppisp_overrides);
+        }
+
+        [[nodiscard]] bool applySparkLodViewerDefaults(RenderSettings& settings) {
+            bool changed = false;
+
+            if (settings.lod_max_splats == 1'500'000) {
+                settings.lod_max_splats = DEFAULT_LOD_MAX_SPLATS;
+                changed = true;
+            }
+
+            if (settings.lod_behind_camera_penalty == 2.0f) {
+                settings.lod_behind_camera_penalty = DEFAULT_LOD_BEHIND_CAMERA_FOVEATION;
+                changed = true;
+            }
+
+            if (settings.lod_cone_inner_degrees == 0.0f &&
+                settings.lod_cone_outer_degrees == 0.0f) {
+                settings.lod_cone_foveation = DEFAULT_LOD_CONE_FOVEATION;
+                settings.lod_cone_inner_degrees = DEFAULT_LOD_CONE_INNER_DEGREES;
+                settings.lod_cone_outer_degrees = DEFAULT_LOD_CONE_OUTER_DEGREES;
+                changed = true;
+            }
+
+            return changed;
         }
 
         [[nodiscard]] std::expected<RenderingManager::CameraMetricsOverlayState, std::string>
@@ -62,6 +86,16 @@ namespace lfs::vis {
                 .ssim = metrics->ssim,
                 .used_mask = metrics->used_mask};
         }
+
+        [[nodiscard]] AppStore::CameraMetrics toAppCameraMetrics(
+            const RenderingManager::CameraMetricsOverlayState& metrics) {
+            return AppStore::CameraMetrics{
+                .camera_id = metrics.camera_id,
+                .iteration = metrics.iteration,
+                .psnr = metrics.psnr,
+                .ssim = metrics.ssim,
+                .used_mask = metrics.used_mask};
+        }
     } // namespace
 
     int RenderingManager::clampGridPlane(const int plane) {
@@ -81,26 +115,36 @@ namespace lfs::vis {
     }
 
     RenderingManager::~RenderingManager() {
+        if (lod_controller_) {
+            lod_controller_->setReadyCallback(nullptr);
+        }
         camera_metrics_worker_.request_stop();
         camera_metrics_cv_.notify_all();
     }
 
+    void RenderingManager::setWakeCallback(std::function<void()> callback) {
+        std::scoped_lock lock(wake_callback_mutex_);
+        wake_callback_ = std::move(callback);
+    }
+
     void RenderingManager::initialize() {
-        if (initialized_)
+        // Gate on engine_ rather than initialized_: the Vulkan path flips
+        // initialized_ on first frame without building the auxiliary engine,
+        // and getRenderingEngine() relies on this to lazy-create it on demand.
+        if (engine_)
             return;
 
         LOG_TIMER("RenderingEngine initialization");
 
-        engine_ = lfs::rendering::RenderingEngine::createRasterOnly();
-        auto init_result = engine_->initializeRasterOnly();
+        engine_ = lfs::rendering::RenderingEngine::create();
+        auto init_result = engine_->initialize();
         if (!init_result) {
             LOG_ERROR("Failed to initialize rendering engine: {}", init_result.error());
             throw std::runtime_error("Failed to initialize rendering engine: " + init_result.error());
         }
 
         initialized_ = true;
-        raster_initialized_ = true;
-        LOG_INFO("Raster rendering engine initialized successfully");
+        LOG_INFO("Auxiliary rendering engine initialized successfully");
     }
 
     void RenderingManager::markDirty() {
@@ -113,19 +157,201 @@ namespace lfs::vis {
         LOG_TRACE("Render marked dirty (flags: 0x{:x})", flags);
     }
 
+    bool RenderingManager::pollDirtyState() {
+        if (const DirtyMask animation_dirty = animation_state_.pollDirtyState(); animation_dirty) {
+            dirty_mask_.fetch_or(animation_dirty, std::memory_order_relaxed);
+            return true;
+        }
+        if (lod_controller_ && lod_controller_->hasReadyResults()) {
+            dirty_mask_.fetch_or(DirtyFlag::CAMERA, std::memory_order_relaxed);
+            return true;
+        }
+        return dirty_mask_.load(std::memory_order_relaxed) != 0;
+    }
+
+    void RenderingManager::notifyAsyncLodResultsReady() {
+        dirty_mask_.fetch_or(DirtyFlag::CAMERA, std::memory_order_relaxed);
+
+        std::function<void()> wake_callback;
+        {
+            std::scoped_lock lock(wake_callback_mutex_);
+            wake_callback = wake_callback_;
+        }
+        if (wake_callback) {
+            wake_callback();
+        }
+    }
+
     void RenderingManager::setViewportResizeActive(bool active) {
         if (const DirtyMask dirty = frame_lifecycle_service_.setViewportResizeActive(active); dirty) {
             markDirty(dirty);
         }
     }
 
+    void RenderingManager::setLodAvailable(bool available) {
+        lod_available_ = available;
+        if (available) {
+            auto settings = getSettings();
+            if (applySparkLodViewerDefaults(settings)) {
+                updateSettings(settings, DirtyFlag::ALL);
+            }
+        }
+    }
+
+    void RenderingManager::setLodEnabled(bool enabled) {
+        auto settings = getSettings();
+        settings.lod_enabled = enabled;
+        const bool changed = enabled && applySparkLodViewerDefaults(settings);
+        updateSettings(settings, changed ? DirtyFlag::ALL : DirtyFlag::SPLATS);
+    }
+
+    bool RenderingManager::isLodEnabled() const {
+        std::lock_guard<std::mutex> lock(settings_mutex_);
+        return settings_.lod_enabled;
+    }
+
+    SparkLodController::Stats RenderingManager::getLodStats() const {
+        SparkLodController::Stats stats;
+        if (lod_controller_) {
+            stats = lod_controller_->stats();
+        }
+
+        bool gpu_selection_eligible = false;
+        float render_scale_setting = 1.0f;
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex_);
+            stats.enabled = settings_.lod_enabled;
+            stats.requested_max_splats = settings_.lod_max_splats;
+            if (stats.max_splats == 0) {
+                stats.max_splats = settings_.lod_max_splats;
+            }
+            if (stats.lod_render_scale == 0.0f) {
+                stats.lod_render_scale = settings_.lod_render_scale;
+            }
+            stats.behind_camera_penalty = settings_.lod_behind_camera_penalty;
+            stats.cone_foveation = settings_.lod_cone_foveation;
+            stats.cone_inner_degrees = settings_.lod_cone_inner_degrees;
+            stats.cone_outer_degrees = settings_.lod_cone_outer_degrees;
+            gpu_selection_eligible = settings_.lod_enabled;
+            render_scale_setting = settings_.lod_render_scale;
+        }
+
+        if (gpu_selection_eligible && vksplat_viewport_renderer_) {
+            const auto gpu = vksplat_viewport_renderer_->gpuLodSelectionStatus();
+            if (gpu.active) {
+                // The CPU controller is frozen at its bootstrap cut in GPU
+                // mode; report the selector's live numbers instead.
+                stats.gpu_selection = true;
+                stats.selected_splats = gpu.selected;
+                stats.output_size = gpu.selected;
+                // Effective target = LOD Budget x Render Scale (Spark-style
+                // quality scaler); the overlay shows both when they differ.
+                stats.max_splats = std::max<size_t>(
+                    1,
+                    static_cast<size_t>(
+                        std::llround(static_cast<double>(stats.requested_max_splats) *
+                                     std::max(render_scale_setting, 0.1f))));
+                stats.budget_repair_active = false;
+                stats.budget_fill_active = false;
+                stats.budget_limited = gpu.overflow > 0;
+                stats.threshold_limited = gpu.overflow == 0;
+                stats.output_limited = false;
+                if (stats.pixel_scale_limit > 0.0f) {
+                    stats.pixel_scale_limit *= gpu.pixel_scale_feedback;
+                }
+                if (gpu.chunk_count > 0) {
+                    stats.chunk_count = gpu.chunk_count;
+                    stats.resident_chunks = gpu.resident_chunks;
+                    stats.touched_chunks = gpu.touched_chunks;
+                }
+                stats.gpu_output_capacity = gpu.capacity;
+                stats.gpu_overflow = gpu.overflow;
+                stats.gpu_pixel_scale_feedback = gpu.pixel_scale_feedback;
+                stats.pool_pages = gpu.pool_pages;
+                stats.streaming_jobs = gpu.streaming_jobs;
+                stats.miss_chunks = gpu.miss_chunks;
+                stats.deferred_requests = gpu.deferred_requests;
+                stats.admission_frozen = gpu.admission_frozen;
+            }
+        }
+
+        stats.available = lod_available_ || stats.has_tree;
+        stats.active = stats.has_tree && lod_controller_ != nullptr &&
+                       (stats.enabled || stats.full_quality_reference);
+        return stats;
+    }
+
+    void RenderingManager::releaseSceneModelResources() {
+        clearVulkanMeshFrame();
+
+        point_cloud_colors_cache_ = {};
+        point_cloud_colors_cache_key_ = nullptr;
+        point_cloud_colors_cache_size_ = 0;
+        ++point_cloud_data_revision_;
+        ++point_cloud_preview_selection_revision_;
+
+        if (vksplat_viewport_renderer_) {
+            vksplat_viewport_renderer_->releaseSceneResources();
+        }
+        if (point_cloud_vulkan_renderer_) {
+            point_cloud_vulkan_renderer_->reset();
+        }
+        frame_lifecycle_service_.resetModelTracking();
+    }
+
+    void RenderingManager::releaseSceneRenderResources() {
+        viewport_artifact_service_.clearViewportOutput();
+        vulkan_viewport_image_.reset();
+        vulkan_viewport_image_generation_ = 0;
+        vulkan_external_viewport_image_ = VK_NULL_HANDLE;
+        vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
+        vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+        vulkan_external_viewport_image_generation_ = 0;
+        split_view_image_generation_ = 0;
+        vulkan_viewport_image_size_ = {0, 0};
+        vulkan_viewport_image_flip_y_ = false;
+
+        clearVulkanMeshFrame();
+
+        point_cloud_colors_cache_ = {};
+        point_cloud_colors_cache_key_ = nullptr;
+        point_cloud_colors_cache_size_ = 0;
+        ++point_cloud_data_revision_;
+        ++point_cloud_preview_selection_revision_;
+
+        if (vksplat_viewport_renderer_) {
+            vksplat_viewport_renderer_->reset();
+        }
+        if (point_cloud_vulkan_renderer_) {
+            point_cloud_vulkan_renderer_->reset();
+        }
+        frame_lifecycle_service_.resetModelTracking();
+        lfs::core::Tensor::trim_memory_pool();
+    }
+
     void RenderingManager::updateSettings(const RenderSettings& new_settings) {
+        updateSettings(new_settings, DirtyFlag::ALL);
+    }
+
+    void RenderingManager::updateSettings(const RenderSettings& new_settings,
+                                          const DirtyMask dirty_flags) {
         bool clear_metrics = false;
+        bool lod_request_changed = false;
+        bool lod_enabled_turned_on = false;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
             const int focused_panel_index =
                 static_cast<int>(splitViewPanelIndex(split_view_service_.focusedPanel()));
             const bool grid_plane_changed = settings_.grid_plane != new_settings.grid_plane;
+            lod_enabled_turned_on = !settings_.lod_enabled && new_settings.lod_enabled;
+            lod_request_changed =
+                settings_.lod_enabled != new_settings.lod_enabled ||
+                settings_.lod_max_splats != new_settings.lod_max_splats ||
+                settings_.lod_render_scale != new_settings.lod_render_scale ||
+                settings_.lod_behind_camera_penalty != new_settings.lod_behind_camera_penalty ||
+                settings_.lod_cone_foveation != new_settings.lod_cone_foveation ||
+                settings_.lod_cone_inner_degrees != new_settings.lod_cone_inner_degrees ||
+                settings_.lod_cone_outer_degrees != new_settings.lod_cone_outer_degrees;
 
             // Update preview color if changed
             if (settings_.selection_color_preview != new_settings.selection_color_preview) {
@@ -146,15 +372,18 @@ namespace lfs::vis {
                 clear_metrics = true;
             }
 
+            const auto previous_backend = settings_.raster_backend;
+            const bool previous_gut = settings_.gut;
             settings_ = new_settings;
-            if (settings_.gut &&
-                settings_.raster_backend == lfs::rendering::GaussianRasterBackend::FastGs) {
-                settings_.raster_backend = lfs::rendering::GaussianRasterBackend::Gut;
-            } else if (settings_.gut &&
-                       settings_.raster_backend == lfs::rendering::GaussianRasterBackend::VkSplat) {
-                settings_.raster_backend = lfs::rendering::GaussianRasterBackend::VkSplatGut;
-            }
+            const bool gut_toggle_only =
+                settings_.raster_backend == previous_backend && settings_.gut != previous_gut;
+            settings_.raster_backend = gut_toggle_only
+                                           ? lfs::rendering::viewerRasterBackendForGutMode(settings_.gut)
+                                           : lfs::rendering::normalizeViewerRasterBackend(
+                                                 settings_.raster_backend, settings_.gut);
             settings_.gut = lfs::rendering::isGutBackend(settings_.raster_backend);
+            enforceProjectionBackend(settings_);
+            sanitizeDepthViewSettings(settings_);
             settings_.grid_plane = clampGridPlane(settings_.grid_plane);
             if (split_view_service_.isIndependentDualActive(settings_)) {
                 if (grid_plane_changed) {
@@ -163,8 +392,18 @@ namespace lfs::vis {
             } else {
                 syncGridPlanesLocked(settings_.grid_plane);
             }
-            markDirty();
+            markDirty(dirty_flags);
         }
+
+        if (lod_request_changed && lod_controller_) {
+            lod_controller_->invalidatePendingWork();
+        }
+        if (lod_enabled_turned_on) {
+            lod_controller_needs_sync_traversal_ = true;
+        }
+
+        auto& render_settings_generation = app_store().render_settings_generation;
+        render_settings_generation.set(render_settings_generation.get() + 1);
 
         if (clear_metrics) {
             invalidateCameraMetricsRequests(true);
@@ -306,14 +545,21 @@ namespace lfs::vis {
     }
 
     void RenderingManager::setLatestCameraMetrics(CameraMetricsOverlayState metrics) {
-        std::lock_guard<std::mutex> lock(camera_metrics_mutex_);
-        latest_camera_metrics_ = std::move(metrics);
-        last_camera_metrics_refresh_time_ = std::chrono::steady_clock::now();
+        const auto app_metrics = toAppCameraMetrics(metrics);
+        {
+            std::lock_guard<std::mutex> lock(camera_metrics_mutex_);
+            latest_camera_metrics_ = std::move(metrics);
+            last_camera_metrics_refresh_time_ = std::chrono::steady_clock::now();
+        }
+        app_store().camera_metrics.set(app_metrics);
     }
 
     void RenderingManager::clearLatestCameraMetrics() {
-        std::lock_guard<std::mutex> lock(camera_metrics_mutex_);
-        latest_camera_metrics_.reset();
+        {
+            std::lock_guard<std::mutex> lock(camera_metrics_mutex_);
+            latest_camera_metrics_.reset();
+        }
+        app_store().camera_metrics.set(std::optional<AppStore::CameraMetrics>{});
     }
 
     std::optional<RenderingManager::CameraMetricsOverlayState> RenderingManager::getLatestCameraMetrics() const {
@@ -322,13 +568,17 @@ namespace lfs::vis {
     }
 
     void RenderingManager::invalidateCameraMetricsRequests(const bool clear_latest) {
-        std::lock_guard<std::mutex> lock(camera_metrics_mutex_);
-        ++camera_metrics_request_generation_;
-        pending_camera_metrics_request_.reset();
-        last_camera_metrics_refresh_time_ = {};
-        if (clear_latest) {
-            latest_camera_metrics_.reset();
+        {
+            std::lock_guard<std::mutex> lock(camera_metrics_mutex_);
+            ++camera_metrics_request_generation_;
+            pending_camera_metrics_request_.reset();
+            last_camera_metrics_refresh_time_ = {};
+            if (clear_latest) {
+                latest_camera_metrics_.reset();
+            }
         }
+        if (clear_latest)
+            app_store().camera_metrics.set(std::optional<AppStore::CameraMetrics>{});
     }
 
     void RenderingManager::queueCameraMetricsRefreshIfStale(SceneManager* const scene_manager) {
@@ -440,6 +690,7 @@ namespace lfs::vis {
                 request.settings);
 
             bool applied = false;
+            std::optional<AppStore::CameraMetrics> app_metrics;
             {
                 std::lock_guard<std::mutex> lock(camera_metrics_mutex_);
                 if (active_camera_metrics_request_ &&
@@ -450,6 +701,7 @@ namespace lfs::vis {
                 if (request.generation == camera_metrics_request_generation_) {
                     if (metrics) {
                         latest_camera_metrics_ = *metrics;
+                        app_metrics = toAppCameraMetrics(*metrics);
                     } else {
                         latest_camera_metrics_.reset();
                     }
@@ -459,6 +711,7 @@ namespace lfs::vis {
             }
 
             if (applied) {
+                app_store().camera_metrics.set(std::move(app_metrics));
                 markDirty(DirtyFlag::OVERLAY);
             }
         }
@@ -474,7 +727,13 @@ namespace lfs::vis {
         const auto content_bounds = getContentBounds(glm::ivec2(
             std::max(static_cast<int>(viewport_size.x), 0),
             std::max(static_cast<int>(viewport_size.y), 0)));
-        return viewport_pos.x + content_bounds.x + content_bounds.width * settings_.split_position;
+        const int content_width = std::max(static_cast<int>(std::lround(content_bounds.width)), 0);
+        if (content_width <= 0) {
+            return std::nullopt;
+        }
+
+        return viewport_pos.x + content_bounds.x +
+               static_cast<float>(splitViewDividerPixel(content_width, settings_.split_position));
     }
 
     Viewport& RenderingManager::resolvePanelViewport(Viewport& primary_viewport, const SplitViewPanelId panel) {
@@ -537,8 +796,9 @@ namespace lfs::vis {
     }
 
     void RenderingManager::setRectPreview(float x0, float y0, float x1, float y1, bool add_mode,
-                                          const std::optional<SplitViewPanelId> panel) {
-        viewport_overlay_service_.setRect(x0, y0, x1, y1, add_mode, panel);
+                                          const std::optional<SplitViewPanelId> panel,
+                                          const bool track_cursor) {
+        viewport_overlay_service_.setRect(x0, y0, x1, y1, add_mode, panel, track_cursor);
     }
 
     void RenderingManager::clearRectPreview() {
@@ -561,8 +821,9 @@ namespace lfs::vis {
     }
 
     void RenderingManager::setLassoPreview(const std::vector<std::pair<float, float>>& points, bool add_mode,
-                                           const std::optional<SplitViewPanelId> panel) {
-        viewport_overlay_service_.setLasso(points, add_mode, panel);
+                                           const std::optional<SplitViewPanelId> panel,
+                                           const bool track_cursor) {
+        viewport_overlay_service_.setLasso(points, add_mode, panel, track_cursor);
     }
 
     void RenderingManager::clearLassoPreview() {

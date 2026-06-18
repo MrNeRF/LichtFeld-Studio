@@ -9,6 +9,7 @@
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
 #include "core/tensor.hpp"
+#include "diagnostics/vram_profiler.hpp"
 
 #include <glslang/Public/ResourceLimits.h>
 #include <glslang/Public/ShaderLang.h>
@@ -639,6 +640,8 @@ void main() {
             VkBuffer buffer = VK_NULL_HANDLE;
             VkDeviceMemory memory = VK_NULL_HANDLE;
             VkDeviceSize size = 0;
+            VkDeviceSize allocation_size = 0;
+            std::string vram_label;
 
             ~Buffer() { reset(); }
             Buffer() = default;
@@ -653,13 +656,19 @@ void main() {
                 buffer = other.buffer;
                 memory = other.memory;
                 size = other.size;
+                allocation_size = other.allocation_size;
+                vram_label = std::move(other.vram_label);
                 other.device = VK_NULL_HANDLE;
                 other.buffer = VK_NULL_HANDLE;
                 other.memory = VK_NULL_HANDLE;
                 other.size = 0;
+                other.allocation_size = 0;
+                other.vram_label.clear();
                 return *this;
             }
             void reset() {
+                if (!vram_label.empty())
+                    lfs::diagnostics::VramProfiler::instance().recordCurrentBytes("vulkan.mesh2splat.buffer", vram_label, 0);
                 if (buffer)
                     vkDestroyBuffer(device, buffer, nullptr);
                 if (memory)
@@ -667,6 +676,8 @@ void main() {
                 buffer = VK_NULL_HANDLE;
                 memory = VK_NULL_HANDLE;
                 size = 0;
+                allocation_size = 0;
+                vram_label.clear();
             }
         };
 
@@ -678,6 +689,8 @@ void main() {
             VkFormat format = VK_FORMAT_UNDEFINED;
             uint32_t width = 0;
             uint32_t height = 0;
+            VkDeviceSize allocation_size = 0;
+            std::string vram_label;
 
             ~Image() { reset(); }
             Image() = default;
@@ -695,6 +708,8 @@ void main() {
                 format = other.format;
                 width = other.width;
                 height = other.height;
+                allocation_size = other.allocation_size;
+                vram_label = std::move(other.vram_label);
                 other.device = VK_NULL_HANDLE;
                 other.image = VK_NULL_HANDLE;
                 other.memory = VK_NULL_HANDLE;
@@ -702,9 +717,13 @@ void main() {
                 other.format = VK_FORMAT_UNDEFINED;
                 other.width = 0;
                 other.height = 0;
+                other.allocation_size = 0;
+                other.vram_label.clear();
                 return *this;
             }
             void reset() {
+                if (!vram_label.empty())
+                    lfs::diagnostics::VramProfiler::instance().recordCurrentBytes("vulkan.mesh2splat.image", vram_label, 0);
                 if (view)
                     vkDestroyImageView(device, view, nullptr);
                 if (image)
@@ -714,6 +733,8 @@ void main() {
                 image = VK_NULL_HANDLE;
                 memory = VK_NULL_HANDLE;
                 view = VK_NULL_HANDLE;
+                allocation_size = 0;
+                vram_label.clear();
             }
         };
 
@@ -796,6 +817,14 @@ void main() {
                 result = vkAllocateMemory(device_, &alloc, nullptr, &out.memory);
                 if (result != VK_SUCCESS)
                     return std::unexpected(vkError("vkAllocateMemory(buffer)", result));
+                out.allocation_size = req.size;
+                if ((properties & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0) {
+                    out.vram_label = std::format("buffer#{}:{}B", ++allocation_serial_, static_cast<std::size_t>(req.size));
+                    lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                        "vulkan.mesh2splat.buffer",
+                        out.vram_label,
+                        static_cast<std::size_t>(out.allocation_size));
+                }
                 result = vkBindBufferMemory(device_, out.buffer, out.memory, 0);
                 if (result != VK_SUCCESS)
                     return std::unexpected(vkError("vkBindBufferMemory", result));
@@ -840,6 +869,16 @@ void main() {
                 result = vkAllocateMemory(device_, &alloc, nullptr, &out.memory);
                 if (result != VK_SUCCESS)
                     return std::unexpected(vkError("vkAllocateMemory(image)", result));
+                out.allocation_size = req.size;
+                out.vram_label = std::format("image#{}:{}x{}:{}B",
+                                             ++allocation_serial_,
+                                             width,
+                                             height,
+                                             static_cast<std::size_t>(req.size));
+                lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                    "vulkan.mesh2splat.image",
+                    out.vram_label,
+                    static_cast<std::size_t>(out.allocation_size));
                 result = vkBindImageMemory(device_, out.image, out.memory, 0);
                 if (result != VK_SUCCESS)
                     return std::unexpected(vkError("vkBindImageMemory", result));
@@ -1056,6 +1095,7 @@ void main() {
             VkQueue queue_ = VK_NULL_HANDLE;
             VkCommandPool command_pool_ = VK_NULL_HANDLE;
             uint32_t graphics_family_ = 0;
+            mutable std::uint64_t allocation_serial_ = 0;
         };
 
         VulkanMesh2SplatContext& vulkan_context() {

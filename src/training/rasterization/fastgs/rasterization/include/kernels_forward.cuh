@@ -15,6 +15,26 @@ namespace cg = cooperative_groups;
 
 namespace fast_lfs::rasterization::kernels::forward {
 
+    __device__ __forceinline__ void report_forward_status(
+        FastGSForwardStatus* __restrict__ status,
+        const unsigned int flag,
+        const uint source_index,
+        const uint tile_index,
+        const std::uint64_t value,
+        const uint4 bounds,
+        const uint expected_count,
+        const uint actual_count) {
+        report_fastgs_status(
+            status,
+            flag,
+            source_index,
+            tile_index,
+            value,
+            bounds,
+            expected_count,
+            actual_count);
+    }
+
     __device__ __forceinline__ uint quantize_depth_key(float depth, const uint depth_bits) {
         if (depth_bits == 0)
             return 0;
@@ -39,11 +59,12 @@ namespace fast_lfs::rasterization::kernels::forward {
         const float4* __restrict__ raw_rotations,
         const float* __restrict__ raw_opacities,
         const float3* __restrict__ sh_coefficients_0,
-        const float3* __restrict__ sh_coefficients_rest,
+        const float4* __restrict__ sh_coefficients_rest, // compact float4-packed swizzled layout
         const float4* __restrict__ w2c,
         const float3* __restrict__ cam_position,
         uint* __restrict__ primitive_depth_keys,
-        uint* __restrict__ primitive_n_touched_tiles,
+        float* __restrict__ primitive_depths,
+        std::uint64_t* __restrict__ primitive_n_touched_tiles,
         ushort4* __restrict__ primitive_screen_bounds,
         float2* __restrict__ primitive_mean2d,
         float4* __restrict__ primitive_conic_opacity,
@@ -52,7 +73,7 @@ namespace fast_lfs::rasterization::kernels::forward {
         const uint grid_width,
         const uint grid_height,
         const uint active_sh_bases,
-        const uint total_bases_sh_rest,
+        const uint sh_layout_slots,
         const float w,
         const float h,
         const float fx,
@@ -218,20 +239,22 @@ namespace fast_lfs::rasterization::kernels::forward {
         primitive_color[primitive_idx] = convert_sh_to_color(
             sh_coefficients_0, sh_coefficients_rest,
             mean3d, cam_position[0],
-            primitive_idx, active_sh_bases, total_bases_sh_rest);
+            primitive_idx, active_sh_bases, sh_layout_slots);
         primitive_depth_keys[primitive_idx] = quantize_depth_key(depth, depth_bits);
+        primitive_depths[primitive_idx] = depth;
     }
 
     // based on https://github.com/r4dl/StopThePop-Rasterization/blob/d8cad09919ff49b11be3d693d1e71fa792f559bb/cuda_rasterizer/stopthepop/stopthepop_common.cuh#L325
     __global__ void create_instances_cu(
-        const uint* __restrict__ primitive_n_touched_tiles,
-        const uint* __restrict__ primitive_offsets,
+        const std::uint64_t* __restrict__ primitive_n_touched_tiles,
+        const std::uint64_t* __restrict__ primitive_offsets,
         const uint* __restrict__ primitive_depth_keys,
         const ushort4* __restrict__ primitive_screen_bounds,
         const float2* __restrict__ primitive_mean2d,
         const float4* __restrict__ primitive_conic_opacity,
         InstanceKey* __restrict__ instance_keys,
         uint* __restrict__ instance_primitive_indices,
+        FastGSForwardStatus* __restrict__ status,
         const uint grid_width,
         const uint depth_bits,
         const uint n_primitives) {
@@ -244,15 +267,16 @@ namespace fast_lfs::rasterization::kernels::forward {
         }
 
         const uint primitive_idx = idx;
-        const uint n_touched_tiles = active ? primitive_n_touched_tiles[primitive_idx] : 0;
+        const uint n_touched_tiles = active ? static_cast<uint>(primitive_n_touched_tiles[primitive_idx]) : 0;
         active = active && n_touched_tiles > 0;
 
         if (__ballot_sync(0xffffffffu, active) == 0)
             return;
 
         const ushort4 screen_bounds = active ? primitive_screen_bounds[primitive_idx] : make_ushort4(0, 0, 0, 0);
+        const uint4 diagnostic_bounds = make_uint4(screen_bounds.x, screen_bounds.y, screen_bounds.z, screen_bounds.w);
         const uint depth_key = active ? primitive_depth_keys[primitive_idx] : 0;
-        const uint write_offset_end = active ? primitive_offsets[idx] : 0;
+        const uint write_offset_end = active ? static_cast<uint>(primitive_offsets[idx]) : 0;
 
         const float2 mean2d_shifted = active ? primitive_mean2d[primitive_idx] - 0.5f : make_float2(0.0f, 0.0f);
         const float4 conic_opacity_loaded = active ? primitive_conic_opacity[primitive_idx] : make_float4(0.0f, 0.0f, 0.0f, config::min_alpha_threshold);
@@ -260,8 +284,7 @@ namespace fast_lfs::rasterization::kernels::forward {
         const float power_threshold_precomputed = logf(conic_opacity_loaded.w * config::min_alpha_threshold_rcp);
         const float radius_sq = 2.0f * power_threshold_precomputed;
 
-        uint current_write_offset = idx == 0 ? 0 : primitive_offsets[idx - 1];
-
+        uint current_write_offset = idx == 0 ? 0 : static_cast<uint>(primitive_offsets[idx - 1]);
         if (active) {
             const uint screen_bounds_width = static_cast<uint>(screen_bounds.y - screen_bounds.x);
             const uint screen_bounds_height = static_cast<uint>(screen_bounds.w - screen_bounds.z);
@@ -296,22 +319,60 @@ namespace fast_lfs::rasterization::kernels::forward {
                     }
                 }
             }
+
+            if (current_write_offset != write_offset_end) {
+                report_forward_status(
+                    status,
+                    kFastGSForwardStatusInstanceWriteMismatch,
+                    primitive_idx,
+                    0,
+                    current_write_offset,
+                    diagnostic_bounds,
+                    write_offset_end,
+                    current_write_offset);
+            }
         }
     }
 
     __global__ void extract_instance_ranges_cu(
         const InstanceKey* instance_keys,
         uint2* tile_instance_ranges,
+        FastGSForwardStatus* __restrict__ status,
         const uint depth_bits,
+        const uint n_tiles,
         const uint n_instances) {
         auto instance_idx = cg::this_grid().thread_rank();
         if (instance_idx >= n_instances)
             return;
         const uint instance_tile_idx = static_cast<uint>(instance_keys[instance_idx] >> depth_bits);
+        if (instance_tile_idx >= n_tiles) {
+            report_forward_status(
+                status,
+                kFastGSForwardStatusTileIndexOutOfRange,
+                instance_idx,
+                instance_tile_idx,
+                instance_tile_idx,
+                make_uint4(0, 0, 0, 0),
+                n_tiles,
+                0);
+            return;
+        }
         if (instance_idx == 0)
             tile_instance_ranges[instance_tile_idx].x = 0;
         else {
             const uint previous_instance_tile_idx = static_cast<uint>(instance_keys[instance_idx - 1] >> depth_bits);
+            if (previous_instance_tile_idx >= n_tiles) {
+                report_forward_status(
+                    status,
+                    kFastGSForwardStatusTileIndexOutOfRange,
+                    instance_idx - 1,
+                    previous_instance_tile_idx,
+                    previous_instance_tile_idx,
+                    make_uint4(0, 0, 0, 0),
+                    n_tiles,
+                    0);
+                return;
+            }
             if (instance_tile_idx != previous_instance_tile_idx) {
                 tile_instance_ranges[previous_instance_tile_idx].y = instance_idx;
                 tile_instance_ranges[instance_tile_idx].x = instance_idx;
@@ -327,8 +388,10 @@ namespace fast_lfs::rasterization::kernels::forward {
         const float2* __restrict__ primitive_mean2d,
         const float4* __restrict__ primitive_conic_opacity,
         const float3* __restrict__ primitive_color,
+        const float* __restrict__ primitive_depths,
         float* __restrict__ image,
         float* __restrict__ alpha_map,
+        float* __restrict__ depth_map,
         uint* __restrict__ tile_n_contributions,
         float* __restrict__ tile_final_transmittance,
         const uint width,
@@ -350,8 +413,10 @@ namespace fast_lfs::rasterization::kernels::forward {
         __shared__ float2 collected_mean2d[config::block_size_blend];
         __shared__ float4 collected_conic_opacity[config::block_size_blend];
         __shared__ float3 collected_color[config::block_size_blend];
+        __shared__ float collected_depth[config::block_size_blend];
         // initialize local storage
         float3 color_pixel = make_float3(0.0f);
+        float depth_pixel = 0.0f;
         float transmittance = 1.0f;
         uint n_possible_contributions = 0;
         uint n_contributions = 0;
@@ -366,6 +431,7 @@ namespace fast_lfs::rasterization::kernels::forward {
                 collected_conic_opacity[thread_rank] = primitive_conic_opacity[primitive_idx];
                 const float3 color = fminf(fmaxf(primitive_color[primitive_idx], 0.0f), config::max_blend_color);
                 collected_color[thread_rank] = color;
+                collected_depth[thread_rank] = primitive_depths[primitive_idx];
             }
             block.sync();
             const int current_batch_size = min(config::block_size_blend, n_points_remaining);
@@ -382,7 +448,9 @@ namespace fast_lfs::rasterization::kernels::forward {
                 const float alpha = fminf(opacity * gaussian, config::max_fragment_alpha);
                 if (alpha < config::min_alpha_threshold)
                     continue;
-                color_pixel += transmittance * alpha * collected_color[j];
+                const float weight = transmittance * alpha;
+                color_pixel += weight * collected_color[j];
+                depth_pixel += weight * collected_depth[j];
                 transmittance *= (1.0f - alpha);
                 n_contributions = n_possible_contributions;
                 if (transmittance < config::transmittance_threshold) {
@@ -399,6 +467,7 @@ namespace fast_lfs::rasterization::kernels::forward {
             image[pixel_idx + n_pixels] = color_pixel.y;
             image[pixel_idx + n_pixels * 2] = color_pixel.z;
             alpha_map[pixel_idx] = 1.0f - transmittance;
+            depth_map[pixel_idx] = depth_pixel;
             tile_n_contributions[pixel_idx] = n_contributions;
         }
         tile_final_transmittance[tile_idx * config::block_size_blend + thread_rank] = inside ? transmittance : 1.0f;

@@ -244,17 +244,28 @@ namespace lfs::python {
         int camera_uid() const { return node_->camera_uid; }
         std::string image_path() const { return node_->image_path; }
         std::string mask_path() const { return node_->mask_path; }
+        std::string depth_path() const { return node_->depth_path; }
         bool has_camera() const { return node_->camera != nullptr; }
         bool has_mask() const {
             if (!node_->camera)
                 return false;
             return node_->camera->has_mask();
         }
+        bool has_depth() const {
+            if (!node_->camera)
+                return false;
+            return node_->camera->has_depth();
+        }
         std::optional<PyTensor> load_mask(int resize_factor = 1, int max_width = 0,
                                           bool invert = false, float threshold = 0.5f) {
             if (!node_->camera || !node_->camera->has_mask())
                 return std::nullopt;
             return PyTensor(node_->camera->load_and_get_mask(resize_factor, max_width, invert, threshold), true);
+        }
+        std::optional<PyTensor> load_depth(int resize_factor = 1, int max_width = 0) {
+            if (!node_->camera || !node_->camera->has_depth())
+                return std::nullopt;
+            return PyTensor(node_->camera->load_and_get_depth(resize_factor, max_width), true);
         }
         std::optional<PyTensor> camera_R() const {
             if (!node_->camera)
@@ -311,8 +322,8 @@ namespace lfs::python {
                                      "world_transform", "set_local_transform",
                                      "gaussian_count", "centroid",
                                      "splat_data", "point_cloud", "mesh", "cropbox", "ellipsoid", "keyframe_data",
-                                     "camera_uid", "image_path", "mask_path", "has_camera",
-                                     "has_mask", "load_mask",
+                                     "camera_uid", "image_path", "mask_path", "depth_path", "has_camera",
+                                     "has_mask", "has_depth", "load_mask", "load_depth",
                                      "camera_R", "camera_T", "camera_focal_x", "camera_focal_y",
                                      "camera_width", "camera_height",
                                      "prop_info"}) {
@@ -427,13 +438,14 @@ namespace lfs::python {
                            int width,
                            int height,
                            const std::string& image_path = "",
-                           int uid = -1);
+                           int uid = -1,
+                           std::optional<PyTensor> mask = std::nullopt);
         void remove_node(const std::string& name, bool keep_children = false);
         bool rename_node(const std::string& old_name, const std::string& new_name);
         void clear();
 
         // Hierarchy
-        void reparent(int32_t node_id, int32_t new_parent_id);
+        bool reparent(int32_t node_id, int32_t new_parent_id);
         std::vector<int32_t> root_nodes() const { return scene_->getRootNodes(); }
 
         // Queries

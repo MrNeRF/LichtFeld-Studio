@@ -17,45 +17,43 @@ class OperatorResult(enum.Enum):
 class BuiltinOp(enum.Enum):
     SelectionStroke = 0
 
-    BrushStroke = 1
+    TransformSet = 1
 
-    TransformSet = 2
+    TransformTranslate = 2
 
-    TransformTranslate = 3
+    TransformRotate = 3
 
-    TransformRotate = 4
+    TransformScale = 4
 
-    TransformScale = 5
+    TransformApplyBatch = 5
 
-    TransformApplyBatch = 6
+    AlignPickPoint = 6
 
-    AlignPickPoint = 7
+    Undo = 7
 
-    Undo = 8
+    Redo = 8
 
-    Redo = 9
+    Delete = 9
 
-    Delete = 10
+    SelectionClear = 10
 
-    SelectionClear = 11
+    SceneSelectNode = 11
 
-    SceneSelectNode = 12
+    CropBoxAdd = 12
 
-    CropBoxAdd = 13
+    CropBoxSet = 13
 
-    CropBoxSet = 14
+    CropBoxFit = 14
 
-    CropBoxFit = 15
+    CropBoxReset = 15
 
-    CropBoxReset = 16
+    EllipsoidAdd = 16
 
-    EllipsoidAdd = 17
+    EllipsoidSet = 17
 
-    EllipsoidSet = 18
+    EllipsoidFit = 18
 
-    EllipsoidFit = 19
-
-    EllipsoidReset = 20
+    EllipsoidReset = 19
 
 class BuiltinTool(enum.Enum):
     Select = 0
@@ -68,9 +66,7 @@ class BuiltinTool(enum.Enum):
 
     Mirror = 4
 
-    Brush = 5
-
-    Align = 6
+    Align = 5
 
 class OperatorFlags(enum.Enum):
     NONE = 0

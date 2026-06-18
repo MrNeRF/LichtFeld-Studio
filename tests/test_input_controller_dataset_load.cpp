@@ -51,7 +51,9 @@ namespace lfs::vis {
         }
     } // namespace
 
-    TEST_F(InputControllerDatasetLoadTest, DatasetLoadFramesSceneAndUpdatesHomeWhenBoundsAvailable) {
+    // Dataset load deliberately resets to the home pose instead of framing the
+    // scene (b8f9d6b8 "revert cam to home pos at dataloading").
+    TEST_F(InputControllerDatasetLoadTest, DatasetLoadResetsCameraToHome) {
         Viewport viewport(200, 200);
         InputController controller(nullptr, viewport);
         SceneManager scene_manager;
@@ -72,9 +74,9 @@ namespace lfs::vis {
         viewport.camera.home_t = glm::vec3(123.0f, 456.0f, 789.0f);
         viewport.camera.home_pivot = glm::vec3(10.0f, 20.0f, 30.0f);
         viewport.camera.home_R = glm::mat3(1.0f);
-        viewport.camera.t = viewport.camera.home_t;
-        viewport.camera.pivot = viewport.camera.home_pivot;
-        viewport.camera.R = viewport.camera.home_R;
+        viewport.camera.t = glm::vec3(-3.0f, 4.0f, 12.0f);
+        viewport.camera.pivot = glm::vec3(1.0f, 1.0f, 1.0f);
+        viewport.camera.R = glm::mat3(1.0f);
 
         core::events::state::DatasetLoadCompleted{
             .path = {},
@@ -85,16 +87,10 @@ namespace lfs::vis {
         }
             .emit();
 
-        const glm::vec3 expected_pivot =
-            lfs::rendering::visualizerWorldPointFromDataWorld(glm::vec3(0.0f, 1.0f, 2.0f));
-        EXPECT_NEAR(viewport.camera.getPivot().x, expected_pivot.x, 1e-5f);
-        EXPECT_NEAR(viewport.camera.getPivot().y, expected_pivot.y, 1e-5f);
-        EXPECT_NEAR(viewport.camera.getPivot().z, expected_pivot.z, 1e-5f);
-
-        EXPECT_NE(viewport.camera.home_t, glm::vec3(123.0f, 456.0f, 789.0f));
-        EXPECT_NE(viewport.camera.home_pivot, glm::vec3(10.0f, 20.0f, 30.0f));
-        EXPECT_EQ(viewport.camera.home_t, viewport.camera.t);
-        EXPECT_EQ(viewport.camera.home_pivot, viewport.camera.pivot);
+        EXPECT_EQ(viewport.camera.t, viewport.camera.home_t);
+        EXPECT_EQ(viewport.camera.pivot, viewport.camera.home_pivot);
+        EXPECT_EQ(viewport.camera.home_t, glm::vec3(123.0f, 456.0f, 789.0f));
+        EXPECT_EQ(viewport.camera.home_pivot, glm::vec3(10.0f, 20.0f, 30.0f));
     }
 
     TEST_F(InputControllerDatasetLoadTest, DroppedHdrUpdatesEnvironmentRenderSettings) {

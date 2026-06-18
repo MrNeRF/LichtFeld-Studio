@@ -7,6 +7,7 @@
 #include "core/export.hpp"
 #include "core/logger.hpp"
 #include "deferred_free_queue.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "gpu_slab_allocator.hpp"
 #include "size_bucketed_pool.hpp"
 #include <cuda_runtime.h>
@@ -30,6 +31,22 @@ namespace lfs::core {
     class LFS_CORE_API CudaMemoryPool {
     public:
         static CudaMemoryPool& instance();
+
+        class LFS_CORE_API LabelGuard {
+        public:
+            explicit LabelGuard(std::string_view label);
+            ~LabelGuard();
+            LabelGuard(const LabelGuard&) = delete;
+            LabelGuard& operator=(const LabelGuard&) = delete;
+            LabelGuard(LabelGuard&&) = delete;
+            LabelGuard& operator=(LabelGuard&&) = delete;
+
+        private:
+            std::string previous_;
+            bool active_ = false;
+        };
+
+        static std::string_view current_label() noexcept;
 
         void shutdown() {
             bool expected = false;
@@ -109,6 +126,7 @@ namespace lfs::core {
                 if (err == cudaSuccess) {
                     stats_.async_allocs.fetch_add(1, std::memory_order_relaxed);
                     stats_.async_bytes.fetch_add(bytes, std::memory_order_relaxed);
+                    track_allocation(ptr, bytes, AllocMethod::Async);
                     if constexpr (ENABLE_ALLOCATION_PROFILING) {
                         AllocationProfiler::instance().record_allocation(bytes, 3);
                     }
@@ -140,7 +158,7 @@ namespace lfs::core {
                     GPUSlabAllocator::instance().deallocate(ptr, size);
                     return;
                 case AllocMethod::Bucketed:
-                    SizeBucketedPool::instance().cache_free(ptr, size);
+                    SizeBucketedPool::instance().cache_free(ptr, size, stream);
                     return;
                 case AllocMethod::Direct:
                     cudaFree(ptr);
@@ -183,7 +201,7 @@ namespace lfs::core {
                 size_t size;
                 if (lookup_allocation(ptr, method, size) && method == AllocMethod::Bucketed) {
                     untrack_allocation(ptr);
-                    SizeBucketedPool::instance().cache_free(ptr, size);
+                    SizeBucketedPool::instance().cache_free(ptr, size, stream);
                     return;
                 }
             }
@@ -236,7 +254,11 @@ namespace lfs::core {
                 return;
             }
 
-            uint64_t threshold = UINT64_MAX;
+            // 64 MiB headroom: keep typical reuse fast (per-iter scratch buffers stay
+            // pool-resident) while letting the driver reclaim memory beyond peak
+            // densification spikes. UINT64_MAX hoards indefinitely and inflates
+            // cuda.pool.overhead at higher gaussian counts.
+            uint64_t threshold = std::uint64_t(64) << 20;
             cudaMemPoolSetAttribute(pool, cudaMemPoolAttrReleaseThreshold, &threshold);
 
             LOG_DEBUG("CUDA memory pool configured for device " + std::to_string(device) + " (CUDA " + std::to_string(CUDART_VERSION) + ")");
@@ -244,10 +266,8 @@ namespace lfs::core {
             LOG_WARN("CUDA memory pooling not available (requires CUDA >= 12.8)");
 #endif
 
-            slab_enabled_ = GPUSlabAllocator::instance().is_enabled();
-            if (slab_enabled_) {
-                LOG_DEBUG("Slab allocator enabled (≤256KB)");
-            }
+            slab_enabled_ = true;
+            LOG_DEBUG("Slab allocator enabled (lazy, ≤256KB)");
             LOG_DEBUG("Size-bucketed pool enabled (256KB-16GB, reduces fragmentation)");
         }
 
@@ -382,11 +402,22 @@ namespace lfs::core {
         void track_allocation(void* ptr, size_t size, AllocMethod method) {
             std::lock_guard<std::mutex> lock(map_mutex_);
             allocation_map_[ptr] = {size, method};
+            try {
+                lfs::diagnostics::VramProfiler::instance().recordAllocation(
+                    ptr, size, to_vram_method(method), current_label());
+            } catch (...) {
+                // Diagnostics must never make CUDA allocation fail.
+            }
         }
 
         void untrack_allocation(void* ptr) {
             std::lock_guard<std::mutex> lock(map_mutex_);
             allocation_map_.erase(ptr);
+            try {
+                lfs::diagnostics::VramProfiler::instance().recordDeallocation(ptr);
+            } catch (...) {
+                // Diagnostics must never make CUDA deallocation fail.
+            }
         }
 
         bool lookup_allocation(void* ptr, AllocMethod& method, size_t& size) {
@@ -398,6 +429,16 @@ namespace lfs::core {
                 return true;
             }
             return false;
+        }
+
+        static lfs::diagnostics::VramAllocationMethod to_vram_method(AllocMethod method) {
+            switch (method) {
+            case AllocMethod::Slab: return lfs::diagnostics::VramAllocationMethod::Slab;
+            case AllocMethod::Bucketed: return lfs::diagnostics::VramAllocationMethod::Bucketed;
+            case AllocMethod::Async: return lfs::diagnostics::VramAllocationMethod::Async;
+            case AllocMethod::Direct: return lfs::diagnostics::VramAllocationMethod::Direct;
+            }
+            return lfs::diagnostics::VramAllocationMethod::Unknown;
         }
 
         void log_stats_periodically() {

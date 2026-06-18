@@ -130,7 +130,7 @@ The runtime exposes the current host contract through:
 | Level | What you add | Typical files |
 |---|---|---|
 | Immediate | `draw(self, ui)` only | `main_panel.py` |
-| Mixed | `style`, `height_mode`, `on_update()`, `on_mount()`, `on_bind_model()` | `main_panel.py` |
+| Mixed | `style`, `height_mode`, `on_mount()`, `on_bind_model()`, optional `on_update()` | `main_panel.py` |
 | Hybrid | `template` plus optional embedded `draw(ui)` | `main_panel.py`, `main_panel.rml`, `main_panel.rcss` |
 
 ### Default retained shells
@@ -162,6 +162,36 @@ Retained template rules:
 - a sibling `.rcss` file is loaded automatically for a plugin-local `.rml`
 - a sibling `.theme.rcss` file is loaded automatically for palette-dependent overrides
 - include `<div id="im-root"></div>` in the template when you want embedded `draw(ui)` content
+
+### Reactive update model
+
+Retained panels should normally be dirty-driven, not timer-driven:
+
+```python
+import lichtfeld as lf
+from lfs_plugins.ui import RuntimeState, PanelStateBinding
+
+
+class MyPanel(lf.ui.Panel):
+    update_policy = "dirty"
+
+    def __init__(self):
+        self._handle = None
+        self._store_binding = PanelStateBinding()
+
+    def on_mount(self, doc):
+        self._store_binding.set_handle(self._handle).watch(
+            RuntimeState.scene_generation,
+            refresh=self._refresh_model,
+        )
+
+    def on_unmount(self, doc):
+        self._store_binding.close()
+```
+
+`PanelStateBinding` owns both the state subscriptions and the RML model invalidation. `update_interval_ms` remains available for animation-like or truly periodic UI, but data panels should subscribe to runtime-state fields and invalidate only the model variables that changed.
+
+Compatibility aliases (`AppState`, `AppStore`, and `NativeAppStore`) remain for older plugins. New retained panels should import `RuntimeState` from `lfs_plugins.ui`.
 
 ## Dependency isolation
 

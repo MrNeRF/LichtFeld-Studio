@@ -356,11 +356,17 @@ namespace lfs::training {
                                                        lfs::core::Tensor& gt_image,
                                                        const bool alpha_as_mask) const {
         if (cam->has_mask()) {
-            return cam->load_and_get_mask(
+            bool is_segment_and_ignore = _params.optimization.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore;
+            auto m = cam->load_and_get_mask(
                 _params.dataset.resize_factor,
                 _params.dataset.max_width,
                 _params.optimization.invert_masks,
-                _params.optimization.mask_threshold);
+                _params.optimization.mask_threshold,
+                !is_segment_and_ignore);
+            if (is_segment_and_ignore) {
+                m = m.gt(250).to(lfs::core::DataType::UInt8).contiguous();
+            }
+            return m;
         }
 
         if (!alpha_as_mask)
@@ -461,7 +467,10 @@ namespace lfs::training {
         size_t evaluated_images = 0;
 
         const auto mask_mode = _params.optimization.mask_mode;
-        const bool use_masking = mask_mode == lfs::core::param::MaskMode::Segment || mask_mode == lfs::core::param::MaskMode::Ignore;
+        const bool use_masking =
+            mask_mode == lfs::core::param::MaskMode::Segment ||
+            mask_mode == lfs::core::param::MaskMode::Ignore ||
+            mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore;
 
         while (auto batch_opt = val_dataloader->next()) {
             auto& batch = *batch_opt;

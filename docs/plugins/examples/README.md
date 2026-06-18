@@ -5,10 +5,12 @@ Start with these in order:
 | Step | File | What it teaches |
 |---|---|---|
 | 1 | [`01_draw_only.py`](01_draw_only.py) | The smallest useful plugin panel: one class and `draw(ui)` |
-| 2 | [`02_status_bar_mixed.py`](02_status_bar_mixed.py) | Add `style`, `height_mode`, `update_interval_ms`, `space = lf.ui.PanelSpace.STATUS_BAR`, and `on_update()` without rewriting `draw(ui)` |
+| 2 | [`02_status_bar_mixed.py`](02_status_bar_mixed.py) | Add `style`, `height_mode`, `space = lf.ui.PanelSpace.STATUS_BAR`, and a periodic `on_update()` for animation-like UI |
 | 3 | [`03_hybrid_plugin/`](03_hybrid_plugin/) | Full retained/hybrid panel with template, RCSS, data model binding, DOM hooks, `on_unmount()`, `on_scene_changed()`, and embedded `draw(ui)` |
 
 `lf.plugins.create("name")` now scaffolds the step-1 panel plus a ready-made `main_panel.rml` / `main_panel.rcss` shell. You can ignore those files until you move to step 3. The CLI command `LichtFeld-Studio plugin create <name>` follows the same UI progression and only adds development helpers such as `.venv` and `.vscode`.
+
+For data-driven retained panels, prefer `update_policy = "dirty"` with `lfs_plugins.ui.RuntimeState` and `PanelStateBinding` instead of interval polling. See [Reactive retained panels](../getting-started.md#reactive-retained-panels) and the [Plugin API Reference](../api-reference.md#reactive-retained-panels).
 
 After that, use the focused examples by topic:
 

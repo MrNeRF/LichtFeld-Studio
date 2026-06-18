@@ -168,6 +168,17 @@ namespace lfs::vis::gui::rml_paths {
             return lfs::core::utf8_to_path(std::string(reference));
         }
 
+        // Decorator/style references reach RmlUI percent-encoded (e.g. an absolute
+        // mask path "C:%5CUsers%5C...png"). The raw form is not recognized as
+        // absolute, so RmlUI would otherwise join it against the document directory
+        // and produce a bogus "assets/rmlui/\Users\..." path. Retry after decoding.
+        if (reference.find('%') != std::string_view::npos) {
+            const std::string decoded = percentDecode(reference);
+            if (decoded != reference && isAbsoluteFilePath(decoded)) {
+                return lfs::core::utf8_to_path(decoded);
+            }
+        }
+
         return std::nullopt;
     }
 

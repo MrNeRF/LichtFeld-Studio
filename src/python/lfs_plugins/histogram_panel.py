@@ -10,9 +10,10 @@ from typing import Iterable
 import lichtfeld as lf
 
 from .histogram_support import METRICS, METRIC_BY_ID, histogram_mode_available, histogram_tr
+from . import rml_widgets as w
 from .rml_keys import KI_A, KI_DELETE, KI_I
 from .types import Panel
-from .ui.state import AppState
+from .ui import RuntimeState
 
 __lfs_panel_classes__ = ["HistogramPanel"]
 __lfs_panel_ids__ = ["lfs.histogram"]
@@ -26,6 +27,9 @@ DEFAULT_COMPARE_Y_BIN_COUNT = 20
 MIN_COMPARE_BIN_COUNT = 8
 MAX_COMPARE_BIN_COUNT = 48
 HISTOGRAM_BAR_GAP = 2.0
+# Span multiplier per wheel notch. <1 so one notch zooms in by 20%, smooth enough
+# to frame a feature in a few notches without overshooting.
+HISTOGRAM_ZOOM_STEP = 0.8
 RML_KM_CTRL = 1 << 0
 RML_KM_SHIFT = 1 << 1
 RML_KM_ALT = 1 << 2
@@ -48,7 +52,7 @@ class HistogramPanel(Panel):
     template = "rmlui/histogram_panel.rml"
     size = (860, 660)
     height_mode = lf.ui.PanelHeightMode.FILL
-    update_interval_ms = 250
+    update_policy = "dirty"
 
     def __init__(self):
         self._doc = None
@@ -101,6 +105,10 @@ class HistogramPanel(Panel):
         self._primary_values: lf.Tensor | None = None
         self._primary_finite_mask: lf.Tensor | None = None
         self._primary_valid_values: lf.Tensor | None = None
+        # Cached host copies so a view-only change (zoom / range) re-bins without
+        # re-extracting, re-copying, or re-sorting the full dataset.
+        self._primary_finite_values_cpu: lf.Tensor | None = None
+        self._primary_sorted_values: lf.Tensor | None = None
         self._primary_histogram_min = 0.0
         self._primary_histogram_max = 1.0
         self._auto_histogram_min = 0.0
@@ -113,8 +121,12 @@ class HistogramPanel(Panel):
         self._compare_finite_mask: lf.Tensor | None = None
         self._compare_valid_x_values: lf.Tensor | None = None
         self._compare_valid_y_values: lf.Tensor | None = None
+        self._compare_x_finite_cpu: lf.Tensor | None = None
+        self._compare_y_finite_cpu: lf.Tensor | None = None
         self._compare_x_min = 0.0
         self._compare_x_max = 1.0
+        self._compare_x_auto_min = 0.0
+        self._compare_x_auto_max = 1.0
         self._compare_y_min = 0.0
         self._compare_y_max = 1.0
         self._compare_y_auto_min = 0.0
@@ -166,7 +178,7 @@ class HistogramPanel(Panel):
         self._marked_count_text = _trf("histogram.gaussian_count", "{count} Gaussians", count="0")
         self._status_hint = _tr(
             "histogram.status_drag_delete",
-            "Left-drag across the histogram to mark a range, then delete it.",
+            "Left-drag to mark a range, then delete it  ·  Ctrl+scroll to zoom  ·  double-click to fit",
         )
         self._selection_left_style = "0%"
         self._selection_width_style = "0%"
@@ -174,6 +186,7 @@ class HistogramPanel(Panel):
         self._compare_selection_top_style = "0%"
         self._compare_selection_width_style = "0%"
         self._compare_selection_height_style = "0%"
+        self._reactive_unsubscribers = []
 
     @classmethod
     def poll(cls, context):
@@ -246,10 +259,14 @@ class HistogramPanel(Panel):
         model.bind_func("compare_x_axis_max", lambda: self._compare_x_axis_max)
         model.bind_func("compare_y_axis_min", lambda: self._compare_y_axis_min)
         model.bind_func("compare_y_axis_max", lambda: self._compare_y_axis_max)
-        model.bind_func("show_selection_overlay", lambda: self._histogram_overlay_bounds is not None)
+        # The sweep rectangle is only a live drag affordance; once committed, the marked bars
+        # themselves carry the selection colour, so the box hides on mouse-up.
+        model.bind_func("show_selection_overlay",
+                        lambda: self._dragging_mark and self._histogram_overlay_bounds is not None)
         model.bind_func("selection_left_style", lambda: self._selection_left_style)
         model.bind_func("selection_width_style", lambda: self._selection_width_style)
-        model.bind_func("show_compare_selection_overlay", lambda: self._compare_overlay_bounds is not None)
+        model.bind_func("show_compare_selection_overlay",
+                        lambda: self._dragging_compare_mark and self._compare_overlay_bounds is not None)
         model.bind_func("compare_selection_left_style", lambda: self._compare_selection_left_style)
         model.bind_func("compare_selection_top_style", lambda: self._compare_selection_top_style)
         model.bind_func("compare_selection_width_style", lambda: self._compare_selection_width_style)
@@ -304,8 +321,12 @@ class HistogramPanel(Panel):
         self._sync_panel_space_state()
         if self._chart_el:
             self._chart_el.add_event_listener("mousedown", self._on_chart_mousedown)
+            self._chart_el.add_event_listener("mousescroll", self._on_chart_mousescroll)
+            self._chart_el.add_event_listener("dblclick", self._on_chart_dblclick)
         if self._compare_chart_el:
             self._compare_chart_el.add_event_listener("mousedown", self._on_compare_chart_mousedown)
+            self._compare_chart_el.add_event_listener("mousescroll", self._on_compare_chart_mousescroll)
+            self._compare_chart_el.add_event_listener("dblclick", self._on_compare_chart_dblclick)
         for input_id in ("range-min-input", "range-max-input",
                          "compare-range-x-min-input", "compare-range-x-max-input"):
             el = doc.get_element_by_id(input_id)
@@ -327,6 +348,7 @@ class HistogramPanel(Panel):
         self._trainer_state = ""
         self._rebuild_metric_options()
         self._refresh()
+        self._subscribe_reactive_state()
 
     def on_update(self, doc):
         del doc
@@ -335,7 +357,7 @@ class HistogramPanel(Panel):
         scene_generation = lf.get_scene_generation()
         history_generation = self._history_generation_value()
         current_lang = lf.ui.get_current_language()
-        trainer_state = AppState.trainer_state.value
+        trainer_state = RuntimeState.trainer_state.value
         selection_signature = self._scene_node_selection_signature()
         scene_changed = scene_generation != self._scene_generation
         history_changed = history_generation != self._history_generation
@@ -386,12 +408,40 @@ class HistogramPanel(Panel):
         self._scene_generation = -1
 
     def on_unmount(self, doc):
+        self._unsubscribe_reactive_state()
         self._clear_owned_scene_selection()
         self._doc = None
         self._chart_el = None
         self._compare_chart_el = None
         self._handle = None
         doc.remove_data_model("histogram_panel")
+
+    def _subscribe_reactive_state(self):
+        if self._reactive_unsubscribers:
+            return
+
+        native_signals = (
+            RuntimeState.scene_generation,
+            RuntimeState.selection_generation,
+            RuntimeState.training_state,
+            RuntimeState.language_generation,
+        )
+        self._reactive_unsubscribers = [
+            signal.subscribe(lambda _value: self._request_reactive_update())
+            for signal in native_signals
+        ]
+
+    def _unsubscribe_reactive_state(self):
+        for unsubscribe in self._reactive_unsubscribers:
+            try:
+                unsubscribe()
+            except Exception:
+                pass
+        self._reactive_unsubscribers = []
+
+    def _request_reactive_update(self):
+        if self._handle:
+            w.request_model_update(self._handle)
 
     def _set_metric_id(self, value):
         metric_id = str(value)
@@ -423,9 +473,10 @@ class HistogramPanel(Panel):
         if enabled == self._log_scale_enabled:
             return
         self._log_scale_enabled = enabled
-        # Bin EDGES change with log scale (we log-space them on both axes), so
-        # we need a full rebuild rather than just a re-render of the records.
-        self._refresh_after_range_change()
+        self._update_bin_records()
+        self._update_compare_bin_records()
+        if self._handle:
+            self._handle.dirty_all()
 
     def _resolve_active_bounds(self, auto_min: float, auto_max: float) -> tuple[float, float]:
         """User constraint narrows binning when set; otherwise the metric's auto bounds win."""
@@ -443,16 +494,11 @@ class HistogramPanel(Panel):
         finite_values: lf.Tensor,
         range_min: float,
         range_max: float,
-        log_scale: bool = False,
     ) -> tuple[float, float]:
-        """Tighten [range_min, range_max] to the actual extent of values inside it.
-        With log_scale, additionally exclude non-positive samples so the lower bound
-        is always > 0 (a hard requirement for log-spaced bin edges)."""
+        """Tighten [range_min, range_max] to the actual extent of values inside it."""
         if not math.isfinite(range_min) or not math.isfinite(range_max) or range_max <= range_min:
             return range_min, range_max
         in_range = (finite_values >= range_min) & (finite_values <= range_max)
-        if log_scale:
-            in_range = in_range & (finite_values > 0)
         if not bool(in_range.any().item()):
             return range_min, range_max
         clipped = finite_values[in_range]
@@ -463,26 +509,9 @@ class HistogramPanel(Panel):
         return max(range_min, data_min), min(range_max, data_max)
 
     @staticmethod
-    def _log_bins_supported(histogram_min: float, histogram_max: float) -> bool:
-        return (
-            histogram_min > 0.0 and
-            histogram_max > 0.0 and
-            histogram_max > histogram_min and
-            math.isfinite(histogram_min) and
-            math.isfinite(histogram_max)
-        )
-
-    @staticmethod
     def _compute_bin_edges(
-        histogram_min: float, histogram_max: float, bin_count: int, log_scale: bool = False
+        histogram_min: float, histogram_max: float, bin_count: int
     ) -> list[float]:
-        if log_scale and HistogramPanel._log_bins_supported(histogram_min, histogram_max):
-            log_lo = math.log(histogram_min)
-            log_hi = math.log(histogram_max)
-            return [
-                math.exp(log_lo + (log_hi - log_lo) * (index / bin_count))
-                for index in range(bin_count + 1)
-            ]
         return [
             histogram_min + (histogram_max - histogram_min) * (index / bin_count)
             for index in range(bin_count + 1)
@@ -515,6 +544,261 @@ class HistogramPanel(Panel):
         if self._handle:
             self._handle.dirty_all()
 
+    def _refresh_range_preserving_mark(self):
+        # View-only change (zoom): re-bin the cached data instead of forcing a full
+        # re-extract on the next frame. _refresh() handles the single dirty.
+        self._refresh(view_only=True)
+
+    def _assign_custom_range_values(self, range_min: float, range_max: float) -> bool:
+        lo = float(min(range_min, range_max))
+        hi = float(max(range_min, range_max))
+        if not (math.isfinite(lo) and math.isfinite(hi)) or hi <= lo:
+            return False
+        changed = (
+            self._custom_range_min_value != lo or
+            self._custom_range_max_value != hi
+        )
+        self._custom_range_min_value = lo
+        self._custom_range_max_value = hi
+        self._custom_range_min_str = self._format_range_input(lo)
+        self._custom_range_max_str = self._format_range_input(hi)
+        return changed
+
+    def _clear_custom_range_values(self) -> bool:
+        if not self._has_custom_range():
+            return False
+        self._reset_custom_range()
+        return True
+
+    def _assign_compare_y_custom_range_values(self, range_min: float, range_max: float) -> bool:
+        lo = float(min(range_min, range_max))
+        hi = float(max(range_min, range_max))
+        if not (math.isfinite(lo) and math.isfinite(hi)) or hi <= lo:
+            return False
+        changed = (
+            self._compare_y_custom_range_min_value != lo or
+            self._compare_y_custom_range_max_value != hi
+        )
+        self._compare_y_custom_range_min_value = lo
+        self._compare_y_custom_range_max_value = hi
+        self._compare_y_custom_range_min_str = self._format_range_input(lo)
+        self._compare_y_custom_range_max_str = self._format_range_input(hi)
+        return changed
+
+    def _clear_compare_y_custom_range_values(self) -> bool:
+        if not self._has_compare_y_custom_range():
+            return False
+        self._reset_compare_y_custom_range()
+        return True
+
+    @staticmethod
+    def _value_at_fraction(fraction: float, lo: float, hi: float) -> float | None:
+        """Map a 0..1 position across the chart to a data value."""
+        lo = float(lo)
+        hi = float(hi)
+        if not (math.isfinite(lo) and math.isfinite(hi)) or hi <= lo:
+            return None
+        fraction = min(1.0, max(0.0, float(fraction)))
+        return lo + (hi - lo) * fraction
+
+    @staticmethod
+    def _cursor_zoom_bounds(
+        current_min: float,
+        current_max: float,
+        focus: float,
+        domain_min: float,
+        domain_max: float,
+        zoom_in: bool,
+        magnitude: float = 1.0,
+    ) -> tuple[float, float] | None:
+        """Zoom [current_min, current_max] around ``focus`` (the value under the cursor),
+        keeping that value pinned to its on-screen position. Clamps to the data domain.
+        Returns the full domain when a zoom-out reaches it (caller drops the custom range),
+        or None when the inputs are degenerate."""
+        values = (current_min, current_max, focus, domain_min, domain_max)
+        if not all(math.isfinite(float(value)) for value in values):
+            return None
+
+        domain_lo, domain_hi = sorted((float(domain_min), float(domain_max)))
+        current_lo, current_hi = sorted((float(current_min), float(current_max)))
+        if domain_hi <= domain_lo or current_hi <= current_lo:
+            return None
+
+        current_lo = min(max(current_lo, domain_lo), domain_hi)
+        current_hi = min(max(current_hi, domain_lo), domain_hi)
+        focus = min(max(float(focus), current_lo), current_hi)
+
+        span = current_hi - current_lo
+        domain_span = domain_hi - domain_lo
+        if span <= 0.0 or domain_span <= 0.0:
+            return None
+
+        step = HISTOGRAM_ZOOM_STEP ** max(1.0, float(magnitude))
+        target_span = span * step if zoom_in else span / step
+        if not zoom_in and target_span >= domain_span:
+            return domain_lo, domain_hi
+        target_span = min(target_span, domain_span)
+        target_span = max(target_span, max(domain_span * 1e-9, 1e-30))
+
+        # Hold the focused value at its current fractional offset so the point under the
+        # cursor stays put as the window shrinks or grows around it.
+        fraction = (focus - current_lo) / span
+        new_lo = focus - fraction * target_span
+        new_hi = new_lo + target_span
+
+        if new_lo < domain_lo:
+            new_hi += domain_lo - new_lo
+            new_lo = domain_lo
+        if new_hi > domain_hi:
+            new_lo -= new_hi - domain_hi
+            new_hi = domain_hi
+        new_lo = max(domain_lo, new_lo)
+        new_hi = min(domain_hi, new_hi)
+        if new_hi <= new_lo:
+            return None
+        return new_lo, new_hi
+
+    @staticmethod
+    def _view_covers_domain(view_min: float, view_max: float, domain_min: float, domain_max: float) -> bool:
+        domain_lo, domain_hi = sorted((float(domain_min), float(domain_max)))
+        span = domain_hi - domain_lo
+        if span <= 0.0:
+            return True
+        tolerance = span * 1e-6
+        return float(view_min) <= domain_lo + tolerance and float(view_max) >= domain_hi - tolerance
+
+    def _snap_histogram_zoom_bounds_to_data(self, range_min: float, range_max: float) -> tuple[float, float]:
+        if self._primary_valid_values is None:
+            return float(range_min), float(range_max)
+        try:
+            finite_values = self._primary_valid_values.contiguous().cpu().to("float32")
+            return self._snap_bounds_to_data(
+                finite_values,
+                float(range_min),
+                float(range_max),
+            )
+        except Exception:
+            return float(range_min), float(range_max)
+
+    def _histogram_value_for_mouse_x(self, mouse_x: float) -> float | None:
+        if self._chart_el is None:
+            return None
+        left = float(self._chart_el.absolute_left)
+        total_width, _, _ = self._histogram_bar_geometry(self._histogram_bin_count)
+        if total_width <= 0.0:
+            return None
+        return self._value_at_fraction(
+            (mouse_x - left) / total_width,
+            self._primary_histogram_min,
+            self._primary_histogram_max,
+        )
+
+    def _apply_histogram_view_range(self, range_min: float, range_max: float) -> bool:
+        lo = float(min(range_min, range_max))
+        hi = float(max(range_min, range_max))
+        if not (math.isfinite(lo) and math.isfinite(hi)) or hi <= lo:
+            return False
+        # Reaching the data extent drops the custom range so the panel returns to its
+        # pristine auto-ranged state instead of pinning a range that spans everything.
+        if self._view_covers_domain(lo, hi, self._auto_histogram_min, self._auto_histogram_max):
+            if not self._clear_custom_range_values():
+                return False
+        else:
+            lo, hi = self._snap_histogram_zoom_bounds_to_data(lo, hi)
+            if not self._assign_custom_range_values(lo, hi):
+                if self._handle:
+                    self._handle.dirty_all()
+                return True
+        self._refresh_range_preserving_mark()
+        return True
+
+    def _zoom_histogram_at_value(self, focus_value: float, zoom_in: bool, magnitude: float = 1.0) -> bool:
+        if not self._show_chart:
+            return False
+        # Already framing the whole distribution — a further zoom-out is a no-op.
+        if not zoom_in and not self._has_custom_range():
+            return False
+        bounds = self._cursor_zoom_bounds(
+            self._primary_histogram_min,
+            self._primary_histogram_max,
+            focus_value,
+            self._auto_histogram_min,
+            self._auto_histogram_max,
+            zoom_in,
+            magnitude=magnitude,
+        )
+        if bounds is None:
+            return False
+        return self._apply_histogram_view_range(*bounds)
+
+    def _compare_value_for_mouse(self, mouse_x: float, mouse_y: float) -> tuple[float, float] | None:
+        if self._compare_chart_el is None:
+            return None
+        left = float(self._compare_chart_el.absolute_left)
+        top = float(self._compare_chart_el.absolute_top)
+        width = max(float(self._compare_chart_el.absolute_width), 1.0)
+        height = max(float(self._compare_chart_el.absolute_height), 1.0)
+        x_value = self._value_at_fraction(
+            (mouse_x - left) / width, self._compare_x_min, self._compare_x_max
+        )
+        # Screen y grows downward while the value axis grows upward, so invert.
+        y_value = self._value_at_fraction(
+            1.0 - (mouse_y - top) / height, self._compare_y_min, self._compare_y_max
+        )
+        if x_value is None or y_value is None:
+            return None
+        return x_value, y_value
+
+    def _apply_compare_view_range(self, x_min: float, x_max: float, y_min: float, y_max: float) -> bool:
+        x_lo = float(min(x_min, x_max))
+        x_hi = float(max(x_min, x_max))
+        y_lo = float(min(y_min, y_max))
+        y_hi = float(max(y_min, y_max))
+        if x_hi <= x_lo or y_hi <= y_lo:
+            return False
+        changed = False
+        if self._view_covers_domain(x_lo, x_hi, self._auto_histogram_min, self._auto_histogram_max):
+            changed = self._clear_custom_range_values() or changed
+        else:
+            x_lo, x_hi = self._snap_histogram_zoom_bounds_to_data(x_lo, x_hi)
+            changed = self._assign_custom_range_values(x_lo, x_hi) or changed
+        if self._view_covers_domain(y_lo, y_hi, self._compare_y_auto_min, self._compare_y_auto_max):
+            changed = self._clear_compare_y_custom_range_values() or changed
+        else:
+            changed = self._assign_compare_y_custom_range_values(y_lo, y_hi) or changed
+        if changed:
+            self._refresh_range_preserving_mark()
+        elif self._handle:
+            self._handle.dirty_all()
+        return True
+
+    def _zoom_compare_at_value(self, focus_x: float, focus_y: float, zoom_in: bool, magnitude: float = 1.0) -> bool:
+        if not self._show_compare_chart:
+            return False
+        if not zoom_in and not self._has_any_custom_range():
+            return False
+        zoomed_x = self._cursor_zoom_bounds(
+            self._compare_x_min,
+            self._compare_x_max,
+            focus_x,
+            self._auto_histogram_min,
+            self._auto_histogram_max,
+            zoom_in,
+            magnitude=magnitude,
+        )
+        zoomed_y = self._cursor_zoom_bounds(
+            self._compare_y_min,
+            self._compare_y_max,
+            focus_y,
+            self._compare_y_auto_min,
+            self._compare_y_auto_max,
+            zoom_in,
+            magnitude=magnitude,
+        )
+        if zoomed_x is None or zoomed_y is None:
+            return False
+        return self._apply_compare_view_range(zoomed_x[0], zoomed_x[1], zoomed_y[0], zoomed_y[1])
+
     def _set_custom_range_min(self, value):
         # Per-keystroke setter: just buffer the text. Commit happens on Enter or blur
         # via _commit_custom_range so the user can type freely without the input
@@ -535,6 +819,12 @@ class HistogramPanel(Panel):
             return None
         return parsed if math.isfinite(parsed) else None
 
+    @staticmethod
+    def _approx_equal(a: float, b: float) -> bool:
+        # Relative tolerance so equality detection works for large-magnitude metrics,
+        # where an absolute 1e-9 epsilon would never match.
+        return abs(float(a) - float(b)) <= max(abs(float(b)) * 1e-6, 1e-9)
+
     def _commit_custom_range(self):
         parsed_min = self._parse_range_input(self._custom_range_min_str)
         parsed_max = self._parse_range_input(self._custom_range_max_str)
@@ -544,9 +834,9 @@ class HistogramPanel(Panel):
 
         # Treat values equal to the auto bounds as "no constraint" so the user
         # can clear a side by typing the metric's natural min/max.
-        if new_min is not None and abs(new_min - self._auto_histogram_min) < 1e-9:
+        if new_min is not None and self._approx_equal(new_min, self._auto_histogram_min):
             new_min = None
-        if new_max is not None and abs(new_max - self._auto_histogram_max) < 1e-9:
+        if new_max is not None and self._approx_equal(new_max, self._auto_histogram_max):
             new_max = None
 
         # Reject inverted ranges — leave previous constraint in place.
@@ -583,7 +873,7 @@ class HistogramPanel(Panel):
     def _on_range_input_blur(self, _event):
         self._commit_custom_range()
 
-    def _on_reset_range(self, _event=None):
+    def _on_reset_range(self, _handle, _event, _args):
         if not self._has_custom_range():
             return
         self._reset_custom_range()
@@ -626,9 +916,9 @@ class HistogramPanel(Panel):
         new_min = parsed_min if parsed_min is not None else self._compare_y_custom_range_min_value
         new_max = parsed_max if parsed_max is not None else self._compare_y_custom_range_max_value
 
-        if new_min is not None and abs(new_min - self._compare_y_auto_min) < 1e-9:
+        if new_min is not None and self._approx_equal(new_min, self._compare_y_auto_min):
             new_min = None
-        if new_max is not None and abs(new_max - self._compare_y_auto_max) < 1e-9:
+        if new_max is not None and self._approx_equal(new_max, self._compare_y_auto_max):
             new_max = None
 
         effective_min = new_min if new_min is not None else self._compare_y_auto_min
@@ -663,7 +953,7 @@ class HistogramPanel(Panel):
     def _on_compare_y_range_input_blur(self, _event):
         self._commit_compare_y_range()
 
-    def _on_reset_compare_range(self, _event=None):
+    def _on_reset_compare_range(self, _handle, _event, _args):
         if not self._has_any_custom_range():
             return
         self._reset_custom_range()
@@ -734,8 +1024,17 @@ class HistogramPanel(Panel):
         )
         self._handle.update_record_list("compare_metric_options", options)
 
-    def _refresh(self):
+    def _refresh(self, view_only: bool = False):
         if not self._handle:
+            return
+
+        # Zoom / range changes don't touch the data — re-bin the cached values
+        # instead of re-extracting, re-copying and re-sorting the whole scene.
+        if view_only and self._primary_finite_values_cpu is not None and self._primary_valid_values is not None:
+            self._rebind_view_from_cache()
+            if self._show_compare_card and self._compare_x_finite_cpu is not None:
+                self._rebind_compare_from_cache()
+            self._handle.dirty_all()
             return
 
         scene = lf.get_scene()
@@ -805,25 +1104,13 @@ class HistogramPanel(Panel):
         self._primary_values = values
         self._primary_finite_mask = finite_mask
         self._primary_valid_values = valid_values
+        self._primary_finite_values_cpu = finite_values
+        self._primary_sorted_values = sorted_values
         self._auto_histogram_min = auto_min
         self._auto_histogram_max = auto_max
-        range_min, range_max = self._resolve_active_bounds(auto_min, auto_max)
-        # Snap to the actual extent of the values that fall inside the resolved
-        # range so the bars fill the chart instead of leaving leading/trailing
-        # empty bins. Without this, a wide custom range (or a metric with a
-        # hardcoded theoretical span) wastes resolution on regions that hold
-        # no samples.
-        histogram_min, histogram_max = self._snap_bounds_to_data(
-            finite_values, range_min, range_max, log_scale=self._log_scale_enabled
-        )
-        # Inputs always reflect the *current* effective min/max so the user
-        # can see what's on screen and shrink it deliberately. The constraint
-        # they typed is preserved in _custom_range_{min,max}_value.
-        self._custom_range_min_str = self._format_range_input(histogram_min)
-        self._custom_range_max_str = self._format_range_input(histogram_max)
-        self._primary_histogram_min = histogram_min
-        self._primary_histogram_max = histogram_max
 
+        # Whole-dataset stats — independent of the view range, so a later view-only
+        # re-bin reuses them instead of recomputing.
         self._show_chart = True
         self._sample_count = f"{int(finite_values.shape[0]):,}"
         self._range_text = self._format_range_text(finite_values.min_scalar(), finite_values.max_scalar())
@@ -837,9 +1124,29 @@ class HistogramPanel(Panel):
             count=f"{int(finite_values.shape[0]):,}",
         )
 
-        self._rebuild_histogram_from_cache(reset_footer=self._active_mark_source != "compare")
+        self._rebind_view_from_cache()
         self._refresh_compare(scene, model, values, visible_mask)
         self._handle.dirty_all()
+
+    def _rebind_view_from_cache(self):
+        """Re-resolve the view range and rebuild the bars from already-extracted data.
+        Used by the full refresh and by view-only changes (zoom / range)."""
+        finite_values = self._primary_finite_values_cpu
+        if finite_values is None:
+            return
+        range_min, range_max = self._resolve_active_bounds(self._auto_histogram_min, self._auto_histogram_max)
+        # Snap to the actual extent of the values inside the resolved range so the bars
+        # fill the chart instead of leaving leading/trailing empty bins.
+        histogram_min, histogram_max = self._snap_bounds_to_data(
+            finite_values, range_min, range_max
+        )
+        # Inputs reflect the current effective min/max; the typed constraint stays in
+        # _custom_range_{min,max}_value.
+        self._custom_range_min_str = self._format_range_input(histogram_min)
+        self._custom_range_max_str = self._format_range_input(histogram_max)
+        self._primary_histogram_min = histogram_min
+        self._primary_histogram_max = histogram_max
+        self._rebuild_histogram_from_cache(reset_footer=self._active_mark_source != "compare")
 
     def _set_empty(self, title: str, message: str):
         self._show_chart = False
@@ -857,6 +1164,8 @@ class HistogramPanel(Panel):
         self._primary_values = None
         self._primary_finite_mask = None
         self._primary_valid_values = None
+        self._primary_finite_values_cpu = None
+        self._primary_sorted_values = None
         self._primary_histogram_min = 0.0
         self._primary_histogram_max = 1.0
         self._auto_histogram_min = 0.0
@@ -886,21 +1195,18 @@ class HistogramPanel(Panel):
             return
 
         mark_bounds = self._capture_histogram_mark_value_bounds()
-        log_x = self._log_scale_enabled
         selection_bin_indices = self._build_selection_bin_indices(
             self._primary_values,
             self._primary_finite_mask,
             self._primary_histogram_min,
             self._primary_histogram_max,
             self._histogram_bin_count,
-            log_scale=log_x,
         )
         valid_bin_indices = self._bin_indices_for_values(
             self._primary_valid_values,
             self._primary_histogram_min,
             self._primary_histogram_max,
             self._histogram_bin_count,
-            log_scale=log_x,
         )
         counts, edges = self._build_histogram(
             valid_bin_indices,
@@ -908,7 +1214,6 @@ class HistogramPanel(Panel):
             self._primary_histogram_min,
             self._primary_histogram_max,
             self._histogram_bin_count,
-            log_scale=log_x,
         )
 
         self._selection_bin_indices = selection_bin_indices
@@ -951,14 +1256,12 @@ class HistogramPanel(Panel):
             return
 
         mark_bounds = self._capture_compare_mark_value_bounds()
-        log = self._log_scale_enabled
         x_bin_indices = self._build_selection_bin_indices(
             self._primary_values,
             self._compare_finite_mask,
             self._compare_x_min,
             self._compare_x_max,
             self._compare_x_bin_count,
-            log_scale=log,
         )
         y_bin_indices = self._build_selection_bin_indices(
             self._compare_values,
@@ -966,21 +1269,18 @@ class HistogramPanel(Panel):
             self._compare_y_min,
             self._compare_y_max,
             self._compare_y_bin_count,
-            log_scale=log,
         )
         valid_x_bins = self._bin_indices_for_values(
             self._compare_valid_x_values,
             self._compare_x_min,
             self._compare_x_max,
             self._compare_x_bin_count,
-            log_scale=log,
         )
         valid_y_bins = self._bin_indices_for_values(
             self._compare_valid_y_values,
             self._compare_y_min,
             self._compare_y_max,
             self._compare_y_bin_count,
-            log_scale=log,
         )
         compare_counts, x_edges, y_edges = self._build_compare_heatmap(
             valid_x_bins,
@@ -992,7 +1292,6 @@ class HistogramPanel(Panel):
             self._compare_y_max,
             self._compare_x_bin_count,
             self._compare_y_bin_count,
-            log_scale=log,
         )
 
         self._compare_x_bin_indices = x_bin_indices
@@ -1017,13 +1316,7 @@ class HistogramPanel(Panel):
 
     def _build_bin_records(self, counts: list[int], edges: list[float]) -> Iterable[dict[str, object]]:
         if self._log_scale_enabled:
-            # In log-space, bin widths grow geometrically — plot density
-            # (count / width) so the bar shape reflects the underlying PDF
-            # instead of giving wider upper bins an unfair advantage.
-            display_counts = [
-                float(count) / max(edges[i + 1] - edges[i], 1e-30)
-                for i, count in enumerate(counts)
-            ]
+            display_counts = [math.log1p(float(count)) for count in counts]
         else:
             display_counts = [float(count) for count in counts]
 
@@ -1330,6 +1623,76 @@ class HistogramPanel(Panel):
         except Exception:
             return False
 
+    @staticmethod
+    def _keymap_modifier_value(name: str, fallback: int) -> int:
+        try:
+            return int(getattr(lf.keymap.Modifier, name).value)
+        except Exception:
+            return fallback
+
+    @classmethod
+    def _event_keymap_modifier_mask(cls, event) -> int:
+        modifiers = 0
+        ctrl_pressed = cls._event_has_modifier(event, "ctrl_key", "ctrl", mask=RML_KM_CTRL)
+        shift_pressed = cls._event_has_modifier(event, "shift_key", "shift", mask=RML_KM_SHIFT)
+        alt_pressed = cls._event_has_modifier(event, "alt_key", "alt", mask=RML_KM_ALT)
+        super_pressed = cls._event_has_modifier(
+            event, "meta_key", "meta", "super_key", "super", mask=RML_KM_META
+        )
+
+        if cls._is_rml_event(event):
+            if not ctrl_pressed:
+                try:
+                    ctrl_pressed = bool(lf.ui.is_ctrl_down())
+                except Exception:
+                    pass
+            if not shift_pressed:
+                try:
+                    shift_pressed = bool(lf.ui.is_shift_down())
+                except Exception:
+                    pass
+
+        if shift_pressed:
+            modifiers |= cls._keymap_modifier_value("SHIFT", 1)
+        if ctrl_pressed:
+            modifiers |= cls._keymap_modifier_value("CTRL", 2)
+        if alt_pressed:
+            modifiers |= cls._keymap_modifier_value("ALT", 4)
+        if super_pressed:
+            modifiers |= cls._keymap_modifier_value("SUPER", 8)
+        return modifiers
+
+    @staticmethod
+    def _event_wheel_delta(event) -> float:
+        for key in ("wheel_delta_y", "wheel_delta"):
+            try:
+                raw = event.get_parameter(key, "")
+            except Exception:
+                continue
+            if raw is None:
+                continue
+            if isinstance(raw, str) and not raw.strip():
+                continue
+            try:
+                return float(raw)
+            except Exception:
+                continue
+        return 0.0
+
+    @classmethod
+    def _event_matches_histogram_zoom_binding(cls, event) -> bool:
+        keymap = getattr(lf, "keymap", None)
+        try:
+            if getattr(keymap, "is_capturing", lambda: False)():
+                return False
+            action = keymap.get_action_for_scroll(
+                keymap.ToolMode.GLOBAL,
+                cls._event_keymap_modifier_mask(event),
+            )
+            return action == keymap.Action.HISTOGRAM_ZOOM_MARKED
+        except Exception:
+            return cls._event_primary_shortcut_pressed(event)
+
     def _normalize_selection_mask(self, mask: lf.Tensor | None, reference: lf.Tensor | None) -> lf.Tensor | None:
         if mask is None or reference is None:
             return None
@@ -1516,9 +1879,8 @@ class HistogramPanel(Panel):
         histogram_min: float,
         histogram_max: float,
         bin_count: int = DEFAULT_HISTOGRAM_BIN_COUNT,
-        log_scale: bool = False,
     ) -> tuple[list[int], list[float]]:
-        edges = self._compute_bin_edges(histogram_min, histogram_max, bin_count, log_scale)
+        edges = self._compute_bin_edges(histogram_min, histogram_max, bin_count)
 
         span = histogram_max - histogram_min
         if not math.isfinite(span) or span <= 0.0:
@@ -1548,14 +1910,11 @@ class HistogramPanel(Panel):
         histogram_min: float,
         histogram_max: float,
         bin_count: int = DEFAULT_HISTOGRAM_BIN_COUNT,
-        log_scale: bool = False,
     ) -> lf.Tensor:
         # Out-of-range values get a -1 sentinel so they're excluded from both
         # the histogram counts and bin-based selection masks. Without this,
         # clamping piles every out-of-range sample into the edge bins, which
-        # makes a custom range-of-interest meaningless. With log_scale on,
-        # bin edges are log-spaced and non-positive samples are also excluded
-        # since log is undefined for them.
+        # makes a custom range-of-interest meaningless.
         value_count = int(values.shape[0]) if values.ndim > 0 else int(values.numel)
         device = HistogramPanel._device_string(values)
         if value_count <= 0:
@@ -1567,30 +1926,16 @@ class HistogramPanel(Panel):
 
         flat = values.reshape([-1])
         in_range = (flat >= histogram_min) & (flat <= histogram_max)
-
-        use_log = log_scale and HistogramPanel._log_bins_supported(histogram_min, histogram_max)
         raw = lf.Tensor.full([value_count], -1, dtype="int32", device=device)
-        if use_log:
-            in_range = in_range & (flat > 0)
         if not bool(in_range.any().item()):
             return raw
 
         in_values = flat[in_range]
-        if use_log:
-            log_lo = math.log(histogram_min)
-            log_hi = math.log(histogram_max)
-            log_span = log_hi - log_lo
-            bin_idx = (
-                (((in_values.log() - log_lo) / log_span) * bin_count)
-                .floor()
-                .to("int32")
-            )
-        else:
-            bin_idx = (
-                (((in_values - histogram_min) / span) * bin_count)
-                .floor()
-                .to("int32")
-            )
+        bin_idx = (
+            (((in_values - histogram_min) / span) * bin_count)
+            .floor()
+            .to("int32")
+        )
         bin_idx = bin_idx.clamp(0.0, float(bin_count - 1)).to("int32")
         raw[in_range] = bin_idx
         return raw
@@ -1602,7 +1947,6 @@ class HistogramPanel(Panel):
         histogram_min: float,
         histogram_max: float,
         bin_count: int = DEFAULT_HISTOGRAM_BIN_COUNT,
-        log_scale: bool = False,
     ) -> lf.Tensor:
         value_count = int(values.shape[0]) if values.ndim > 0 else int(values.numel)
         device = self._device_string(values)
@@ -1615,7 +1959,6 @@ class HistogramPanel(Panel):
             histogram_min,
             histogram_max,
             bin_count,
-            log_scale=log_scale,
         )
         return selection_bin_indices
 
@@ -1807,20 +2150,6 @@ class HistogramPanel(Panel):
         y_valid = compare_values[finite_mask]
         x_finite = x_valid.contiguous().cpu().to("float32")
         y_finite = y_valid.contiguous().cpu().to("float32")
-        # Mirror the primary axis range-of-interest on the compare X axis so the
-        # 2D heatmap stays consistent with the 1D histogram.
-        x_range_min, x_range_max = self._resolve_active_bounds(
-            self._auto_histogram_min, self._auto_histogram_max
-        )
-        log = self._log_scale_enabled
-        x_min, x_max = self._snap_bounds_to_data(x_finite, x_range_min, x_range_max, log_scale=log)
-        y_auto_min, y_auto_max = self._histogram_bounds(y_finite, self._compare_metric_id)
-        self._compare_y_auto_min = y_auto_min
-        self._compare_y_auto_max = y_auto_max
-        y_range_min, y_range_max = self._resolve_compare_y_bounds(y_auto_min, y_auto_max)
-        y_min, y_max = self._snap_bounds_to_data(y_finite, y_range_min, y_range_max, log_scale=log)
-        self._compare_y_custom_range_min_str = self._format_range_input(y_min)
-        self._compare_y_custom_range_max_str = self._format_range_input(y_max)
         self._show_compare_card = True
         self._show_compare_chart = True
         self._compare_empty_title = ""
@@ -1830,10 +2159,10 @@ class HistogramPanel(Panel):
         self._compare_finite_mask = finite_mask
         self._compare_valid_x_values = x_valid
         self._compare_valid_y_values = y_valid
-        self._compare_x_min = x_min
-        self._compare_x_max = x_max
-        self._compare_y_min = y_min
-        self._compare_y_max = y_max
+        self._compare_x_finite_cpu = x_finite
+        self._compare_y_finite_cpu = y_finite
+        self._compare_x_auto_min, self._compare_x_auto_max = self._histogram_bounds(x_finite, self._metric_id)
+        self._compare_y_auto_min, self._compare_y_auto_max = self._histogram_bounds(y_finite, self._compare_metric_id)
         self._compare_summary_text = _trf(
             "histogram.compare.summary",
             "{x_metric} vs {y_metric} across {count} Gaussians",
@@ -1843,6 +2172,26 @@ class HistogramPanel(Panel):
         )
         self._compare_x_metric_label = METRIC_BY_ID[self._metric_id].label()
         self._compare_y_metric_label = METRIC_BY_ID[self._compare_metric_id].label()
+        self._rebind_compare_from_cache()
+
+    def _rebind_compare_from_cache(self):
+        """Re-resolve compare X/Y ranges and rebuild the heatmap from cached values."""
+        x_finite = self._compare_x_finite_cpu
+        y_finite = self._compare_y_finite_cpu
+        if x_finite is None or y_finite is None:
+            return
+        # Mirror the primary axis range-of-interest on the compare X axis so the 2D
+        # heatmap stays consistent with the 1D histogram.
+        x_range_min, x_range_max = self._resolve_active_bounds(self._compare_x_auto_min, self._compare_x_auto_max)
+        x_min, x_max = self._snap_bounds_to_data(x_finite, x_range_min, x_range_max)
+        y_range_min, y_range_max = self._resolve_compare_y_bounds(self._compare_y_auto_min, self._compare_y_auto_max)
+        y_min, y_max = self._snap_bounds_to_data(y_finite, y_range_min, y_range_max)
+        self._compare_y_custom_range_min_str = self._format_range_input(y_min)
+        self._compare_y_custom_range_max_str = self._format_range_input(y_max)
+        self._compare_x_min = x_min
+        self._compare_x_max = x_max
+        self._compare_y_min = y_min
+        self._compare_y_max = y_max
         self._rebuild_compare_from_cache()
 
     def _build_compare_heatmap(
@@ -1856,10 +2205,9 @@ class HistogramPanel(Panel):
         y_max: float,
         x_bin_count: int,
         y_bin_count: int,
-        log_scale: bool = False,
     ) -> tuple[list[int], list[float], list[float]]:
-        x_edges = self._compute_bin_edges(x_min, x_max, x_bin_count, log_scale)
-        y_edges = self._compute_bin_edges(y_min, y_max, y_bin_count, log_scale)
+        x_edges = self._compute_bin_edges(x_min, x_max, x_bin_count)
+        y_edges = self._compute_bin_edges(y_min, y_max, y_bin_count)
 
         device = self._device_string(x_bin_indices)
         counts_tensor = lf.Tensor.zeros([x_bin_count * y_bin_count], dtype="int32", device=device)
@@ -1917,6 +2265,8 @@ class HistogramPanel(Panel):
         self._compare_finite_mask = None
         self._compare_valid_x_values = None
         self._compare_valid_y_values = None
+        self._compare_x_finite_cpu = None
+        self._compare_y_finite_cpu = None
         self._compare_x_min = 0.0
         self._compare_x_max = 1.0
         self._compare_y_min = 0.0
@@ -1932,23 +2282,7 @@ class HistogramPanel(Panel):
             return []
 
         if self._log_scale_enabled:
-            # Density per cell — divide by the geometric area in value-space
-            # so wider log-bins don't dominate the heatmap.
-            x_widths = [
-                max(self._compare_x_edges[i + 1] - self._compare_x_edges[i], 1e-30)
-                for i in range(self._compare_x_bin_count)
-            ]
-            y_widths = [
-                max(self._compare_y_edges[i + 1] - self._compare_y_edges[i], 1e-30)
-                for i in range(self._compare_y_bin_count)
-            ]
-            display_counts = []
-            for y_bin in range(self._compare_y_bin_count):
-                for x_bin in range(self._compare_x_bin_count):
-                    idx = y_bin * self._compare_x_bin_count + x_bin
-                    display_counts.append(
-                        float(self._compare_counts[idx]) / (x_widths[x_bin] * y_widths[y_bin])
-                    )
+            display_counts = [math.log1p(float(count)) for count in self._compare_counts]
         else:
             display_counts = [float(count) for count in self._compare_counts]
 
@@ -2636,6 +2970,34 @@ class HistogramPanel(Panel):
         self._sync_marked_range(apply_scene=False, preview_scene=True)
         event.stop_propagation()
 
+    @staticmethod
+    def _wheel_zoom_magnitude(delta: float) -> float:
+        # HID wheels report ~120 units per physical notch; a fast multi-notch flick should
+        # zoom proportionally further. Trackpads / per-notch=1 systems stay at a single step.
+        magnitude = abs(float(delta))
+        magnitude = magnitude / 120.0 if magnitude >= 30.0 else 1.0
+        return min(max(magnitude, 1.0), 8.0)
+
+    def _on_chart_mousescroll(self, event):
+        if not self._show_chart or not self._event_matches_histogram_zoom_binding(event):
+            return
+        delta = self._event_wheel_delta(event)
+        if delta == 0.0:
+            return
+        focus_value = self._histogram_value_for_mouse_x(self._event_mouse_x(event))
+        if focus_value is not None:
+            self._zoom_histogram_at_value(
+                focus_value, zoom_in=delta < 0.0, magnitude=self._wheel_zoom_magnitude(delta)
+            )
+        # Claim the wheel so the dock/page doesn't scroll while the user zooms the chart.
+        event.stop_propagation()
+
+    def _on_chart_dblclick(self, event):
+        # Double-click fits the full distribution (clears the zoom), keeping any selection.
+        if self._show_chart and self._clear_custom_range_values():
+            self._refresh_range_preserving_mark()
+        event.stop_propagation()
+
     def _on_compare_chart_mousedown(self, event):
         if not self._show_compare_chart or self._compare_chart_el is None:
             return
@@ -2666,6 +3028,29 @@ class HistogramPanel(Panel):
         self._sync_compare_mark(apply_scene=False, preview_scene=True)
         event.stop_propagation()
 
+    def _on_compare_chart_mousescroll(self, event):
+        if not self._show_compare_chart or not self._event_matches_histogram_zoom_binding(event):
+            return
+        delta = self._event_wheel_delta(event)
+        if delta == 0.0:
+            return
+        focus = self._compare_value_for_mouse(self._event_mouse_x(event), self._event_mouse_y(event))
+        if focus is not None:
+            self._zoom_compare_at_value(
+                focus[0], focus[1], zoom_in=delta < 0.0, magnitude=self._wheel_zoom_magnitude(delta)
+            )
+        # Claim the wheel so the dock/page doesn't scroll while the user zooms the chart.
+        event.stop_propagation()
+
+    def _on_compare_chart_dblclick(self, event):
+        if not self._show_compare_chart:
+            return
+        changed = self._clear_custom_range_values()
+        changed = self._clear_compare_y_custom_range_values() or changed
+        if changed:
+            self._refresh_range_preserving_mark()
+        event.stop_propagation()
+
     def _on_document_mousemove(self, event):
         if self._dragging_compare_mark and self._compare_chart_el is not None:
             bins = self._compare_bin_indices_for_mouse(self._event_mouse_x(event), self._event_mouse_y(event))
@@ -2686,6 +3071,19 @@ class HistogramPanel(Panel):
             event.stop_propagation()
 
     def _on_document_mouseup(self, event):
+        if self._dragging_mark or self._dragging_compare_mark:
+            scene = lf.get_scene()
+            if scene is None or not scene.is_valid():
+                # Scene was torn down mid-drag — abort instead of committing the
+                # selection against a dangling model.
+                self._dragging_mark = False
+                self._dragging_compare_mark = False
+                self._reset_marked_state(clear_scene=False)
+                if self._handle:
+                    self._handle.dirty_all()
+                event.stop_propagation()
+                return
+
         if self._dragging_compare_mark:
             self._sync_compare_mark(apply_scene=False, preview_scene=True)
             self._commit_scene_selection_preview()
@@ -2695,6 +3093,9 @@ class HistogramPanel(Panel):
             self._drag_compare_selection_base_cells = None
             if self._panel_selection_mask is None or not self._any_true(self._panel_selection_mask):
                 self._reset_marked_state(clear_scene=False)
+            # Re-render now that the drag flag is cleared so the sweep box hides.
+            if self._handle:
+                self._handle.dirty_all()
             event.stop_propagation()
             return
 
@@ -2717,6 +3118,9 @@ class HistogramPanel(Panel):
             # preview overlay so we don't leave a dangling rectangle on screen.
             if self._panel_selection_mask is None or not self._any_true(self._panel_selection_mask):
                 self._reset_marked_state(clear_scene=False)
+            # Re-render now that the drag flag is cleared so the sweep box hides.
+            if self._handle:
+                self._handle.dirty_all()
             event.stop_propagation()
 
     def _event_mouse_x(self, event) -> float:
@@ -2975,7 +3379,7 @@ class HistogramPanel(Panel):
         self._marked_count_text = _trf("histogram.gaussian_count", "{count} Gaussians", count="0")
         self._status_hint = _tr(
             "histogram.status_drag_delete",
-            "Left-drag across the histogram to mark a range, then delete it.",
+            "Left-drag to mark a range, then delete it  ·  Ctrl+scroll to zoom  ·  double-click to fit",
         )
         self._active_mark_source = None
         if clear_scene:

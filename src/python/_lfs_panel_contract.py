@@ -23,6 +23,7 @@ class Panel:
     style: str = ''
     height_mode: PanelHeightMode = DEFAULT_HEIGHT_MODE
     update_interval_ms: int = 100
+    update_policy: str = 'interval'
 
     @classmethod
     def _class_id(cls) -> str:

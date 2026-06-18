@@ -10,7 +10,7 @@ namespace lfs::vis::op {
 
     class SelectionClearOperator : public Operator {
     public:
-        static const OperatorDescriptor DESCRIPTOR;
+        static LFS_LOCAL_SYMBOL const OperatorDescriptor DESCRIPTOR;
 
         [[nodiscard]] const OperatorDescriptor& descriptor() const override { return DESCRIPTOR; }
         [[nodiscard]] bool poll(const OperatorContext& ctx, const OperatorProperties* props = nullptr) const override;
@@ -19,7 +19,7 @@ namespace lfs::vis::op {
 
     class SceneSelectNodeOperator : public Operator {
     public:
-        static const OperatorDescriptor DESCRIPTOR;
+        static LFS_LOCAL_SYMBOL const OperatorDescriptor DESCRIPTOR;
 
         [[nodiscard]] const OperatorDescriptor& descriptor() const override { return DESCRIPTOR; }
         [[nodiscard]] bool poll(const OperatorContext& ctx, const OperatorProperties* props = nullptr) const override;
@@ -28,7 +28,7 @@ namespace lfs::vis::op {
 
     class CropBoxAddOperator : public Operator {
     public:
-        static const OperatorDescriptor DESCRIPTOR;
+        static LFS_LOCAL_SYMBOL const OperatorDescriptor DESCRIPTOR;
 
         [[nodiscard]] const OperatorDescriptor& descriptor() const override { return DESCRIPTOR; }
         [[nodiscard]] bool poll(const OperatorContext& ctx, const OperatorProperties* props = nullptr) const override;
@@ -37,7 +37,7 @@ namespace lfs::vis::op {
 
     class CropBoxSetOperator : public Operator {
     public:
-        static const OperatorDescriptor DESCRIPTOR;
+        static LFS_LOCAL_SYMBOL const OperatorDescriptor DESCRIPTOR;
 
         [[nodiscard]] const OperatorDescriptor& descriptor() const override { return DESCRIPTOR; }
         [[nodiscard]] bool poll(const OperatorContext& ctx, const OperatorProperties* props = nullptr) const override;
@@ -46,7 +46,7 @@ namespace lfs::vis::op {
 
     class CropBoxFitOperator : public Operator {
     public:
-        static const OperatorDescriptor DESCRIPTOR;
+        static LFS_LOCAL_SYMBOL const OperatorDescriptor DESCRIPTOR;
 
         [[nodiscard]] const OperatorDescriptor& descriptor() const override { return DESCRIPTOR; }
         [[nodiscard]] bool poll(const OperatorContext& ctx, const OperatorProperties* props = nullptr) const override;
@@ -55,7 +55,7 @@ namespace lfs::vis::op {
 
     class CropBoxResetOperator : public Operator {
     public:
-        static const OperatorDescriptor DESCRIPTOR;
+        static LFS_LOCAL_SYMBOL const OperatorDescriptor DESCRIPTOR;
 
         [[nodiscard]] const OperatorDescriptor& descriptor() const override { return DESCRIPTOR; }
         [[nodiscard]] bool poll(const OperatorContext& ctx, const OperatorProperties* props = nullptr) const override;
@@ -64,7 +64,7 @@ namespace lfs::vis::op {
 
     class EllipsoidAddOperator : public Operator {
     public:
-        static const OperatorDescriptor DESCRIPTOR;
+        static LFS_LOCAL_SYMBOL const OperatorDescriptor DESCRIPTOR;
 
         [[nodiscard]] const OperatorDescriptor& descriptor() const override { return DESCRIPTOR; }
         [[nodiscard]] bool poll(const OperatorContext& ctx, const OperatorProperties* props = nullptr) const override;
@@ -73,7 +73,7 @@ namespace lfs::vis::op {
 
     class EllipsoidSetOperator : public Operator {
     public:
-        static const OperatorDescriptor DESCRIPTOR;
+        static LFS_LOCAL_SYMBOL const OperatorDescriptor DESCRIPTOR;
 
         [[nodiscard]] const OperatorDescriptor& descriptor() const override { return DESCRIPTOR; }
         [[nodiscard]] bool poll(const OperatorContext& ctx, const OperatorProperties* props = nullptr) const override;
@@ -82,7 +82,7 @@ namespace lfs::vis::op {
 
     class EllipsoidFitOperator : public Operator {
     public:
-        static const OperatorDescriptor DESCRIPTOR;
+        static LFS_LOCAL_SYMBOL const OperatorDescriptor DESCRIPTOR;
 
         [[nodiscard]] const OperatorDescriptor& descriptor() const override { return DESCRIPTOR; }
         [[nodiscard]] bool poll(const OperatorContext& ctx, const OperatorProperties* props = nullptr) const override;
@@ -91,7 +91,7 @@ namespace lfs::vis::op {
 
     class EllipsoidResetOperator : public Operator {
     public:
-        static const OperatorDescriptor DESCRIPTOR;
+        static LFS_LOCAL_SYMBOL const OperatorDescriptor DESCRIPTOR;
 
         [[nodiscard]] const OperatorDescriptor& descriptor() const override { return DESCRIPTOR; }
         [[nodiscard]] bool poll(const OperatorContext& ctx, const OperatorProperties* props = nullptr) const override;

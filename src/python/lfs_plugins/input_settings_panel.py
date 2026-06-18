@@ -2,8 +2,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Input settings panel for keyboard/mouse binding configuration."""
 
+import threading
+
 import lichtfeld as lf
+from . import rml_widgets as w
 from .types import Panel
+from .ui import RuntimeState
 
 __lfs_panel_classes__ = ["InputSettingsPanel"]
 __lfs_panel_ids__ = ["lfs.input_settings"]
@@ -18,12 +22,11 @@ class InputSettingsPanel(Panel):
     height_mode = lf.ui.PanelHeightMode.CONTENT
     size = (500, 0)
     options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    update_interval_ms = 50
+    update_policy = "dirty"
 
     TOOL_MODES = [
         lf.keymap.ToolMode.GLOBAL,
         lf.keymap.ToolMode.SELECTION,
-        lf.keymap.ToolMode.BRUSH,
         lf.keymap.ToolMode.TRANSLATE,
         lf.keymap.ToolMode.ROTATE,
         lf.keymap.ToolMode.SCALE,
@@ -51,6 +54,7 @@ class InputSettingsPanel(Panel):
         ],
         "navigation_global": [
             lf.keymap.Action.CAMERA_RESET_HOME,
+            lf.keymap.Action.CAMERA_SET_HOME,
             lf.keymap.Action.CAMERA_NEXT_VIEW,
             lf.keymap.Action.CAMERA_PREV_VIEW,
         ],
@@ -75,10 +79,6 @@ class InputSettingsPanel(Panel):
             lf.keymap.Action.TOGGLE_SELECTION_DEPTH_FILTER,
             lf.keymap.Action.TOGGLE_SELECTION_CROP_FILTER,
             lf.keymap.Action.DEPTH_ADJUST_FAR,
-        ],
-        "brush": [
-            lf.keymap.Action.CYCLE_BRUSH_MODE,
-            lf.keymap.Action.BRUSH_RESIZE,
         ],
         "crop_box": [
             lf.keymap.Action.APPLY_CROP_BOX,
@@ -109,13 +109,13 @@ class InputSettingsPanel(Panel):
             lf.keymap.Action.TOOL_ROTATE,
             lf.keymap.Action.TOOL_SCALE,
             lf.keymap.Action.TOOL_MIRROR,
-            lf.keymap.Action.TOOL_BRUSH,
             lf.keymap.Action.TOOL_ALIGN,
             lf.keymap.Action.PIE_MENU,
         ],
         "ui_global": [
             lf.keymap.Action.TOGGLE_UI,
             lf.keymap.Action.TOGGLE_FULLSCREEN,
+            lf.keymap.Action.HISTOGRAM_ZOOM_MARKED,
         ],
         "sequencer_global": [
             lf.keymap.Action.SEQUENCER_ADD_KEYFRAME,
@@ -131,7 +131,6 @@ class InputSettingsPanel(Panel):
     )
     GAUSSIAN_SELECTION_MODES = (
         lf.keymap.ToolMode.SELECTION,
-        lf.keymap.ToolMode.BRUSH,
         lf.keymap.ToolMode.ALIGN,
         lf.keymap.ToolMode.CROP_BOX,
     )
@@ -150,6 +149,9 @@ class InputSettingsPanel(Panel):
         self._last_current_profile = ""
         self._last_display_h = 0
         self._last_capturing = None
+        self._reactive_unsubscribers = []
+        self._model_update_scheduled = False
+        self._capture_poll_timer = None
 
     # ── Data model ────────────────────────────────────────────
 
@@ -200,6 +202,7 @@ class InputSettingsPanel(Panel):
             self._clear_pending_conflict()
             lf.keymap.load_profile(profiles[idx])
             self._last_state_key = None
+            self._request_model_update()
 
     def _set_mode_idx(self, v):
         try:
@@ -209,6 +212,7 @@ class InputSettingsPanel(Panel):
         if 0 <= idx < len(self.TOOL_MODES) and idx != self._selected_mode_idx:
             self._selected_mode_idx = idx
             self._last_state_key = None
+            self._request_model_update()
 
     # ── Events ────────────────────────────────────────────────
 
@@ -219,6 +223,7 @@ class InputSettingsPanel(Panel):
         self._clear_pending_conflict()
         lf.keymap.reset_to_default()
         self._last_state_key = None
+        self._request_model_update()
 
     def _on_export_profile(self, _handle, _ev, _args):
         tr = lf.ui.tr
@@ -233,6 +238,7 @@ class InputSettingsPanel(Panel):
             self._clear_pending_conflict()
             lf.keymap.import_profile(path)
             self._last_state_key = None
+            self._request_model_update()
 
     def _on_replace_conflict(self, _handle, _ev, _args):
         if not self._pending_conflict:
@@ -243,6 +249,7 @@ class InputSettingsPanel(Panel):
         self._clear_pending_conflict()
         self._last_state_key = None
         self._rebuild_binding_rows(self.TOOL_MODES[self._selected_mode_idx])
+        self._request_model_update()
 
     def _on_cancel_conflict(self, _handle, _ev, _args):
         if not self._pending_conflict:
@@ -256,6 +263,7 @@ class InputSettingsPanel(Panel):
         self._clear_pending_conflict()
         self._last_state_key = None
         self._rebuild_binding_rows(self.TOOL_MODES[self._selected_mode_idx])
+        self._request_model_update()
 
     # ── Lifecycle ─────────────────────────────────────────────
 
@@ -273,6 +281,84 @@ class InputSettingsPanel(Panel):
         if table_el:
             table_el.add_event_listener("click", self._on_table_click)
         self._hide_conflict_overlay()
+        self._subscribe_reactive_state()
+
+    def on_unmount(self, doc):
+        self._unsubscribe_reactive_state()
+        self._cancel_capture_poll()
+        self._doc = None
+        self._handle = None
+        doc.remove_data_model("input_settings")
+
+    def _subscribe_reactive_state(self):
+        if self._reactive_unsubscribers:
+            return
+
+        self._reactive_unsubscribers = [
+            RuntimeState.language_generation.subscribe(lambda _value: self._schedule_model_update()),
+        ]
+
+    def _unsubscribe_reactive_state(self):
+        for unsubscribe in self._reactive_unsubscribers:
+            try:
+                unsubscribe()
+            except Exception:
+                pass
+        self._reactive_unsubscribers = []
+
+    def _request_model_update(self):
+        if self._handle:
+            w.request_model_update(self._handle)
+
+    def _schedule_model_update(self):
+        if self._model_update_scheduled:
+            return
+        self._model_update_scheduled = True
+
+        def run_update():
+            self._model_update_scheduled = False
+            self._request_model_update()
+
+        scheduler = getattr(lf.ui, "schedule_on_ui_thread", None)
+        if not callable(scheduler):
+            scheduler = getattr(lf.ui, "_run_on_ui_thread", None)
+
+        if callable(scheduler):
+            try:
+                scheduler(run_update)
+                return
+            except Exception:
+                pass
+
+        self._model_update_scheduled = False
+        if threading.current_thread() is threading.main_thread():
+            run_update()
+            return
+
+        request_redraw = getattr(lf.ui, "request_redraw", None)
+        if callable(request_redraw):
+            try:
+                request_redraw()
+            except Exception:
+                pass
+
+    def _schedule_capture_poll(self):
+        if self._capture_poll_timer is not None:
+            return
+
+        def tick():
+            self._capture_poll_timer = None
+            self._schedule_model_update()
+
+        self._capture_poll_timer = threading.Timer(0.05, tick)
+        self._capture_poll_timer.daemon = True
+        self._capture_poll_timer.start()
+
+    def _cancel_capture_poll(self):
+        timer = self._capture_poll_timer
+        self._capture_poll_timer = None
+        if timer is not None:
+            timer.cancel()
 
     def on_update(self, doc):
         self._doc = doc
@@ -341,6 +427,11 @@ class InputSettingsPanel(Panel):
         if is_capturing != self._last_capturing:
             self._last_capturing = is_capturing
             self._dirty_model("is_capturing")
+
+        if self._rebinding_action is not None or is_capturing:
+            self._schedule_capture_poll()
+        else:
+            self._cancel_capture_poll()
 
     def _update_max_height(self, doc):
         try:
@@ -451,29 +542,23 @@ class InputSettingsPanel(Panel):
             for action in self.BINDING_SECTIONS["navigation_global"]:
                 rows.append(self._binding_row_record(action, mode))
 
-        if mode in (lf.keymap.ToolMode.SELECTION, lf.keymap.ToolMode.BRUSH):
+        if mode == lf.keymap.ToolMode.SELECTION:
             selection_actions = list(self.BINDING_SECTIONS["selection"])
-            if mode == lf.keymap.ToolMode.SELECTION:
-                selection_actions.extend(self.BINDING_SECTIONS["selection_modal"])
+            selection_actions.extend(self.BINDING_SECTIONS["selection_modal"])
             selection_actions.append(lf.keymap.Action.DELETE_SELECTED)
+            selection_actions.append(lf.keymap.Action.BRUSH_RESIZE)
             self._append_binding_section(
                 rows, tr("input_settings.section.selection"),
                 selection_actions, mode)
 
-            if mode == lf.keymap.ToolMode.SELECTION:
-                self._append_binding_section(
-                    rows, tr("input_settings.section.depth"),
-                    self.BINDING_SECTIONS["depth"], mode)
+            self._append_binding_section(
+                rows, tr("input_settings.section.depth"),
+                self.BINDING_SECTIONS["depth"], mode)
 
         if mode == lf.keymap.ToolMode.GLOBAL:
             self._append_binding_section(
                 rows, tr("input_settings.section.selection"),
                 self.BINDING_SECTIONS["selection_global"], mode)
-
-        if mode == lf.keymap.ToolMode.BRUSH:
-            self._append_binding_section(
-                rows, tr("input_settings.section.brush"),
-                self.BINDING_SECTIONS["brush"], mode)
 
         if mode == lf.keymap.ToolMode.CROP_BOX:
             self._append_binding_section(
@@ -492,8 +577,7 @@ class InputSettingsPanel(Panel):
             for action in self.BINDING_SECTIONS["editing"]:
                 editing_rows.append(self._binding_row_record(action, mode))
         elif mode in self.GAUSSIAN_SELECTION_MODES and mode not in (
-                lf.keymap.ToolMode.SELECTION,
-                lf.keymap.ToolMode.BRUSH):
+                lf.keymap.ToolMode.SELECTION,):
             self._append_binding_section(
                 rows, tr("input_settings.section.selection"),
                 [lf.keymap.Action.DELETE_SELECTED], mode)
@@ -620,12 +704,16 @@ class InputSettingsPanel(Panel):
             self._previous_trigger = lf.keymap.get_trigger(action, mode)
             lf.keymap.start_capture(mode, action)
             self._last_state_key = None
+            self._request_model_update()
+            self._schedule_capture_poll()
         elif btn_action == "cancel":
             lf.keymap.cancel_capture()
             self._rebinding_action = None
             self._rebinding_mode = None
             self._previous_trigger = None
             self._last_state_key = None
+            self._cancel_capture_poll()
+            self._request_model_update()
 
     def _find_btn_action(self, element):
         while element is not None:

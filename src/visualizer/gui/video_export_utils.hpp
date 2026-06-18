@@ -32,6 +32,7 @@ namespace lfs::vis::gui {
     struct VideoExportCropBoxSnapshot {
         bool has_data = false;
         lfs::core::NodeId node_id = lfs::core::NULL_NODE;
+        lfs::core::NodeId parent_splat_id = lfs::core::NULL_NODE;
         int parent_node_index = -1;
         lfs::core::CropBoxData data;
         glm::mat4 world_transform{1.0f};
@@ -39,6 +40,7 @@ namespace lfs::vis::gui {
 
     struct VideoExportEllipsoidSnapshot {
         lfs::core::NodeId node_id = lfs::core::NULL_NODE;
+        lfs::core::NodeId parent_splat_id = lfs::core::NULL_NODE;
         int parent_node_index = -1;
         lfs::core::EllipsoidData data;
         glm::mat4 world_transform{1.0f};

@@ -8,6 +8,10 @@ body {
     background-color: @{menu.background};
 }
 
+#menu-toolbar {
+    background-color: @{menu.background};
+}
+
 .menu-label:hover {
     background-color: @{menu.hover};
 }
@@ -29,6 +33,10 @@ body {
     background-color: @{menu.hover};
 }
 
+.menu-item.active {
+    background-color: @{menu.hover};
+}
+
 .menu-item.disabled {
     color: @{text_dim};
 }
@@ -42,5 +50,18 @@ body {
 }
 
 .menu-separator {
+    background-color: @{menu.border};
+}
+
+.menu-toolbar-btn:hover {
+    background-color: @{menu.hover};
+}
+
+.menu-toolbar-btn.selected {
+    background-color: @{menu.active};
+    border-color: @{menu.border};
+}
+
+.menu-toolbar-separator {
     background-color: @{menu.border};
 }

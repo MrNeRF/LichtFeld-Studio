@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
-#include "rendering/rasterizer/rasterization/include/rasterization_api_tensor.h"
+#include "rendering/selection_ops.hpp"
 
 #include <algorithm>
 #include <array>
@@ -93,6 +93,67 @@ namespace {
         return output.cpu().to_vector_uint8();
     }
 
+    std::vector<uint8_t> run_indexed_group_apply(const std::vector<uint8_t>& selection_values,
+                                                 const std::vector<int>& visible_indices,
+                                                 const std::vector<uint8_t>& existing_values,
+                                                 const uint8_t group_id,
+                                                 const std::vector<uint8_t>& locked_groups = {},
+                                                 const bool add_mode = true,
+                                                 const bool replace_mode = false,
+                                                 const std::vector<int>* transform_indices = nullptr,
+                                                 const std::vector<bool>& valid_nodes = {}) {
+        if (selection_values.size() != visible_indices.size()) {
+            ADD_FAILURE() << "Selection and visible index sizes differ";
+            return {};
+        }
+
+        const auto selection = make_bool_mask(selection_values);
+        const auto indices = make_int32_values(visible_indices);
+        const auto existing = make_uint8_mask(existing_values);
+        auto output = Tensor::empty({existing_values.size()}, Device::CUDA, DataType::UInt8);
+
+        std::array<uint32_t, LOCKED_GROUPS_SIZE> locked_bitmask{};
+        for (const auto locked_group : locked_groups) {
+            locked_bitmask[locked_group / 32] |= (1u << (locked_group % 32));
+        }
+
+        uint32_t* d_locked = nullptr;
+        if (cudaMalloc(&d_locked, sizeof(locked_bitmask)) != cudaSuccess) {
+            ADD_FAILURE() << "cudaMalloc failed for locked group mask";
+            return {};
+        }
+        if (cudaMemcpy(d_locked, locked_bitmask.data(), sizeof(locked_bitmask), cudaMemcpyHostToDevice) != cudaSuccess) {
+            cudaFree(d_locked);
+            ADD_FAILURE() << "cudaMemcpy failed for locked group mask";
+            return {};
+        }
+
+        Tensor transform_indices_tensor;
+        const Tensor* transform_indices_ptr = nullptr;
+        if (transform_indices) {
+            transform_indices_tensor = make_int32_values(*transform_indices);
+            transform_indices_ptr = &transform_indices_tensor;
+        }
+
+        lfs::rendering::apply_selection_group_indexed_tensor_mask(
+            selection,
+            indices,
+            existing,
+            output,
+            group_id,
+            d_locked,
+            add_mode,
+            transform_indices_ptr,
+            valid_nodes,
+            replace_mode);
+        if (cudaFree(d_locked) != cudaSuccess) {
+            ADD_FAILURE() << "cudaFree failed for locked group mask";
+            return {};
+        }
+
+        return output.cpu().to_vector_uint8();
+    }
+
 } // namespace
 
 class SelectionRasterizationOpsTest : public ::testing::Test {
@@ -148,78 +209,35 @@ TEST_F(SelectionRasterizationOpsTest, RemoveRespectsNodeMask) {
     EXPECT_EQ(result, (std::vector<uint8_t>{0, 1, 0, 1}));
 }
 
-TEST_F(SelectionRasterizationOpsTest, BrushSelectMarksPointsInsideRadius) {
-    const auto screen_positions = make_float32_values(
-        {
-            0.0f,
-            0.0f,
-            0.75f,
-            0.0f,
-            1.5f,
-            0.0f,
-            0.0f,
-            2.0f,
-        },
-        {4, 2});
-    auto selection = Tensor::zeros({4}, Device::CUDA, DataType::UInt8);
+TEST_F(SelectionRasterizationOpsTest, IndexedReplacePreservesNonVisibleActiveGroup) {
+    const auto result = run_indexed_group_apply(
+        {0, 1, 0},
+        {1, 3, 5},
+        {1, 1, 2, 0, 1, 1},
+        1,
+        {},
+        true,
+        true);
 
-    lfs::rendering::brush_select_tensor(screen_positions, 0.0f, 0.0f, 1.0f, selection);
-
-    EXPECT_EQ(selection.cpu().to_vector_uint8(), (std::vector<uint8_t>{1, 1, 0, 0}));
+    EXPECT_EQ(result, (std::vector<uint8_t>{1, 0, 2, 1, 1, 0}));
 }
 
-TEST_F(SelectionRasterizationOpsTest, RectSelectMarksPointsInsideBox) {
-    const auto screen_positions = make_float32_values(
-        {
-            0.0f,
-            0.0f,
-            2.0f,
-            2.0f,
-            -0.1f,
-            1.0f,
-            1.0f,
-            2.1f,
-            3.0f,
-            3.0f,
-        },
-        {5, 2});
-    auto selection = Tensor::zeros({5}, Device::CUDA, DataType::Bool);
+TEST_F(SelectionRasterizationOpsTest, IndexedReplaceRespectsNodeMask) {
+    const std::vector<int> transform_indices = {0, 1, 0, 1};
+    const std::vector<bool> valid_nodes = {true, false};
 
-    lfs::rendering::rect_select_tensor(screen_positions, 0.0f, 0.0f, 2.0f, 2.0f, selection);
+    const auto result = run_indexed_group_apply(
+        {0, 0, 1, 0},
+        {0, 1, 2, 3},
+        {1, 1, 1, 2},
+        1,
+        {},
+        true,
+        true,
+        &transform_indices,
+        valid_nodes);
 
-    EXPECT_EQ(selection.cpu().to_vector_bool(), (std::vector<bool>{true, true, false, false, false}));
-}
-
-TEST_F(SelectionRasterizationOpsTest, PolygonSelectMarksPointsInsideTriangle) {
-    const auto screen_positions = make_float32_values(
-        {
-            0.5f,
-            0.5f,
-            1.0f,
-            1.0f,
-            3.0f,
-            1.5f,
-            -0.1f,
-            0.5f,
-            0.5f,
-            3.0f,
-        },
-        {5, 2});
-    const auto polygon = make_float32_values(
-        {
-            0.0f,
-            0.0f,
-            4.0f,
-            0.0f,
-            0.0f,
-            4.0f,
-        },
-        {3, 2});
-    auto selection = Tensor::zeros({5}, Device::CUDA, DataType::Bool);
-
-    lfs::rendering::polygon_select_tensor(screen_positions, polygon, selection);
-
-    EXPECT_EQ(selection.cpu().to_vector_bool(), (std::vector<bool>{true, true, false, false, true}));
+    EXPECT_EQ(result, (std::vector<uint8_t>{0, 1, 1, 2}));
 }
 
 TEST_F(SelectionRasterizationOpsTest, CropFilterKeepsOnlyPointsInsideCropBox) {

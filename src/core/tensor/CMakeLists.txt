@@ -44,6 +44,7 @@ if(LFS_TENSOR_CUDA_SOURCES)
             PUBLIC
             CUDA::cudart
             CUDA::curand
+            lfs_diagnostics
             spdlog::spdlog
     )
 

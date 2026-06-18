@@ -52,6 +52,8 @@ namespace lfs::training::mcmc {
      * @param raw_quats [N, 4] - Raw quaternion rotation values
      * @param noise [N, 3] - Random noise from N(0,1)
      * @param means [N, 3] - Mean positions (modified in-place)
+     * @param frozen_mask [N] - Optional mask of rows that must not be modified
+     * @param frozen_mask_size - Number of entries in frozen_mask
      * @param current_lr - Current learning rate for noise scaling
      * @param N - Number of Gaussians
      * @param stream - CUDA stream for async execution
@@ -62,6 +64,8 @@ namespace lfs::training::mcmc {
         const float* raw_quats,
         const float* noise,
         float* means,
+        const bool* frozen_mask,
+        size_t frozen_mask_size,
         float current_lr,
         size_t N,
         void* stream = nullptr);

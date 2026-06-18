@@ -19,8 +19,8 @@ namespace lfs::vis {
         constexpr int ORDER_ROTATE = 30;
         constexpr int ORDER_SCALE = 40;
         constexpr int ORDER_MIRROR = 50;
-        constexpr int ORDER_BRUSH = 60;
-        constexpr int ORDER_ALIGN = 70;
+        constexpr int ORDER_CROP = 70;
+        constexpr int ORDER_ALIGN = 80;
 
         bool pollTool(const ToolType tool) {
             const auto* editor = services().editorOrNull();
@@ -48,6 +48,21 @@ namespace lfs::vis {
             UnifiedToolRegistry::instance().registerTool(std::move(desc));
         }
 
+        void addCropTool() {
+            ToolDescriptor desc;
+            desc.id = "builtin.cropbox";
+            desc.label = "Crop";
+            desc.icon = "cropbox";
+            desc.group = "utility";
+            desc.order = ORDER_CROP;
+            desc.source = ToolSource::CPP;
+            desc.poll_fn = [] {
+                const auto* editor = services().editorOrNull();
+                return editor && editor->hasSelection() && !editor->isToolsDisabled();
+            };
+            UnifiedToolRegistry::instance().registerTool(std::move(desc));
+        }
+
     } // namespace
 
     void registerBuiltinTools() {
@@ -63,8 +78,8 @@ namespace lfs::vis {
         addTool("builtin.rotate", "Rotate", "rotation", "3", "transform", ORDER_ROTATE, ToolType::Rotate);
         addTool("builtin.scale", "Scale", "scaling", "4", "transform", ORDER_SCALE, ToolType::Scale);
         addTool("builtin.mirror", "Mirror", "mirror", "5", "transform", ORDER_MIRROR, ToolType::Mirror);
-        addTool("builtin.brush", "Paint", "painting", "6", "paint", ORDER_BRUSH, ToolType::Brush);
-        addTool("builtin.align", "Align", "align", "7", "align", ORDER_ALIGN, ToolType::Align);
+        addCropTool();
+        addTool("builtin.align", "Align", "align", "6", "align", ORDER_ALIGN, ToolType::Align);
     }
 
 } // namespace lfs::vis

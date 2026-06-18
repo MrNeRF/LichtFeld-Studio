@@ -38,4 +38,18 @@ namespace lfs::core::cuda {
     /// @return [N] UInt8 mask
     LFS_CUDA_API Tensor select_by_scale(const Tensor& scale_raw, float max_scale, uint8_t group_id);
 
+    /// Select gaussians by SH DC color similarity.
+    /// Decodes each gaussian's base color from SH0 coefficients and selects those
+    /// within a per-channel absolute threshold of the reference color.
+    /// @param sh0         [N, 1, 3] or [N, 3] Float32 zeroth-order SH coefficients
+    /// @param ref_r       decoded reference red   (0-1, after SH_C0 decode)
+    /// @param ref_g       decoded reference green  (0-1, after SH_C0 decode)
+    /// @param ref_b       decoded reference blue   (0-1, after SH_C0 decode)
+    /// @param threshold   per-channel absolute difference threshold (0-1)
+    /// @param group_id    group ID to assign
+    /// @return [N] UInt8 mask
+    LFS_CUDA_API Tensor select_by_color(const Tensor& sh0,
+                                        float ref_r, float ref_g, float ref_b,
+                                        float threshold, uint8_t group_id);
+
 } // namespace lfs::core::cuda

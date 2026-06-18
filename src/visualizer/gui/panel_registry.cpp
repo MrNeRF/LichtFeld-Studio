@@ -9,9 +9,13 @@
 #include "gui/ui_context.hpp"
 #include "gui/ui_widgets.hpp"
 #include "theme/theme.hpp"
+#include "visualizer/app_store.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <chrono>
 #include <optional>
+#include <string>
 #include <imgui.h>
 
 namespace lfs::vis::gui {
@@ -37,6 +41,25 @@ namespace lfs::vis::gui {
             panel.float_user_height = 0.0f;
         }
 
+        std::string panelDirectTimerName(const std::string& panel_id, const char* stage) {
+            std::string name = "gui_render.panel_direct.";
+            if (panel_id.empty()) {
+                name += "unknown";
+            } else {
+                name.reserve(name.size() + panel_id.size() + 12);
+                for (const unsigned char ch : panel_id) {
+                    if (std::isalnum(ch) || ch == '.' || ch == '_' || ch == '-') {
+                        name.push_back(static_cast<char>(ch));
+                    } else {
+                        name.push_back('_');
+                    }
+                }
+            }
+            name += '.';
+            name += stage;
+            return name;
+        }
+
         const char* panelSpaceName(const PanelSpace space) {
             switch (space) {
             case PanelSpace::SidePanel: return "side_panel";
@@ -45,6 +68,7 @@ namespace lfs::vis::gui {
             case PanelSpace::MainPanelTab: return "main_panel_tab";
             case PanelSpace::SceneHeader: return "scene_header";
             case PanelSpace::BottomDock: return "bottom_dock";
+            case PanelSpace::LeftDock: return "left_dock";
             case PanelSpace::StatusBar: return "status_bar";
             }
             return "unknown";
@@ -512,6 +536,12 @@ namespace lfs::vis::gui {
             if (!should_draw[snap_idx])
                 continue;
 
+            constexpr double kViewportOverlayPanelPerfThresholdMs = 0.05;
+            const bool time_viewport_panel = space == PanelSpace::ViewportOverlay;
+            const auto panel_start = time_viewport_panel
+                                         ? std::chrono::steady_clock::now()
+                                         : std::chrono::steady_clock::time_point{};
+
             try {
                 ImGui::PushID(snap.id.c_str());
                 snap.panel->setPanelSpace(space);
@@ -708,6 +738,7 @@ namespace lfs::vis::gui {
                     snap.panel->draw(ctx);
                     break;
                 case PanelSpace::BottomDock:
+                case PanelSpace::LeftDock:
                     break;
                 case PanelSpace::StatusBar:
                     with_panel_input(snap.panel, [&] { snap.panel->draw(ctx); });
@@ -724,6 +755,16 @@ namespace lfs::vis::gui {
             }
 
             track_draw_result(snap, draw_succeeded);
+            if (time_viewport_panel) {
+                const auto elapsed =
+                    std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - panel_start)
+                        .count();
+                if (elapsed >= kViewportOverlayPanelPerfThresholdMs) {
+                    LOG_PERF("gui_render.viewport_overlay.panel.{} took {:.2f}ms",
+                             snap.id, elapsed);
+                }
+            }
         }
     }
 
@@ -820,8 +861,11 @@ namespace lfs::vis::gui {
         float y_offset = 0.0f;
         for (auto& snap : snapshots) {
             try {
-                if (!check_poll(snap, ctx))
-                    continue;
+                {
+                    LOG_TIMER_THRESHOLD(panelDirectTimerName(snap.id, "poll"), 0.25);
+                    if (!check_poll(snap, ctx))
+                        continue;
+                }
             } catch (const std::exception& e) {
                 LOG_ERROR("Panel '{}' poll error: {}", snap.label, e.what());
                 continue;
@@ -833,6 +877,7 @@ namespace lfs::vis::gui {
 
             bool draw_succeeded = false;
             try {
+                LOG_TIMER_THRESHOLD(panelDirectTimerName(snap.id, "draw"), 0.25);
                 snap.panel->setPanelSpace(space);
                 snap.panel->setInput(input);
                 snap.panel->drawDirect(x, y + y_offset, w, remaining, ctx);
@@ -844,6 +889,64 @@ namespace lfs::vis::gui {
                 LOG_ERROR("Panel '{}' drawDirect error: {}", snap.label, e.what());
             }
 
+            track_draw_result(snap, draw_succeeded);
+        }
+        return y_offset;
+    }
+
+    float PanelRegistry::draw_panels_direct_cached(PanelSpace space, float x, float y, float w,
+                                                   float max_h, const PanelDrawContext& ctx,
+                                                   const PanelInputState* input) {
+        std::vector<PanelSnapshot> snapshots;
+        {
+            std::lock_guard lock(mutex_);
+            for (size_t i = 0; i < panels_.size(); ++i) {
+                auto& p = panels_[i];
+                if (p.space == space && p.enabled && !p.error_disabled && p.parent_id.empty()) {
+                    snapshots.push_back({i, p.panel.get(), p.label, p.id,
+                                         p.parent_id, p.options, p.is_native,
+                                         p.poll_dependencies, p.initial_width, p.initial_height,
+                                         p.float_x, p.float_y});
+                }
+            }
+        }
+
+        float y_offset = 0.0f;
+        for (auto& snap : snapshots) {
+            const float remaining = max_h - y_offset;
+            if (remaining <= 0)
+                break;
+
+            bool draw_succeeded = false;
+            float used_h = 0.0f;
+            try {
+                LOG_TIMER_THRESHOLD(panelDirectTimerName(snap.id, "draw_cached"), 0.25);
+                snap.panel->setPanelSpace(space);
+                snap.panel->setInput(input);
+                if (snap.panel->drawDirectCached(x, y + y_offset, w, remaining, ctx)) {
+                    snap.panel->setInput(nullptr);
+                    used_h = snap.panel->getDirectDrawHeight();
+                    draw_succeeded = true;
+                } else {
+                    snap.panel->setInput(nullptr);
+                    {
+                        LOG_TIMER_THRESHOLD(panelDirectTimerName(snap.id, "poll"), 0.25);
+                        if (!check_poll(snap, ctx))
+                            continue;
+                    }
+                    snap.panel->setInput(input);
+                    snap.panel->drawDirect(x, y + y_offset, w, remaining, ctx);
+                    snap.panel->setInput(nullptr);
+                    used_h = snap.panel->getDirectDrawHeight();
+                    draw_succeeded = true;
+                }
+            } catch (const std::exception& e) {
+                snap.panel->setInput(nullptr);
+                LOG_ERROR("Panel '{}' drawDirectCached error: {}", snap.label, e.what());
+            }
+
+            if (draw_succeeded)
+                y_offset += used_h > 0 ? used_h : remaining;
             track_draw_result(snap, draw_succeeded);
         }
         return y_offset;
@@ -870,8 +973,11 @@ namespace lfs::vis::gui {
         float y_offset = 0.0f;
         for (auto& snap : snapshots) {
             try {
-                if (!check_poll(snap, ctx))
-                    continue;
+                {
+                    LOG_TIMER_THRESHOLD(panelDirectTimerName(snap.id, "poll"), 0.25);
+                    if (!check_poll(snap, ctx))
+                        continue;
+                }
             } catch (const std::exception& e) {
                 LOG_ERROR("Panel '{}' preloadDirect poll error: {}", snap.label, e.what());
                 continue;
@@ -883,6 +989,7 @@ namespace lfs::vis::gui {
 
             bool preload_succeeded = false;
             try {
+                LOG_TIMER_THRESHOLD(panelDirectTimerName(snap.id, "preload"), 0.25);
                 snap.panel->setInputClipY(clip_y_min, clip_y_max);
                 snap.panel->setPanelSpace(space);
                 snap.panel->setInput(input);
@@ -962,7 +1069,7 @@ namespace lfs::vis::gui {
         std::vector<PanelSummary> result;
         for (const auto& p : panels_) {
             if (p.space == space && p.enabled && !p.error_disabled && p.parent_id.empty())
-                result.push_back({p.label, p.id, p.space, p.order, p.enabled});
+                result.push_back({p.label, p.id, p.space, p.order, p.enabled, p.tab_closeable});
         }
         std::stable_sort(result.begin(), result.end(), [](const PanelSummary& a, const PanelSummary& b) {
             if (a.order != b.order)
@@ -1004,25 +1111,35 @@ namespace lfs::vis::gui {
     }
 
     void PanelRegistry::set_panel_enabled(const std::string& id, bool enabled) {
-        std::lock_guard lock(mutex_);
-        for (auto& p : panels_) {
-            if (p.id == id) {
-                p.enabled = enabled;
-                if (enabled && p.space == PanelSpace::Floating) {
-                    p.float_x = NAN;
-                    p.float_y = NAN;
-                    p.float_auto_center = true;
-                    resetFloatingPanelSize(p, floatingUiScale());
-                    bring_floating_panel_to_front_locked(p);
-                } else if (!enabled) {
-                    p.float_last_bounds_valid = false;
-                    guiFocusState().want_capture_mouse = false;
-                    guiFocusState().want_capture_keyboard = false;
-                    guiFocusState().want_text_input = false;
+        bool changed = false;
+        {
+            std::lock_guard lock(mutex_);
+            for (auto& p : panels_) {
+                if (p.id == id) {
+                    changed = p.enabled != enabled;
+                    if (!changed)
+                        break;
+
+                    p.enabled = enabled;
+                    if (enabled && p.space == PanelSpace::Floating) {
+                        p.float_x = NAN;
+                        p.float_y = NAN;
+                        p.float_auto_center = true;
+                        resetFloatingPanelSize(p, floatingUiScale());
+                        bring_floating_panel_to_front_locked(p);
+                    } else if (!enabled) {
+                        p.float_last_bounds_valid = false;
+                        guiFocusState().want_capture_mouse = false;
+                        guiFocusState().want_capture_keyboard = false;
+                        guiFocusState().want_text_input = false;
+                    }
+                    break;
                 }
-                return;
             }
         }
+
+        if (changed)
+            lfs::vis::publish_viewport_toolbar_generation();
     }
 
     void PanelRegistry::set_panel_disabled_override(const std::string& id) {
@@ -1092,6 +1209,68 @@ namespace lfs::vis::gui {
                 return true;
         }
         return false;
+    }
+
+    PanelAnimationDemand PanelRegistry::animationDemandForVisiblePanels(
+        const PanelAnimationVisibility visibility) const {
+        auto mark_visible_demand = [&](PanelAnimationDemand& demand, const PanelInfo& p) {
+            if (!p.parent_id.empty()) {
+                if (visibility.right_panel_visible &&
+                    std::string_view(p.parent_id) == visibility.active_main_tab)
+                    demand.main_panel_tab = true;
+                return;
+            }
+
+            switch (p.space) {
+            case PanelSpace::Floating:
+                if (visibility.ui_visible)
+                    demand.floating = true;
+                return;
+            case PanelSpace::SidePanel:
+                if (visibility.ui_visible)
+                    demand.side_panel = true;
+                return;
+            case PanelSpace::StatusBar:
+                if (visibility.ui_visible)
+                    demand.status_bar = true;
+                return;
+            case PanelSpace::ViewportOverlay:
+                demand.viewport_overlay = true;
+                return;
+            case PanelSpace::SceneHeader:
+                if (visibility.right_panel_visible)
+                    demand.scene_header = true;
+                return;
+            case PanelSpace::MainPanelTab:
+                if (visibility.right_panel_visible &&
+                    std::string_view(p.id) == visibility.active_main_tab)
+                    demand.main_panel_tab = true;
+                return;
+            case PanelSpace::BottomDock:
+                if (visibility.ui_visible && visibility.bottom_dock_visible)
+                    demand.bottom_dock = true;
+                return;
+            case PanelSpace::LeftDock:
+                if (visibility.ui_visible && visibility.left_dock_visible)
+                    demand.left_dock = true;
+                return;
+            }
+        };
+
+        PanelAnimationDemand demand;
+        std::lock_guard lock(mutex_);
+        for (const auto& p : panels_) {
+            if (!p.enabled || p.error_disabled || !p.panel)
+                continue;
+            if (p.panel->needsAnimationFrame())
+                mark_visible_demand(demand, p);
+        }
+        return demand;
+    }
+
+    bool PanelRegistry::needsAnimationFrameForVisiblePanels(
+        const PanelAnimationVisibility visibility) const {
+        return animationDemandForVisiblePanels(visibility).any();
     }
 
     bool PanelRegistry::set_panel_label(const std::string& id, const std::string& new_label) {
@@ -1255,8 +1434,11 @@ namespace lfs::vis::gui {
             return 0.0f;
 
         try {
-            if (!check_poll(snap, ctx))
-                return 0.0f;
+            {
+                LOG_TIMER_THRESHOLD(panelDirectTimerName(snap.id, "poll"), 0.25);
+                if (!check_poll(snap, ctx))
+                    return 0.0f;
+            }
         } catch (const std::exception& e) {
             LOG_ERROR("Panel '{}' poll error: {}", snap.label, e.what());
             return 0.0f;
@@ -1264,6 +1446,7 @@ namespace lfs::vis::gui {
 
         bool draw_succeeded = false;
         try {
+            LOG_TIMER_THRESHOLD(panelDirectTimerName(snap.id, "draw"), 0.25);
             snap.panel->setPanelSpace(panel_space);
             snap.panel->setInputClipY(clip_y_min, clip_y_max);
             snap.panel->setInput(input);
@@ -1273,6 +1456,65 @@ namespace lfs::vis::gui {
             draw_succeeded = true;
         } catch (const std::exception& e) {
             LOG_ERROR("Panel '{}' drawDirect error: {}", snap.label, e.what());
+        }
+
+        track_draw_result(snap, draw_succeeded);
+        const float used = snap.panel->getDirectDrawHeight();
+        return used > 0 ? used : 0.0f;
+    }
+
+    float PanelRegistry::draw_single_panel_direct_cached(const std::string& id, float x, float y,
+                                                         float w, float h,
+                                                         const PanelDrawContext& ctx,
+                                                         float clip_y_min, float clip_y_max,
+                                                         const PanelInputState* input) {
+        std::shared_ptr<IPanel> panel_holder;
+        PanelSnapshot snap{};
+        PanelSpace panel_space = PanelSpace::Floating;
+        bool found = false;
+        {
+            std::lock_guard lock(mutex_);
+            for (size_t i = 0; i < panels_.size(); ++i) {
+                if (panels_[i].id == id && panels_[i].enabled && !panels_[i].error_disabled) {
+                    panel_holder = panels_[i].panel;
+                    snap = {i, panels_[i].panel.get(), panels_[i].label, panels_[i].id,
+                            panels_[i].parent_id, panels_[i].options, panels_[i].is_native,
+                            panels_[i].poll_dependencies, panels_[i].initial_width, panels_[i].initial_height,
+                            panels_[i].float_x, panels_[i].float_y};
+                    panel_space = panels_[i].space;
+                    found = true;
+                    break;
+                }
+            }
+        }
+
+        if (!found)
+            return 0.0f;
+
+        bool draw_succeeded = false;
+        try {
+            LOG_TIMER_THRESHOLD(panelDirectTimerName(snap.id, "draw_cached"), 0.25);
+            snap.panel->setPanelSpace(panel_space);
+            snap.panel->setInputClipY(clip_y_min, clip_y_max);
+            snap.panel->setInput(input);
+            if (!snap.panel->drawDirectCached(x, y, w, h, ctx)) {
+                {
+                    LOG_TIMER_THRESHOLD(panelDirectTimerName(snap.id, "poll"), 0.25);
+                    if (!check_poll(snap, ctx)) {
+                        snap.panel->setInput(nullptr);
+                        snap.panel->setInputClipY(-1.0f, -1.0f);
+                        return 0.0f;
+                    }
+                }
+                snap.panel->drawDirect(x, y, w, h, ctx);
+            }
+            snap.panel->setInput(nullptr);
+            snap.panel->setInputClipY(-1.0f, -1.0f);
+            draw_succeeded = true;
+        } catch (const std::exception& e) {
+            snap.panel->setInput(nullptr);
+            snap.panel->setInputClipY(-1.0f, -1.0f);
+            LOG_ERROR("Panel '{}' drawDirectCached error: {}", snap.label, e.what());
         }
 
         track_draw_result(snap, draw_succeeded);
@@ -1308,8 +1550,11 @@ namespace lfs::vis::gui {
             return 0.0f;
 
         try {
-            if (!check_poll(snap, ctx))
-                return 0.0f;
+            {
+                LOG_TIMER_THRESHOLD(panelDirectTimerName(snap.id, "poll"), 0.25);
+                if (!check_poll(snap, ctx))
+                    return 0.0f;
+            }
         } catch (const std::exception& e) {
             LOG_ERROR("Panel '{}' preloadDirect poll error: {}", snap.label, e.what());
             return 0.0f;
@@ -1317,6 +1562,7 @@ namespace lfs::vis::gui {
 
         bool preload_succeeded = false;
         try {
+            LOG_TIMER_THRESHOLD(panelDirectTimerName(snap.id, "preload"), 0.25);
             snap.panel->setPanelSpace(panel_space);
             snap.panel->setInputClipY(clip_y_min, clip_y_max);
             snap.panel->setInput(input);
@@ -1355,8 +1601,11 @@ namespace lfs::vis::gui {
         float y_offset = 0.0f;
         for (auto& snap : snapshots) {
             try {
-                if (!check_poll(snap, ctx))
-                    continue;
+                {
+                    LOG_TIMER_THRESHOLD(panelDirectTimerName(snap.id, "poll"), 0.25);
+                    if (!check_poll(snap, ctx))
+                        continue;
+                }
             } catch (const std::exception& e) {
                 LOG_ERROR("Panel '{}' preloadDirect poll error: {}", snap.label, e.what());
                 continue;
@@ -1368,6 +1617,7 @@ namespace lfs::vis::gui {
 
             bool preload_succeeded = false;
             try {
+                LOG_TIMER_THRESHOLD(panelDirectTimerName(snap.id, "preload"), 0.25);
                 snap.panel->setInputClipY(clip_y_min, clip_y_max);
                 snap.panel->setInput(input);
                 snap.panel->preloadDirect(w, remaining, ctx, clip_y_min, clip_y_max, input);
@@ -1408,8 +1658,11 @@ namespace lfs::vis::gui {
         float y_offset = 0.0f;
         for (auto& snap : snapshots) {
             try {
-                if (!check_poll(snap, ctx))
-                    continue;
+                {
+                    LOG_TIMER_THRESHOLD(panelDirectTimerName(snap.id, "poll"), 0.25);
+                    if (!check_poll(snap, ctx))
+                        continue;
+                }
             } catch (const std::exception& e) {
                 LOG_ERROR("Panel '{}' poll error: {}", snap.label, e.what());
                 continue;
@@ -1421,6 +1674,7 @@ namespace lfs::vis::gui {
 
             bool draw_succeeded = false;
             try {
+                LOG_TIMER_THRESHOLD(panelDirectTimerName(snap.id, "draw"), 0.25);
                 snap.panel->setInputClipY(clip_y_min, clip_y_max);
                 snap.panel->setInput(input);
                 snap.panel->drawDirect(x, y + y_offset, w, remaining, ctx);
@@ -1433,6 +1687,69 @@ namespace lfs::vis::gui {
                 LOG_ERROR("Panel '{}' drawDirect error: {}", snap.label, e.what());
             }
 
+            track_draw_result(snap, draw_succeeded);
+        }
+        return y_offset;
+    }
+
+    float PanelRegistry::draw_child_panels_direct_cached(const std::string& parent_id,
+                                                         float x, float y, float w, float h,
+                                                         const PanelDrawContext& ctx,
+                                                         float clip_y_min, float clip_y_max,
+                                                         const PanelInputState* input) {
+        std::vector<PanelSnapshot> snapshots;
+        {
+            std::lock_guard lock(mutex_);
+            snapshots.reserve(panels_.size());
+            for (size_t i = 0; i < panels_.size(); ++i) {
+                auto& p = panels_[i];
+                if (p.parent_id == parent_id && p.enabled && !p.error_disabled) {
+                    snapshots.push_back({i, p.panel.get(), p.label, p.id,
+                                         p.parent_id, p.options, p.is_native,
+                                         p.poll_dependencies, p.initial_width, p.initial_height,
+                                         p.float_x, p.float_y});
+                }
+            }
+        }
+
+        float y_offset = 0.0f;
+        for (auto& snap : snapshots) {
+            const float remaining = h - y_offset;
+            if (remaining <= 0)
+                break;
+
+            bool draw_succeeded = false;
+            float used_h = 0.0f;
+            try {
+                LOG_TIMER_THRESHOLD(panelDirectTimerName(snap.id, "draw_cached"), 0.25);
+                snap.panel->setInputClipY(clip_y_min, clip_y_max);
+                snap.panel->setInput(input);
+                if (snap.panel->drawDirectCached(x, y + y_offset, w, remaining, ctx)) {
+                    used_h = snap.panel->getDirectDrawHeight();
+                    draw_succeeded = true;
+                } else {
+                    {
+                        LOG_TIMER_THRESHOLD(panelDirectTimerName(snap.id, "poll"), 0.25);
+                        if (!check_poll(snap, ctx)) {
+                            snap.panel->setInput(nullptr);
+                            snap.panel->setInputClipY(-1.0f, -1.0f);
+                            continue;
+                        }
+                    }
+                    snap.panel->drawDirect(x, y + y_offset, w, remaining, ctx);
+                    used_h = snap.panel->getDirectDrawHeight();
+                    draw_succeeded = true;
+                }
+                snap.panel->setInput(nullptr);
+                snap.panel->setInputClipY(-1.0f, -1.0f);
+            } catch (const std::exception& e) {
+                snap.panel->setInput(nullptr);
+                snap.panel->setInputClipY(-1.0f, -1.0f);
+                LOG_ERROR("Panel '{}' drawDirectCached error: {}", snap.label, e.what());
+            }
+
+            if (draw_succeeded)
+                y_offset += used_h > 0 ? used_h : remaining;
             track_draw_result(snap, draw_succeeded);
         }
         return y_offset;

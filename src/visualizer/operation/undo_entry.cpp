@@ -8,7 +8,9 @@
 #include "core/scene.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "rendering/vulkan_external_tensor.hpp"
 #include "scene/scene_manager.hpp"
+#include "training/training_setup.hpp"
 #include "undo_history.hpp"
 #include <algorithm>
 #include <array>
@@ -25,6 +27,7 @@ namespace lfs::vis::op {
         using lfs::core::events::state::PLYRemoved;
         using lfs::core::events::state::SceneCleared;
         constexpr auto PROPERTY_COALESCE_WINDOW = std::chrono::milliseconds(500);
+        constexpr size_t DENSE_SELECTION_SNAPSHOT_THRESHOLD = 1u << 20;
 
         bool cropBoxesEqual(const lfs::core::CropBoxData& lhs, const lfs::core::CropBoxData& rhs) {
             return lhs.min == rhs.min &&
@@ -225,7 +228,8 @@ namespace lfs::vis::op {
                 }
             }
 
-            if (node->parent_id != desired_parent) {
+            const bool parent_differs = (node->parent_id != desired_parent);
+            if (parent_differs || target.order_index >= 0) {
                 std::string old_parent_name;
                 if (node->parent_id != lfs::core::NULL_NODE) {
                     if (const auto* old_parent = scene.getNodeById(node->parent_id)) {
@@ -233,20 +237,24 @@ namespace lfs::vis::op {
                     }
                 }
 
-                scene.reparent(node->id, desired_parent);
+                // moveNode returns false for a no-op (already at the target slot) as well as a
+                // genuine failure; the parent post-condition below is the authoritative check.
+                (void)scene.moveNode(node->id, desired_parent, target.order_index);
                 node = scene.getMutableNode(current_name);
                 if (!node || node->parent_id != desired_parent) {
                     throw std::runtime_error("Failed to reparent node '" + current_name + "'");
                 }
 
-                scene_manager.invalidateNodeSelectionMask();
-                if (emit_reparent_event) {
-                    NodeReparented{
-                        .name = target.name,
-                        .old_parent = old_parent_name,
-                        .new_parent = target.parent_name,
-                        .from_history = true}
-                        .emit();
+                if (parent_differs) {
+                    scene_manager.invalidateNodeSelectionMask();
+                    if (emit_reparent_event) {
+                        NodeReparented{
+                            .name = target.name,
+                            .old_parent = old_parent_name,
+                            .new_parent = target.parent_name,
+                            .from_history = true}
+                            .emit();
+                    }
                 }
             }
 
@@ -467,6 +475,36 @@ namespace lfs::vis::op {
             return storage;
         }
 
+        TensorSwapStorage buildDenseTensorSwapStorage(const std::shared_ptr<lfs::core::Tensor>& before,
+                                                      const lfs::core::Tensor* after,
+                                                      const size_t total_size,
+                                                      const lfs::core::Device fallback_device,
+                                                      const lfs::core::DataType dtype,
+                                                      const bool before_present,
+                                                      const bool after_present) {
+            TensorSwapStorage storage;
+            storage.mode = TensorSwapStorageMode::DENSE;
+            storage.total_size = total_size;
+            storage.device = fallback_device;
+            storage.dtype = dtype;
+            storage.before_present = before_present;
+            storage.after_present = after_present;
+
+            if (total_size == 0) {
+                storage.mode = TensorSwapStorageMode::NONE;
+                return storage;
+            }
+
+            const lfs::core::Device device =
+                (after && after->is_valid()) ? after->device()
+                                             : ((before && before->is_valid()) ? before->device() : fallback_device);
+            storage.device = device;
+            if (before_present) {
+                storage.stored_values = materializeMaskTensor(before, total_size, device, dtype);
+            }
+            return storage;
+        }
+
         void applyTensorSwapStorage(lfs::core::Tensor& live_tensor, TensorSwapStorage& storage) {
             switch (storage.mode) {
             case TensorSwapStorageMode::DENSE: {
@@ -647,7 +685,8 @@ namespace lfs::vis::op {
                 src.scaling_raw().clone(),
                 src.rotation_raw().clone(),
                 src.opacity_raw().clone(),
-                src.get_scene_scale());
+                src.get_scene_scale(),
+                lfs::core::SplatData::ShNLayout::Swizzled);
             cloned->set_active_sh_degree(src.get_active_sh_degree());
             cloned->set_max_sh_degree(src.get_max_sh_degree());
             if (src.has_deleted_mask()) {
@@ -655,6 +694,24 @@ namespace lfs::vis::op {
             }
             if (src._densification_info.is_valid()) {
                 cloned->_densification_info = src._densification_info.clone();
+            }
+            return cloned;
+        }
+
+        std::unique_ptr<lfs::core::SplatData> cloneRendererReadySplatData(
+            const lfs::core::SplatData& src,
+            const lfs::core::SplatTensorAllocator& allocator) {
+            auto cloned = cloneSplatData(src);
+            if (!allocator) {
+                return cloned;
+            }
+
+            lfs::core::param::TrainingParameters params;
+            params.optimization.max_cap = 0;
+            if (auto migrated = lfs::training::migrateTrainingModelToAllocator(params, *cloned, allocator);
+                !migrated) {
+                throw std::runtime_error("Failed to prepare restored splat tensors for rendering: " +
+                                         migrated.error());
             }
             return cloned;
         }
@@ -701,6 +758,7 @@ namespace lfs::vis::op {
             snapshot.image_name = camera.image_name();
             snapshot.image_path = camera.image_path();
             snapshot.mask_path = camera.mask_path();
+            snapshot.depth_path = camera.depth_path();
             snapshot.split = camera.split();
             snapshot.focal_x = camera.focal_x();
             snapshot.focal_y = camera.focal_y();
@@ -732,7 +790,8 @@ namespace lfs::vis::op {
                 snapshot.camera_width,
                 snapshot.camera_height,
                 snapshot.uid,
-                snapshot.camera_id);
+                snapshot.camera_id,
+                snapshot.depth_path);
             camera->set_split(snapshot.split);
             camera->set_image_dimensions(snapshot.image_width, snapshot.image_height);
             return camera;
@@ -751,7 +810,16 @@ namespace lfs::vis::op {
             if (node.parent_id != lfs::core::NULL_NODE) {
                 if (const auto* parent = scene_manager.getScene().getNodeById(node.parent_id)) {
                     snapshot.parent_name = parent->name;
+                    const auto& siblings = parent->children;
+                    const auto it = std::find(siblings.begin(), siblings.end(), node.id);
+                    if (it != siblings.end())
+                        snapshot.order_index = static_cast<int>(std::distance(siblings.begin(), it));
                 }
+            } else {
+                const auto roots = scene_manager.getScene().getRootNodes();
+                const auto it = std::find(roots.begin(), roots.end(), node.id);
+                if (it != roots.end())
+                    snapshot.order_index = static_cast<int>(std::distance(roots.begin(), it));
             }
 
             if (auto path = scene_manager.getPlyPath(node.name); path) {
@@ -962,7 +1030,8 @@ namespace lfs::vis::op {
                     .total_gaussians = scene_manager.getScene().getTotalGaussianCount(),
                     .is_visible = node->visible,
                     .parent_name = snapshot.parent_name,
-                    .is_group = node->type == lfs::core::NodeType::GROUP,
+                    .is_group = node->type == lfs::core::NodeType::GROUP ||
+                                node->type == lfs::core::NodeType::PLY_SEQUENCE,
                     .node_type = static_cast<int>(node->type),
                     .from_history = true}
                     .emit();
@@ -992,7 +1061,14 @@ namespace lfs::vis::op {
             case lfs::core::NodeType::SPLAT:
                 if (!snapshot.model)
                     return false;
-                node_id = scene.addSplat(snapshot.name, cloneSplatData(*snapshot.model), parent_id);
+                {
+                    auto allocator = makeViewerSplatTensorAllocator();
+                    auto model = cloneRendererReadySplatData(*snapshot.model, allocator);
+                    if (allocator) {
+                        scene.setCombinedModelAllocator(std::move(allocator));
+                    }
+                    node_id = scene.addSplat(snapshot.name, std::move(model), parent_id);
+                }
                 break;
             case lfs::core::NodeType::POINTCLOUD:
                 if (!snapshot.point_cloud)
@@ -1019,6 +1095,9 @@ namespace lfs::vis::op {
             case lfs::core::NodeType::DATASET:
                 node_id = scene.addDataset(snapshot.name);
                 break;
+            case lfs::core::NodeType::PLY_SEQUENCE:
+                node_id = scene.addPlySequence(snapshot.name, parent_id, snapshot.gaussian_count);
+                break;
             case lfs::core::NodeType::CAMERA_GROUP:
                 node_id = scene.addCameraGroup(snapshot.name, parent_id, snapshot.gaussian_count);
                 break;
@@ -1044,7 +1123,7 @@ namespace lfs::vis::op {
                 return false;
             }
 
-            auto* restored = scene.getMutableNode(snapshot.name);
+            auto* restored = scene.getNodeById(node_id);
             if (!restored) {
                 return false;
             }
@@ -1057,7 +1136,7 @@ namespace lfs::vis::op {
             restored->transform_dirty = true;
 
             if (snapshot.source_path) {
-                scene_manager.setPlyPath(snapshot.name, *snapshot.source_path);
+                scene_manager.setPlyPath(restored->name, *snapshot.source_path);
             }
 
             for (const auto& child : snapshot.children) {
@@ -1155,6 +1234,12 @@ namespace lfs::vis::op {
         : scene_(scene),
           name_(std::move(name)) {}
 
+    void SceneSnapshot::setSelectionChangeHint(const bool changed, const bool prefer_dense_storage) {
+        selection_change_known_ = true;
+        selection_changed_ = changed;
+        prefer_dense_selection_storage_ = prefer_dense_storage;
+    }
+
     void SceneSnapshot::captureDeletedMasks(
         std::unordered_map<std::string, TensorPresenceSnapshot>& target) {
         target.clear();
@@ -1234,14 +1319,30 @@ namespace lfs::vis::op {
                 : ((selection_before_.mask && selection_before_.mask->is_valid())
                        ? selection_before_.mask->device()
                        : lfs::core::Device::CUDA);
-        selection_mask_storage_ = buildTensorSwapStorage(
-            selection_before_.mask,
-            selection_after.get(),
-            total_size,
-            fallback_device,
-            lfs::core::DataType::UInt8,
-            selection_before_.has_selection,
-            selection_after_metadata_.has_selection);
+        if (selection_change_known_ && !selection_changed_) {
+            selection_mask_storage_ = {};
+        } else if (selection_change_known_ &&
+                   selection_changed_ &&
+                   prefer_dense_selection_storage_ &&
+                   total_size >= DENSE_SELECTION_SNAPSHOT_THRESHOLD) {
+            selection_mask_storage_ = buildDenseTensorSwapStorage(
+                selection_before_.mask,
+                selection_after.get(),
+                total_size,
+                fallback_device,
+                lfs::core::DataType::UInt8,
+                selection_before_.has_selection,
+                selection_after_metadata_.has_selection);
+        } else {
+            selection_mask_storage_ = buildTensorSwapStorage(
+                selection_before_.mask,
+                selection_after.get(),
+                total_size,
+                fallback_device,
+                lfs::core::DataType::UInt8,
+                selection_before_.has_selection,
+                selection_after_metadata_.has_selection);
+        }
         selection_before_.mask.reset();
     }
 

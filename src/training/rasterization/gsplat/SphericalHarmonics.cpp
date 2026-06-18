@@ -10,31 +10,32 @@
 
 namespace gsplat_lfs {
 
-    void spherical_harmonics_fwd(
+    void spherical_harmonics_swizzled_fwd(
         uint32_t degrees_to_use,
         const float* dirs,
-        const float* coeffs,
+        const float* sh0,
+        const float* sh_rest_swizzled,
         const bool* masks,
         int64_t total_elements,
-        int32_t K,
         float* colors,
         cudaStream_t stream) {
         if (total_elements == 0) {
             return;
         }
 
-        launch_spherical_harmonics_fwd_kernel(
+        launch_spherical_harmonics_swizzled_fwd_kernel(
             degrees_to_use,
-            dirs, coeffs, masks,
-            total_elements, K,
+            dirs, sh0, sh_rest_swizzled, masks,
+            total_elements,
             colors, stream);
     }
 
-    void spherical_harmonics_bwd(
+    void spherical_harmonics_swizzled_bwd(
         uint32_t K,
         uint32_t degrees_to_use,
         const float* dirs,
-        const float* coeffs,
+        const float* sh0,
+        const float* sh_rest_swizzled,
         const bool* masks,
         const float* v_colors,
         int64_t total_elements,
@@ -46,9 +47,9 @@ namespace gsplat_lfs {
             return;
         }
 
-        launch_spherical_harmonics_bwd_kernel(
+        launch_spherical_harmonics_swizzled_bwd_kernel(
             degrees_to_use,
-            dirs, coeffs, masks, v_colors,
+            dirs, sh0, sh_rest_swizzled, masks, v_colors,
             total_elements, K,
             compute_v_dirs,
             v_coeffs, v_dirs, stream);

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 import lichtfeld as lf
 
-from .ui.state import AppState
+from .ui import RuntimeState
 
 
 def histogram_tr(key: str, fallback: str) -> str:
@@ -158,7 +158,7 @@ def histogram_mode_available(context=None) -> bool:
     if bool(getattr(ctx, "is_training", False)) or bool(getattr(ctx, "is_paused", False)):
         return False
 
-    if AppState.trainer_state.value in _ACTIVE_TRAINING_STATES:
+    if RuntimeState.trainer_state.value in _ACTIVE_TRAINING_STATES:
         return False
 
     try:

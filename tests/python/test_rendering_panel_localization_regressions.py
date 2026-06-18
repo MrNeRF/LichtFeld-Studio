@@ -83,8 +83,7 @@ def test_rendering_panel_section_headers_use_literals_without_missing_keys(rende
         "rendering_panel.simplify_source": "Input Source",
         "rendering_panel.simplify_select_source": "Pick a splat",
         "rendering_panel.simplify_target": "Goal",
-        "rendering_panel.simplify_knn_k": "Neighbors",
-        "rendering_panel.simplify_merge_cap": "Merge Limit",
+        "rendering_panel.simplify_lod_base": "LOD Base",
         "rendering_panel.simplify_opacity_prune": "Opacity Cutoff",
         "rendering_panel.simplify_original": "Before",
         "rendering_panel.simplify_output": "Result",
@@ -106,8 +105,7 @@ def test_rendering_panel_section_headers_use_literals_without_missing_keys(rende
     assert model.func_bindings["label_simplify_select_source"]() == "Pick a splat"
     assert model.func_bindings["label_simplify_target"]() == "Goal:"
     assert model.func_bindings["label_simplify_target_stat"]() == "Goal"
-    assert model.func_bindings["label_simplify_knn_k"]() == "Neighbors:"
-    assert model.func_bindings["label_simplify_merge_cap"]() == "Merge Limit:"
+    assert model.func_bindings["label_simplify_lod_base"]() == "LOD Base:"
     assert model.func_bindings["label_simplify_opacity_prune"]() == "Opacity Cutoff:"
     assert model.func_bindings["label_simplify_original"]() == "Before"
     assert model.func_bindings["label_simplify_output"]() == "Result:"

@@ -21,7 +21,9 @@ class SplatData:
 
     @property
     def shN_raw(self) -> lichtfeld.Tensor:
-        """Raw SHN tensor [N, (degree+1)^2-1, 3] (view)"""
+        """
+        SHN tensor in canonical [N, (degree+1)^2-1, 3] layout (materialised from the internal swizzled storage — this allocates, not a view).
+        """
 
     @property
     def scaling_raw(self) -> lichtfeld.Tensor:
@@ -114,6 +116,8 @@ class NodeType(enum.Enum):
     POINTCLOUD = 1
 
     GROUP = 2
+
+    PLY_SEQUENCE = 13
 
     CROPBOX = 3
 
@@ -367,6 +371,10 @@ class SceneNode:
         """Path to the camera mask file"""
 
     @property
+    def depth_path(self) -> str:
+        """Path to the camera depth map file"""
+
+    @property
     def has_camera(self) -> bool:
         """Whether this node has camera data"""
 
@@ -374,9 +382,18 @@ class SceneNode:
     def has_mask(self) -> bool:
         """Whether this camera node has a mask file"""
 
+    @property
+    def has_depth(self) -> bool:
+        """Whether this camera node has a depth map file"""
+
     def load_mask(self, resize_factor: int = 1, max_width: int = 0, invert: bool = False, threshold: float = 0.5) -> lichtfeld.Tensor | None:
         """
         Load mask as tensor [1, H, W] on CUDA (None if not a camera node or no mask)
+        """
+
+    def load_depth(self, resize_factor: int = 1, max_width: int = 0) -> lichtfeld.Tensor | None:
+        """
+        Load depth map as tensor [H, W] on CUDA (None if not a camera node or no depth map)
         """
 
     @property
@@ -468,7 +485,7 @@ class Scene:
     def add_camera_group(self, name: str, parent: int, camera_count: int) -> int:
         """Add a camera group node"""
 
-    def add_camera(self, name: str, parent: int, R: lichtfeld.Tensor, T: lichtfeld.Tensor, focal_x: float, focal_y: float, width: int, height: int, image_path: str = '', uid: int = -1) -> int:
+    def add_camera(self, name: str, parent: int, R: lichtfeld.Tensor, T: lichtfeld.Tensor, focal_x: float, focal_y: float, width: int, height: int, image_path: str = '', uid: int = -1, mask: lichtfeld.Tensor | None = None) -> int:
         """
         Add a camera node with intrinsic and extrinsic parameters.
 
@@ -483,6 +500,11 @@ class Scene:
             height: Image height in pixels
             image_path: Optional path to camera image
             uid: Optional unique identifier (-1 for auto-assigned)
+            mask: Optional in-memory mask tensor (H, W) or (1, H, W) at the image
+                resolution. Bypasses the on-disk masks/ workflow — useful for
+                direct-scene plugins that want to attach per-frame masks without
+                writing files. Set the session's ``mask_mode`` to ``Ignore`` or
+                ``Segment`` for it to take effect during training.
 
         Returns:
             Node ID of created camera
@@ -497,8 +519,8 @@ class Scene:
     def clear(self) -> None:
         """Remove all nodes from the scene"""
 
-    def reparent(self, node_id: int, new_parent_id: int) -> None:
-        """Move a node under a new parent"""
+    def reparent(self, node_id: int, new_parent_id: int) -> bool:
+        """Move a node under a new parent, returns true on success"""
 
     def root_nodes(self) -> list[int]:
         """Get all root-level nodes"""
@@ -742,8 +764,16 @@ class Camera:
         """Full path to mask file"""
 
     @property
+    def depth_path(self) -> str:
+        """Full path to depth map file"""
+
+    @property
     def has_mask(self) -> bool:
         """Whether a mask file exists"""
+
+    @property
+    def has_depth(self) -> bool:
+        """Whether a depth map file exists"""
 
     @property
     def uid(self) -> int:
@@ -790,6 +820,9 @@ class Camera:
 
     def load_mask(self, resize_factor: int = 1, max_width: int = 0, invert: bool = False, threshold: float = 0.5) -> lichtfeld.Tensor:
         """Load mask as tensor [1, H, W] on CUDA"""
+
+    def load_depth(self, resize_factor: int = 1, max_width: int = 0) -> lichtfeld.Tensor:
+        """Load depth map as tensor [H, W] on CUDA"""
 
 class CameraDataset:
     def __len__(self) -> int:

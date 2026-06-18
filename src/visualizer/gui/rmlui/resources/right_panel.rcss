@@ -99,16 +99,49 @@ body {
 }
 
 .tab {
-    display: block;
+    display: flex;
     flex: 0 0 auto;
-    padding: 6dp 14dp;
+    align-items: center;
+    justify-content: center;
+    gap: 6dp;
+    padding: 0 14dp;
     white-space: nowrap;
     cursor: pointer;
     tab-index: auto;
     nav: auto;
+    min-height: 28dp;
     border-top-left-radius: 4dp;
     border-top-right-radius: 4dp;
     border-bottom-width: 2dp;
     border-bottom-color: transparent;
     transition: border-bottom-color background-color color 0.15s quadratic-out;
+}
+
+.tab.closeable {
+    padding-right: 7dp;
+}
+
+.tab-label {
+    display: block;
+    line-height: 28dp;
+    pointer-events: none;
+}
+
+.tab-close {
+    display: block;
+    flex: 0 0 auto;
+    width: 16dp;
+    height: 16dp;
+    margin: 0;
+    padding: 0;
+    border-width: 0;
+    border-radius: 4dp;
+    background-color: transparent;
+    cursor: pointer;
+    tab-index: auto;
+    nav: auto;
+    line-height: 16dp;
+    text-align: center;
+    font-size: 13dp;
+    font-weight: bold;
 }

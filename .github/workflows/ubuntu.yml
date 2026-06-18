@@ -72,12 +72,11 @@ jobs:
           wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
           echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ noble main' | tee /etc/apt/sources.list.d/kitware.list >/dev/null
           apt-get update
-          apt-get install -y kitware-archive-keyring
 
           apt-get install -y git curl unzip cmake gcc-14 g++-14 ccache ninja-build \
             zip tar pkg-config python3 python3-dev libxinerama-dev libxcursor-dev xorg-dev libglu1-mesa-dev \
             libwayland-dev libxkbcommon-dev libegl-dev libdecor-0-dev libibus-1.0-dev libdbus-1-dev \
-            libsystemd-dev \
+            libsystemd-dev libgtk-3-dev \
             nasm autoconf autoconf-archive automake libtool
 
           update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100 \
@@ -127,11 +126,16 @@ jobs:
             -DBUILD_PYTHON_STUBS=OFF \
             -DLFS_DEV_IMPORT_SOURCE_PYTHON=OFF \
             -DLFS_DEV_IMPORT_SOURCE_RESOURCES=OFF \
-            -DCUDA_DEVICE_DEBUG=OFF
+            -DCUDA_DEVICE_DEBUG=OFF \
+            -DCMAKE_C_FLAGS="-pipe -gz" \
+            -DCMAKE_CXX_FLAGS="-pipe -gz" \
+            -DCMAKE_EXE_LINKER_FLAGS="-Wl,--compress-debug-sections=zlib" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-Wl,--compress-debug-sections=zlib"
 
       - name: Clean vcpkg buildtrees
         run: |
-          rm -rf build/vcpkg_installed/vcpkg/blds
+          rm -rf build/vcpkg_installed/vcpkg/blds build/vcpkg_installed/vcpkg/pkgs
+          rm -rf "$VCPKG_ROOT"/buildtrees "$VCPKG_ROOT"/downloads "$VCPKG_ROOT"/packages
           df -h
 
       - name: Build

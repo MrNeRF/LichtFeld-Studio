@@ -15,6 +15,7 @@ namespace fast_lfs::rasterization {
     struct FastGSSettings {
         const float* cam_position_ptr; // Device pointer [3]
         int active_sh_bases;
+        int sh_layout_bases;
         int width;
         int height;
         float focal_x;
@@ -35,10 +36,12 @@ namespace fast_lfs::rasterization {
         size_t per_instance_sort_scratch_size = 0;
         size_t per_instance_sort_total_size = 0;
         int n_instances = 0;
+        int sh_layout_bases = 1;
         uint64_t frame_id = 0;
         // Add helper buffer pointers to avoid re-allocation in backward
         void* grad_mean2d_helper = nullptr;
         void* grad_conic_helper = nullptr;
+        void* grad_depth_helper = nullptr;
         void* grad_opacity_helper = nullptr;
         void* grad_color_helper = nullptr;
         // Error handling for OOM
@@ -52,14 +55,15 @@ namespace fast_lfs::rasterization {
         const float* rotations_raw_ptr,        // Device pointer [N*4]
         const float* opacities_raw_ptr,        // Device pointer [N]
         const float* sh_coefficients_0_ptr,    // Device pointer [N*3]
-        const float* sh_coefficients_rest_ptr, // Device pointer [N*total_bases_sh_rest*3]
+        const float* sh_coefficients_rest_ptr, // Device pointer to swizzled shN float buffer
         const float* w2c_ptr,                  // Device pointer [4*4]
         const float* cam_position_ptr,         // Device pointer [3]
         float* image_ptr,                      // Device pointer [3*H*W]
         float* alpha_ptr,                      // Device pointer [H*W]
+        float* depth_ptr,                      // Device pointer [H*W]
         int n_primitives,
         int active_sh_bases,
-        int total_bases_sh_rest,
+        int sh_layout_bases,
         int width,
         int height,
         float focal_x,
@@ -82,20 +86,21 @@ namespace fast_lfs::rasterization {
         const float* densification_error_map_ptr, // Device pointer [H*W] or nullptr
         const float* grad_image_ptr,              // Device pointer [3*H*W]
         const float* grad_alpha_ptr,              // Device pointer [H*W]
+        const float* grad_depth_ptr,              // Device pointer [H*W] or nullptr
         const float* image_ptr,                   // Device pointer [3*H*W]
         const float* alpha_ptr,                   // Device pointer [H*W]
         const float* means_ptr,                   // Device pointer [N*3]
         const float* scales_raw_ptr,              // Device pointer [N*3]
         const float* rotations_raw_ptr,           // Device pointer [N*4]
         const float* raw_opacities_ptr,           // Device pointer [N]
-        const float* sh_coefficients_rest_ptr,    // Device pointer [N*total_bases_sh_rest*3]
+        const float* sh_coefficients_rest_ptr,    // Device pointer to swizzled shN float buffer
         const float* w2c_ptr,                     // Device pointer [4*4]
         const float* cam_position_ptr,            // Device pointer [3]
         const ForwardContext& forward_ctx,
         float* grad_w2c_ptr, // Device pointer [4*4] - output or nullptr
         int n_primitives,
         int active_sh_bases,
-        int total_bases_sh_rest,
+        int sh_layout_bases,
         int width,
         int height,
         float focal_x,
@@ -104,7 +109,8 @@ namespace fast_lfs::rasterization {
         float center_y,
         bool mip_filter,
         DensificationType densification_type,
-        const FusedAdamSettings* fused_adam);
+        const FusedAdamSettings* fused_adam,
+        bool detach_depth_weights = false);
 
     // Pre-compile all CUDA kernels to avoid JIT delays during rendering
     void warmup_kernels();

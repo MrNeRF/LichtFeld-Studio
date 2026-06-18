@@ -13,7 +13,6 @@ namespace lfs::vis::op {
 
     enum class BuiltinOp : uint16_t {
         SelectionStroke,
-        BrushStroke,
 
         TransformSet,
         TransformTranslate,
@@ -46,7 +45,6 @@ namespace lfs::vis::op {
         Rotate,
         Scale,
         Mirror,
-        Brush,
         Align,
 
         _Count

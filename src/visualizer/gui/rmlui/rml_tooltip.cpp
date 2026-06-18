@@ -4,6 +4,10 @@
 
 #include "gui/rmlui/rml_tooltip.hpp"
 
+#include "core/event_bridge/localization_manager.hpp"
+#include "input/input_bindings.hpp"
+#include "python/python_runtime.hpp"
+
 #include <RmlUi/Core/Context.h>
 #include <RmlUi/Core/ElementDocument.h>
 #include <algorithm>
@@ -13,8 +17,54 @@
 
 namespace lfs::vis::gui {
 
+    namespace {
+        std::string actionShortcut(std::string_view action_name) {
+            if (action_name.empty())
+                return {};
+            const auto action = lfs::vis::input::actionFromName(action_name);
+            if (!action)
+                return {};
+            const auto* const bindings = lfs::python::get_keymap_bindings();
+            if (!bindings || !bindings->getEffectiveTriggerForAction(*action))
+                return {};
+            return bindings->getLocalizedTriggerDescription(*action);
+        }
+
+        std::string appendShortcut(Rml::Element* el, std::string text) {
+            auto shortcut = el->GetAttribute<Rml::String>("data-shortcut", "");
+            if (shortcut.empty())
+                shortcut = actionShortcut(el->GetAttribute<Rml::String>("data-action", ""));
+            if (!shortcut.empty())
+                text.append(" (").append(shortcut).append(")");
+            return text;
+        }
+
+        Rml::String trimmedTooltipKey(Rml::String key) {
+            const auto first = key.find_first_not_of(" \t\r\n");
+            if (first == Rml::String::npos)
+                return {};
+            const auto last = key.find_last_not_of(" \t\r\n");
+            return key.substr(first, last - first + 1);
+        }
+    } // namespace
+
+    std::string resolveRmlTooltip(Rml::Element* hover) {
+        auto& loc = lfs::event::LocalizationManager::getInstance();
+        for (auto* el = hover; el; el = el->GetParentNode()) {
+            const auto title = el->GetAttribute<Rml::String>("title", "");
+            if (auto key = trimmedTooltipKey(el->GetAttribute<Rml::String>("data-tooltip", ""));
+                !key.empty()) {
+                const char* const resolved = loc.get(key);
+                if (resolved && resolved != key)
+                    return appendShortcut(el, resolved);
+            }
+            if (!title.empty())
+                return appendShortcut(el, title);
+        }
+        return {};
+    }
+
     void RmlTooltipController::setHover(const std::string& text, const void* target) {
-        seen_this_frame_ = true;
         if (text.empty() || !target) {
             pending_text_.clear();
             pending_target_ = nullptr;
@@ -32,13 +82,6 @@ namespace lfs::vis::gui {
                                      const int doc_w, const int doc_h) {
         if (!body)
             return false;
-
-        if (!seen_this_frame_) {
-            pending_text_.clear();
-            pending_target_ = nullptr;
-            hover_started_at_ = {};
-        }
-        seen_this_frame_ = false;
 
         auto* doc = body->GetOwnerDocument();
         auto* tooltip_el = doc ? doc->GetElementById("frame-tooltip") : nullptr;

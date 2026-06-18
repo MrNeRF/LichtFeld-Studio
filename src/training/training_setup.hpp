@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/parameters.hpp"
+#include "core/splat_data.hpp"
 #include "io/loader.hpp"
 #include <expected>
 #include <string>
@@ -49,7 +50,22 @@ namespace lfs::training {
      */
     std::expected<void, std::string> initializeTrainingModel(
         const lfs::core::param::TrainingParameters& params,
-        lfs::core::Scene& scene);
+        lfs::core::Scene& scene,
+        lfs::core::SplatTensorAllocator tensor_allocator = {});
+
+    /**
+     * @brief Copy an existing training model into caller-provided tensor storage.
+     *
+     * GUI/Vulkan training uses this to repair loaded or restored scene-owned
+     * SplatData before VkSplat renders it. It preserves the SplatData object and
+     * swaps only its parameter tensors, so strategies that hold a SplatData
+     * reference remain valid.
+     */
+    std::expected<void, std::string> migrateTrainingModelToAllocator(
+        const lfs::core::param::TrainingParameters& params,
+        lfs::core::SplatData& model,
+        const lfs::core::SplatTensorAllocator& tensor_allocator,
+        bool force_reallocation = false);
 
     /**
      * @brief Validate dataset path without loading data

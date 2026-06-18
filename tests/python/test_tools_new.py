@@ -160,6 +160,7 @@ class TestBuiltinTools:
         assert "builtin.translate" in ids
         assert "builtin.rotate" in ids
         assert "builtin.scale" in ids
+        assert "builtin.cropbox" in ids
 
     def test_get_tool_by_id(self):
         """get_tool_by_id should return correct tool."""
@@ -208,6 +209,13 @@ class TestBuiltinTools:
         assert get_tool_by_id("builtin.translate").gizmo == "translate"
         assert get_tool_by_id("builtin.rotate").gizmo == "rotate"
         assert get_tool_by_id("builtin.scale").gizmo == "scale"
+
+    def test_crop_tool_opens_toolbar_without_invoking_operator(self):
+        """Crop tool should be persistent so the crop object toolbar can open."""
+        tool = get_tool_by_id("builtin.cropbox")
+        assert tool.gizmo == "translate"
+        assert tool.operator == ""
+        assert tool.action_only is False
 
     def test_tools_have_shortcuts(self):
         """Tools should have keyboard shortcuts."""

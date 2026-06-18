@@ -158,6 +158,7 @@ namespace lfs::vis::op {
     public:
         explicit SceneSnapshot(SceneManager& scene, std::string name = "Operation");
 
+        void setSelectionChangeHint(bool changed, bool prefer_dense_storage = false);
         void captureSelection();
         void captureTransforms(const std::vector<std::string>& nodes);
         [[nodiscard]] bool captureTransformsBefore(const std::vector<std::string>& nodes,
@@ -182,6 +183,9 @@ namespace lfs::vis::op {
         lfs::core::Scene::SelectionStateSnapshot selection_before_;
         lfs::core::Scene::SelectionStateMetadata selection_after_metadata_;
         TensorSwapStorage selection_mask_storage_;
+        bool selection_change_known_ = false;
+        bool selection_changed_ = false;
+        bool prefer_dense_selection_storage_ = false;
 
         std::unordered_map<std::string, glm::mat4> transforms_before_;
         std::unordered_map<std::string, glm::mat4> transforms_after_;
@@ -357,6 +361,7 @@ namespace lfs::vis::op {
         std::string image_name;
         std::filesystem::path image_path;
         std::filesystem::path mask_path;
+        std::filesystem::path depth_path;
         lfs::core::CameraSplit split = lfs::core::CameraSplit::Train;
         float focal_x = 0.0f;
         float focal_y = 0.0f;
@@ -419,6 +424,7 @@ namespace lfs::vis::op {
         bool locked = false;
         bool training_enabled = true;
         std::optional<std::filesystem::path> source_path;
+        int order_index = -1;
     };
 
     struct SceneGraphNodeMetadataDiff {

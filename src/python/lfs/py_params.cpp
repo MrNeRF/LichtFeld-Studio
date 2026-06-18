@@ -115,6 +115,7 @@ namespace lfs::python {
                        {{"None", MaskMode::None},
                         {"Segment", MaskMode::Segment},
                         {"Ignore", MaskMode::Ignore},
+                        {"SegmentAndIgnore", MaskMode::SegmentAndIgnore},
                         {"AlphaConsistent", MaskMode::AlphaConsistent}},
                        "Attention mask behavior during training")
             .bool_prop(&OptimizationParameters::invert_masks,
@@ -132,6 +133,15 @@ namespace lfs::python {
             .bool_prop(&OptimizationParameters::use_alpha_as_mask,
                        "use_alpha_as_mask", "Use Alpha as Mask", true,
                        "Use alpha channel from RGBA images as mask source")
+            .bool_prop(&OptimizationParameters::use_depth_loss,
+                       "use_depth_loss", "Use Depth Loss", false,
+                       "Use dataset depth maps for depth supervision")
+            .float_prop(&OptimizationParameters::depth_loss_weight,
+                        "depth_loss_weight", "Depth Loss Weight", 2.0f, 0.0f, 100.0f,
+                        "Weight for depth supervision")
+            .string_prop(&OptimizationParameters::depth_loss_mode,
+                         "depth_loss_mode", "Depth Loss Mode", "adaptive-warped-l1",
+                         "Depth supervision mode: pearson or adaptive-warped-l1")
 
             // Bilateral grid
             .bool_prop(&OptimizationParameters::use_bilateral_grid,
@@ -273,9 +283,6 @@ namespace lfs::python {
             .float_prop(&OptimizationParameters::init_rho,
                         "init_rho", "Init Rho", 0.001f, 0.0f, 0.01f,
                         "Initial rho for sparsity optimization")
-            .int_prop(&OptimizationParameters::tile_mode,
-                      "tile_mode", "Tile Mode", 1, 1, 4,
-                      "Tile mode for 3DGUT training only (1, 2, or 4; ignored for 3DGS/FastGS)")
             .float_prop(&OptimizationParameters::steps_scaler,
                         "steps_scaler", "Steps Scaler", 1.0f, 0.0f, 10.0f,
                         "Scale training step counts")
@@ -993,6 +1000,7 @@ namespace lfs::python {
             .value("NONE", MaskMode::None)
             .value("SEGMENT", MaskMode::Segment)
             .value("IGNORE", MaskMode::Ignore)
+            .value("SEGMENT_AND_IGNORE", MaskMode::SegmentAndIgnore)
             .value("ALPHA_CONSISTENT", MaskMode::AlphaConsistent);
 
         nb::enum_<BackgroundMode>(m, "BackgroundMode")
@@ -1101,11 +1109,6 @@ namespace lfs::python {
                 [](PyOptimizationParams& self) { return self.params().enable_eval; },
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.enable_eval = v; }); },
                 "Enable evaluation during training")
-            .def_prop_rw(
-                "tile_mode",
-                [](PyOptimizationParams& self) { return self.params().tile_mode; },
-                [](PyOptimizationParams&, int v) { modify_params([v](auto& p) { p.tile_mode = v; }); },
-                "Tile mode for 3DGUT training only (1, 2, or 4; ignored for 3DGS/FastGS)")
             .def_prop_rw(
                 "steps_scaler",
                 [](PyOptimizationParams& self) { return self.params().steps_scaler; },
@@ -1236,6 +1239,21 @@ namespace lfs::python {
                 [](PyOptimizationParams& self) { return self.params().use_alpha_as_mask; },
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.use_alpha_as_mask = v; }); },
                 "Use alpha channel from RGBA images as mask source")
+            .def_prop_rw(
+                "use_depth_loss",
+                [](PyOptimizationParams& self) { return self.params().use_depth_loss; },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.use_depth_loss = v; }); },
+                "Load depth maps and use depth-map supervision during training")
+            .def_prop_rw(
+                "depth_loss_weight",
+                [](PyOptimizationParams& self) { return self.params().depth_loss_weight; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.depth_loss_weight = std::max(0.0f, v); }); },
+                "Weight for depth-map supervision")
+            .def_prop_rw(
+                "depth_loss_mode",
+                [](PyOptimizationParams& self) { return self.params().depth_loss_mode; },
+                [](PyOptimizationParams&, const std::string& v) { modify_params([v](auto& p) { p.depth_loss_mode = v; }); },
+                "Depth supervision mode: 'pearson' or 'adaptive-warped-l1'")
             .def_prop_rw(
                 "undistort",
                 [](PyOptimizationParams& self) { return self.params().undistort; },
@@ -1392,7 +1410,7 @@ namespace lfs::python {
             .def_prop_ro(
                 "centralize_dataset",
                 [](const PyDatasetConfig& self) { return self.params().centralize_dataset; },
-                "Dataset centralization mode used for the last load: 'none', 'auto', 'by_pointcloud', 'by_cameras'");
+                "Dataset centralization mode used for the last load: 'off', 'by_pointcloud', 'by_cameras'");
 
         m.def(
             "dataset_params", []() { return PyDatasetConfig{}; },

@@ -5,6 +5,7 @@
 
 #include "py_prop.hpp"
 #include "py_tensor.hpp"
+#include "rendering/render_constants.hpp"
 #include "visualizer/ipc/view_context.hpp"
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
@@ -58,6 +59,11 @@ namespace lfs::python {
     [[nodiscard]] std::optional<PyTensor> render_view(const PyTensor& rotation, const PyTensor& translation, int width,
                                                       int height, float fov_degrees = 60.0f,
                                                       const PyTensor* bg_color = nullptr);
+    [[nodiscard]] std::optional<PyTensor> render_view_u8(const PyTensor& rotation, const PyTensor& translation,
+                                                         int width, int height, float fov_degrees = 60.0f,
+                                                         const PyTensor* bg_color = nullptr,
+                                                         std::optional<bool> orthographic = std::nullopt,
+                                                         std::optional<float> ortho_scale = std::nullopt);
 
     [[nodiscard]] std::optional<PyTensor> compute_screen_positions(const PyTensor& rotation, const PyTensor& translation,
                                                                    int width, int height, float fov_degrees = 60.0f);
@@ -72,6 +78,12 @@ namespace lfs::python {
         const std::tuple<float, float, float>& eye, const std::tuple<float, float, float>& target, int width,
         int height, float fov_degrees = 60.0f, const std::tuple<float, float, float>& up = {0.0f, 1.0f, 0.0f},
         const PyTensor* bg_color = nullptr);
+
+    [[nodiscard]] std::optional<PyTensor> render_asset_preview(
+        const std::string& path,
+        int width = 512,
+        int height = 224,
+        float focal_length_mm = lfs::rendering::DEFAULT_FOCAL_LENGTH_MM);
 
     class PyRenderSettings {
     public:

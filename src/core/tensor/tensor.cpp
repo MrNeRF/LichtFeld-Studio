@@ -43,6 +43,127 @@ namespace lfs::core {
 
     std::atomic<size_t> Tensor::next_id_{1};
 
+    namespace {
+        struct StorageAccountingCounter {
+            std::atomic<uint64_t> live_bytes{0};
+            std::atomic<uint64_t> live_allocations{0};
+            std::atomic<uint64_t> total_bytes{0};
+            std::atomic<uint64_t> total_allocations{0};
+        };
+
+        struct StorageAccountingState {
+            StorageAccountingCounter cuda_direct;
+            StorageAccountingCounter vulkan_external;
+        };
+
+        StorageAccountingState& storage_accounting_state() {
+            static StorageAccountingState state;
+            return state;
+        }
+
+        void add_counter(StorageAccountingCounter& counter, const size_t bytes) {
+            if (bytes == 0) {
+                return;
+            }
+            counter.live_bytes.fetch_add(bytes, std::memory_order_relaxed);
+            counter.live_allocations.fetch_add(1, std::memory_order_relaxed);
+            counter.total_bytes.fetch_add(bytes, std::memory_order_relaxed);
+            counter.total_allocations.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        void subtract_counter(StorageAccountingCounter& counter, const size_t bytes) {
+            if (bytes == 0) {
+                return;
+            }
+
+            const uint64_t current = counter.live_bytes.load(std::memory_order_relaxed);
+            if (current >= bytes) {
+                counter.live_bytes.fetch_sub(bytes, std::memory_order_relaxed);
+            } else {
+                counter.live_bytes.store(0, std::memory_order_relaxed);
+            }
+
+            const uint64_t allocations = counter.live_allocations.load(std::memory_order_relaxed);
+            if (allocations > 0) {
+                counter.live_allocations.fetch_sub(1, std::memory_order_relaxed);
+            }
+        }
+
+        double mib(const uint64_t bytes) {
+            return static_cast<double>(bytes) / (1024.0 * 1024.0);
+        }
+    } // namespace
+
+    size_t Tensor::storage_allocation_bytes(const TensorShape& shape,
+                                            const size_t capacity,
+                                            const DataType dtype) {
+        if (shape.rank() == 0) {
+            return shape.elements() * dtype_size(dtype);
+        }
+
+        size_t row_elements = 1;
+        for (size_t i = 1; i < shape.rank(); ++i) {
+            row_elements *= shape[i];
+        }
+
+        const size_t rows = capacity == 0 ? shape[0] : capacity;
+        return rows * row_elements * dtype_size(dtype);
+    }
+
+    void Tensor::record_storage_allocation(const StorageAccountingKind kind,
+                                           const size_t bytes) {
+        auto& state = storage_accounting_state();
+        switch (kind) {
+        case StorageAccountingKind::CudaDirect:
+            add_counter(state.cuda_direct, bytes);
+            break;
+        case StorageAccountingKind::VulkanExternal:
+            add_counter(state.vulkan_external, bytes);
+            break;
+        }
+    }
+
+    void Tensor::record_storage_deallocation(const StorageAccountingKind kind,
+                                             const size_t bytes) {
+        auto& state = storage_accounting_state();
+        switch (kind) {
+        case StorageAccountingKind::CudaDirect:
+            subtract_counter(state.cuda_direct, bytes);
+            break;
+        case StorageAccountingKind::VulkanExternal:
+            subtract_counter(state.vulkan_external, bytes);
+            break;
+        }
+    }
+
+    std::string Tensor::storage_memory_summary() {
+        const auto& state = storage_accounting_state();
+        std::ostringstream oss;
+        const auto append = [&oss](std::string_view label, const StorageAccountingCounter& counter) {
+            const uint64_t live_bytes = counter.live_bytes.load(std::memory_order_relaxed);
+            const uint64_t live_allocations = counter.live_allocations.load(std::memory_order_relaxed);
+            const uint64_t total_bytes = counter.total_bytes.load(std::memory_order_relaxed);
+            const uint64_t total_allocations = counter.total_allocations.load(std::memory_order_relaxed);
+            oss << label << ": live=" << std::fixed << std::setprecision(2) << mib(live_bytes)
+                << " MiB/" << live_allocations << " allocs, total=" << mib(total_bytes)
+                << " MiB/" << total_allocations << " allocs";
+        };
+
+        oss << "Tensor storage accounting: ";
+        append("cuda_direct", state.cuda_direct);
+        oss << "; ";
+        append("vulkan_external", state.vulkan_external);
+        return oss.str();
+    }
+
+    void Tensor::log_storage_memory(const std::string_view label) {
+        if (label.empty()) {
+            LOG_INFO("{}", storage_memory_summary());
+        } else {
+            LOG_INFO("{} - {}", label, storage_memory_summary());
+        }
+    }
+
     // TensorLeaf implementation
     TensorLeaf::TensorLeaf(Tensor tensor)
         : tensor_ptr_(std::make_shared<Tensor>(std::move(tensor))) {}
@@ -442,6 +563,37 @@ namespace lfs::core {
         return pool;
     }
 
+    namespace {
+        thread_local std::string g_pool_pending_label;
+    }
+
+    CudaMemoryPool::LabelGuard::LabelGuard(std::string_view label)
+        : previous_(std::move(g_pool_pending_label)),
+          active_(!label.empty()) {
+        if (active_) {
+            g_pool_pending_label.assign(label);
+        }
+    }
+
+    CudaMemoryPool::LabelGuard::~LabelGuard() {
+        g_pool_pending_label = std::move(previous_);
+    }
+
+    std::string_view CudaMemoryPool::current_label() noexcept {
+        return g_pool_pending_label;
+    }
+
+    void Tensor::relabel_allocation_for_profiler() {
+        if (device_ != Device::CUDA || data_ == nullptr || state_->name.empty()) {
+            return;
+        }
+        try {
+            lfs::diagnostics::VramProfiler::instance().relabelAllocation(data_, state_->name);
+        } catch (...) {
+            // Diagnostics must never throw out of tensor operations.
+        }
+    }
+
     void Tensor::trim_memory_pool() {
         CudaMemoryPool::instance().trim_cached_memory();
     }
@@ -579,8 +731,13 @@ namespace lfs::core {
 // For HWC→CHW permute ([H, W, C] → [C, H, W]), this means:
 //   dim0 = C (typically 3), dim1 = H (typically 720+), dim2 = W (typically 820+)
 // Using collapse(2) distributes work across C×H iterations (e.g., 3×720=2160 iterations)
-// This ensures good work distribution even when dim0 is small
+// This ensures good work distribution even when dim0 is small.
+// collapse() requires OpenMP 3.0 (2008)
+#if _OPENMP >= 200805
 #pragma omp parallel for collapse(2) if (use_parallel) schedule(static)
+#else
+#pragma omp parallel for if (use_parallel) schedule(static)
+#endif
                 for (size_t i0 = 0; i0 < dim0; ++i0) {
                     for (size_t i1 = 0; i1 < dim1; ++i1) {
                         size_t i2 = 0;
@@ -619,7 +776,11 @@ namespace lfs::core {
                 }
 #else
 // Fallback: scalar version (no SIMD), but still multi-threaded with collapse(2)
+#if _OPENMP >= 200805
 #pragma omp parallel for collapse(2) if (use_parallel) schedule(static)
+#else
+#pragma omp parallel for if (use_parallel) schedule(static)
+#endif
                 for (int64_t i0 = 0; i0 < static_cast<int64_t>(dim0); ++i0) {
                     for (int64_t i1 = 0; i1 < static_cast<int64_t>(dim1); ++i1) {
                         for (size_t i2 = 0; i2 < dim2; ++i2) {
@@ -917,16 +1078,22 @@ namespace lfs::core {
             // This is needed for the stream-aware pinned memory allocator
             const_cast<Tensor*>(this)->set_stream(transfer_stream);
 
-            // If stream is provided, caller is responsible for sync
+            // If stream is provided, caller is responsible for sync.
+            // Otherwise wait only on transfer_stream — the H2D is the only work
+            // we submitted, and a full cudaDeviceSynchronize was draining
+            // unrelated GPU work (Vulkan compute, other CUDA streams), turning
+            // sub-KB uploads into multi-ms calls during concurrent rendering.
             if (!stream) {
-                CHECK_CUDA(cudaDeviceSynchronize()); // Ensure transfer completes before returning
+                CHECK_CUDA(cudaStreamSynchronize(transfer_stream));
             }
         } else if (device_ == Device::CUDA && device == Device::CPU) {
-            // API BOUNDARY: Sync before GPU→CPU transfer
+            // API BOUNDARY: Sync before GPU→CPU transfer so we see the latest
+            // writes to the source tensor. Sync only the source's stream — a
+            // full device sync was draining unrelated GPU work.
             if (stream) {
                 cudaStreamSynchronize(stream);
             } else {
-                cudaDeviceSynchronize();
+                cudaStreamSynchronize(this->stream());
             }
             // Async transfer for GPU→CPU as well (destination is pinned)
             cudaStream_t transfer_stream = stream ? stream : 0;
@@ -936,7 +1103,7 @@ namespace lfs::core {
             CHECK_CUDA(cudaMemcpyAsync(t.data_, src, bytes(), cudaMemcpyDeviceToHost, transfer_stream));
 
             if (!stream) {
-                CHECK_CUDA(cudaDeviceSynchronize()); // Ensure transfer completes before returning
+                CHECK_CUDA(cudaStreamSynchronize(transfer_stream));
             }
         }
 
@@ -1038,18 +1205,10 @@ namespace lfs::core {
         }
 
         // Float32 <-> Int32
-        // DEBUG: Add logging for Float32->Int32 conversion
         if (dtype_ == DataType::Float32 && dtype == DataType::Int32) {
             auto result = empty(shape_, device_, DataType::Int32);
             if (numel() == 0)
                 return result;
-
-            // Read source value before conversion (for debugging)
-            if (numel() == 1 && device_ == Device::CUDA) {
-                float src_val;
-                cudaMemcpy(&src_val, ptr<float>(), sizeof(float), cudaMemcpyDeviceToHost);
-                printf("[to Float32->Int32] Source value: %f\n", src_val);
-            }
 
             if (device_ == Device::CUDA) {
                 tensor_ops::launch_convert_type<float, int>(
@@ -1793,6 +1952,9 @@ namespace lfs::core {
             } else {
                 oss << ", view";
             }
+            if (has_external_storage()) {
+                oss << ", external=" << external_storage_kind();
+            }
         }
         oss << ")";
         return oss.str();
@@ -2473,11 +2635,23 @@ namespace lfs::core {
             return;
         }
 
+        if (has_external_storage()) {
+            throw TensorError(std::format(
+                                  "reserve({}) would reallocate externally-owned tensor storage '{}'; "
+                                  "growth must be handled by the storage owner",
+                                  new_capacity,
+                                  external_storage_kind()),
+                              this);
+        }
+
         LOG_DEBUG("Tensor #{}: reserve({}) starting (current size {}, capacity {})",
                   id_, new_capacity, current_rows, state_->capacity);
 
         // Calculate sizes
-        const size_t row_size = numel() / current_rows; // elements per "row"
+        size_t row_size = 1;
+        for (size_t i = 1; i < shape_.rank(); ++i) {
+            row_size *= shape_[i];
+        }
         const size_t new_total_elements = new_capacity * row_size;
         const size_t element_size = dtype_size(dtype_);
         const size_t new_bytes = new_total_elements * element_size;
@@ -2521,13 +2695,25 @@ namespace lfs::core {
         bump_storage_generation();
 
         data_ = new_data;
-        data_owner_ = std::shared_ptr<void>(new_data, [device = device_](void* ptr) {
-            if (device == Device::CUDA) {
-                cudaFree(ptr);
-            } else {
-                std::free(ptr);
-            }
-        });
+        if (device_ == Device::CUDA) {
+            record_storage_allocation(StorageAccountingKind::CudaDirect, new_bytes);
+            data_owner_ = std::shared_ptr<void>(new_data, [device = device_, bytes = new_bytes](void* ptr) {
+                if (device == Device::CUDA) {
+                    cudaFree(ptr);
+                    Tensor::record_storage_deallocation(StorageAccountingKind::CudaDirect, bytes);
+                } else {
+                    std::free(ptr);
+                }
+            });
+        } else {
+            data_owner_ = std::shared_ptr<void>(new_data, [device = device_](void* ptr) {
+                if (device == Device::CUDA) {
+                    cudaFree(ptr);
+                } else {
+                    std::free(ptr);
+                }
+            });
+        }
         init_storage_meta();
         state_->capacity = new_capacity;
         state_->logical_size = current_rows;
@@ -2546,7 +2732,7 @@ namespace lfs::core {
         : std::runtime_error(msg),
           tensor_info_(t ? t->str() : "") {}
 
-    Tensor Tensor::zeros_direct(TensorShape shape, size_t capacity, Device device) {
+    Tensor Tensor::zeros_direct(TensorShape shape, size_t capacity, Device device, DataType dtype) {
         if (device != Device::CUDA) {
             throw TensorError("zeros_direct only supports CUDA device");
         }
@@ -2561,7 +2747,7 @@ namespace lfs::core {
             t.strides_ = {};
             t.storage_offset_ = 0;
             t.device_ = device;
-            t.dtype_ = DataType::Float32;
+            t.dtype_ = dtype;
             t.state_->capacity = 0;
             t.state_->logical_size = 0;
             t.id_ = next_id_++;
@@ -2575,7 +2761,7 @@ namespace lfs::core {
         }
 
         const size_t total_elements = capacity * row_size;
-        const size_t total_bytes = total_elements * sizeof(float);
+        const size_t total_bytes = total_elements * dtype_size(dtype);
 
         if (total_bytes == 0) {
             Tensor t;
@@ -2586,7 +2772,7 @@ namespace lfs::core {
             t.strides_ = shape.strides();
             t.storage_offset_ = 0;
             t.device_ = device;
-            t.dtype_ = DataType::Float32;
+            t.dtype_ = dtype;
             t.state_->capacity = capacity;
             t.state_->logical_size = current_size;
             t.id_ = next_id_++;
@@ -2615,15 +2801,18 @@ namespace lfs::core {
         // Create tensor with custom deleter
         Tensor t;
         t.data_ = data_ptr;
-        t.data_owner_ = std::shared_ptr<void>(data_ptr, [](void* ptr) {
-            if (ptr)
+        record_storage_allocation(StorageAccountingKind::CudaDirect, total_bytes);
+        t.data_owner_ = std::shared_ptr<void>(data_ptr, [bytes = total_bytes](void* ptr) {
+            if (ptr) {
                 cudaFree(ptr);
+                Tensor::record_storage_deallocation(StorageAccountingKind::CudaDirect, bytes);
+            }
         });
         t.shape_ = shape;
         t.strides_ = shape.strides();
         t.storage_offset_ = 0;
         t.device_ = device;
-        t.dtype_ = DataType::Float32;
+        t.dtype_ = dtype;
         t.state_->capacity = capacity;
         t.state_->logical_size = current_size;
         t.id_ = next_id_++;

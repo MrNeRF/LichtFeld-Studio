@@ -170,6 +170,8 @@ scene-graph,
     right: 0;
     top: 0;
     height: 24dp;
+    margin: 0;
+    border-top-width: 0;
 }
 
 #history-container {
@@ -410,10 +412,37 @@ scene-graph,
 .tree-row.drop-target {
     border-width: 1dp;
     border-color: #89b4fa;
+    background-color: rgba(137, 180, 250, 48);
 }
 
-.tree-row:drag {
-    opacity: 0.5;
+.tree-row.dragging {
+    opacity: 0.45;
+}
+
+.tree-drag-ghost {
+    display: none;
+    position: absolute;
+    z-index: 9999;
+    pointer-events: none;
+    padding: 3dp 10dp;
+    background-color: rgba(49, 50, 68, 242);
+    border-width: 1dp;
+    border-color: #89b4fa;
+    border-radius: 4dp;
+    color: #cdd6f4;
+    font-size: 12dp;
+    white-space: nowrap;
+}
+
+.tree-insert-line {
+    display: none;
+    position: absolute;
+    right: 4dp;
+    height: 3dp;
+    background-color: #89b4fa;
+    border-radius: 2dp;
+    z-index: 50;
+    pointer-events: none;
 }
 
 .row-content {
@@ -495,6 +524,7 @@ scene-graph,
 /* Colored dot — replaces type icons for a cleaner row */
 .row-icon.type-icon.splat        { image-color: rgba(153, 204, 255, 230); }
 .row-icon.type-icon.group        { image-color: rgba(178, 178, 178, 204); }
+.row-icon.type-icon.ply_sequence { image-color: rgba(105, 175, 255, 220); }
 .row-icon.type-icon.dataset      { image-color: rgba(127, 178, 255, 230); }
 .row-icon.type-icon.camera       { image-color: rgba(127, 153, 204, 200); }
 .row-icon.type-icon.camera_group { image-color: rgba(153, 178, 230, 204); }

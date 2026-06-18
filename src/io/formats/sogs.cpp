@@ -3,7 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #ifdef _WIN32
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #endif
 
 #include "sogs.hpp"
@@ -14,14 +16,19 @@
 #include "cuda/morton_encoding.hpp"
 #include "io/atomic_output.hpp"
 #include "io/error.hpp"
+#include <algorithm>
 #include <archive.h>
 #include <archive_entry.h>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <fstream>
+#include <limits>
 #include <nlohmann/json.hpp>
 #include <sstream>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 #include <webp/decode.h>
@@ -30,7 +37,6 @@
 namespace lfs::io {
 
     // Import types from lfs::core for convenience
-    using lfs::core::DataType;
     using lfs::core::Device;
     using lfs::core::SplatData;
     using lfs::core::Tensor;
@@ -735,6 +741,37 @@ namespace lfs::io {
             return 1.0 / (1.0 + std::exp(-x));
         }
 
+        Tensor as_cuda_contiguous(const Tensor& tensor) {
+            if (tensor.device() == Device::CUDA) {
+                return tensor.is_contiguous() ? tensor : tensor.contiguous();
+            }
+            return tensor.cuda().contiguous();
+        }
+
+        int nearest_centroid_1d(const std::vector<float>& centroids, float value) {
+            auto it = std::lower_bound(centroids.begin(), centroids.end(), value);
+            int best = static_cast<int>(std::distance(centroids.begin(), it));
+            if (best >= static_cast<int>(centroids.size())) {
+                best = static_cast<int>(centroids.size()) - 1;
+            }
+
+            float best_dist = std::abs(value - centroids[best]);
+            if (best > 0) {
+                const float prev_dist = std::abs(value - centroids[best - 1]);
+                if (prev_dist < best_dist) {
+                    best = best - 1;
+                    best_dist = prev_dist;
+                }
+            }
+            if (best + 1 < static_cast<int>(centroids.size())) {
+                const float next_dist = std::abs(value - centroids[best + 1]);
+                if (next_dist < best_dist) {
+                    best = best + 1;
+                }
+            }
+            return best;
+        }
+
         class SogArchive {
             struct archive* a_ = nullptr;
             std::filesystem::path output_path_;
@@ -891,47 +928,105 @@ namespace lfs::io {
         };
 
         Cluster1dResult cluster1d(const float* data, int num_rows, int num_columns, int iterations) {
-            const int total_points = num_rows * num_columns;
-            std::vector<float> flat_data(total_points);
+            constexpr int K = 256;
+            const size_t total_points = static_cast<size_t>(num_rows) * static_cast<size_t>(num_columns);
 
+            float min_val = std::numeric_limits<float>::infinity();
+            float max_val = -std::numeric_limits<float>::infinity();
             for (int col = 0; col < num_columns; ++col) {
                 for (int row = 0; row < num_rows; ++row) {
-                    flat_data[col * num_rows + row] = data[row * num_columns + col];
+                    const float value = data[row * num_columns + col];
+                    min_val = std::min(min_val, value);
+                    max_val = std::max(max_val, value);
                 }
             }
 
-            auto data_tensor = Tensor::from_blob(flat_data.data(), {static_cast<size_t>(total_points), 1},
-                                                 Device::CPU, DataType::Float32)
-                                   .cuda();
-            auto [centroids_tensor, labels_tensor] = lfs::io::kmeans(data_tensor, 256, iterations);
-
-            auto centroids_cpu = centroids_tensor.cpu();
-            auto labels_cpu = labels_tensor.cpu();
-            const auto* centroids_ptr = static_cast<const float*>(centroids_cpu.data_ptr());
-            const auto* labels_ptr = static_cast<const int32_t*>(labels_cpu.data_ptr());
-
-            std::vector<int> order(256);
-            for (int i = 0; i < 256; ++i)
-                order[i] = i;
-            std::sort(order.begin(), order.end(), [&](int a, int b) {
-                return centroids_ptr[a] < centroids_ptr[b];
-            });
-
-            std::vector<float> ordered_centroids(256);
-            for (int i = 0; i < 256; ++i) {
-                ordered_centroids[i] = centroids_ptr[order[i]];
-            }
-
-            std::vector<int> inv_order(256);
-            for (int i = 0; i < 256; ++i) {
-                inv_order[order[i]] = i;
+            std::vector<float> centroid_vals(K);
+            const float step = (K > 1) ? (max_val - min_val) / (K - 1) : 0.0f;
+            for (int i = 0; i < K; ++i) {
+                centroid_vals[i] = min_val + i * step;
             }
 
             Cluster1dResult result;
+            result.labels.assign(total_points, 0);
+
+            struct LocalAccum {
+                std::array<double, K> sums{};
+                std::array<int64_t, K> counts{};
+            };
+
+            const unsigned int hw_threads = std::max(1u, std::thread::hardware_concurrency());
+            const size_t worker_count = std::max<size_t>(
+                1, std::min<size_t>(hw_threads, (total_points + 65535) / 65536));
+
+            auto accumulate_range = [&](size_t begin, size_t end, const bool write_labels, LocalAccum& accum) {
+                for (size_t linear = begin; linear < end; ++linear) {
+                    const int col = static_cast<int>(linear / static_cast<size_t>(num_rows));
+                    const int row = static_cast<int>(linear - static_cast<size_t>(col) * static_cast<size_t>(num_rows));
+                    const float value = data[row * num_columns + col];
+                    const int label = nearest_centroid_1d(centroid_vals, value);
+
+                    if (write_labels) {
+                        result.labels[linear] = static_cast<uint8_t>(label);
+                    }
+                    accum.sums[label] += static_cast<double>(value);
+                    accum.counts[label]++;
+                }
+            };
+
+            const int effective_iterations = std::max(0, iterations);
+            for (int iter = 0; iter < effective_iterations; ++iter) {
+                std::vector<LocalAccum> accumulators(worker_count);
+                const bool write_labels = (iter == effective_iterations - 1);
+
+                if (worker_count == 1) {
+                    accumulate_range(0, total_points, write_labels, accumulators[0]);
+                } else {
+                    std::vector<std::thread> workers;
+                    workers.reserve(worker_count);
+                    for (size_t worker = 0; worker < worker_count; ++worker) {
+                        const size_t begin = total_points * worker / worker_count;
+                        const size_t end = total_points * (worker + 1) / worker_count;
+                        workers.emplace_back(accumulate_range, begin, end, write_labels, std::ref(accumulators[worker]));
+                    }
+                    for (auto& worker : workers) {
+                        worker.join();
+                    }
+                }
+
+                for (int c = 0; c < K; ++c) {
+                    double sum = 0.0;
+                    int64_t count = 0;
+                    for (const auto& accum : accumulators) {
+                        sum += accum.sums[c];
+                        count += accum.counts[c];
+                    }
+                    if (count > 0) {
+                        centroid_vals[c] = static_cast<float>(sum / static_cast<double>(count));
+                    }
+                }
+            }
+
+            std::vector<int> order(K);
+            for (int i = 0; i < K; ++i)
+                order[i] = i;
+            std::sort(order.begin(), order.end(), [&](int a, int b) {
+                return centroid_vals[a] < centroid_vals[b];
+            });
+
+            std::vector<float> ordered_centroids(K);
+            for (int i = 0; i < K; ++i) {
+                ordered_centroids[i] = centroid_vals[order[i]];
+            }
+
+            std::vector<int> inv_order(K);
+            for (int i = 0; i < K; ++i) {
+                inv_order[order[i]] = i;
+            }
+
             result.centroids = ordered_centroids;
-            result.labels.resize(total_points);
-            for (int i = 0; i < total_points; ++i) {
-                result.labels[i] = static_cast<uint8_t>(inv_order[labels_ptr[i]]);
+            for (uint8_t& label : result.labels) {
+                label = static_cast<uint8_t>(inv_order[label]);
             }
 
             return result;
@@ -979,13 +1074,28 @@ namespace lfs::io {
             return std::unexpected(result.error());
         }
 
-        auto means_cuda = splat_data.means_raw().cuda();
-        auto morton_codes = morton_encode(means_cuda);
-        auto sort_indices_tensor = morton_sort_indices(morton_codes);
+        if (num_rows > static_cast<int64_t>(std::numeric_limits<int>::max())) {
+            return make_error(ErrorCode::INVALID_DATASET,
+                              "SOG export supports at most INT_MAX splats",
+                              options.output_path);
+        }
+
+        auto means_cuda = as_cuda_contiguous(splat_data.means_raw());
+        auto sort_indices_tensor = morton_sort_indices_for_positions(means_cuda);
+        if (!sort_indices_tensor.is_valid()) {
+            return make_error(ErrorCode::ENCODING_FAILED,
+                              "Failed to compute Morton order for SOG export",
+                              options.output_path);
+        }
         auto sort_indices_cpu = sort_indices_tensor.cpu();
-        const auto* indices = sort_indices_cpu.ptr<int64_t>();
+        const auto* indices = sort_indices_cpu.ptr<int32_t>();
 
         auto means_cpu = means_cuda.cpu();
+        const auto* means_ptr = means_cpu.ptr<float>();
+        const auto source_index = [&](int64_t sorted_index) -> int64_t {
+            return static_cast<int64_t>(indices[sorted_index]);
+        };
+
         ScopedAtomicOutputFile atomic_output(options.output_path);
         SogArchive archive(atomic_output.temp_path());
 
@@ -1003,14 +1113,12 @@ namespace lfs::io {
             return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
         }
 
-        const auto* means_ptr = means_cpu.ptr<float>();
-
         std::array<std::array<double, 2>, 3> means_min_max = {{{std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()},
                                                                {std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()},
                                                                {std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()}}};
 
         for (int64_t i = 0; i < num_rows; ++i) {
-            const int64_t idx = indices[i];
+            const int64_t idx = source_index(i);
             for (int d = 0; d < 3; ++d) {
                 const double v = log_transform(static_cast<double>(means_ptr[idx * 3 + d]));
                 means_min_max[d][0] = std::min(means_min_max[d][0], v);
@@ -1022,7 +1130,7 @@ namespace lfs::io {
         std::vector<uint8_t> means_u(width * height * CHANNELS, 0);
 
         for (int64_t i = 0; i < num_rows; ++i) {
-            const int64_t idx = indices[i];
+            const int64_t idx = source_index(i);
             const double x = 65535.0 * (log_transform(static_cast<double>(means_ptr[idx * 3 + 0])) - means_min_max[0][0]) /
                              (means_min_max[0][1] - means_min_max[0][0]);
             const double y = 65535.0 * (log_transform(static_cast<double>(means_ptr[idx * 3 + 1])) - means_min_max[1][0]) /
@@ -1063,7 +1171,7 @@ namespace lfs::io {
         std::vector<uint8_t> quats(width * height * CHANNELS, 0);
 
         for (int64_t i = 0; i < num_rows; ++i) {
-            const int64_t idx = indices[i];
+            const int64_t idx = source_index(i);
             float q[4] = {rot_ptr[idx * 4 + 0], rot_ptr[idx * 4 + 1], rot_ptr[idx * 4 + 2], rot_ptr[idx * 4 + 3]};
 
             const float len = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
@@ -1110,7 +1218,7 @@ namespace lfs::io {
 
         std::vector<uint8_t> scales_data(width * height * CHANNELS, 0);
         for (int64_t i = 0; i < num_rows; ++i) {
-            const int64_t idx = indices[i];
+            const int64_t idx = source_index(i);
             const auto ti = static_cast<int>(i);
 
             scales_data[ti * 4 + 0] = scale_result.labels[0 * num_rows + idx];
@@ -1137,7 +1245,7 @@ namespace lfs::io {
 
         std::vector<uint8_t> sh0_data(width * height * CHANNELS, 0);
         for (int64_t i = 0; i < num_rows; ++i) {
-            const int64_t idx = indices[i];
+            const int64_t idx = source_index(i);
             const auto ti = static_cast<int>(i);
 
             sh0_data[ti * 4 + 0] = color_result.labels[0 * num_rows + idx];
@@ -1158,9 +1266,6 @@ namespace lfs::io {
                 return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
             }
 
-            auto shN = splat_data.shN_raw().cpu();
-            const auto* shN_ptr = shN.ptr<float>();
-
             static const int SH_COEFFS_TABLE[] = {0, 3, 8, 15};
             const int sh_coeffs = SH_COEFFS_TABLE[sh_degree];
             const int sh_dims = sh_coeffs * 3;
@@ -1168,26 +1273,41 @@ namespace lfs::io {
             int palette_size = std::min(64, static_cast<int>(std::pow(2, std::floor(std::log2(num_rows / 1024.0))))) * 1024;
             palette_size = std::clamp(palette_size, 1024, static_cast<int>(num_rows));
 
-            std::vector<float> shN_flat(num_rows * sh_dims);
-            for (int64_t i = 0; i < num_rows; ++i) {
-                for (int c = 0; c < 3; ++c) {
-                    for (int j = 0; j < sh_coeffs; ++j) {
-                        const int their_col = c * sh_coeffs + j;
-                        shN_flat[i * sh_dims + their_col] = shN_ptr[i * sh_coeffs * 3 + j * 3 + c];
-                    }
-                }
+            const auto& shN_swizzled = splat_data.shN_raw();
+            if (!shN_swizzled.is_valid() || shN_swizzled.ndim() != 1 || shN_swizzled.numel() == 0) {
+                return make_error(ErrorCode::INVALID_DATASET,
+                                  "Invalid swizzled SH tensor for SOG export",
+                                  options.output_path);
             }
 
-            auto shN_tensor = Tensor::from_blob(shN_flat.data(),
-                                                {static_cast<size_t>(num_rows), static_cast<size_t>(sh_dims)}, Device::CPU, DataType::Float32)
-                                  .cuda();
-            auto [sh_centroids, sh_labels] = lfs::io::kmeans(shN_tensor, palette_size, options.kmeans_iterations);
+            // Run k-means directly on resident swizzled shN so SOG export does not allocate
+            // a full canonical [N, K, 3] CUDA tensor.
+            auto [sh_centroids, sh_labels] = lfs::io::kmeans_sh_swizzled(
+                shN_swizzled, static_cast<int>(num_rows), sh_coeffs,
+                palette_size, options.kmeans_iterations);
+            if (!sh_centroids.is_valid() || !sh_labels.is_valid()) {
+                return make_error(ErrorCode::ENCODING_FAILED,
+                                  "Failed to cluster swizzled SH tensor for SOG export",
+                                  options.output_path);
+            }
 
             auto sh_centroids_cpu = sh_centroids.cpu();
             const auto* sh_centroids_ptr = static_cast<const float*>(sh_centroids_cpu.data_ptr());
             const int actual_palette_size = static_cast<int>(sh_centroids.size(0));
 
-            auto codebook_result = cluster1d(sh_centroids_ptr, actual_palette_size, sh_dims, options.kmeans_iterations);
+            // Keep the full SH tensor in source layout for k-means, then regroup only
+            // the much smaller centroid table into the SOG texture/codebook layout.
+            std::vector<float> sh_centroids_grouped(actual_palette_size * sh_dims);
+            for (int i = 0; i < actual_palette_size; ++i) {
+                for (int c = 0; c < 3; ++c) {
+                    for (int j = 0; j < sh_coeffs; ++j) {
+                        sh_centroids_grouped[i * sh_dims + c * sh_coeffs + j] =
+                            sh_centroids_ptr[i * sh_dims + j * 3 + c];
+                    }
+                }
+            }
+
+            auto codebook_result = cluster1d(sh_centroids_grouped.data(), actual_palette_size, sh_dims, options.kmeans_iterations);
 
             const int centroids_width = 64 * sh_coeffs;
             const int centroids_height = (actual_palette_size + 63) / 64;
@@ -1215,7 +1335,7 @@ namespace lfs::io {
 
             std::vector<uint8_t> labels_buf(width * height * CHANNELS, 0);
             for (int64_t i = 0; i < num_rows; ++i) {
-                const int64_t idx = indices[i];
+                const int64_t idx = source_index(i);
                 const int32_t label = sh_labels_ptr[idx];
                 const auto ti = static_cast<int>(i);
 

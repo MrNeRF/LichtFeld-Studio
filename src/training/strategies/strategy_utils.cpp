@@ -5,8 +5,39 @@
 #include "strategy_utils.hpp"
 #include "core/logger.hpp"
 #include "kernels/pruning_kernels.hpp"
+#include <algorithm>
+#include <vector>
 
 namespace lfs::training {
+
+    namespace {
+        [[nodiscard]] std::vector<bool> build_frozen_vector(
+            const lfs::core::SplatData& splat_data,
+            const size_t n,
+            size_t* frozen_count = nullptr) {
+            std::vector<bool> mask(n, false);
+            size_t count = 0;
+
+            for (const auto& range : splat_data.frozen_ranges()) {
+                if (range.count == 0 || range.start >= n) {
+                    continue;
+                }
+                const size_t end = range.count > n - range.start ? n : range.start + range.count;
+                for (size_t i = range.start; i < end; ++i) {
+                    if (!mask[i]) {
+                        mask[i] = true;
+                        ++count;
+                    }
+                }
+            }
+
+            if (frozen_count) {
+                *frozen_count = count;
+            }
+            return mask;
+        }
+
+    } // namespace
 
     void initialize_gaussians(lfs::core::SplatData& splat_data, int max_cap) {
         // Tensors are already on GPU in the new framework (created with Device::CUDA by default)
@@ -18,17 +49,7 @@ namespace lfs::training {
             const size_t capacity = static_cast<size_t>(max_cap);
             LOG_INFO("Pre-allocating tensor capacity for {} Gaussians (parameters)", capacity);
 
-            // Reserve capacity for all parameters (skip empty tensors like shN at sh_degree=0)
-            auto reserve_if_valid = [capacity](lfs::core::Tensor& t) {
-                if (t.is_valid() && t.numel() > 0)
-                    t.reserve(capacity);
-            };
-            reserve_if_valid(splat_data.means());
-            reserve_if_valid(splat_data.sh0());
-            reserve_if_valid(splat_data.shN());
-            reserve_if_valid(splat_data.scaling_raw());
-            reserve_if_valid(splat_data.rotation_raw());
-            reserve_if_valid(splat_data.opacity_raw());
+            splat_data.reserve_capacity(capacity);
         }
     }
 
@@ -82,6 +103,116 @@ namespace lfs::training {
         const double gamma = std::pow(0.01, 1.0 / params.iterations);
 
         return std::make_unique<ExponentialLR>(optimizer, gamma, std::vector<ParamType>{ParamType::Means});
+    }
+
+    lfs::core::Tensor make_frozen_mask(
+        const lfs::core::SplatData& splat_data,
+        const size_t n,
+        const lfs::core::Device device) {
+        if (!splat_data.has_frozen_ranges() || n == 0) {
+            return {};
+        }
+
+        size_t frozen_count = 0;
+        auto mask = build_frozen_vector(splat_data, n, &frozen_count);
+        if (frozen_count == 0) {
+            return {};
+        }
+
+        auto tensor = lfs::core::Tensor::from_vector(
+            mask,
+            lfs::core::TensorShape({n}),
+            device);
+        tensor.set_name("splat.frozen_mask");
+        return tensor;
+    }
+
+    lfs::core::Tensor make_trainable_mask(
+        const lfs::core::SplatData& splat_data,
+        const size_t n,
+        const lfs::core::Device device) {
+        auto frozen_mask = make_frozen_mask(splat_data, n, device);
+        return frozen_mask.is_valid()
+                   ? frozen_mask.logical_not()
+                   : lfs::core::Tensor();
+    }
+
+    lfs::core::Tensor exclude_frozen_from_mask(
+        const lfs::core::SplatData& splat_data,
+        const lfs::core::Tensor& mask) {
+        if (!mask.is_valid() || mask.numel() == 0 || !splat_data.has_frozen_ranges()) {
+            return mask;
+        }
+
+        auto frozen_mask = make_frozen_mask(splat_data, mask.numel(), mask.device());
+        return frozen_mask.is_valid()
+                   ? mask.logical_and(frozen_mask.logical_not())
+                   : mask;
+    }
+
+    lfs::core::Tensor zero_frozen_scores(
+        const lfs::core::SplatData& splat_data,
+        const lfs::core::Tensor& scores) {
+        if (!scores.is_valid() || scores.numel() == 0 || !splat_data.has_frozen_ranges()) {
+            return scores;
+        }
+
+        auto frozen_mask = make_frozen_mask(splat_data, scores.numel(), scores.device());
+        return frozen_mask.is_valid()
+                   ? scores.masked_fill(frozen_mask, 0.0f)
+                   : scores;
+    }
+
+    void zero_frozen_scores_inplace(
+        const lfs::core::SplatData& splat_data,
+        lfs::core::Tensor& scores) {
+        if (!scores.is_valid() || scores.numel() == 0 || !splat_data.has_frozen_ranges()) {
+            return;
+        }
+
+        auto frozen_mask = make_frozen_mask(splat_data, scores.numel(), scores.device());
+        if (frozen_mask.is_valid()) {
+            scores.masked_fill_(frozen_mask, 0.0f);
+        }
+    }
+
+    size_t frozen_row_count(const lfs::core::SplatData& splat_data, const size_t n) {
+        size_t frozen_count = 0;
+        (void)build_frozen_vector(splat_data, n, &frozen_count);
+        return frozen_count;
+    }
+
+    void apply_frozen_ranges_to_optimizer(
+        const lfs::core::SplatData& splat_data,
+        AdamOptimizer& optimizer) {
+        const size_t n = static_cast<size_t>(splat_data.size());
+        auto mask = make_frozen_mask(splat_data, n, lfs::core::Device::CUDA);
+        if (!mask.is_valid()) {
+            optimizer.set_frozen_mask({});
+            return;
+        }
+
+        const size_t frozen_count = frozen_row_count(splat_data, n);
+        optimizer.set_frozen_mask(std::move(mask));
+        LOG_INFO("Frozen training mask: {} / {} Gaussians frozen", frozen_count, n);
+    }
+
+    void remap_frozen_ranges_after_compaction(
+        lfs::core::SplatData& splat_data,
+        const lfs::core::Tensor& kept_old_indices,
+        const size_t old_size) {
+        if (!splat_data.has_frozen_ranges()) {
+            return;
+        }
+        if (!kept_old_indices.is_valid() || kept_old_indices.numel() == 0) {
+            splat_data.clear_frozen_ranges();
+            return;
+        }
+
+        auto kept_i64 = kept_old_indices.dtype() == lfs::core::DataType::Int64
+                            ? kept_old_indices
+                            : kept_old_indices.to(lfs::core::DataType::Int64);
+        splat_data.remap_frozen_ranges_after_keep(old_size, kept_i64.to_vector_int64());
     }
 
     void update_param_with_optimizer(

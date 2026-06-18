@@ -4,10 +4,6 @@
 
 #pragma once
 
-#include "config.h"
-
-#ifdef LFS_VULKAN_VIEWER_ENABLED
-
 #include "core/export.hpp"
 #include "core/tensor.hpp"
 #include "rendering/rendering.hpp"
@@ -56,9 +52,12 @@ namespace lfs::vis {
 
         struct RenderRequest {
             // Positions/colors are float [N, 3] tensors. Either CUDA or CPU; we
-            // copy to Vulkan device-local on first use and cache by pointer.
+            // copy to Vulkan device-local on first use and cache by pointer plus
+            // caller-provided content revisions for in-place tensor mutations.
             const lfs::core::Tensor* positions = nullptr;
             const lfs::core::Tensor* colors = nullptr;
+            std::uint64_t positions_revision = 0;
+            std::uint64_t colors_revision = 0;
 
             // Optional model_transforms[K, 16] + per-point transform_indices[N];
             // empty/null disables the transform path.
@@ -67,6 +66,19 @@ namespace lfs::vis {
 
             // Optional per-transform visibility (size matches model_transforms).
             const std::vector<bool>* node_visibility_mask = nullptr;
+
+            // Optional per-point soft-delete mask. Nonzero entries are hidden.
+            const lfs::core::Tensor* deleted_mask = nullptr;
+            std::uint64_t deleted_mask_revision = 0;
+
+            // Optional selection overlays. Masks are per-point UInt8/Bool tensors
+            // where 0 means unselected and nonzero means selection group/preview.
+            const lfs::core::Tensor* selection_mask = nullptr;
+            const lfs::core::Tensor* preview_selection_mask = nullptr;
+            const std::array<glm::vec4, lfs::rendering::kSelectionColorTableCount>* selection_colors = nullptr;
+            bool preview_selection_additive = true;
+            std::uint64_t selection_revision = 0;
+            std::uint64_t preview_selection_revision = 0;
 
             // Optional crop. When set, points outside the local box are either
             // dropped (default) or rendered desaturated (crop.desaturate).
@@ -82,6 +94,11 @@ namespace lfs::vis {
             float focal_y = 1.0f;
             float voxel_size = 0.01f;
             float scaling_modifier = 1.0f;
+            bool depth_view = false;
+            float depth_view_min = lfs::rendering::DEFAULT_DEPTH_VIEW_MIN;
+            float depth_view_max = lfs::rendering::DEFAULT_DEPTH_VIEW_MAX;
+            lfs::rendering::DepthVisualizationMode depth_visualization_mode =
+                lfs::rendering::DepthVisualizationMode::Palette;
         };
 
         enum class OutputSlot : std::size_t {
@@ -100,6 +117,9 @@ namespace lfs::vis {
             VulkanContext& context,
             const RenderRequest& request,
             OutputSlot output_slot = OutputSlot::Main);
+        [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
+            VulkanContext& context,
+            OutputSlot output_slot = OutputSlot::Main);
 
         void reset();
 
@@ -109,5 +129,3 @@ namespace lfs::vis {
     };
 
 } // namespace lfs::vis
-
-#endif // LFS_VULKAN_VIEWER_ENABLED

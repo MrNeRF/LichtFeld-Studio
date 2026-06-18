@@ -9,5 +9,6 @@
 namespace lfs::app {
 
     int run_converter(const lfs::core::param::ConvertParameters& params);
+    int run_mesh2splat(const lfs::core::param::Mesh2SplatParameters& params);
 
 } // namespace lfs::app

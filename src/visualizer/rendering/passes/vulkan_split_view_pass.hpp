@@ -4,9 +4,6 @@
 
 #pragma once
 
-#include "config.h"
-
-#ifdef LFS_VULKAN_VIEWER_ENABLED
 #include "core/tensor.hpp"
 
 #include <cstdint>
@@ -68,4 +65,3 @@ namespace lfs::vis {
     };
 
 } // namespace lfs::vis
-#endif

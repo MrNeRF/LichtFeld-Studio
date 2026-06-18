@@ -67,6 +67,16 @@ namespace lfs::io {
                     return true;
                 }
 
+                if (ext == ".spz") {
+                    LOG_TRACE("SPZ file detected: {}", lfs::core::path_to_utf8(path));
+                    return true;
+                }
+
+                if (ext == ".rad") {
+                    LOG_TRACE("RAD file detected: {}", lfs::core::path_to_utf8(path));
+                    return true;
+                }
+
                 if (ext == ".usd" || ext == ".usda" || ext == ".usdc" || ext == ".usdz") {
                     LOG_TRACE("USD gaussian file detected: {}", lfs::core::path_to_utf8(path));
                     return true;

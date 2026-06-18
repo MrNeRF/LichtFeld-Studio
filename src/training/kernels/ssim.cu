@@ -8,6 +8,7 @@
 #include <cassert>
 #include <cooperative_groups.h>
 #include <cstdint>
+#include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <type_traits>
 
@@ -460,9 +461,9 @@ namespace {
         float C2,
         const float* __restrict__ img1,
         const TargetT* __restrict__ img2,
-        float* __restrict__ dm_dmu1,
-        float* __restrict__ dm_dsigma1_sq,
-        float* __restrict__ dm_dsigma12,
+        __half* __restrict__ dm_dmu1,
+        __half* __restrict__ dm_dsigma1_sq,
+        __half* __restrict__ dm_dsigma12,
         float* __restrict__ ssim_map) {
 
         auto block = cg::this_thread_block();
@@ -653,7 +654,7 @@ namespace {
     }
 
     // Fused L1+SSIM Backward Kernel
-    template <typename TargetT>
+    template <typename TargetT, typename PartialT>
     __global__ void fusedL1SSIMBackwardCUDA(
         float ssim_weight,
         int H,
@@ -666,9 +667,9 @@ namespace {
         const float* __restrict__ img1,
         const TargetT* __restrict__ img2,
         float* __restrict__ dL_dimg1,
-        const float* __restrict__ dm_dmu1,
-        const float* __restrict__ dm_dsigma1_sq,
-        const float* __restrict__ dm_dsigma12) {
+        const PartialT* __restrict__ dm_dmu1,
+        const PartialT* __restrict__ dm_dsigma1_sq,
+        const PartialT* __restrict__ dm_dsigma12) {
 
         auto block = cg::this_thread_block();
         const int pix_y = block.group_index().y * BLOCK_Y + block.thread_index().y;
@@ -1872,9 +1873,9 @@ namespace lfs::training::kernels {
             fusedL1SSIMForwardCUDA<TargetT><<<grid, block>>>(
                 H, W, C, C1, C2,
                 img1.ptr<float>(), img2_ptr,
-                workspace.dm_dmu1.ptr<float>(),
-                workspace.dm_dsigma1_sq.ptr<float>(),
-                workspace.dm_dsigma12.ptr<float>(),
+                workspace.dm_dmu1.ptr<__half>(),
+                workspace.dm_dsigma1_sq.ptr<__half>(),
+                workspace.dm_dsigma12.ptr<__half>(),
                 workspace.ssim_map.ptr<float>());
 
             launch_fused_l1_ssim_mean_device(
@@ -1931,13 +1932,13 @@ namespace lfs::training::kernels {
 
         dispatch_target_ptr(ctx.img2, [&](auto* img2_ptr) {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(img2_ptr)>>;
-            fusedL1SSIMBackwardCUDA<TargetT><<<grid, block>>>(
+            fusedL1SSIMBackwardCUDA<TargetT, __half><<<grid, block>>>(
                 ctx.ssim_weight, ctx.H, ctx.W, static_cast<int>(C), C1, C2,
                 grad_per_pixel, ctx.apply_valid_padding,
                 ctx.img1.ptr<float>(), img2_ptr,
                 workspace.grad_img.ptr<float>(),
-                ctx.dm_dmu1.ptr<float>(), ctx.dm_dsigma1_sq.ptr<float>(),
-                ctx.dm_dsigma12.ptr<float>());
+                ctx.dm_dmu1.ptr<__half>(), ctx.dm_dsigma1_sq.ptr<__half>(),
+                ctx.dm_dsigma12.ptr<__half>());
         });
 
         return workspace.grad_img;
@@ -2047,7 +2048,7 @@ namespace lfs::training::kernels {
         dispatch_target_ptr(ctx.gt_img, [&](auto* gt_ptr) {
             using TargetT = std::remove_cv_t<std::remove_pointer_t<decltype(gt_ptr)>>;
             workspace.grad_corrected.zero_();
-            fusedL1SSIMBackwardCUDA<TargetT><<<grid, block>>>(
+            fusedL1SSIMBackwardCUDA<TargetT, float><<<grid, block>>>(
                 ctx.ssim_weight, ctx.H, ctx.W, static_cast<int>(C), C1, C2,
                 grad_per_pixel, ctx.apply_valid_padding,
                 ctx.corrected_img.ptr<float>(), gt_ptr,
@@ -2057,7 +2058,7 @@ namespace lfs::training::kernels {
                 workspace.zero_terms.ptr<float>());
 
             workspace.grad_raw.zero_();
-            fusedL1SSIMBackwardCUDA<TargetT><<<grid, block>>>(
+            fusedL1SSIMBackwardCUDA<TargetT, float><<<grid, block>>>(
                 1.0f, ctx.H, ctx.W, static_cast<int>(C), C1, C2,
                 grad_per_pixel, ctx.apply_valid_padding,
                 ctx.raw_img.ptr<float>(), gt_ptr,

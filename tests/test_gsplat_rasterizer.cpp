@@ -2,9 +2,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#include "core/cuda/memory_arena.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "training/rasterization/gsplat_rasterizer.hpp"
+#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
 using namespace lfs::training;
@@ -98,6 +100,14 @@ TEST_F(GsplatRasterizerTest, ForwardPassBasic) {
     std::cout << "  Image shape: [" << render_output.image.shape()[0] << ", "
               << render_output.image.shape()[1] << ", "
               << render_output.image.shape()[2] << "]" << std::endl;
+
+    if (ctx.isect_ids_ptr != nullptr) {
+        cudaFree(ctx.isect_ids_ptr);
+    }
+    if (ctx.flatten_ids_ptr != nullptr) {
+        cudaFree(ctx.flatten_ids_ptr);
+    }
+    GlobalArenaManager::instance().get_arena().end_frame(ctx.frame_id);
 }
 
 TEST_F(GsplatRasterizerTest, InferenceWrapper) {

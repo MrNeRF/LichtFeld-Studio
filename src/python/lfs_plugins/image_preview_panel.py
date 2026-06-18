@@ -9,7 +9,9 @@ from typing import Optional
 from urllib.parse import quote
 
 import lichtfeld as lf
+from . import rml_widgets as w
 from .types import Panel
+from .ui import RuntimeState
 from .rml_keys import (
     KI_1, KI_ADD, KI_C, KI_DOWN, KI_END, KI_ESCAPE, KI_F, KI_HOME, KI_I,
     KI_LEFT, KI_M, KI_OEM_MINUS, KI_OEM_PLUS, KI_R, KI_RIGHT, KI_SPACE,
@@ -47,7 +49,7 @@ class ImagePreviewPanel(Panel):
     order = 98
     template = "rmlui/image_preview.rml"
     size = (900, 600)
-    update_interval_ms = 16
+    update_policy = "dirty"
 
     def __init__(self):
         global _instance
@@ -76,6 +78,7 @@ class ImagePreviewPanel(Panel):
         self._color_picker_active = False
 
         self._doc = None
+        self._handle = None
         self._dirty = True
         self._prev_image_index = -1
 
@@ -90,6 +93,7 @@ class ImagePreviewPanel(Panel):
         self._image_info_cache: dict[str, tuple[int, int, int]] = {}
         self._last_training_params: tuple[int, int, bool] = (1, 0, False)
         self._decorator_cache: dict[str, str] = {}
+        self._reactive_unsubscribers = []
 
     def _get_title(self) -> str:
         if self._image_paths:
@@ -160,6 +164,7 @@ class ImagePreviewPanel(Panel):
 
         self._decorator_cache = {}
         self._dirty = True
+        self._subscribe_reactive_state()
 
     def on_update(self, doc):
         if not self._fit_to_window and self._image_paths and self._hover_image:
@@ -184,9 +189,45 @@ class ImagePreviewPanel(Panel):
         if self._dirty:
             self._dirty = False
             self._refresh_ui(doc)
+            if self._crossfade_pending or self._scroll_target is not None:
+                self._request_model_update()
             return True
 
+        if needs_redraw and (self._crossfade_pending or self._scroll_target is not None):
+            self._request_model_update()
+
         return needs_redraw
+
+    def on_unmount(self, doc):
+        self._unsubscribe_reactive_state()
+        doc.remove_data_model("image_preview")
+        self._handle = None
+        self._doc = None
+
+    def _subscribe_reactive_state(self):
+        if self._reactive_unsubscribers:
+            return
+
+        self._reactive_unsubscribers = [
+            RuntimeState.scene_generation.subscribe(lambda _value: self._mark_dirty()),
+            RuntimeState.language_generation.subscribe(lambda _value: self._mark_dirty()),
+        ]
+
+    def _unsubscribe_reactive_state(self):
+        for unsubscribe in self._reactive_unsubscribers:
+            try:
+                unsubscribe()
+            except Exception:
+                pass
+        self._reactive_unsubscribers = []
+
+    def _request_model_update(self):
+        if self._handle:
+            w.request_model_update(self._handle)
+
+    def _mark_dirty(self):
+        self._dirty = True
+        self._request_model_update()
 
     def open(self, image_paths: list[Path], mask_paths: list[Optional[Path]],
              start_index: int, camera_uids: list[int] | None = None):
@@ -200,11 +241,11 @@ class ImagePreviewPanel(Panel):
         self._last_training_params = self._get_training_params()
         self._rotation_quadrants = 0
         self._reset_view()
-        self._dirty = True
         self._prev_image_index = -1
         self._crossfade_pending = False
         self._scroll_target = None
         self._decorator_cache = {}
+        self._mark_dirty()
 
     def _reset_pan(self):
         self._pan_x = 0.0
@@ -217,11 +258,7 @@ class ImagePreviewPanel(Panel):
         self._reset_pan()
 
     def _refresh_immediately(self):
-        if self._doc:
-            self._dirty = False
-            self._refresh_ui(self._doc)
-        else:
-            self._dirty = True
+        self._mark_dirty()
 
     def _navigate(self, delta: int):
         new_idx = self._current_index + delta
@@ -240,7 +277,7 @@ class ImagePreviewPanel(Panel):
         self._fit_to_window = not self._fit_to_window
         if self._fit_to_window:
             self._reset_view()
-        self._dirty = True
+        self._mark_dirty()
 
     def _copy_path_to_clipboard(self):
         if self._image_paths:
@@ -279,7 +316,7 @@ class ImagePreviewPanel(Panel):
         if node is None:
             return
         lf.set_camera_training_enabled(node.name, not node.training_enabled)
-        self._dirty = True
+        self._mark_dirty()
 
     def _action_show_in_file_manager(self):
         if not self._image_paths:
@@ -290,17 +327,17 @@ class ImagePreviewPanel(Panel):
         if not self._image_paths:
             return
         self._rotation_quadrants = (self._rotation_quadrants + delta_quadrants) % 4
-        self._dirty = True
+        self._mark_dirty()
 
     def _zoom_in(self):
         self._zoom = min(ZOOM_MAX, self._zoom * 1.25)
         self._fit_to_window = False
-        self._dirty = True
+        self._mark_dirty()
 
     def _zoom_out(self):
         self._zoom = max(ZOOM_MIN, self._zoom / 1.25)
         self._fit_to_window = False
-        self._dirty = True
+        self._mark_dirty()
 
     def _has_valid_overlay(self) -> bool:
         if self._current_index >= len(self._mask_paths):
@@ -370,13 +407,13 @@ class ImagePreviewPanel(Panel):
             self._fit_to_window = cb.has_attribute("checked")
             if self._fit_to_window:
                 self._reset_view()
-            self._dirty = True
+            self._mark_dirty()
 
     def _on_mask_checkbox_change(self, _event):
         cb = self._doc.get_element_by_id("cb-mask") if self._doc else None
         if cb:
             self._show_overlay = cb.has_attribute("checked")
-            self._dirty = True
+            self._mark_dirty()
 
     def _on_precise_scroll(self, event):
         scroll_el = event.current_target()
@@ -409,7 +446,7 @@ class ImagePreviewPanel(Panel):
         else:
             self._zoom = max(ZOOM_MIN, self._zoom / 1.15)
         self._fit_to_window = False
-        self._dirty = True
+        self._mark_dirty()
 
     def _on_img_mousedown(self, event):
         button = int(event.get_parameter("button", "0"))
@@ -438,7 +475,7 @@ class ImagePreviewPanel(Panel):
         my = float(event.get_parameter("mouse_y", "0"))
         self._pan_x = self._drag_start_pan_x + (mx - self._drag_start_x)
         self._pan_y = self._drag_start_pan_y + (my - self._drag_start_y)
-        self._dirty = True
+        self._mark_dirty()
 
     def _on_img_mouseover(self, _event):
         self._hover_image = True
@@ -448,7 +485,7 @@ class ImagePreviewPanel(Panel):
         self._dragging = False
 
     def _on_layout_resize(self, _event):
-        self._dirty = True
+        self._mark_dirty()
 
     def _get_active_layer_id(self):
         return "main-image-a" if self._active_layer == "a" else "main-image-b"
@@ -982,7 +1019,7 @@ class ImagePreviewPanel(Panel):
 
         self._color_picker_active = False
         self._update_picker_cursor()
-        self._dirty = True
+        self._mark_dirty()
 
     def _update_picker_cursor(self):
         """Toggle the picker-active CSS class on the image container."""
@@ -1017,22 +1054,22 @@ class ImagePreviewPanel(Panel):
             event.stop_propagation()
         elif key == KI_I:
             self._show_info = not self._show_info
-            self._dirty = True
+            self._mark_dirty()
             event.stop_propagation()
         elif key == KI_T:
             self._show_filmstrip = not self._show_filmstrip
-            self._dirty = True
+            self._mark_dirty()
             event.stop_propagation()
         elif key == KI_M:
             if self._has_valid_overlay():
                 self._show_overlay = not self._show_overlay
-                self._dirty = True
+                self._mark_dirty()
             event.stop_propagation()
         elif key == KI_1:
             self._zoom = 1.0
             self._fit_to_window = False
             self._reset_pan()
-            self._dirty = True
+            self._mark_dirty()
             event.stop_propagation()
         elif key == KI_OEM_PLUS or key == KI_ADD:
             self._zoom_in()
@@ -1047,23 +1084,23 @@ class ImagePreviewPanel(Panel):
                 self._reset_pan()
             else:
                 self._reset_view()
-            self._dirty = True
+            self._mark_dirty()
             event.stop_propagation()
         elif key == KI_R:
             self._reset_view()
-            self._dirty = True
+            self._mark_dirty()
             event.stop_propagation()
         elif key == KI_C:
             if self._image_paths:
                 self._color_picker_active = not self._color_picker_active
                 self._update_picker_cursor()
-                self._dirty = True
+                self._mark_dirty()
             event.stop_propagation()
         elif key == KI_ESCAPE:
             if self._color_picker_active:
                 self._color_picker_active = False
                 self._update_picker_cursor()
-                self._dirty = True
+                self._mark_dirty()
             else:
                 self._close_panel()
             event.stop_propagation()

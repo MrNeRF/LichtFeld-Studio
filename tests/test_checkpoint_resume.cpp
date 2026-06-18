@@ -4,12 +4,20 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
+#include <utility>
+#include <vector>
 
+#include "core/camera.hpp"
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
+#include "core/path_utils.hpp"
 #include "core/scene.hpp"
+#include "core/tensor.hpp"
+#include "io/loader.hpp"
 #include "training/checkpoint.hpp"
+#include "training/strategies/mcmc.hpp"
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
 
@@ -18,6 +26,151 @@ namespace {
     constexpr const char* TEST_IMAGES = "images_4";
     constexpr int CHECKPOINT_ITER = 1200;
     constexpr int TOTAL_ITER = 2100;
+
+    std::unique_ptr<lfs::core::SplatData> make_checkpoint_test_splat(const size_t count) {
+        std::vector<float> means(count * 3, 0.0f);
+        std::vector<float> rotations(count * 4, 0.0f);
+        for (size_t i = 0; i < count; ++i) {
+            means[i * 3] = static_cast<float>(i);
+            rotations[i * 4] = 1.0f;
+        }
+
+        return std::make_unique<lfs::core::SplatData>(
+            0,
+            lfs::core::Tensor::from_vector(means, {count, size_t{3}}, lfs::core::Device::CPU),
+            lfs::core::Tensor::zeros({count, size_t{1}, size_t{3}}, lfs::core::Device::CPU, lfs::core::DataType::Float32),
+            lfs::core::Tensor::zeros({size_t{0}}, lfs::core::Device::CPU, lfs::core::DataType::Float32),
+            lfs::core::Tensor::zeros({count, size_t{3}}, lfs::core::Device::CPU, lfs::core::DataType::Float32),
+            lfs::core::Tensor::from_vector(rotations, {count, size_t{4}}, lfs::core::Device::CPU),
+            lfs::core::Tensor::zeros({count, size_t{1}}, lfs::core::Device::CPU, lfs::core::DataType::Float32),
+            1.0f);
+    }
+
+    TEST(TrainingSetupRegressionTest, ApplyLoadedDatasetKeepsFullInitPointCloudUntilTrainingStarts) {
+        constexpr size_t initial_points = 12;
+        constexpr int target_splats = 5;
+
+        const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_training_setup_full_init_regression";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir);
+
+        const auto init_path = temp_dir / "init_points.ply";
+        {
+            std::ofstream ply(init_path);
+            ASSERT_TRUE(ply.is_open());
+            ply << "ply\n"
+                   "format ascii 1.0\n"
+                   "element vertex "
+                << initial_points
+                << "\n"
+                   "property float x\n"
+                   "property float y\n"
+                   "property float z\n"
+                   "property uchar red\n"
+                   "property uchar green\n"
+                   "property uchar blue\n"
+                   "end_header\n";
+            for (size_t i = 0; i < initial_points; ++i) {
+                ply << static_cast<float>(i) << ' '
+                    << static_cast<float>(i % 3) << ' '
+                    << static_cast<float>(i % 5) << ' '
+                    << static_cast<int>(10 + i) << ' '
+                    << static_cast<int>(20 + i) << ' '
+                    << static_cast<int>(30 + i) << '\n';
+            }
+        }
+
+        lfs::core::param::TrainingParameters params;
+        params.dataset.data_path = temp_dir / "dataset";
+        params.init_path = lfs::core::path_to_utf8(init_path);
+        params.optimization.max_cap = target_splats;
+
+        lfs::io::LoadedScene loaded_scene;
+        loaded_scene.cameras.push_back(std::make_shared<lfs::core::Camera>());
+
+        lfs::io::LoadResult load_result;
+        load_result.data = std::move(loaded_scene);
+        load_result.scene_center = lfs::core::Tensor::from_vector(
+            std::vector<float>{0.0f, 0.0f, 0.0f},
+            {size_t{3}},
+            lfs::core::Device::CPU);
+        load_result.loader_used = "test";
+
+        lfs::core::Scene scene;
+        auto apply_result = lfs::training::applyLoadResultToScene(params, scene, std::move(load_result));
+        ASSERT_TRUE(apply_result.has_value()) << apply_result.error();
+
+        const auto* model = scene.getTrainingModel();
+        ASSERT_NE(model, nullptr);
+        EXPECT_EQ(static_cast<size_t>(model->size()), initial_points);
+        EXPECT_EQ(scene.getTrainingModelGaussianCount(), initial_points);
+
+        auto trainer = std::make_unique<lfs::training::Trainer>(scene);
+        auto init_result = trainer->initialize(params);
+        ASSERT_TRUE(init_result.has_value()) << init_result.error();
+
+        EXPECT_EQ(static_cast<size_t>(trainer->get_strategy().get_model().size()), static_cast<size_t>(target_splats));
+        EXPECT_EQ(scene.getTrainingModelGaussianCount(), static_cast<size_t>(target_splats));
+
+        trainer->shutdown();
+        std::filesystem::remove_all(temp_dir, ec);
+    }
+
+    TEST(CheckpointAllocatorRegressionTest, LoadCheckpointUsesAllocatorWithMaxCapacity) {
+        constexpr size_t count = 4;
+        constexpr size_t max_cap = 16;
+
+        const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_allocator_regression";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir / "checkpoints");
+
+        lfs::core::param::TrainingParameters params;
+        params.dataset.output_path = temp_dir;
+        params.optimization.strategy = "mcmc";
+        params.optimization.max_cap = max_cap;
+
+        auto source_model = make_checkpoint_test_splat(count);
+        lfs::training::MCMC source_strategy(*source_model);
+        auto save_result = lfs::training::save_checkpoint(temp_dir, 7, source_strategy, params);
+        ASSERT_TRUE(save_result.has_value()) << save_result.error();
+
+        struct AllocationCall {
+            std::string name;
+            size_t capacity = 0;
+        };
+        std::vector<AllocationCall> calls;
+        lfs::core::SplatTensorAllocator allocator =
+            [&calls](lfs::core::TensorShape shape,
+                     const size_t capacity,
+                     const lfs::core::DataType dtype,
+                     const std::string_view name) -> lfs::core::Tensor {
+            calls.push_back({std::string{name}, capacity});
+            EXPECT_EQ(dtype, lfs::core::DataType::Float32);
+            auto tensor = lfs::core::Tensor::zeros_direct(std::move(shape), capacity, lfs::core::Device::CUDA);
+            tensor.set_name(std::string{name});
+            return tensor;
+        };
+
+        auto target_model = make_checkpoint_test_splat(1);
+        lfs::training::MCMC target_strategy(*target_model);
+        auto load_params = params;
+        const auto checkpoint_path = lfs::training::checkpoint_output_path(temp_dir);
+        auto load_result = lfs::training::load_checkpoint(
+            checkpoint_path, target_strategy, load_params, nullptr, nullptr, nullptr, allocator);
+        ASSERT_TRUE(load_result.has_value()) << load_result.error();
+
+        EXPECT_EQ(*load_result, 7);
+        EXPECT_EQ(static_cast<size_t>(target_strategy.get_model().size()), count);
+        EXPECT_GE(target_strategy.get_model().means_raw().capacity(), max_cap);
+        EXPECT_EQ(calls.size(), 5u);
+        for (const auto& call : calls) {
+            EXPECT_GE(call.capacity, max_cap) << call.name;
+        }
+
+        std::filesystem::remove_all(temp_dir, ec);
+    }
 
     class CheckpointResumeTest : public ::testing::TestWithParam<std::tuple<std::string, int>> {
     protected:

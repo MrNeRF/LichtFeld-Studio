@@ -12,6 +12,7 @@
 #include "strategies/istrategy.hpp"
 #include <fstream>
 #include <nlohmann/json.hpp>
+#include <utility>
 
 namespace lfs::training {
 
@@ -42,6 +43,24 @@ namespace lfs::training {
             }
 
             return {};
+        }
+
+        [[nodiscard]] lfs::core::SplatTensorAllocator make_checkpoint_tensor_allocator(
+            lfs::core::SplatTensorAllocator allocator,
+            const std::size_t target_row_capacity) {
+            if (!allocator) {
+                return {};
+            }
+            return [allocator = std::move(allocator), target_row_capacity](
+                       lfs::core::TensorShape shape,
+                       std::size_t capacity,
+                       lfs::core::DataType dtype,
+                       std::string_view name) mutable -> lfs::core::Tensor {
+                if (target_row_capacity > capacity && name != "SplatData.shN") {
+                    capacity = target_row_capacity;
+                }
+                return allocator(std::move(shape), capacity, dtype, name);
+            };
         }
     } // namespace
 
@@ -202,6 +221,9 @@ namespace lfs::training {
             if (params.init_path.has_value()) {
                 params_json["init_path"] = params.init_path.value();
             }
+            if (!params.disabled_camera_uids.empty()) {
+                params_json["disabled_camera_uids"] = params.disabled_camera_uids;
+            }
             const std::string params_str = params_json.dump();
             file.write(params_str.data(), static_cast<std::streamsize>(params_str.size()));
             const auto params_end = file.tellp();
@@ -247,7 +269,8 @@ namespace lfs::training {
         lfs::core::param::TrainingParameters& params,
         BilateralGrid* bilateral_grid,
         PPISP* ppisp,
-        PPISPControllerPool* ppisp_controller_pool) {
+        PPISPControllerPool* ppisp_controller_pool,
+        lfs::core::SplatTensorAllocator tensor_allocator) {
 
         try {
             std::ifstream file;
@@ -295,6 +318,9 @@ namespace lfs::training {
                     if (params_json.contains("init_path")) {
                         params.init_path = params_json["init_path"].get<std::string>();
                     }
+                    if (params_json.contains("disabled_camera_uids")) {
+                        params.disabled_camera_uids = params_json["disabled_camera_uids"].get<std::vector<int>>();
+                    }
                 } else {
                     params.optimization = lfs::core::param::OptimizationParameters::from_json(params_json);
                 }
@@ -308,8 +334,17 @@ namespace lfs::training {
             file.clear();
             file.seekg(strategy_state_pos);
 
-            // Model and strategy state
-            strategy.get_model().deserialize(file);
+            // Model and strategy state. If the caller provides a viewer/training
+            // allocator, deserialize directly into that storage so checkpoint
+            // resume does not reintroduce CUDA-only model tensors.
+            const size_t target_capacity =
+                params.optimization.max_cap > 0
+                    ? std::max<std::size_t>(static_cast<std::size_t>(params.optimization.max_cap),
+                                            static_cast<std::size_t>(header.num_gaussians))
+                    : 0;
+            strategy.get_model().deserialize(
+                file,
+                make_checkpoint_tensor_allocator(std::move(tensor_allocator), target_capacity));
             strategy.deserialize(file);
 
             // Bilateral grid (if present in checkpoint)

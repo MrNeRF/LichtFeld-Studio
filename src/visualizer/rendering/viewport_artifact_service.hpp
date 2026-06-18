@@ -36,6 +36,7 @@ namespace lfs::vis {
         [[nodiscard]] std::shared_ptr<lfs::core::Tensor> getCapturedImageIfCurrent() const;
 
         void clearViewportOutput();
+        void invalidateCapturedImage();
         void updateFromFrameResources(const FrameResources& resources, bool viewport_output_updated);
         void updateFromImageOutput(std::shared_ptr<lfs::core::Tensor> image,
                                    const lfs::rendering::FrameMetadata& metadata,

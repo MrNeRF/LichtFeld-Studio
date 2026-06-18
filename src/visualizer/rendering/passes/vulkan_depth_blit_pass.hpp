@@ -4,9 +4,6 @@
 
 #pragma once
 
-#include "config.h"
-
-#ifdef LFS_VULKAN_VIEWER_ENABLED
 #include "core/tensor.hpp"
 
 #include <cstdint>
@@ -49,10 +46,13 @@ namespace lfs::vis {
 
         [[nodiscard]] bool hasDepth() const;
 
+        // Bound after prepare(). Lets other passes sample the splat depth
+        // surface without re-uploading it.
+        [[nodiscard]] VkImageView depthView() const;
+
     private:
         struct Impl;
         std::unique_ptr<Impl> impl_;
     };
 
 } // namespace lfs::vis
-#endif

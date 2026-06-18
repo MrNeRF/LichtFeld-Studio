@@ -98,7 +98,7 @@ protected:
                       0.0f,
                       0.0f,
                   }) {
-        scene_manager_->getScene().addNode(
+        scene_manager_->getScene().addSplat(
             name,
             make_test_splat(xyz));
     }
@@ -173,8 +173,8 @@ TEST_F(OperatorRegistryPropsTest, EditorContextDisablesTransformToolsForMixedLoc
 
 TEST_F(OperatorRegistryPropsTest, EditorContextDisablesTransformToolsForMixedUnsupportedSelection) {
     add_node("editable");
-    ASSERT_NE(scene_manager_->getScene().addGroup("group"), lfs::core::NULL_NODE);
-    scene_manager_->selectNodes({"editable", "group"});
+    ASSERT_NE(scene_manager_->getScene().addPlySequence("sequence"), lfs::core::NULL_NODE);
+    scene_manager_->selectNodes({"editable", "sequence"});
 
     lfs::vis::EditorContext editor;
     editor.update(scene_manager_.get(), nullptr);

@@ -31,12 +31,7 @@ namespace lfs::vis::tools {
 
         [[nodiscard]] lfs::rendering::ScreenOverlayRenderer* getOverlayRenderer(const ToolContext& ctx) {
             auto* const rm = ctx.getRenderingManager();
-            if (!rm)
-                return nullptr;
-            auto* const engine = rm->getRenderingEngineIfInitialized();
-            if (!engine)
-                return nullptr;
-            return engine->getScreenOverlayRenderer();
+            return rm ? rm->getScreenOverlayRenderer() : nullptr;
         }
 
         [[nodiscard]] float depthBoxHalfHeight(const ToolContext& ctx, const float half_width) {
@@ -101,7 +96,6 @@ namespace lfs::vis::tools {
         }
 
         if (enabled) {
-            syncDepthFilterRenderMode(*tool_context_);
             applySelectionFilterSettings(*tool_context_);
         } else {
             clearSelectionRenderState(*tool_context_);
@@ -118,7 +112,22 @@ namespace lfs::vis::tools {
             return;
         }
 
-        syncDepthFilterRenderMode(*tool_context_);
+        applySelectionFilterSettings(*tool_context_);
+    }
+
+    void SelectionTool::setDepthFilterRange(const bool enabled,
+                                            const float depth_near,
+                                            const float depth_far,
+                                            const float frustum_half_width) {
+        depth_near_ = std::clamp(depth_near, 0.0f, DEPTH_MAX - DEPTH_MIN);
+        depth_far_ = std::clamp(depth_far, depth_near_ + DEPTH_MIN, DEPTH_MAX);
+        frustum_half_width_ = std::max(frustum_half_width, 0.05f);
+
+        depth_filter_enabled_ = enabled;
+        if (!tool_context_ || !isEnabled()) {
+            return;
+        }
+
         applySelectionFilterSettings(*tool_context_);
     }
 
@@ -161,40 +170,6 @@ namespace lfs::vis::tools {
             return;
         }
         applySelectionFilterSettings(*tool_context_);
-    }
-
-    void SelectionTool::syncDepthFilterRenderMode(const ToolContext& ctx) {
-        auto* const rm = ctx.getRenderingManager();
-        if (!rm) {
-            return;
-        }
-
-        auto settings = rm->getSettings();
-
-        if (depth_filter_enabled_) {
-            if (!depth_filter_render_mode_snapshot_.valid) {
-                depth_filter_render_mode_snapshot_.valid = true;
-                depth_filter_render_mode_snapshot_.point_cloud_mode = settings.point_cloud_mode;
-                depth_filter_render_mode_snapshot_.show_rings = settings.show_rings;
-                depth_filter_render_mode_snapshot_.show_center_markers = settings.show_center_markers;
-            }
-
-            settings.point_cloud_mode = false;
-            settings.show_rings = false;
-            settings.show_center_markers = true;
-            rm->updateSettings(settings);
-            return;
-        }
-
-        if (!depth_filter_render_mode_snapshot_.valid) {
-            return;
-        }
-
-        settings.point_cloud_mode = depth_filter_render_mode_snapshot_.point_cloud_mode;
-        settings.show_rings = depth_filter_render_mode_snapshot_.show_rings;
-        settings.show_center_markers = depth_filter_render_mode_snapshot_.show_center_markers;
-        depth_filter_render_mode_snapshot_.valid = false;
-        rm->updateSettings(settings);
     }
 
     void SelectionTool::applySelectionFilterSettings(const ToolContext& ctx) const {
@@ -274,13 +249,9 @@ namespace lfs::vis::tools {
         const ImVec2 mouse_imv = ImGui::GetMousePos();
         const glm::vec2 mp{mouse_imv.x, mouse_imv.y};
         const auto& t = theme();
-        const auto sel_border = toOverlay(t.palette.primary, 0.85f);
 
-        // Cursor circle / cross is drawn by GuiManager in a late-stage pass so the
-        // sample-to-present path is as short as possible and the ring tracks the mouse
-        // without a visible frame trail. Labels stay here; their offset from the cursor
-        // makes any small drift much less perceptible than the ring itself.
-        (void)sel_border;
+        // Cursor outlines are drawn by GuiManager in a late-stage Vulkan overlay pass so
+        // their sample-to-present path stays as short as possible.
 
         const SDL_Keymod kmods = SDL_GetModState();
         const char* op_suffix = "";
@@ -301,6 +272,7 @@ namespace lfs::vis::tools {
             case lfs::vis::SelectionPreviewMode::Rectangle: mode_name = "RECT"; break;
             case lfs::vis::SelectionPreviewMode::Polygon: mode_name = "POLY"; break;
             case lfs::vis::SelectionPreviewMode::Lasso: mode_name = "LASSO"; break;
+            case lfs::vis::SelectionPreviewMode::Color: mode_name = "COLOR"; break;
             default: break;
             }
         }

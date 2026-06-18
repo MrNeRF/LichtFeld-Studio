@@ -24,6 +24,7 @@ namespace lfs::rendering::pcraster {
         const float* transforms; // [n_transforms, 16] column-major or null
         const std::int32_t* transform_indices;
         const std::uint8_t* visibility_mask;
+        const bool* deleted_mask;
         std::size_t n_points;
         int n_transforms;
         int n_visibility;

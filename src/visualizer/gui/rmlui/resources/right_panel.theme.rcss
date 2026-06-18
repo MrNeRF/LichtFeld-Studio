@@ -33,6 +33,16 @@
     border-bottom-color: @{primary};
 }
 
+.tab-close {
+    color: @{text_dim};
+}
+
+.tab-close:hover,
+.tab-close:focus-visible {
+    background-color: @{right_panel.tab_hover};
+    color: @{text};
+}
+
 .tab-nav {
     background-color: @{right_panel.tab_nav_bg};
     color: @{text_dim};

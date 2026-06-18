@@ -35,29 +35,66 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float3* __restrict__ means,
         const float3* __restrict__ raw_scales,
         const float4* __restrict__ raw_rotations,
-        const float3* __restrict__ sh_coefficients_rest,
+        const float4* __restrict__ sh_coefficients_rest, // compact float4-packed swizzled layout
         const float4* __restrict__ w2c,
         const float3* __restrict__ cam_position,
         const float* __restrict__ raw_opacities,
-        const uint* __restrict__ primitive_n_touched_tiles,
+        const std::uint64_t* __restrict__ primitive_n_touched_tiles,
         const float2* __restrict__ grad_mean2d,
         const float* __restrict__ grad_conic,
+        const float* __restrict__ grad_depth,
         float* __restrict__ grad_opacity_helper,
         float3* __restrict__ grad_color_helper,
         float4* __restrict__ grad_w2c,
         float* __restrict__ densification_info,
         const uint n_primitives,
-        const uint total_bases_sh_rest,
         const float w,
         const float h,
         const float fx,
         const float fy,
         const float cx,
         const float cy,
+        const uint sh_layout_slots,
         FusedAdamSettings fused_adam) {
         auto primitive_idx = cg::this_grid().thread_rank();
-        if (primitive_idx >= n_primitives || primitive_n_touched_tiles[primitive_idx] == 0)
+        if (primitive_idx >= n_primitives)
             return;
+
+        // vksplat-style invisible fold: when n_touched_tiles == 0, skip the projection /
+        // SH-backward work and only apply Adam momentum decay (with regulariser grads for
+        // scaling / opacity). Eliminates the separate adam_step_invisible kernel launches.
+        if (primitive_n_touched_tiles[primitive_idx] == 0) {
+            // means / rotation / sh0: grad = 0 (pure momentum decay)
+            const float zero3[3] = {0.0f, 0.0f, 0.0f};
+            const float zero4[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+            adam_step_row(zero3, fused_adam.means, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+            adam_step_row(zero4, fused_adam.rotation, primitive_idx, 4, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+            adam_step_row(zero3, fused_adam.sh0, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+
+            // scaling: grad = scale_regularization_grad per channel
+            const uint scale_base = static_cast<uint>(primitive_idx) * 3u;
+            const float scaling_grads[3] = {
+                scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base),
+                scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 1),
+                scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 2)};
+            adam_step_row(scaling_grads, fused_adam.scaling, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+
+            // opacity: grad = opacity_extra_grad
+            const float opacity_grads[1] = {opacity_extra_grad(fused_adam, fused_adam.opacity, static_cast<uint>(primitive_idx))};
+            adam_step_row(opacity_grads, fused_adam.opacity, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+
+            // shN: grad = 0, swizzle-aware momentum decay over the active slots.
+            if constexpr (ACTIVE_SH_BASES > 1) {
+                float3 zero_g[15];
+#pragma unroll
+                for (int i = 0; i < 15; ++i)
+                    zero_g[i] = make_float3(0.0f, 0.0f, 0.0f);
+                constexpr uint N_SLOTS = (ACTIVE_SH_BASES > 9) ? 12u : (ACTIVE_SH_BASES > 4) ? 6u
+                                                                                             : 3u;
+                apply_shN_grads_packed(fused_adam, primitive_idx, zero_g, N_SLOTS, sh_layout_slots);
+            }
+            return;
+        }
 
         // load 3d mean
         const float3 mean3d = means[primitive_idx];
@@ -67,7 +104,8 @@ namespace fast_lfs::rasterization::kernels::backward {
             sh_coefficients_rest, grad_color_helper,
             fused_adam,
             mean3d, cam_position[0],
-            primitive_idx, total_bases_sh_rest);
+            primitive_idx,
+            sh_layout_slots);
 
         const float4 w2c_r3 = w2c[2];
         const float depth = w2c_r3.x * mean3d.x + w2c_r3.y * mean3d.y + w2c_r3.z * mean3d.z + w2c_r3.w;
@@ -161,14 +199,11 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float grad_compensated_opacity = grad_opacity_helper[primitive_idx];
         float opacity_compensation = 1.0f;
         if constexpr (MIP_FILTER) {
+            // Keep mip opacity compensation detached from covariance; feeding this
+            // determinant ratio into scale/rotation gradients creates long splats.
             const float det_raw = raw_a * raw_c - raw_b * raw_b;
             if (det_raw > config::min_cov2d_determinant && determinant > config::min_cov2d_determinant) {
-                const float det_raw_rcp = 1.0f / det_raw;
                 opacity_compensation = sqrtf(det_raw * determinant_rcp);
-                const float compensation_grad_scale = 0.5f * grad_compensated_opacity * original_opacity * opacity_compensation;
-                dL_dcov2d.x += compensation_grad_scale * (raw_c * det_raw_rcp - c * determinant_rcp);
-                dL_dcov2d.y += compensation_grad_scale * (-2.0f * raw_b * det_raw_rcp + 2.0f * b * determinant_rcp);
-                dL_dcov2d.z += compensation_grad_scale * (raw_a * det_raw_rcp - a * determinant_rcp);
             } else {
                 opacity_compensation = 0.0f;
             }
@@ -177,14 +212,8 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float sigmoid_derivative = original_opacity * (1.0f - original_opacity);
         const float opacity_grad = grad_compensated_opacity * opacity_compensation * sigmoid_derivative +
                                    opacity_extra_grad(fused_adam, fused_adam.opacity, primitive_idx);
-        adam_step_helper(
-            opacity_grad,
-            fused_adam.opacity,
-            primitive_idx,
-            0,
-            fused_adam.beta1,
-            fused_adam.beta2,
-            fused_adam.eps);
+        const float opacity_grads[1] = {opacity_grad};
+        adam_step_row(opacity_grads, fused_adam.opacity, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
 
         // 3d covariance gradient
         const mat3x3_triu dL_dcov3d = {
@@ -214,10 +243,11 @@ namespace fast_lfs::rasterization::kernels::backward {
 
         // mean3d camera space gradient from J and mean2d (accounts for tx/ty clipping)
         const float2 dL_dmean2d = grad_mean2d[primitive_idx];
+        const float dL_ddepth = grad_depth ? grad_depth[primitive_idx] : 0.0f;
         float3 dL_dmean3d_cam = make_float3(
             j11 * dL_dmean2d.x,
             j22 * dL_dmean2d.y,
-            -j11 * x * dL_dmean2d.x - j22 * y * dL_dmean2d.y);
+            -j11 * x * dL_dmean2d.x - j22 * y * dL_dmean2d.y + dL_ddepth);
         const bool valid_x = x >= clip_left && x <= clip_right;
         const bool valid_y = y >= clip_top && y <= clip_bottom;
         if (valid_x)
@@ -251,9 +281,8 @@ namespace fast_lfs::rasterization::kernels::backward {
 
         const float3 dL_dmean3d = dL_dmean3d_from_splatting + dL_dmean3d_from_color;
         const float3 clamped_mean = clamp_grad3(dL_dmean3d);
-        adam_step_helper(clamped_mean.x, fused_adam.means, primitive_idx, 0, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-        adam_step_helper(clamped_mean.y, fused_adam.means, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-        adam_step_helper(clamped_mean.z, fused_adam.means, primitive_idx, 2, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+        const float mean_grads[3] = {clamped_mean.x, clamped_mean.y, clamped_mean.z};
+        adam_step_row(mean_grads, fused_adam.means, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
 
         // raw scale gradient (zero gradient for clamped scales)
         const float dL_dvariance_x = rotation.m11 * rotation.m11 * dL_dcov3d.m11 + rotation.m21 * rotation.m21 * dL_dcov3d.m22 + rotation.m31 * rotation.m31 * dL_dcov3d.m33 +
@@ -268,9 +297,11 @@ namespace fast_lfs::rasterization::kernels::backward {
             (raw_scale.z < config::max_raw_scale) ? 2.0f * variance.z * dL_dvariance_z : 0.0f);
         const float3 clamped_scale_grad = clamp_grad3(dL_draw_scale);
         const uint scale_base = primitive_idx * 3;
-        adam_step_helper(clamped_scale_grad.x + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base), fused_adam.scaling, primitive_idx, 0, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-        adam_step_helper(clamped_scale_grad.y + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 1), fused_adam.scaling, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-        adam_step_helper(clamped_scale_grad.z + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 2), fused_adam.scaling, primitive_idx, 2, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+        const float scale_grads[3] = {
+            clamped_scale_grad.x + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base),
+            clamped_scale_grad.y + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 1),
+            clamped_scale_grad.z + scale_regularization_grad(fused_adam, fused_adam.scaling, scale_base + 2)};
+        adam_step_row(scale_grads, fused_adam.scaling, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
 
         // raw rotation gradient
         const mat3x3 dL_drotation = {
@@ -295,47 +326,14 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float dL_dq_norm_helper = qxx * dL_dqxx + qyy * dL_dqyy + qzz * dL_dqzz + qxy * dL_dqxy + qxz * dL_dqxz + qyz * dL_dqyz + qrx * dL_dqrx + qry * dL_dqry + qrz * dL_dqrz;
         const float4 dL_draw_rotation = 2.0f * make_float4(qx * dL_dqrx + qy * dL_dqry + qz * dL_dqrz - qr * dL_dq_norm_helper, 2.0f * qx * dL_dqxx + qy * dL_dqxy + qz * dL_dqxz + qr * dL_dqrx - qx * dL_dq_norm_helper, 2.0f * qy * dL_dqyy + qx * dL_dqxy + qz * dL_dqyz + qr * dL_dqry - qy * dL_dq_norm_helper, 2.0f * qz * dL_dqzz + qx * dL_dqxz + qy * dL_dqyz + qr * dL_dqrz - qz * dL_dq_norm_helper) / q_norm_sq_safe;
         const float4 clamped_rotation = clamp_grad4(dL_draw_rotation);
-        adam_step_helper(clamped_rotation.x, fused_adam.rotation, primitive_idx, 0, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-        adam_step_helper(clamped_rotation.y, fused_adam.rotation, primitive_idx, 1, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-        adam_step_helper(clamped_rotation.z, fused_adam.rotation, primitive_idx, 2, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
-        adam_step_helper(clamped_rotation.w, fused_adam.rotation, primitive_idx, 3, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
+        const float rotation_grads[4] = {clamped_rotation.x, clamped_rotation.y, clamped_rotation.z, clamped_rotation.w};
+        adam_step_row(rotation_grads, fused_adam.rotation, primitive_idx, 4, fused_adam.beta1, fused_adam.beta2, fused_adam.eps);
 
         // TODO: only needed for adaptive density control from the original 3dgs
         if (densification_info != nullptr) {
             densification_info[primitive_idx] += 1.0f;
             densification_info[n_primitives + primitive_idx] += length(dL_dmean2d * make_float2(0.5f * w, 0.5f * h));
         }
-    }
-
-    __global__ void adam_step_invisible(
-        const uint* __restrict__ primitive_n_touched_tiles,
-        FusedAdamParam param,
-        FusedAdamSettings fused_adam,
-        const int extra_grad_kind,
-        const float beta1,
-        const float beta2,
-        const float eps) {
-        const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (!param.enabled || idx >= param.n_elements || param.n_attributes <= 0)
-            return;
-
-        const uint primitive_idx = static_cast<uint>(idx / param.n_attributes);
-        if (primitive_n_touched_tiles[primitive_idx] != 0)
-            return;
-
-        float grad = 0.0f;
-        if (extra_grad_kind == 1) {
-            grad = scale_regularization_grad(fused_adam, param, static_cast<uint>(idx));
-        } else if (extra_grad_kind == 2) {
-            grad = opacity_extra_grad(fused_adam, param, static_cast<uint>(idx));
-        }
-
-        const float moment1 = fmaf(beta1, param.exp_avg[idx] - grad, grad);
-        const float moment2 = fmaf(beta2, param.exp_avg_sq[idx] - grad * grad, grad * grad);
-        const float denom = sqrtf(moment2) * param.bias_correction2_sqrt_rcp + eps;
-        param.param[idx] -= param.step_size * moment1 / denom;
-        param.exp_avg[idx] = moment1;
-        param.exp_avg_sq[idx] = moment2;
     }
 
     struct BlendBackwardAccum {
@@ -348,43 +346,65 @@ namespace fast_lfs::rasterization::kernels::backward {
         float color_x;
         float color_y;
         float color_z;
+        float depth;
         float densification_weight;
         float densification_error_weighted;
     };
 
     __device__ __forceinline__ BlendBackwardAccum make_zero_blend_backward_accum() {
-        return {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+        return {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     }
 
     template <DensificationType DENSIFICATION_TYPE>
-    __global__ void __launch_bounds__(config::block_size_blend_backward) blend_backward_cu(
+    // The (128, 8) occupancy hint was tuned on sm_89 (-4.3%, all variants spill-free).
+    __global__ void __launch_bounds__(config::block_size_blend_backward, 8) blend_backward_cu(
         const uint2* __restrict__ tile_instance_ranges,
         const uint* __restrict__ instance_primitive_indices,
         const float2* __restrict__ primitive_mean2d,
         const float4* __restrict__ primitive_conic_opacity,
         const float3* __restrict__ primitive_color,
+        const float* __restrict__ primitive_depths,
         const float* __restrict__ grad_image,
         const float* __restrict__ grad_alpha_map,
+        const float* __restrict__ grad_depth_map,
         const float* __restrict__ image,
         const float* __restrict__ alpha_map,
         const uint* __restrict__ tile_n_contributions,
         const float* __restrict__ tile_final_transmittance,
         float2* __restrict__ grad_mean2d,
         float* __restrict__ grad_conic,
+        float* __restrict__ grad_depth,
         float* __restrict__ grad_compensated_opacity,
         float3* __restrict__ grad_color,
         float* __restrict__ densification_info,
         const float* __restrict__ densification_error_map,
+        FastGSForwardStatus* __restrict__ status,
+        const uint n_instances,
         const uint n_primitives,
         const uint width,
         const uint height,
-        const uint grid_width) {
+        const uint grid_width,
+        const bool detach_depth_weights) {
         (void)image;
         (void)alpha_map;
         auto block = cg::this_thread_block();
         const uint tile_idx = block.group_index().x;
         const uint thread_rank = block.thread_rank();
         const uint2 tile_instance_range = tile_instance_ranges[tile_idx];
+        if (tile_instance_range.x > tile_instance_range.y || tile_instance_range.y > n_instances) {
+            if (thread_rank == 0) {
+                report_fastgs_status(
+                    status,
+                    kFastGSForwardStatusTileInstanceRangeOutOfRange,
+                    tile_idx,
+                    tile_idx,
+                    (static_cast<std::uint64_t>(tile_instance_range.x) << 32) | tile_instance_range.y,
+                    make_uint4(tile_instance_range.x, tile_instance_range.y, n_instances, 0),
+                    n_instances,
+                    tile_instance_range.y);
+            }
+            return;
+        }
         const int tile_n_primitives = tile_instance_range.y - tile_instance_range.x;
         if (tile_n_primitives <= 0)
             return;
@@ -431,7 +451,7 @@ namespace fast_lfs::rasterization::kernels::backward {
                                               ? (tile_n_primitives - batch_base)
                                               : splat_batch_size;
             const int lane = static_cast<int>(thread_rank);
-            const bool valid_splat = lane < n_splats_in_batch;
+            bool valid_splat = lane < n_splats_in_batch;
             const int tile_primitive_idx = tile_n_primitives - batch_base - lane - 1;
 
             uint primitive_idx = 0;
@@ -439,20 +459,41 @@ namespace fast_lfs::rasterization::kernels::backward {
             float3 conic = make_float3(0.0f);
             float compensated_opacity = 0.0f;
             float3 color = make_float3(0.0f);
+            float depth = 0.0f;
             float3 color_grad_factor = make_float3(0.0f);
 
             if (valid_splat) {
-                primitive_idx = instance_primitive_indices[tile_instance_range.x + tile_primitive_idx];
-                mean2d = primitive_mean2d[primitive_idx];
-                const float4 conic_opacity = primitive_conic_opacity[primitive_idx];
-                conic = make_float3(conic_opacity);
-                compensated_opacity = conic_opacity.w;
-                const float3 color_unclamped = primitive_color[primitive_idx];
-                color = fminf(fmaxf(color_unclamped, 0.0f), config::max_blend_color);
-                color_grad_factor = make_float3(
-                    (color_unclamped.x >= 0.0f && color_unclamped.x <= config::max_blend_color) ? 1.0f : 0.0f,
-                    (color_unclamped.y >= 0.0f && color_unclamped.y <= config::max_blend_color) ? 1.0f : 0.0f,
-                    (color_unclamped.z >= 0.0f && color_unclamped.z <= config::max_blend_color) ? 1.0f : 0.0f);
+                const uint instance_idx = tile_instance_range.x + static_cast<uint>(tile_primitive_idx);
+                primitive_idx = instance_primitive_indices[instance_idx];
+                if (primitive_idx >= n_primitives) {
+                    report_fastgs_status(
+                        status,
+                        kFastGSForwardStatusPrimitiveIndexOutOfRange,
+                        instance_idx,
+                        tile_idx,
+                        primitive_idx,
+                        make_uint4(
+                            tile_instance_range.x,
+                            tile_instance_range.y,
+                            static_cast<uint>(tile_primitive_idx),
+                            n_instances),
+                        n_primitives,
+                        primitive_idx);
+                    valid_splat = false;
+                }
+                if (valid_splat) {
+                    mean2d = primitive_mean2d[primitive_idx];
+                    const float4 conic_opacity = primitive_conic_opacity[primitive_idx];
+                    conic = make_float3(conic_opacity);
+                    compensated_opacity = conic_opacity.w;
+                    const float3 color_unclamped = primitive_color[primitive_idx];
+                    color = fminf(fmaxf(color_unclamped, 0.0f), config::max_blend_color);
+                    depth = primitive_depths[primitive_idx];
+                    color_grad_factor = make_float3(
+                        (color_unclamped.x >= 0.0f && color_unclamped.x <= config::max_blend_color) ? 1.0f : 0.0f,
+                        (color_unclamped.y >= 0.0f && color_unclamped.y <= config::max_blend_color) ? 1.0f : 0.0f,
+                        (color_unclamped.z >= 0.0f && color_unclamped.z <= config::max_blend_color) ? 1.0f : 0.0f);
+                }
             }
 
             BlendBackwardAccum accum = make_zero_blend_backward_accum();
@@ -483,10 +524,12 @@ namespace fast_lfs::rasterization::kernels::backward {
                                 const float transmittance_before = transmittance_after / one_minus_alpha_safe;
                                 const float blending_weight = transmittance_before * alpha;
                                 const float3 grad_color_pixel = s_grad_color_state[pixel_rank];
+                                const uint pixel_idx = width * pixel_coords.y + pixel_coords.x;
+                                const float grad_depth_pixel = grad_depth_map ? grad_depth_map[pixel_idx] : 0.0f;
+                                const float grad_depth_weight_pixel = detach_depth_weights ? 0.0f : grad_depth_pixel;
                                 const float grad_transmittance_after = s_grad_transmittance_state[pixel_rank];
 
                                 if constexpr (DENSIFICATION_TYPE == DensificationType::MCMC) {
-                                    const uint pixel_idx = width * pixel_coords.y + pixel_coords.x;
                                     const float pixel_error = densification_error_map[pixel_idx];
                                     accum.densification_weight += blending_weight;
                                     accum.densification_error_weighted += blending_weight * pixel_error;
@@ -498,8 +541,10 @@ namespace fast_lfs::rasterization::kernels::backward {
                                 accum.color_z += dL_dcolor.z;
 
                                 const float dL_dalpha = dot(transmittance_before * color, grad_color_pixel) -
-                                                        grad_transmittance_after * transmittance_before;
+                                                        grad_transmittance_after * transmittance_before +
+                                                        transmittance_before * depth * grad_depth_weight_pixel;
                                 accum.compensated_opacity += alpha_saturated ? 0.0f : gaussian * dL_dalpha;
+                                accum.depth += blending_weight * grad_depth_pixel;
 
                                 const float gaussian_grad_helper = alpha_saturated ? 0.0f : -alpha * dL_dalpha;
                                 accum.conic_x += 0.5f * gaussian_grad_helper * delta.x * delta.x;
@@ -512,7 +557,6 @@ namespace fast_lfs::rasterization::kernels::backward {
                                 accum.mean_y += dL_dmean2d.y;
 
                                 if constexpr (DENSIFICATION_TYPE == DensificationType::MRNF) {
-                                    const uint pixel_idx = width * pixel_coords.y + pixel_coords.x;
                                     const float pixel_error = (densification_error_map != nullptr)
                                                                   ? densification_error_map[pixel_idx]
                                                                   : 1.0f;
@@ -522,6 +566,7 @@ namespace fast_lfs::rasterization::kernels::backward {
 
                                 s_transmittance_state[pixel_rank] = transmittance_before;
                                 s_grad_transmittance_state[pixel_rank] = dot(grad_color_pixel, alpha * color) +
+                                                                         alpha * depth * grad_depth_weight_pixel +
                                                                          grad_transmittance_after * one_minus_alpha;
                             }
                         }
@@ -536,6 +581,7 @@ namespace fast_lfs::rasterization::kernels::backward {
                 atomicAdd(&grad_conic[primitive_idx], clamp_grad(accum.conic_x));
                 atomicAdd(&grad_conic[n_primitives + primitive_idx], clamp_grad(accum.conic_y));
                 atomicAdd(&grad_conic[2 * n_primitives + primitive_idx], clamp_grad(accum.conic_z));
+                atomicAdd(&grad_depth[primitive_idx], clamp_grad(accum.depth));
 
                 atomicAdd(&grad_compensated_opacity[primitive_idx],
                           clamp_grad(accum.compensated_opacity));

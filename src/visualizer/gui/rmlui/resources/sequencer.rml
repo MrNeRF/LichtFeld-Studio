@@ -29,7 +29,7 @@
                     <div id="btn-stop" class="transport-btn" data-tooltip="tooltip.seq_stop">
                         <img class="transport-icon" src="../icon/sequencer/stop.png" />
                     </div>
-                    <div id="btn-play" class="transport-btn play-btn" data-tooltip="tooltip.seq_play">
+                    <div id="btn-play" class="transport-btn play-btn" data-tooltip="tooltip.seq_play" data-action="sequencer_play_pause">
                         <img id="play-icon" class="transport-icon" src="../icon/sequencer/play.png" />
                     </div>
                     <div id="btn-next-keyframe" class="transport-btn" data-tooltip="tooltip.seq_next_keyframe">
@@ -41,7 +41,7 @@
                     <div id="btn-loop" class="transport-btn" data-tooltip="tooltip.seq_loop_off">
                         <img class="transport-icon" src="../icon/sequencer/loop.png" />
                     </div>
-                    <div id="btn-add" class="transport-btn" data-tooltip="tooltip.seq_add">
+                    <div id="btn-add" class="transport-btn" data-tooltip="tooltip.seq_add" data-action="sequencer_add_keyframe">
                         <img class="transport-icon" src="../icon/sequencer/plus.png" />
                     </div>
                 </div>
@@ -57,6 +57,10 @@
                     <span id="speed-label" class="speed-val">1x</span>
                     <span class="speed-text">Speed</span>
                     <span class="dropdown-arrow">&#x25be;</span>
+                </div>
+                <div id="sequence-fps-field" class="sequence-fps-field" data-tooltip="tooltip.seq_sequence_fps">
+                    <span id="sequence-fps-display">24 fps</span>
+                    <input id="sequence-fps-input" type="text" />
                 </div>
                 <div id="btn-snap" class="transport-btn toggle text snap-toggle" data-tooltip="tooltip.seq_snap">
                     <div class="snap-check"></div>
@@ -84,6 +88,9 @@
                 </div>
                 <div id="btn-load-path" class="transport-btn text" data-tooltip="tooltip.seq_load_path">
                     <span class="transport-label">Load Path&#x2026;</span>
+                </div>
+                <div id="btn-load-sequence" class="transport-btn text" data-tooltip="tooltip.seq_load_sequence">
+                    <span class="transport-label">Load Seq&#x2026;</span>
                 </div>
                 <div class="transport-sep"></div>
                 <div id="btn-format" class="transport-btn text wide format-badge" data-tooltip="tooltip.seq_format">
@@ -122,6 +129,7 @@
                     <div id="track-bar">
                         <span id="hint"></span>
                     </div>
+                    <div id="sequence-strip"></div>
                     <div id="keyframes"></div>
                     <div id="playhead">
                         <div id="playhead-handle"></div>

@@ -25,7 +25,7 @@ namespace lfs::io {
     using lfs::core::MeshData;
     using lfs::core::Tensor;
 
-    constexpr std::array MESH_EXTENSIONS = {".obj", ".fbx", ".gltf", ".glb", ".stl", ".dae", ".3ds", ".ply"};
+    constexpr std::array MESH_EXTENSIONS = {".obj", ".fbx", ".gltf", ".glb", ".stl", ".dae", ".3ds", ".mesh", ".ply"};
 
     namespace {
 

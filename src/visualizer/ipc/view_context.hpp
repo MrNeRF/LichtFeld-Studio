@@ -104,11 +104,14 @@ namespace lfs::vis {
         bool show_pivot = false;
         int split_view_mode = 0;
         float split_position = 0.5f;
-        int raster_backend = 0;
+        int raster_backend = 2;
         bool gut = false;
         bool equirectangular = false;
         bool orthographic = false;
         float ortho_scale = 100.0f;
+        float depth_view_min = lfs::rendering::DEFAULT_DEPTH_VIEW_MIN;
+        float depth_view_max = lfs::rendering::DEFAULT_DEPTH_VIEW_MAX;
+        int depth_visualization_mode = 0;
         std::array<float, 3> selection_color_committed{0.859f, 0.325f, 0.325f};
         std::array<float, 3> selection_color_preview{0.0f, 0.871f, 0.298f};
         std::array<float, 3> selection_color_center_marker{0.0f, 0.604f, 0.733f};
@@ -134,6 +137,17 @@ namespace lfs::vis {
         std::array<float, 3> depth_filter_max{50.0f, 10000.0f, 100.0f};
         std::array<float, 4> depth_filter_rotation{1.0f, 0.0f, 0.0f, 0.0f};
         std::array<float, 3> depth_filter_translation{0.0f, 0.0f, 0.0f};
+
+        bool lod_enabled = false;
+        bool lod_debug_colors = false;
+        float lod_max_splats = static_cast<float>(DEFAULT_LOD_MAX_SPLATS);
+        float lod_page_pool_splats = static_cast<float>(DEFAULT_LOD_PAGE_POOL_SPLATS);
+        float lod_pool_vram_fraction = DEFAULT_LOD_POOL_VRAM_FRACTION;
+        float lod_fade_frames = static_cast<float>(DEFAULT_LOD_FADE_FRAMES);
+        float lod_render_scale = DEFAULT_LOD_RENDER_SCALE;
+        float lod_cone_foveation = DEFAULT_LOD_CONE_FOVEATION;
+        float lod_cone_inner_degrees = DEFAULT_LOD_CONE_INNER_DEGREES;
+        float lod_cone_outer_degrees = DEFAULT_LOD_CONE_OUTER_DEGREES;
     };
 
     using GetRenderSettingsCallback = std::function<std::optional<RenderSettingsProxy>()>;

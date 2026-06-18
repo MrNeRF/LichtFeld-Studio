@@ -14,6 +14,7 @@
 
 class MRNFStrategyTest_EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores_Test;
 class MRNFStrategyTest_GrowAndSplitResetsOptimizerStateForParents_Test;
+class MRNFStrategyTest_SHDegree0KeepsShNEmptyAndFusedAdamUsableAfterGrowth_Test;
 class MRNFStrategyTest_GrowAndSplitUsesIgsPlusSplitRule_Test;
 class MRNFStrategyTest_GrowAndSplitWithoutMaxCapExtendsBookkeepingMasks_Test;
 class MRNFStrategyTest_GrowAndSplitReplacementSkipsZeroWeightCandidates_Test;
@@ -61,6 +62,7 @@ namespace lfs::training {
     private:
         friend class ::MRNFStrategyTest_EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores_Test;
         friend class ::MRNFStrategyTest_GrowAndSplitResetsOptimizerStateForParents_Test;
+        friend class ::MRNFStrategyTest_SHDegree0KeepsShNEmptyAndFusedAdamUsableAfterGrowth_Test;
         friend class ::MRNFStrategyTest_GrowAndSplitUsesIgsPlusSplitRule_Test;
         friend class ::MRNFStrategyTest_GrowAndSplitWithoutMaxCapExtendsBookkeepingMasks_Test;
         friend class ::MRNFStrategyTest_GrowAndSplitReplacementSkipsZeroWeightCandidates_Test;
@@ -87,6 +89,7 @@ namespace lfs::training {
         size_t free_count() const;
         [[nodiscard]] lfs::core::Tensor get_active_indices() const;
         void mark_as_free(const lfs::core::Tensor& indices);
+        // Writes child shN linear rows directly into resident swizzled splat_data.shN().
         std::pair<lfs::core::Tensor, int64_t> fill_free_slots_with_data(
             const lfs::core::Tensor& positions,
             const lfs::core::Tensor& rotations,

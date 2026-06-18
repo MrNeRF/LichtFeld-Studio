@@ -24,6 +24,7 @@ target_link_libraries(lfs_io_cuda
         INTERFACE
         lfs_core      # Propagate to consumers, not linked during device linking
         PRIVATE
+        lfs_diagnostics
         CUDA::cudart
 )
 
@@ -50,6 +51,39 @@ if(MSVC)
             $<$<COMPILE_LANGUAGE:CUDA>:FMT_UNICODE=0>
     )
 endif()
+
+# RAD encode quantization kernels. Kept out of lfs_io_cuda: bit-parity with
+# the CPU PropertyEncoder requires IEEE arithmetic — no -use_fast_math, no
+# FMA contraction (same constraint as lod_page_dequant_cuda.cu).
+add_library(lfs_io_rad_quant_cuda STATIC
+        cuda/rad_encode_quant.hpp
+        cuda/rad_encode_quant.cu
+)
+
+target_include_directories(lfs_io_rad_quant_cuda
+        PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src
+)
+
+target_link_libraries(lfs_io_rad_quant_cuda
+        PRIVATE
+        CUDA::cudart
+)
+
+set_target_properties(lfs_io_rad_quant_cuda PROPERTIES
+        CUDA_SEPARABLE_COMPILATION OFF
+        CUDA_STANDARD 20
+        CUDA_STANDARD_REQUIRED ON
+        POSITION_INDEPENDENT_CODE ON
+)
+
+target_compile_options(lfs_io_rad_quant_cuda PRIVATE
+        $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Debug>>:-O0 -g ${LFS_CUDA_DEVICE_DEBUG_FLAGS} -lineinfo --fmad=false -Xcompiler=/Od -Xcompiler=/Z7 -Xcompiler=/utf-8 -Xcompiler=/D_CRT_SECURE_NO_WARNINGS>
+        $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:-O3 --fmad=false -Xcompiler=/O2 -Xcompiler=/DNDEBUG -Xcompiler=/utf-8 -Xcompiler=/D_CRT_SECURE_NO_WARNINGS>
+        $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<NOT:$<CXX_COMPILER_ID:MSVC>>,$<CONFIG:Debug>>:-O0 -g ${LFS_CUDA_DEVICE_DEBUG_FLAGS} -lineinfo --fmad=false>
+        $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<NOT:$<CXX_COMPILER_ID:MSVC>>,$<CONFIG:Release>>:-O3 --fmad=false>
+)
 
 # SPZ library (Niantic compressed format) - MIT licensed
 add_library(spz_lib STATIC
@@ -92,7 +126,9 @@ target_include_directories(lfs_video
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_SOURCE_DIR}/src/core/include
         ${CMAKE_SOURCE_DIR}/src
-        ${CMAKE_SOURCE_DIR}/external
+)
+target_include_directories(lfs_video SYSTEM PRIVATE
+    ${CMAKE_SOURCE_DIR}/external
 )
 
 target_link_libraries(lfs_video
@@ -144,6 +180,7 @@ add_library(lfs_io STATIC
         formats/html_viewer_resources.hpp
         formats/rad.hpp
         formats/rad.cpp
+        ply_to_rad_lod.cpp
         formats/spz.hpp
         formats/spz.cpp
         formats/usd.hpp
@@ -165,6 +202,8 @@ add_library(lfs_io STATIC
         loaders/spz_loader.cpp
         loaders/usd_loader.hpp
         loaders/usd_loader.cpp
+        loaders/rad_loader.hpp
+        loaders/rad_loader.cpp
         loaders/checkpoint_loader.hpp
         loaders/checkpoint_loader.cpp
         loaders/mesh_loader.hpp
@@ -189,9 +228,11 @@ target_include_directories(lfs_io
         $<INSTALL_INTERFACE:include>
         PRIVATE
         ${CMAKE_SOURCE_DIR}/src
-        ${CMAKE_SOURCE_DIR}/external
-        ${CMAKE_SOURCE_DIR}/external/nvImageCodec/include
         ${CMAKE_SOURCE_DIR}/external/spz
+)
+target_include_directories(lfs_io SYSTEM PRIVATE
+    ${CMAKE_SOURCE_DIR}/external
+    ${CMAKE_SOURCE_DIR}/external/nvImageCodec/include
 )
 
 # Find the actual WebP library targets
@@ -244,12 +285,14 @@ target_link_libraries(lfs_io
         ${WEBP_ENCODE_LIB}     # WebP for SOG/HTML export
         ${ARCHIVE_LIB}         # LibArchive for SOG bundle support
         ZLIB::ZLIB             # gzip/msgpack payloads inside NuRec USDZ
+        $<IF:$<TARGET_EXISTS:libdeflate::libdeflate_shared>,libdeflate::libdeflate_shared,libdeflate::libdeflate_static> # fast DEFLATE for RAD
         CUDA::cudart           # CUDA runtime for nvImageCodec
         lfs_io_cuda            # IO-specific CUDA kernels (morton, k-means)
+        lfs_io_rad_quant_cuda  # RAD encode quantization (bit-exact, no fast math)
         lfs_core_cuda          # Core CUDA utilities (lanczos_resize for nvcodec)
         assimp::assimp         # Multi-format mesh import
         usdVol                 # OpenUSD Gaussian ParticleField import
-        $<IF:$<PLATFORM_ID:Windows>,OpenMeshCore,OpenMeshCoreStatic>
+        OpenMeshCore
         spz_lib                # Niantic SPZ compressed format
 )
 
@@ -260,6 +303,19 @@ if(TARGET nvimgcodec)
     message(STATUS "Linking nvImageCodec to lfs_io")
 else()
     message(WARNING "nvImageCodec target not found - JPEG hardware decode will not work")
+endif()
+
+if(TARGET nvimgcodec_imgproc_static)
+    target_compile_options(nvimgcodec_imgproc_static PRIVATE
+        $<$<COMPILE_LANGUAGE:CUDA>:--diag-suppress=860,3004>
+        $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_FRONTEND_VARIANT:MSVC>>:-Xcompiler "/wd4834">
+    )
+endif()
+
+if(TARGET nvimgcodec)
+    target_compile_options(nvimgcodec PRIVATE
+        $<$<CXX_COMPILER_FRONTEND_VARIANT:MSVC>:/wd4267>
+    )
 endif()
 
 # Set C++ standard

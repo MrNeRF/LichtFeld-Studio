@@ -27,6 +27,8 @@ namespace lfs::rendering {
         glm::mat3 rotation{1.0f};
         glm::vec3 translation{0.0f};
         glm::ivec2 size{0, 0};
+        glm::ivec2 subregion_origin{0, 0};
+        glm::ivec2 subregion_full_size{0, 0};
         float focal_length_mm = DEFAULT_FOCAL_LENGTH_MM;
         std::optional<CameraIntrinsics> intrinsics_override;
         float near_plane = DEFAULT_NEAR_PLANE;

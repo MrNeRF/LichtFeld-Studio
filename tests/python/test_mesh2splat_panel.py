@@ -89,6 +89,9 @@ class _HandleStub:
     def dirty_all(self):
         self.dirty_fields.append("__all__")
 
+    def request_update(self):
+        self.dirty_fields.append("__update__")
+
 
 class _ElementStub:
     def __init__(self, attrs=None, parent=None):
@@ -115,6 +118,12 @@ class _EventStub:
 
     def current_target(self):
         return self._current_target
+
+
+def test_mesh2splat_panel_uses_dirty_update_policy(mesh2splat_module):
+    module, _state = mesh2splat_module
+    assert module.Mesh2SplatPanel.update_policy == "dirty"
+    assert "update_interval_ms" not in module.Mesh2SplatPanel.__dict__
 
 
 def test_mesh2splat_panel_builds_mesh_and_resolution_records(mesh2splat_module):
@@ -208,3 +217,49 @@ def test_mesh2splat_panel_progress_updates_retained_fields(mesh2splat_module):
         "show_error",
         "error_text",
     ]
+
+
+def test_mesh2splat_panel_prefers_native_store_progress(mesh2splat_module, monkeypatch):
+    module, state = mesh2splat_module
+    panel = module.Mesh2SplatPanel()
+    panel._handle = _HandleStub()
+    state.active = False
+    state.progress = 0.0
+    state.stage = "legacy"
+    state.error = "legacy error"
+
+    monkeypatch.setattr(
+        module,
+        "_native_store_value",
+        lambda field, fallback: {
+            "active": True,
+            "progress": 0.875,
+            "stage": "Native progress",
+            "error": "native error",
+        }
+        if field == "mesh2splat_state"
+        else fallback,
+    )
+
+    assert panel._sync_conversion_state(force=False) is True
+    assert panel._last_active is True
+    assert panel._last_progress_value == "0.875"
+    assert panel._last_progress_stage == "Native progress"
+    assert panel._error_text == "native error"
+
+
+def test_mesh2splat_panel_store_update_invalidates_model(mesh2splat_module):
+    module, _state = mesh2splat_module
+    panel = module.Mesh2SplatPanel()
+    panel._handle = _HandleStub()
+    panel._last_mesh_key = ("cached",)
+
+    panel._subscribe_reactive_state()
+    try:
+        module.RuntimeState.mesh2splat_state.value = {"active": True, "progress": 0.5}
+
+        assert panel._last_mesh_key is None
+        assert "__update__" in panel._handle.dirty_fields
+    finally:
+        panel._unsubscribe_reactive_state()
+        module.RuntimeState.mesh2splat_state._fallback = {}

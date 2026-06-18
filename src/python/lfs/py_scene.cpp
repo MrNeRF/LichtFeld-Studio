@@ -8,10 +8,12 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
+#include "io/loader.hpp"
 #include "python/python_runtime.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/operation/undo_entry.hpp"
 #include "visualizer/operation/undo_history.hpp"
+#include "visualizer/rendering/vulkan_external_tensor.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/training/training_manager.hpp"
 #include "visualizer/training/training_state.hpp"
@@ -73,6 +75,7 @@ namespace lfs::python {
                             0.0f, 1.0f, "Flash effect intensity")
                 .build();
         }
+
     } // namespace
 
     // Helper to convert glm::mat4 to nb::tuple (row-major for NumPy compatibility)
@@ -384,11 +387,24 @@ namespace lfs::python {
             opacity.tensor().clone(),
             scene_scale);
 
+        if (auto allocator = vis::makeViewerSplatTensorAllocator()) {
+            if (auto migrated = io::migrateSplatTensorsToAllocator(*splat, allocator); !migrated) {
+                throw std::runtime_error("Failed to prepare splat tensors for rendering: " +
+                                         migrated.error().format());
+            }
+            scene_->setCombinedModelAllocator(std::move(allocator));
+        }
+
         const size_t gaussian_count = splat->size();
         const int32_t node_id = scene_->addSplat(name, std::move(splat), parent);
+        if (node_id == core::NULL_NODE) {
+            return core::NULL_NODE;
+        }
+        const auto* const added = scene_->getNodeById(node_id);
+        const std::string added_name = added ? added->name : name;
 
         lfs::core::events::state::PLYAdded{
-            .name = name,
+            .name = added_name,
             .node_gaussians = gaussian_count,
             .total_gaussians = scene_->getTotalGaussianCount(),
             .is_visible = true,
@@ -403,7 +419,7 @@ namespace lfs::python {
                 *scene_manager,
                 "Add Splat",
                 std::move(*history_before),
-                vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {name})));
+                vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {added_name})));
         }
 
         return node_id;
@@ -426,6 +442,11 @@ namespace lfs::python {
 
         auto pc = std::make_shared<core::PointCloud>(pts.to(core::Device::CUDA), cols.to(core::Device::CUDA));
         const int32_t node_id = scene_->addPointCloud(name, std::move(pc), parent);
+        if (node_id == core::NULL_NODE) {
+            return core::NULL_NODE;
+        }
+        const auto* const added = scene_->getNodeById(node_id);
+        const std::string added_name = added ? added->name : name;
 
         if (auto* const scene_manager = get_scene_manager()) {
             ensure_scene_manager_content_type(*scene_manager, vis::SceneManager::ContentType::SplatFiles);
@@ -433,7 +454,7 @@ namespace lfs::python {
                 *scene_manager,
                 "Add Point Cloud",
                 std::move(*history_before),
-                vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {name})));
+                vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {added_name})));
         }
 
         return node_id;
@@ -474,16 +495,19 @@ namespace lfs::python {
         }
 
         const int32_t node_id = scene_->addMesh(name, std::move(mesh), parent);
+        if (node_id == core::NULL_NODE) {
+            return core::NULL_NODE;
+        }
 
         if (auto* const scene_manager = get_scene_manager()) {
             ensure_scene_manager_content_type(*scene_manager, vis::SceneManager::ContentType::SplatFiles);
-            if (const auto* node = scene_->getNodeById(node_id)) {
-                vis::op::undoHistory().push(std::make_unique<vis::op::SceneGraphPatchEntry>(
-                    *scene_manager,
-                    "Add Mesh",
-                    std::move(*history_before),
-                    vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {node->name})));
-            }
+            const auto* const added = scene_->getNodeById(node_id);
+            const std::string added_name = added ? added->name : name;
+            vis::op::undoHistory().push(std::make_unique<vis::op::SceneGraphPatchEntry>(
+                *scene_manager,
+                "Add Mesh",
+                std::move(*history_before),
+                vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {added_name})));
         }
 
         return node_id;
@@ -496,13 +520,19 @@ namespace lfs::python {
         }
 
         const int32_t node_id = scene_->addCameraGroup(name, parent, camera_count);
+        if (node_id == core::NULL_NODE) {
+            return core::NULL_NODE;
+        }
+        const auto* const added = scene_->getNodeById(node_id);
+        const std::string added_name = added ? added->name : name;
+
         if (auto* const scene_manager = get_scene_manager()) {
             ensure_scene_manager_content_type(*scene_manager, vis::SceneManager::ContentType::Dataset);
             vis::op::undoHistory().push(std::make_unique<vis::op::SceneGraphPatchEntry>(
                 *scene_manager,
                 "Add Camera Group",
                 std::move(*history_before),
-                vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {name})));
+                vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {added_name})));
         }
         return node_id;
     }
@@ -516,7 +546,8 @@ namespace lfs::python {
                                 int width,
                                 int height,
                                 const std::string& image_path,
-                                int uid) {
+                                int uid,
+                                std::optional<PyTensor> mask) {
         std::optional<vis::op::SceneGraphStateSnapshot> history_before;
         if (auto* const scene_manager = get_scene_manager()) {
             history_before = vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {name});
@@ -543,14 +574,26 @@ namespace lfs::python {
             width, height,
             uid);
 
+        // Attach an in-memory mask if the caller passed one (direct-scene
+        // plugins use this to bypass the on-disk masks/ workflow).
+        if (mask.has_value() && mask->tensor().is_valid()) {
+            camera->set_mask_tensor(mask->tensor().clone());
+        }
+
         const int32_t node_id = scene_->addCamera(name, parent, std::move(camera));
+        if (node_id == core::NULL_NODE) {
+            return core::NULL_NODE;
+        }
+
         if (auto* const scene_manager = get_scene_manager()) {
+            const auto* added = scene_->getNodeById(node_id);
+            const std::string added_name = added ? added->name : name;
             ensure_scene_manager_content_type(*scene_manager, vis::SceneManager::ContentType::Dataset);
             vis::op::undoHistory().push(std::make_unique<vis::op::SceneGraphPatchEntry>(
                 *scene_manager,
                 "Add Camera",
                 std::move(*history_before),
-                vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {name})));
+                vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {added_name})));
         }
         return node_id;
     }
@@ -590,25 +633,11 @@ namespace lfs::python {
         scene_->clear();
     }
 
-    void PyScene::reparent(int32_t node_id, int32_t new_parent_id) {
+    bool PyScene::reparent(int32_t node_id, int32_t new_parent_id) {
         if (auto* const scene_manager = get_scene_manager()) {
-            const auto* node = scene_->getNodeById(node_id);
-            if (!node) {
-                return;
-            }
-
-            std::string new_parent_name;
-            if (new_parent_id != core::NULL_NODE) {
-                const auto* parent = scene_->getNodeById(new_parent_id);
-                if (!parent) {
-                    return;
-                }
-                new_parent_name = parent->name;
-            }
-            scene_manager->reparentNode(node->name, new_parent_name);
-            return;
+            return scene_manager->reparentNode(node_id, new_parent_id);
         }
-        scene_->reparent(node_id, new_parent_id);
+        return scene_->reparent(node_id, new_parent_id);
     }
 
     std::optional<PySceneNode> PyScene::get_node_by_id(int32_t id) {
@@ -979,6 +1008,7 @@ namespace lfs::python {
             .value("SPLAT", core::NodeType::SPLAT)
             .value("POINTCLOUD", core::NodeType::POINTCLOUD)
             .value("GROUP", core::NodeType::GROUP)
+            .value("PLY_SEQUENCE", core::NodeType::PLY_SEQUENCE)
             .value("CROPBOX", core::NodeType::CROPBOX)
             .value("ELLIPSOID", core::NodeType::ELLIPSOID)
             .value("DATASET", core::NodeType::DATASET)
@@ -1111,12 +1141,17 @@ namespace lfs::python {
             .def_prop_ro("camera_uid", &PySceneNode::camera_uid, "Camera unique identifier")
             .def_prop_ro("image_path", &PySceneNode::image_path, "Path to the camera image file")
             .def_prop_ro("mask_path", &PySceneNode::mask_path, "Path to the camera mask file")
+            .def_prop_ro("depth_path", &PySceneNode::depth_path, "Path to the camera depth map file")
             .def_prop_ro("has_camera", &PySceneNode::has_camera, "Whether this node has camera data")
             .def_prop_ro("has_mask", &PySceneNode::has_mask, "Whether this camera node has a mask file")
+            .def_prop_ro("has_depth", &PySceneNode::has_depth, "Whether this camera node has a depth map file")
             .def("load_mask", &PySceneNode::load_mask,
                  nb::arg("resize_factor") = 1, nb::arg("max_width") = 0,
                  nb::arg("invert") = false, nb::arg("threshold") = 0.5f,
                  "Load mask as tensor [1, H, W] on CUDA (None if not a camera node or no mask)")
+            .def("load_depth", &PySceneNode::load_depth,
+                 nb::arg("resize_factor") = 1, nb::arg("max_width") = 0,
+                 "Load depth map as tensor [H, W] on CUDA (None if not a camera node or no depth map)")
             .def_prop_ro("camera_R", &PySceneNode::camera_R, "Camera rotation matrix [3, 3]")
             .def_prop_ro("camera_T", &PySceneNode::camera_T, "Camera translation vector [3, 1]")
             .def_prop_ro("camera_focal_x", &PySceneNode::camera_focal_x, "Camera focal length in pixels (x)")
@@ -1222,6 +1257,7 @@ Returns:
                  nb::arg("height"),
                  nb::arg("image_path") = "",
                  nb::arg("uid") = -1,
+                 nb::arg("mask") = nb::none(),
                  R"doc(Add a camera node with intrinsic and extrinsic parameters.
 
 Args:
@@ -1235,6 +1271,11 @@ Args:
     height: Image height in pixels
     image_path: Optional path to camera image
     uid: Optional unique identifier (-1 for auto-assigned)
+    mask: Optional in-memory mask tensor (H, W) or (1, H, W) at the image
+        resolution. Bypasses the on-disk masks/ workflow — useful for
+        direct-scene plugins that want to attach per-frame masks without
+        writing files. Set the session's ``mask_mode`` to ``Ignore`` or
+        ``Segment`` for it to take effect during training.
 
 Returns:
     Node ID of created camera
@@ -1250,7 +1291,7 @@ Returns:
             // Hierarchy
             .def("reparent", &PyScene::reparent,
                  nb::arg("node_id"), nb::arg("new_parent_id"),
-                 "Move a node under a new parent")
+                 "Move a node under a new parent, returns true on success")
             .def("root_nodes", &PyScene::root_nodes,
                  "Get all root-level nodes")
             // Queries

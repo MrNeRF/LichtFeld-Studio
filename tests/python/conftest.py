@@ -2,7 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Pytest configuration and fixtures for lichtfeld module tests."""
 
+import hashlib
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -22,11 +25,83 @@ if MODULE_PATH.exists():
     sys.path.insert(1 if SOURCE_MODULE_PATH.exists() else 0, str(MODULE_PATH))
 
 
+# The real, user-facing Asset Manager catalog. No test may ever write here.
+PRODUCTION_ASSET_CATALOG_DIR = Path.home() / ".lichtfeld" / "asset_manager"
+
+
+def _asset_catalog_fingerprint():
+    """Cheap snapshot of the production catalog: library.json content plus the
+    directory listing. Catches both mutated entries and stray new files."""
+    if not PRODUCTION_ASSET_CATALOG_DIR.exists():
+        return None
+    library = PRODUCTION_ASSET_CATALOG_DIR / "library.json"
+    library_hash = (
+        hashlib.md5(library.read_bytes()).hexdigest() if library.is_file() else None
+    )
+    listing = sorted(p.name for p in PRODUCTION_ASSET_CATALOG_DIR.iterdir())
+    return (library_hash, listing)
+
+
 def pytest_configure(config):
-    """Register custom markers."""
+    """Register custom markers and baseline-isolate the asset catalog."""
     config.addinivalue_line("markers", "gpu: marks tests as requiring GPU")
     config.addinivalue_line("markers", "slow: marks tests as slow running")
     config.addinivalue_line("markers", "integration: marks integration tests")
+
+    # Catch catalog resolution that happens before any function fixture runs
+    # (import/collection time). Per-test fixtures override this with their own
+    # temp dir; this baseline only guarantees nothing resolves to production.
+    session_catalog = Path(tempfile.gettempdir()) / "lfs-test-asset-manager"
+    os.environ.setdefault("LICHTFELD_ASSET_MANAGER_DIR", str(session_catalog))
+    os.environ.setdefault("LFS_ASSET_MANAGER_DIR", str(session_catalog))
+
+
+@pytest.fixture(scope="session", autouse=True)
+def guard_production_asset_catalog():
+    """Fail the suite if any test mutates the production Asset Manager catalog.
+
+    This is the enforcement behind "tests must never pollute production": even a
+    future test that forgets to isolate the catalog trips this wire."""
+    before = _asset_catalog_fingerprint()
+    yield
+    after = _asset_catalog_fingerprint()
+    if after != before:
+        pytest.fail(
+            "A test mutated the production Asset Manager catalog at "
+            f"{PRODUCTION_ASSET_CATALOG_DIR}. Tests must isolate it via the "
+            "isolate_asset_manager_catalog fixture.\n"
+            f"  before: {before}\n  after:  {after}",
+            pytrace=False,
+        )
+
+
+@pytest.fixture(autouse=True)
+def isolate_asset_manager_catalog(tmp_path, monkeypatch):
+    """Redirect the Asset Manager catalog to a per-test temp directory.
+
+    Code paths that resolve the catalog implicitly (e.g.
+    register_catalog_asset_path -> load_asset_index) otherwise write into the
+    user's real ~/.lichtfeld/asset_manager/library.json, leaving dead entries
+    that point at deleted pytest tmp dirs. resolve_asset_manager_storage_path()
+    reads these env vars first on every call, so the redirect is binding-proof;
+    pinning the legacy path to the temp dir suppresses the real-catalog copy.
+    """
+    catalog_dir = tmp_path / "asset_manager"
+    monkeypatch.setenv("LICHTFELD_ASSET_MANAGER_DIR", str(catalog_dir))
+    monkeypatch.setenv("LFS_ASSET_MANAGER_DIR", str(catalog_dir))
+    try:
+        from lfs_plugins import asset_index
+
+        monkeypatch.setattr(asset_index, "LEGACY_STORAGE_PATH", catalog_dir, raising=False)
+        monkeypatch.setattr(
+            asset_index, "LEGACY_LIBRARY_PATH", catalog_dir / "library.json", raising=False
+        )
+        monkeypatch.setattr(
+            asset_index, "DEFAULT_LIBRARY_PATH", catalog_dir / "library.json", raising=False
+        )
+    except Exception:
+        pass
+    return catalog_dir
 
 
 @pytest.fixture(scope="session")

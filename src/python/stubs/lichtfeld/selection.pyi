@@ -28,24 +28,8 @@ def cancel_stroke() -> None:
 def is_stroke_active() -> bool:
     """Check if a stroke is currently active"""
 
-def brush_select(x: float, y: float, radius: float) -> None:
-    """
-    Brush select at (x, y) with given radius. Accumulates into stroke selection.
-    """
-
 def ring_select(index: int, add: bool = True) -> None:
     """Select/deselect a single gaussian by index (for ring selection mode)."""
-
-def rect_select(x0: float, y0: float, x1: float, y1: float) -> None:
-    """Rectangle select from (x0, y0) to (x1, y1). Sets stroke selection."""
-
-def polygon_select(vertices: Sequence[tuple[float, float]]) -> None:
-    """
-    Polygon select with given vertices [(x, y), ...]. Sets stroke selection.
-    """
-
-def lasso_select(points: Sequence[tuple[float, float]]) -> None:
-    """Lasso (freehand polygon) select. Sets stroke selection."""
 
 def set_preview(add_mode: bool = True) -> None:
     """Set current stroke as preview selection (green = add, red = remove)"""
@@ -155,6 +139,13 @@ def by_opacity(min_opacity: float = 0.0, max_opacity: float = 1.0) -> None:
 
 def by_scale(max_scale: float) -> None:
     """Select gaussians with max activated scale <= threshold."""
+
+def by_color(gaussian_index: int, threshold: float = 0.20000000298023224) -> None:
+    """
+    Select gaussians by color similarity to a reference gaussian.
+    Picks the SH DC color of the gaussian at the given index and selects all
+    gaussians whose per-channel color difference is within the threshold (0-1).
+    """
 
 def trigger_flash() -> None:
     """Trigger selection flash animation feedback"""

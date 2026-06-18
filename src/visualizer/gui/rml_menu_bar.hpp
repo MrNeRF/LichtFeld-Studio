@@ -5,6 +5,9 @@
 #pragma once
 
 #include "gui/panel_layout.hpp"
+#include "gui/rmlui/rml_tooltip.hpp"
+#include "gui/rmlui/rmlui_manager.hpp"
+
 #include <RmlUi/Core/DataModelHandle.h>
 #include <chrono>
 #include <cstddef>
@@ -52,6 +55,17 @@ namespace lfs::vis::gui {
         bool active = false;
     };
 
+    struct MenuToolbarButtonView {
+        std::string button_id;
+        std::string action;
+        std::string value;
+        std::string icon_src;
+        std::string tooltip_key;
+        std::string tooltip_text;
+        bool selected = false;
+        bool operator==(const MenuToolbarButtonView&) const = default;
+    };
+
     struct MenuDropdownLeafView {
         std::string label;
         std::string action;
@@ -67,6 +81,7 @@ namespace lfs::vis::gui {
     };
 
     struct MenuDropdownRootView {
+        int index = -1;
         std::string label;
         std::string action;
         std::string operator_id;
@@ -77,6 +92,7 @@ namespace lfs::vis::gui {
         bool has_shortcut = false;
         bool show_checkmark = false;
         bool has_children = false;
+        bool submenu_open = false;
         int callback_index = -1;
         std::vector<MenuDropdownLeafView> children;
     };
@@ -90,6 +106,7 @@ namespace lfs::vis::gui {
                           const std::vector<std::string>& idnames);
         void reloadResources();
         void processInput(const PanelInputState& input);
+        void setViewportRightEdge(float x) { viewport_right_edge_ = x; }
         void suspend();
         bool wantsInput() const { return wants_input_; }
         bool isOpen() const { return open_menu_index_ >= 0; }
@@ -102,6 +119,12 @@ namespace lfs::vis::gui {
         void openDropdown(int index);
         void closeDropdown();
         void rebuildDropdownDOM();
+        void setOpenSubmenu(int index);
+        Rml::Element* dropdownElementAtPoint(float x, float y) const;
+        int submenuIndexForElement(Rml::Element* element) const;
+        void rebuildToolbarButtons();
+        void dispatchToolbarAction(const std::string& action, const std::string& value);
+        Rml::Element* toolbarButtonAtPoint(float x, float y) const;
 
         RmlUIManager* rml_manager_ = nullptr;
         Rml::Context* rml_context_ = nullptr;
@@ -116,22 +139,35 @@ namespace lfs::vis::gui {
         std::vector<std::string> current_idnames_;
         std::vector<MenuLabelView> menu_labels_;
         std::vector<MenuDropdownRootView> dropdown_items_;
+        std::vector<MenuToolbarButtonView> render_buttons_;
+        std::vector<MenuToolbarButtonView> projection_buttons_;
         int active_index_ = -1;
 
         Rml::Element* menu_items_ = nullptr;
         Rml::Element* dropdown_container_ = nullptr;
+        Rml::Element* dropdown_popup_ = nullptr;
         Rml::Element* dropdown_overlay_ = nullptr;
+        Rml::Element* brand_logo_ = nullptr;
+        Rml::Element* menu_toolbar_ = nullptr;
+        Rml::Element* body_el_ = nullptr;
+        RmlTooltipController tooltip_;
+        float viewport_right_edge_ = 0.0f;
+        float applied_toolbar_right_ = -1.0f;
 
         int open_menu_index_ = -1;
+        int open_submenu_index_ = -1;
         std::string open_menu_idname_;
         bool wants_input_ = false;
         bool render_needed_ = true;
         bool mouse_pos_valid_ = false;
         int last_mouse_x_ = 0;
         int last_mouse_y_ = 0;
+        int last_hovered_label_ = -1;
+        bool last_toolbar_hovered_ = false;
         int last_ctx_w_ = 0;
         int last_ctx_h_ = 0;
         int last_document_h_ = 0;
+        CachedVulkanContextRender direct_cache_;
 
         float bar_height_ = 30.0f;
     };

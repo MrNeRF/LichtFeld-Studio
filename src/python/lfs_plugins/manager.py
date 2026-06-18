@@ -379,6 +379,7 @@ class PluginManager:
         module.__package__ = module_name
         module.__path__ = [str(plugin.info.path)]
         module.__spec__ = importlib.util.spec_from_file_location(module_name, entry_file, loader=module.__loader__, submodule_search_locations=[str(plugin.info.path)])
+        module.__lfs_plugin_name__ = plugin.info.name
 
         sys.modules[module_name] = module
 

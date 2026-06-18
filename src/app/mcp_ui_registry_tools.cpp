@@ -141,8 +141,6 @@ namespace lfs::app {
                 return "builtin.scale";
             case vis::ToolType::Mirror:
                 return "builtin.mirror";
-            case vis::ToolType::Brush:
-                return "builtin.brush";
             case vis::ToolType::Align:
                 return "builtin.align";
             }

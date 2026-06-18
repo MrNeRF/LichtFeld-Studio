@@ -5,11 +5,15 @@
 #include "vulkan_depth_blit_pass.hpp"
 
 #include "core/logger.hpp"
+#include "diagnostics/vram_profiler.hpp"
+#include "window/vulkan_barrier2.hpp"
 #include "window/vulkan_context.hpp"
 
 #include <array>
 #include <cstring>
+#include <format>
 #include <limits>
+#include <string>
 #include <vk_mem_alloc.h>
 
 #include "viewport/depth_blit.frag.spv.h"
@@ -59,6 +63,7 @@ namespace lfs::vis {
         VkImageView image_view = VK_NULL_HANDLE;
         std::uint32_t image_width = 0;
         std::uint32_t image_height = 0;
+        std::string image_vram_label;
 
         const lfs::core::Tensor* uploaded_tensor = nullptr;
         std::uint64_t uploaded_generation = 0;
@@ -426,6 +431,12 @@ namespace lfs::vis {
                 image_view = VK_NULL_HANDLE;
             }
             if (image != VK_NULL_HANDLE) {
+                if (!image_vram_label.empty()) {
+                    lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                        "vulkan.depth_blit.image",
+                        image_vram_label,
+                        0);
+                }
                 vmaDestroyImage(allocator, image, image_alloc);
                 image = VK_NULL_HANDLE;
                 image_alloc = VK_NULL_HANDLE;
@@ -455,9 +466,15 @@ namespace lfs::vis {
             img.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             VmaAllocationCreateInfo ai{};
             ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-            if (vmaCreateImage(allocator, &img, &ai, &image, &image_alloc, nullptr) != VK_SUCCESS) {
+            VmaAllocationInfo allocation_info{};
+            if (vmaCreateImage(allocator, &img, &ai, &image, &image_alloc, &allocation_info) != VK_SUCCESS) {
                 return false;
             }
+            image_vram_label = std::format("r32_float:{}x{}", w, h);
+            lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                "vulkan.depth_blit.image",
+                image_vram_label,
+                static_cast<std::size_t>(allocation_info.size));
             VkImageViewCreateInfo vi{};
             vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
             vi.image = image;
@@ -516,25 +533,13 @@ namespace lfs::vis {
             const VkImageLayout old_layout = (uploaded_tensor != nullptr)
                                                  ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
                                                  : VK_IMAGE_LAYOUT_UNDEFINED;
-            VkImageMemoryBarrier to_dst{};
-            to_dst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            to_dst.oldLayout = old_layout;
-            to_dst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            to_dst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            to_dst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            to_dst.image = image;
-            to_dst.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            to_dst.subresourceRange.levelCount = 1;
-            to_dst.subresourceRange.layerCount = 1;
-            to_dst.srcAccessMask =
-                old_layout == VK_IMAGE_LAYOUT_UNDEFINED ? 0 : VK_ACCESS_SHADER_READ_BIT;
-            to_dst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            const VkPipelineStageFlags src_stage =
-                old_layout == VK_IMAGE_LAYOUT_UNDEFINED
-                    ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
-                    : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-            vkCmdPipelineBarrier(transfer_cmd, src_stage, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                 0, 0, nullptr, 0, nullptr, 1, &to_dst);
+            const bool was_undefined = old_layout == VK_IMAGE_LAYOUT_UNDEFINED;
+            cmdImageBarrier2(transfer_cmd, image, VK_IMAGE_ASPECT_COLOR_BIT,
+                             old_layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                             was_undefined ? VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT
+                                           : VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                             was_undefined ? VK_ACCESS_2_NONE : VK_ACCESS_2_SHADER_READ_BIT,
+                             VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
 
             VkBufferImageCopy region{};
             region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -543,21 +548,10 @@ namespace lfs::vis {
             vkCmdCopyBufferToImage(transfer_cmd, staging_buffer, image,
                                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-            VkImageMemoryBarrier to_read{};
-            to_read.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            to_read.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            to_read.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            to_read.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            to_read.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            to_read.image = image;
-            to_read.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            to_read.subresourceRange.levelCount = 1;
-            to_read.subresourceRange.layerCount = 1;
-            to_read.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            to_read.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            vkCmdPipelineBarrier(transfer_cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                                 0, 0, nullptr, 0, nullptr, 1, &to_read);
+            cmdImageBarrier2(transfer_cmd, image, VK_IMAGE_ASPECT_COLOR_BIT,
+                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                             VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
 
             if (vkEndCommandBuffer(transfer_cmd) != VK_SUCCESS) {
                 return false;
@@ -685,6 +679,10 @@ namespace lfs::vis {
 
     bool VulkanDepthBlitPass::hasDepth() const {
         return impl_ && impl_->bound_view != VK_NULL_HANDLE;
+    }
+
+    VkImageView VulkanDepthBlitPass::depthView() const {
+        return impl_ ? impl_->bound_view : VK_NULL_HANDLE;
     }
 
 } // namespace lfs::vis

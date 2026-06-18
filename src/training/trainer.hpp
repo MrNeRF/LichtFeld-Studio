@@ -28,7 +28,9 @@
 #include <mutex>
 #include <shared_mutex>
 #include <stop_token>
+#include <string_view>
 #include <unordered_map>
+#include <utility>
 
 namespace lfs::core {
     class Scene;
@@ -163,6 +165,9 @@ namespace lfs::training {
 
         const lfs::core::param::TrainingParameters& getParams() const { return params_; }
         void setParams(const lfs::core::param::TrainingParameters& params);
+        void setSplatTensorAllocator(lfs::core::SplatTensorAllocator allocator) {
+            splat_tensor_allocator_ = std::move(allocator);
+        }
 
         void setOnIterationStart(std::function<void()> cb) { on_iteration_start_ = std::move(cb); }
 
@@ -334,6 +339,7 @@ namespace lfs::training {
                    !params_.optimization.ppisp_sidecar_path.empty();
         }
         [[nodiscard]] PPISPControllerPool* controller_pool_for_save(int iteration) const;
+        [[nodiscard]] lfs::core::param::TrainingParameters params_for_checkpoint_save() const;
         [[nodiscard]] TrainingProgress::Phase get_progress_phase(
             int iter,
             bool in_controller_phase = false) const;
@@ -383,6 +389,9 @@ namespace lfs::training {
 
         std::shared_ptr<CameraLossHeatmapState> getCameraLossHeatmap() const;
         void setCameraLossHeatmap(std::shared_ptr<CameraLossHeatmapState> heatmap);
+        std::expected<void, std::string> ensureModelTensorAllocatorStorage(
+            lfs::core::SplatData& model,
+            std::string_view reason);
 
         lfs::core::Scene* scene_ = nullptr;
         std::shared_ptr<CameraDataset> base_dataset_;
@@ -391,6 +400,7 @@ namespace lfs::training {
         std::shared_ptr<lfs::io::PipelinedImageLoader> active_image_loader_;
         std::unique_ptr<IStrategy> strategy_;
         lfs::core::param::TrainingParameters params_;
+        lfs::core::SplatTensorAllocator splat_tensor_allocator_;
         std::optional<std::tuple<std::vector<std::string>, std::vector<std::string>>> provided_splits_;
 
         lfs::core::Tensor background_{};
@@ -405,6 +415,7 @@ namespace lfs::training {
 
         // Pre-loaded mask from pipelined dataloader (used in train_step)
         lfs::core::Tensor pipelined_mask_;
+        lfs::core::Tensor pipelined_depth_;
 
         // Bilateral grid for appearance modeling (optional)
         std::unique_ptr<BilateralGrid> bilateral_grid_;
@@ -423,6 +434,9 @@ namespace lfs::training {
 
         // Cached GPU scalar to avoid per-iteration allocation
         core::Tensor loss_accumulator_;
+        core::Tensor depth_loss_scalar_;
+        core::Tensor depth_loss_grad_;
+        core::Tensor depth_loss_partials_;
 
         // Pre-allocated SSIM-map workspace for densification error maps.
         lfs::training::kernels::SSIMMapWorkspace densification_ssim_workspace_;
@@ -466,7 +480,6 @@ namespace lfs::training {
         bool memory_breakdown_logged_first_batch_ = false;
         bool memory_breakdown_logged_first_raster_ = false;
         bool memory_breakdown_logged_first_step_ = false;
-        bool fastgs_tiling_warning_logged_ = false;
 
         // Current training state
         std::atomic<int> current_iteration_{0};

@@ -81,6 +81,10 @@ namespace lfs::vis {
         invalidateCapture();
     }
 
+    void ViewportArtifactService::invalidateCapturedImage() {
+        invalidateCapture();
+    }
+
     void ViewportArtifactService::updateFromFrameResources(const FrameResources& resources,
                                                            const bool viewport_output_updated) {
         metadata_ = resources.cached_metadata;
@@ -219,8 +223,8 @@ namespace lfs::vis {
                     scaled_x = panel_local_x;
                 }
 
-                // The CUDA rasterizer outputs depth with a bottom-left origin. Tools operate
-                // in window coordinates with a top-left origin, so flip Y before sampling.
+                // Tensor-backed depth outputs use a bottom-left origin. Tools operate in
+                // window coordinates with a top-left origin, so flip Y before sampling.
                 scaled_y = (depth_height - 1) - scaled_y;
 
                 if (scaled_x >= 0 && scaled_x < depth_width && scaled_y >= 0 && scaled_y < depth_height) {

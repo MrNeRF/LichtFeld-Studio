@@ -64,7 +64,7 @@ namespace lfs::vis::op {
             return OperatorResult::CANCELLED;
         }
 
-        shape_ = toSelectionShape(props.get_or<int>("mode", 0));
+        const int mode_int = props.get_or<int>("mode", 0);
         mode_ = toSelectionMode(props.get_or<int>("op", 0));
         brush_radius_ = props.get_or<float>("brush_radius", 20.0f);
         stroke_button_ = props.get_or<int>("button", static_cast<int>(input::AppMouseButton::LEFT));
@@ -72,6 +72,15 @@ namespace lfs::vis::op {
         filters_.depth_filter = props.get_or<bool>("use_depth_filter", false);
         filters_.restrict_to_selected_nodes = props.get_or<bool>("restrict_to_selected_nodes", true);
 
+        // Color selection mode (5): pick Gaussian under cursor and select by color similarity.
+        if (mode_int == 5) {
+            const float click_x = static_cast<float>(props.get_or<double>("x", 0.0));
+            const float click_y = static_cast<float>(props.get_or<double>("y", 0.0));
+            const auto result = service->selectByColorAt(click_x, click_y, mode_, filters_);
+            return result.success ? OperatorResult::FINISHED : OperatorResult::CANCELLED;
+        }
+
+        shape_ = toSelectionShape(mode_int);
         const glm::vec2 start_pos(props.get_or<double>("x", 0.0), props.get_or<double>("y", 0.0));
         if (!service->beginInteractiveSelection(shape_, mode_, start_pos, brush_radius_, filters_)) {
             return OperatorResult::CANCELLED;
@@ -149,8 +158,10 @@ namespace lfs::vis::op {
             }
         }
 
-        if (event->type == ModalEvent::Type::MOUSE_SCROLL &&
-            shape_ == lfs::vis::SelectionShape::Polygon) {
+        // Always let scroll events through so the user can resize the selection
+        // ring mid-stroke (BRUSH_RESIZE is bound to Ctrl/Shift+scroll). The
+        // shape doesn't matter — the operator never uses scroll input itself.
+        if (event->type == ModalEvent::Type::MOUSE_SCROLL) {
             return OperatorResult::PASS_THROUGH;
         }
 

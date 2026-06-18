@@ -18,6 +18,11 @@
 #include "io/exporter.hpp"
 #include "io/formats/ply.hpp"
 #include "io/formats/sogs.hpp"
+#include "io/loader.hpp"
+
+#include <algorithm>
+#include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -383,4 +388,50 @@ TEST_F(SogFormatTest, ExportRoundtrip) {
 
     // Clean up test file
     fs::remove_all(export_path);
+}
+
+// Regression: a SOG loaded through the full Loader must route its tensors through the
+// supplied splat allocator (Vulkan-external storage), or the Vulkan splat renderer rejects
+// it ("refusing full input-copy fallback"). The SOG decoder ignores the allocator, so the
+// LoaderService migrates the model post-load. Before the fix the allocator was never called.
+TEST_F(SogFormatTest, LoaderRoutesSogThroughSplatAllocator) {
+    fs::path sog_path;
+    for (const auto& candidate : {sog_bundle,
+                                  fs::path("/home/paja/projects/gaussian-splatting-cuda/splat_30000.sog")}) {
+        if (fs::exists(candidate)) {
+            sog_path = candidate;
+            break;
+        }
+    }
+    if (sog_path.empty()) {
+        GTEST_SKIP() << "No SOG test file available (test.sog or splat_30000.sog)";
+    }
+
+    std::vector<std::string> allocated_names;
+    lfs::io::LoadOptions options;
+    options.splat_tensor_allocator = [&](lfs::core::TensorShape shape,
+                                         size_t /*capacity*/,
+                                         lfs::core::DataType dtype,
+                                         std::string_view name) {
+        allocated_names.emplace_back(name);
+        return lfs::core::Tensor::empty(std::move(shape), lfs::core::Device::CUDA, dtype);
+    };
+
+    auto loader = lfs::io::Loader::create();
+    auto result = loader->load(sog_path, options);
+    ASSERT_TRUE(result.has_value()) << "SOG load failed: " << result.error().format();
+
+    auto* splat = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&result->data);
+    ASSERT_NE(splat, nullptr);
+    ASSERT_NE(*splat, nullptr);
+
+    const auto routed = [&](const std::string& n) {
+        return std::find(allocated_names.begin(), allocated_names.end(), n) != allocated_names.end();
+    };
+    EXPECT_FALSE(allocated_names.empty()) << "SOG tensors never went through the allocator";
+    EXPECT_TRUE(routed("SplatData.means"));
+    EXPECT_TRUE(routed("SplatData.sh0"));
+    EXPECT_TRUE(routed("SplatData.scaling"));
+    EXPECT_TRUE(routed("SplatData.rotation"));
+    EXPECT_TRUE(routed("SplatData.opacity"));
 }

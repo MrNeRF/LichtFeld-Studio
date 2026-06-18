@@ -4,7 +4,9 @@
 
 import lichtfeld as lf
 
+from . import rml_widgets
 from .types import Panel
+from .ui import RuntimeState, PanelStateBinding
 
 SELECTION_GROUPS_MODEL = "selection_groups"
 __lfs_panel_classes__ = ["SelectionGroupsPanel"]
@@ -22,7 +24,7 @@ class SelectionGroupsPanel(Panel):
     order = 110
     template = "rmlui/selection_groups.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
-    update_interval_ms = 50
+    update_policy = "dirty"
 
     def __init__(self):
         self.doc = None
@@ -30,9 +32,12 @@ class SelectionGroupsPanel(Panel):
         self._collapsed = True
         self._prev_group_hash = None
         self._color_edit_group_id = None
-        self._context_menu_group_id = None
         self._picker_click_handled = False
         self._has_groups = False
+        self._last_scene_generation = None
+        self._last_selection_generation = None
+        self._last_visible = None
+        self._reactive_binding = PanelStateBinding()
 
     @classmethod
     def poll(cls, context):
@@ -84,29 +89,88 @@ class SelectionGroupsPanel(Panel):
             from . import rml_widgets as w
             w.sync_section_state(section, not self._collapsed, header, arrow)
 
+        self._sync_panel_state(doc, force=True)
+        self._subscribe_reactive_state()
+
+    def _subscribe_reactive_state(self):
+        if self._reactive_binding.active:
+            return
+
+        native_signals = (
+            RuntimeState.scene_generation,
+            RuntimeState.selection_generation,
+            RuntimeState.active_tool,
+        )
+        self._reactive_binding.set_handle(self._handle).watch(*native_signals)
+
+    def _unsubscribe_reactive_state(self):
+        self._reactive_binding.close()
+
+    def _request_reactive_update(self):
+        if self._handle:
+            rml_widgets.request_model_update(self._handle)
+
     def on_update(self, doc):
+        return self._sync_panel_state(doc, force=False)
+
+    def _sync_panel_state(self, doc, force=False):
+        dirty = False
         visible = lf.ui.get_active_tool() == "builtin.select" and lf.get_scene() is not None
         wrap = doc.get_element_by_id("content-wrap")
         if wrap:
             wrap.set_class("hidden", not visible)
+            if force or visible != self._last_visible:
+                dirty = True
+        self._last_visible = visible
         if not visible:
-            return
+            return dirty
 
-        action = lf.ui.poll_context_menu()
-        if action and self._context_menu_group_id is not None:
-            self._handle_context_action(action, self._context_menu_group_id)
-            self._context_menu_group_id = None
+        scene_generation = RuntimeState.scene_generation.value
+        selection_generation = RuntimeState.selection_generation.value
+        if (
+            not force
+            and self._prev_group_hash is not None
+            and scene_generation == self._last_scene_generation
+            and selection_generation == self._last_selection_generation
+        ):
+            return dirty
 
-        self._rebuild_groups()
+        first_update = (
+            self._last_scene_generation is None
+            or self._last_selection_generation is None
+        )
+        recompute_counts = (
+            force
+            or first_update
+            or scene_generation != self._last_scene_generation
+            or selection_generation != self._last_selection_generation
+        )
+        self._last_scene_generation = scene_generation
+        self._last_selection_generation = selection_generation
+        self._rebuild_groups(recompute_counts=recompute_counts)
+        return True
 
     def on_scene_changed(self, doc):
         del doc
         self._prev_group_hash = None
+        self._last_scene_generation = None
+        self._last_selection_generation = None
+        self._request_reactive_update()
+        return True
 
     def on_unmount(self, doc):
+        self._unsubscribe_reactive_state()
         doc.remove_data_model(SELECTION_GROUPS_MODEL)
         self._handle = None
         self.doc = None
+
+    def _mark_groups_changed(self):
+        self._prev_group_hash = None
+        if self.doc is not None:
+            self._sync_panel_state(self.doc, force=True)
+        elif self._handle:
+            self._rebuild_groups(recompute_counts=True)
+            self._handle.dirty_all()
 
     def _on_toggle_section(self, event):
         del event
@@ -123,7 +187,7 @@ class SelectionGroupsPanel(Panel):
         scene = lf.get_scene()
         if scene:
             scene.add_selection_group("", (0.0, 0.0, 0.0))
-            self._prev_group_hash = None
+            self._mark_groups_changed()
 
     def _compute_group_hash(self, scene):
         groups = scene.selection_groups()
@@ -142,12 +206,13 @@ class SelectionGroupsPanel(Panel):
         if self._handle:
             self._handle.dirty("show_empty_message")
 
-    def _rebuild_groups(self):
+    def _rebuild_groups(self, recompute_counts=True):
         scene = lf.get_scene()
         if not scene or not self._handle:
             return
 
-        scene.update_selection_group_counts()
+        if recompute_counts:
+            scene.update_selection_group_counts()
         group_hash = self._compute_group_hash(scene)
         if group_hash == self._prev_group_hash:
             return
@@ -196,12 +261,12 @@ class SelectionGroupsPanel(Panel):
             group = next((g for g in groups if g.id == gid), None)
             if group:
                 scene.set_selection_group_locked(gid, not group.locked)
-                self._prev_group_hash = None
+                self._mark_groups_changed()
         elif action == "color":
             self._show_color_picker(gid, event)
         elif action == "select":
             scene.active_selection_group = gid
-            self._prev_group_hash = None
+            self._mark_groups_changed()
 
     def _show_color_picker(self, gid, event):
         if self._color_edit_group_id == gid:
@@ -247,7 +312,7 @@ class SelectionGroupsPanel(Panel):
         g = float(event.get_parameter("green", "0"))
         b = float(event.get_parameter("blue", "0"))
         scene.set_selection_group_color(self._color_edit_group_id, (r, g, b))
-        self._prev_group_hash = None
+        self._mark_groups_changed()
 
     def _on_popup_click(self, event):
         event.stop_propagation()
@@ -273,7 +338,6 @@ class SelectionGroupsPanel(Panel):
         if not group:
             return
 
-        self._context_menu_group_id = gid
         tr = lf.ui.tr
         lock_label = tr("selection_group.unlock") if group.locked else tr("selection_group.lock")
         items = [
@@ -282,7 +346,12 @@ class SelectionGroupsPanel(Panel):
             {"label": tr("common.delete"), "action": "delete", "separator_before": True},
         ]
         sx, sy = lf.ui.get_mouse_screen_pos()
-        lf.ui.show_context_menu(items, sx, sy)
+        lf.ui.show_context_menu(
+            items,
+            sx,
+            sy,
+            lambda action, group_id=gid: self._handle_context_action(action, group_id),
+        )
 
     def _handle_context_action(self, action, gid):
         scene = lf.get_scene()
@@ -298,7 +367,7 @@ class SelectionGroupsPanel(Panel):
             scene.clear_selection_group(gid)
         elif action == "delete":
             scene.remove_selection_group(gid)
-        self._prev_group_hash = None
+        self._mark_groups_changed()
 
     def _on_body_click(self, event):
         del event

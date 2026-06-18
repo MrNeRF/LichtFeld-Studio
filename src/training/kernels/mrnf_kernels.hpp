@@ -25,6 +25,8 @@ namespace lfs::training::mrnf_strategy {
      * @param means [N, 3] — positions (modified in-place)
      * @param raw_opacities [N] — raw opacity values
      * @param vis_count [N] — visibility counts (> 0 means visible)
+     * @param frozen_mask [N] — optional mask of rows that must not be modified
+     * @param frozen_mask_size — number of entries in frozen_mask
      * @param lr_mean — current mean learning rate
      * @param noise_weight — exploration noise multiplier
      * @param median_scale — clamp range for noise
@@ -36,6 +38,8 @@ namespace lfs::training::mrnf_strategy {
         float* means,
         const float* raw_opacities,
         const float* vis_count,
+        const bool* frozen_mask,
+        size_t frozen_mask_size,
         float lr_mean,
         float noise_weight,
         float median_scale,
@@ -51,6 +55,8 @@ namespace lfs::training::mrnf_strategy {
      *
      * @param raw_opacities [N] — raw opacities (modified in-place)
      * @param log_scales [N, 3] — log scales (modified in-place)
+     * @param frozen_mask [N] — optional mask of rows that must not be modified
+     * @param frozen_mask_size — number of entries in frozen_mask
      * @param opacity_decay — opacity decay rate
      * @param scale_decay — scale decay rate
      * @param train_t — current training progress [0, 1]
@@ -60,6 +66,8 @@ namespace lfs::training::mrnf_strategy {
     void launch_mrnf_decay(
         float* raw_opacities,
         float* log_scales,
+        const bool* frozen_mask,
+        size_t frozen_mask_size,
         float opacity_decay,
         float scale_decay,
         float train_t,

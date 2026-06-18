@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "core/mesh2splat.hpp"
 
 #include <algorithm>
 #include <array>
@@ -21,10 +22,11 @@ namespace lfs::core {
     namespace param {
         // Mask mode for attention mask behavior during training
         enum class MaskMode {
-            None,           // No masking applied
-            Segment,        // Soft penalty to enforce alpha→0 in masked areas
-            Ignore,         // Completely ignore masked regions in loss
-            AlphaConsistent // Enforce exact alpha values from mask
+            None,             // No masking applied
+            Segment,          // Soft penalty to enforce alpha→0 in masked areas
+            Ignore,           // Completely ignore masked regions in loss
+            SegmentAndIgnore, // 3-band mask (0-255): value<128 ignore, 128<=value<=250 segment, value>250 keep
+            AlphaConsistent   // Enforce exact alpha values from mask
         };
 
         // Background mode for training - only one can be active at a time
@@ -104,6 +106,7 @@ namespace lfs::core {
             float init_opacity = 0.5f;
             float init_scaling = 0.1f;
             int max_cap = 1000000;
+
             std::vector<size_t> eval_steps = {7'000, 30'000};  // Steps to evaluate the model
             std::vector<size_t> save_steps = {7'000, 30'000};  // Steps to save the model
             bool bg_modulation = false;                        // Enable sinusoidal background modulation
@@ -123,6 +126,11 @@ namespace lfs::core {
             float mask_opacity_penalty_weight = 1.0f; // Opacity penalty weight for segment mode
             float mask_opacity_penalty_power = 2.0f;  // Penalty falloff (1=linear, 2=quadratic)
             bool use_alpha_as_mask = true;            // Auto-use alpha channel from RGBA images as mask
+
+            // Depth supervision
+            bool use_depth_loss = false;                        // Use dataset depth maps when available
+            float depth_loss_weight = 2.0f;                     // Depth supervision weight
+            std::string depth_loss_mode = "adaptive-warped-l1"; // pearson or adaptive-warped-l1
 
             // Mip filter (anti-aliasing)
             bool mip_filter = false;
@@ -180,9 +188,6 @@ namespace lfs::core {
             bool random = false;        // Use random initialization instead of SfM
             int init_num_pts = 100'000; // Number of random points to initialize
             float init_extent = 3.0f;   // Extent of random point cloud
-
-            // Tile mode for memory-efficient 3DGUT training (ignored for 3DGS/FastGS)
-            int tile_mode = 1;
 
             // Sparsity optimization parameters
             bool enable_sparsity = false;
@@ -244,9 +249,19 @@ namespace lfs::core {
             static DatasetConfig from_json(const nlohmann::json& j);
         };
 
+        struct LFS_CORE_API ServerConfig {
+            int tcp_server_connection_port = -1;    // Set the TCP connection port when tcp connection is in use for server requests, -1 for auto
+            int tcp_broadcast_connection_port = -1; // Set the TCP connection port when tcp connection is in use for broadcasting, -1 for auto
+            bool tcp_connection = false;            // Use TCP connection for signals and events
+
+            nlohmann::json to_json() const;
+            static ServerConfig from_json(const nlohmann::json& j);
+        };
+
         struct LFS_CORE_API TrainingParameters {
             DatasetConfig dataset;
             OptimizationParameters optimization;
+            ServerConfig server;
 
             // Viewer mode: splat files to load (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume)
             std::vector<std::filesystem::path> view_paths;
@@ -257,11 +272,20 @@ namespace lfs::core {
             // Optional splat file for initialization (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume)
             std::optional<std::string> init_path = std::nullopt;
 
+            // Optional trained splats to append to the training model before optimizer initialization
+            std::vector<std::filesystem::path> add_splat_paths;
+            std::vector<bool> add_splat_freeze;
+
             // Checkpoint to resume training from
             std::optional<std::filesystem::path> resume_checkpoint = std::nullopt;
 
             // Python scripts to execute for custom training callbacks
             std::vector<std::filesystem::path> python_scripts;
+
+            // True when --bg-color was provided on the command line.
+            bool cli_bg_color_set = false;
+
+            std::vector<int> disabled_camera_uids;
 
             [[nodiscard]] std::string validate() const;
         };
@@ -276,6 +300,12 @@ namespace lfs::core {
                                   USDC,
                                   RAD };
 
+        // PLY -> RAD only: per-bucket LOD tree builder for the out-of-core
+        // converter. BHATT is the quality-validated default; OCTREE trades
+        // unvalidated quality for a much faster parallel build.
+        enum class LodBuilder { BHATT,
+                                OCTREE };
+
         // Parameters for the convert command
         struct LFS_CORE_API ConvertParameters {
             std::filesystem::path input_path;
@@ -283,8 +313,23 @@ namespace lfs::core {
             OutputFormat format = OutputFormat::PLY;
             int sh_degree = 3; // 0-3, -1 = keep original
             int sog_iterations = 10;
-            bool overwrite = false;            // Skip overwrite prompts
-            std::vector<float> rad_lod_levels; // LOD levels for RAD format (as ratios, e.g., 0.5f = 50%)
+            // PLY -> RAD only: replicate the source across an AxB ground-plane
+            // grid instead of pre-tiling the input file.
+            std::uint32_t tiles_x = 1;
+            std::uint32_t tiles_y = 1;
+            LodBuilder lod_builder = LodBuilder::BHATT;
+            bool overwrite = false; // Skip overwrite prompts
+        };
+
+        // Parameters for the mesh2splat command
+        struct LFS_CORE_API Mesh2SplatParameters {
+            std::filesystem::path input_path;
+            std::filesystem::path output_path; // Empty = derive from input
+            OutputFormat format = OutputFormat::PLY;
+            std::vector<OutputFormat> formats{OutputFormat::PLY};
+            Mesh2SplatOptions options;
+            int sog_iterations = 10;
+            bool overwrite = false;
         };
 
         // Modern C++23 functions returning expected values

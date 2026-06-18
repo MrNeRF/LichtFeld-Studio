@@ -7,7 +7,6 @@
 #include "core/tensor.hpp"
 #include "gui/video_export_utils.hpp"
 #include "rendering/coordinate_conventions.hpp"
-#include "rendering/render_constants.hpp"
 #include "scene/scene_manager.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -100,8 +99,8 @@ TEST(VideoExportUtilsTest, CaptureSnapshotUsesRenderableModelAndTransforms) {
     lfs::vis::SceneManager scene_manager;
     auto& scene = scene_manager.getScene();
 
-    scene.addNode("left", make_test_splat({0.0f, 0.0f, 0.0f}));
-    scene.addNode("right", make_test_splat({0.0f, 0.0f, 0.0f}));
+    scene.addSplat("left", make_test_splat({0.0f, 0.0f, 0.0f}));
+    scene.addSplat("right", make_test_splat({0.0f, 0.0f, 0.0f}));
     scene.setNodeTransform("left", glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 2.0f, 3.0f)));
     scene.setNodeTransform("right", glm::translate(glm::mat4(1.0f), glm::vec3(-4.0f, 0.5f, 2.0f)));
 
@@ -124,7 +123,7 @@ TEST(VideoExportUtilsTest, CaptureSnapshotPrefersSplatsOverPointCloudAndKeepsMes
     lfs::vis::SceneManager scene_manager;
     auto& scene = scene_manager.getScene();
 
-    scene.addNode("splat", make_test_splat({0.0f, 0.0f, 0.0f}));
+    scene.addSplat("splat", make_test_splat({0.0f, 0.0f, 0.0f}));
     scene.addPointCloud("points", make_test_point_cloud());
     scene.addMesh("mesh", make_test_mesh());
 
@@ -186,25 +185,21 @@ TEST(VideoExportUtilsTest, ValidateVideoExportOptionsRejectsInvalidValues) {
                                                             .height = 1080,
                                                             .framerate = 0,
                                                             .crf = 18}));
-    EXPECT_FALSE(lfs::vis::gui::validateVideoExportOptions({.width = lfs::rendering::MAX_VIEWPORT_SIZE + 1,
-                                                            .height = 1080,
-                                                            .framerate = 30,
-                                                            .crf = 18}));
     EXPECT_FALSE(lfs::vis::gui::validateVideoExportOptions({.width = 1920,
                                                             .height = 1080,
                                                             .framerate = 30,
                                                             .crf = 99}));
 }
 
-TEST(VideoExportUtilsTest, ValidateVideoExportOptionsAcceptsTypicalPreset) {
-    auto result = lfs::vis::gui::validateVideoExportOptions({.width = 1920,
-                                                             .height = 1080,
+TEST(VideoExportUtilsTest, ValidateVideoExportOptionsAcceptsNativeResolution) {
+    auto result = lfs::vis::gui::validateVideoExportOptions({.width = 32768,
+                                                             .height = 17280,
                                                              .framerate = 30,
                                                              .crf = 18});
 
     ASSERT_TRUE(result.has_value()) << result.error();
-    EXPECT_EQ(result->width, 1920);
-    EXPECT_EQ(result->height, 1080);
+    EXPECT_EQ(result->width, 32768);
+    EXPECT_EQ(result->height, 17280);
     EXPECT_EQ(result->framerate, 30);
     EXPECT_EQ(result->crf, 18);
 }

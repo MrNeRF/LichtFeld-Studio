@@ -8,6 +8,7 @@
 #include <cmath>
 #include <glm/glm.hpp>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <utility>
 
@@ -283,12 +284,26 @@ namespace lfs::rendering {
                                           const float screen_x,
                                           const float screen_y,
                                           const float depth,
-                                          const float focal_length_mm) {
+                                          const float focal_length_mm,
+                                          const bool orthographic = false,
+                                          const float ortho_scale = DEFAULT_ORTHO_SCALE) {
         const auto [fx, fy] = computePixelFocalLengths(viewport_size, focal_length_mm);
         const float width = static_cast<float>(viewport_size.x);
         const float height = static_cast<float>(viewport_size.y);
         const float cx = width * 0.5f;
         const float cy = height * 0.5f;
+
+        if (orthographic) {
+            if (!std::isfinite(ortho_scale) || ortho_scale <= 0.0f) {
+                return glm::vec3(std::numeric_limits<float>::quiet_NaN());
+            }
+
+            const glm::vec3 view_pos(
+                (screen_x - cx) / ortho_scale,
+                (cy - screen_y) / ortho_scale,
+                -depth);
+            return rotation * view_pos + translation;
+        }
 
         const glm::vec3 view_pos(
             (screen_x - cx) * depth / fx,

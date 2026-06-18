@@ -43,6 +43,9 @@ namespace lfs::rendering::pcraster {
             if (idx >= static_cast<int>(params.n_points)) {
                 return;
             }
+            if (params.deleted_mask && params.deleted_mask[idx]) {
+                return;
+            }
 
             int transform_index = 0;
             if (params.transform_indices) {

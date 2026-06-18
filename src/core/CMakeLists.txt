@@ -53,13 +53,18 @@ set(CORE_SOURCES
         image_loader.cpp
         cuda_version.cpp
         image_io.cpp
+        mapped_file.cpp
         parameters.cpp
         property_registry.cpp
+        reactive_store.cpp
         scene.cpp
         splat_simplify.cpp
+        bhatt_lod.cpp
+        octree_lod.cpp
         splat_data.cpp
         splat_data_mirror.cpp
         splat_data_transform.cpp
+        splat_exportable_storage.cpp
         tensor_debug.cpp
         training_snapshot.cpp
         mesh_data.cpp
@@ -76,13 +81,16 @@ target_include_directories(lfs_core
         ${CUDAToolkit_INCLUDE_DIRS}
     PRIVATE
         ${CMAKE_SOURCE_DIR}/src
-        ${CMAKE_SOURCE_DIR}/external
         ${CMAKE_CURRENT_SOURCE_DIR}/tensor  # For internal/ headers
+)
+target_include_directories(lfs_core SYSTEM PRIVATE
+    ${CMAKE_SOURCE_DIR}/external
 )
 
 target_link_libraries(lfs_core
     PUBLIC
         lfs_logger
+        lfs_diagnostics
         lfs_event_bridge
         lfs_geometry
         TBB::tbb
@@ -97,14 +105,14 @@ target_link_libraries(lfs_core
         lfs_tensor_kernels
         taywee::args
         OpenImageIO::OpenImageIO
-        $<IF:$<PLATFORM_ID:Windows>,OpenMeshCore,OpenMeshCoreStatic>
+        OpenMeshCore
 )
 
 # OpenMP for tensor multi-threaded operations
 find_package(OpenMP)
 if(OpenMP_CXX_FOUND)
     target_link_libraries(lfs_core PRIVATE OpenMP::OpenMP_CXX)
-    message(STATUS "✓ OpenMP support enabled for lfs_core")
+    message(STATUS "[ok] OpenMP support enabled for lfs_core")
 endif()
 
 # Platform-specific settings
@@ -123,6 +131,7 @@ if(MSVC)
     target_compile_definitions(lfs_core PRIVATE _USE_MATH_DEFINES NOMINMAX
         $<$<COMPILE_LANGUAGE:CUDA>:FMT_UNICODE=0>
     )
+    target_link_options(lfs_core PRIVATE /ignore:4217)
 else()
     target_compile_options(lfs_core PRIVATE
         $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:-O0 -g -fno-omit-frame-pointer -DDEBUG>
@@ -206,8 +215,8 @@ else()
     target_compile_definitions(lfs_core PUBLIC ENABLE_ALLOCATION_PROFILING=0)
 endif()
 
-message(STATUS "╔════════════════════════════════════════════════════════════════╗")
-message(STATUS "║  lfs_core - Core + Tensor Library (SHARED)                    ║")
-message(STATUS "╚════════════════════════════════════════════════════════════════╝")
-message(STATUS "  • Namespace: lfs::core")
-message(STATUS "  • Includes: tensor, core utilities, parameters, splat data")
+message(STATUS "+------------------------------------------------------------------+")
+message(STATUS "|  lfs_core - Core + Tensor Library (SHARED)                       |")
+message(STATUS "+------------------------------------------------------------------+")
+message(STATUS "  - Namespace: lfs::core")
+message(STATUS "  - Includes: tensor, core utilities, parameters, splat data")

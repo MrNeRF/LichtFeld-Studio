@@ -63,6 +63,9 @@ namespace lfs::vis {
         p.equirectangular = s.equirectangular;
         p.orthographic = s.orthographic;
         p.ortho_scale = s.ortho_scale;
+        p.depth_view_min = s.depth_view_min;
+        p.depth_view_max = s.depth_view_max;
+        p.depth_visualization_mode = static_cast<int>(s.depth_visualization_mode);
         p.selection_color_committed = detail::to_array(s.selection_color_committed);
         p.selection_color_preview = detail::to_array(s.selection_color_preview);
         p.selection_color_center_marker = detail::to_array(s.selection_color_center_marker);
@@ -82,6 +85,16 @@ namespace lfs::vis {
         p.depth_filter_max = detail::to_array(s.depth_filter_max);
         p.depth_filter_rotation = detail::to_array(s.depth_filter_transform.getRotation());
         p.depth_filter_translation = detail::to_array(s.depth_filter_transform.getTranslation());
+        p.lod_enabled = s.lod_enabled;
+        p.lod_debug_colors = s.lod_debug_colors;
+        p.lod_max_splats = static_cast<float>(s.lod_max_splats);
+        p.lod_page_pool_splats = static_cast<float>(s.lod_page_pool_splats);
+        p.lod_pool_vram_fraction = s.lod_pool_vram_fraction;
+        p.lod_fade_frames = static_cast<float>(s.lod_fade_frames);
+        p.lod_render_scale = s.lod_render_scale;
+        p.lod_cone_foveation = s.lod_cone_foveation;
+        p.lod_cone_inner_degrees = s.lod_cone_inner_degrees;
+        p.lod_cone_outer_degrees = s.lod_cone_outer_degrees;
         return p;
     }
 
@@ -127,16 +140,23 @@ namespace lfs::vis {
         s.show_pivot = p.show_pivot;
         s.split_view_mode = static_cast<SplitViewMode>(p.split_view_mode);
         s.split_position = p.split_position;
-        s.raster_backend = static_cast<lfs::rendering::GaussianRasterBackend>(p.raster_backend);
-        if (p.gut && s.raster_backend == lfs::rendering::GaussianRasterBackend::FastGs) {
-            s.raster_backend = lfs::rendering::GaussianRasterBackend::Gut;
-        } else if (p.gut && s.raster_backend == lfs::rendering::GaussianRasterBackend::VkSplat) {
-            s.raster_backend = lfs::rendering::GaussianRasterBackend::VkSplatGut;
-        }
+        const auto previous_backend = s.raster_backend;
+        const bool previous_gut = s.gut;
+        const auto requested_backend = static_cast<lfs::rendering::GaussianRasterBackend>(p.raster_backend);
+        const bool gut_toggle_only = requested_backend == previous_backend && p.gut != previous_gut;
+        s.raster_backend = gut_toggle_only
+                               ? lfs::rendering::viewerRasterBackendForGutMode(p.gut)
+                               : lfs::rendering::normalizeViewerRasterBackend(requested_backend, p.gut);
         s.gut = lfs::rendering::isGutBackend(s.raster_backend);
         s.equirectangular = p.equirectangular;
+        enforceProjectionBackend(s);
         s.orthographic = p.orthographic;
         s.ortho_scale = p.ortho_scale;
+        s.depth_view_min = p.depth_view_min;
+        s.depth_view_max = p.depth_view_max;
+        s.depth_visualization_mode =
+            static_cast<lfs::rendering::DepthVisualizationMode>(p.depth_visualization_mode);
+        sanitizeDepthViewSettings(s);
         s.selection_color_committed = detail::to_vec3(p.selection_color_committed);
         s.selection_color_preview = detail::to_vec3(p.selection_color_preview);
         s.selection_color_center_marker = detail::to_vec3(p.selection_color_center_marker);
@@ -157,6 +177,16 @@ namespace lfs::vis {
         s.depth_filter_transform =
             lfs::geometry::EuclideanTransform(detail::to_quat(p.depth_filter_rotation),
                                               detail::to_vec3(p.depth_filter_translation));
+        s.lod_enabled = p.lod_enabled;
+        s.lod_debug_colors = p.lod_debug_colors;
+        s.lod_max_splats = static_cast<size_t>(p.lod_max_splats);
+        s.lod_page_pool_splats = static_cast<size_t>(p.lod_page_pool_splats);
+        s.lod_pool_vram_fraction = std::clamp(p.lod_pool_vram_fraction, 0.05f, 0.9f);
+        s.lod_fade_frames = std::clamp(static_cast<int>(p.lod_fade_frames), 0, 240);
+        s.lod_render_scale = p.lod_render_scale;
+        s.lod_cone_foveation = p.lod_cone_foveation;
+        s.lod_cone_inner_degrees = p.lod_cone_inner_degrees;
+        s.lod_cone_outer_degrees = p.lod_cone_outer_degrees;
     }
 
 } // namespace lfs::vis

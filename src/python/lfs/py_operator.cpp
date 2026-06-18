@@ -27,7 +27,6 @@ namespace lfs::python {
 
         nb::enum_<vis::op::BuiltinOp>(ops, "BuiltinOp")
             .value("SelectionStroke", vis::op::BuiltinOp::SelectionStroke)
-            .value("BrushStroke", vis::op::BuiltinOp::BrushStroke)
             .value("TransformSet", vis::op::BuiltinOp::TransformSet)
             .value("TransformTranslate", vis::op::BuiltinOp::TransformTranslate)
             .value("TransformRotate", vis::op::BuiltinOp::TransformRotate)
@@ -54,7 +53,6 @@ namespace lfs::python {
             .value("Rotate", vis::op::BuiltinTool::Rotate)
             .value("Scale", vis::op::BuiltinTool::Scale)
             .value("Mirror", vis::op::BuiltinTool::Mirror)
-            .value("Brush", vis::op::BuiltinTool::Brush)
             .value("Align", vis::op::BuiltinTool::Align);
 
         nb::enum_<vis::op::OperatorFlags>(ops, "OperatorFlags")
