@@ -20,7 +20,11 @@ extern "C" {
 #include <cuda_runtime.h>
 #include <stb_image_write.h>
 
+#include <algorithm>
+#include <cctype>
 #include <fstream>
+#include <iomanip>
+#include <sstream>
 
 namespace lfs::io {
 
@@ -82,6 +86,63 @@ namespace lfs::io {
         }
 
     } // namespace
+
+    std::string make_frame_filename_stem(const std::string& pattern, int frame_num) {
+        const std::string fallback_pattern = "frame_%d";
+        const std::string& source = pattern.empty() ? fallback_pattern : pattern;
+        std::string result;
+        result.reserve(source.size() + 8);
+
+        bool replaced_frame = false;
+        for (size_t i = 0; i < source.size();) {
+            if (source[i] != '%') {
+                result.push_back(source[i++]);
+                continue;
+            }
+
+            if (i + 1 < source.size() && source[i + 1] == '%') {
+                result.push_back('%');
+                i += 2;
+                continue;
+            }
+
+            size_t cursor = i + 1;
+            char fill = ' ';
+            if (cursor < source.size() && source[cursor] == '0') {
+                fill = '0';
+                ++cursor;
+            }
+
+            int width = 0;
+            bool has_width = false;
+            while (cursor < source.size() && std::isdigit(static_cast<unsigned char>(source[cursor]))) {
+                has_width = true;
+                width = std::min(width * 10 + (source[cursor] - '0'), 64);
+                ++cursor;
+            }
+
+            if (cursor < source.size() && source[cursor] == 'd') {
+                std::ostringstream frame;
+                if (has_width)
+                    frame << std::setw(width) << std::setfill(fill);
+                frame << frame_num;
+                result += frame.str();
+                replaced_frame = true;
+                i = cursor + 1;
+                continue;
+            }
+
+            result.push_back(source[i++]);
+        }
+
+        if (!replaced_frame) {
+            if (!result.empty())
+                result.push_back('_');
+            result += std::to_string(frame_num);
+        }
+
+        return result;
+    }
 
     class VideoFrameExtractor::Impl {
     public:
@@ -341,10 +402,8 @@ namespace lfs::io {
                 };
 
                 auto generate_filename = [&](int frame_num) {
-                    char buf[256];
-                    std::snprintf(buf, sizeof(buf), params.filename_pattern.c_str(), frame_num);
                     std::string ext = params.format == ImageFormat::PNG ? ".png" : ".jpg";
-                    return params.output_dir / (std::string(buf) + ext);
+                    return params.output_dir / (make_frame_filename_stem(params.filename_pattern, frame_num) + ext);
                 };
 
                 auto process_frame_hw = [&](AVFrame* hw_frame) {

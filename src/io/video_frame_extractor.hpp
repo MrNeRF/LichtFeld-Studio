@@ -62,4 +62,6 @@ namespace lfs::io {
         Impl* impl_;
     };
 
+    std::string make_frame_filename_stem(const std::string& pattern, int frame_num);
+
 } // namespace lfs::io

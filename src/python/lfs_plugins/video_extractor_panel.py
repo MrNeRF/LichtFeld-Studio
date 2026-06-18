@@ -21,6 +21,56 @@ def _format_time(seconds: float) -> str:
 SCALE_VALUES = (0.25, 0.5, 0.75, 1.0)
 
 
+def _make_frame_filename_stem(pattern: str, frame_num: int) -> str:
+    source = pattern or "frame_%d"
+    result = []
+    replaced_frame = False
+    idx = 0
+
+    while idx < len(source):
+        if source[idx] != "%":
+            result.append(source[idx])
+            idx += 1
+            continue
+
+        if idx + 1 < len(source) and source[idx + 1] == "%":
+            result.append("%")
+            idx += 2
+            continue
+
+        cursor = idx + 1
+        fill = " "
+        if cursor < len(source) and source[cursor] == "0":
+            fill = "0"
+            cursor += 1
+
+        width = 0
+        has_width = False
+        while cursor < len(source) and source[cursor] in "0123456789":
+            has_width = True
+            width = min(width * 10 + int(source[cursor]), 64)
+            cursor += 1
+
+        if cursor < len(source) and source[cursor] == "d":
+            frame = str(frame_num)
+            if has_width and len(frame) < width:
+                frame = (fill * (width - len(frame))) + frame
+            result.append(frame)
+            replaced_frame = True
+            idx = cursor + 1
+            continue
+
+        result.append(source[idx])
+        idx += 1
+
+    stem = "".join(result)
+    if not replaced_frame:
+        if stem:
+            stem += "_"
+        stem += str(frame_num)
+    return stem
+
+
 class VideoExtractorPanel(Panel):
     """Floating retained panel for video frame extraction."""
 
@@ -534,10 +584,7 @@ class VideoExtractorPanel(Panel):
 
     def _get_pattern_example(self) -> str:
         ext = "png" if self._format_index == 0 else "jpg"
-        try:
-            name = self._filename_pattern.replace("%d", "1")
-        except Exception:
-            name = "frame_1"
+        name = _make_frame_filename_stem(self._filename_pattern, 1)
         template = lf.ui.tr("video_extractor.example")
         if template:
             return template.replace("%s", name, 1).replace("%s", f".{ext}", 1)

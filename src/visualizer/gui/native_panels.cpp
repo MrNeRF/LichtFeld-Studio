@@ -42,12 +42,23 @@ namespace lfs::vis::gui::native_panels {
         const auto& t = lfs::vis::theme();
         ImGui::SetNextWindowSize(ImVec2(750, 600), ImGuiCond_FirstUseEver);
         t.pushModalStyle();
-        if (ImGui::Begin(LOC(lichtfeld::Strings::VideoExtractor::TITLE), &open)) {
-            if (!widget_->render())
-                open = false;
+        bool began = false;
+        try {
+            const bool visible = ImGui::Begin(LOC(lichtfeld::Strings::VideoExtractor::TITLE), &open);
+            began = true;
+            if (visible) {
+                if (!widget_->render())
+                    open = false;
+            }
+            ImGui::End();
+            began = false;
+            t.popModalStyle();
+        } catch (...) {
+            if (began)
+                ImGui::End();
+            t.popModalStyle();
+            throw;
         }
-        ImGui::End();
-        t.popModalStyle();
 
         if (!open)
             PanelRegistry::instance().set_panel_enabled("native.video_extractor", false);

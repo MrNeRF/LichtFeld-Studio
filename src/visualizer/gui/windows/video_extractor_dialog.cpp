@@ -676,9 +676,8 @@ namespace lfs::gui {
 
         ImGui::SameLine();
         const char* ext = format_selection_ == 0 ? ".png" : ".jpg";
-        char preview[128];
-        std::snprintf(preview, sizeof(preview), filename_pattern_.data(), 1);
-        ImGui::TextColored(t.palette.text_dim, LOC(VideoExtractor::EXAMPLE), preview, ext);
+        const std::string preview = io::make_frame_filename_stem(filename_pattern_.data(), 1);
+        ImGui::TextColored(t.palette.text_dim, LOC(VideoExtractor::EXAMPLE), preview.c_str(), ext);
     }
 
     bool VideoExtractorDialog::render() {
