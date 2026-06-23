@@ -26,7 +26,7 @@ namespace lfs::vis::input {
 
     namespace {
 
-        constexpr int PROFILE_VERSION = 15; // Version 15 adds crop apply Enter bindings.
+        constexpr int PROFILE_VERSION = 16; // Version 16 promotes tool/control activation bindings to global.
         constexpr int REMOVED_TOOL_MODE_2 = 2;
         constexpr int REMOVED_ACTION_39 = 39;
         constexpr int REMOVED_ACTION_66 = 66;
@@ -93,6 +93,26 @@ namespace lfs::vis::input {
             case Action::DEPTH_ADJUST_SIDE:
             case Action::TOGGLE_SELECTION_DEPTH_FILTER:
             case Action::TOGGLE_SELECTION_CROP_FILTER:
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        [[nodiscard]] bool isToolControlActivationAction(const Action action) {
+            switch (action) {
+            case Action::TOOL_SELECT:
+            case Action::TOOL_TRANSLATE:
+            case Action::TOOL_ROTATE:
+            case Action::TOOL_SCALE:
+            case Action::TOOL_MIRROR:
+            case Action::TOOL_ALIGN:
+            case Action::SELECT_MODE_CENTERS:
+            case Action::SELECT_MODE_RECTANGLE:
+            case Action::SELECT_MODE_POLYGON:
+            case Action::SELECT_MODE_LASSO:
+            case Action::SELECT_MODE_RINGS:
+            case Action::SELECT_MODE_COLOR:
                 return true;
             default:
                 return false;
@@ -212,6 +232,55 @@ namespace lfs::vis::input {
                 }
             }
             return added;
+        }
+
+        size_t promoteToolControlActivationBindings(std::vector<Binding>& bindings,
+                                                    const int version,
+                                                    std::string_view profile_name) {
+            if (version >= 16) {
+                return 0;
+            }
+
+            size_t changed = 0;
+            for (auto it = bindings.begin(); it != bindings.end();) {
+                if (it->mode == ToolMode::GLOBAL || !isToolControlActivationAction(it->action)) {
+                    ++it;
+                    continue;
+                }
+
+                const bool duplicate_global_action_trigger = std::ranges::any_of(
+                    bindings,
+                    [&](const Binding& current) {
+                        return current.mode == ToolMode::GLOBAL &&
+                               current.action == it->action &&
+                               triggersOverlap(current.trigger, it->trigger);
+                    });
+                if (duplicate_global_action_trigger) {
+                    it = bindings.erase(it);
+                    ++changed;
+                    continue;
+                }
+
+                const bool trigger_conflicts_global = std::ranges::any_of(
+                    bindings,
+                    [&](const Binding& current) {
+                        return current.mode == ToolMode::GLOBAL &&
+                               triggersOverlap(current.trigger, it->trigger);
+                    });
+                if (trigger_conflicts_global) {
+                    LOG_WARN("Profile '{}' keeps tool/control shortcut '{}' in mode {} because its trigger conflicts globally",
+                             profile_name, getActionName(it->action), static_cast<int>(it->mode));
+                    ++it;
+                    continue;
+                }
+
+                LOG_INFO("Promoting profile '{}' tool/control shortcut '{}' from mode {} to Global mode",
+                         profile_name, getActionName(it->action), static_cast<int>(it->mode));
+                it->mode = ToolMode::GLOBAL;
+                ++changed;
+                ++it;
+            }
+            return changed;
         }
 
     } // namespace
@@ -449,8 +518,9 @@ namespace lfs::vis::input {
                          added_bindings, current_profile_name_);
             }
 
+            const size_t promoted = promoteToolControlActivationBindings(bindings_, version, current_profile_name_);
             const size_t collapsed = collapseRedundantModeBindings(version);
-            const size_t migrated = collapsed + migrateLoadedProfile(version);
+            const size_t migrated = promoted + collapsed + migrateLoadedProfile(version);
 
             rebuildLookupMaps();
             LOG_INFO("Loaded profile '{}' ({} bindings) from {}", current_profile_name_, bindings_.size(), lfs::core::path_to_utf8(path));

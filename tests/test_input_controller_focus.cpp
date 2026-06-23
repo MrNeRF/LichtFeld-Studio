@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/event_bridge/scoped_handler.hpp"
+#include "core/editor_context.hpp"
 #include "core/events.hpp"
 #include "core/services.hpp"
 #include "gui/gui_focus_state.hpp"
@@ -1034,6 +1035,85 @@ namespace lfs::vis {
                   input::Action::APPLY_CROP_BOX);
 
         std::filesystem::remove(profile_path);
+    }
+
+    TEST_F(InputControllerFocusTest, VersionFifteenProfilePromotesToolControlActivationBindingsToGlobal) {
+        const auto profile_path =
+            std::filesystem::temp_directory_path() / "lfs_input_bindings_legacy_v15_tool_controls.json";
+        std::filesystem::remove(profile_path);
+        {
+            std::ofstream file(profile_path);
+            ASSERT_TRUE(file.is_open());
+            file << R"({
+  "name": "LegacyToolControls",
+  "version": 15,
+  "bindings": [
+    {
+      "mode": )" << static_cast<int>(input::ToolMode::SELECTION) << R"(,
+      "action": )" << static_cast<int>(input::Action::SELECT_MODE_RECTANGLE) << R"(,
+      "description": "Selection: Rectangle",
+      "trigger_type": "key",
+      "key": )" << input::KEY_2 << R"(,
+      "modifiers": )" << input::MODIFIER_CTRL << R"(
+    },
+    {
+      "mode": )" << static_cast<int>(input::ToolMode::ROTATE) << R"(,
+      "action": )" << static_cast<int>(input::Action::TOOL_MIRROR) << R"(,
+      "description": "Mirror Tool",
+      "trigger_type": "key",
+      "key": )" << input::KEY_M << R"(,
+      "modifiers": )" << input::MODIFIER_CTRL << R"(
+    }
+  ]
+})";
+        }
+
+        input::InputBindings loaded;
+        ASSERT_TRUE(loaded.loadProfileFromFile(profile_path));
+
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::TRANSLATE,
+                                         input::KEY_2,
+                                         input::MODIFIER_CTRL),
+                  input::Action::SELECT_MODE_RECTANGLE);
+        EXPECT_TRUE(loaded.getTriggerForAction(input::Action::SELECT_MODE_RECTANGLE,
+                                               input::ToolMode::GLOBAL)
+                        .has_value());
+        EXPECT_FALSE(loaded.getTriggerForAction(input::Action::SELECT_MODE_RECTANGLE,
+                                                input::ToolMode::SELECTION)
+                         .has_value());
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::SELECTION,
+                                         input::KEY_M,
+                                         input::MODIFIER_CTRL),
+                  input::Action::TOOL_MIRROR);
+        EXPECT_TRUE(loaded.getTriggerForAction(input::Action::TOOL_MIRROR,
+                                               input::ToolMode::GLOBAL)
+                        .has_value());
+        EXPECT_FALSE(loaded.getTriggerForAction(input::Action::TOOL_MIRROR,
+                                                input::ToolMode::ROTATE)
+                         .has_value());
+
+        std::filesystem::remove(profile_path);
+    }
+
+    TEST_F(InputControllerFocusTest, ToolControlActivationShortcutsResolveAcrossModesAtRuntime) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+
+        controller.getBindings().setBinding(input::ToolMode::SELECTION,
+                                            input::Action::TOOL_MIRROR,
+                                            input::KeyTrigger{input::KEY_M, input::MODIFIER_CTRL});
+
+        lfs::event::ScopedHandler handlers;
+        int tool_mode = -1;
+        handlers.subscribe<core::events::tools::SetToolbarTool>(
+            [&](const auto& event) { tool_mode = event.tool_mode; });
+
+        controller.handleKey(input::KEY_M, input::ACTION_PRESS, input::MODIFIER_CTRL);
+
+        EXPECT_EQ(tool_mode, static_cast<int>(ToolType::Mirror));
     }
 
     TEST_F(InputControllerFocusTest, LegacyProfileMigrationAddsOnlyVersionedModalDefaults) {
