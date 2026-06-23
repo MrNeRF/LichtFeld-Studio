@@ -168,11 +168,13 @@ namespace lfs::io {
         RADIAL_FISHEYE = 9,
         THIN_PRISM_FISHEYE = 10,
         UNDEFINED = 11,
-        // Equirectangular / spherical 360 panorama model. The id matches the
-        // SPHERICAL model id written by the equirectangular COLMAP fork
-        // (params: [width, height], no intrinsics). Mapped to
-        // CameraModelType::EQUIRECTANGULAR, which the rasterizer handles natively.
-        SPHERICAL = 17
+        // Equirectangular 360 panorama model (COLMAP model id 17, params
+        // [width, height], no intrinsics). Mapped to
+        // CameraModelType::EQUIRECTANGULAR, which the rasterizer handles
+        // natively. Upstream COLMAP names this model "EQUIRECTANGULAR"
+        // (colmap/colmap#4441); the legacy "SPHERICAL" name written by the
+        // original equirectangular fork is still accepted on read.
+        EQUIRECTANGULAR = 17
     };
 
     static const std::unordered_map<int, std::pair<CAMERA_MODEL, int32_t>> camera_model_ids = {
@@ -188,7 +190,7 @@ namespace lfs::io {
         {9, {CAMERA_MODEL::RADIAL_FISHEYE, 5}},
         {10, {CAMERA_MODEL::THIN_PRISM_FISHEYE, 12}},
         {11, {CAMERA_MODEL::UNDEFINED, -1}},
-        {17, {CAMERA_MODEL::SPHERICAL, 2}}};
+        {17, {CAMERA_MODEL::EQUIRECTANGULAR, 2}}};
 
     static const std::unordered_map<std::string, CAMERA_MODEL> camera_model_names = {
         {"SIMPLE_PINHOLE", CAMERA_MODEL::SIMPLE_PINHOLE},
@@ -202,9 +204,10 @@ namespace lfs::io {
         {"SIMPLE_RADIAL_FISHEYE", CAMERA_MODEL::SIMPLE_RADIAL_FISHEYE},
         {"RADIAL_FISHEYE", CAMERA_MODEL::RADIAL_FISHEYE},
         {"THIN_PRISM_FISHEYE", CAMERA_MODEL::THIN_PRISM_FISHEYE},
-        {"SPHERICAL", CAMERA_MODEL::SPHERICAL},
-        // Accept EQUIRECTANGULAR as an alias for the same 360 panorama model.
-        {"EQUIRECTANGULAR", CAMERA_MODEL::SPHERICAL}};
+        {"EQUIRECTANGULAR", CAMERA_MODEL::EQUIRECTANGULAR},
+        // Accept the legacy "SPHERICAL" name (written by the original
+        // equirectangular COLMAP fork) as an alias for the same model.
+        {"SPHERICAL", CAMERA_MODEL::EQUIRECTANGULAR}};
 
     // Placeholder focal length for equirectangular/spherical cameras. They carry
     // no real intrinsics; the rasterizer reinterprets K for EQUIRECTANGULAR
@@ -226,7 +229,9 @@ namespace lfs::io {
         case CAMERA_MODEL::SIMPLE_RADIAL_FISHEYE: return "SIMPLE_RADIAL_FISHEYE";
         case CAMERA_MODEL::RADIAL_FISHEYE: return "RADIAL_FISHEYE";
         case CAMERA_MODEL::THIN_PRISM_FISHEYE: return "THIN_PRISM_FISHEYE";
-        case CAMERA_MODEL::SPHERICAL: return "SPHERICAL";
+        // Write the canonical upstream name so exported reconstructions round-
+        // trip with current COLMAP (which no longer accepts "SPHERICAL").
+        case CAMERA_MODEL::EQUIRECTANGULAR: return "EQUIRECTANGULAR";
         default: return "UNDEFINED";
         }
     }
@@ -534,7 +539,7 @@ namespace lfs::io {
             params[3] /= factor; // cy
             break;
 
-        case CAMERA_MODEL::SPHERICAL:
+        case CAMERA_MODEL::EQUIRECTANGULAR:
             params[0] /= factor; // width
             params[1] /= factor; // height
             break;
@@ -1227,7 +1232,7 @@ namespace lfs::io {
                                   std::format("FOV camera model not supported for image '{}'", img.name),
                                   image_path);
 
-            case CAMERA_MODEL::SPHERICAL:
+            case CAMERA_MODEL::EQUIRECTANGULAR:
                 // Equirectangular 360 panorama. params = [width, height]; no real
                 // intrinsics. The EQUIRECTANGULAR rasterizer derives projection
                 // from the image dimensions, so we only set placeholder focal/center.
@@ -2194,7 +2199,7 @@ namespace lfs::io {
                                   std::format("FOV camera model not supported for image '{}'", img.name),
                                   sparse_path);
 
-            case CAMERA_MODEL::SPHERICAL:
+            case CAMERA_MODEL::EQUIRECTANGULAR:
                 // Equirectangular 360 panorama. params = [width, height]; no real
                 // intrinsics. The EQUIRECTANGULAR rasterizer derives projection
                 // from the image dimensions, so we only set placeholder focal/center.
