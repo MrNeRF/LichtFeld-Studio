@@ -204,6 +204,7 @@ namespace lfs::vis {
             const bool right = area->x >= size.x - kResizeBorder && area->x < size.x;
             const bool top = area->y >= 0 && area->y < kResizeBorder;
             const bool bottom = area->y >= size.y - kResizeBorder && area->y < size.y;
+            const bool titlebar_point = self->isTitlebarDragPoint(area->x, area->y);
 
             if (!self->isMaximized()) {
                 if (top && left)
@@ -218,13 +219,15 @@ namespace lfs::vis {
                     return SDL_HITTEST_RESIZE_LEFT;
                 if (right)
                     return SDL_HITTEST_RESIZE_RIGHT;
-                if (top)
+                if (top && !titlebar_point)
                     return SDL_HITTEST_RESIZE_TOP;
                 if (bottom)
                     return SDL_HITTEST_RESIZE_BOTTOM;
             }
 
-            if (self->isTitlebarDragPoint(area->x, area->y)) {
+            if (titlebar_point) {
+                if (self->isMaximized())
+                    return SDL_HITTEST_NORMAL;
                 if (self->usesEventDrivenTitlebarDrag())
                     return SDL_HITTEST_NORMAL;
                 return SDL_HITTEST_DRAGGABLE;
@@ -551,10 +554,20 @@ namespace lfs::vis {
             }
             break;
 
+        case SDL_EVENT_WINDOW_MAXIMIZED:
+            if (!eventTargetsWindow(event, main_window_id))
+                break;
+            LOG_DEBUG("SDL window event: {} data1={} data2={} fullscreen={}",
+                      windowEventName(event.type),
+                      event.window.data1,
+                      event.window.data2,
+                      is_fullscreen_);
+            normalizeNativeMaximize("native-window-maximized");
+            break;
+
         case SDL_EVENT_WINDOW_RESIZED:
         case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
         case SDL_EVENT_WINDOW_MINIMIZED:
-        case SDL_EVENT_WINDOW_MAXIMIZED:
         case SDL_EVENT_WINDOW_RESTORED:
             if (!eventTargetsWindow(event, main_window_id))
                 break;
@@ -851,6 +864,24 @@ namespace lfs::vis {
 
         SDL_GetWindowPosition(window_, &borderless_restore_pos_.x, &borderless_restore_pos_.y);
         SDL_GetWindowSize(window_, &borderless_restore_size_.x, &borderless_restore_size_.y);
+    }
+
+    void WindowManager::normalizeNativeMaximize(const char* const reason) {
+        if (!window_ || is_fullscreen_ || is_borderless_maximized_) {
+            updateWindowSize(reason);
+            return;
+        }
+
+        if (isSdlMaximized()) {
+            if (!SDL_RestoreWindow(window_)) {
+                LOG_WARN("Failed to restore SDL-maximized window before normalizing maximize: {}", SDL_GetError());
+                updateWindowSize(reason);
+                return;
+            }
+            saveBorderlessRestoreGeometry();
+        }
+
+        maximizeBorderless(reason, false);
     }
 
     void WindowManager::maximizeBorderless(const char* const reason, const bool save_restore_geometry) {

@@ -114,6 +114,7 @@ namespace lfs::vis {
         void finishTitlebarDragIfReleased();
         [[nodiscard]] bool isSdlMaximized() const;
         void saveBorderlessRestoreGeometry();
+        void normalizeNativeMaximize(const char* reason);
         void maximizeBorderless(const char* reason, bool save_restore_geometry);
         void restoreMaximized(const char* reason);
         [[nodiscard]] bool titlebarDragMovedEnough() const;
