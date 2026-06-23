@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/event_bridge/scoped_handler.hpp"
+#include "core/editor_context.hpp"
 #include "core/events.hpp"
 #include "core/services.hpp"
 #include "gui/gui_focus_state.hpp"
@@ -1034,6 +1035,56 @@ namespace lfs::vis {
                   input::Action::APPLY_CROP_BOX);
 
         std::filesystem::remove(profile_path);
+    }
+
+    TEST_F(InputControllerFocusTest, ToolControlActivationShortcutsResolveAcrossModesAtRuntime) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+
+        controller.getBindings().setBinding(input::ToolMode::SELECTION,
+                                            input::Action::TOOL_MIRROR,
+                                            input::KeyTrigger{input::KEY_M, input::MODIFIER_CTRL});
+
+        lfs::event::ScopedHandler handlers;
+        int tool_mode = -1;
+        handlers.subscribe<core::events::tools::SetToolbarTool>(
+            [&](const auto& event) { tool_mode = event.tool_mode; });
+
+        controller.handleKey(input::KEY_M, input::ACTION_PRESS, input::MODIFIER_CTRL);
+
+        EXPECT_EQ(tool_mode, static_cast<int>(ToolType::Mirror));
+        EXPECT_TRUE(controller.getBindings()
+                        .getTriggerForAction(input::Action::TOOL_MIRROR,
+                                             input::ToolMode::SELECTION)
+                        .has_value());
+        EXPECT_FALSE(controller.getBindings()
+                         .getTriggerForAction(input::Action::TOOL_MIRROR,
+                                              input::ToolMode::GLOBAL)
+                         .has_value());
+    }
+
+    TEST_F(InputControllerFocusTest, ToolLocalOperationalShortcutsDoNotResolveAcrossModes) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+
+        controller.getBindings().setBinding(input::ToolMode::SELECTION,
+                                            input::Action::DELETE_SELECTED,
+                                            input::KeyTrigger{input::KEY_B, input::MODIFIER_CTRL});
+
+        lfs::event::ScopedHandler handlers;
+        int delete_count = 0;
+        handlers.subscribe<core::events::cmd::DeleteSelected>(
+            [&](const auto&) { ++delete_count; });
+
+        controller.handleKey(input::KEY_B, input::ACTION_PRESS, input::MODIFIER_CTRL);
+
+        EXPECT_EQ(delete_count, 0);
     }
 
     TEST_F(InputControllerFocusTest, LegacyProfileMigrationAddsOnlyVersionedModalDefaults) {
