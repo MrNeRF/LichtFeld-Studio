@@ -4417,6 +4417,80 @@ namespace lfs::python {
             "Check if an operator is currently active");
 
         m.def(
+            "can_edit_gaussian_selection", []() -> bool {
+                const auto* editor = get_editor_context();
+                return editor && editor->canSelectGaussians();
+            },
+            "Return true when Gaussian selection editing is available");
+
+        m.def(
+            "has_gaussian_selection", []() -> bool {
+                const auto* sm = get_scene_manager();
+                return sm && sm->getScene().hasSelection();
+            },
+            "Return true when any Gaussians are selected");
+
+        m.def(
+            "has_gaussian_clipboard", []() -> bool {
+                const auto* sm = get_scene_manager();
+                return sm && sm->hasGaussianClipboard();
+            },
+            "Return true when copied Gaussians are available for paste");
+
+        m.def(
+            "copy_gaussian_selection", []() {
+                auto* editor = get_editor_context();
+                auto* sm = get_scene_manager();
+                if (!editor || !editor->canSelectGaussians() || !sm || !sm->getScene().hasSelection()) {
+                    return;
+                }
+                sm->copySelectedGaussians();
+            },
+            "Copy selected Gaussians to the internal Gaussian clipboard");
+
+        m.def(
+            "paste_gaussian_selection", []() {
+                auto* editor = get_editor_context();
+                auto* sm = get_scene_manager();
+                if (!editor || !editor->canSelectGaussians() || !sm || !sm->hasGaussianClipboard()) {
+                    return;
+                }
+                sm->pasteSelectionFromClipboard();
+            },
+            "Paste copied Gaussians from the internal Gaussian clipboard");
+
+        m.def(
+            "invert_gaussian_selection", []() {
+                const auto* editor = get_editor_context();
+                if (!editor || !editor->canSelectGaussians()) {
+                    return;
+                }
+                lfs::core::events::cmd::InvertSelection{}.emit();
+            },
+            "Invert the current Gaussian selection");
+
+        m.def(
+            "select_all_gaussians", []() {
+                const auto* editor = get_editor_context();
+                if (!editor || !editor->canSelectGaussians()) {
+                    return;
+                }
+                lfs::core::events::cmd::SelectAll{}.emit();
+            },
+            "Select all editable Gaussians");
+
+        m.def(
+            "deselect_all_gaussians", []() {
+                const auto* editor = get_editor_context();
+                auto* sm = get_scene_manager();
+                if (!editor || !editor->canSelectGaussians() || !sm || !sm->getScene().hasSelection()) {
+                    return;
+                }
+                lfs::core::events::cmd::DeselectAll{}.emit();
+            },
+            "Deselect all selected Gaussians");
+
+        m.def(
             "set_gizmo_type", [](const std::string& type) {
                 if (auto* editor = get_editor_context())
                     editor->setGizmoType(type);

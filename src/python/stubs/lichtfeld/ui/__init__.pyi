@@ -2132,6 +2132,30 @@ def clear_active_operator() -> None:
 def has_active_operator() -> bool:
     """Check if an operator is currently active"""
 
+def can_edit_gaussian_selection() -> bool:
+    """Return true when Gaussian selection editing is available"""
+
+def has_gaussian_selection() -> bool:
+    """Return true when any Gaussians are selected"""
+
+def has_gaussian_clipboard() -> bool:
+    """Return true when copied Gaussians are available for paste"""
+
+def copy_gaussian_selection() -> None:
+    """Copy selected Gaussians to the internal Gaussian clipboard"""
+
+def paste_gaussian_selection() -> None:
+    """Paste copied Gaussians from the internal Gaussian clipboard"""
+
+def invert_gaussian_selection() -> None:
+    """Invert the current Gaussian selection"""
+
+def select_all_gaussians() -> None:
+    """Select all editable Gaussians"""
+
+def deselect_all_gaussians() -> None:
+    """Deselect all selected Gaussians"""
+
 def set_gizmo_type(type: str) -> None:
     """Set gizmo type without blocking camera"""
 
