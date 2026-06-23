@@ -867,21 +867,31 @@ namespace lfs::vis {
     }
 
     void WindowManager::normalizeNativeMaximize(const char* const reason) {
-        if (!window_ || is_fullscreen_ || is_borderless_maximized_) {
+        if (!window_ || is_fullscreen_) {
             updateWindowSize(reason);
             return;
         }
 
+        bool restored_sdl_maximize = false;
         if (isSdlMaximized()) {
             if (!SDL_RestoreWindow(window_)) {
                 LOG_WARN("Failed to restore SDL-maximized window before normalizing maximize: {}", SDL_GetError());
                 updateWindowSize(reason);
                 return;
             }
+            restored_sdl_maximize = true;
+        }
+
+        if (is_borderless_maximized_) {
+            updateWindowSize(reason);
+            return;
+        }
+
+        if (restored_sdl_maximize) {
             saveBorderlessRestoreGeometry();
         }
 
-        maximizeBorderless(reason, false);
+        maximizeBorderless(reason, !restored_sdl_maximize);
     }
 
     void WindowManager::maximizeBorderless(const char* const reason, const bool save_restore_geometry) {
