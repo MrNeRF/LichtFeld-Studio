@@ -30,15 +30,6 @@ namespace lfs::vis::input {
         constexpr int REMOVED_TOOL_MODE_2 = 2;
         constexpr int REMOVED_ACTION_39 = 39;
         constexpr int REMOVED_ACTION_66 = 66;
-        constexpr std::array<ToolMode, 7> ALL_MODES = {
-            ToolMode::GLOBAL,
-            ToolMode::SELECTION,
-            ToolMode::ALIGN,
-            ToolMode::CROP_BOX,
-            ToolMode::TRANSLATE,
-            ToolMode::ROTATE,
-            ToolMode::SCALE,
-        };
         constexpr std::array<ToolMode, 4> NODE_PICK_MODES = {
             ToolMode::GLOBAL,
             ToolMode::TRANSLATE,
@@ -206,7 +197,7 @@ namespace lfs::vis::input {
                     break;
                 default:
                     if (!describe(binding.action).inherits_from_global) {
-                        added += mirrorLegacyBindingToModes(bindings, binding, binding.action, ALL_MODES);
+                        added += mirrorLegacyBindingToModes(bindings, binding, binding.action, kAllToolModes);
                     }
                     break;
                 }

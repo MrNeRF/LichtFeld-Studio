@@ -35,7 +35,6 @@
 #include "visualizer/scene_coordinate_utils.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <format>
 #include <limits>
@@ -318,17 +317,7 @@ namespace lfs::vis {
                                                          const input::ToolMode current_mode,
                                                          const int key,
                                                          const int mods) {
-            constexpr std::array modes = {
-                input::ToolMode::GLOBAL,
-                input::ToolMode::SELECTION,
-                input::ToolMode::ALIGN,
-                input::ToolMode::CROP_BOX,
-                input::ToolMode::TRANSLATE,
-                input::ToolMode::ROTATE,
-                input::ToolMode::SCALE,
-            };
-
-            for (const auto mode : modes) {
+            for (const auto mode : input::kAllToolModes) {
                 if (mode == current_mode) {
                     continue;
                 }
