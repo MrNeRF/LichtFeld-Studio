@@ -1181,6 +1181,7 @@
     "action.toggle_split_view": "Geteilte Ansicht umschalten",
     "action.toggle_independent_split_view": "Unabhängige geteilte Ansicht umschalten",
     "action.toggle_gt_comparison": "GT-Vergleich umschalten",
+    "action.toggle_camera_frustums": "Kamera-Frustums umschalten",
     "action.toggle_depth_mode": "Tiefenbox umschalten",
     "action.cycle_ply": "PLY durchschalten",
     "action.delete_selected": "Ausgewählte Gaussians löschen",

@@ -1604,6 +1604,14 @@ namespace lfs::vis {
                 cmd::ToggleGTComparison{}.emit();
                 return;
 
+            case input::Action::TOGGLE_CAMERA_FRUSTUMS:
+                if (auto* rendering_manager = services().renderingOrNull()) {
+                    auto settings = rendering_manager->getSettings();
+                    settings.show_camera_frustums = !settings.show_camera_frustums;
+                    rendering_manager->updateSettings(settings);
+                }
+                return;
+
             case input::Action::CAMERA_NEXT_VIEW:
             case input::Action::CAMERA_PREV_VIEW: {
                 const auto* trainer = services().trainerOrNull();

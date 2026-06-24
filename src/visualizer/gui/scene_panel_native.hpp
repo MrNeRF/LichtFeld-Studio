@@ -76,6 +76,7 @@ namespace lfs::vis::gui {
             uint64_t log_generation = 0;
             lfs::core::LogLevel log_level = lfs::core::LogLevel::Off;
             uint64_t language_generation = 0;
+            uint64_t render_settings_generation = 0;
             int dp_ratio_milli = 1000;
             bool invert_masks = false;
 

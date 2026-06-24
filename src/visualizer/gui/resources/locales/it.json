@@ -1181,6 +1181,7 @@
     "action.toggle_split_view": "Attiva vista divisa",
     "action.toggle_independent_split_view": "Attiva vista divisa indipendente",
     "action.toggle_gt_comparison": "Attiva confronto GT",
+    "action.toggle_camera_frustums": "Attiva/disattiva frustum fotocamera",
     "action.toggle_depth_mode": "Attiva box di profondità",
     "action.cycle_ply": "Scorri PLY",
     "action.delete_selected": "Elimina gaussiane selezionate",

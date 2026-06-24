@@ -12,6 +12,7 @@
 #include "internal/viewport.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "rendering/rendering_manager.hpp"
 
 #include <cstdint>
 #include <cstdlib>
@@ -986,6 +987,89 @@ namespace lfs::vis {
         EXPECT_FALSE(scroll_trigger->chord_key.has_value());
         EXPECT_TRUE(input::describe(input::Action::HISTOGRAM_ZOOM_MARKED).allowed_kinds &
                     input::TRIGGER_KIND_MOUSE_SCROLL);
+    }
+
+    TEST_F(InputControllerFocusTest, CameraFrustumsDefaultToAltCAndToggleRenderSetting) {
+        RenderingManager rendering_manager;
+        services().set(&rendering_manager);
+
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+        router.focusViewportKeyboard();
+
+        EXPECT_EQ(controller.getBindings().getActionForKey(input::ToolMode::GLOBAL,
+                                                           input::KEY_C,
+                                                           input::MODIFIER_ALT),
+                  input::Action::TOGGLE_CAMERA_FRUSTUMS);
+        EXPECT_EQ(input::shortcutScopeForAction(input::Action::TOGGLE_CAMERA_FRUSTUMS),
+                  input::ShortcutScope::Viewport);
+
+        EXPECT_FALSE(rendering_manager.getSettings().show_camera_frustums);
+        controller.handleKey(input::KEY_C, input::ACTION_PRESS, input::KEYMOD_ALT);
+        EXPECT_TRUE(rendering_manager.getSettings().show_camera_frustums);
+        controller.handleKey(input::KEY_C, input::ACTION_PRESS, input::KEYMOD_ALT);
+        EXPECT_FALSE(rendering_manager.getSettings().show_camera_frustums);
+    }
+
+    TEST_F(InputControllerFocusTest, VersionFifteenProfileMigratesCameraFrustumShortcutWhenFree) {
+        const auto profile_path = std::filesystem::temp_directory_path() / "lfs_input_bindings_legacy_v15.json";
+        std::filesystem::remove(profile_path);
+        {
+            std::ofstream file(profile_path);
+            ASSERT_TRUE(file.is_open());
+            file << R"({
+  "name": "LegacyV15",
+  "version": 15,
+  "bindings": []
+})";
+        }
+
+        input::InputBindings loaded;
+        ASSERT_TRUE(loaded.loadProfileFromFile(profile_path));
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL,
+                                         input::KEY_C,
+                                         input::MODIFIER_ALT),
+                  input::Action::TOGGLE_CAMERA_FRUSTUMS);
+
+        std::filesystem::remove(profile_path);
+    }
+
+    TEST_F(InputControllerFocusTest, VersionFifteenProfilePreservesOccupiedAltC) {
+        const auto profile_path = std::filesystem::temp_directory_path() / "lfs_input_bindings_legacy_v15_alt_c.json";
+        std::filesystem::remove(profile_path);
+        {
+            std::ofstream file(profile_path);
+            ASSERT_TRUE(file.is_open());
+            file << R"({
+  "name": "LegacyV15AltC",
+  "version": 15,
+  "bindings": [
+    {
+      "mode": 0,
+      "action": 25,
+      "description": "Cycle PLY",
+      "trigger_type": "key",
+      "key": 67,
+      "modifiers": 4
+    }
+  ]
+})";
+        }
+
+        input::InputBindings loaded;
+        ASSERT_TRUE(loaded.loadProfileFromFile(profile_path));
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL,
+                                         input::KEY_C,
+                                         input::MODIFIER_ALT),
+                  input::Action::CYCLE_PLY);
+        EXPECT_FALSE(loaded.getTriggerForAction(input::Action::TOGGLE_CAMERA_FRUSTUMS,
+                                                input::ToolMode::GLOBAL)
+                         .has_value());
+
+        std::filesystem::remove(profile_path);
     }
 
     TEST_F(InputControllerFocusTest, CropApplyDefaultsToEnterAndNumEnter) {

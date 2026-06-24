@@ -125,6 +125,7 @@ namespace lfs::vis::input {
         DEPTH_ADJUST_NEAR, // Deprecated: migrated to DEPTH_ADJUST_FAR on load
         CAMERA_RESET_HOME,
         HISTOGRAM_ZOOM_MARKED,
+        TOGGLE_CAMERA_FRUSTUMS,
 
     };
 

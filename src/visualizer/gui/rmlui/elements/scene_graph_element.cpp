@@ -521,7 +521,8 @@ namespace lfs::vis::gui {
                 }
             }
         }
-        syncVisibleRows(rebuilt_tree);
+        const bool frustum_visibility_changed = syncCameraFrustumVisibility();
+        syncVisibleRows(rebuilt_tree || frustum_visibility_changed);
     }
 
     void SceneGraphElement::RenameInputListener::ProcessEvent(Rml::Event& event) {
@@ -835,6 +836,18 @@ namespace lfs::vis::gui {
                 parent_it != snapshots.end() && parent_it->second.type == core::NodeType::DATASET;
             snapshot.draggable = canDrag(snapshot.type, parent_is_dataset);
             snapshot.deletable = isDeletable(snapshot.type, parent_is_dataset);
+            snapshot.camera_frustum_container =
+                (snapshot.type == core::NodeType::GROUP &&
+                 std::ranges::any_of(snapshot.children, [&](const core::NodeId child_id) {
+                     const auto child_it = snapshots.find(child_id);
+                     return child_it != snapshots.end() &&
+                            child_it->second.type == core::NodeType::CAMERA_GROUP;
+                 })) ||
+                (snapshot.type == core::NodeType::CAMERA_GROUP && (parent_it == snapshots.end() || parent_it->second.type != core::NodeType::GROUP));
+            if (snapshot.camera_frustum_container) {
+                if (const auto* rendering = services().renderingOrNull())
+                    snapshot.visible = rendering->getSettings().show_camera_frustums;
+            }
             if (!previous_ids.contains(id) &&
                 snapshot.type == core::NodeType::CAMERA_GROUP &&
                 static_cast<int>(snapshot.children.size()) >= kAutoCollapseCameraGroupThreshold) {
@@ -1078,6 +1091,30 @@ namespace lfs::vis::gui {
         return changed;
     }
 
+    bool SceneGraphElement::syncCameraFrustumVisibility() {
+        const auto* rendering = services().renderingOrNull();
+        if (!rendering)
+            return false;
+
+        const bool visible = rendering->getSettings().show_camera_frustums;
+        bool changed = false;
+        for (auto& [id, snapshot] : node_snapshots_) {
+            if (!snapshot.camera_frustum_container || snapshot.visible == visible)
+                continue;
+
+            snapshot.visible = visible;
+            if (const auto flat_it = flat_index_by_id_.find(id);
+                flat_it != flat_index_by_id_.end() && flat_it->second < flat_rows_.size()) {
+                flat_rows_[flat_it->second].visible = visible;
+            }
+            changed = true;
+        }
+
+        if (changed)
+            markStateDirty();
+        return changed;
+    }
+
     bool SceneGraphElement::syncFromScene(const PanelDrawContext& ctx) {
         claimRenameTextInputFocus();
 
@@ -1125,6 +1162,7 @@ namespace lfs::vis::gui {
             changed |= syncTrainingTopologyLabel(*scene, true);
             changed |= syncCameraLossIconColors(*scene, true);
         }
+        changed |= syncCameraFrustumVisibility();
 
         if (pending_reveal_node_id_ != core::NULL_NODE) {
             const auto target_it = node_snapshots_.find(pending_reveal_node_id_);
@@ -1521,6 +1559,16 @@ namespace lfs::vis::gui {
             return;
 
         if (action == "toggle-vis") {
+            if (const auto snapshot_it = node_snapshots_.find(node_id);
+                snapshot_it != node_snapshots_.end() && snapshot_it->second.camera_frustum_container) {
+                if (auto* rendering = services().renderingOrNull()) {
+                    auto settings = rendering->getSettings();
+                    settings.show_camera_frustums = !settings.show_camera_frustums;
+                    rendering->updateSettings(settings);
+                    syncCameraFrustumVisibility();
+                }
+                return;
+            }
             if (auto it = node_snapshots_.find(node_id); it != node_snapshots_.end()) {
                 it->second.visible = !static_cast<bool>(node->visible);
                 markStateDirty();

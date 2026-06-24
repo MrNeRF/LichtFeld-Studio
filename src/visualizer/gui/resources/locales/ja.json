@@ -1181,6 +1181,7 @@
     "action.toggle_split_view": "分割ビュー切替",
     "action.toggle_independent_split_view": "独立分割ビュー切替",
     "action.toggle_gt_comparison": "GT比較切替",
+    "action.toggle_camera_frustums": "カメラ視錐台を切り替え",
     "action.toggle_depth_mode": "深度ボックス切替",
     "action.cycle_ply": "PLY切替",
     "action.delete_selected": "選択したガウシアンを削除",

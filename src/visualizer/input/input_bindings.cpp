@@ -26,7 +26,7 @@ namespace lfs::vis::input {
 
     namespace {
 
-        constexpr int PROFILE_VERSION = 15; // Version 15 adds crop apply Enter bindings.
+        constexpr int PROFILE_VERSION = 16; // Version 16 adds the camera frustum visibility shortcut.
         constexpr int REMOVED_TOOL_MODE_2 = 2;
         constexpr int REMOVED_ACTION_39 = 39;
         constexpr int REMOVED_ACTION_66 = 66;
@@ -62,7 +62,7 @@ namespace lfs::vis::input {
         [[nodiscard]] std::optional<Action> findActionByDescription(std::string_view description) {
             static const auto* const table = [] {
                 auto* const m = new std::unordered_map<std::string, Action>();
-                constexpr int kActionCount = static_cast<int>(Action::HISTOGRAM_ZOOM_MARKED) + 1;
+                constexpr int kActionCount = static_cast<int>(Action::TOGGLE_CAMERA_FRUSTUMS) + 1;
                 for (int i = 0; i < kActionCount; ++i) {
                     const auto a = static_cast<Action>(i);
                     m->emplace(toLowerCopy(getActionName(a)), a);
@@ -494,7 +494,8 @@ namespace lfs::vis::input {
                 (version < 12 && brush_resize_shift_scroll) ||
                 (version < 13 && def.action == Action::CAMERA_SET_HOME) ||
                 (version < 14 && def.action == Action::HISTOGRAM_ZOOM_MARKED) ||
-                (version < 15 && def.action == Action::APPLY_CROP_BOX);
+                (version < 15 && def.action == Action::APPLY_CROP_BOX) ||
+                (version < 16 && def.action == Action::TOGGLE_CAMERA_FRUSTUMS);
             if (!should_add) {
                 continue;
             }
@@ -967,6 +968,7 @@ namespace lfs::vis::input {
             {KeyTrigger{KEY_V, MODIFIER_NONE}, Action::TOGGLE_SPLIT_VIEW, "Split view"},
             {KeyTrigger{KEY_V, MODIFIER_SHIFT}, Action::TOGGLE_INDEPENDENT_SPLIT_VIEW, "Independent split"},
             {KeyTrigger{KEY_G, MODIFIER_NONE}, Action::TOGGLE_GT_COMPARISON, "GT comparison"},
+            {KeyTrigger{KEY_C, MODIFIER_ALT}, Action::TOGGLE_CAMERA_FRUSTUMS, "Camera frustums"},
             {KeyTrigger{KEY_T, MODIFIER_NONE}, Action::CYCLE_PLY, "Cycle PLY"},
             // Editing (Delete is mode-specific, added below)
             {KeyTrigger{KEY_Z, MODIFIER_CTRL}, Action::UNDO, "Undo"},
@@ -1142,6 +1144,7 @@ namespace lfs::vis::input {
         case Action::TOOL_ALIGN: return "Align Tool";
         case Action::PIE_MENU: return "Pie Menu";
         case Action::HISTOGRAM_ZOOM_MARKED: return "Zoom Histogram at Cursor";
+        case Action::TOGGLE_CAMERA_FRUSTUMS: return "Toggle Camera Frustums";
         default: return "Unknown";
         }
     }
@@ -1218,6 +1221,7 @@ namespace lfs::vis::input {
         case Action::TOOL_ALIGN: return "tool_align";
         case Action::PIE_MENU: return "pie_menu";
         case Action::HISTOGRAM_ZOOM_MARKED: return "histogram_zoom_marked";
+        case Action::TOGGLE_CAMERA_FRUSTUMS: return "toggle_camera_frustums";
         default: return {};
         }
     }
@@ -1225,7 +1229,7 @@ namespace lfs::vis::input {
     std::optional<Action> actionFromName(std::string_view name) {
         static const auto table = [] {
             std::unordered_map<std::string, Action> m;
-            for (int i = 0; i <= static_cast<int>(Action::HISTOGRAM_ZOOM_MARKED); ++i) {
+            for (int i = 0; i <= static_cast<int>(Action::TOGGLE_CAMERA_FRUSTUMS); ++i) {
                 const auto action = static_cast<Action>(i);
                 const auto key = actionNameKey(action);
                 if (!key.empty())
@@ -1835,6 +1839,7 @@ namespace lfs::vis::input {
         case Action::TOGGLE_SPLIT_VIEW:
         case Action::TOGGLE_INDEPENDENT_SPLIT_VIEW:
         case Action::TOGGLE_GT_COMPARISON:
+        case Action::TOGGLE_CAMERA_FRUSTUMS:
         case Action::CYCLE_PLY:
         case Action::CYCLE_SELECTION_VIS:
             return d_view_global_key;
@@ -1967,6 +1972,7 @@ namespace lfs::vis::input {
         case Action::TOGGLE_SPLIT_VIEW:
         case Action::TOGGLE_INDEPENDENT_SPLIT_VIEW:
         case Action::TOGGLE_GT_COMPARISON:
+        case Action::TOGGLE_CAMERA_FRUSTUMS:
         case Action::CYCLE_SELECTION_VIS:
         case Action::PIE_MENU:
             return ShortcutScope::Viewport;

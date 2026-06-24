@@ -143,6 +143,8 @@ class Action(enum.Enum):
 
     HISTOGRAM_ZOOM_MARKED = 71
 
+    TOGGLE_CAMERA_FRUSTUMS = 72
+
 class ToolMode(enum.Enum):
     GLOBAL = 0
 

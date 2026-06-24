@@ -1181,6 +1181,7 @@
     "action.toggle_split_view": "Przełącz widok podzielony",
     "action.toggle_independent_split_view": "Przełącz niezależny widok podzielony",
     "action.toggle_gt_comparison": "Przełącz porównanie GT",
+    "action.toggle_camera_frustums": "Przełącz ostrosłupy kamery",
     "action.toggle_depth_mode": "Przełącz pudełko głębi",
     "action.cycle_ply": "Przełączaj PLY",
     "action.delete_selected": "Usuń wybrane gaussiany",

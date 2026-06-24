@@ -160,6 +160,7 @@
     "action.toggle_split_view": "Alternar vista dividida",
     "action.toggle_independent_split_view": "Alternar vista dividida independiente",
     "action.toggle_gt_comparison": "Alternar comparación GT",
+    "action.toggle_camera_frustums": "Alternar frustos de cámara",
     "action.toggle_depth_mode": "Alternar caja de profundidad",
     "action.cycle_ply": "Recorrer PLY",
     "action.delete_selected": "Eliminar gaussianas seleccionadas",

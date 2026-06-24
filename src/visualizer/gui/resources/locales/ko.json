@@ -1181,6 +1181,7 @@
     "action.toggle_split_view": "분할 보기 전환",
     "action.toggle_independent_split_view": "독립 분할 보기 전환",
     "action.toggle_gt_comparison": "GT 비교 전환",
+    "action.toggle_camera_frustums": "카메라 절두체 전환",
     "action.toggle_depth_mode": "깊이 상자 전환",
     "action.cycle_ply": "PLY 순환",
     "action.delete_selected": "선택한 가우시안 삭제",

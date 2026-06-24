@@ -1011,6 +1011,7 @@
     "action.toggle_split_view": "切换分屏视图",
     "action.toggle_independent_split_view": "切换独立分屏视图",
     "action.toggle_gt_comparison": "切换 GT 对比",
+    "action.toggle_camera_frustums": "切换相机视锥体",
     "action.toggle_depth_mode": "切换深度框",
     "action.cycle_ply": "循环 PLY",
     "action.delete_selected": "删除选中的高斯",

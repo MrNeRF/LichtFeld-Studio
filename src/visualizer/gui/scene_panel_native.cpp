@@ -698,6 +698,7 @@ namespace lfs::vis::gui {
         if (active_tab_ == Tab::Scene) {
             stamp.scene_generation = store.scene_generation.get();
             stamp.selection_generation = store.selection_generation.get();
+            stamp.render_settings_generation = store.render_settings_generation.get();
             if (auto* params = services().paramsOrNull())
                 stamp.invert_masks = params->getActiveParams().invert_masks;
 
