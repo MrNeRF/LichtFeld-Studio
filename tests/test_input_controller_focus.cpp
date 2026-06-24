@@ -302,6 +302,41 @@ namespace lfs::vis {
                   input::Action::CAMERA_PAN);
     }
 
+    TEST_F(InputControllerFocusTest, GlobalSetPivotDoubleClickWorksInEveryToolMode) {
+        input::InputBindings bindings;
+
+        for (const auto mode : input::kAllToolModes) {
+            EXPECT_EQ(bindings.getActionForMouseButton(
+                          mode, input::MouseButton::RIGHT, input::MODIFIER_NONE, true),
+                      input::Action::CAMERA_SET_PIVOT)
+                << "tool mode " << static_cast<int>(mode);
+        }
+
+        // Selection deliberately owns an ordinary right-click for polygon undo;
+        // that single-click action must not shadow the global double-click.
+        EXPECT_EQ(bindings.getActionForMouseButton(
+                      input::ToolMode::SELECTION,
+                      input::MouseButton::RIGHT,
+                      input::MODIFIER_NONE,
+                      false),
+                  input::Action::UNDO_POLYGON_VERTEX);
+    }
+
+    TEST_F(InputControllerFocusTest, LocalDoubleClickOverridesGlobalSetPivot) {
+        input::InputBindings bindings;
+        bindings.setBinding(
+            input::ToolMode::SELECTION,
+            input::Action::CAMERA_ORBIT,
+            input::MouseButtonTrigger{input::MouseButton::RIGHT, input::MODIFIER_NONE, true});
+
+        EXPECT_EQ(bindings.getActionForMouseButton(
+                      input::ToolMode::SELECTION,
+                      input::MouseButton::RIGHT,
+                      input::MODIFIER_NONE,
+                      true),
+                  input::Action::CAMERA_ORBIT);
+    }
+
     TEST_F(InputControllerFocusTest, BindingConflictChecksInheritedGlobalBindings) {
         input::InputBindings bindings;
         const input::MouseDragTrigger right_drag{

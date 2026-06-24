@@ -665,41 +665,46 @@ namespace lfs::vis::input {
 
     Action InputBindings::getActionForMouseButton(ToolMode mode, MouseButton button, int modifiers, bool is_double_click) const {
         const int mods = modifiers & MODIFIER_MASK;
-        const auto find_in_mode = [&](ToolMode query_mode) -> Action {
-            if (auto it = mouse_button_map_.find({query_mode, button, mods, is_double_click}); it != mouse_button_map_.end()) {
+        const auto find_in_mode = [&](ToolMode query_mode, const bool double_click) -> Action {
+            if (auto it = mouse_button_map_.find({query_mode, button, mods, double_click}); it != mouse_button_map_.end()) {
                 return it->second;
             }
             if (mods != MODIFIER_NONE) {
-                if (auto it = mouse_button_map_.find({query_mode, button, MODIFIER_NONE, is_double_click});
+                if (auto it = mouse_button_map_.find({query_mode, button, MODIFIER_NONE, double_click});
                     it != mouse_button_map_.end() &&
                     describe(it->second).allows_extra_modifiers) {
                     return it->second;
                 }
             }
-            // If double-click, also try a single-click binding in the same mode.
-            if (is_double_click) {
-                if (auto it = mouse_button_map_.find({query_mode, button, mods, false}); it != mouse_button_map_.end()) {
-                    return it->second;
-                }
-                if (mods != MODIFIER_NONE) {
-                    if (auto it = mouse_button_map_.find({query_mode, button, MODIFIER_NONE, false});
-                        it != mouse_button_map_.end() &&
-                        describe(it->second).allows_extra_modifiers) {
-                        return it->second;
-                    }
-                }
-            }
             return Action::NONE;
         };
 
-        if (const auto local_action = find_in_mode(mode); local_action != Action::NONE) {
+        if (const auto local_action = find_in_mode(mode, is_double_click); local_action != Action::NONE) {
             return local_action;
         }
         if (mode != ToolMode::GLOBAL) {
-            const auto global_action = find_in_mode(ToolMode::GLOBAL);
+            const auto global_action = find_in_mode(ToolMode::GLOBAL, is_double_click);
             if (global_action != Action::NONE &&
                 describe(global_action).inherits_from_global) {
                 return global_action;
+            }
+        }
+
+        // A double-click is its own gesture. Only fall back to single-click
+        // bindings after exact local and inherited global double-click bindings
+        // have both been considered. This keeps global viewport gestures such as
+        // Set Pivot available in every tool mode, even when that mode binds the
+        // same button to a single-click action.
+        if (is_double_click) {
+            if (const auto local_action = find_in_mode(mode, false); local_action != Action::NONE) {
+                return local_action;
+            }
+            if (mode != ToolMode::GLOBAL) {
+                const auto global_action = find_in_mode(ToolMode::GLOBAL, false);
+                if (global_action != Action::NONE &&
+                    describe(global_action).inherits_from_global) {
+                    return global_action;
+                }
             }
         }
         return Action::NONE;

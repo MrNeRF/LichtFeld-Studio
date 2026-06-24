@@ -760,8 +760,11 @@ namespace lfs::vis {
                 return;
             }
 
-            // Block if a transform gizmo is being used or hovered
-            if (over_transform_gizmo) {
+            // Pivot placement is a viewport-global double-click gesture and must
+            // remain available when an editing gizmo is merely hovered. Active
+            // gizmo manipulation still owns the pointer until the drag finishes.
+            if (isTransformGizmoUsing() ||
+                (over_transform_gizmo && bound_action != input::Action::CAMERA_SET_PIVOT)) {
                 return;
             }
 
