@@ -70,7 +70,7 @@ jobs:
               core.setOutput('previous_sha', '');
               if (!stableVersionPattern.test(stableVersion)) {
                 core.setFailed(
-                  `Stable publishes require a version like 0.5.2; got '${stableVersion || '<empty>'}'.`
+                  `Stable publishes require a version like 0.5.3; got '${stableVersion || '<empty>'}'.`
                 );
                 return;
               }
@@ -334,7 +334,7 @@ jobs:
           if ($buildChannel -eq "stable") {
             $packageVersion = $env:STABLE_VERSION
             if ([string]::IsNullOrWhiteSpace($packageVersion) -or $packageVersion -notmatch '^[0-9]+(\.[0-9]+){1,2}$') {
-              throw "Stable publishes require STABLE_VERSION like 0.5.2."
+              throw "Stable publishes require STABLE_VERSION like 0.5.3."
             }
           } elseif ($buildChannel -eq "nightly") {
             $targetVersionFile = ".github/nightly-target-version.txt"
@@ -346,7 +346,7 @@ jobs:
               Where-Object { $_ -and -not $_.StartsWith("#") } |
               Select-Object -First 1
             if ([string]::IsNullOrWhiteSpace($nightlyTargetVersion) -or $nightlyTargetVersion -eq "SET_ME") {
-              throw "Set the target version in $targetVersionFile, for example 0.6 or 0.5.2."
+              throw "Set the target version in $targetVersionFile, for example 0.6 or 0.5.3."
             }
             if ($nightlyTargetVersion -notmatch '^[0-9]+(\.[0-9]+){1,2}$') {
               throw "Invalid nightly target version '$nightlyTargetVersion' in $targetVersionFile."

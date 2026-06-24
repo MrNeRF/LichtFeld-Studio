@@ -549,6 +549,7 @@ namespace lfs::python {
             .value("MAIN_PANEL_TAB", PanelSpace::MainPanelTab)
             .value("SCENE_HEADER", PanelSpace::SceneHeader)
             .value("BOTTOM_DOCK", PanelSpace::BottomDock)
+            .value("LEFT_DOCK", PanelSpace::LeftDock)
             .value("STATUS_BAR", PanelSpace::StatusBar);
         nb::enum_<PanelHeightMode>(m, "PanelHeightMode")
             .value("FILL", PanelHeightMode::Fill)

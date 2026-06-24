@@ -4,13 +4,27 @@
 </head>
 <body id="body" data-model="menu_bar">
     <div id="menu-row">
-        <div id="menu-items">
-            <span class="menu-label"
-                  data-for="menu : menu_labels"
-                  data-class-active="menu.active"
-                  data-attr-data-index="menu.index">{{ menu.label }}</span>
+        <div id="menu-left">
+            <img id="brand-logo" />
+            <div id="menu-items">
+                <span class="menu-label"
+                      data-for="menu : menu_labels"
+                      data-class-active="menu.active"
+                      data-attr-data-index="menu.index">{{ menu.label }}</span>
+            </div>
         </div>
         <div id="menu-toolbar">
+            <div class="icon-btn menu-toolbar-btn"
+                 data-for="button : menu_camera_buttons"
+                 data-attr-id="button.button_id"
+                 data-class-selected="button.selected"
+                 data-attr-data-action="button.action"
+                 data-attr-data-value="button.value"
+                 data-attr-data-tooltip="button.tooltip_key"
+                 data-attr-title="button.tooltip_text">
+                <img data-attr-src="button.icon_src" />
+            </div>
+            <div class="menu-toolbar-separator"></div>
             <div class="icon-btn menu-toolbar-btn"
                  data-for="button : menu_render_buttons"
                  data-attr-id="button.button_id"
@@ -33,7 +47,52 @@
                 <img data-attr-src="button.icon_src" />
             </div>
         </div>
-        <img id="brand-logo" />
+        <div id="menu-right">
+            <div id="menu-window-controls">
+                <div id="menu-window-split-view"
+                     class="icon-btn menu-window-btn menu-window-utility-btn"
+                     data-action="toggle_independent_split_view"
+                     title="Independent Split View">
+                    <img src="../icon/layout-columns.png" />
+                </div>
+                <div id="menu-window-toggle-ui"
+                     class="icon-btn menu-window-btn menu-window-utility-btn"
+                     data-action="window_toggle_ui"
+                     title="Hide UI">
+                    <img src="../icon/layout-off.png" />
+                </div>
+                <div class="menu-window-separator"></div>
+                <div id="menu-window-minimize"
+                     class="icon-btn menu-window-btn"
+                     data-action="window_minimize"
+                     title="Minimize">
+                    <div class="window-icon window-icon-minimize">
+                        <div class="window-minimize-line"></div>
+                    </div>
+                </div>
+                <div id="menu-window-maximize"
+                     class="icon-btn menu-window-btn"
+                     data-action="window_toggle_maximize"
+                     title="Maximize Window">
+                    <div class="window-icon window-icon-maximize">
+                        <div class="window-maximize-box"></div>
+                    </div>
+                    <div class="window-icon window-icon-restore">
+                        <div class="window-restore-box window-restore-back"></div>
+                        <div class="window-restore-box window-restore-front"></div>
+                    </div>
+                </div>
+                <div id="menu-window-close"
+                     class="icon-btn menu-window-btn menu-window-close"
+                     data-action="window_close"
+                     title="Close">
+                    <div class="window-icon window-icon-close">
+                        <div class="window-close-line window-close-line-a"></div>
+                        <div class="window-close-line window-close-line-b"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
     <div id="bottom-border"></div>
     <div id="dropdown-overlay"></div>

@@ -98,6 +98,12 @@ namespace lfs::app {
             return ".ply";
         }
 
+        std::uint32_t radChunkSizeForMode(const param::RadExportMode mode) {
+            return mode == param::RadExportMode::Stream
+                       ? lfs::io::kRadStreamableChunkSplats
+                       : lfs::io::kRadNativeChunkSplats;
+        }
+
         std::filesystem::path generateOutputPath(
             const std::filesystem::path& input,
             const std::filesystem::path& output_template,
@@ -217,6 +223,7 @@ namespace lfs::app {
             const std::filesystem::path& output,
             const param::OutputFormat format,
             const int sog_iterations,
+            const param::RadExportMode rad_export_mode,
             const lfs::io::ExportProgressCallback& progress = nullptr) {
             switch (format) {
             case param::OutputFormat::PLY:
@@ -232,7 +239,11 @@ namespace lfs::app {
             case param::OutputFormat::USDC:
                 return lfs::io::save_usd(splat, {.output_path = output, .progress_callback = progress});
             case param::OutputFormat::RAD:
-                return lfs::io::save_rad(splat, {.output_path = output, .progress_callback = progress});
+                return lfs::io::save_rad(splat, {
+                                                    .output_path = output,
+                                                    .chunk_size = radChunkSizeForMode(rad_export_mode),
+                                                    .progress_callback = progress,
+                                                });
             }
             return lfs::io::save_ply(splat, {.output_path = output, .binary = true, .progress_callback = progress});
         }
@@ -253,18 +264,18 @@ namespace lfs::app {
             return ext == ".rad";
         }
 
-        // Migration for RAD LOD files written with an older splats-per-chunk:
-        // the loader rejects them, so rad -> rad routes through the re-chunker
-        // instead of the generic load/save pipeline.
+        // RAD LOD -> RAD LOD can preserve node order and tree links while
+        // re-encoding only the file chunk profile selected by the caller.
         bool rechunkRadFile(
             const std::filesystem::path& input,
-            const std::filesystem::path& output) {
-            std::println("Re-chunking RAD LOD: {} -> {}",
-                         path_to_utf8(input), path_to_utf8(output));
+            const std::filesystem::path& output,
+            const std::uint32_t target_chunk_size) {
+            std::println("Re-chunking RAD LOD: {} -> {} ({}-splat chunks)",
+                         path_to_utf8(input), path_to_utf8(output), target_chunk_size);
 
             ConvertProgressBar bar;
             const auto result = lfs::io::rechunk_rad_lod(
-                input, output, [&bar](const float progress) {
+                input, output, target_chunk_size, [&bar](const float progress) {
                     return bar.report(progress, "re-chunk");
                 });
             if (!result) {
@@ -328,6 +339,7 @@ namespace lfs::app {
             lfs::io::PlyToRadLodOptions options;
             options.tiles_x = params.tiles_x;
             options.tiles_y = params.tiles_y;
+            options.chunk_size = radChunkSizeForMode(params.rad_export_mode);
             options.builder = params.lod_builder == param::LodBuilder::OCTREE
                                   ? lfs::io::LodBuilder::kOctree
                                   : lfs::io::LodBuilder::kBhatt;
@@ -360,16 +372,14 @@ namespace lfs::app {
             }
 
             if (params.format == param::OutputFormat::RAD && isRadExtension(input)) {
-                const auto needs_rechunk = lfs::io::rad_lod_needs_rechunk(input);
-                if (!needs_rechunk) {
-                    LOG_ERROR("RAD probe failed: {}", needs_rechunk.error());
-                    std::println(stderr, "  Error: {}", needs_rechunk.error());
+                const auto lod_chunk_size = lfs::io::rad_lod_file_chunk_size(input);
+                if (!lod_chunk_size) {
+                    LOG_ERROR("RAD probe failed: {}", lod_chunk_size.error());
+                    std::println(stderr, "  Error: {}", lod_chunk_size.error());
                     return false;
                 }
-                // Only stale-chunk LOD files take the migration path; current
-                // LOD and flat RADs round-trip through the generic pipeline.
-                if (*needs_rechunk) {
-                    return rechunkRadFile(input, output);
+                if (*lod_chunk_size) {
+                    return rechunkRadFile(input, output, radChunkSizeForMode(params.rad_export_mode));
                 }
             }
 
@@ -409,6 +419,7 @@ namespace lfs::app {
             ConvertProgressBar bar;
             const auto result = saveSplat(
                 *splat, output, params.format, params.sog_iterations,
+                params.rad_export_mode,
                 [&bar](const float progress, const std::string& stage) {
                     return bar.report(progress, stage);
                 });
@@ -468,7 +479,8 @@ namespace lfs::app {
             bool ok = true;
             for (const auto& output : outputs) {
                 std::println("  Saving: {}", path_to_utf8(output.path));
-                const auto result = saveSplat(**splat, output.path, output.format, params.sog_iterations);
+                const auto result = saveSplat(**splat, output.path, output.format, params.sog_iterations,
+                                              param::RadExportMode::Stream);
                 if (!result) {
                     LOG_ERROR("Save failed: {}", result.error().format());
                     std::println(stderr, "  Error: {}", result.error().message);

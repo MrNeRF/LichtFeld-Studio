@@ -4,7 +4,19 @@ body {
     color: @{text};
 }
 
+#menu-row {
+    background-color: @{menu.background};
+}
+
+#menu-left {
+    background-color: @{menu.background};
+}
+
 #menu-items {
+    background-color: @{menu.background};
+}
+
+#menu-right {
     background-color: @{menu.background};
 }
 
@@ -57,11 +69,38 @@ body {
     background-color: @{menu.hover};
 }
 
+.menu-window-btn:hover {
+    background-color: @{menu.hover};
+}
+
+.window-minimize-line,
+.window-close-line {
+    background-color: @{text};
+}
+
+.window-maximize-box,
+.window-restore-box {
+    border-color: @{text};
+}
+
+.menu-window-close:hover {
+    background-color: #c42b1c;
+}
+
+.menu-window-close:hover .window-close-line {
+    background-color: #ffffff;
+}
+
+.menu-window-separator,
+.menu-toolbar-separator {
+    background-color: @{menu.border};
+}
+
+.menu-window-utility-btn.selected {
+    background-color: @{menu.active};
+}
+
 .menu-toolbar-btn.selected {
     background-color: @{menu.active};
     border-color: @{menu.border};
-}
-
-.menu-toolbar-separator {
-    background-color: @{menu.border};
 }

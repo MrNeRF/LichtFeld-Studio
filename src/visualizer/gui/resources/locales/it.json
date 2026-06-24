@@ -16,6 +16,12 @@
     "edit": "Modifica",
     "edit.input_settings": "Impostazioni di Input...",
     "edit.preferences": "Preferenze...",
+    "select": "Selezione",
+    "select.copy_selection": "Copia selezione",
+    "select.paste_selection": "Incolla selezione",
+    "select.invert_selection": "Inverti selezione",
+    "select.select_all": "Seleziona tutto",
+    "select.deselect_all": "Deseleziona tutto",
     "tools": "Strumenti",
     "tools.asset_manager": "Gestore Risorse",
     "tools.python_console": "Console Python",
@@ -329,7 +335,6 @@
     "tooltip.iterations": "Iterazioni totali di addestramento",
     "tooltip.max_gaussians": "Numero massimo di Gaussiani",
     "tooltip.sh_degree": "Grado di armoniche sferiche (0-3)",
-    "tooltip.tile_mode": "Rendering a piastrelle per immagini grandi",
     "tooltip.steps_scaler": "Scala passaggi di addestramento. Auto-calcolato dal numero di immagini (1.0 per <=300, immagini/300 oltre)",
     "tooltip.bilateral_grid": "Embedding di aspetto per correzione esposizione/colore",
     "tooltip.sparsity": "Abilita potatura per compressione modello",
@@ -437,6 +442,7 @@
     "options.mask.none": "Nessuno",
     "options.mask.segment": "Segmento",
     "options.mask.ignore": "Ignora",
+    "options.mask.segment_and_ignore": "Segmento + Ignora",
     "options.mask.alpha_consistent": "Coerente con alpha",
     "options.bg.color": "Colore",
     "options.bg.modulation": "Modulazione",
@@ -483,15 +489,11 @@
           "2": "SH del secondo ordine — migliore colore vista-dipendente",
           "3": "SH del terzo ordine — massima qualità, più VRAM"
         },
-        "tile_mode": {
-          "full": "Rasterizzazione a piena risoluzione",
-          "half": "Rasterizzazione a metà risoluzione (~4× più veloce)",
-          "quarter": "Rasterizzazione a un quarto di risoluzione (~16× più veloce)"
-        },
         "mask_mode": {
           "none": "Allena su tutta l'immagine, nessuna maschera",
           "segment": "Usa la maschera di segmentazione per il primo piano",
           "ignore": "Ignora i pixel mascherati nella loss",
+          "segment_and_ignore": "Combinazione di Segment e Ignore",
           "alpha_consistent": "Imponi consistenza alpha con la maschera"
         },
         "bg_mode": {
@@ -1077,6 +1079,9 @@
     "sh_degree": "SH DEGREE",
     "export_merged": "Esporta Unito...",
     "no_lod_settings": "Nessuna impostazione Level of Detail (esportazione piatta)",
+    "rad_export_mode": "RAD MODE",
+    "rad_streamable": "RAD (streamable)",
+    "rad_native": "RAD (non-streamable)",
     "rad_flip_y": "Inverti asse Y",
     "colmap_writes_sparse": "Scrive cameras.bin, images.bin e points3D.bin",
     "colmap_no_sparse": "Nessuna cartella sparse COLMAP trovata",
@@ -1239,7 +1244,6 @@
     "iterations": "Iterations:",
     "max_gaussians": "Max Gaussians:",
     "sh_degree": "SH Degree:",
-    "tile_mode": "Tile Mode:",
     "steps_scaler": "Steps Scaler:",
     "bilateral_grid": "Bilateral Grid:",
     "mask_mode": "Mask Mode:",

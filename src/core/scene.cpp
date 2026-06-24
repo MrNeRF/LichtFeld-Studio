@@ -2793,6 +2793,8 @@ namespace lfs::core {
         if (node->parent_id == new_parent)
             return false;
 
+        const glm::mat4 old_world = getWorldTransform(node_id);
+
         if (node->parent_id != NULL_NODE) {
             if (auto* old_parent = getNodeById(node->parent_id)) {
                 auto& children = old_parent->children;
@@ -2807,6 +2809,135 @@ namespace lfs::core {
             }
         }
 
+        // Keep the node visually in place: re-express its world pose in the new parent's frame.
+        const glm::mat4 new_parent_world =
+            new_parent == NULL_NODE ? glm::mat4(1.0f) : getWorldTransform(new_parent);
+        node->local_transform.set(glm::inverse(new_parent_world) * old_world, false);
+
+        markTransformDirty(node_id);
+        notifyMutation(MutationType::NODE_REPARENTED);
+        return true;
+    }
+
+    // `index` is expressed in the destination sibling list *as it currently is* (including the
+    // moving node when it is already a sibling); the self-removal adjustment is applied internally
+    // so callers can pass the raw row index they computed. index < 0 appends. Root order is the
+    // position among root nodes within `nodes_`, so a root move reshuffles storage and rebuilds
+    // id_to_index_; combined-model/transform caches are id-keyed and refreshed via notifyMutation.
+    bool Scene::moveNode(const NodeId node_id, const NodeId new_parent, const int index) {
+        auto* node = getNodeById(node_id);
+        if (!node)
+            return false;
+
+        if (new_parent != NULL_NODE) {
+            NodeId check = new_parent;
+            while (check != NULL_NODE) {
+                if (check == node_id) {
+                    LOG_WARN("Cannot move: would create cycle");
+                    return false;
+                }
+                const auto* check_node = getNodeById(check);
+                if (!check_node) {
+                    LOG_WARN("Cannot move: parent id {} does not exist", new_parent);
+                    return false;
+                }
+                check = check_node->parent_id;
+            }
+        }
+
+        const NodeId old_parent = node->parent_id;
+        const glm::mat4 old_world = getWorldTransform(node_id);
+
+        // Keep the node visually in place across a parent change by re-expressing its world pose
+        // in the new parent's frame. Pure reorders (same parent) leave the transform untouched.
+        const auto preserveWorldTransform = [&] {
+            const glm::mat4 new_parent_world =
+                new_parent == NULL_NODE ? glm::mat4(1.0f) : getWorldTransform(new_parent);
+            node->local_transform.set(glm::inverse(new_parent_world) * old_world, false);
+        };
+
+        if (new_parent != NULL_NODE) {
+            auto* parent = getNodeById(new_parent);
+            assert(parent);
+            auto& children = parent->children;
+
+            if (old_parent == new_parent) {
+                const auto existing = std::find(children.begin(), children.end(), node_id);
+                assert(existing != children.end());
+                const int old_index = static_cast<int>(std::distance(children.begin(), existing));
+                int target = index < 0 ? static_cast<int>(children.size()) - 1 : index;
+                if (target > old_index)
+                    --target;
+                target = std::clamp(target, 0, static_cast<int>(children.size()) - 1);
+                if (target == old_index)
+                    return false;
+                children.erase(existing);
+                children.insert(children.begin() + static_cast<ptrdiff_t>(target), node_id);
+                notifyMutation(MutationType::NODE_REPARENTED);
+                return true;
+            }
+
+            if (old_parent != NULL_NODE) {
+                if (auto* op = getNodeById(old_parent)) {
+                    auto& oc = op->children;
+                    oc.erase(std::remove(oc.begin(), oc.end(), node_id), oc.end());
+                }
+            }
+            node->parent_id = new_parent;
+            const int target = std::clamp(index < 0 ? static_cast<int>(children.size()) : index,
+                                          0, static_cast<int>(children.size()));
+            children.insert(children.begin() + static_cast<ptrdiff_t>(target), node_id);
+
+            preserveWorldTransform();
+            markTransformDirty(node_id);
+            notifyMutation(MutationType::NODE_REPARENTED);
+            return true;
+        }
+
+        const bool was_root = (old_parent == NULL_NODE);
+        if (old_parent != NULL_NODE) {
+            if (auto* op = getNodeById(old_parent)) {
+                auto& oc = op->children;
+                oc.erase(std::remove(oc.begin(), oc.end(), node_id), oc.end());
+            }
+        }
+        node->parent_id = NULL_NODE;
+
+        const size_t src_idx = id_to_index_.at(node_id);
+        std::vector<size_t> root_storage;
+        size_t current_root_index = 0;
+        for (size_t i = 0; i < nodes_.size(); ++i) {
+            if (i == src_idx)
+                continue;
+            if (nodes_[i]->parent_id == NULL_NODE) {
+                if (i < src_idx)
+                    ++current_root_index;
+                root_storage.push_back(i);
+            }
+        }
+
+        int final_idx = index < 0 ? static_cast<int>(root_storage.size()) : index;
+        if (was_root && current_root_index < static_cast<size_t>(final_idx))
+            --final_idx;
+        final_idx = std::clamp(final_idx, 0, static_cast<int>(root_storage.size()));
+        if (was_root && static_cast<size_t>(final_idx) == current_root_index)
+            return false;
+
+        const size_t dest_idx = static_cast<size_t>(final_idx) >= root_storage.size()
+                                    ? nodes_.size()
+                                    : root_storage[static_cast<size_t>(final_idx)];
+
+        auto ptr = std::move(nodes_[src_idx]);
+        nodes_.erase(nodes_.begin() + static_cast<ptrdiff_t>(src_idx));
+        size_t insert_pos = dest_idx > src_idx ? dest_idx - 1 : dest_idx;
+        insert_pos = std::min(insert_pos, nodes_.size());
+        nodes_.insert(nodes_.begin() + static_cast<ptrdiff_t>(insert_pos), std::move(ptr));
+
+        for (size_t i = 0; i < nodes_.size(); ++i)
+            id_to_index_[nodes_[i]->id] = i;
+
+        if (!was_root)
+            preserveWorldTransform();
         markTransformDirty(node_id);
         notifyMutation(MutationType::NODE_REPARENTED);
         return true;

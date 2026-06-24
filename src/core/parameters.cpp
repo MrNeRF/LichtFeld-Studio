@@ -152,7 +152,6 @@ namespace lfs::core {
             opt_json["random"] = random;
             opt_json["init_num_pts"] = init_num_pts;
             opt_json["init_extent"] = init_extent;
-            opt_json["tile_mode"] = tile_mode;
             opt_json["enable_sparsity"] = enable_sparsity;
             opt_json["sparsify_steps"] = sparsify_steps;
             opt_json["init_rho"] = init_rho;
@@ -167,7 +166,7 @@ namespace lfs::core {
             }
 
             // Mask parameters
-            static constexpr const char* MASK_MODE_NAMES[] = {"none", "segment", "ignore", "alpha_consistent"};
+            static constexpr const char* MASK_MODE_NAMES[] = {"none", "segment", "ignore", "segment_and_ignore", "alpha_consistent"};
             opt_json["mask_mode"] = MASK_MODE_NAMES[static_cast<int>(mask_mode)];
             opt_json["invert_masks"] = invert_masks;
             opt_json["mask_opacity_penalty_weight"] = mask_opacity_penalty_weight;
@@ -446,9 +445,6 @@ namespace lfs::core {
             if (json.contains("init_extent")) {
                 params.init_extent = json["init_extent"];
             }
-            if (json.contains("tile_mode")) {
-                params.tile_mode = json["tile_mode"];
-            }
             if (json.contains("enable_sparsity")) {
                 params.enable_sparsity = json["enable_sparsity"];
             }
@@ -499,6 +495,8 @@ namespace lfs::core {
                     params.mask_mode = MaskMode::Segment;
                 } else if (mode == "ignore") {
                     params.mask_mode = MaskMode::Ignore;
+                } else if (mode == "segment_and_ignore") {
+                    params.mask_mode = MaskMode::SegmentAndIgnore;
                 } else if (mode == "alpha_consistent") {
                     params.mask_mode = MaskMode::AlphaConsistent;
                 }

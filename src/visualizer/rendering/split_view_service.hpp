@@ -38,6 +38,7 @@ namespace lfs::vis {
             SplitViewMode current_mode = SplitViewMode::Disabled;
             bool mode_changed = false;
             bool clear_viewport_output = false;
+            bool render_settings_changed = false;
             std::optional<bool> restore_equirectangular;
         };
 
@@ -85,6 +86,8 @@ namespace lfs::vis {
         SplitViewInfo current_info_;
         std::optional<GTComparisonContext> gt_context_;
         bool pre_gt_equirectangular_ = false;
+        bool pre_gt_show_camera_frustums_ = false;
+        bool gt_forced_camera_frustums_off_ = false;
         SplitViewPanelId focused_panel_ = SplitViewPanelId::Left;
         Viewport secondary_viewport_;
     };

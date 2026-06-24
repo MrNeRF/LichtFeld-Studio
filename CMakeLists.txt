@@ -30,7 +30,7 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
 endif()
 
-project(LichtFeld-Studio VERSION 0.5.2 LANGUAGES CUDA CXX C)
+project(LichtFeld-Studio VERSION 0.5.3 LANGUAGES CUDA CXX C)
 
 # On Linux, hide symbols pulled in from third-party image / compression static
 # archives so they don't escape into the dynamic symbol tables of the binaries

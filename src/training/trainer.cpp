@@ -64,6 +64,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace lfs::training {
 
@@ -87,6 +88,62 @@ namespace lfs::training {
             return value != "0" && value != "false" && value != "FALSE" &&
                    value != "off" && value != "OFF" &&
                    value != "no" && value != "NO";
+        }
+
+        [[nodiscard]] std::unique_ptr<lfs::core::SplatData> make_ply_export_model(
+            const lfs::core::SplatData& model,
+            const bool exclude_frozen_ranges) {
+            if (!exclude_frozen_ranges || !model.has_frozen_ranges()) {
+                return nullptr;
+            }
+
+            const size_t count = model.size();
+            if (count == 0) {
+                return nullptr;
+            }
+
+            std::vector<bool> keep(count, true);
+            size_t excluded_count = 0;
+            for (const auto& range : model.frozen_ranges()) {
+                if (range.count == 0 || range.start >= count) {
+                    continue;
+                }
+                const size_t remaining = count - range.start;
+                const size_t end = range.start + std::min(range.count, remaining);
+                for (size_t idx = range.start; idx < end; ++idx) {
+                    if (keep[idx]) {
+                        keep[idx] = false;
+                        ++excluded_count;
+                    }
+                }
+            }
+
+            if (excluded_count == 0) {
+                return nullptr;
+            }
+            if (excluded_count == count) {
+                LOG_WARN("Skipping frozen-add-splat export exclusion because it would remove all {} Gaussians",
+                         count);
+                return nullptr;
+            }
+
+            auto keep_mask = lfs::core::Tensor::from_vector(
+                keep,
+                lfs::core::TensorShape({count}),
+                model.means_raw().device());
+            auto filtered = std::make_unique<lfs::core::SplatData>(
+                lfs::core::extract_by_mask(model, keep_mask));
+            if (!filtered->means_raw().is_valid() || filtered->size() == 0) {
+                LOG_WARN("Failed to build frozen-add-splat filtered export model; exporting full model");
+                return nullptr;
+            }
+
+            LOG_INFO("Excluding {} frozen added Gaussian{} from PLY export ({} -> {})",
+                     excluded_count,
+                     excluded_count == 1 ? "" : "s",
+                     count,
+                     filtered->size());
+            return filtered;
         }
 
         [[nodiscard]] int env_int_or_default(const char* name, const int fallback) {
@@ -330,7 +387,8 @@ namespace lfs::training {
             const auto mask_mode = opt_params.mask_mode;
             const bool use_masking =
                 mask_mode == lfs::core::param::MaskMode::Segment ||
-                mask_mode == lfs::core::param::MaskMode::Ignore;
+                mask_mode == lfs::core::param::MaskMode::Ignore ||
+                mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore;
 
             // Sidecar mask file wins when present; alpha-as-mask is only used as fallback
             // (some datasets ship RGBA images with a degenerate constant alpha alongside
@@ -888,13 +946,6 @@ namespace lfs::training {
         }
     } // namespace
 
-    // Tile configuration for memory-efficient training
-    enum class TileMode {
-        One = 1, // 1 tile  - 1x1 - Render full image (no tiling)
-        Two = 2, // 2 tiles - 2x1 - Two horizontal tiles
-        Four = 4 // 4 tiles - 2x2 - Four tiles in a grid
-    };
-
     void Trainer::cleanup() {
         LOG_DEBUG("Cleaning up trainer for re-initialization");
 
@@ -1398,6 +1449,12 @@ namespace lfs::training {
             return {};
         }
 
+        // Segment and ignore does not support mask invert
+        if (opt.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore && opt.invert_masks) {
+            LOG_WARN("invert_masks is ignored in SegmentAndIgnore mode (would scramble the mask bands)");
+            params_.optimization.invert_masks = false;
+        }
+
         size_t alpha_count = 0;
         size_t masks_found = 0;
         for (const auto& cam : train_dataset_->get_cameras()) {
@@ -1445,10 +1502,16 @@ namespace lfs::training {
 
         const auto mode = opt_params.mask_mode;
         const Tensor mask_2d = mask.ndim() == 3 ? mask.squeeze(0) : mask;
-        const auto mask_as_float = [&]() -> Tensor {
-            return (mask_2d.dtype() == DataType::UInt8 || mask_2d.dtype() == DataType::Bool)
-                       ? mask_2d.to(DataType::Float32)
-                       : mask_2d;
+        Tensor mask_2d_th = mask_2d;
+        if (mode == param::MaskMode::SegmentAndIgnore) {
+            mask_2d_th = mask_2d_th.masked_fill(mask_2d_th <= 250, 0);  // Set all Ignore and Segment to 0
+            mask_2d_th = mask_2d_th.masked_fill(mask_2d_th > 250, 255); // Keep everything > 250
+        }
+
+        const auto mask_as_float = [](const Tensor t) -> Tensor {
+            return (t.dtype() == DataType::UInt8 || t.dtype() == DataType::Bool)
+                       ? t.gt(0).to(DataType::Float32)
+                       : t;
         };
 
         Tensor loss, grad_corrected, grad_raw, grad_alpha;
@@ -1457,10 +1520,10 @@ namespace lfs::training {
             raw_rendered.numel() > 0 &&
             opt_params.lambda_dssim > 0.0f;
 
-        if (mode == param::MaskMode::Segment || mode == param::MaskMode::Ignore) {
+        if (mode == param::MaskMode::Segment || mode == param::MaskMode::Ignore || mode == param::MaskMode::SegmentAndIgnore) {
             if (use_decoupled_appearance_loss) {
                 auto [loss_tensor, ctx] = lfs::training::kernels::masked_decoupled_fused_l1_ssim_forward(
-                    corrected, raw_rendered, gt_image, mask_2d, opt_params.lambda_dssim,
+                    corrected, raw_rendered, gt_image, mask_2d_th, opt_params.lambda_dssim,
                     masked_decoupled_fused_workspace_);
                 auto grads = lfs::training::kernels::masked_decoupled_fused_l1_ssim_backward(
                     ctx, masked_decoupled_fused_workspace_);
@@ -1477,7 +1540,7 @@ namespace lfs::training {
                 }
             } else {
                 auto [loss_tensor, ctx] = lfs::training::kernels::masked_fused_l1_ssim_forward(
-                    corrected, gt_image, mask_2d, opt_params.lambda_dssim, masked_fused_workspace_);
+                    corrected, gt_image, mask_2d_th, opt_params.lambda_dssim, masked_fused_workspace_);
 
                 grad_corrected = lfs::training::kernels::masked_fused_l1_ssim_backward(ctx, masked_fused_workspace_);
                 loss = loss_tensor;
@@ -1488,10 +1551,19 @@ namespace lfs::training {
             }
 
             // Segment: opacity penalty for background
-            if (mode == param::MaskMode::Segment && alpha.is_valid()) {
+            if ((mode == param::MaskMode::Segment || mode == param::MaskMode::SegmentAndIgnore) && alpha.is_valid()) {
+                Tensor mask_2d_th_segment = mask_2d;
+                if (mode == param::MaskMode::SegmentAndIgnore) {
+                    // Values used for ignore (<128) do not contribute to opacity penalty
+                    // Values in the range 128<=x<=250 contribute to the opacity penalty
+                    // Values > 250 are kept
+                    mask_2d_th_segment = mask_2d_th_segment.masked_fill(mask_2d_th_segment < 128, 255);
+                    mask_2d_th_segment = mask_2d_th_segment.masked_fill(mask_2d_th_segment >= 128 && mask_2d_th_segment <= 250, 0);
+                    mask_2d_th_segment = mask_2d_th_segment.masked_fill(mask_2d_th_segment > 250, 255);
+                }
+                const Tensor mask_2d_th_segment_f = mask_as_float(mask_2d_th_segment);
                 const Tensor alpha_2d = alpha.ndim() == 3 ? alpha.squeeze(0) : alpha;
-                const Tensor mask_f = mask_as_float();
-                const Tensor bg_mask = Tensor::full(mask_f.shape(), 1.0f, mask_f.device()) - mask_f;
+                const Tensor bg_mask = Tensor::full(mask_2d_th_segment_f.shape(), 1.0f, mask_2d_th_segment_f.device()) - mask_2d_th_segment_f;
                 const Tensor penalty_weights = bg_mask.pow(opt_params.mask_opacity_penalty_power);
                 const Tensor penalty = (alpha_2d * penalty_weights).mean() * opt_params.mask_opacity_penalty_weight;
 
@@ -1513,7 +1585,7 @@ namespace lfs::training {
             // Alpha should match mask
             if (alpha.is_valid()) {
                 const Tensor alpha_2d = alpha.ndim() == 3 ? alpha.squeeze(0) : alpha;
-                const Tensor mask_f = mask_as_float();
+                const Tensor mask_f = mask_as_float(mask_2d_th);
                 const Tensor alpha_loss = (alpha_2d - mask_f).abs().mean() * ALPHA_CONSISTENCY_WEIGHT;
                 loss = loss + alpha_loss;
                 grad_alpha = (alpha_2d - mask_f).sign() * (ALPHA_CONSISTENCY_WEIGHT / static_cast<float>(alpha_2d.numel()));
@@ -2112,7 +2184,6 @@ namespace lfs::training {
             memory_breakdown_logged_first_batch_ = false;
             memory_breakdown_logged_first_raster_ = false;
             memory_breakdown_logged_first_step_ = false;
-            fastgs_tiling_warning_logged_ = false;
 
             if (params_.optimization.enable_sparsity) {
                 const size_t stop_refine_limit = static_cast<size_t>(std::max(0, get_regular_iterations()));
@@ -2410,7 +2481,7 @@ namespace lfs::training {
             LOG_INFO("Visualization: {}", params.optimization.headless ? "disabled" : "enabled");
             LOG_INFO("Strategy: {}", params.optimization.strategy);
             if (params.optimization.mask_mode != lfs::core::param::MaskMode::None) {
-                static constexpr const char* MASK_MODE_NAMES[] = {"none", "segment", "ignore", "alpha_consistent"};
+                static constexpr const char* MASK_MODE_NAMES[] = {"none", "segment", "ignore", "segment_and_ignore", "alpha_consistent"};
                 LOG_INFO("Mask mode: {}", MASK_MODE_NAMES[static_cast<int>(params.optimization.mask_mode)]);
             }
             if (current_iteration_ > 0) {
@@ -3097,43 +3168,7 @@ namespace lfs::training {
                 bg_image = get_random_background_for_camera(cam->image_width(), cam->image_height(), iter);
             }
 
-            // Configurable tile-based training to reduce peak memory in 3DGUT.
-            const int full_width = cam->image_width();
-            const int full_height = cam->image_height();
             const bool fastgs_path = !params_.optimization.gut;
-
-            // Read tile mode from parameters (1=1 tile, 2=2 tiles, 4=4 tiles)
-            const TileMode requested_tile_mode = static_cast<TileMode>(params_.optimization.tile_mode);
-            TileMode tile_mode = requested_tile_mode;
-            if (fastgs_path && requested_tile_mode != TileMode::One) {
-                if (!fastgs_tiling_warning_logged_) {
-                    LOG_WARN("tile_mode={} was requested, but tiled training is only available for 3DGUT. 3DGS/FastGS will render full images with tile_mode=1.",
-                             params_.optimization.tile_mode);
-                    fastgs_tiling_warning_logged_ = true;
-                }
-                tile_mode = TileMode::One;
-            }
-
-            // Determine tile configuration
-            int tile_rows = 1, tile_cols = 1;
-            switch (tile_mode) {
-            case TileMode::One:
-                tile_rows = 1;
-                tile_cols = 1;
-                break;
-            case TileMode::Two:
-                tile_rows = 2;
-                tile_cols = 1;
-                break;
-            case TileMode::Four:
-                tile_rows = 2;
-                tile_cols = 2;
-                break;
-            }
-
-            const int tile_width = full_width / tile_cols;
-            const int tile_height = full_height / tile_rows;
-            const int num_tiles = tile_rows * tile_cols;
 
             if (!loss_accumulator_.is_valid()) {
                 loss_accumulator_ = core::Tensor::zeros({1}, core::Device::CUDA);
@@ -3160,7 +3195,7 @@ namespace lfs::training {
             const bool in_sparsification = get_active_sparsify_steps() > 0 &&
                                            iter > get_sparsity_boundary_iteration();
 
-            // Determine controller phase before tile loop (does not depend on tile results)
+            // Determine controller phase before render (does not depend on render results)
             const bool known_ppisp_camera = ppisp_ && ppisp_->is_known_camera(cam->camera_id());
             const int ppisp_cam_idx = known_ppisp_camera ? ppisp_->camera_index(cam->camera_id()) : -1;
             const int ppisp_activation_step = params_.optimization.resolved_ppisp_controller_activation_step(get_total_iterations());
@@ -3289,47 +3324,13 @@ namespace lfs::training {
                 }
             }
 
-            // Loop over tiles (row-major order)
-            for (int tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
-                const int tile_row = tile_idx / tile_cols;
-                const int tile_col = tile_idx % tile_cols;
-                const int tile_x_offset = tile_col * tile_width;
-                const int tile_y_offset = tile_row * tile_height;
+            {
+                nvtxRangePush("rasterize");
 
-                nvtxRangePush(std::format("tile_{}x{}", tile_row, tile_col).c_str());
-
-                // Extract GT image tile
-                lfs::core::Tensor gt_tile;
-                // Extract background image tile (if using background image)
+                lfs::core::Tensor gt_tile = gt_image;
                 lfs::core::Tensor bg_tile;
-                {
-                    LFS_VRAM_SCOPE("train.tile_inputs");
-                    LOG_VRAM_DIFF("train.tile_inputs");
-                    if (num_tiles == 1) {
-                        // No tiling - use full image
-                        gt_tile = gt_image;
-                    } else if (gt_image.shape()[0] == 3) {
-                        // CHW layout: gt_image is [3, H, W]
-                        // Slice both height and width dimensions
-                        auto tile_h = gt_image.slice(1, tile_y_offset, tile_y_offset + tile_height);
-                        gt_tile = tile_h.slice(2, tile_x_offset, tile_x_offset + tile_width);
-                    } else {
-                        // HWC layout: gt_image is [H, W, 3]
-                        auto tile_h = gt_image.slice(0, tile_y_offset, tile_y_offset + tile_height);
-                        gt_tile = tile_h.slice(1, tile_x_offset, tile_x_offset + tile_width);
-                    }
-
-                    if (bg_image.is_valid() && !bg_image.is_empty()) {
-                        if (num_tiles == 1) {
-                            // No tiling - use full image
-                            bg_tile = bg_image;
-                        } else {
-                            // CHW layout: bg_image is [3, H, W]
-                            // Slice both height and width dimensions
-                            auto tile_h = bg_image.slice(1, tile_y_offset, tile_y_offset + tile_height);
-                            bg_tile = tile_h.slice(2, tile_x_offset, tile_x_offset + tile_width);
-                        }
-                    }
+                if (bg_image.is_valid() && !bg_image.is_empty()) {
+                    bg_tile = bg_image;
                 }
 
                 // Render the tile
@@ -3344,11 +3345,9 @@ namespace lfs::training {
                     LFS_VRAM_SCOPE("train.rasterize_forward");
                     LOG_VRAM_DIFF("train.rasterize_forward");
                     if (params_.optimization.gut) {
-                        const int tw = (num_tiles > 1) ? tile_width : 0;
-                        const int th = (num_tiles > 1) ? tile_height : 0;
                         auto rasterize_result = gsplat_rasterize_forward(
                             *cam, strategy_->get_model(), bg,
-                            tile_x_offset, tile_y_offset, tw, th,
+                            0, 0, 0, 0,
                             1.0f, false, GsplatRenderMode::RGB, true, bg_tile);
 
                         if (!rasterize_result) {
@@ -3360,12 +3359,9 @@ namespace lfs::training {
                         output = std::move(rasterize_result->first);
                         gsplat_ctx.emplace(std::move(rasterize_result->second));
                     } else {
-                        // Standard 3DGS/FastGS mode renders full images; tiling is 3DGUT-only.
                         auto rasterize_result = fast_rasterize_forward(
                             *cam, strategy_->get_model(), bg,
-                            tile_x_offset, tile_y_offset,
-                            (num_tiles > 1) ? tile_width : 0, // 0 means full image
-                            (num_tiles > 1) ? tile_height : 0,
+                            0, 0, 0, 0,
                             params_.optimization.mip_filter, bg_tile);
 
                         // Check for OOM error
@@ -3373,9 +3369,9 @@ namespace lfs::training {
                             const std::string& error = rasterize_result.error();
                             if (error.find("OUT_OF_MEMORY") != std::string::npos) {
                                 nvtxRangePop(); // rasterize_forward
-                                nvtxRangePop(); // tile
+                                nvtxRangePop(); // rasterize
 
-                                LOG_ERROR("OUT OF MEMORY in 3DGS/FastGS training. Tiling is only available for 3DGUT; enable --gut to use tiled training.");
+                                LOG_ERROR("OUT OF MEMORY in 3DGS/FastGS training.");
                                 LOG_ERROR("Arena error: {}", error);
                                 return std::unexpected(error);
                             }
@@ -3392,7 +3388,10 @@ namespace lfs::training {
                             fast_ctx->release_forward_context();
                             nvtxRangePop();
                             nvtxRangePop();
-                            continue;
+                            LOG_DEBUG("Skipping iteration {} - no visible primitives", iter);
+                            return iter < get_total_iterations() && !stop_requested_.load() && !stop_token.stop_requested()
+                                       ? StepResult::Continue
+                                       : StepResult::Stop;
                         }
                     }
                 }
@@ -3471,14 +3470,11 @@ namespace lfs::training {
                                     params_.dataset.resize_factor,
                                     params_.dataset.max_width,
                                     params_.optimization.invert_masks,
-                                    params_.optimization.mask_threshold);
+                                    params_.optimization.mask_threshold,
+                                    params_.optimization.mask_mode != lfs::core::param::MaskMode::SegmentAndIgnore);
                             }
 
                             lfs::core::Tensor mask_tile = mask;
-                            if (num_tiles > 1 && mask.ndim() == 2) {
-                                auto tile_h = mask.slice(0, tile_y_offset, tile_y_offset + tile_height);
-                                mask_tile = tile_h.slice(1, tile_x_offset, tile_x_offset + tile_width);
-                            }
 
                             auto result = compute_photometric_loss_with_mask(
                                 corrected_image, gt_tile, mask_tile, output.alpha, params_.optimization, raw_loss_input);
@@ -3580,7 +3576,8 @@ namespace lfs::training {
                     const bool used_masked_fused =
                         use_mask &&
                         (params_.optimization.mask_mode == lfs::core::param::MaskMode::Segment ||
-                         params_.optimization.mask_mode == lfs::core::param::MaskMode::Ignore) &&
+                         params_.optimization.mask_mode == lfs::core::param::MaskMode::Ignore ||
+                         params_.optimization.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore) &&
                         params_.optimization.lambda_dssim > 0.0f;
                     {
                         LFS_VRAM_SCOPE("train.photometric_loss");
@@ -3594,14 +3591,11 @@ namespace lfs::training {
                                     params_.dataset.resize_factor,
                                     params_.dataset.max_width,
                                     params_.optimization.invert_masks,
-                                    params_.optimization.mask_threshold);
+                                    params_.optimization.mask_threshold,
+                                    params_.optimization.mask_mode != lfs::core::param::MaskMode::SegmentAndIgnore);
                             }
 
                             mask_tile = mask;
-                            if (num_tiles > 1 && mask.ndim() == 2) {
-                                auto tile_h = mask.slice(0, tile_y_offset, tile_y_offset + tile_height);
-                                mask_tile = tile_h.slice(1, tile_x_offset, tile_x_offset + tile_width);
-                            }
 
                             auto result = compute_photometric_loss_with_mask(
                                 corrected_image, gt_tile, mask_tile, output.alpha, params_.optimization, raw_loss_input);
@@ -3824,6 +3818,12 @@ namespace lfs::training {
                         }
 
                         if (use_mask &&
+                            params_.optimization.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore) {
+                            const auto mask_for_error = mask_tile.gt(250).to(lfs::core::DataType::Float32);
+                            tile_error_map.mul_(mask_for_error);
+                        }
+
+                        if (use_mask &&
                             (params_.optimization.mask_mode == lfs::core::param::MaskMode::Segment ||
                              params_.optimization.mask_mode == lfs::core::param::MaskMode::Ignore)) {
                             const auto mask_for_error =
@@ -3948,12 +3948,10 @@ namespace lfs::training {
                                      stats.prefetch_queue_size);
                         }
 
-                        LOG_INFO("[MEM] fastgs counts instances={}, image={}x{}, tile_mode={}, num_tiles={}",
+                        LOG_INFO("[MEM] fastgs counts instances={}, image={}x{}",
                                  fast_ctx->forward_ctx.n_instances,
                                  output.width,
-                                 output.height,
-                                 static_cast<int>(tile_mode),
-                                 num_tiles);
+                                 output.height);
                         memory_breakdown_logged_first_raster_ = true;
                     }
 
@@ -4026,11 +4024,8 @@ namespace lfs::training {
                     nvtxRangePop();
                 }
 
-                nvtxRangePop(); // End tile
+                nvtxRangePop(); // End rasterize
             }
-
-            if (tiles_processed > 1)
-                loss_tensor_gpu = loss_tensor_gpu / static_cast<float>(tiles_processed);
 
             if (tiles_processed == 0) {
                 LOG_DEBUG("Skipping iteration {} - no visible primitives", iter);
@@ -4482,6 +4477,9 @@ namespace lfs::training {
             if (params_.optimization.mask_mode != lfs::core::param::MaskMode::None) {
                 aux_pipeline_config.invert_masks = params_.optimization.invert_masks;
                 aux_pipeline_config.mask_threshold = params_.optimization.mask_threshold;
+                if (params_.optimization.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore) {
+                    aux_pipeline_config.mask_threshold = 0.0f;
+                }
                 if (params_.optimization.use_alpha_as_mask && alpha_available) {
                     aux_pipeline_config.use_alpha_as_mask = true;
                     aux_pipeline_config.load_masks = true;
@@ -4705,7 +4703,12 @@ namespace lfs::training {
             .binary = true,
             .async = !join_threads};
 
-        const auto ply_result = lfs::io::save_ply(strategy_->get_model(), ply_options);
+        const auto& model = strategy_->get_model();
+        const auto export_model = make_ply_export_model(
+            model,
+            params_.exclude_frozen_add_splats_from_export);
+        const auto& model_for_export = export_model ? *export_model : model;
+        const auto ply_result = lfs::io::save_ply(model_for_export, ply_options);
         if (!ply_result) {
             if (ply_result.error().code == lfs::io::ErrorCode::INSUFFICIENT_DISK_SPACE) {
                 lfs::core::events::state::DiskSpaceSaveFailed{

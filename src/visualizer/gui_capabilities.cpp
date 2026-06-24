@@ -28,6 +28,7 @@ namespace lfs::vis::cap {
 
     bool isTransformableNodeType(const core::NodeType type) {
         return type == core::NodeType::DATASET ||
+               type == core::NodeType::GROUP ||
                type == core::NodeType::SPLAT ||
                type == core::NodeType::POINTCLOUD ||
                type == core::NodeType::CROPBOX ||

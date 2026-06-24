@@ -1236,19 +1236,22 @@ void VulkanGSRenderer::executeSelectionMask(
     const _VulkanBuffer& primitives,
     const _VulkanBuffer& model_transforms,
     const _VulkanBuffer& selection_out,
-    const _VulkanBuffer& polygon_mask) {
+    const _VulkanBuffer& polygon_mask,
+    const _VulkanBuffer& ring_pick_out) {
     DEVICE_GUARD;
 
     bufferMemoryBarrier({
                             {buffers.xyz_ws.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
                             {buffers.rotations.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
                             {buffers.scaling_raw.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
+                            {buffers.opacity_raw.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
                             {transform_indices, TRANSFER_COMPUTE_SHADER_WRITE},
                             {node_mask, TRANSFER_COMPUTE_SHADER_WRITE},
                             {primitives, TRANSFER_COMPUTE_SHADER_WRITE},
                             {model_transforms, TRANSFER_COMPUTE_SHADER_WRITE},
                             {selection_out, TRANSFER_COMPUTE_SHADER_WRITE},
                             {polygon_mask, COMPUTE_SHADER_READ_WRITE},
+                            {ring_pick_out, TRANSFER_COMPUTE_SHADER_WRITE},
                         },
                         COMPUTE_SHADER_READ_WRITE);
 
@@ -1267,9 +1270,13 @@ void VulkanGSRenderer::executeSelectionMask(
             buffers.scaling_raw.deviceBuffer,
             selection_out,
             polygon_mask,
+            buffers.opacity_raw.deviceBuffer,
+            ring_pick_out,
         });
 
-    bufferMemoryBarrier({{selection_out, COMPUTE_SHADER_WRITE}}, TRANSFER_READ);
+    bufferMemoryBarrier({{selection_out, COMPUTE_SHADER_WRITE},
+                         {ring_pick_out, COMPUTE_SHADER_WRITE}},
+                        TRANSFER_READ);
 }
 
 void VulkanGSRenderer::executeSelectionPolygonRasterize(

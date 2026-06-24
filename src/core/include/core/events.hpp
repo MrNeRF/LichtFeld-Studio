@@ -83,15 +83,16 @@ namespace lfs::core {
             EVENT(SetNodeVisibilityById, int32_t node_id; bool visible;);
             EVENT(ExportNodeAs, std::string name; ExportFormat format;);
             EVENT(ExportAllMergedAs, ExportFormat format;);
-            EVENT(ReparentNode, std::string node_name; std::string new_parent_name;); // Empty parent = root
-            EVENT(ReparentNodeById, int32_t node_id; int32_t new_parent_id;);         // -1 parent = root
-            EVENT(AddGroup, std::string name; std::string parent_name;);              // Create empty group node
-            EVENT(AddGroupByParentId, std::string name; int32_t parent_id;);          // -1 parent = root
-            EVENT(DuplicateNode, std::string name;);                                  // Duplicate node (and children if group)
-            EVENT(DuplicateNodeById, int32_t node_id;);                               // Duplicate node (and children if group)
-            EVENT(MergeGroup, std::string name;);                                     // Merge group children into single PLY
-            EVENT(MergeGroupById, int32_t node_id;);                                  // Merge group children into single PLY
-            EVENT(SetNodeLocked, std::string name; bool locked;);                     // Lock/unlock node for editing
+            EVENT(ReparentNode, std::string node_name; std::string new_parent_name;);    // Empty parent = root
+            EVENT(ReparentNodeById, int32_t node_id; int32_t new_parent_id;);            // -1 parent = root
+            EVENT(MoveNodeById, int32_t node_id; int32_t new_parent_id; int32_t index;); // -1 parent = root, -1 index = append
+            EVENT(AddGroup, std::string name; std::string parent_name;);                 // Create empty group node
+            EVENT(AddGroupByParentId, std::string name; int32_t parent_id;);             // -1 parent = root
+            EVENT(DuplicateNode, std::string name;);                                     // Duplicate node (and children if group)
+            EVENT(DuplicateNodeById, int32_t node_id;);                                  // Duplicate node (and children if group)
+            EVENT(MergeGroup, std::string name;);                                        // Merge group children into single PLY
+            EVENT(MergeGroupById, int32_t node_id;);                                     // Merge group children into single PLY
+            EVENT(SetNodeLocked, std::string name; bool locked;);                        // Lock/unlock node for editing
             EVENT(CropPLY, lfs::geometry::BoundingBox crop_box; bool inverse;);
             EVENT(CropPLYEllipsoid, glm::mat4 world_transform; glm::vec3 radii; bool inverse;);
             EVENT(ApplyCropBox, );

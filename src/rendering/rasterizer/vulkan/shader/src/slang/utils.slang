@@ -1164,6 +1164,7 @@ static const uint OVERLAY_FLAG_FLASH = 4;
 static const uint SELECTION_PREVIEW_FLAG = 0x80;
 static const uint SELECTION_GROUP_MASK = 0x7F;
 static const uint SELECTION_PREVIEW_COLOR_INDEX = 256;
+static const uint SELECTION_SELECTED_HOVER_COLOR_INDEX = 257;
 static const float SELECTION_PREVIEW_BLEND = 0.9f;
 static const float SELECTION_COMMITTED_BLEND = 0.8f;
 
@@ -1295,12 +1296,31 @@ float4 apply_projection_overlay_color(
 }
 
 [ForceInline]
+float3 selection_overlay_target_color(uint sel_status, StructuredBuffer<float4> selection_colors)
+{
+    uint group_id = sel_status & SELECTION_GROUP_MASK;
+    bool is_preview = (sel_status & SELECTION_PREVIEW_FLAG) != 0u;
+    if (is_preview && group_id > 0u) {
+        return selection_colors[SELECTION_SELECTED_HOVER_COLOR_INDEX].xyz;
+    }
+    if (is_preview) {
+        return selection_colors[SELECTION_PREVIEW_COLOR_INDEX].xyz;
+    }
+    if (group_id > 0u) {
+        return selection_colors[group_id].xyz;
+    }
+    return selection_colors[0].xyz;
+}
+
+[ForceInline]
 float4 apply_ring_overlay(
     float4 gauss_rgba,
     Splat_2D_AlphaBlend g,
     float2 pix_coord,
+    uint sel_status,
     uint flags,
-    StructuredBuffer<float4> overlay_params)
+    StructuredBuffer<float4> overlay_params,
+    StructuredBuffer<float4> selection_colors)
 {
     bool show_rings = overlay_enabled(overlay_params[OVERLAY_PARAM_MARKER_FLAGS].x);
     bool selectable = (flags & OVERLAY_FLAG_NONSELECTABLE) == 0u;
@@ -1317,6 +1337,11 @@ float4 apply_ring_overlay(
     float ring_inner = boundary_gaussian * (1.0f - ring_width * 10.0f);
     if (gaussian < ring_outer && gaussian > ring_inner) {
         float3 color = unpremultiplied_color(gauss_rgba);
+        uint group_id = sel_status & SELECTION_GROUP_MASK;
+        bool is_preview = (sel_status & SELECTION_PREVIEW_FLAG) != 0u;
+        if (is_preview || group_id > 0u) {
+            color = selection_overlay_target_color(sel_status, selection_colors);
+        }
         float alpha = min(0.8f, ALPHA_BLEND_MAX_OPACITY);
         return float4(color * alpha, alpha);
     }
@@ -1337,7 +1362,7 @@ float4 apply_selection_overlay(
 
     float3 color = unpremultiplied_color(gauss_rgba);
     if (is_preview) {
-        color = lerp(color, selection_colors[SELECTION_PREVIEW_COLOR_INDEX].xyz, SELECTION_PREVIEW_BLEND);
+        color = lerp(color, selection_overlay_target_color(sel_status, selection_colors), SELECTION_PREVIEW_BLEND);
     } else if (group_id > 0u) {
         color = lerp(color, selection_colors[group_id].xyz, SELECTION_COMMITTED_BLEND);
     }

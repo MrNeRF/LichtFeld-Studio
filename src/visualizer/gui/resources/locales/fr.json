@@ -16,6 +16,12 @@
     "edit": "Édition",
     "edit.input_settings": "Paramètres d'Entrée...",
     "edit.preferences": "Préférences...",
+    "select": "S\u00e9lection",
+    "select.copy_selection": "Copier la s\u00e9lection",
+    "select.paste_selection": "Coller la s\u00e9lection",
+    "select.invert_selection": "Inverser la s\u00e9lection",
+    "select.select_all": "Tout s\u00e9lectionner",
+    "select.deselect_all": "D\u00e9s\u00e9lectionner tout",
     "tools": "Outils",
     "tools.asset_manager": "Gestionnaire d'Actifs",
     "tools.python_console": "Console Python",
@@ -329,7 +335,6 @@
     "tooltip.iterations": "Nombre total d'itérations d'entraînement",
     "tooltip.max_gaussians": "Nombre maximum de Gaussiens",
     "tooltip.sh_degree": "Degré des harmoniques sphériques (0-3)",
-    "tooltip.tile_mode": "Rendu par tuiles pour grandes images",
     "tooltip.steps_scaler": "Échelle des étapes d'entraînement. Auto-calculé selon les images (1.0 pour <=300, images/300 au-delà)",
     "tooltip.bilateral_grid": "Embedding d'apparence pour correction exposition/couleur",
     "tooltip.sparsity": "Activer l'élagage pour compression du modèle",
@@ -437,6 +442,7 @@
     "options.mask.none": "Aucun",
     "options.mask.segment": "Segment",
     "options.mask.ignore": "Ignorer",
+    "options.mask.segment_and_ignore": "Segment + Ignorer",
     "options.mask.alpha_consistent": "Coh erent alpha",
     "options.bg.color": "Couleur",
     "options.bg.modulation": "Modulation",
@@ -483,15 +489,11 @@
           "2": "SH deuxième ordre — meilleure couleur dépendante de la vue",
           "3": "SH troisième ordre — meilleure qualité, plus de VRAM"
         },
-        "tile_mode": {
-          "full": "Rastérisation pleine résolution",
-          "half": "Rastérisation demi-résolution (~4× plus rapide)",
-          "quarter": "Rastérisation quart de résolution (~16× plus rapide)"
-        },
         "mask_mode": {
           "none": "Entraîner sur toute l'image, sans masque",
           "segment": "Utiliser le masque de segmentation pour l'avant-plan",
           "ignore": "Ignorer les pixels masqués dans la perte",
+          "segment_and_ignore": "Combinaison de Segment et Ignorer",
           "alpha_consistent": "Forcer la cohérence alpha avec le masque"
         },
         "bg_mode": {
@@ -1077,6 +1079,9 @@
     "sh_degree": "SH DEGREE",
     "export_merged": "Exporter Fusionné...",
     "no_lod_settings": "Pas de paramètres Level of Detail (export plat)",
+    "rad_export_mode": "RAD MODE",
+    "rad_streamable": "RAD (streamable)",
+    "rad_native": "RAD (non-streamable)",
     "rad_flip_y": "Inverser l'axe Y",
     "colmap_writes_sparse": "Écrit cameras.bin, images.bin et points3D.bin",
     "colmap_no_sparse": "Aucun dossier sparse COLMAP trouvé",
@@ -1239,7 +1244,6 @@
     "iterations": "Iterations:",
     "max_gaussians": "Max Gaussians:",
     "sh_degree": "SH Degree:",
-    "tile_mode": "Tile Mode:",
     "steps_scaler": "Steps Scaler:",
     "bilateral_grid": "Bilateral Grid:",
     "mask_mode": "Mask Mode:",

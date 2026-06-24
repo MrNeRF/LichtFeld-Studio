@@ -12,6 +12,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 namespace lfs::vis::lodq {

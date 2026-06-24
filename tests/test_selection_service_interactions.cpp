@@ -66,6 +66,13 @@ namespace {
         return mask->cpu().to_vector_uint8();
     }
 
+    std::vector<bool> deleted_values(const lfs::core::SplatData& splat) {
+        if (!splat.has_deleted_mask()) {
+            return {};
+        }
+        return splat.deleted().cpu().to_vector_bool();
+    }
+
 } // namespace
 
 class SelectionServiceInteractionsTest : public ::testing::Test {
@@ -121,6 +128,65 @@ protected:
     std::unique_ptr<lfs::vis::RenderingManager> rendering_manager_;
     std::unique_ptr<lfs::vis::SelectionService> service_;
 };
+
+TEST_F(SelectionServiceInteractionsTest, SelectionAfterVisibilityChangeUsesRefreshedSelectedNodeMask) {
+    const auto copy_id = scene_manager_->getScene().addSplat(
+        "copy",
+        make_test_splat({
+            2.0f,
+            0.0f,
+            0.0f,
+            3.0f,
+            0.0f,
+            0.0f,
+        }));
+    ASSERT_NE(copy_id, lfs::core::NULL_NODE);
+
+    scene_manager_->selectNodes({"copy"});
+    EXPECT_EQ(scene_manager_->getSelectedNodeMask(), (std::vector<bool>{false, true}));
+
+    const auto original_id = scene_manager_->getScene().getNodeIdByName("test");
+    ASSERT_NE(original_id, lfs::core::NULL_NODE);
+    scene_manager_->setNodeVisibility(original_id, false);
+
+    const auto result = service_->applyMask(std::vector<uint8_t>{1, 0}, lfs::vis::SelectionMode::Replace);
+
+    ASSERT_TRUE(result.success) << result.error;
+    EXPECT_EQ(result.affected_count, 1u);
+    EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{0, 0, 1, 0}));
+}
+
+TEST_F(SelectionServiceInteractionsTest, DeleteSelectedGaussiansMapsFullSelectionMaskAcrossHiddenNodes) {
+    const auto copy_id = scene_manager_->getScene().addSplat(
+        "copy",
+        make_test_splat({
+            2.0f,
+            0.0f,
+            0.0f,
+            3.0f,
+            0.0f,
+            0.0f,
+        }));
+    ASSERT_NE(copy_id, lfs::core::NULL_NODE);
+
+    const auto original_id = scene_manager_->getScene().getNodeIdByName("test");
+    ASSERT_NE(original_id, lfs::core::NULL_NODE);
+    scene_manager_->setNodeVisibility(original_id, false);
+    scene_manager_->getScene().setSelectionMask(
+        std::make_shared<Tensor>(make_uint8_mask({0, 0, 1, 0})));
+
+    const auto result = scene_manager_->softDeleteSelectedGaussians();
+
+    ASSERT_TRUE(result) << result.error();
+    const auto* original = scene_manager_->getScene().getNodeById(original_id);
+    const auto* copy = scene_manager_->getScene().getNodeById(copy_id);
+    ASSERT_NE(original, nullptr);
+    ASSERT_NE(copy, nullptr);
+    ASSERT_NE(original->model, nullptr);
+    ASSERT_NE(copy->model, nullptr);
+    EXPECT_TRUE(deleted_values(*original->model).empty());
+    EXPECT_EQ(deleted_values(*copy->model), (std::vector<bool>{true, false}));
+}
 
 TEST_F(SelectionServiceInteractionsTest, ClosedPolygonDragUpdatesVertexPosition) {
     ASSERT_TRUE(service_->beginInteractiveSelection(

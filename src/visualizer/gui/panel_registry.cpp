@@ -68,6 +68,7 @@ namespace lfs::vis::gui {
             case PanelSpace::MainPanelTab: return "main_panel_tab";
             case PanelSpace::SceneHeader: return "scene_header";
             case PanelSpace::BottomDock: return "bottom_dock";
+            case PanelSpace::LeftDock: return "left_dock";
             case PanelSpace::StatusBar: return "status_bar";
             }
             return "unknown";
@@ -737,6 +738,7 @@ namespace lfs::vis::gui {
                     snap.panel->draw(ctx);
                     break;
                 case PanelSpace::BottomDock:
+                case PanelSpace::LeftDock:
                     break;
                 case PanelSpace::StatusBar:
                     with_panel_input(snap.panel, [&] { snap.panel->draw(ctx); });
@@ -1247,6 +1249,10 @@ namespace lfs::vis::gui {
             case PanelSpace::BottomDock:
                 if (visibility.ui_visible && visibility.bottom_dock_visible)
                     demand.bottom_dock = true;
+                return;
+            case PanelSpace::LeftDock:
+                if (visibility.ui_visible && visibility.left_dock_visible)
+                    demand.left_dock = true;
                 return;
             }
         };

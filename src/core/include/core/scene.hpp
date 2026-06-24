@@ -219,6 +219,7 @@ namespace lfs::core {
         NodeId addKeyframe(const std::string& name, NodeId parent, std::unique_ptr<KeyframeData> data);
         void removeKeyframeNodes();
         [[nodiscard]] bool reparent(NodeId node, NodeId new_parent);
+        [[nodiscard]] bool moveNode(NodeId node, NodeId new_parent, int index);
         [[nodiscard]] std::string duplicateNode(const std::string& name);
         [[nodiscard]] std::string mergeGroup(const std::string& group_name);
         [[nodiscard]] const glm::mat4& getWorldTransform(NodeId node) const;

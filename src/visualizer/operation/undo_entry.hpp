@@ -424,6 +424,7 @@ namespace lfs::vis::op {
         bool locked = false;
         bool training_enabled = true;
         std::optional<std::filesystem::path> source_path;
+        int order_index = -1;
     };
 
     struct SceneGraphNodeMetadataDiff {

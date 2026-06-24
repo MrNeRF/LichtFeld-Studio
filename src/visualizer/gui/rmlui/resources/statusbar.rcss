@@ -110,6 +110,16 @@ body {
     width: 14dp;
     height: 14dp;
     margin-right: 4dp;
+    cursor: pointer;
+    image-color: rgba(255, 255, 255, 150);
+}
+
+#gpu-icon:hover {
+    image-color: rgba(255, 255, 255, 215);
+}
+
+#gpu-icon.active {
+    image-color: rgba(255, 255, 255, 255);
 }
 
 #gpu-model {

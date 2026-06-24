@@ -49,7 +49,7 @@ namespace lfs::vis::gui {
         void pollGpuMemoryQuery(std::chrono::steady_clock::time_point now);
         void setModelString(const char* name, std::string& field, std::string value);
         void setModelBool(const char* name, bool& field, bool value);
-        void attachGitCommitListener();
+        void attachElementListeners();
         void bindReactiveStore();
         void markModelDirty();
 
@@ -58,6 +58,7 @@ namespace lfs::vis::gui {
         Rml::ElementDocument* document_ = nullptr;
         Rml::DataModelHandle model_handle_;
         Rml::EventListener* git_commit_listener_ = nullptr;
+        Rml::EventListener* gpu_icon_listener_ = nullptr;
 
         std::size_t last_theme_signature_ = 0;
         bool has_theme_signature_ = false;
@@ -117,6 +118,7 @@ namespace lfs::vis::gui {
             std::string lfs_mem_text;
             std::string lfs_mem_color;
             bool show_gpu_model = false;
+            bool gpu_panel_active = false;
             std::string gpu_model_text;
             std::string gpu_mem_text;
             std::string gpu_mem_color;

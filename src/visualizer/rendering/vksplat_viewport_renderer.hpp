@@ -84,6 +84,7 @@ namespace lfs::vis {
             Brush = 0,
             Rectangle = 1,
             Polygon = 2,
+            Ring = 3,
         };
 
         enum class OutputSlot : std::size_t {
@@ -101,7 +102,10 @@ namespace lfs::vis {
             std::vector<glm::vec2> polygon_vertices;
             bool gut = false;
             bool equirectangular = false;
+            bool mip_filter = false;
+            float ring_width = 0.01f;
             bool synchronize_input_upload = false;
+            std::uint32_t* picked_ring_id_out = nullptr;
         };
 
         struct DepthSampleRequest {
@@ -245,6 +249,13 @@ namespace lfs::vis {
         };
         [[nodiscard]] GpuLodSelectionStatus gpuLodSelectionStatus() const;
 
+        // True when the most recent render's start-of-frame deferred poll
+        // confirmed the previously rendered frame produced complete, unclamped
+        // content using the steady-state rasterizer chain. One-shot preview/
+        // export captures poll this to avoid reading back a capacity-clamped
+        // (partial) frame; see RenderingManager::renderPreviewImageToPreviewSlotWithState.
+        [[nodiscard]] bool previewCaptureSettled() const { return last_preview_capture_settled_; }
+
     private:
         struct ComposePipeline;
         struct InputBindingResult {
@@ -323,7 +334,7 @@ namespace lfs::vis {
         // Vulkan-external buffers bypass this allocation and are bound directly.
         static constexpr std::size_t kInputRegionCount = 7;
         static constexpr std::size_t kOverlayRegionCount = 7;
-        static constexpr std::size_t kSelectionQueryRegionCount = 7;
+        static constexpr std::size_t kSelectionQueryRegionCount = 8;
         static constexpr std::size_t kRegionAlignment = 256; // VK minStorageBufferOffsetAlignment upper bound on common HW
         struct CudaInputSlot {
             VulkanContext::ExternalBuffer buffer{};
@@ -586,6 +597,13 @@ namespace lfs::vis {
         // keeps frames scheduled while idle so the capacity self-heal converges.
         bool visible_clamp_pending_ = false;
         bool instance_clamp_pending_ = false;
+        // Set each render from the start-of-frame deferred poll: true once a
+        // representative frame (one that used the same steady-state rasterizer
+        // chain the next pass will use) is confirmed complete and unclamped.
+        // Drives the synchronous capacity self-heal used by one-shot preview/
+        // export captures, which cannot tolerate the interactive loop's
+        // one-frame clamp transient.
+        bool last_preview_capture_settled_ = false;
 
         // Fallback CUDA-backed input buffers for models that are not already
         // backed by Vulkan-external tensor storage. Direct Vulkan-external

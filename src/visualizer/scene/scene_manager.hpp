@@ -227,6 +227,7 @@ namespace lfs::vis {
         void updatePlyPath(const std::string& ply_name, const std::filesystem::path& ply_path);
         bool reparentNode(const std::string& node_name, const std::string& new_parent_name);
         bool reparentNode(core::NodeId node_id, core::NodeId new_parent_id);
+        bool moveNode(core::NodeId node_id, core::NodeId new_parent_id, int index);
         std::string addGroupNode(const std::string& name, const std::string& parent_name = "");
         std::string addGroupNode(const std::string& name, core::NodeId parent_id);
         std::string addPlySequenceNode(const std::string& name, const std::string& parent_name = "", size_t frame_count = 0);
@@ -257,6 +258,7 @@ namespace lfs::vis {
         bool executeMirror(lfs::core::MirrorAxis axis);
 
         [[nodiscard]] std::expected<void, std::string> softDeleteSelectedGaussians();
+        [[nodiscard]] std::expected<void, std::string> deleteSelectedGaussiansWithHistory();
         void deleteSelectedGaussians();
         void invertSelection();
         void deselectAllGaussians();
@@ -292,7 +294,37 @@ namespace lfs::vis {
         [[nodiscard]] bool hasAppearanceModel() const { return appearance_ppisp_ != nullptr; }
 
     private:
+        enum class HistoryMode : uint8_t {
+            Record,
+            Skip,
+        };
+
+        struct GaussianDeletionSlice {
+            std::string node_name;
+            size_t begin = 0;
+            size_t end = 0;
+        };
+
+        struct GaussianDeletionPlan {
+            lfs::core::Tensor selection_mask;
+            bool consolidated = false;
+            bool any_visible_node = false;
+            std::vector<GaussianDeletionSlice> partial_slices;
+            std::vector<std::string> removed_node_names;
+        };
+
         void resetToEmptyState(bool trainer_already_cleared = false);
+        [[nodiscard]] bool nodeRemovalAffectsTraining(const std::string& name) const;
+        [[nodiscard]] std::expected<void, std::string> validateNodeRemoval(const std::string& name) const;
+        [[nodiscard]] std::expected<void, std::string> removeNodeImpl(const std::string& name,
+                                                                      bool keep_children,
+                                                                      HistoryMode history_mode);
+        // Drop the GUI's borrowed scene-image tensor and drain the GPU so no in-flight
+        // Vulkan work references model tensors that are about to be freed. Must run
+        // before releasing splat models, especially when their tensors are backed by
+        // Vulkan-external storage (freeing imported memory under the GPU faults the
+        // device with VK_ERROR_DEVICE_LOST).
+        void drainGpuForTensorRelease();
         void setupEventHandlers();
         void finalizeDatasetSceneLoad(const std::filesystem::path& dataset_path,
                                       const std::filesystem::path& scene_path,
@@ -314,6 +346,8 @@ namespace lfs::vis {
         void updateCropBoxToFitScene(bool use_percentile);
         void updateEllipsoidToFitScene(bool use_percentile);
         void scheduleConsolidatedCompaction();
+        [[nodiscard]] std::expected<GaussianDeletionPlan, std::string> buildSelectedGaussianDeletionPlan();
+        [[nodiscard]] std::expected<void, std::string> applySelectedGaussianDeletionPlan(const GaussianDeletionPlan& plan);
 
         core::Scene scene_;
         // Lock ordering: state_mutex_ before selection_.mutex() when both needed

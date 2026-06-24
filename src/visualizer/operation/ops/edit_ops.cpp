@@ -11,7 +11,7 @@ namespace lfs::vis::op {
     OperationResult EditDelete::execute(SceneManager& scene,
                                         const OperatorProperties& /*props*/,
                                         const std::any& /*input*/) {
-        if (const auto result = scene.softDeleteSelectedGaussians(); !result) {
+        if (const auto result = scene.deleteSelectedGaussiansWithHistory(); !result) {
             return OperationResult::failure(result.error());
         }
 

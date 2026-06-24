@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/rml_menu_bar.hpp"
-#include "core/image_io.hpp"
+#include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/services.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
@@ -18,7 +18,7 @@
 #include "rendering/dirty_flags.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/rendering_types.hpp"
-#include "theme/theme.hpp"
+#include "window/window_manager.hpp"
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
@@ -244,6 +244,7 @@ namespace lfs::vis::gui {
         ctor.RegisterArray<std::vector<MenuToolbarButtonView>>();
         ctor.Bind("menu_labels", &menu_labels_);
         ctor.Bind("dropdown_items", &dropdown_items_);
+        ctor.Bind("menu_camera_buttons", &camera_buttons_);
         ctor.Bind("menu_render_buttons", &render_buttons_);
         ctor.Bind("menu_projection_buttons", &projection_buttons_);
         menu_model_ = ctor.GetModelHandle();
@@ -267,6 +268,10 @@ namespace lfs::vis::gui {
         dropdown_popup_ = document_->GetElementById("dropdown-popup");
         brand_logo_ = document_->GetElementById("brand-logo");
         menu_toolbar_ = document_->GetElementById("menu-toolbar");
+        menu_window_controls_ = document_->GetElementById("menu-window-controls");
+        menu_window_split_view_ = document_->GetElementById("menu-window-split-view");
+        menu_window_toggle_ui_ = document_->GetElementById("menu-window-toggle-ui");
+        menu_window_maximize_ = document_->GetElementById("menu-window-maximize");
         body_el_ = document_->GetElementById("body");
 
         render_needed_ = true;
@@ -277,6 +282,7 @@ namespace lfs::vis::gui {
         menu_model_ = {};
         menu_labels_.clear();
         dropdown_items_.clear();
+        camera_buttons_.clear();
         render_buttons_.clear();
         projection_buttons_.clear();
         open_menu_idname_.clear();
@@ -292,7 +298,15 @@ namespace lfs::vis::gui {
         dropdown_overlay_ = nullptr;
         brand_logo_ = nullptr;
         menu_toolbar_ = nullptr;
+        menu_window_controls_ = nullptr;
+        menu_window_split_view_ = nullptr;
+        menu_window_toggle_ui_ = nullptr;
+        menu_window_maximize_ = nullptr;
         body_el_ = nullptr;
+        last_window_split_view_ = false;
+        last_ui_hidden_ = false;
+        last_window_maximized_ = false;
+        clearTitlebarDragRegion();
     }
 
     void RmlMenuBar::suspend() {
@@ -302,6 +316,7 @@ namespace lfs::vis::gui {
         last_mouse_y_ = 0;
         last_hovered_label_ = -1;
         last_toolbar_hovered_ = false;
+        clearTitlebarDragRegion();
         tooltip_.setHover({}, nullptr);
 
         if (open_menu_index_ >= 0)
@@ -327,8 +342,13 @@ namespace lfs::vis::gui {
         dropdown_overlay_ = nullptr;
         brand_logo_ = nullptr;
         menu_toolbar_ = nullptr;
+        menu_window_controls_ = nullptr;
+        menu_window_split_view_ = nullptr;
+        menu_window_toggle_ui_ = nullptr;
+        menu_window_maximize_ = nullptr;
         body_el_ = nullptr;
         tooltip_.setHover({}, nullptr);
+        clearTitlebarDragRegion();
         base_rcss_.clear();
         has_theme_signature_ = false;
         wants_input_ = false;
@@ -360,11 +380,19 @@ namespace lfs::vis::gui {
         dropdown_popup_ = document_->GetElementById("dropdown-popup");
         brand_logo_ = document_->GetElementById("brand-logo");
         menu_toolbar_ = document_->GetElementById("menu-toolbar");
+        menu_window_controls_ = document_->GetElementById("menu-window-controls");
+        menu_window_split_view_ = document_->GetElementById("menu-window-split-view");
+        menu_window_toggle_ui_ = document_->GetElementById("menu-window-toggle-ui");
+        menu_window_maximize_ = document_->GetElementById("menu-window-maximize");
         body_el_ = document_->GetElementById("body");
         applied_toolbar_right_ = -1.0f;
+        last_window_split_view_ = false;
+        last_ui_hidden_ = false;
+        last_window_maximized_ = false;
 
         rebuildLabels();
         menu_model_.DirtyVariable("dropdown_items");
+        menu_model_.DirtyVariable("menu_camera_buttons");
         menu_model_.DirtyVariable("menu_render_buttons");
         menu_model_.DirtyVariable("menu_projection_buttons");
         updateTheme();
@@ -478,6 +506,18 @@ namespace lfs::vis::gui {
         else
             tooltip_.setHover({}, nullptr);
 
+        const float dp_ratio = rml_manager_ ? rml_manager_->getDpRatio() : 1.0f;
+        const bool in_free_titlebar =
+            !is_open &&
+            hovered_label < 0 &&
+            !hovered_toolbar_btn &&
+            my >= 0.0f &&
+            my < bar_height_ * dp_ratio;
+        if (in_free_titlebar && (input.mouse_clicked[0] || input.mouse_down[0])) {
+            wants_input_ = true;
+            return;
+        }
+
         if (is_open) {
             wants_input_ = true;
 
@@ -561,6 +601,7 @@ namespace lfs::vis::gui {
         open_menu_index_ = index;
         open_submenu_index_ = -1;
         open_menu_idname_ = current_idnames_[index];
+        clearTitlebarDragRegion();
 
         MenuDropdownContent content;
         content.menu_idname = current_idnames_[index];
@@ -655,8 +696,36 @@ namespace lfs::vis::gui {
     }
 
     void RmlMenuBar::rebuildToolbarButtons() {
+        std::vector<MenuToolbarButtonView> camera_buttons;
         std::vector<MenuToolbarButtonView> render_buttons;
         std::vector<MenuToolbarButtonView> projection_buttons;
+
+        const auto make = [](std::string id, std::string action, std::string value,
+                             std::string icon, std::string tooltip_key,
+                             std::string tooltip_text, bool selected) {
+            return MenuToolbarButtonView{
+                .button_id = std::move(id),
+                .action = std::move(action),
+                .value = std::move(value),
+                .icon_src = "../icon/" + std::move(icon) + ".png",
+                .tooltip_key = std::move(tooltip_key),
+                .tooltip_text = std::move(tooltip_text),
+                .selected = selected,
+            };
+        };
+
+        if (const auto* ic = lfs::vis::InputController::instance()) {
+            const auto mode = ic->cameraNavigationMode();
+            camera_buttons.push_back(make("menu-camera-orbit", "set_camera_navigation_mode", "orbit",
+                                          "camera-orbit", "", "Orbit Camera",
+                                          mode == lfs::vis::InputController::CameraNavigationMode::Orbit));
+            camera_buttons.push_back(make("menu-camera-trackball", "set_camera_navigation_mode", "trackball",
+                                          "world", "", "Free Orbit Camera",
+                                          mode == lfs::vis::InputController::CameraNavigationMode::Trackball));
+            camera_buttons.push_back(make("menu-camera-fpv", "set_camera_navigation_mode", "fpv",
+                                          "camera-fpv", "", "Fly Camera",
+                                          mode == lfs::vis::InputController::CameraNavigationMode::FPV));
+        }
 
         if (const auto* rm = lfs::vis::services().renderingOrNull()) {
             const auto settings = rm->getSettings();
@@ -668,20 +737,6 @@ namespace lfs::vis::gui {
                 active_mode = "rings";
             else if (settings.show_center_markers)
                 active_mode = "centers";
-
-            const auto make = [](std::string id, std::string action, std::string value,
-                                 std::string icon, std::string tooltip_key,
-                                 std::string tooltip_text, bool selected) {
-                return MenuToolbarButtonView{
-                    .button_id = std::move(id),
-                    .action = std::move(action),
-                    .value = std::move(value),
-                    .icon_src = "../icon/" + std::move(icon) + ".png",
-                    .tooltip_key = std::move(tooltip_key),
-                    .tooltip_text = std::move(tooltip_text),
-                    .selected = selected,
-                };
-            };
 
             render_buttons.push_back(make("menu-render-splats", "set_render_mode", "splats", "blob",
                                           "toolbar.splat_rendering", "Splat Rendering",
@@ -709,15 +764,16 @@ namespace lfs::vis::gui {
                 view_snap = ic->cameraViewSnapEnabled();
             projection_buttons.push_back(make("menu-view-snap", "toggle_camera_view_snap", "", "check",
                                               "", "Snap Axis Views", view_snap));
-            projection_buttons.push_back(make(
-                "menu-split-view", "toggle_independent_split_view", "", "layout-columns", "",
-                "Independent Split View",
-                settings.split_view_mode == lfs::vis::SplitViewMode::IndependentDual));
         }
 
         if (render_buttons != render_buttons_) {
             render_buttons_ = std::move(render_buttons);
             menu_model_.DirtyVariable("menu_render_buttons");
+            render_needed_ = true;
+        }
+        if (camera_buttons != camera_buttons_) {
+            camera_buttons_ = std::move(camera_buttons);
+            menu_model_.DirtyVariable("menu_camera_buttons");
             render_needed_ = true;
         }
         if (projection_buttons != projection_buttons_) {
@@ -743,6 +799,17 @@ namespace lfs::vis::gui {
                                point_cloud_changed && enable_point_cloud
                                    ? lfs::vis::DirtyFlag::ALL
                                    : lfs::vis::DirtyFlag::SELECTION);
+        } else if (action == "set_camera_navigation_mode") {
+            auto* ic = lfs::vis::InputController::instance();
+            if (!ic)
+                return;
+            if (value == "orbit") {
+                ic->setCameraNavigationMode(lfs::vis::InputController::CameraNavigationMode::Orbit);
+            } else if (value == "trackball") {
+                ic->setCameraNavigationMode(lfs::vis::InputController::CameraNavigationMode::Trackball);
+            } else if (value == "fpv" || value == "fly") {
+                ic->setCameraNavigationMode(lfs::vis::InputController::CameraNavigationMode::FPV);
+            }
         } else if (action == "toggle_projection") {
             if (!rm)
                 return;
@@ -768,24 +835,94 @@ namespace lfs::vis::gui {
         } else if (action == "toggle_independent_split_view") {
             if (auto* ic = lfs::vis::InputController::instance())
                 ic->toggleIndependentSplitView();
+        } else if (action == "window_toggle_ui") {
+            lfs::core::events::ui::ToggleUI{}.emit();
+        } else if (action == "window_minimize") {
+            if (auto* wm = lfs::vis::services().windowOrNull())
+                wm->minimize();
+        } else if (action == "window_toggle_maximize") {
+            if (auto* wm = lfs::vis::services().windowOrNull())
+                wm->toggleMaximized();
+        } else if (action == "window_close") {
+            if (auto* wm = lfs::vis::services().windowOrNull()) {
+                wm->requestClose();
+                wm->wakeEventLoop();
+            }
         }
 
         render_needed_ = true;
     }
 
+    void RmlMenuBar::setUiHidden(const bool hidden) {
+        if (ui_hidden_ == hidden)
+            return;
+        ui_hidden_ = hidden;
+        render_needed_ = true;
+    }
+
     Rml::Element* RmlMenuBar::toolbarButtonAtPoint(const float x, const float y) const {
-        if (!menu_toolbar_)
+        const auto find_button = [x, y](Rml::Element* root) -> Rml::Element* {
+            if (!root)
+                return nullptr;
+            for (int i = 0; i < root->GetNumChildren(); ++i) {
+                auto* child = root->GetChild(i);
+                if (!child->HasAttribute("data-action"))
+                    continue;
+                const auto box = child->GetAbsoluteOffset(Rml::BoxArea::Border);
+                const auto size = child->GetBox().GetSize(Rml::BoxArea::Border);
+                if (x >= box.x && x < box.x + size.x && y >= box.y && y < box.y + size.y)
+                    return child;
+            }
             return nullptr;
-        for (int i = 0; i < menu_toolbar_->GetNumChildren(); ++i) {
-            auto* child = menu_toolbar_->GetChild(i);
-            if (!child->HasAttribute("data-action"))
-                continue;
-            const auto box = child->GetAbsoluteOffset(Rml::BoxArea::Border);
-            const auto size = child->GetBox().GetSize(Rml::BoxArea::Border);
-            if (x >= box.x && x < box.x + size.x && y >= box.y && y < box.y + size.y)
-                return child;
+        };
+
+        if (auto* button = find_button(menu_toolbar_))
+            return button;
+        return find_button(menu_window_controls_);
+    }
+
+    void RmlMenuBar::clearTitlebarDragRegion() {
+        if (auto* wm = lfs::vis::services().windowOrNull())
+            wm->clearTitlebarDragRegion();
+    }
+
+    void RmlMenuBar::updateTitlebarDragRegion(const int bar_height_px) {
+        auto* wm = lfs::vis::services().windowOrNull();
+        if (!wm)
+            return;
+        if (open_menu_index_ >= 0 || bar_height_px <= 0) {
+            wm->clearTitlebarDragRegion();
+            return;
         }
-        return nullptr;
+
+        const auto append_element = [](std::vector<lfs::vis::WindowManager::HitTestRect>& rects,
+                                       Rml::Element* element) {
+            if (!element)
+                return;
+
+            const auto offset = element->GetAbsoluteOffset(Rml::BoxArea::Border);
+            const auto size = element->GetBox().GetSize(Rml::BoxArea::Border);
+            const int x1 = static_cast<int>(std::floor(offset.x));
+            const int y1 = static_cast<int>(std::floor(offset.y));
+            const int x2 = static_cast<int>(std::ceil(offset.x + size.x));
+            const int y2 = static_cast<int>(std::ceil(offset.y + size.y));
+            if (x2 <= x1 || y2 <= y1)
+                return;
+
+            rects.push_back({
+                .x = x1,
+                .y = y1,
+                .w = x2 - x1,
+                .h = y2 - y1,
+            });
+        };
+
+        std::vector<lfs::vis::WindowManager::HitTestRect> excluded_rects;
+        excluded_rects.reserve(3);
+        append_element(excluded_rects, menu_items_);
+        append_element(excluded_rects, menu_toolbar_);
+        append_element(excluded_rects, menu_window_controls_);
+        wm->setTitlebarDragRegion(bar_height_px, std::move(excluded_rects));
     }
 
     void RmlMenuBar::rebuildDropdownDOM() {
@@ -826,17 +963,10 @@ namespace lfs::vis::gui {
         rml_theme::applyTheme(document_, base_rcss_, rml_theme::loadBaseRCSS("rmlui/menubar.theme.rcss"));
 
         if (brand_logo_) {
-            const bool is_light = theme().isLightTheme();
-            const auto logo_path = lfs::vis::getAssetPath(
-                is_light ? "lichtfeld-splash-logo-dark.png" : "lichtfeld-splash-logo.png");
+            const auto logo_path = lfs::vis::getAssetPath("lichtfeld-icon.png");
             brand_logo_->SetAttribute("src", rml_theme::pathToRmlImageSource(logo_path));
-            auto [w, h, c] = lfs::core::get_image_info(logo_path);
-            if (w > 0 && h > 0) {
-                constexpr float kTargetHeightDp = 18.0f;
-                const float scale = kTargetHeightDp / static_cast<float>(h);
-                brand_logo_->SetProperty("width", std::format("{:.0f}dp", w * scale));
-                brand_logo_->SetProperty("height", std::format("{:.0f}dp", kTargetHeightDp));
-            }
+            brand_logo_->SetProperty("width", "20dp");
+            brand_logo_->SetProperty("height", "20dp");
         }
         return true;
     }
@@ -849,17 +979,58 @@ namespace lfs::vis::gui {
         const bool theme_changed = updateTheme();
         rebuildToolbarButtons();
 
+        if (menu_window_split_view_) {
+            const bool split_view = [&] {
+                if (auto* rm = lfs::vis::services().renderingOrNull())
+                    return rm->getSettings().split_view_mode == lfs::vis::SplitViewMode::IndependentDual;
+                return false;
+            }();
+            if (split_view != last_window_split_view_) {
+                menu_window_split_view_->SetClass("selected", split_view);
+                menu_window_split_view_->SetAttribute(
+                    "title", split_view ? "Exit Independent Split View" : "Independent Split View");
+                last_window_split_view_ = split_view;
+                render_needed_ = true;
+            }
+        }
+
+        if (menu_window_toggle_ui_ && ui_hidden_ != last_ui_hidden_) {
+            menu_window_toggle_ui_->SetClass("selected", ui_hidden_);
+            menu_window_toggle_ui_->SetAttribute("title", ui_hidden_ ? "Show UI" : "Hide UI");
+            last_ui_hidden_ = ui_hidden_;
+            render_needed_ = true;
+        }
+
+        if (menu_window_maximize_) {
+            const bool maximized = [&] {
+                if (auto* wm = lfs::vis::services().windowOrNull())
+                    return wm->isMaximized();
+                return false;
+            }();
+            if (maximized != last_window_maximized_) {
+                menu_window_maximize_->SetClass("maximized", maximized);
+                menu_window_maximize_->SetAttribute("title", maximized ? "Restore Window" : "Maximize Window");
+                last_window_maximized_ = maximized;
+                render_needed_ = true;
+            }
+        }
+
         const float dp_ratio = rml_manager_->getDpRatio();
         const int bar_h = static_cast<int>(bar_height_ * dp_ratio);
 
-        // Right-align the toolbar to the viewport's right edge (just before the
-        // dock panel) rather than the full-width bar edge. A small inset keeps
-        // the buttons off the panel boundary.
+        // Right-align the render/projection toolbar to the viewport edge, but
+        // keep it clear of the window-control cluster when there is no dock panel.
         if (menu_toolbar_) {
             const float inset = 8.0f * dp_ratio;
-            float right_px = 12.0f * dp_ratio;
+            constexpr float kFallbackRightClusterReserveDp = 184.0f;
+            float right_px = kFallbackRightClusterReserveDp * dp_ratio;
+            if (menu_window_controls_) {
+                const auto offset = menu_window_controls_->GetAbsoluteOffset(Rml::BoxArea::Border);
+                if (offset.x > 0.0f)
+                    right_px = static_cast<float>(screen_w) - offset.x + 4.0f * dp_ratio;
+            }
             if (viewport_right_edge_ > 0.0f)
-                right_px = std::max(0.0f, static_cast<float>(screen_w) - viewport_right_edge_ + inset);
+                right_px = std::max(right_px, static_cast<float>(screen_w) - viewport_right_edge_ + inset);
             if (std::abs(right_px - applied_toolbar_right_) > 0.5f) {
                 menu_toolbar_->SetProperty("right", std::format("{:.1f}px", right_px));
                 applied_toolbar_right_ = right_px;
@@ -892,6 +1063,7 @@ namespace lfs::vis::gui {
             }
             rml_context_->Update();
         }
+        updateTitlebarDragRegion(bar_h);
 
         rml_manager_->queueCachedVulkanContext({
             .context = rml_context_,

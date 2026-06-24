@@ -167,7 +167,14 @@ namespace lfs::io {
         SIMPLE_RADIAL_FISHEYE = 8,
         RADIAL_FISHEYE = 9,
         THIN_PRISM_FISHEYE = 10,
-        UNDEFINED = 11
+        UNDEFINED = 11,
+        // Equirectangular 360 panorama model (COLMAP model id 17, params
+        // [width, height], no intrinsics). Mapped to
+        // CameraModelType::EQUIRECTANGULAR, which the rasterizer handles
+        // natively. Upstream COLMAP names this model "EQUIRECTANGULAR"
+        // (colmap/colmap#4441); the legacy "SPHERICAL" name written by the
+        // original equirectangular fork is still accepted on read.
+        EQUIRECTANGULAR = 17
     };
 
     static const std::unordered_map<int, std::pair<CAMERA_MODEL, int32_t>> camera_model_ids = {
@@ -182,7 +189,8 @@ namespace lfs::io {
         {8, {CAMERA_MODEL::SIMPLE_RADIAL_FISHEYE, 4}},
         {9, {CAMERA_MODEL::RADIAL_FISHEYE, 5}},
         {10, {CAMERA_MODEL::THIN_PRISM_FISHEYE, 12}},
-        {11, {CAMERA_MODEL::UNDEFINED, -1}}};
+        {11, {CAMERA_MODEL::UNDEFINED, -1}},
+        {17, {CAMERA_MODEL::EQUIRECTANGULAR, 2}}};
 
     static const std::unordered_map<std::string, CAMERA_MODEL> camera_model_names = {
         {"SIMPLE_PINHOLE", CAMERA_MODEL::SIMPLE_PINHOLE},
@@ -195,7 +203,18 @@ namespace lfs::io {
         {"FOV", CAMERA_MODEL::FOV},
         {"SIMPLE_RADIAL_FISHEYE", CAMERA_MODEL::SIMPLE_RADIAL_FISHEYE},
         {"RADIAL_FISHEYE", CAMERA_MODEL::RADIAL_FISHEYE},
-        {"THIN_PRISM_FISHEYE", CAMERA_MODEL::THIN_PRISM_FISHEYE}};
+        {"THIN_PRISM_FISHEYE", CAMERA_MODEL::THIN_PRISM_FISHEYE},
+        {"EQUIRECTANGULAR", CAMERA_MODEL::EQUIRECTANGULAR},
+        // Accept the legacy "SPHERICAL" name (written by the original
+        // equirectangular COLMAP fork) as an alias for the same model.
+        {"SPHERICAL", CAMERA_MODEL::EQUIRECTANGULAR}};
+
+    // Placeholder focal length for equirectangular/spherical cameras. They carry
+    // no real intrinsics; the rasterizer reinterprets K for EQUIRECTANGULAR
+    // (focal := full image dimensions, principal point := tile offsets). This
+    // value only keeps the FoV/intrinsics bookkeeping non-degenerate and mirrors
+    // the convention used by the transforms.json loader.
+    static constexpr float EQUIRECTANGULAR_DUMMY_FOCAL = 20.0f;
 
     static const char* camera_model_name(const int model_id) {
         switch (static_cast<CAMERA_MODEL>(model_id)) {
@@ -210,6 +229,9 @@ namespace lfs::io {
         case CAMERA_MODEL::SIMPLE_RADIAL_FISHEYE: return "SIMPLE_RADIAL_FISHEYE";
         case CAMERA_MODEL::RADIAL_FISHEYE: return "RADIAL_FISHEYE";
         case CAMERA_MODEL::THIN_PRISM_FISHEYE: return "THIN_PRISM_FISHEYE";
+        // Write the canonical upstream name so exported reconstructions round-
+        // trip with current COLMAP (which no longer accepts "SPHERICAL").
+        case CAMERA_MODEL::EQUIRECTANGULAR: return "EQUIRECTANGULAR";
         default: return "UNDEFINED";
         }
     }
@@ -515,6 +537,11 @@ namespace lfs::io {
             params[1] /= factor; // fy
             params[2] /= factor; // cx
             params[3] /= factor; // cy
+            break;
+
+        case CAMERA_MODEL::EQUIRECTANGULAR:
+            params[0] /= factor; // width
+            params[1] /= factor; // height
             break;
 
         default:
@@ -1204,6 +1231,18 @@ namespace lfs::io {
                 return make_error(ErrorCode::UNSUPPORTED_FORMAT,
                                   std::format("FOV camera model not supported for image '{}'", img.name),
                                   image_path);
+
+            case CAMERA_MODEL::EQUIRECTANGULAR:
+                // Equirectangular 360 panorama. params = [width, height]; no real
+                // intrinsics. The EQUIRECTANGULAR rasterizer derives projection
+                // from the image dimensions, so we only set placeholder focal/center.
+                focal_x = focal_y = EQUIRECTANGULAR_DUMMY_FOCAL;
+                center_x = 0.5f * static_cast<float>(cam_data.width);
+                center_y = 0.5f * static_cast<float>(cam_data.height);
+                radial_dist = Tensor::empty({0}, Device::CPU);
+                tangential_dist = Tensor::empty({0}, Device::CPU);
+                camera_model_type = lfs::core::CameraModelType::EQUIRECTANGULAR;
+                break;
 
             default:
                 return make_error(ErrorCode::UNSUPPORTED_FORMAT,
@@ -2159,6 +2198,18 @@ namespace lfs::io {
                 return make_error(ErrorCode::UNSUPPORTED_FORMAT,
                                   std::format("FOV camera model not supported for image '{}'", img.name),
                                   sparse_path);
+
+            case CAMERA_MODEL::EQUIRECTANGULAR:
+                // Equirectangular 360 panorama. params = [width, height]; no real
+                // intrinsics. The EQUIRECTANGULAR rasterizer derives projection
+                // from the image dimensions, so we only set placeholder focal/center.
+                focal_x = focal_y = EQUIRECTANGULAR_DUMMY_FOCAL;
+                center_x = 0.5f * static_cast<float>(cam_data.width);
+                center_y = 0.5f * static_cast<float>(cam_data.height);
+                radial_dist = Tensor::empty({0}, Device::CPU);
+                tangential_dist = Tensor::empty({0}, Device::CPU);
+                camera_model_type = lfs::core::CameraModelType::EQUIRECTANGULAR;
+                break;
 
             default:
                 return make_error(ErrorCode::UNSUPPORTED_FORMAT,

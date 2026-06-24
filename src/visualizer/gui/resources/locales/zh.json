@@ -16,6 +16,12 @@
     "edit": "编辑",
     "edit.input_settings": "输入设置...",
     "edit.preferences": "偏好设置...",
+    "select": "\u9009\u62e9",
+    "select.copy_selection": "\u590d\u5236\u9009\u62e9",
+    "select.paste_selection": "\u7c98\u8d34\u9009\u62e9",
+    "select.invert_selection": "\u53cd\u9009",
+    "select.select_all": "\u5168\u9009",
+    "select.deselect_all": "\u53d6\u6d88\u5168\u9009",
     "tools": "工具",
     "tools.asset_manager": "资源管理器",
     "tools.python_console": "Python 控制台",
@@ -159,7 +165,6 @@
     "tooltip.iterations": "总训练迭代次数",
     "tooltip.max_gaussians": "最大高斯数量",
     "tooltip.sh_degree": "球谐函数阶数 (0-3)",
-    "tooltip.tile_mode": "大图像分块渲染",
     "tooltip.steps_scaler": "缩放训练步数。根据图像数量自动计算（<=300张为1.0，超过则为图像数/300）",
     "tooltip.bilateral_grid": "曝光/颜色校正的外观嵌入",
     "tooltip.sparsity": "启用剪枝进行模型压缩",
@@ -267,6 +272,7 @@
     "options.mask.none": "无",
     "options.mask.segment": "分割",
     "options.mask.ignore": "忽略",
+    "options.mask.segment_and_ignore": "分割 + 忽略",
     "options.mask.alpha_consistent": "与 Alpha 一致",
     "options.bg.color": "颜色",
     "options.bg.modulation": "调制",
@@ -313,15 +319,11 @@
           "2": "二阶 SH — 更好的视角相关颜色",
           "3": "三阶 SH — 最佳质量，最多 VRAM"
         },
-        "tile_mode": {
-          "full": "全分辨率光栅化",
-          "half": "半分辨率光栅化（约 4× 更快）",
-          "quarter": "四分之一分辨率光栅化（约 16× 更快）"
-        },
         "mask_mode": {
           "none": "在整张图像上训练，无掩码",
           "segment": "使用分割掩码作为前景",
           "ignore": "在损失中忽略被掩码的像素",
+          "segment_and_ignore": "分割与忽略的组合",
           "alpha_consistent": "强制 alpha 与掩码一致"
         },
         "bg_mode": {
@@ -907,6 +909,9 @@
     "sh_degree": "SH Degree",
     "export_merged": "导出合并的...",
     "no_lod_settings": "无Level of Detail（平面导出）",
+    "rad_export_mode": "RAD MODE",
+    "rad_streamable": "RAD (streamable)",
+    "rad_native": "RAD (non-streamable)",
     "rad_flip_y": "翻转Y轴",
     "colmap_writes_sparse": "写入 cameras.bin、images.bin 和 points3D.bin",
     "colmap_no_sparse": "未找到 COLMAP sparse 文件夹",
@@ -1069,7 +1074,6 @@
     "iterations": "Iterations:",
     "max_gaussians": "Max Gaussians:",
     "sh_degree": "SH Degree:",
-    "tile_mode": "Tile Mode:",
     "steps_scaler": "Steps Scaler:",
     "bilateral_grid": "Bilateral Grid:",
     "mask_mode": "Mask Mode:",

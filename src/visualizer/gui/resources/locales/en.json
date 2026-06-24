@@ -16,6 +16,12 @@
     "edit": "Edit",
     "edit.input_settings": "Input Settings...",
     "edit.preferences": "Preferences...",
+    "select": "Select",
+    "select.copy_selection": "Copy Selection",
+    "select.paste_selection": "Paste Selection",
+    "select.invert_selection": "Invert Selection",
+    "select.select_all": "Select All",
+    "select.deselect_all": "Deselect All",
     "tools": "Tools",
     "tools.asset_manager": "Asset Manager",
     "tools.python_console": "Python Console",
@@ -334,7 +340,6 @@
     "tooltip.iterations": "Total training iterations",
     "tooltip.max_gaussians": "Maximum number of Gaussians",
     "tooltip.sh_degree": "Spherical harmonics degree (0-3)",
-    "tooltip.tile_mode": "Use tiled rendering for large images in 3DGUT training.",
     "tooltip.steps_scaler": "Scale training steps. Auto-set from image count (1.0 for <=300 images, images/300 for more)",
     "tooltip.bilateral_grid": "Appearance embedding for exposure/color correction",
     "tooltip.sparsity": "Enable pruning for model compression",
@@ -434,6 +439,7 @@
     "options.mask.none": "None",
     "options.mask.segment": "Segment",
     "options.mask.ignore": "Ignore",
+    "options.mask.segment_and_ignore": "Segment + Ignore",
     "options.mask.alpha_consistent": "Alpha Consistent",
     "options.depth_loss.pearson": "Pearson Correlation",
     "options.depth_loss.adaptive_warped_l1": "Adaptive Warped L1",
@@ -492,15 +498,11 @@
           "2": "Second-order SH — better view-dependent color",
           "3": "Third-order SH — best quality, most VRAM"
         },
-        "tile_mode": {
-          "full": "Full image (1 tile)",
-          "half": "2 tiles (3DGUT only)",
-          "quarter": "4 tiles (3DGUT only)"
-        },
         "mask_mode": {
           "none": "Train on the entire image, no masking",
           "segment": "Use the segmentation mask for foreground",
           "ignore": "Ignore masked pixels in the loss",
+          "segment_and_ignore": "Combination of Segment and Ignore",
           "alpha_consistent": "Enforce alpha consistency with the mask"
         },
         "bg_mode": {
@@ -1102,6 +1104,9 @@
     "sh_degree": "SH DEGREE",
     "export_merged": "Export Merged...",
     "no_lod_settings": "No Level of Detail (flat export)",
+    "rad_export_mode": "RAD MODE",
+    "rad_streamable": "RAD (streamable)",
+    "rad_native": "RAD (non-streamable)",
     "rad_flip_y": "Flip Y axis",
     "colmap_writes_sparse": "Writes cameras.bin, images.bin, and points3D.bin",
     "colmap_no_sparse": "No COLMAP sparse folder found",
@@ -1265,7 +1270,6 @@
     "iterations": "Iterations:",
     "max_gaussians": "Max Gaussians:",
     "sh_degree": "SH Degree:",
-    "tile_mode": "Tile Mode:",
     "steps_scaler": "Steps Scaler:",
     "bilateral_grid": "Bilateral Grid:",
     "mask_mode": "Mask Mode:",

@@ -579,11 +579,13 @@ namespace lfs::training {
                     // Direct-scene plugins attach masks as in-memory tensors
                     // via Camera::set_mask_tensor — load_and_get_mask returns
                     // the processed-and-cached tensor (skips file I/O).
+                    bool segment_and_ignore = aux_config_.mask_threshold <= 0.f;
                     auto m = cam->load_and_get_mask(
                         dataset_->get_resize_factor(),
                         dataset_->get_max_width(),
                         aux_config_.invert_masks,
-                        aux_config_.mask_threshold);
+                        aux_config_.mask_threshold,
+                        !segment_and_ignore);
                     if (m.is_valid()) {
                         example.mask = std::move(m);
                     }

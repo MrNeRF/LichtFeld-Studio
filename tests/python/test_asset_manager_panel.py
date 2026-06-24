@@ -34,7 +34,11 @@ def _install_lf_stub(monkeypatch):
 
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = SimpleNamespace(
-        PanelSpace=SimpleNamespace(FLOATING="FLOATING"),
+        PanelSpace=SimpleNamespace(
+            FLOATING="FLOATING",
+            BOTTOM_DOCK="BOTTOM_DOCK",
+            LEFT_DOCK="LEFT_DOCK",
+        ),
         PanelHeightMode=SimpleNamespace(FILL="FILL", CONTENT="CONTENT"),
         tr=lambda key: key,
     )
@@ -196,7 +200,6 @@ def _make_asset():
         "absolute_path": "/tmp/bicycle",
         "path": "/tmp/bicycle",
         "file_size_bytes": 4206437268,
-        "tags": ["outdoor", "benchmark"],
         "exists": True,
         "dataset_metadata": {
             "image_count": 194,
@@ -221,10 +224,25 @@ def test_asset_manager_uses_dirty_update_policy(asset_manager_panel_module):
     assert "update_interval_ms" not in asset_manager_panel_module.AssetManagerPanel.__dict__
 
 
+def test_asset_manager_remains_left_dock_panel(asset_manager_panel_module):
+    assert (
+        asset_manager_panel_module.AssetManagerPanel.space
+        == asset_manager_panel_module.lf.ui.PanelSpace.LEFT_DOCK
+    )
+    assert asset_manager_panel_module.AssetManagerPanel.order == 20
+
+
+def test_builtin_registration_keeps_asset_manager_closed_by_default():
+    panels_source = (
+        Path(__file__).resolve().parents[2] / "src" / "python" / "lfs_plugins" / "panels.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'set_panel_enabled("lfs.asset_manager", False)' in panels_source
+
+
 def test_asset_manager_requests_update_from_reactive_store(asset_manager_panel_module, monkeypatch):
     module = asset_manager_panel_module
     signals = SimpleNamespace(
-        scene_generation=_SignalStub(),
         language_generation=_SignalStub(),
     )
     monkeypatch.setattr(module, "RuntimeState", signals)
@@ -233,24 +251,36 @@ def test_asset_manager_requests_update_from_reactive_store(asset_manager_panel_m
     panel._handle = _HandleStub()
 
     panel._subscribe_reactive_state()
-    signals.scene_generation.emit(1)
     signals.language_generation.emit(1)
 
-    assert panel._handle.dirty_fields == ["__update__", "__update__"]
+    assert panel._handle.dirty_fields == ["__update__"]
 
     panel._unsubscribe_reactive_state()
-    signals.scene_generation.emit(2)
+    signals.language_generation.emit(2)
 
-    assert panel._handle.dirty_fields == ["__update__", "__update__"]
+    assert panel._handle.dirty_fields == ["__update__"]
 
 
-def test_asset_rows_expose_scalar_tag_label(asset_manager_panel_module):
-    panel = asset_manager_panel_module.AssetManagerPanel()
-    row = panel._format_asset_for_ui(_make_asset())
+def test_asset_manager_scene_changed_refreshes_catalog(asset_manager_panel_module, monkeypatch):
+    module = asset_manager_panel_module
+    panel = object.__new__(module.AssetManagerPanel)
+    panel._flush_pending_transform_applications = lambda: None
+    panel._sync_runtime_scene_catalog = lambda select_current=True: None
+    panel._last_scene_generation = 0
+    panel.refresh_catalog = lambda request_update=True: setattr(
+        panel, "_refresh_request", request_update
+    )
+    panel._asset_index = None
+    monkeypatch.setattr(
+        module,
+        "RuntimeState",
+        SimpleNamespace(scene_generation=SimpleNamespace(value=1)),
+    )
 
-    assert row["tags_label"] == "outdoor, benchmark"
-    assert "tags" not in row
+    panel.on_scene_changed(None)
 
+    assert panel._last_scene_generation == 1
+    assert panel._refresh_request is True
 
 def test_asset_rows_expose_thumbnail_decorator(asset_manager_panel_module, tmp_path):
     panel = asset_manager_panel_module.AssetManagerPanel()
@@ -352,6 +382,31 @@ def test_asset_manager_card_thumbs_do_not_use_gradient_placeholders():
     rcss = rcss_path.read_text(encoding="utf-8")
 
     assert "vertical-gradient" not in rcss
+
+
+def test_asset_manager_has_visible_viewport_edge():
+    folder_root = Path(__file__).parent.parent.parent
+    resources_dir = (
+        folder_root
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "resources"
+    )
+    rcss = (resources_dir / "asset_manager.rcss").read_text(encoding="utf-8")
+    rml = (resources_dir / "asset_manager.rml").read_text(encoding="utf-8")
+    theme_rcss = (resources_dir / "asset_manager.theme.rcss").read_text(encoding="utf-8")
+
+    assert 'id="asset-viewport-edge"' in rml
+    assert "position: relative;" in rcss
+    assert "#asset-viewport-edge" in rcss
+    assert "position: absolute;" in rcss
+    assert "right: 0;" in rcss
+    assert "width: 1dp;" in rcss
+    assert "background-color: rgba(88, 91, 112, 153);" in rcss
+    assert "#asset-shell.is-floating #asset-viewport-edge" in rcss
+    assert "background-color: @{right_panel.border};" in theme_rcss
 
 
 def test_dataset_thumbnail_uses_first_dataset_image(asset_manager_panel_module, tmp_path):
@@ -735,7 +790,7 @@ def test_dom_card_click_selects_asset_from_stable_parent(asset_manager_panel_mod
         collections={},
     )
 
-    container = _ElementStub({"id": "asset-popup-content"})
+    container = _ElementStub({"id": "asset-main-row"})
     card = _ElementStub(
         {"data-asset-id": "a1", "data-asset-action": "select"},
         parent=container,
@@ -807,7 +862,7 @@ def test_dom_card_ctrl_click_adds_to_multi_selection(asset_manager_panel_module)
         collections={},
     )
 
-    container = _ElementStub({"id": "asset-popup-content"})
+    container = _ElementStub({"id": "asset-main-row"})
     card_a1 = _ElementStub(
         {"data-asset-id": "a1", "data-asset-action": "select"},
         parent=container,
@@ -1037,11 +1092,11 @@ def test_bind_dom_event_listeners_registers_gallery_wheel_handler(
     asset_manager_panel_module,
 ):
     panel = asset_manager_panel_module.AssetManagerPanel()
-    content = _ElementStub({"id": "asset-popup-content"})
+    content = _ElementStub({"id": "asset-main-row"})
     gallery_scroll = _ElementStub({"id": "asset-gallery-scroll"})
     doc = _DocumentStub(
         {
-            "asset-popup-content": content,
+            "asset-main-row": content,
             "asset-gallery-scroll": gallery_scroll,
         }
     )
@@ -1068,6 +1123,94 @@ def test_gallery_precise_scroll_moves_scroll_container(asset_manager_panel_modul
 
     assert gallery_scroll.scroll_top == 152.0
     assert event.stopped is True
+
+
+def test_asset_scroll_schedules_coalesced_window_refresh(asset_manager_panel_module):
+    panel = object.__new__(asset_manager_panel_module.AssetManagerPanel)
+    panel._asset_scroll_event_suppressed = False
+    panel._asset_scroll_suppressed_top = -1.0
+    panel._asset_window_refresh_pending = False
+    panel._asset_window_update_requested = False
+    scheduled = []
+    panel._request_model_update = lambda: scheduled.append("update")
+    scroll_el = _ElementStub({"id": "asset-gallery-scroll"})
+    event = _EventStub(current_target=scroll_el)
+
+    panel._on_asset_scroll(event)
+    panel._on_asset_scroll(event)
+
+    assert panel._asset_window_refresh_pending is True
+    assert panel._asset_window_update_requested is True
+    assert scheduled == ["update"]
+
+
+def test_on_update_applies_pending_window_refresh(asset_manager_panel_module):
+    panel = object.__new__(asset_manager_panel_module.AssetManagerPanel)
+    panel._handle = _HandleStub()
+    panel._asset_window_refresh_pending = True
+    panel._asset_window_update_requested = True
+    panel._view_mode = "list"
+    panel._sync_asset_window_viewport = lambda doc=None: False
+    panel._sync_gallery_card_width = lambda doc=None: False
+    panel._sync_panel_space_state = lambda: False
+    panel.get_filtered_assets = lambda: ["row-1", "row-2"]
+    panel._asset_window_dirty_fields = lambda: (
+        "assets",
+        "asset_list_top_spacer_height",
+        "asset_list_bottom_spacer_height",
+        "asset_gallery_top_spacer_height",
+        "asset_gallery_bottom_spacer_height",
+    )
+    runtime_state = SimpleNamespace(
+        scene_generation=SimpleNamespace(value=0),
+        language_generation=SimpleNamespace(value=0),
+    )
+    asset_manager_panel_module.RuntimeState = runtime_state
+    panel._last_language_generation = 0
+    panel._last_scene_generation = 0
+    panel._asset_index = None
+
+    changed = panel.on_update(None)
+
+    assert changed is True
+    assert panel._handle.records["assets"] == ["row-1", "row-2"]
+    assert "assets" in panel._handle.dirty_fields
+    assert panel._asset_window_refresh_pending is False
+    assert panel._asset_window_update_requested is False
+
+
+def test_dirty_model_assets_refresh_does_not_invalidate_catalog_cache(
+    asset_manager_panel_module,
+):
+    panel = object.__new__(asset_manager_panel_module.AssetManagerPanel)
+    panel._handle = _HandleStub()
+    invalidations = []
+    panel._invalidate_catalog_cache = lambda: invalidations.append("invalidate")
+    panel._selection_count_fields = lambda: ()
+    panel._selection_visibility_fields = lambda: ()
+    panel._selected_asset_detail_fields = lambda: ()
+    panel._selected_scene_detail_fields = lambda: ()
+    panel._selected_folder_detail_fields = lambda: ()
+    panel._update_selection_details = lambda update_scene_assets=True: {
+        "counts": {},
+        "timings_ms": {},
+    }
+    panel._updating_selection_details = False
+    panel.get_filtered_assets = lambda: []
+    panel.get_folder_list = lambda: []
+    panel.get_scene_list = lambda: []
+    panel.get_filter_list = lambda: []
+    panel._request_model_update = lambda: None
+    panel._elapsed_ms = lambda start: 0.0
+    panel._log_perf = lambda *args, **kwargs: None
+    panel._last_dirty_model_timing = {}
+    panel._last_asset_rows_update_count = 0
+    panel._last_asset_rows_update_ms = 0.0
+
+    panel._dirty_model("assets")
+
+    assert invalidations == []
+    assert panel._handle.records["assets"] == []
 
 
 def test_folder_count_matches_visible_list(asset_manager_panel_module, tmp_path):

@@ -35,10 +35,21 @@ _logger = logging.getLogger(__name__)
 
 PRECISE_SCROLL_STEP = 32.0
 RML_PATH_SAFE_CHARS = "/:._-~"
-ASSET_LIST_VISIBLE_LIMIT = 150
-ASSET_GALLERY_VISIBLE_LIMIT = 72
+ASSET_LIST_ROW_HEIGHT_DP = 44.0
+ASSET_LIST_ROW_GAP_DP = 4.0
+ASSET_LIST_WINDOW_FALLBACK_ROWS = 24
+ASSET_LIST_WINDOW_OVERSCAN_ROWS = 6
+ASSET_GALLERY_ROW_HEIGHT_DP = 220.0
+ASSET_GALLERY_ROW_GAP_DP = 10.0
+ASSET_GALLERY_WINDOW_FALLBACK_ROWS = 10
+ASSET_GALLERY_WINDOW_OVERSCAN_ROWS = 2
+ASSET_LIST_BOTTOM_SPACER_EXTRA_ROWS = 3
+ASSET_GALLERY_BOTTOM_SPACER_EXTRA_ROWS = 1
 BACKGROUND_SCAN_THUMBNAIL_LIMIT = 64
 SELECTION_DETAIL_DEFER_SECONDS = 0.035
+ASSET_CARD_PREFERRED_WIDTH_DP = 208.0
+ASSET_CARD_MIN_WIDTH_DP = 1.0
+ASSET_CARD_GRID_HORIZONTAL_CHROME_DP = 48.0
 
 
 def _read_perf_log_threshold_ms() -> float:
@@ -108,7 +119,7 @@ class AssetManagerPanel(Panel):
 
     id = "lfs.asset_manager"
     label = "Asset Manager"
-    space = lf.ui.PanelSpace.FLOATING
+    space = lf.ui.PanelSpace.LEFT_DOCK
     order = 20
     template = "rmlui/asset_manager.rml"
     height_mode = lf.ui.PanelHeightMode.FILL
@@ -295,18 +306,30 @@ class AssetManagerPanel(Panel):
         self._view_mode: str = "list"  # gallery, list
         self._sort_mode: str = "type"  # name, size, type
         self._search_query: str = ""
-        self._pending_tag_name: str = ""
-        self._asset_visible_limit = ASSET_LIST_VISIBLE_LIMIT
         self._last_asset_match_count = 0
         self._last_asset_visible_count = 0
         self._last_dirty_model_timing: Dict[str, Any] = {}
         self._last_asset_rows_update_count = 0
         self._last_asset_rows_update_ms = 0.0
+        self._asset_filtered_cache_key: Optional[tuple] = None
+        self._asset_filtered_cache: List[Dict[str, Any]] = []
+        self._asset_window_scroll_top: float = 0.0
+        self._asset_window_client_height: float = 0.0
+        self._asset_window_client_width: float = 0.0
+        self._asset_window_start_index: int = 0
+        self._asset_window_end_index: int = 0
+        self._asset_list_top_spacer_height: float = 0.0
+        self._asset_list_bottom_spacer_height: float = 0.0
+        self._asset_gallery_top_spacer_height: float = 0.0
+        self._asset_gallery_bottom_spacer_height: float = 0.0
+        self._asset_window_refresh_pending: bool = False
+        self._asset_window_update_requested: bool = False
+        self._asset_scroll_event_suppressed: bool = False
+        self._asset_scroll_suppressed_top: float = -1.0
         self._catalog_assets_snapshot: Optional[Dict[str, Dict[str, Any]]] = None
         self._catalog_folders_snapshot: Optional[Dict[str, Dict[str, Any]]] = None
         self._catalog_scenes_snapshot: Optional[Dict[str, Dict[str, Any]]] = None
         self._catalog_stats_snapshot: Optional[Dict[str, Any]] = None
-        self._selected_asset_tags_key: Optional[tuple[str, ...]] = None
         self._selected_scene_assets_key: Optional[str] = None
         self._selection_detail_timer: Optional[threading.Timer] = None
         self._selection_detail_generation = 0
@@ -372,13 +395,26 @@ class AssetManagerPanel(Panel):
 
         # Panel resize drag state
         self._sidebar_dragging: bool = False
-        self._sidebar_drag_start_x: float = 0.0
-        self._sidebar_start_width: float = 176.0
-        self._sidebar_width: float = 176.0
+        self._sidebar_drag_start_y: float = 0.0
+        self._sidebar_start_height: float = 176.0
+        self._sidebar_resize_handle = None
+        self._sidebar_height: float = 176.0
         self._right_panel_dragging: bool = False
         self._right_panel_drag_start_x: float = 0.0
         self._right_panel_start_width: float = 300.0
+        self._right_panel_resize_handle = None
         self._right_panel_width: float = 300.0
+
+        self._bottom_panel_dragging: bool = False
+        self._bottom_panel_drag_start_y: float = 0.0
+        self._bottom_panel_start_height: float = 220.0
+        self._bottom_panel_resize_handle = None
+        self._bottom_panel_height: float = 220.0
+        self._asset_card_slot_width: float = ASSET_CARD_PREFERRED_WIDTH_DP
+
+        # Dock state tracking (mirror histogram_panel pattern)
+        self._panel_space = lf.ui.PanelSpace.LEFT_DOCK
+        self._is_floating = False
 
     # ── Initialization ────────────────────────────────────────
 
@@ -419,9 +455,35 @@ class AssetManagerPanel(Panel):
         model.bind_func("is_list_view", lambda: self._view_mode == "list")
         model.bind_func("sort_label", self.get_sort_label)
 
-        # Panel widths for resizable sidebar and info panel
-        model.bind_func("sidebar_width", lambda: f"{self._sidebar_width}dp")
+        # Panel dimensions for resizable sidebar and info panel
+        model.bind_func("sidebar_height", lambda: f"{self._sidebar_height}dp")
         model.bind_func("right_panel_width", lambda: f"{self._right_panel_width}dp")
+        model.bind_func("bottom_panel_height", lambda: f"{self._bottom_panel_height}dp")
+        model.bind_func("sidebar_resize_dragging", lambda: self._sidebar_dragging)
+        model.bind_func("right_panel_resize_dragging", lambda: self._right_panel_dragging)
+        model.bind_func(
+            "bottom_panel_resize_dragging", lambda: self._bottom_panel_dragging
+        )
+        model.bind_func(
+            "asset_card_slot_width",
+            lambda: f"{self._asset_card_slot_width:.1f}dp",
+        )
+        model.bind_func(
+            "asset_list_top_spacer_height",
+            lambda: f"{self._asset_list_top_spacer_height:.1f}dp",
+        )
+        model.bind_func(
+            "asset_list_bottom_spacer_height",
+            lambda: f"{self._asset_list_bottom_spacer_height:.1f}dp",
+        )
+        model.bind_func(
+            "asset_gallery_top_spacer_height",
+            lambda: f"{self._asset_gallery_top_spacer_height:.1f}dp",
+        )
+        model.bind_func(
+            "asset_gallery_bottom_spacer_height",
+            lambda: f"{self._asset_gallery_bottom_spacer_height:.1f}dp",
+        )
 
         # Active states
         model.bind_func("active_filters", self.get_active_filters)
@@ -438,6 +500,10 @@ class AssetManagerPanel(Panel):
 
         # Panel label for floating window template
         model.bind_func("panel_label", lambda: tr("asset_manager.panel_title"))
+
+        # Dock state (mirror histogram_panel pattern)
+        model.bind_func("is_floating", lambda: self._is_floating)
+        model.bind_func("close_label", lambda: tr("common.close"))
 
         # Import menu state
         model.bind_func("import_menu_open", self.get_import_menu_open)
@@ -575,11 +641,6 @@ class AssetManagerPanel(Panel):
             "asset_results_summary_visible",
             self.get_asset_results_summary_visible,
         )
-        model.bind_func(
-            "asset_results_more_visible",
-            self.get_asset_results_more_visible,
-        )
-        model.bind_func("show_more_assets_label", self.get_show_more_assets_label)
         model.bind_func("edit_watch_dirs_label", lambda: tr("asset_manager.action.edit_watch_dirs"))
         model.bind_func("rename_folder_label", lambda: tr("asset_manager.action.rename_folder"))
         model.bind_func("delete_folder_label", lambda: tr("asset_manager.action.delete_folder"))
@@ -588,7 +649,10 @@ class AssetManagerPanel(Panel):
         model.bind_func("add_to_scene_label", lambda: tr("asset_manager.action.add_to_scene"))
         model.bind_func("rename_label", lambda: tr("asset_manager.action.rename"))
         model.bind_func("move_to_folder_label", lambda: tr("asset_manager.action.move_to_folder"))
-        model.bind_func("new_folder_label", lambda: tr("asset_manager.action.new_folder"))
+        model.bind_func(
+            "new_folder_label",
+            lambda: f"{tr('asset_manager.action.new_folder')} and move here",
+        )
         model.bind_func("show_in_folder_label", lambda: tr("asset_manager.action.show_in_folder"))
         model.bind_func("update_thumbnail_label", lambda: tr("asset_manager.action.update_thumbnail"))
         model.bind_func("remove_label", lambda: tr("asset_manager.action.remove"))
@@ -625,10 +689,6 @@ class AssetManagerPanel(Panel):
         model.bind_func("prop_sparse_model_label", lambda: tr("asset_manager.property.sparse_model"))
         model.bind_func("prop_cameras_label", lambda: tr("asset_manager.property.cameras"))
         model.bind_func("prop_initial_points_label", lambda: tr("asset_manager.property.initial_points"))
-        model.bind_func("tags_title", lambda: tr("asset_manager.sidebar.tags"))
-        model.bind_func("remove_tag_label", lambda: tr("asset_manager.action.remove"))
-        model.bind_func("add_tag_placeholder", lambda: tr("asset_manager.action.add_tag"))
-        model.bind_func("add_tag_button_label", lambda: tr("asset_manager.action.add_tag"))
         model.bind_func("geometry_metadata_title", lambda: tr("asset_manager.info_panel.geometry_metadata"))
         model.bind_func("prop_bounding_box_label", lambda: tr("asset_manager.geometry.bounding_box"))
         model.bind_func("prop_center_label", lambda: tr("asset_manager.geometry.center"))
@@ -654,7 +714,6 @@ class AssetManagerPanel(Panel):
         model.bind_record_list("scenes")
         model.bind_record_list("filters")
         model.bind_record_list("assets")
-        model.bind_record_list("selected_asset_tags")
 
         # Record lists for nested struct lists
         model.bind_record_list("selected_scene_assets")
@@ -668,7 +727,6 @@ class AssetManagerPanel(Panel):
         model.bind_event("toggle_filter", self.toggle_filter)
         model.bind_event("set_view_mode", self.set_view_mode)
         model.bind_event("cycle_sort_mode", self.cycle_sort_mode)
-        model.bind_event("show_more_assets", self.show_more_assets)
         model.bind_event("toggle_asset_selection", self.toggle_asset_selection)
         model.bind_event("on_search", self.on_search)
         model.bind_event("on_import_splat", self.on_import_splat)
@@ -685,13 +743,11 @@ class AssetManagerPanel(Panel):
         model.bind_event("on_load_asset", self.on_load_asset)
         model.bind_event("on_remove_asset", self.on_remove_asset)
         model.bind_event("on_update_thumbnail", self.on_update_thumbnail)
-        model.bind_event("on_pending_tag_change", self.on_pending_tag_change)
-        model.bind_event("on_add_tag", self.on_add_tag)
-        model.bind_event("on_remove_tag", self.on_remove_tag)
 
         # Panel resize event handlers
         model.bind_event("on_sidebar_resize_start", self.on_sidebar_resize_start)
         model.bind_event("on_right_panel_resize_start", self.on_right_panel_resize_start)
+        model.bind_event("on_bottom_panel_resize_start", self.on_bottom_panel_resize_start)
 
         # New folder event handlers
         model.bind_event("toggle_new_folder_menu", self.toggle_new_folder_menu)
@@ -707,6 +763,9 @@ class AssetManagerPanel(Panel):
         model.bind_event("toggle_folders_collapsed", self.toggle_folders_collapsed)
         model.bind_event("toggle_filters_collapsed", self.toggle_filters_collapsed)
 
+        # Close event
+        model.bind_event("close_panel", self._on_close_panel)
+
     # ── Data Retrieval Methods ─────────────────────────────────
 
     def get_search_query(self) -> str:
@@ -714,7 +773,7 @@ class AssetManagerPanel(Panel):
 
     def set_search_query(self, value: str) -> None:
         self._search_query = value
-        self._reset_asset_visible_limit()
+        self._reset_asset_window_to_top()
         # Trigger asset list refresh when search query changes
         self._dirty_model("search_query", *self._asset_result_dirty_fields())
 
@@ -896,6 +955,8 @@ class AssetManagerPanel(Panel):
         self._catalog_folders_snapshot = None
         self._catalog_scenes_snapshot = None
         self._catalog_stats_snapshot = None
+        self._asset_filtered_cache_key = None
+        self._asset_filtered_cache = []
 
     def _asset_index_assets(self) -> Dict[str, Dict[str, Any]]:
         if not self._asset_index:
@@ -1157,46 +1218,260 @@ class AssetManagerPanel(Panel):
             "context_label": context_label,
         }
 
-    def _default_asset_visible_limit(self) -> int:
-        if self._view_mode == "gallery":
-            return ASSET_GALLERY_VISIBLE_LIMIT
-        return ASSET_LIST_VISIBLE_LIMIT
+    def _reset_asset_window_to_top(self) -> None:
+        scroll_el = self._asset_scroll_container()
+        if scroll_el:
+            try:
+                scroll_el.scroll_top = 0.0
+            except Exception:
+                pass
+        self._asset_window_scroll_top = 0.0
+        self._asset_window_start_index = 0
+        self._asset_window_end_index = 0
+        self._asset_list_top_spacer_height = 0.0
+        self._asset_list_bottom_spacer_height = 0.0
+        self._asset_gallery_top_spacer_height = 0.0
+        self._asset_gallery_bottom_spacer_height = 0.0
+        self._asset_window_refresh_pending = False
+        self._asset_window_update_requested = False
 
-    def _reset_asset_visible_limit(self) -> None:
-        self._asset_visible_limit = self._default_asset_visible_limit()
+    def _request_asset_window_refresh(self) -> None:
+        self._asset_window_refresh_pending = True
+        if self._asset_window_update_requested:
+            return
+        self._asset_window_update_requested = True
+        self._request_model_update()
+
+    def _apply_asset_window_refresh(self, *, card_width_changed: bool = False) -> None:
+        """Update the visible asset window without scheduling another panel refresh."""
+        if not self._handle:
+            return
+
+        if card_width_changed:
+            self._handle.dirty("asset_card_slot_width")
+
+        for field in self._asset_window_dirty_fields():
+            self._handle.dirty(field)
+
+        records_start = time.perf_counter()
+        rows = self.get_filtered_assets()
+        self._handle.update_record_list("assets", rows)
+        self._last_asset_rows_update_count = len(rows)
+        self._last_asset_rows_update_ms = self._elapsed_ms(records_start)
 
     def _asset_result_dirty_fields(self) -> tuple[str, ...]:
         return (
             "assets",
             "asset_results_summary",
             "asset_results_summary_visible",
-            "asset_results_more_visible",
-            "show_more_assets_label",
+            "asset_list_top_spacer_height",
+            "asset_list_bottom_spacer_height",
+            "asset_gallery_top_spacer_height",
+            "asset_gallery_bottom_spacer_height",
+        )
+
+    def _asset_window_dirty_fields(self) -> tuple[str, ...]:
+        return (
+            "assets",
+            "asset_list_top_spacer_height",
+            "asset_list_bottom_spacer_height",
+            "asset_gallery_top_spacer_height",
+            "asset_gallery_bottom_spacer_height",
         )
 
     def get_asset_results_summary_visible(self) -> bool:
         return self._last_asset_match_count > 0
 
-    def get_asset_results_more_visible(self) -> bool:
-        return self._last_asset_visible_count < self._last_asset_match_count
-
-    def get_show_more_assets_label(self) -> str:
-        remaining = max(0, self._last_asset_match_count - self._last_asset_visible_count)
-        next_count = min(self._default_asset_visible_limit(), remaining)
-        if next_count <= 0:
-            return "Show more"
-        return f"Show {next_count:,} more"
-
     def get_asset_results_summary(self) -> str:
         total = self._last_asset_match_count
-        visible = self._last_asset_visible_count
         if total <= 0:
             return ""
-        if visible < total:
-            return f"Showing {visible:,} of {total:,} assets"
         if total == 1:
             return "Showing 1 asset"
         return f"Showing {total:,} assets"
+
+    def _asset_scroll_container(self, doc=None):
+        root = doc or self._doc
+        if not root:
+            return None
+        try:
+            return root.get_element_by_id("asset-gallery-scroll")
+        except Exception:
+            return None
+
+    def _sync_asset_window_viewport(self, doc=None) -> bool:
+        scroll_el = self._asset_scroll_container(doc)
+        if not scroll_el:
+            return False
+
+        try:
+            next_scroll_top = max(0.0, float(scroll_el.scroll_top or 0.0))
+            next_client_height = max(0.0, float(scroll_el.client_height or 0.0))
+            next_client_width = max(0.0, float(scroll_el.client_width or 0.0))
+        except Exception:
+            return False
+
+        if (
+            abs(next_scroll_top - self._asset_window_scroll_top) <= 0.5
+            and abs(next_client_height - self._asset_window_client_height) <= 0.5
+            and abs(next_client_width - self._asset_window_client_width) <= 0.5
+        ):
+            return False
+
+        self._asset_window_scroll_top = next_scroll_top
+        self._asset_window_client_height = next_client_height
+        self._asset_window_client_width = next_client_width
+
+        folder_id = self._repair_selected_folder()
+        if not folder_id:
+            changed = (
+                self._asset_window_start_index != 0
+                or self._asset_window_end_index != 0
+                or self._asset_list_top_spacer_height != 0.0
+                or self._asset_list_bottom_spacer_height != 0.0
+                or self._asset_gallery_top_spacer_height != 0.0
+                or self._asset_gallery_bottom_spacer_height != 0.0
+            )
+            self._asset_window_start_index = 0
+            self._asset_window_end_index = 0
+            self._asset_list_top_spacer_height = 0.0
+            self._asset_list_bottom_spacer_height = 0.0
+            self._asset_gallery_top_spacer_height = 0.0
+            self._asset_gallery_bottom_spacer_height = 0.0
+            return changed
+
+        total_count = len(self._get_filtered_assets_cache(folder_id))
+        prev_state = (
+            self._asset_window_start_index,
+            self._asset_window_end_index,
+            self._asset_list_top_spacer_height,
+            self._asset_list_bottom_spacer_height,
+            self._asset_gallery_top_spacer_height,
+            self._asset_gallery_bottom_spacer_height,
+        )
+        self._compute_asset_window(total_count)
+        next_state = (
+            self._asset_window_start_index,
+            self._asset_window_end_index,
+            self._asset_list_top_spacer_height,
+            self._asset_list_bottom_spacer_height,
+            self._asset_gallery_top_spacer_height,
+            self._asset_gallery_bottom_spacer_height,
+        )
+        return prev_state != next_state
+
+    def _asset_filtered_cache_signature(self, folder_id: Optional[str]) -> tuple:
+        return (
+            folder_id,
+            self._selected_scene_id,
+            tuple(sorted(self._active_filters)),
+            self._sort_mode,
+            self._search_query,
+        )
+
+    def _get_filtered_assets_cache(self, folder_id: Optional[str]) -> List[Dict[str, Any]]:
+        signature = self._asset_filtered_cache_signature(folder_id)
+        if signature == self._asset_filtered_cache_key:
+            return self._asset_filtered_cache
+
+        assets_by_folder = self._catalog_stats()["assets_by_folder"]
+        raw_assets = list(assets_by_folder.get(folder_id or "", []))
+        matching_assets: List[Dict[str, Any]] = []
+        search_query = self._search_query
+        selected_scene_id = self._selected_scene_id
+        for asset in raw_assets:
+            if selected_scene_id and asset.get("scene_id") != selected_scene_id:
+                continue
+            if not self._asset_matches_active_filters(asset):
+                continue
+            if search_query and not self._asset_matches_query(asset, search_query):
+                continue
+            matching_assets.append(asset)
+
+        self._asset_filtered_cache_key = signature
+        self._asset_filtered_cache = self._sort_assets(matching_assets)
+        return self._asset_filtered_cache
+
+    def _compute_asset_window(
+        self,
+        total_count: int,
+    ) -> tuple[int, int, float, float]:
+        if total_count <= 0:
+            self._asset_window_start_index = 0
+            self._asset_window_end_index = 0
+            self._asset_list_top_spacer_height = 0.0
+            self._asset_list_bottom_spacer_height = 0.0
+            self._asset_gallery_top_spacer_height = 0.0
+            self._asset_gallery_bottom_spacer_height = 0.0
+            return 0, 0, 0.0, 0.0
+
+        if self._view_mode == "gallery":
+            row_height = ASSET_GALLERY_ROW_HEIGHT_DP
+            row_gap = ASSET_GALLERY_ROW_GAP_DP
+            overscan_rows = ASSET_GALLERY_WINDOW_OVERSCAN_ROWS
+            fallback_rows = ASSET_GALLERY_WINDOW_FALLBACK_ROWS
+            available_width = max(
+                ASSET_CARD_MIN_WIDTH_DP,
+                self._asset_window_client_width - ASSET_CARD_GRID_HORIZONTAL_CHROME_DP,
+            )
+            slot_width = max(ASSET_CARD_MIN_WIDTH_DP, self._asset_card_slot_width)
+            columns = max(
+                1,
+                int((available_width + row_gap) // (slot_width + row_gap)),
+            )
+            total_rows = int(math.ceil(total_count / float(columns)))
+            scroll_row = int(self._asset_window_scroll_top // (row_height + row_gap))
+            visible_rows = max(
+                1,
+                int(math.ceil(self._asset_window_client_height / (row_height + row_gap)))
+                + overscan_rows * 2
+                if self._asset_window_client_height > 0.0
+                else fallback_rows,
+            )
+            start_row = max(0, scroll_row - overscan_rows)
+            end_row = min(total_rows, start_row + visible_rows)
+            start_index = min(total_count, start_row * columns)
+            end_index = min(total_count, end_row * columns)
+            top_spacer = float(start_row * (row_height + row_gap))
+            bottom_spacer = float(
+                max(0, total_rows - end_row + ASSET_GALLERY_BOTTOM_SPACER_EXTRA_ROWS)
+                * (row_height + row_gap)
+            )
+            self._asset_window_start_index = start_index
+            self._asset_window_end_index = end_index
+            self._asset_gallery_top_spacer_height = top_spacer
+            self._asset_gallery_bottom_spacer_height = bottom_spacer
+            self._asset_list_top_spacer_height = 0.0
+            self._asset_list_bottom_spacer_height = 0.0
+            return start_index, end_index, top_spacer, bottom_spacer
+
+        row_height = ASSET_LIST_ROW_HEIGHT_DP
+        row_gap = ASSET_LIST_ROW_GAP_DP
+        overscan_rows = ASSET_LIST_WINDOW_OVERSCAN_ROWS
+        fallback_rows = ASSET_LIST_WINDOW_FALLBACK_ROWS
+        row_pitch = row_height + row_gap
+        scroll_row = int(self._asset_window_scroll_top // row_pitch)
+        visible_rows = max(
+            1,
+            int(math.ceil(self._asset_window_client_height / row_pitch))
+            + overscan_rows * 2
+            if self._asset_window_client_height > 0.0
+            else fallback_rows,
+        )
+        start_row = max(0, scroll_row - overscan_rows)
+        end_row = min(total_count, start_row + visible_rows)
+        top_spacer = float(start_row * row_pitch)
+        bottom_spacer = float(
+            max(0, total_count - end_row + ASSET_LIST_BOTTOM_SPACER_EXTRA_ROWS)
+            * row_pitch
+        )
+        self._asset_window_start_index = start_row
+        self._asset_window_end_index = end_row
+        self._asset_list_top_spacer_height = top_spacer
+        self._asset_list_bottom_spacer_height = bottom_spacer
+        self._asset_gallery_top_spacer_height = 0.0
+        self._asset_gallery_bottom_spacer_height = 0.0
+        return start_row, end_row, top_spacer, bottom_spacer
 
     def _asset_matches_active_filters(self, asset: Dict[str, Any]) -> bool:
         if not self._active_filters:
@@ -1219,32 +1494,32 @@ class AssetManagerPanel(Panel):
         if not assets_by_folder:
             self._last_asset_match_count = 0
             self._last_asset_visible_count = 0
+            self._asset_window_start_index = 0
+            self._asset_window_end_index = 0
+            self._asset_list_top_spacer_height = 0.0
+            self._asset_list_bottom_spacer_height = 0.0
+            self._asset_gallery_top_spacer_height = 0.0
+            self._asset_gallery_bottom_spacer_height = 0.0
             return []
 
         folder_id = self._repair_selected_folder()
         if not folder_id:
             self._last_asset_match_count = 0
             self._last_asset_visible_count = 0
+            self._asset_window_start_index = 0
+            self._asset_window_end_index = 0
+            self._asset_list_top_spacer_height = 0.0
+            self._asset_list_bottom_spacer_height = 0.0
+            self._asset_gallery_top_spacer_height = 0.0
+            self._asset_gallery_bottom_spacer_height = 0.0
             return []
 
-        matching_assets = []
-        search_query = self._search_query
-        selected_scene_id = self._selected_scene_id
-        for asset in assets_by_folder.get(folder_id, []):
-            if selected_scene_id and asset.get("scene_id") != selected_scene_id:
-                continue
-            if not self._asset_matches_active_filters(asset):
-                continue
-            if search_query and not self._asset_matches_query(asset, search_query):
-                continue
-
-            matching_assets.append(asset)
-
-        sorted_assets = self._sort_assets(matching_assets)
+        sorted_assets = self._get_filtered_assets_cache(folder_id)
         total_count = len(sorted_assets)
-        visible_limit = max(1, int(self._asset_visible_limit))
-        visible_assets = sorted_assets[:visible_limit]
-
+        start_index, end_index, top_spacer, bottom_spacer = self._compute_asset_window(
+            total_count
+        )
+        visible_assets = sorted_assets[start_index:end_index]
         self._last_asset_match_count = total_count
         self._last_asset_visible_count = len(visible_assets)
         include_thumbnail = self._view_mode == "gallery"
@@ -1383,11 +1658,6 @@ class AssetManagerPanel(Panel):
             "usd": tr("asset_manager.type.usd"),
         }
         type_label = type_labels.get(asset_type, asset_type.upper() if asset_type else "")
-        tags = asset.get("tags") or []
-        if isinstance(tags, (list, tuple, set)):
-            tags_label = ", ".join(str(tag) for tag in tags if tag is not None)
-        else:
-            tags_label = str(tags)
 
         return {
             "id": asset_id,
@@ -1403,8 +1673,6 @@ class AssetManagerPanel(Panel):
             "file_size_bytes": file_size_bytes,
             "points_label": points_str,
             "gaussian_count": gaussian_count,
-            # Record-list rows only support scalar fields in the current RML bridge.
-            "tags_label": tags_label,
             "thumb_class": thumb_class,
             "thumb_label": asset_type.upper() if asset_type else tr("asset_manager.type.asset"),
             "thumbnail_decorator": self._thumbnail_decorator(asset)
@@ -1423,7 +1691,7 @@ class AssetManagerPanel(Panel):
             "modified_label": self._format_timestamp(asset.get("modified_at", "")),
             "thumbnail_path": asset.get("thumbnail_path"),
             "menu_open": asset_id == self._open_menu_asset_id,
-            "load_menu_open": asset_id == self._load_menu_asset_id,
+            "load_menu_open": asset_id == self._open_menu_asset_id,
         }
 
     def get_folder_list(self) -> List[Dict[str, Any]]:
@@ -2563,7 +2831,7 @@ class AssetManagerPanel(Panel):
         else:
             self._active_filters.add(filter_id)
 
-        self._reset_asset_visible_limit()
+        self._reset_asset_window_to_top()
         self._dirty_model(
             "active_filters",
             "filters",
@@ -2578,7 +2846,7 @@ class AssetManagerPanel(Panel):
         if mode not in ("gallery", "list"):
             return
         self._view_mode = mode
-        self._reset_asset_visible_limit()
+        self._reset_asset_window_to_top()
         self._dirty_model(
             "view_mode",
             "is_gallery_view",
@@ -2593,19 +2861,12 @@ class AssetManagerPanel(Panel):
         except ValueError:
             current_index = 0
         self._sort_mode = self.SORT_MODES[(current_index + 1) % len(self.SORT_MODES)]
-        self._reset_asset_visible_limit()
+        self._reset_asset_window_to_top()
         self._dirty_model(
             "sort_mode",
             "sort_label",
             *self._asset_result_dirty_fields(),
         )
-
-    def show_more_assets(self, _handle=None, _ev=None, _args=None):
-        """Expand the bounded asset row/card window."""
-        if not self.get_asset_results_more_visible():
-            return
-        self._asset_visible_limit += self._default_asset_visible_limit()
-        self._dirty_model(*self._asset_result_dirty_fields())
 
     def toggle_asset_selection(self, _handle, _ev, args):
         """Toggle selection state of an asset."""
@@ -2717,7 +2978,6 @@ class AssetManagerPanel(Panel):
     ) -> tuple[str, ...]:
         fields = [
             "selected_asset_id",
-            "selected_asset_tags",
             *self._selection_count_fields(),
             *self._selection_visibility_fields(),
             *self._selected_asset_detail_fields(),
@@ -2971,37 +3231,8 @@ class AssetManagerPanel(Panel):
         """Handle search input changes (real-time)."""
         if args and len(args) > 0:
             self._search_query = str(args[0])
-        self._reset_asset_visible_limit()
+        self._reset_asset_window_to_top()
         self._dirty_model("search_query", *self._asset_result_dirty_fields())
-
-    def on_pending_tag_change(self, _handle, _ev, args):
-        """Update the pending tag input buffer."""
-        self._pending_tag_name = str(args[0]) if args else ""
-
-    def on_add_tag(self, _handle, _ev, args):
-        """Add the pending tag to the currently selected asset."""
-        asset = self._get_selected_asset()
-        if not asset or not self._asset_index:
-            return
-        tag = self._pending_tag_name.strip()
-        if not tag:
-            return
-        self._asset_index.add_tag_to_asset(asset["id"], tag)
-        self._pending_tag_name = ""
-        self.refresh_catalog()
-        self._dirty_model("assets", "selected_asset_tags")
-
-    def on_remove_tag(self, _handle, _ev, args):
-        """Remove a tag from the currently selected asset."""
-        asset = self._get_selected_asset()
-        if not asset or not self._asset_index or not args:
-            return
-        tag = str(args[0]).strip()
-        if not tag:
-            return
-        self._asset_index.remove_tag_from_asset(asset["id"], tag)
-        self.refresh_catalog()
-        self._dirty_model("assets", "selected_asset_tags")
 
     # ── New Folder Handlers ──────────────────────────────────
 
@@ -3031,26 +3262,38 @@ class AssetManagerPanel(Panel):
     def on_sidebar_resize_start(self, _handle, event, _args):
         """Start dragging the sidebar resize handle."""
         self._sidebar_dragging = True
-        self._sidebar_drag_start_x = float(event.get_parameter("mouse_x", "0"))
-        # Use the current width from instance variable
-        self._sidebar_start_width = self._sidebar_width
+        self._sidebar_drag_start_y = float(event.get_parameter("mouse_y", "0"))
+        self._sidebar_start_height = self._sidebar_height
+        self._sidebar_resize_handle = _handle
+        if _handle is not None:
+            try:
+                _handle.set_class("dragging", True)
+            except Exception:
+                pass
         event.stop_propagation()
 
-    def on_sidebar_resize_delta(self, mouse_x: float) -> None:
-        """Update sidebar width during drag."""
+    def on_sidebar_resize_delta(self, mouse_y: float) -> None:
+        """Update sidebar height during drag."""
         if not self._sidebar_dragging:
             return
-        delta_x = mouse_x - self._sidebar_drag_start_x
-        new_width = self._sidebar_start_width + delta_x
-        # Enforce minimum width of 160dp
-        new_width = max(160.0, new_width)
-        self._sidebar_width = new_width
-        # The width is bound via data-style-width, so just dirty the model
-        self._dirty_model("sidebar_width")
+        delta_y = mouse_y - self._sidebar_drag_start_y
+        new_height = self._sidebar_start_height + delta_y
+        # Enforce minimum height of 120dp and maximum of 400dp
+        new_height = max(120.0, min(400.0, new_height))
+        self._sidebar_height = new_height
+        # The height is bound via data-style-height, so just dirty the model
+        self._dirty_model("sidebar_height")
 
-    def on_sidebar_resize_end(self) -> None:
+    def on_sidebar_resize_end(self, handle=None) -> None:
         """End sidebar resize drag."""
         self._sidebar_dragging = False
+        handle = handle or self._sidebar_resize_handle
+        if handle is not None:
+            try:
+                handle.set_class("dragging", False)
+            except Exception:
+                pass
+        self._sidebar_resize_handle = None
 
     def on_right_panel_resize_start(self, _handle, event, _args):
         """Start dragging the right panel resize handle."""
@@ -3058,6 +3301,12 @@ class AssetManagerPanel(Panel):
         self._right_panel_drag_start_x = float(event.get_parameter("mouse_x", "0"))
         # Use the current width from instance variable
         self._right_panel_start_width = self._right_panel_width
+        self._right_panel_resize_handle = _handle
+        if _handle is not None:
+            try:
+                _handle.set_class("dragging", True)
+            except Exception:
+                pass
         event.stop_propagation()
 
     def on_right_panel_resize_delta(self, mouse_x: float) -> None:
@@ -3075,6 +3324,48 @@ class AssetManagerPanel(Panel):
     def on_right_panel_resize_end(self) -> None:
         """End right panel resize drag."""
         self._right_panel_dragging = False
+        handle = self._right_panel_resize_handle
+        if handle is not None:
+            try:
+                handle.set_class("dragging", False)
+            except Exception:
+                pass
+        self._right_panel_resize_handle = None
+
+    def on_bottom_panel_resize_start(self, _handle, event, _args):
+        """Start dragging the bottom panel resize handle."""
+        self._bottom_panel_dragging = True
+        self._bottom_panel_drag_start_y = float(event.get_parameter("mouse_y", "0"))
+        self._bottom_panel_start_height = self._bottom_panel_height
+        self._bottom_panel_resize_handle = _handle
+        if _handle is not None:
+            try:
+                _handle.set_class("dragging", True)
+            except Exception:
+                pass
+        event.stop_propagation()
+
+    def on_bottom_panel_resize_delta(self, mouse_y: float) -> None:
+        """Update bottom panel height during drag."""
+        if not self._bottom_panel_dragging:
+            return
+        delta_y = self._bottom_panel_drag_start_y - mouse_y
+        new_height = self._bottom_panel_start_height + delta_y
+        # Enforce min/max height
+        new_height = max(120.0, min(400.0, new_height))
+        self._bottom_panel_height = new_height
+        self._dirty_model("bottom_panel_height")
+
+    def on_bottom_panel_resize_end(self, handle=None) -> None:
+        """End bottom panel resize drag."""
+        self._bottom_panel_dragging = False
+        handle = handle or self._bottom_panel_resize_handle
+        if handle is not None:
+            try:
+                handle.set_class("dragging", False)
+            except Exception:
+                pass
+        self._bottom_panel_resize_handle = None
 
     def on_import_splat(self, _handle, _ev, args):
         """Import a splat/point-cloud file (PLY, SOG, SPZ, USD formats)."""
@@ -3331,7 +3622,7 @@ class AssetManagerPanel(Panel):
         self._selected_scene_id = None  # Clear scene selection when folder changes
         self._selected_asset_ids.clear()
         self._selection_type = next_selection_type
-        self._reset_asset_visible_limit()
+        self._reset_asset_window_to_top()
 
         self._dirty_model(
             "folders",
@@ -3340,7 +3631,6 @@ class AssetManagerPanel(Panel):
             "selected_folder_id",
             "selected_scene_id",
             "selected_asset_id",
-            "selected_asset_tags",
             *self._selection_count_fields(),
             *self._selection_visibility_fields(),
             *self._selected_asset_detail_fields(),
@@ -3393,14 +3683,13 @@ class AssetManagerPanel(Panel):
         self._selected_scene_id = next_scene_id
         self._selected_asset_ids.clear()
         self._selection_type = next_selection_type
-        self._reset_asset_visible_limit()
+        self._reset_asset_window_to_top()
 
         self._dirty_model(
             "scenes",
             *self._asset_result_dirty_fields(),
             "selected_scene_id",
             "selected_asset_id",
-            "selected_asset_tags",
             *self._selection_count_fields(),
             *self._selection_visibility_fields(),
             *self._selected_asset_detail_fields(),
@@ -3893,6 +4182,18 @@ class AssetManagerPanel(Panel):
         # Sort by name
         return sorted(folders, key=lambda f: self._sort_text(f.get("name")))
 
+    def _open_asset_menu(self, asset_id: str) -> None:
+        if not asset_id:
+            return
+        self._load_menu_asset_id = None
+        self._open_menu_folder_id = None
+        self._open_menu_asset_id = asset_id
+        if self._handle:
+            folders = self.get_move_menu_folders()
+            self._log_info("Loading %d folders for move menu", len(folders))
+            self._handle.update_record_list("move_menu_folders", folders)
+        self._dirty_model("assets", "folders")
+
     def on_toggle_asset_menu(self, _handle, _ev, args):
         """Toggle dropdown menu for an asset."""
         asset_id = self._resolve_event_value(args, _ev, "data-asset-id")
@@ -3909,19 +4210,11 @@ class AssetManagerPanel(Panel):
         # Toggle: if already open for this asset, close it; otherwise open for this asset
         if self._open_menu_asset_id == asset_id:
             self._open_menu_asset_id = None
-        else:
-            self._open_menu_asset_id = asset_id
-
-        # Always reload folders when menu opens to ensure fresh data
-        if self._handle:
-            if self._open_menu_asset_id:
-                folders = self.get_move_menu_folders()
-                self._log_info("Loading %d folders for move menu", len(folders))
-                self._handle.update_record_list("move_menu_folders", folders)
-            else:
+            self._dirty_model("assets")
+            if self._handle:
                 self._handle.update_record_list("move_menu_folders", [])
-
-        self._dirty_model("assets")
+        else:
+            self._open_asset_menu(asset_id)
 
     def on_rename_asset(self, _handle, _ev, args):
         """Open rename dialog for an asset."""
@@ -4478,6 +4771,7 @@ class AssetManagerPanel(Panel):
         self._doc = doc
         set_active_asset_manager_panel(self)
         self._bind_dom_event_listeners(doc)
+        self._sync_panel_space_state()
 
         # Initialize backend
         backend_ok = self._initialize_backend()
@@ -4509,6 +4803,7 @@ class AssetManagerPanel(Panel):
 
         # Initial refresh must dirty scalar bindings after catalog load.
         self.refresh_catalog()
+        self._last_auto_save_time = time.time()
         self._last_scene_generation = RuntimeState.scene_generation.value
         self._last_language_generation = RuntimeState.language_generation.value
         self._subscribe_reactive_state()
@@ -4522,7 +4817,25 @@ class AssetManagerPanel(Panel):
 
     def on_update(self, doc):
         """Dirty-policy update for catalog and deferred scene work."""
-        changed = False
+        self._asset_window_update_requested = False
+        pending_window_refresh = self._asset_window_refresh_pending
+        window_changed = self._sync_asset_window_viewport(doc)
+        card_width_changed = self._sync_gallery_card_width(doc)
+        should_apply_window_refresh = (
+            pending_window_refresh or window_changed or card_width_changed
+        )
+        if should_apply_window_refresh:
+            self._apply_asset_window_refresh(
+                card_width_changed=card_width_changed and self._view_mode == "gallery",
+            )
+        self._asset_window_refresh_pending = False
+
+        changed = should_apply_window_refresh
+
+        space_changed = self._sync_panel_space_state()
+        if space_changed and self._handle:
+            self._handle.dirty_all()
+            changed = True
 
         language_generation = RuntimeState.language_generation.value
         if language_generation != self._last_language_generation:
@@ -4538,16 +4851,14 @@ class AssetManagerPanel(Panel):
         if self._pending_transform_applications:
             self._request_model_update()
 
-        scene_generation = RuntimeState.scene_generation.value
-        if scene_generation != self._last_scene_generation:
-            self._last_scene_generation = scene_generation
-            self._sync_runtime_scene_catalog(select_current=True)
-            self.refresh_catalog(request_update=False)
-            changed = True
-
         try:
+            scan_active = False
+            scan_refresh_pending = False
+            with self._scan_thread_lock:
+                scan_active = self._scan_thread is not None and self._scan_thread.is_alive()
+                scan_refresh_pending = self._scan_ui_refresh_needed
             library_path = self._asset_index.library_path
-            if library_path.exists():
+            if library_path.exists() and not scan_active and not scan_refresh_pending:
                 current_mtime = library_path.stat().st_mtime
                 if current_mtime > self._library_mtime:
                     self._asset_index.load()
@@ -4586,6 +4897,30 @@ class AssetManagerPanel(Panel):
             pass
 
         return changed
+
+    def _sync_gallery_card_width(self, doc) -> bool:
+        grid_el = doc.get_element_by_id("asset-card-grid") if doc else None
+        if not grid_el:
+            return False
+
+        try:
+            dp_ratio = max(1.0, float(lf.ui.get_ui_scale()))
+            viewport_width_dp = float(grid_el.client_width or 0.0) / dp_ratio
+        except Exception:
+            return False
+
+        available_width = max(
+            ASSET_CARD_MIN_WIDTH_DP,
+            viewport_width_dp - ASSET_CARD_GRID_HORIZONTAL_CHROME_DP,
+        )
+        next_width = min(ASSET_CARD_PREFERRED_WIDTH_DP, available_width)
+        if abs(next_width - self._asset_card_slot_width) <= 0.5:
+            return False
+
+        self._asset_card_slot_width = next_width
+        if self._handle:
+            self._handle.dirty("asset_card_slot_width")
+        return True
 
     def on_unmount(self, doc):
         """Save index on unmount."""
@@ -4626,7 +4961,6 @@ class AssetManagerPanel(Panel):
             return
 
         native_signals = (
-            RuntimeState.scene_generation,
             RuntimeState.language_generation,
         )
         self._reactive_unsubscribers = [
@@ -4653,16 +4987,17 @@ class AssetManagerPanel(Panel):
         Binding once to a stable parent mirrors the working popup panels and
         avoids relying on per-row data-event callbacks for card selection.
         """
-        content = doc.get_element_by_id("asset-popup-content")
+        content = doc.get_element_by_id("asset-main-row")
         if content:
             content.add_event_listener("mousedown", self._on_asset_manager_mousedown)
             content.add_event_listener("click", self._on_asset_manager_click)
             content.add_event_listener(
                 "dblclick", self._on_asset_manager_double_click
             )
-        gallery_scroll = doc.get_element_by_id("asset-gallery-scroll")
-        if gallery_scroll:
-            gallery_scroll.add_event_listener(
+        scroll_el = doc.get_element_by_id("asset-gallery-scroll")
+        if scroll_el:
+            scroll_el.add_event_listener("scroll", self._on_asset_scroll)
+            scroll_el.add_event_listener(
                 "mousescroll", self._on_gallery_precise_scroll
             )
 
@@ -4670,6 +5005,22 @@ class AssetManagerPanel(Panel):
         # Only keep document-level listeners here for active drag tracking.
         doc.add_event_listener("mousemove", self._on_resize_mousemove)
         doc.add_event_listener("mouseup", self._on_resize_mouseup)
+
+    def _on_asset_scroll(self, event) -> None:
+        scroll_el = event.current_target()
+        if not scroll_el:
+            return
+        if self._asset_scroll_event_suppressed:
+            try:
+                current_scroll_top = max(0.0, float(scroll_el.scroll_top or 0.0))
+            except Exception:
+                current_scroll_top = -1.0
+            self._asset_scroll_event_suppressed = False
+            if abs(current_scroll_top - self._asset_scroll_suppressed_top) <= 0.01:
+                self._asset_scroll_suppressed_top = -1.0
+                return
+            self._asset_scroll_suppressed_top = -1.0
+        self._request_asset_window_refresh()
 
     def _on_gallery_precise_scroll(self, event) -> None:
         scroll_el = event.current_target()
@@ -4692,6 +5043,10 @@ class AssetManagerPanel(Panel):
         )
         if abs(new_scroll - scroll_el.scroll_top) > 0.01:
             scroll_el.scroll_top = new_scroll
+            self._asset_scroll_event_suppressed = True
+            self._asset_scroll_suppressed_top = new_scroll
+
+        self._request_asset_window_refresh()
 
         event.stop_propagation()
 
@@ -4714,12 +5069,14 @@ class AssetManagerPanel(Panel):
             if action == "load":
                 self.on_load_asset(None, event, [asset_id])
             elif action == "load_new":
+                self._open_menu_asset_id = None
                 self._load_menu_asset_id = None
                 self._dirty_model("assets")
                 self.on_load_asset_new(None, event, [asset_id])
                 self._stop_event(event)
                 return
             elif action == "add_to_scene":
+                self._open_menu_asset_id = None
                 self._load_menu_asset_id = None
                 self._dirty_model("assets")
                 self.on_add_asset_to_scene(None, event, [asset_id])
@@ -4869,8 +5226,6 @@ class AssetManagerPanel(Panel):
             button = int(event.get_parameter("button", "0"))
         except (AttributeError, TypeError, ValueError):
             return
-        if button != 1:
-            return
 
         container = event.current_target()
         target = event.target()
@@ -4891,10 +5246,27 @@ class AssetManagerPanel(Panel):
         if not asset_id:
             return
 
+        if button == 2:
+            self._load_menu_asset_id = None
+            self._select_asset_id(
+                asset_id,
+                toggle=False,
+                multi_select=False,
+                row_element=action_el,
+                container=container,
+            )
+            self._open_asset_menu(asset_id)
+            self._stop_event(event)
+            return
+
+        if button != 1:
+            return
+
         if self._select_asset_id(asset_id):
-            self._load_menu_asset_id = asset_id
+            self._load_menu_asset_id = None
             self._open_menu_asset_id = None
             self._open_menu_folder_id = None
+            self._open_asset_menu(asset_id)
             self._dirty_model("assets", "folders")
         self._stop_event(event)
 
@@ -4954,19 +5326,24 @@ class AssetManagerPanel(Panel):
         """Handle mousemove for panel resizing."""
         try:
             mouse_x = float(event.get_parameter("mouse_x", "0"))
+            mouse_y = float(event.get_parameter("mouse_y", "0"))
         except (TypeError, ValueError):
             return
         if self._sidebar_dragging:
-            self.on_sidebar_resize_delta(mouse_x)
+            self.on_sidebar_resize_delta(mouse_y)
             event.stop_propagation()
         elif self._right_panel_dragging:
             self.on_right_panel_resize_delta(mouse_x)
+            event.stop_propagation()
+        elif self._bottom_panel_dragging:
+            self.on_bottom_panel_resize_delta(mouse_y)
             event.stop_propagation()
 
     def _on_resize_mouseup(self, _event) -> None:
         """Handle mouseup to end panel resizing."""
         self.on_sidebar_resize_end()
         self.on_right_panel_resize_end()
+        self.on_bottom_panel_resize_end()
 
     # ── Integration Hooks (Stubs) ─────────────────────────────
 
@@ -5107,6 +5484,7 @@ class AssetManagerPanel(Panel):
 
     def _dirty_catalog_view(self) -> None:
         """Refresh catalog-facing records without dirtying unrelated model fields."""
+        self._invalidate_catalog_cache()
         self._reconcile_selection()
         fields: List[str] = [
             "folders",
@@ -5254,7 +5632,6 @@ class AssetManagerPanel(Panel):
         self,
         *,
         update_scene_assets: bool = True,
-        update_asset_tags: bool = True,
     ) -> Dict[str, Any]:
         """Update record lists for selected scene and folder."""
         if not self._handle or self._updating_selection_details:
@@ -5284,29 +5661,6 @@ class AssetManagerPanel(Panel):
                         "total": build_ms + update_ms,
                     }
                     self._handle.dirty("selected_scene_assets")
-
-            if update_asset_tags:
-                selected_asset = self._get_selected_asset()
-                tags_key = tuple(
-                    str(tag)
-                    for tag in ((selected_asset or {}).get("tags", []) or [])
-                    if tag is not None
-                )
-                if tags_key != self._selected_asset_tags_key:
-                    build_start = time.perf_counter()
-                    rows = [{"value": tag} for tag in tags_key]
-                    build_ms = self._elapsed_ms(build_start)
-                    update_start = time.perf_counter()
-                    self._handle.update_record_list("selected_asset_tags", rows)
-                    update_ms = self._elapsed_ms(update_start)
-                    self._selected_asset_tags_key = tags_key
-                    counts["selected_asset_tags"] = len(rows)
-                    timings_ms["selected_asset_tags"] = {
-                        "build": build_ms,
-                        "update": update_ms,
-                        "total": build_ms + update_ms,
-                    }
-                    self._handle.dirty("selected_asset_tags")
 
             return {"counts": counts, "timings_ms": timings_ms}
         finally:
@@ -5372,7 +5726,10 @@ class AssetManagerPanel(Panel):
             return
 
         fields_set = set(fields)
-        if fields_set.intersection({"assets", "folders", "scenes"}):
+        # "assets" is also used for viewport/menu refreshes, so invalidating the
+        # catalog cache here defeats virtualization by forcing a full regroup/filter
+        # rebuild on scroll. Real catalog mutations already invalidate explicitly.
+        if fields_set.intersection({"folders", "scenes"}):
             self._invalidate_catalog_cache()
 
         # Check if any selection-related fields are being dirtied.
@@ -5385,7 +5742,6 @@ class AssetManagerPanel(Panel):
             {
                 "selected_asset",
                 "selected_asset_id",
-                "selected_asset_tags",
                 "selected_folder",
                 "selected_folder_id",
                 "selected_scene",
@@ -5399,13 +5755,6 @@ class AssetManagerPanel(Panel):
                 | {"selected_scene", "selected_scene_id", "selected_scene_assets"}
             )
         )
-        update_asset_tags = bool(
-            fields_set.intersection(
-                set(self._selected_asset_detail_fields())
-                | {"selected_asset", "selected_asset_id", "selected_asset_tags"}
-            )
-        )
-
         for field in fields:
             self._handle.dirty(field)
             # Update record lists when they change
@@ -5437,7 +5786,6 @@ class AssetManagerPanel(Panel):
             records_start = time.perf_counter()
             selection_summary = self._update_selection_details(
                 update_scene_assets=update_scene_assets,
-                update_asset_tags=update_asset_tags,
             )
             record_update_ms += self._elapsed_ms(records_start)
             record_updates.update(selection_summary.get("counts", {}))
@@ -5501,6 +5849,23 @@ class AssetManagerPanel(Panel):
         self._import_menu_open = False
         self._dirty_model("import_menu_open")
         self._with_import_folder(lambda _folder_id: open_url_import_panel())
+
+
+    def _sync_panel_space_state(self) -> bool:
+        info = None
+        try:
+            info = lf.ui.get_panel(self.id)
+        except Exception:
+            info = None
+        panel_space = getattr(info, "space", self._panel_space)
+        is_floating = panel_space == lf.ui.PanelSpace.FLOATING
+        changed = panel_space != self._panel_space or is_floating != self._is_floating
+        self._panel_space = panel_space
+        self._is_floating = is_floating
+        return changed
+
+    def _on_close_panel(self, _handle, _event, _args):
+        lf.ui.set_panel_enabled(self.id, False)
 
 
 # ── atexit backup ─────────────────────────────────────────

@@ -50,6 +50,13 @@ namespace lfs::vis::tools {
             return ctx.getViewport();
         }
 
+        [[nodiscard]] bool pointInViewportBounds(const ViewportBounds& bounds, const glm::vec2 point) {
+            return point.x >= bounds.x &&
+                   point.y >= bounds.y &&
+                   point.x < bounds.x + bounds.width &&
+                   point.y < bounds.y + bounds.height;
+        }
+
     } // namespace
 
     SelectionTool::SelectionTool() = default;
@@ -69,7 +76,7 @@ namespace lfs::vis::tools {
         }
 
         float mx, my;
-        SDL_GetMouseState(&mx, &my);
+        const SDL_MouseButtonFlags mouse_buttons = SDL_GetMouseState(&mx, &my);
         last_mouse_pos_ = glm::vec2(mx, my);
 
         if (depth_filter_enabled_ || crop_filter_enabled_) {
@@ -78,6 +85,36 @@ namespace lfs::vis::tools {
 
         if (auto* const sm = ctx.getSceneManager()) {
             if (auto* const service = sm->getSelectionService()) {
+                auto* const rm = ctx.getRenderingManager();
+                const bool passive_ring_mode =
+                    rm &&
+                    rm->getSelectionPreviewMode() == lfs::vis::SelectionPreviewMode::Rings &&
+                    !service->isInteractiveSelectionActive();
+                if (passive_ring_mode) {
+                    const bool update_hover =
+                        mouse_buttons == 0 &&
+                        !gui::guiFocusState().want_capture_mouse &&
+                        pointInViewportBounds(ctx.getViewportBounds(), last_mouse_pos_);
+                    if (update_hover) {
+                        const SDL_Keymod kmods = SDL_GetModState();
+                        lfs::vis::SelectionMode mode = lfs::vis::SelectionMode::Replace;
+                        if (kmods & SDL_KMOD_SHIFT) {
+                            mode = lfs::vis::SelectionMode::Add;
+                        } else if (kmods & SDL_KMOD_CTRL) {
+                            mode = lfs::vis::SelectionMode::Remove;
+                        }
+                        SelectionFilterState filters{};
+                        filters.crop_filter = crop_filter_enabled_;
+                        filters.depth_filter = depth_filter_enabled_;
+                        filters.restrict_to_selected_nodes = true;
+                        service->updatePassiveRingHoverPreview(last_mouse_pos_, mode, filters);
+                    } else {
+                        if (rm->isCursorPreviewActive()) {
+                            rm->clearCursorPreviewState();
+                        }
+                    }
+                    return;
+                }
                 service->refreshInteractivePreview();
             }
         }

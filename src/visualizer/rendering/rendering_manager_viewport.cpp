@@ -26,6 +26,11 @@ namespace lfs::vis {
         constexpr std::size_t kMaxNativePreviewPixelStateBytes =
             (std::size_t{4} << 30) - (std::size_t{64} << 20);
         constexpr float kMaxValidDepth = 1e9f;
+        // Upper bound on the synchronous capacity self-heal passes a one-shot
+        // preview/export capture will run before reading back (see
+        // renderPreviewImageToPreviewSlotWithState). Typical convergence is
+        // 2-4 passes; the cap only guards a pathological non-converging case.
+        constexpr int kMaxPreviewSettlePasses = 8;
 
         [[nodiscard]] std::optional<std::shared_lock<std::shared_mutex>> acquireLiveModelRenderLock(
             const SceneManager* const scene_manager) {
@@ -572,7 +577,8 @@ namespace lfs::vis {
             orthographic_override,
             ortho_scale_override,
             background_color_override,
-            PreviewImageReadback::UInt8Rgb);
+            PreviewImageReadback::UInt8Rgb,
+            /*settle_capacity=*/true);
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImageRgba8(SceneManager* const scene_manager,
@@ -624,7 +630,8 @@ namespace lfs::vis {
             orthographic_override,
             ortho_scale_override,
             std::nullopt,
-            PreviewImageReadback::UInt8Rgba);
+            PreviewImageReadback::UInt8Rgba,
+            /*settle_capacity=*/true);
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImage(const lfs::core::SplatData& model,
@@ -787,7 +794,8 @@ namespace lfs::vis {
         std::optional<bool> orthographic_override,
         std::optional<float> ortho_scale_override,
         std::optional<glm::vec3> background_color_override,
-        const PreviewImageReadback readback) {
+        const PreviewImageReadback readback,
+        const bool settle_capacity) {
         const auto readback_config =
             previewImageReadbackConfig(readback, background_color_override.has_value());
 
@@ -807,7 +815,8 @@ namespace lfs::vis {
             orthographic_override,
             ortho_scale_override,
             background_color_override,
-            readback_config.transparent_background_override);
+            readback_config.transparent_background_override,
+            settle_capacity);
         if (!rendered) {
             LOG_ERROR("Gaussian preview image render failed: {}", rendered.error());
             return {};
@@ -852,7 +861,8 @@ namespace lfs::vis {
         std::optional<bool> orthographic_override,
         std::optional<float> ortho_scale_override,
         std::optional<glm::vec3> background_color_override,
-        std::optional<bool> transparent_background_override) {
+        std::optional<bool> transparent_background_override,
+        const bool settle_capacity) {
         if (width <= 0 || height <= 0) {
             return std::unexpected("invalid preview render dimensions");
         }
@@ -922,15 +932,34 @@ namespace lfs::vis {
             vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
         }
 
-        auto render_result = vksplat_viewport_renderer_->render(
-            *last_vulkan_context_,
-            model,
-            request,
-            false,
-            VksplatViewportRenderer::OutputSlot::Preview,
-            false);
-        if (!render_result) {
-            return std::unexpected(render_result.error());
+        // One-shot preview/export captures read the image back immediately, so
+        // they cannot rely on the interactive viewport's one-frame capacity
+        // self-heal. The renderer sizes per-frame scratch (visible-primitive and
+        // tile-instance capacity) from deferred, one-frame-late high-water marks;
+        // the first render at a new viewpoint/resolution — e.g. a high-res export
+        // after the live viewport established marks at a smaller size — can clamp
+        // the depth/tile-ordered tail, dropping content along an irregular edge.
+        // Re-render the Preview slot until the renderer confirms the previous
+        // pass produced complete, unclamped content (each pass grows the marks
+        // via the deferred readback). The pass >= 1 guard ensures the settle
+        // signal reflects this exact view (critical for the tiled path, where
+        // each tile is a different sub-view); max_passes bounds a pathological
+        // case. Non-settling callers (e.g. depth capture) render exactly once.
+        const int max_passes = settle_capacity ? kMaxPreviewSettlePasses : 1;
+        for (int pass = 0; pass < max_passes; ++pass) {
+            auto render_result = vksplat_viewport_renderer_->render(
+                *last_vulkan_context_,
+                model,
+                request,
+                false,
+                VksplatViewportRenderer::OutputSlot::Preview,
+                false);
+            if (!render_result) {
+                return std::unexpected(render_result.error());
+            }
+            if (pass >= 1 && vksplat_viewport_renderer_->previewCaptureSettled()) {
+                break;
+            }
         }
         return {};
     }
@@ -1000,7 +1029,8 @@ namespace lfs::vis {
                 orthographic_override,
                 ortho_scale_override,
                 background_color_override,
-                readback_config.transparent_background_override);
+                readback_config.transparent_background_override,
+                /*settle_capacity=*/true);
             if (!rendered) {
                 LOG_TRACE("Gaussian preview tiled render failed at tile y={} height={}: {}",
                           tile_y,

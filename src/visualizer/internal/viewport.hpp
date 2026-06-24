@@ -5,6 +5,7 @@
 #pragma once
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/render_constants.hpp"
+#include <algorithm>
 #include <chrono>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -20,13 +21,13 @@ class Viewport {
     class CameraMotion {
     public:
         glm::vec2 prePos;
-        float zoomSpeed = 5.0f;
+        float zoomSpeed = 11.0f;
         float maxZoomSpeed = 100.0f;
         float rotateSpeed = 0.001f;
         float rotateCenterSpeed = 0.002f;
         float rotateRollSpeed = 0.01f;
-        float translateSpeed = 0.001f;
-        float wasdSpeed = 6.0f;
+        float translateSpeed = 0.0005f;
+        float wasdSpeed = 8.0f;
         float maxWasdSpeed = 100.0f;
         bool isOrbiting = false;
 
@@ -35,12 +36,12 @@ class Viewport {
         static constexpr float kSpeedStepFactor = 1.2f;
 
         void increaseWasdSpeed() { wasdSpeed = std::min(wasdSpeed * kSpeedStepFactor, maxWasdSpeed); }
-        void decreaseWasdSpeed() { wasdSpeed = std::max(wasdSpeed / kSpeedStepFactor, 0.25f); }
+        void decreaseWasdSpeed() { wasdSpeed = std::max(wasdSpeed / kSpeedStepFactor, 1.0f); }
         float getWasdSpeed() const { return wasdSpeed; }
         float getMaxWasdSpeed() const { return maxWasdSpeed; }
 
         void increaseZoomSpeed() { zoomSpeed = std::min(zoomSpeed * kSpeedStepFactor, maxZoomSpeed); }
-        void decreaseZoomSpeed() { zoomSpeed = std::max(zoomSpeed / kSpeedStepFactor, 0.1f); }
+        void decreaseZoomSpeed() { zoomSpeed = std::max(zoomSpeed / kSpeedStepFactor, 1.0f); }
         float getZoomSpeed() const { return zoomSpeed; }
         float getMaxZoomSpeed() const { return maxZoomSpeed; }
 
@@ -103,6 +104,14 @@ class Viewport {
             clearTransientMotion();
         }
 
+        // Record the whole-scene radius (half the bounds diagonal). It scales
+        // WASD speed and caps pan distance so navigation tracks splat size; the
+        // controller feeds it the trimmed whole-scene extent. 0 clears the cache.
+        void setSceneExtent(float radius) {
+            if (std::isfinite(radius) && radius >= 0.0f)
+                scene_extent_ = radius;
+        }
+
         void rotate(const glm::vec2& pos, bool enforceUpright = false) {
             glm::vec2 delta = pos - prePos;
 
@@ -158,7 +167,11 @@ class Viewport {
         void zoom(float delta, bool carry_pivot = false) {
             const glm::vec3 forward = lfs::rendering::cameraForward(R);
             const float distToPivot = glm::length(pivot - t);
-            const float adaptiveSpeed = zoomSpeed * 0.01f * distToPivot;
+            // zoomSpeed is a 0..100 level (default 11) mapped linearly to the
+            // fraction of the camera-to-pivot distance covered per scroll unit;
+            // level 100 matches the previous fastest setting (full distance).
+            constexpr float kZoomFractionPerLevel = 0.01f;
+            const float adaptiveSpeed = zoomSpeed * kZoomFractionPerLevel * distToPivot;
             const glm::vec3 movement = delta * adaptiveSpeed * forward;
 
             t += movement;
@@ -197,11 +210,12 @@ class Viewport {
                 dir += up ? u : -u;
             }
 
-            const glm::vec3 target_velocity = dir * (wasdSpeed + additional_speed);
+            const float effective_speed = (wasdSpeed + additional_speed) * wasdMoveScale();
+            const glm::vec3 target_velocity = dir * effective_speed;
             const float blend = 1.0f - std::exp(-deltaTime * kWasdInertiaRate);
             wasd_velocity = glm::mix(wasd_velocity, target_velocity, blend);
 
-            const float stop_speed = kWasdStopFraction * (wasdSpeed + additional_speed);
+            const float stop_speed = kWasdStopFraction * effective_speed;
             if (glm::length2(dir) < 1e-8f && glm::length2(wasd_velocity) < stop_speed * stop_speed) {
                 wasd_velocity = glm::vec3(0.0f);
                 return;
@@ -441,6 +455,33 @@ class Viewport {
         static constexpr float kWasdInertiaRate = 12.0f;
         static constexpr float kWasdStopFraction = 0.02f;
 
+        // Whole-scene radius (half the bounds diagonal), fed by the controller.
+        // WASD scales by it and panning is capped by it. 0 = unknown, in
+        // which case movement keeps its distance-based behavior. Scenes load in
+        // arbitrary world units (no normalization), so an absolute speed feels right
+        // on one scene and wrong on the next; scaling by this removes that.
+        //
+        // WASD effective speed is wasdSpeed * radius / kWasdReferenceExtent, with
+        // wasdSpeed a 1..100 level (default 8). kWasdReferenceExtent is set so level
+        // 50 crosses one scene radius per second; the level-8 default is a calm
+        // exploration pace and level 100 covers two radii per second.
+        float scene_extent_ = 0.0f;
+        static constexpr float kWasdReferenceExtent = 50.0f;
+        static constexpr float kMinMoveScale = 0.05f;
+        static constexpr float kMaxMoveScale = 100.0f;
+        // Cap pan distance against the trimmed scene radius. A minimum tied to
+        // scene size makes large scenes pan too fast when the camera/pivot is
+        // still close to the origin.
+        static constexpr float kPanMaxDistanceFraction = 1.0f;
+
+        // WASD multiplier from the scene radius, clamped so degenerate or enormous
+        // bounds can't produce unusable speeds; 1.0 when the extent is unknown.
+        float wasdMoveScale() const {
+            if (scene_extent_ <= 0.0f)
+                return 1.0f;
+            return std::clamp(scene_extent_ / kWasdReferenceExtent, kMinMoveScale, kMaxMoveScale);
+        }
+
         float orbit_vel_yaw = 0.0f;
         float orbit_vel_pitch = 0.0f;
         float orbit_last_time = 0.0f;
@@ -494,7 +535,11 @@ class Viewport {
         glm::vec3 applyPanDrag(const glm::vec2& pos) {
             const glm::vec2 delta = pos - prePos;
             const float dist_to_pivot = glm::length(pivot - t);
-            const float adaptive_speed = translateSpeed * dist_to_pivot;
+            float pan_dist = dist_to_pivot;
+            if (scene_extent_ > 0.0f) {
+                pan_dist = std::min(pan_dist, scene_extent_ * kPanMaxDistanceFraction);
+            }
+            const float adaptive_speed = translateSpeed * pan_dist;
             const glm::vec3 movement = -(delta.x * adaptive_speed) * R[0] + (delta.y * adaptive_speed) * R[1];
             t += movement;
             pivot += movement;

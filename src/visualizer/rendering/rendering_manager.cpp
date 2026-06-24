@@ -335,46 +335,51 @@ namespace lfs::vis {
 
     void RenderingManager::updateSettings(const RenderSettings& new_settings,
                                           const DirtyMask dirty_flags) {
+        RenderSettings sanitized_settings = new_settings;
         bool clear_metrics = false;
         bool lod_request_changed = false;
         bool lod_enabled_turned_on = false;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
+            if (split_view_service_.isGTComparisonActive(settings_) ||
+                split_view_service_.isGTComparisonActive(sanitized_settings)) {
+                sanitized_settings.show_camera_frustums = false;
+            }
             const int focused_panel_index =
                 static_cast<int>(splitViewPanelIndex(split_view_service_.focusedPanel()));
-            const bool grid_plane_changed = settings_.grid_plane != new_settings.grid_plane;
-            lod_enabled_turned_on = !settings_.lod_enabled && new_settings.lod_enabled;
+            const bool grid_plane_changed = settings_.grid_plane != sanitized_settings.grid_plane;
+            lod_enabled_turned_on = !settings_.lod_enabled && sanitized_settings.lod_enabled;
             lod_request_changed =
-                settings_.lod_enabled != new_settings.lod_enabled ||
-                settings_.lod_max_splats != new_settings.lod_max_splats ||
-                settings_.lod_render_scale != new_settings.lod_render_scale ||
-                settings_.lod_behind_camera_penalty != new_settings.lod_behind_camera_penalty ||
-                settings_.lod_cone_foveation != new_settings.lod_cone_foveation ||
-                settings_.lod_cone_inner_degrees != new_settings.lod_cone_inner_degrees ||
-                settings_.lod_cone_outer_degrees != new_settings.lod_cone_outer_degrees;
+                settings_.lod_enabled != sanitized_settings.lod_enabled ||
+                settings_.lod_max_splats != sanitized_settings.lod_max_splats ||
+                settings_.lod_render_scale != sanitized_settings.lod_render_scale ||
+                settings_.lod_behind_camera_penalty != sanitized_settings.lod_behind_camera_penalty ||
+                settings_.lod_cone_foveation != sanitized_settings.lod_cone_foveation ||
+                settings_.lod_cone_inner_degrees != sanitized_settings.lod_cone_inner_degrees ||
+                settings_.lod_cone_outer_degrees != sanitized_settings.lod_cone_outer_degrees;
 
             // Update preview color if changed
-            if (settings_.selection_color_preview != new_settings.selection_color_preview) {
-                const auto& p = new_settings.selection_color_preview;
+            if (settings_.selection_color_preview != sanitized_settings.selection_color_preview) {
+                const auto& p = sanitized_settings.selection_color_preview;
                 lfs::rendering::config::setSelectionPreviewColor(make_float3(p.x, p.y, p.z));
             }
 
             // Update center marker color (group 0) if changed
-            if (settings_.selection_color_center_marker != new_settings.selection_color_center_marker) {
-                const auto& m = new_settings.selection_color_center_marker;
+            if (settings_.selection_color_center_marker != sanitized_settings.selection_color_center_marker) {
+                const auto& m = sanitized_settings.selection_color_center_marker;
                 lfs::rendering::config::setSelectionGroupColor(0, make_float3(m.x, m.y, m.z));
             }
 
-            if (new_settings.camera_metrics_mode == RenderSettings::CameraMetricsMode::Off) {
+            if (sanitized_settings.camera_metrics_mode == RenderSettings::CameraMetricsMode::Off) {
                 clear_metrics = true;
             } else if (camera_interaction_service_.currentCameraId() >= 0 &&
-                       shouldRefreshCameraMetricsForSettings(settings_, new_settings)) {
+                       shouldRefreshCameraMetricsForSettings(settings_, sanitized_settings)) {
                 clear_metrics = true;
             }
 
             const auto previous_backend = settings_.raster_backend;
             const bool previous_gut = settings_.gut;
-            settings_ = new_settings;
+            settings_ = sanitized_settings;
             const bool gut_toggle_only =
                 settings_.raster_backend == previous_backend && settings_.gut != previous_gut;
             settings_.raster_backend = gut_toggle_only
@@ -769,6 +774,11 @@ namespace lfs::vis {
             auto event = lfs::core::events::ui::RenderSettingsChanged{};
             event.equirectangular = *result.restore_equirectangular;
             event.emit();
+        }
+        if (result.render_settings_changed) {
+            markDirty(DirtyFlag::OVERLAY);
+            auto& render_settings_generation = app_store().render_settings_generation;
+            render_settings_generation.set(render_settings_generation.get() + 1);
         }
     }
 

@@ -64,7 +64,7 @@ LichtFeld Studio is built for users who need more than a training script or a st
 - **Export and delivery**: export results to common research and delivery formats, including a standalone HTML viewer for easy sharing
 - **Extensibility**: use the Python plugin system for custom panels, operators, tools, and dependencies
 - **Automation surface**: integrate LichtFeld Studio with local tools, scripts, and agents through MCP resources and tools
-- **Research-ready features**: MCMC optimization, bilateral grid appearance modeling, 3DGUT support for distorted camera models, pose optimization, and timelapse generation
+- **Research-ready features**: MCMC optimization, bilateral grid appearance modeling, 3DGUT support for distorted camera models, and timelapse generation
 - **Native performance**: modern C++23 and CUDA 12.8+ for responsive training and visualization on NVIDIA hardware
 
 ## Support Development

@@ -16,6 +16,12 @@
     "edit": "Editar",
     "edit.input_settings": "Configuración de Entrada...",
     "edit.preferences": "Preferencias...",
+    "select": "Selecci\u00f3n",
+    "select.copy_selection": "Copiar selecci\u00f3n",
+    "select.paste_selection": "Pegar selecci\u00f3n",
+    "select.invert_selection": "Invertir selecci\u00f3n",
+    "select.select_all": "Seleccionar todo",
+    "select.deselect_all": "Deseleccionar todo",
     "tools": "Herramientas",
     "tools.asset_manager": "Gestor de Activos",
     "tools.python_console": "Consola de Python",
@@ -247,7 +253,18 @@
     "viewport_export_settings": "Ajustes de exportación de la vista",
     "viewport_export_resolution": "Elegir resolución de exportación",
     "viewport_export_transparency": "Exportar PNG con alfa",
-    "viewport_export_close": "Cerrar exportación de la vista"
+    "viewport_export_close": "Cerrar exportación de la vista",
+    "lod_enabled": "Habilitar renderizado jerárquico de nivel de detalle para archivos RAD",
+    "lod_max_splats": "Número máximo de splats a renderizar por fotograma",
+    "lod_page_pool_splats": "Presupuesto del grupo de páginas VRAM en splats para escenas RAD transmitidas (0 = automático)",
+    "lod_pool_vram_fraction": "Parte de la VRAM libre asignada al pool de páginas LOD out-of-core",
+    "lod_fade_frames": "Fotogramas durante los que aparece gradualmente una página LOD recién cargada (0 = instantáneo)",
+    "lod_render_scale": "Multiplicador de calidad: objetivo efectivo de splats = presupuesto LOD x escala de render",
+    "lod_cone_foveation": "Factor de penalización periférica Level of Detail (1.0 = sin penalización)",
+    "lod_cone_inner_degrees": "Ángulo interior del cono en grados (sin penalización dentro de este ángulo)",
+    "lod_cone_outer_degrees": "Ángulo exterior del cono en grados (penalización completa más allá de este ángulo)",
+    "lod_debug_mode": "Colorear splats según su nivel de Level of Detail para depuración",
+    "simplify_lod_base": "Base LOD usada para elegir los niveles de simplificación por pasada"
   },
   "about": {
     "title": "LICHTFELD STUDIO",
@@ -272,19 +289,6 @@
     "build_info.property": "Propiedad",
     "build_info.value": "Valor",
     "separator": "  |  "
-  },
-  "tooltip": {
-    "lod_enabled": "Habilitar renderizado jerárquico de nivel de detalle para archivos RAD",
-    "lod_max_splats": "Número máximo de splats a renderizar por fotograma",
-    "lod_page_pool_splats": "Presupuesto del grupo de páginas VRAM en splats para escenas RAD transmitidas (0 = automático)",
-    "lod_pool_vram_fraction": "Parte de la VRAM libre asignada al pool de páginas LOD out-of-core",
-    "lod_fade_frames": "Fotogramas durante los que aparece gradualmente una página LOD recién cargada (0 = instantáneo)",
-    "lod_render_scale": "Multiplicador de calidad: objetivo efectivo de splats = presupuesto LOD x escala de render",
-    "lod_cone_foveation": "Factor de penalización periférica Level of Detail (1.0 = sin penalización)",
-    "lod_cone_inner_degrees": "Ángulo interior del cono en grados (sin penalización dentro de este ángulo)",
-    "lod_cone_outer_degrees": "Ángulo exterior del cono en grados (penalización completa más allá de este ángulo)",
-    "lod_debug_mode": "Colorear splats según su nivel de Level of Detail para depuración",
-    "simplify_lod_base": "Base LOD usada para elegir los niveles de simplificación por pasada"
   },
   "rendering_panel": {
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V",

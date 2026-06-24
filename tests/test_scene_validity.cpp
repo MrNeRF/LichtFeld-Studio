@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 #include <memory>
 #include <thread>
@@ -584,6 +585,172 @@ namespace lfs::python {
         EXPECT_EQ(get_application_scene(), &scene_manager.getScene());
         EXPECT_EQ(scene_manager.getContentType(), lfs::vis::SceneManager::ContentType::Empty);
         EXPECT_EQ(scene_manager.getScene().getNodeCount(), 0u);
+    }
+
+    TEST_F(SceneValidityTest, MoveNodeIntoGroupAppendsAsChild) {
+        const auto a = dummy_scene_.addSplat("A", make_test_splat(1));
+        const auto g = dummy_scene_.addGroup("G");
+
+        ASSERT_TRUE(dummy_scene_.moveNode(a, g, -1));
+
+        const auto* group = dummy_scene_.getNodeById(g);
+        ASSERT_NE(group, nullptr);
+        ASSERT_EQ(group->children.size(), 1u);
+        EXPECT_EQ(group->children[0], a);
+        EXPECT_EQ(dummy_scene_.getNodeById(a)->parent_id, g);
+    }
+
+    TEST_F(SceneValidityTest, MoveNodeOutToRoot) {
+        const auto g = dummy_scene_.addGroup("G");
+        const auto a = dummy_scene_.addSplat("A", make_test_splat(1), g);
+        ASSERT_EQ(dummy_scene_.getNodeById(a)->parent_id, g);
+
+        ASSERT_TRUE(dummy_scene_.moveNode(a, core::NULL_NODE, -1));
+
+        EXPECT_EQ(dummy_scene_.getNodeById(a)->parent_id, core::NULL_NODE);
+        EXPECT_TRUE(dummy_scene_.getNodeById(g)->children.empty());
+        const auto roots = dummy_scene_.getRootNodes();
+        EXPECT_NE(std::find(roots.begin(), roots.end(), a), roots.end());
+    }
+
+    TEST_F(SceneValidityTest, MoveNodeReordersWithinGroup) {
+        const auto g = dummy_scene_.addGroup("G");
+        const auto a = dummy_scene_.addSplat("A", make_test_splat(1), g);
+        const auto b = dummy_scene_.addSplat("B", make_test_splat(1), g);
+        const auto c = dummy_scene_.addSplat("C", make_test_splat(1), g);
+
+        ASSERT_TRUE(dummy_scene_.moveNode(a, g, 3));
+
+        const auto& children = dummy_scene_.getNodeById(g)->children;
+        ASSERT_EQ(children.size(), 3u);
+        EXPECT_EQ(children[0], b);
+        EXPECT_EQ(children[1], c);
+        EXPECT_EQ(children[2], a);
+    }
+
+    TEST_F(SceneValidityTest, MoveNodeReordersWithinRoot) {
+        const auto a = dummy_scene_.addSplat("A", make_test_splat(1));
+        const auto b = dummy_scene_.addSplat("B", make_test_splat(1));
+        const auto c = dummy_scene_.addSplat("C", make_test_splat(1));
+
+        ASSERT_TRUE(dummy_scene_.moveNode(c, core::NULL_NODE, 0));
+
+        const auto roots = dummy_scene_.getRootNodes();
+        ASSERT_EQ(roots.size(), 3u);
+        EXPECT_EQ(roots[0], c);
+        EXPECT_EQ(roots[1], a);
+        EXPECT_EQ(roots[2], b);
+    }
+
+    TEST_F(SceneValidityTest, MoveNodeRejectsCycleIntoOwnDescendant) {
+        const auto parent = dummy_scene_.addGroup("Parent");
+        const auto child = dummy_scene_.addGroup("Child", parent);
+
+        EXPECT_FALSE(dummy_scene_.moveNode(parent, child, -1));
+        EXPECT_EQ(dummy_scene_.getNodeById(parent)->parent_id, core::NULL_NODE);
+        EXPECT_EQ(dummy_scene_.getNodeById(child)->parent_id, parent);
+    }
+
+    TEST_F(SceneValidityTest, MoveNodeNoOpReturnsFalse) {
+        const auto g = dummy_scene_.addGroup("G");
+        const auto a = dummy_scene_.addSplat("A", make_test_splat(1), g);
+        const auto b = dummy_scene_.addSplat("B", make_test_splat(1), g);
+
+        EXPECT_FALSE(dummy_scene_.moveNode(a, g, 0));
+        EXPECT_FALSE(dummy_scene_.moveNode(a, g, 1));
+
+        const auto& children = dummy_scene_.getNodeById(g)->children;
+        ASSERT_EQ(children.size(), 2u);
+        EXPECT_EQ(children[0], a);
+        EXPECT_EQ(children[1], b);
+    }
+
+    TEST_F(SceneValidityTest, GroupTransformPropagatesToChildWorldTransform) {
+        const auto group = dummy_scene_.addGroup("Group");
+        const auto splat = dummy_scene_.addSplat("Child", make_test_splat(1), group);
+
+        const glm::mat4 before = dummy_scene_.getWorldTransform(splat);
+
+        glm::mat4 t(1.0f);
+        t[3] = glm::vec4(5.0f, 0.0f, 0.0f, 1.0f);
+        dummy_scene_.setNodeTransform("Group", t);
+
+        const glm::mat4 after = dummy_scene_.getWorldTransform(splat);
+
+        EXPECT_NE(before[3].x, after[3].x);
+        EXPECT_FLOAT_EQ(after[3].x - before[3].x, 5.0f);
+    }
+
+    TEST_F(SceneValidityTest, MoveNodeOutOfTransformedGroupPreservesWorldTransform) {
+        const auto group = dummy_scene_.addGroup("Group");
+        const auto splat = dummy_scene_.addSplat("Child", make_test_splat(1), group);
+
+        glm::mat4 group_t(1.0f);
+        group_t = glm::rotate(group_t, 0.7f, glm::vec3(0.0f, 0.0f, 1.0f));
+        group_t[3] = glm::vec4(3.0f, 1.0f, -2.0f, 1.0f);
+        dummy_scene_.setNodeTransform("Group", group_t);
+
+        const glm::mat4 world_before = dummy_scene_.getWorldTransform(splat);
+
+        ASSERT_TRUE(dummy_scene_.moveNode(splat, core::NULL_NODE, -1));
+        ASSERT_EQ(dummy_scene_.getNodeById(splat)->parent_id, core::NULL_NODE);
+
+        const glm::mat4 world_after = dummy_scene_.getWorldTransform(splat);
+        for (int col = 0; col < 4; ++col)
+            for (int row = 0; row < 4; ++row)
+                EXPECT_NEAR(world_before[col][row], world_after[col][row], 1e-4f);
+    }
+
+    TEST_F(SceneValidityTest, ReparentIntoTransformedGroupPreservesWorldTransform) {
+        const auto group = dummy_scene_.addGroup("Group");
+        const auto splat = dummy_scene_.addSplat("Child", make_test_splat(1));
+
+        glm::mat4 group_t(1.0f);
+        group_t = glm::rotate(group_t, -0.4f, glm::vec3(0.0f, 1.0f, 0.0f));
+        group_t[3] = glm::vec4(-1.0f, 2.0f, 4.0f, 1.0f);
+        dummy_scene_.setNodeTransform("Group", group_t);
+
+        glm::mat4 splat_t(1.0f);
+        splat_t[3] = glm::vec4(5.0f, 0.0f, 0.0f, 1.0f);
+        dummy_scene_.setNodeTransform("Child", splat_t);
+
+        const glm::mat4 world_before = dummy_scene_.getWorldTransform(splat);
+
+        ASSERT_TRUE(dummy_scene_.reparent(splat, group));
+
+        const glm::mat4 world_after = dummy_scene_.getWorldTransform(splat);
+        for (int col = 0; col < 4; ++col)
+            for (int row = 0; row < 4; ++row)
+                EXPECT_NEAR(world_before[col][row], world_after[col][row], 1e-4f);
+    }
+
+    TEST_F(SceneValidityTest, SceneManagerMoveNodeReparentsIntoGroup) {
+        lfs::vis::SceneManager sm;
+        auto& scene = sm.getScene();
+        const auto group = scene.addGroup("Group");
+        const auto splat = scene.addSplat("Splat", make_test_splat(1));
+        ASSERT_EQ(scene.getNodeById(splat)->parent_id, core::NULL_NODE);
+
+        EXPECT_TRUE(sm.moveNode(splat, group, -1));
+
+        ASSERT_NE(scene.getNodeById(splat), nullptr);
+        EXPECT_EQ(scene.getNodeById(splat)->parent_id, group);
+        const auto& children = scene.getNodeById(group)->children;
+        ASSERT_EQ(children.size(), 1u);
+        EXPECT_EQ(children[0], splat);
+    }
+
+    TEST_F(SceneValidityTest, SceneManagerMoveNodeMovesOutToRoot) {
+        lfs::vis::SceneManager sm;
+        auto& scene = sm.getScene();
+        const auto group = scene.addGroup("Group");
+        const auto splat = scene.addSplat("Splat", make_test_splat(1), group);
+        ASSERT_EQ(scene.getNodeById(splat)->parent_id, group);
+
+        EXPECT_TRUE(sm.moveNode(splat, core::NULL_NODE, -1));
+
+        EXPECT_EQ(scene.getNodeById(splat)->parent_id, core::NULL_NODE);
+        EXPECT_TRUE(scene.getNodeById(group)->children.empty());
     }
 
 } // namespace lfs::python

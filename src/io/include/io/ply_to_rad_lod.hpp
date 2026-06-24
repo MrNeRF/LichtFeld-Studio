@@ -48,6 +48,9 @@ namespace lfs::io {
         std::size_t max_concurrent_buckets = 0;
         float lod_base = 1.25f;
         int compression_level = 6;
+        // RAD splats per file chunk. Streamable exports use Spark's 65,536-splat
+        // chunks; non-stream exports use LichtFeld's native 2,048-node chunks.
+        std::uint32_t chunk_size = kRadStreamableChunkSplats;
         LodBuilder builder = LodBuilder::kBhatt;
         // kOctree only: splats per octree leaf group before binary pairing
         // takes over (OctreeLodBuildOptions::leaf_group_splats, clamped to

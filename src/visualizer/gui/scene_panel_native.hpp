@@ -113,6 +113,7 @@ namespace lfs::vis::gui {
         Rml::Element* scene_tab_el_ = nullptr;
         Rml::Element* history_tab_el_ = nullptr;
         Rml::Element* logging_tab_el_ = nullptr;
+        Rml::Element* asset_manager_button_el_ = nullptr;
         Rml::Element* chip_row_el_ = nullptr;
         Rml::Element* summary_model_chip_el_ = nullptr;
         Rml::Element* summary_node_chip_el_ = nullptr;

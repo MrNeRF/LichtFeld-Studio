@@ -16,6 +16,12 @@
     "edit": "編集",
     "edit.input_settings": "入力設定...",
     "edit.preferences": "環境設定...",
+    "select": "\u9078\u629e",
+    "select.copy_selection": "\u9078\u629e\u3092\u30b3\u30d4\u30fc",
+    "select.paste_selection": "\u9078\u629e\u3092\u8cbc\u308a\u4ed8\u3051",
+    "select.invert_selection": "\u9078\u629e\u3092\u53cd\u8ee2",
+    "select.select_all": "\u3059\u3079\u3066\u9078\u629e",
+    "select.deselect_all": "\u9078\u629e\u3092\u89e3\u9664",
     "tools": "ツール",
     "tools.asset_manager": "アセットマネージャー",
     "tools.python_console": "Python コンソール",
@@ -329,7 +335,6 @@
     "tooltip.iterations": "トレーニングの総イテレーション数",
     "tooltip.max_gaussians": "最大ガウシアン数",
     "tooltip.sh_degree": "球面調和関数の次数 (0-3)",
-    "tooltip.tile_mode": "大きな画像用のタイルレンダリング",
     "tooltip.steps_scaler": "トレーニングステップをスケール。画像数から自動計算（300枚以下は1.0、超過時は画像数/300）",
     "tooltip.bilateral_grid": "露出/色補正用の外観埋め込み",
     "tooltip.sparsity": "モデル圧縮用のプルーニングを有効化",
@@ -437,6 +442,7 @@
     "options.mask.none": "なし",
     "options.mask.segment": "セグメント",
     "options.mask.ignore": "無視",
+    "options.mask.segment_and_ignore": "セグメント + 無視",
     "options.mask.alpha_consistent": "アルファ整合",
     "options.bg.color": "色",
     "options.bg.modulation": "変調",
@@ -483,15 +489,11 @@
           "2": "二次 SH — より良いビュー依存色",
           "3": "三次 SH — 最高品質、最大 VRAM"
         },
-        "tile_mode": {
-          "full": "完全解像度のラスタライズ",
-          "half": "半解像度ラスタライズ（約 4 倍高速）",
-          "quarter": "四分の一解像度ラスタライズ（約 16 倍高速）"
-        },
         "mask_mode": {
           "none": "画像全体で学習、マスクなし",
           "segment": "前景にセグメンテーションマスクを使用",
           "ignore": "損失でマスクされたピクセルを無視",
+          "segment_and_ignore": "セグメントと無視の組み合わせ",
           "alpha_consistent": "マスクとのアルファ一貫性を強制"
         },
         "bg_mode": {
@@ -1077,6 +1079,9 @@
     "sh_degree": "SH Degree",
     "export_merged": "結合してエクスポート...",
     "no_lod_settings": "Level of Detailなし（フラットエクスポート）",
+    "rad_export_mode": "RAD MODE",
+    "rad_streamable": "RAD (streamable)",
+    "rad_native": "RAD (non-streamable)",
     "rad_flip_y": "Y軸を反転",
     "colmap_writes_sparse": "cameras.bin、images.bin、points3D.binを書き込みます",
     "colmap_no_sparse": "COLMAP sparseフォルダーが見つかりません",
@@ -1239,7 +1244,6 @@
     "iterations": "Iterations:",
     "max_gaussians": "Max Gaussians:",
     "sh_degree": "SH Degree:",
-    "tile_mode": "Tile Mode:",
     "steps_scaler": "Steps Scaler:",
     "bilateral_grid": "Bilateral Grid:",
     "mask_mode": "Mask Mode:",

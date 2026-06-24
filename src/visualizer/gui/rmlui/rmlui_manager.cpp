@@ -86,7 +86,7 @@ namespace lfs::vis::gui {
         context.graphics_queue_family = vulkan_context.graphicsQueueFamily();
         context.color_format = vulkan_context.swapchainFormat();
         context.depth_stencil_format = vulkan_context.depthStencilFormat();
-        context.extent = vulkan_context.swapchainExtent();
+        context.extent = vulkan_context.framebufferExtent();
         context.host_image_copy = vulkan_context.hasHostImageCopy();
 
         auto* vulkan_render_interface = render_interface.get();

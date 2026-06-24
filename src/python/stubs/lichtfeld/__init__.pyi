@@ -261,7 +261,7 @@ def request_exit() -> None:
 def force_exit() -> None:
     """Force immediate application exit (bypasses confirmation)."""
 
-def export_scene(format: int, path: str, node_names: Sequence[str], sh_degree: int, rad_flip_y: bool = False) -> None:
+def export_scene(format: int, path: str, node_names: Sequence[str], sh_degree: int, rad_flip_y: bool = False, rad_streamable: bool = True) -> None:
     """
     Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP.
     """
@@ -1771,7 +1771,9 @@ class MaskMode(enum.Enum):
 
     IGNORE = 2
 
-    ALPHA_CONSISTENT = 3
+    SEGMENT_AND_IGNORE = 3
+
+    ALPHA_CONSISTENT = 4
 
 class BackgroundMode(enum.Enum):
     SOLID_COLOR = 0
@@ -1910,15 +1912,6 @@ class OptimizationParams:
 
     @enable_eval.setter
     def enable_eval(self, arg: bool, /) -> None: ...
-
-    @property
-    def tile_mode(self) -> int:
-        """
-        Tile mode for 3DGUT training only (1, 2, or 4; ignored for 3DGS/FastGS)
-        """
-
-    @tile_mode.setter
-    def tile_mode(self, arg: int, /) -> None: ...
 
     @property
     def steps_scaler(self) -> float:
@@ -2203,7 +2196,7 @@ class DatasetParams:
     @property
     def centralize_dataset(self) -> str:
         """
-        Dataset centralization mode used for the last load: 'none', 'auto', 'by_pointcloud', 'by_cameras'
+        Dataset centralization mode used for the last load: 'off', 'by_pointcloud', 'by_cameras'
         """
 
 def dataset_params() -> DatasetParams:

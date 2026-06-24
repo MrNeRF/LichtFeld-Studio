@@ -6,6 +6,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "diagnostics/vram_profiler.hpp"
 #include "gui/gpu_memory_query.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
@@ -54,6 +55,16 @@ namespace lfs::vis::gui {
 
         private:
             const std::string* commit_;
+        };
+
+        // Clicking the GPU icon opens/closes the VRAM diagnostics HUD by toggling the
+        // profiler that gates it.
+        class VramHudToggleListener final : public Rml::EventListener {
+        public:
+            void ProcessEvent(Rml::Event& /*event*/) override {
+                auto& profiler = lfs::diagnostics::VramProfiler::instance();
+                profiler.setEnabled(!profiler.enabled());
+            }
         };
 
         std::string fmtCount(int64_t n) {
@@ -213,6 +224,7 @@ namespace lfs::vis::gui {
         ctor.Bind("lfs_mem_text", &model_.lfs_mem_text);
         ctor.Bind("lfs_mem_color", &model_.lfs_mem_color);
         ctor.Bind("show_gpu_model", &model_.show_gpu_model);
+        ctor.Bind("gpu_panel_active", &model_.gpu_panel_active);
         ctor.Bind("gpu_model_text", &model_.gpu_model_text);
         ctor.Bind("gpu_mem_text", &model_.gpu_mem_text);
         ctor.Bind("gpu_mem_color", &model_.gpu_mem_color);
@@ -235,7 +247,7 @@ namespace lfs::vis::gui {
             return;
         }
 
-        attachGitCommitListener();
+        attachElementListeners();
         bindReactiveStore();
 
         if (!speed_events_initialized_) {
@@ -277,6 +289,8 @@ namespace lfs::vis::gui {
         document_ = nullptr;
         delete git_commit_listener_;
         git_commit_listener_ = nullptr;
+        delete gpu_icon_listener_;
+        gpu_icon_listener_ = nullptr;
     }
 
     void RmlStatusBar::reloadResources() {
@@ -314,7 +328,7 @@ namespace lfs::vis::gui {
             return;
         }
 
-        attachGitCommitListener();
+        attachElementListeners();
         bindReactiveStore();
 
         updateTheme();
@@ -396,13 +410,19 @@ namespace lfs::vis::gui {
         });
     }
 
-    void RmlStatusBar::attachGitCommitListener() {
+    void RmlStatusBar::attachElementListeners() {
         if (!document_)
             return;
+
         if (!git_commit_listener_)
             git_commit_listener_ = new GitCommitClickListener(&model_.git_commit);
         if (auto* el = document_->GetElementById("git-commit"))
             el->AddEventListener(Rml::EventId::Click, git_commit_listener_);
+
+        if (!gpu_icon_listener_)
+            gpu_icon_listener_ = new VramHudToggleListener();
+        if (auto* el = document_->GetElementById("gpu-icon"))
+            el->AddEventListener(Rml::EventId::Click, gpu_icon_listener_);
     }
 
     void RmlStatusBar::setModelString(const char* name, std::string& field, std::string value) {
@@ -630,7 +650,7 @@ namespace lfs::vis::gui {
         if (zoom_visible) {
             auto zoom_rml = std::format("{}: {:.0f}",
                                         stripColon(LOC(lichtfeld::Strings::Controls::ZOOM)),
-                                        zoom_speed * 10.0f);
+                                        zoom_speed);
             setModelBool("show_zoom", model_.show_zoom, true);
             setModelString("zoom_text", model_.zoom_text, std::move(zoom_rml));
             setModelString("zoom_color", model_.zoom_color, colorToRmlAlpha(p.info, zoom_alpha));
@@ -650,6 +670,8 @@ namespace lfs::vis::gui {
         float pct = total_gib > 0.0f ? (used_gib / total_gib) * 100.0f : 0.0f;
 
         ImVec4 mem_color = pct < 50.0f ? p.success : (pct < 75.0f ? p.warning : p.error);
+        setModelBool("gpu_panel_active", model_.gpu_panel_active,
+                     lfs::diagnostics::VramProfiler::instance().enabled());
         setModelString("lfs_mem_text", model_.lfs_mem_text, std::format("LFS {:.2f} GiB", app_gib));
         setModelString("lfs_mem_color", model_.lfs_mem_color, colorToRml(p.info));
         setModelBool("show_gpu_model", model_.show_gpu_model, !mem.device_name.empty());

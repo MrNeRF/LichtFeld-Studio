@@ -77,6 +77,26 @@ namespace lfs::vis {
         bool orthographic = false;
     };
 
+    // Layout must match frustum.vert's std430 FrustumInstance.
+    struct VulkanViewportFrustumInstance {
+        glm::mat4 model{1.0f};
+        glm::vec4 color{1.0f};
+    };
+
+    // One instanced draw range for a viewport panel.
+    struct VulkanViewportFrustumBatch {
+        glm::mat4 view{1.0f};
+        glm::vec2 viewport_pos{0.0f, 0.0f};
+        glm::vec2 viewport_size{0.0f, 0.0f};
+        glm::vec2 render_size{0.0f, 0.0f};
+        float focal_x = 0.0f;
+        float focal_y = 0.0f;
+        bool orthographic = false;
+        bool equirectangular = false;
+        std::uint32_t first_instance = 0;
+        std::uint32_t instance_count = 0;
+    };
+
     struct VulkanViewportPassParams {
         std::size_t frame_slot = 0;
         glm::vec2 viewport_pos{0.0f, 0.0f};
@@ -114,6 +134,8 @@ namespace lfs::vis {
         std::uint32_t post_ui_overlay_vertex_count = 0;
         std::vector<VulkanViewportPivotOverlay> pivot_overlays;
         std::vector<VulkanViewportTexturedOverlay> textured_overlays;
+        std::vector<VulkanViewportFrustumInstance> frustum_instances;
+        std::vector<VulkanViewportFrustumBatch> frustum_batches;
 
         // GPU-rendered meshes drawn into the same color/depth attachments as the
         // viewport pass. Replaces the old CPU `rasterizeMeshTriangle` fallback path.

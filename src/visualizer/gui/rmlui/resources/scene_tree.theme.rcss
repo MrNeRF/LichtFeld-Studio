@@ -43,6 +43,17 @@
 
 .tree-row.drop-target {
     border-color: @{primary};
+    background-color: @{panel.row_hover};
+}
+
+.tree-drag-ghost {
+    background-color: @{surface};
+    border-color: @{primary};
+    color: @{text};
+}
+
+.tree-insert-line {
+    background-color: @{primary};
 }
 
 .expand-toggle,

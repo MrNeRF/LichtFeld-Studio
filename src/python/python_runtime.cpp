@@ -948,7 +948,8 @@ namespace lfs::python {
 
     void invoke_export(int format, const std::string& path,
                        const std::vector<std::string>& node_names, int sh_degree,
-                       bool rad_flip_y) {
+                       bool rad_flip_y,
+                       bool rad_streamable) {
         if (!g_export_callback)
             return;
 
@@ -959,7 +960,8 @@ namespace lfs::python {
         }
         g_export_callback(format, path.c_str(), names_ptrs.data(),
                           static_cast<int>(names_ptrs.size()), sh_degree,
-                          rad_flip_y);
+                          rad_flip_y,
+                          rad_streamable);
     }
 
     bool has_python_toolbar() {

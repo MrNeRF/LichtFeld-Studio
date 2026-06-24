@@ -113,19 +113,6 @@ namespace lfs::vis {
             }).detach();
         }
 
-        [[nodiscard]] std::vector<const core::SceneNode*> effectiveVisibleSplatNodes(const core::Scene& scene) {
-            std::vector<const core::SceneNode*> nodes;
-            for (const auto* node : scene.getNodes()) {
-                if (!node || !node->model) {
-                    continue;
-                }
-                if (scene.isNodeEffectivelyVisible(node->id)) {
-                    nodes.push_back(node);
-                }
-            }
-            return nodes;
-        }
-
         [[nodiscard]] const char* sceneNodeUiType(const core::NodeType type) {
             switch (type) {
             case core::NodeType::SPLAT:
@@ -450,6 +437,12 @@ namespace lfs::vis {
         cmd::ReparentNodeById::when([this](const auto& cmd) {
             reparentNode(static_cast<core::NodeId>(cmd.node_id),
                          static_cast<core::NodeId>(cmd.new_parent_id));
+        });
+
+        cmd::MoveNodeById::when([this](const auto& cmd) {
+            moveNode(static_cast<core::NodeId>(cmd.node_id),
+                     static_cast<core::NodeId>(cmd.new_parent_id),
+                     cmd.index);
         });
 
         cmd::AddGroup::when([this](const auto& cmd) {
@@ -1027,6 +1020,17 @@ namespace lfs::vis {
             });
     }
 
+    void SceneManager::drainGpuForTensorRelease() {
+        if (auto* const gui_mgr = services().guiOrNull()) {
+            gui_mgr->setVulkanSceneImage(nullptr, glm::ivec2(0, 0), false, 0);
+        }
+        if (auto* const window_mgr = services().windowOrNull()) {
+            if (auto* const vulkan_ctx = window_mgr->getVulkanContext()) {
+                (void)vulkan_ctx->deviceWaitIdle();
+            }
+        }
+    }
+
     void SceneManager::resetToEmptyState(const bool trainer_already_cleared) {
         if (!trainer_already_cleared) {
             if (auto* trainer = services().trainerOrNull()) {
@@ -1038,18 +1042,10 @@ namespace lfs::vis {
         selection_.invalidateNodeMask();
         clearAppearanceModel();
         // Scene clear can fire from a synchronous menu callback inside the current
-        // GUI render iteration. Drop the GUI's tensor pointer and drain the GPU
-        // before scene_.clear() frees the backing memory — otherwise this same
-        // iteration's prepareVulkanSceneInterop dispatches a CUDA copy from
-        // freed memory and the device faults asynchronously.
-        if (auto* const gui_mgr = services().guiOrNull()) {
-            gui_mgr->setVulkanSceneImage(nullptr, glm::ivec2(0, 0), false, 0);
-        }
-        if (auto* const window_mgr = services().windowOrNull()) {
-            if (auto* const vulkan_ctx = window_mgr->getVulkanContext()) {
-                (void)vulkan_ctx->deviceWaitIdle();
-            }
-        }
+        // GUI render iteration; drain before scene_.clear() frees the backing memory,
+        // otherwise this same iteration's prepareVulkanSceneInterop dispatches a CUDA
+        // copy from freed memory and the device faults asynchronously.
+        drainGpuForTensorRelease();
         scene_.clear();
         python::set_application_scene(&scene_);
 
@@ -1070,32 +1066,56 @@ namespace lfs::vis {
         LOG_INFO("Scene cleared");
     }
 
-    void SceneManager::removePLY(const std::string& name, const bool keep_children) {
-        const auto* node_to_remove = scene_.getNode(name);
-        if (!node_to_remove) {
-            return;
+    bool SceneManager::nodeRemovalAffectsTraining(const std::string& name) const {
+        const auto& training_name = scene_.getTrainingModelNodeName();
+        if (training_name.empty()) {
+            return false;
+        }
+        if (name == training_name) {
+            return true;
+        }
+        for (const auto* n = scene_.getNode(training_name); n && n->parent_id != core::NULL_NODE;) {
+            n = scene_.getNodeById(n->parent_id);
+            if (n && n->name == name) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    std::expected<void, std::string> SceneManager::validateNodeRemoval(const std::string& name) const {
+        auto* trainer = services().trainerOrNull();
+        if (!trainer || !nodeRemovalAffectsTraining(name)) {
+            return {};
         }
 
-        const auto& training_name = scene_.getTrainingModelNodeName();
+        if (trainer->canPerform(TrainingAction::DeleteTrainingNode)) {
+            return {};
+        }
 
-        // Check if node is or contains training model
-        const auto isTrainingNode = [&]() -> bool {
-            if (training_name.empty())
-                return false;
-            if (name == training_name)
-                return true;
-            for (const auto* n = scene_.getNode(training_name); n && n->parent_id != core::NULL_NODE;) {
-                n = scene_.getNodeById(n->parent_id);
-                if (n && n->name == name)
-                    return true;
+        return std::unexpected(
+            std::format("Cannot delete '{}': {}", name, trainer->getActionBlockedReason(TrainingAction::DeleteTrainingNode)));
+    }
+
+    std::expected<void, std::string> SceneManager::removeNodeImpl(const std::string& name,
+                                                                  const bool keep_children,
+                                                                  const HistoryMode history_mode) {
+        const auto* node_to_remove = scene_.getNode(name);
+        if (!node_to_remove) {
+            return {};
+        }
+
+        const bool affects_training = nodeRemovalAffectsTraining(name);
+        if (affects_training) {
+            if (const auto result = validateNodeRemoval(name); !result) {
+                return result;
             }
-            return false;
-        };
+        }
 
-        const bool affects_training = isTrainingNode();
         bool trainer_cleared = false;
+        const bool record_history = history_mode == HistoryMode::Record;
         std::vector<std::string> promoted_children;
-        if (keep_children) {
+        if (record_history && keep_children) {
             promoted_children.reserve(node_to_remove->children.size());
             for (const auto child_id : node_to_remove->children) {
                 if (const auto* child = scene_.getNodeById(child_id)) {
@@ -1104,36 +1124,30 @@ namespace lfs::vis {
             }
         }
 
-        // Use state machine to check if deletion is allowed
-        if (affects_training && services().trainerOrNull()) {
-            if (!services().trainerOrNull()->canPerform(TrainingAction::DeleteTrainingNode)) {
-                LOG_WARN("Cannot delete '{}': {}", name,
-                         services().trainerOrNull()->getActionBlockedReason(TrainingAction::DeleteTrainingNode));
-                return;
+        if (affects_training) {
+            if (auto* trainer = services().trainerOrNull()) {
+                LOG_INFO("Stopping training due to node deletion: {}", name);
+                trainer->stopTraining();
+                trainer->waitForCompletion();
+                trainer->clearTrainer();
+                scene_.setTrainingModelNode("");
+                trainer_cleared = true;
             }
-
-            // Clean up training state if deleting training model (e.g., while paused)
-            LOG_INFO("Stopping training due to node deletion: {}", name);
-            services().trainerOrNull()->stopTraining();
-            services().trainerOrNull()->waitForCompletion();
-            services().trainerOrNull()->clearTrainer();
-            scene_.setTrainingModelNode("");
-            trainer_cleared = true;
         }
 
         const auto history_options = sceneGraphCaptureOptions(true, true);
-        auto history_before = op::SceneGraphPatchEntry::captureState(*this, {name}, history_options);
+        std::optional<op::SceneGraphStateSnapshot> history_before;
+        if (record_history) {
+            history_before = op::SceneGraphPatchEntry::captureState(*this, {name}, history_options);
+        }
 
         std::string parent_name;
-        if (const auto* node = node_to_remove) {
-            if (node->parent_id != core::NULL_NODE) {
-                if (const auto* p = scene_.getNodeById(node->parent_id)) {
-                    parent_name = p->name;
-                }
+        if (node_to_remove->parent_id != core::NULL_NODE) {
+            if (const auto* parent = scene_.getNodeById(node_to_remove->parent_id)) {
+                parent_name = parent->name;
             }
         }
 
-        // Collect all descendant IDs before removal (they'll be gone after removeNode)
         const core::NodeId removed_id = scene_.getNodeIdByName(name);
         std::vector<core::NodeId> ids_to_deselect;
         std::vector<std::string> names_to_remove;
@@ -1142,8 +1156,9 @@ namespace lfs::vis {
                 ids_to_deselect.push_back(id);
                 if (const auto* node = scene_.getNodeById(id)) {
                     names_to_remove.push_back(node->name);
-                    for (core::NodeId child_id : node->children)
+                    for (const core::NodeId child_id : node->children) {
                         collect(child_id);
+                    }
                 }
             };
             collect(removed_id);
@@ -1152,6 +1167,7 @@ namespace lfs::vis {
             names_to_remove.push_back(name);
         }
 
+        drainGpuForTensorRelease();
         if (auto* rendering = services().renderingOrNull()) {
             rendering->releaseSceneModelResources();
         }
@@ -1165,10 +1181,12 @@ namespace lfs::vis {
                 splat_paths_.erase(node_name);
             }
         }
-        for (core::NodeId id : ids_to_deselect)
+        for (const core::NodeId id : ids_to_deselect) {
             selection_.removeFromSelection(id);
-        if (!ids_to_deselect.empty())
+        }
+        if (!ids_to_deselect.empty()) {
             selection_.invalidateNodeMask();
+        }
 
         state::PLYRemoved{
             .name = name,
@@ -1182,10 +1200,19 @@ namespace lfs::vis {
             resetToEmptyState(trainer_cleared);
         }
 
-        pushSceneGraphHistoryEntry(*this, "Delete Node", std::move(history_before),
-                                   keep_children ? promoted_children : std::vector<std::string>{},
-                                   history_options);
+        if (history_before) {
+            pushSceneGraphHistoryEntry(*this, "Delete Node", std::move(*history_before),
+                                       keep_children ? promoted_children : std::vector<std::string>{},
+                                       history_options);
+        }
         retireSplatModelsAsync(std::move(detached_models));
+        return {};
+    }
+
+    void SceneManager::removePLY(const std::string& name, const bool keep_children) {
+        if (const auto result = removeNodeImpl(name, keep_children, HistoryMode::Record); !result) {
+            LOG_WARN("{}", result.error());
+        }
     }
 
     void SceneManager::setPLYVisibility(const std::string& name, const bool visible) {
@@ -1206,6 +1233,7 @@ namespace lfs::vis {
 
         const auto history_before = op::SceneGraphMetadataEntry::captureNodes(*this, {name});
         scene_.setNodeVisibility(id, visible);
+        selection_.invalidateNodeMask();
 
         if (visible) {
             if (const auto* updated = scene_.getNodeById(id))
@@ -3329,6 +3357,37 @@ namespace lfs::vis {
         return true;
     }
 
+    bool SceneManager::moveNode(const core::NodeId node_id, const core::NodeId new_parent_id, const int index) {
+        const auto* node = scene_.getNodeById(node_id);
+        if (!node)
+            return false;
+        const auto* parent = new_parent_id == core::NULL_NODE ? nullptr : scene_.getNodeById(new_parent_id);
+        if (new_parent_id != core::NULL_NODE && !parent)
+            return false;
+
+        const std::string node_name = node->name;
+        std::string old_parent_name;
+        if (node->parent_id != core::NULL_NODE) {
+            if (const auto* p = scene_.getNodeById(node->parent_id))
+                old_parent_name = p->name;
+        }
+        const std::string new_parent_name = parent ? parent->name : std::string{};
+
+        const auto history_before = op::SceneGraphMetadataEntry::captureNodes(*this, {node_name});
+
+        if (!scene_.moveNode(node_id, new_parent_id, index))
+            return false;
+
+        selection_.invalidateNodeMask();
+        state::NodeReparented{.name = node_name, .old_parent = old_parent_name, .new_parent = new_parent_name}.emit();
+        pushSceneGraphMetadataHistoryEntry(
+            *this,
+            "Move Node",
+            history_before,
+            op::SceneGraphMetadataEntry::captureNodes(*this, {node_name}));
+        return true;
+    }
+
     std::string SceneManager::addGroupNode(const std::string& name, const std::string& parent_name) {
         core::NodeId parent_id = core::NULL_NODE;
         if (!parent_name.empty()) {
@@ -4327,7 +4386,7 @@ namespace lfs::vis {
         python::set_selection_service(selection_service_.get());
     }
 
-    std::expected<void, std::string> SceneManager::softDeleteSelectedGaussians() {
+    std::expected<SceneManager::GaussianDeletionPlan, std::string> SceneManager::buildSelectedGaussianDeletionPlan() {
         auto selection = scene_.getSelectionMask();
         if (!selection || !selection->is_valid()) {
             return std::unexpected("Nothing selected");
@@ -4337,53 +4396,116 @@ namespace lfs::vis {
             return std::unexpected("Nothing selected");
         }
 
-        auto selection_mask = selection->to(lfs::core::DataType::Bool);
+        GaussianDeletionPlan plan;
+        plan.selection_mask = selection->to(lfs::core::DataType::Bool);
         if (scene_.isConsolidated()) {
             auto* combined = const_cast<core::SplatData*>(scene_.getCombinedModel());
             if (!combined) {
                 return std::unexpected("No visible nodes");
             }
-            if (static_cast<size_t>(selection_mask.numel()) != static_cast<size_t>(combined->size())) {
+            if (static_cast<size_t>(plan.selection_mask.numel()) != static_cast<size_t>(combined->size())) {
                 return std::unexpected("Selection size mismatch");
             }
 
-            combined->soft_delete(selection_mask);
+            plan.consolidated = true;
+            plan.any_visible_node = true;
         } else {
-            const auto nodes = effectiveVisibleSplatNodes(scene_);
-            if (nodes.empty()) {
-                return std::unexpected("No visible nodes");
-            }
-
-            size_t total_visible = 0;
-            for (const auto* node : nodes) {
-                total_visible += static_cast<size_t>(node->model->size());
-            }
-            if (static_cast<size_t>(selection_mask.numel()) != total_visible) {
+            const size_t full_total = scene_.getSelectionGaussianCount();
+            if (static_cast<size_t>(plan.selection_mask.numel()) != full_total) {
                 return std::unexpected("Selection size mismatch");
             }
 
             size_t offset = 0;
-            for (const auto* node : nodes) {
+            for (const auto* node : scene_.getNodes()) {
+                if (!node || node->type != core::NodeType::SPLAT || !node->model) {
+                    continue;
+                }
+
                 const size_t node_size = static_cast<size_t>(node->model->size());
                 if (node_size == 0) {
                     continue;
                 }
+
+                const size_t node_end = offset + node_size;
+                if (!scene_.isNodeEffectivelyVisible(node->id)) {
+                    offset = node_end;
+                    continue;
+                }
+                plan.any_visible_node = true;
 
                 auto* mutable_node = scene_.getMutableNode(node->name);
                 if (!mutable_node || !mutable_node->model) {
                     return std::unexpected(std::format("Visible node '{}' is missing a mutable model", node->name));
                 }
 
-                mutable_node->model->soft_delete(selection_mask.slice(0, offset, offset + node_size));
-                offset += node_size;
+                const size_t selected_count = plan.selection_mask.slice(0, offset, node_end).count_nonzero();
+                if (selected_count == node_size) {
+                    plan.removed_node_names.push_back(node->name);
+                } else if (selected_count > 0) {
+                    plan.partial_slices.push_back(GaussianDeletionSlice{
+                        .node_name = node->name,
+                        .begin = offset,
+                        .end = node_end,
+                    });
+                }
+                offset = node_end;
+            }
+
+            if (!plan.any_visible_node) {
+                return std::unexpected("No visible nodes");
+            }
+            if (offset != full_total) {
+                return std::unexpected("Selection size mismatch");
             }
         }
 
-        {
-            core::Scene::Transaction txn(scene_);
-            scene_.clearSelection();
-            scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+        return plan;
+    }
+
+    std::expected<void, std::string> SceneManager::applySelectedGaussianDeletionPlan(
+        const GaussianDeletionPlan& plan) {
+        if (plan.consolidated) {
+            auto* combined = const_cast<core::SplatData*>(scene_.getCombinedModel());
+            if (!combined) {
+                return std::unexpected("No visible nodes");
+            }
+            if (static_cast<size_t>(plan.selection_mask.numel()) != static_cast<size_t>(combined->size())) {
+                return std::unexpected("Selection size mismatch");
+            }
+        } else {
+            for (const auto& node_name : plan.removed_node_names) {
+                if (const auto result = validateNodeRemoval(node_name); !result) {
+                    return result;
+                }
+            }
+
+            for (const auto& slice : plan.partial_slices) {
+                auto* node = scene_.getMutableNode(slice.node_name);
+                if (!node || !node->model) {
+                    return std::unexpected(std::format("Visible node '{}' is missing a mutable model", slice.node_name));
+                }
+            }
         }
+
+        scene_.clearSelection();
+
+        if (plan.consolidated) {
+            auto* combined = const_cast<core::SplatData*>(scene_.getCombinedModel());
+            combined->soft_delete(plan.selection_mask);
+        } else {
+            for (const auto& slice : plan.partial_slices) {
+                auto* node = scene_.getMutableNode(slice.node_name);
+                node->model->soft_delete(plan.selection_mask.slice(0, slice.begin, slice.end));
+            }
+
+            for (const auto& node_name : plan.removed_node_names) {
+                if (const auto result = removeNodeImpl(node_name, false, HistoryMode::Skip); !result) {
+                    return result;
+                }
+            }
+        }
+
+        scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
 
         if (auto* rm = services().renderingOrNull()) {
             rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::SELECTION);
@@ -4392,24 +4514,55 @@ namespace lfs::vis {
         return {};
     }
 
-    void SceneManager::deleteSelectedGaussians() {
-        if (const auto selection = scene_.getSelectionMask(); !selection || !selection->is_valid()) {
-            LOG_INFO("No Gaussians selected to delete");
-            return;
+    std::expected<void, std::string> SceneManager::softDeleteSelectedGaussians() {
+        auto plan = buildSelectedGaussianDeletionPlan();
+        if (!plan) {
+            return std::unexpected(plan.error());
+        }
+        return applySelectedGaussianDeletionPlan(*plan);
+    }
+
+    std::expected<void, std::string> SceneManager::deleteSelectedGaussiansWithHistory() {
+        auto plan = buildSelectedGaussianDeletionPlan();
+        if (!plan) {
+            return std::unexpected(plan.error());
         }
 
+        const auto history_options = sceneGraphCaptureOptions(true, true);
+        std::optional<op::SceneGraphStateSnapshot> graph_before;
+        if (!plan->removed_node_names.empty()) {
+            graph_before = op::SceneGraphPatchEntry::captureState(*this, plan->removed_node_names, history_options);
+        }
+
+        op::TransactionGuard transaction("edit.delete");
         auto entry = std::make_unique<op::SceneSnapshot>(*this, "edit.delete");
         entry->captureTopology();
         entry->captureSelection();
 
-        if (const auto result = softDeleteSelectedGaussians(); !result) {
+        if (const auto result = applySelectedGaussianDeletionPlan(*plan); !result) {
+            return result;
+        }
+
+        entry->captureAfter();
+        op::pushSceneSnapshotIfChanged(std::move(entry));
+        if (graph_before) {
+            pushSceneGraphHistoryEntry(*this,
+                                       "Delete Node",
+                                       std::move(*graph_before),
+                                       {},
+                                       history_options);
+        }
+        transaction.commit();
+        return {};
+    }
+
+    void SceneManager::deleteSelectedGaussians() {
+        if (const auto result = deleteSelectedGaussiansWithHistory(); !result) {
             LOG_WARN("Failed to delete selected Gaussians: {}", result.error());
             return;
         }
 
         LOG_INFO("Deleted selected Gaussians");
-        entry->captureAfter();
-        op::pushSceneSnapshotIfChanged(std::move(entry));
     }
 
     void SceneManager::invertSelection() {

@@ -567,21 +567,25 @@ TEST_F(UndistortCameraTest, FisheyeCameraModel) {
     EXPECT_EQ(p.model_type, CameraModelType::FISHEYE);
 }
 
-TEST_F(UndistortCameraTest, NonPinholeModelDetectsDistortion) {
+TEST_F(UndistortCameraTest, EquirectangularModelDoesNotUseUndistortion) {
     auto& cam = cameras_[0];
     auto R = cam->R();
     auto T = cam->T();
 
-    // Even with no distortion coefficients, a non-pinhole model means distortion
+    auto radial = Tensor::from_vector({0.05f}, TensorShape({1}), Device::CPU);
+    auto tangential = Tensor::from_vector({0.01f, -0.02f}, TensorShape({2}), Device::CPU);
+
     Camera equirect_cam(R, T,
                         cam->focal_x(), cam->focal_y(),
                         cam->center_x(), cam->center_y(),
-                        Tensor(), Tensor(),
+                        radial, tangential,
                         CameraModelType::EQUIRECTANGULAR,
                         "test_equirect", cam->image_path(), "",
                         cam->camera_width(), cam->camera_height(), 996);
 
-    EXPECT_TRUE(equirect_cam.has_distortion());
+    EXPECT_FALSE(equirect_cam.has_distortion());
+    equirect_cam.prepare_undistortion();
+    EXPECT_FALSE(equirect_cam.is_undistort_prepared());
 }
 
 TEST(UndistortScale, ScaleUndistortParams) {

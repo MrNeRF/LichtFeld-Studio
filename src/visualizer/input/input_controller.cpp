@@ -6,6 +6,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/splat_data_transform.hpp"
 #include "gui/bounds_gizmo.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/gui_manager.hpp"
@@ -48,6 +49,36 @@ namespace lfs::vis {
         constexpr double kCameraContextMenuDragThreshold = 4.0;
         constexpr double kCameraFrustumClickThreshold = 5.0;
         namespace string_keys = lichtfeld::Strings;
+
+        // Expand [world_min, world_max] by a node's local AABB transformed to world
+        // space. With use_percentile, the splat/point-cloud box is the trimmed
+        // (1st/99th percentile) AABB so far-flung floaters don't inflate it; meshes
+        // and other geometry fall back to the full node bounds.
+        void expandNodeWorldBounds(const core::Scene& scene, const core::SceneNode& node,
+                                   glm::vec3& world_min, glm::vec3& world_max,
+                                   bool use_percentile = false) {
+            glm::vec3 local_min, local_max;
+            bool have_local = false;
+            if (use_percentile) {
+                if (node.model && node.model->size() > 0)
+                    have_local = core::compute_bounds(*node.model, local_min, local_max, 0.0f, true);
+                else if (node.point_cloud && node.point_cloud->size() > 0)
+                    have_local = core::compute_bounds(*node.point_cloud, local_min, local_max, 0.0f, true);
+            }
+            if (!have_local && !scene.getNodeBounds(node.id, local_min, local_max))
+                return;
+
+            const glm::mat4 world_xform = scene_coords::nodeVisualizerWorldTransform(scene, node.id);
+            for (int i = 0; i < 8; ++i) {
+                const glm::vec3 corner(
+                    (i & 1) ? local_max.x : local_min.x,
+                    (i & 2) ? local_max.y : local_min.y,
+                    (i & 4) ? local_max.z : local_min.z);
+                const glm::vec3 world_pt = glm::vec3(world_xform * glm::vec4(corner, 1.0f));
+                world_min = glm::min(world_min, world_pt);
+                world_max = glm::max(world_max, world_pt);
+            }
+        }
 
         [[nodiscard]] bool isTransformGizmoOverOrUsing() {
             return gui::isBoundsGizmoHovered() ||
@@ -206,7 +237,32 @@ namespace lfs::vis {
             return python::dispatch_modal_event(py_evt);
         }
 
-        bool handleSelectionModeShortcut(const input::Action action, gui::GuiManager* gui) {
+        std::optional<ToolType> ownerToolForActivationAction(const input::Action action) {
+            switch (action) {
+            case input::Action::TOOL_SELECT:
+            case input::Action::SELECT_MODE_CENTERS:
+            case input::Action::SELECT_MODE_RECTANGLE:
+            case input::Action::SELECT_MODE_POLYGON:
+            case input::Action::SELECT_MODE_LASSO:
+            case input::Action::SELECT_MODE_RINGS:
+            case input::Action::SELECT_MODE_COLOR:
+                return ToolType::Selection;
+            case input::Action::TOOL_TRANSLATE:
+                return ToolType::Translate;
+            case input::Action::TOOL_ROTATE:
+                return ToolType::Rotate;
+            case input::Action::TOOL_SCALE:
+                return ToolType::Scale;
+            case input::Action::TOOL_MIRROR:
+                return ToolType::Mirror;
+            case input::Action::TOOL_ALIGN:
+                return ToolType::Align;
+            default:
+                return std::nullopt;
+            }
+        }
+
+        bool applySelectionModeShortcut(const input::Action action, gui::GuiManager* gui) {
             if (!gui)
                 return false;
 
@@ -246,33 +302,31 @@ namespace lfs::vis {
             return true;
         }
 
-        bool handleToolbarToolShortcut(const input::Action action) {
-            ToolType tool = ToolType::None;
-            switch (action) {
-            case input::Action::TOOL_SELECT:
-                tool = ToolType::Selection;
-                break;
-            case input::Action::TOOL_TRANSLATE:
-                tool = ToolType::Translate;
-                break;
-            case input::Action::TOOL_ROTATE:
-                tool = ToolType::Rotate;
-                break;
-            case input::Action::TOOL_SCALE:
-                tool = ToolType::Scale;
-                break;
-            case input::Action::TOOL_MIRROR:
-                tool = ToolType::Mirror;
-                break;
-            case input::Action::TOOL_ALIGN:
-                tool = ToolType::Align;
-                break;
-            default:
+        bool handleToolControlActivationShortcut(const input::Action action, gui::GuiManager* gui) {
+            const auto tool = ownerToolForActivationAction(action);
+            if (!tool) {
                 return false;
             }
 
-            lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(tool)}.emit();
+            lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(*tool)}.emit();
+            (void)applySelectionModeShortcut(action, gui);
             return true;
+        }
+
+        input::Action resolveCrossToolActivationShortcut(const input::InputBindings& bindings,
+                                                         const input::ToolMode current_mode,
+                                                         const int key,
+                                                         const int mods) {
+            for (const auto mode : input::kAllToolModes) {
+                if (mode == current_mode) {
+                    continue;
+                }
+                const auto candidate = bindings.getActionForKey(mode, key, mods);
+                if (ownerToolForActivationAction(candidate).has_value()) {
+                    return candidate;
+                }
+            }
+            return input::Action::NONE;
         }
 
         [[nodiscard]] bool shouldDeferClickActionForDrag(const input::Action action) {
@@ -323,11 +377,15 @@ namespace lfs::vis {
         scene_cleared_handler_id_ = state::SceneCleared::when([this](const auto&) {
             clearViewportDragState();
             clearWasdMomentumViewport();
+            scene_extent_ = 0.0f;
+            depth_range_initialized_ = false;
             focusSplitPanel(SplitViewPanelId::Left);
         });
         scene_loaded_handler_id_ = state::SceneLoaded::when([this](const auto&) {
             clearViewportDragState();
             clearWasdMomentumViewport();
+            scene_extent_ = 0.0f;
+            depth_range_initialized_ = false;
             focusSplitPanel(SplitViewPanelId::Left);
         });
 
@@ -1458,7 +1516,10 @@ namespace lfs::vis {
         double mx = mx_f, my = my_f;
         const bool over_gui_hover = isPointerOverUiHover(mx, my);
         const auto tool_mode = getCurrentToolMode();
-        const auto bound_action = bindings_.getActionForKey(tool_mode, logical_key, mods);
+        auto bound_action = bindings_.getActionForKey(tool_mode, logical_key, mods);
+        if (bound_action == input::Action::NONE) {
+            bound_action = resolveCrossToolActivationShortcut(bindings_, tool_mode, logical_key, mods);
+        }
         if (action == input::ACTION_PRESS &&
             dispatchSelectionActionToModal(bound_action, mods, mx, my)) {
             return;
@@ -1524,10 +1585,7 @@ namespace lfs::vis {
         }
 
         if (action == input::ACTION_PRESS) {
-            if (handleSelectionModeShortcut(bound_action, gui))
-                return;
-
-            if (handleToolbarToolShortcut(bound_action))
+            if (handleToolControlActivationShortcut(bound_action, gui))
                 return;
         }
 
@@ -1795,6 +1853,8 @@ namespace lfs::vis {
     }
 
     void InputController::update(float delta_time) {
+        maybeInitializeDepthViewRange();
+
         if (input_router_) {
             const bool any_mouse_buttons_pressed = SDL_GetMouseState(nullptr, nullptr) != 0;
             input_router_->syncPressedMouseButtons(any_mouse_buttons_pressed);
@@ -1985,6 +2045,7 @@ namespace lfs::vis {
         if (movement_viewport && (keys_active || movement_viewport->camera.hasWasdMomentum())) {
             const float movement_speed_bonus =
                 (keys_active && (getModifierKeys() & input::KEYMOD_SHIFT) != 0) ? kWasdShiftSpeedBonus : 0.0f;
+            movement_viewport->camera.setSceneExtent(sceneExtent());
             movement_viewport->camera.advanceWasd(
                 delta_time,
                 keys_active && keys_movement_[0],
@@ -2307,48 +2368,92 @@ namespace lfs::vis {
 
         glm::vec3 total_min(std::numeric_limits<float>::max());
         glm::vec3 total_max(std::numeric_limits<float>::lowest());
-
-        // Accumulate world-space AABB from node's local bounds
-        const auto accumulateBounds = [&](const core::SceneNode* node) {
-            glm::vec3 local_min, local_max;
-            if (!scene.getNodeBounds(node->id, local_min, local_max))
-                return;
-
-            const glm::mat4 world_xform = scene_coords::nodeVisualizerWorldTransform(scene, node->id);
-            for (int i = 0; i < 8; ++i) {
-                const glm::vec3 corner(
-                    (i & 1) ? local_max.x : local_min.x,
-                    (i & 2) ? local_max.y : local_min.y,
-                    (i & 4) ? local_max.z : local_min.z);
-                const glm::vec3 world_pt = glm::vec3(world_xform * glm::vec4(corner, 1.0f));
-                total_min = glm::min(total_min, world_pt);
-                total_max = glm::max(total_max, world_pt);
-            }
-        };
+        bool has_bounds = false;
 
         if (selected.empty()) {
-            // Focus on entire scene (skip group nodes)
-            for (const auto* node : scene.getNodes()) {
-                if (node->type == core::NodeType::GROUP || node->type == core::NodeType::PLY_SEQUENCE ||
-                    node->type == core::NodeType::CAMERA_GROUP ||
-                    node->type == core::NodeType::IMAGE_GROUP)
-                    continue;
-                accumulateBounds(node);
-            }
+            has_bounds = computeWholeSceneBounds(total_min, total_max);
         } else {
-            // Focus on selected nodes
             for (const auto& name : selected) {
                 if (const auto* node = scene.getNode(name))
-                    accumulateBounds(node);
+                    expandNodeWorldBounds(scene, *node, total_min, total_max);
             }
+            has_bounds = total_min.x <= total_max.x;
         }
 
-        if (total_min.x <= total_max.x) {
+        if (has_bounds) {
             target_viewport.camera.focusOnBounds(total_min, total_max);
             publishCameraMove(&target_viewport);
             return true;
         }
         return false;
+    }
+
+    // Whole-scene world AABB, skipping container nodes that carry no geometry.
+    // use_percentile yields the trimmed (outlier-excluding) box.
+    bool InputController::computeWholeSceneBounds(glm::vec3& out_min, glm::vec3& out_max,
+                                                  const bool use_percentile) const {
+        if (!tool_context_)
+            return false;
+        auto* const sm = tool_context_->getSceneManager();
+        if (!sm)
+            return false;
+
+        const auto& scene = sm->getScene();
+        out_min = glm::vec3(std::numeric_limits<float>::max());
+        out_max = glm::vec3(std::numeric_limits<float>::lowest());
+
+        for (const auto* node : scene.getNodes()) {
+            if (node->type == core::NodeType::GROUP || node->type == core::NodeType::PLY_SEQUENCE ||
+                node->type == core::NodeType::DATASET ||
+                node->type == core::NodeType::CAMERA_GROUP ||
+                node->type == core::NodeType::IMAGE_GROUP)
+                continue;
+            expandNodeWorldBounds(scene, *node, out_min, out_max, use_percentile);
+        }
+
+        return out_min.x <= out_max.x;
+    }
+
+    // Cached whole-scene radius used to scale WASD speed and cap pan distance by
+    // splat size. Uses the trimmed (1st/99th percentile) bounds so a few far-flung
+    // floaters can't blow up the extent and make navigation far too fast. Lazily
+    // computed after load (bounds may not exist the instant SceneLoaded fires) and
+    // invalidated on scene load/clear. Returns 0 while no geometry is present.
+    float InputController::sceneExtent() {
+        if (scene_extent_ > 0.0f)
+            return scene_extent_;
+
+        glm::vec3 min, max;
+        if (computeWholeSceneBounds(min, max, /*use_percentile=*/true))
+            scene_extent_ = glm::length(max - min) * 0.5f;
+
+        return scene_extent_;
+    }
+
+    // Seed the depth-map range from the trimmed scene scale once the extent is
+    // known after a load, so the palette spans the actual content instead of the
+    // fixed 0.1..100 default that is useless on large RAD scenes. Runs once per
+    // scene; the user owns the range after that.
+    void InputController::maybeInitializeDepthViewRange() {
+        if (depth_range_initialized_)
+            return;
+
+        const float radius = sceneExtent();
+        if (radius <= 0.0f)
+            return;
+
+        auto* const rendering = services().renderingOrNull();
+        if (!rendering)
+            return;
+
+        constexpr float kDepthViewInitNear = 1.0f;
+        auto settings = rendering->getSettings();
+        settings.depth_view_min = kDepthViewInitNear;
+        settings.depth_view_max = radius;
+        sanitizeDepthViewSettings(settings);
+        rendering->updateSettings(settings);
+
+        depth_range_initialized_ = true;
     }
 
     bool InputController::focusSelection() {
@@ -2477,6 +2582,7 @@ namespace lfs::vis {
         LOG_PERF("InputController::beginPanDrag button={} pos=({},{})", button, x, y);
         const float current_time = static_cast<float>(SDL_GetTicks() / 1000.0f);
         interaction.viewport->camera.finishGlide();
+        interaction.viewport->camera.setSceneExtent(sceneExtent());
         interaction.viewport->camera.startPan(glm::vec2(x, y), current_time);
         drag_viewport_ = interaction.viewport;
         drag_split_panel_ = interaction.panel;

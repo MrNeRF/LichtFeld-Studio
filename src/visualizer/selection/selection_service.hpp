@@ -122,6 +122,8 @@ namespace lfs::vis {
         [[nodiscard]] bool isInteractivePolygonVertexDragActive() const {
             return interactive_selection_.dragged_polygon_vertex >= 0;
         }
+        void updatePassiveRingHoverPreview(glm::vec2 cursor_pos, SelectionMode mode,
+                                           SelectionFilterState filters = {});
         void setInteractiveSelectionMode(SelectionMode mode) { interactive_selection_.mode = mode; }
         void setTestingScreenPositions(std::shared_ptr<core::Tensor> screen_positions);
         void setTestingScreenPositionsForCamera(int camera_index, std::shared_ptr<core::Tensor> screen_positions);
@@ -199,7 +201,8 @@ namespace lfs::vis {
         [[nodiscard]] std::optional<int> renderHoveredGaussianIdForCurrentViewport(float x, float y,
                                                                                    const SelectionFilterState& filters);
         [[nodiscard]] bool buildSelectionMaskForInteractiveSession(core::Tensor& selection_out,
-                                                                   bool include_polygon_cursor = false);
+                                                                   bool include_polygon_cursor = false,
+                                                                   int* picked_ring_id_out = nullptr);
         [[nodiscard]] bool buildInteractiveBrushPreviewIncremental();
         [[nodiscard]] bool buildBrushSelection(const std::vector<glm::vec2>& points, float radius,
                                                core::Tensor& selection_out) const;
@@ -209,7 +212,14 @@ namespace lfs::vis {
                                                  core::Tensor& selection_out) const;
         [[nodiscard]] bool buildWorldPolygonSelection(const std::vector<glm::vec3>& world_points,
                                                       core::Tensor& selection_out) const;
-        [[nodiscard]] bool buildRingSelection(glm::vec2 cursor_pos, core::Tensor& selection_out) const;
+        [[nodiscard]] std::optional<bool> buildRingSelectionForContext(const ViewerViewportContext& context,
+                                                                       glm::vec2 cursor_pos,
+                                                                       core::Tensor& selection_out,
+                                                                       int* picked_ring_id_out = nullptr) const;
+        [[nodiscard]] bool buildRingSelection(glm::vec2 cursor_pos, core::Tensor& selection_out,
+                                              bool try_exact_ring_pick = true,
+                                              bool require_exact_ring_hit = true,
+                                              int* picked_ring_id_out = nullptr) const;
         [[nodiscard]] std::vector<glm::vec2> getPolygonPreviewPoints() const;
         [[nodiscard]] std::optional<glm::vec2> resolveInteractivePolygonDisplayPoint(size_t index) const;
         [[nodiscard]] int findInteractivePolygonVertexAt(glm::vec2 screen_point) const;

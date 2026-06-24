@@ -54,6 +54,11 @@ namespace lfs::vis::gui {
             void ProcessEvent(Rml::Event& event) override;
         };
 
+        struct DragListener : Rml::EventListener {
+            SceneGraphElement* owner = nullptr;
+            void ProcessEvent(Rml::Event& event) override;
+        };
+
         static constexpr size_t kUnsetVisibleRange = std::numeric_limits<size_t>::max();
 
         struct NodeSnapshot {
@@ -149,7 +154,15 @@ namespace lfs::vis::gui {
         core::NodeId nodeIdFromTarget(Rml::Element* target) const;
         void toggleExpand(core::NodeId node_id);
         void toggleModelsSection();
-        bool setDropTarget(core::NodeId node_id);
+        void updateDropTarget(RowSlot* hovered_slot, core::NodeId hovered_id, float mouse_y);
+        void clearDropState();
+        void commitDrop();
+        void showDragGhost(core::NodeId node_id, float mouse_x, float mouse_y);
+        void moveDragGhost(float mouse_x, float mouse_y);
+        void hideDragGhost();
+        void handleDragEvent(Rml::Event& event);
+        [[nodiscard]] bool isValidDropContainer(core::NodeId container_id) const;
+        [[nodiscard]] int siblingIndexOf(core::NodeId node_id) const;
         void showContextMenu(core::NodeId node_id, float mouse_x, float mouse_y);
         void showModelsHeaderContextMenu(float mouse_x, float mouse_y);
         bool isModelsHeaderTarget(Rml::Element* target) const;
@@ -179,9 +192,15 @@ namespace lfs::vis::gui {
         core::NodeId rename_node_id_ = core::NULL_NODE;
         std::string rename_buffer_;
         RenameInputListener rename_input_listener_;
+        DragListener drag_listener_;
         core::NodeId context_menu_node_id_ = core::NULL_NODE;
         core::NodeId drag_source_id_ = core::NULL_NODE;
-        core::NodeId drop_target_id_ = core::NULL_NODE;
+        core::NodeId drop_into_group_id_ = core::NULL_NODE;
+        core::NodeId drop_parent_id_ = core::NULL_NODE;
+        int drop_index_ = -1;
+        bool drop_valid_ = false;
+        Rml::Element* insertion_line_ = nullptr;
+        Rml::Element* drag_ghost_ = nullptr;
         bool models_collapsed_ = false;
         bool scene_has_nodes_ = false;
         size_t root_count_ = 0;

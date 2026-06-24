@@ -56,6 +56,11 @@ body {
     overflow-y: auto;
 }
 
+#secondary-shelf-background,
+#secondary-utility-toolbar {
+    left: -20dp;
+}
+
 .toolbar-vertical .icon-btn {
     position: relative;
     display: flex;
@@ -85,6 +90,59 @@ body {
     height: 20dp;
 }
 
+.viewport-gizmo-controls {
+    position: absolute;
+    top: 108dp;
+    right: 10dp;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 95dp;
+    gap: 3dp;
+    pointer-events: none;
+    z-index: 8;
+}
+
+.viewport-gizmo-control-row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    width: 95dp;
+    gap: 3dp;
+    pointer-events: auto;
+}
+
+.viewport-gizmo-controls .icon-btn {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30dp;
+    height: 30dp;
+    min-width: 30dp;
+    min-height: 30dp;
+    margin: 0;
+    padding: 3dp;
+    border-width: 1dp;
+    border-color: transparent;
+    border-radius: 6dp;
+    box-sizing: border-box;
+    flex-shrink: 0;
+    opacity: 0.88;
+    transition: background-color border-color opacity 0.12s quadratic-out;
+}
+
+.viewport-gizmo-controls .icon-btn:hover,
+.viewport-gizmo-controls .icon-btn.selected {
+    opacity: 1;
+}
+
+.viewport-gizmo-controls .icon-btn img {
+    width: 20dp;
+    height: 20dp;
+}
+
 .toolbar-hcenter {
     position: absolute;
     left: 0;
@@ -109,11 +167,11 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 22dp;
-    height: 22dp;
-    min-width: 22dp;
-    min-height: 22dp;
-    padding: 2dp;
+    width: 30dp;
+    height: 30dp;
+    min-width: 30dp;
+    min-height: 30dp;
+    padding: 3dp;
     border-width: 1dp;
     border-color: transparent;
     border-radius: 6dp;
@@ -123,8 +181,8 @@ body {
 }
 
 .toolbar-hcenter .icon-btn img {
-    width: 17dp;
-    height: 17dp;
+    width: 20dp;
+    height: 20dp;
 }
 
 .toolbar-layer-primary {
@@ -540,11 +598,11 @@ body {
 #selection-block .viewport-transform-option,
 #selection-block .viewport-transform-action,
 #depth-view-block .viewport-transform-action {
-    width: 22dp;
-    height: 22dp;
-    min-width: 22dp;
-    min-height: 22dp;
-    padding: 2dp;
+    width: 30dp;
+    height: 30dp;
+    min-width: 30dp;
+    min-height: 30dp;
+    padding: 3dp;
 }
 
 #transform-block .viewport-transform-option img,
@@ -552,8 +610,8 @@ body {
 #selection-block .viewport-transform-option img,
 #selection-block .viewport-transform-action img,
 #depth-view-block .viewport-transform-action img {
-    width: 17dp;
-    height: 17dp;
+    width: 20dp;
+    height: 20dp;
 }
 
 .viewport-export-fields {
