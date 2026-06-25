@@ -154,7 +154,7 @@ namespace lfs::vis::gui::native_panels {
     }
 
     bool ViewportGizmoPanel::poll(const PanelDrawContext& ctx) {
-        return !ctx.ui_hidden && ctx.viewport &&
+        return ctx.viewport &&
                ctx.viewport->size.x > 0 && ctx.viewport->size.y > 0;
     }
 

@@ -1154,10 +1154,11 @@ namespace lfs::vis::gui {
                                       const VulkanViewportPassParams& params,
                                       const glm::vec2& center,
                                       const int axis,
-                                      const float radius) {
+                                      const float radius,
+                                      const float ui_scale) {
             const glm::vec4 white(1.0f, 1.0f, 1.0f, 0.96f);
-            const float s = std::max(radius * 0.42f, 3.0f);
-            const float thickness = std::max(radius * 0.16f, 1.25f);
+            const float s = std::max(radius * 0.42f, 3.0f * ui_scale);
+            const float thickness = std::max(radius * 0.16f, 1.25f * ui_scale);
             if (axis == 0) {
                 appendShapeOverlayLine(out, params, center + glm::vec2(-s, -s), center + glm::vec2(s, s),
                                        white, thickness);
@@ -1182,6 +1183,7 @@ namespace lfs::vis::gui {
                                        const VulkanViewportGizmoLayout& layout,
                                        const int hovered_axis) {
             const auto& t = theme();
+            const float ui_scale = std::max(layout.size / kViewportGizmoSize, 0.01f);
 
             std::vector<const VulkanViewportGizmoMarker*> draw_order;
             draw_order.reserve(layout.markers.size());
@@ -1200,7 +1202,7 @@ namespace lfs::vis::gui {
                     continue;
                 }
                 appendShapeOverlayLine(out, params, layout.center, marker.screen_pos,
-                                       viewportGizmoAxisColor(marker.axis, 0.72f), 3.0f);
+                                       viewportGizmoAxisColor(marker.axis, 0.72f), 3.0f * ui_scale);
             }
 
             for (const auto* const marker_ptr : draw_order) {
@@ -1221,8 +1223,8 @@ namespace lfs::vis::gui {
                 } else {
                     appendShapeOverlayCircle(out, params, marker.screen_pos, radius, color);
                     appendShapeOverlayCircleOutline(out, params, marker.screen_pos, radius,
-                                                    guideColor(t.palette.background, 0.55f), 1.0f);
-                    appendViewportGizmoLabel(out, params, marker.screen_pos, marker.axis, radius);
+                                                    guideColor(t.palette.background, 0.55f), 1.0f * ui_scale);
+                    appendViewportGizmoLabel(out, params, marker.screen_pos, marker.axis, radius, ui_scale);
                 }
             }
         }
@@ -1231,9 +1233,9 @@ namespace lfs::vis::gui {
                                               VisualizerImpl& viewer,
                                               const ViewportLayout& viewport_layout,
                                               RenderingManager& rendering_manager,
-                                              const bool ui_hidden,
+                                              const float ui_scale,
                                               const bool dragging) {
-            if (ui_hidden || params.viewport_size.x <= 0.0f || params.viewport_size.y <= 0.0f) {
+            if (params.viewport_size.x <= 0.0f || params.viewport_size.y <= 0.0f) {
                 return;
             }
 
@@ -1241,6 +1243,10 @@ namespace lfs::vis::gui {
             if (panels.empty()) {
                 return;
             }
+            const float gizmo_scale = std::max(1.0f, ui_scale);
+            const float gizmo_size = kViewportGizmoSize * gizmo_scale;
+            const float gizmo_margin_x = kViewportGizmoMarginX * gizmo_scale;
+            const float gizmo_margin_y = kViewportGizmoMarginY * gizmo_scale;
 
             int hovered_axis = -1;
             SplitViewPanelId hovered_panel = SplitViewPanelId::Left;
@@ -1251,17 +1257,17 @@ namespace lfs::vis::gui {
                     const glm::vec2 mouse(frame_input.mouse_x, frame_input.mouse_y);
                     for (const auto& panel : panels) {
                         const float gizmo_x = panel.pos.x + panel.size.x -
-                                              kViewportGizmoSize - kViewportGizmoMarginX;
-                        const float gizmo_y = panel.pos.y + kViewportGizmoMarginY;
+                                              gizmo_size - gizmo_margin_x;
+                        const float gizmo_y = panel.pos.y + gizmo_margin_y;
                         const bool mouse_in_gizmo = mouse.x >= gizmo_x &&
-                                                    mouse.x <= gizmo_x + kViewportGizmoSize &&
+                                                    mouse.x <= gizmo_x + gizmo_size &&
                                                     mouse.y >= gizmo_y &&
-                                                    mouse.y <= gizmo_y + kViewportGizmoSize;
+                                                    mouse.y <= gizmo_y + gizmo_size;
                         if (!mouse_in_gizmo) {
                             continue;
                         }
                         if (const auto layout = buildViewportGizmoLayout(
-                                panel, kViewportGizmoSize, kViewportGizmoMarginX, kViewportGizmoMarginY)) {
+                                panel, gizmo_size, gizmo_margin_x, gizmo_margin_y)) {
                             hovered_axis = hitTestViewportGizmoLayout(*layout, mouse);
                         }
                         hovered_panel = panel.panel;
@@ -1273,7 +1279,7 @@ namespace lfs::vis::gui {
 
             for (const auto& panel : panels) {
                 if (const auto layout = buildViewportGizmoLayout(
-                        panel, kViewportGizmoSize, kViewportGizmoMarginX, kViewportGizmoMarginY)) {
+                        panel, gizmo_size, gizmo_margin_x, gizmo_margin_y)) {
                     appendViewportGizmoLayout(params.ui_shape_overlay_triangles,
                                               params,
                                               *layout,
@@ -4782,7 +4788,7 @@ namespace lfs::vis::gui {
                                                  *viewer_,
                                                  viewport_layout_,
                                                  *rendering_manager,
-                                                 ui_hidden_,
+                                                 current_ui_scale_,
                                                  gizmo_manager_.isViewportGizmoDragging());
             }
         }
@@ -5682,6 +5688,8 @@ namespace lfs::vis::gui {
             screen.any_item_active = ImGui::IsAnyItemActive() || rmlui_manager_.anyItemActive();
         }
         panel_layout_.enforceWidthConstraints(show_main_panel_, ui_hidden_, screen);
+        viewport_layout_ = panel_layout_.computeViewportLayout(
+            show_main_panel_, ui_hidden_, window_states_["python_console"], screen);
 
         constexpr uint8_t kUiLayoutSettleFrames = 3;
         const bool python_console_visible = window_states_["python_console"];
@@ -6049,6 +6057,8 @@ namespace lfs::vis::gui {
             default: break;
             }
         };
+        viewport_layout_ = panel_layout_.computeViewportLayout(
+            show_main_panel_, ui_hidden_, window_states_["python_console"], screen);
         python::set_viewport_bounds(viewport_layout_.pos.x, viewport_layout_.pos.y,
                                     viewport_layout_.size.x, viewport_layout_.size.y);
 
@@ -6097,7 +6107,7 @@ namespace lfs::vis::gui {
                                                secondary_toolbar_x,
                                                secondary_toolbar_width);
         const float left_dock_w =
-            icon_bar_w + (panel_layout_.isLeftDockVisible() ? left_dock_panel_w : 0.0f);
+            ui_hidden_ ? 0.0f : icon_bar_w + (panel_layout_.isLeftDockVisible() ? left_dock_panel_w : 0.0f);
         const glm::vec2 overlay_pos = {screen.work_pos.x, viewport_layout_.pos.y};
         const glm::vec2 overlay_size = {viewport_layout_.size.x + left_dock_w, viewport_layout_.size.y};
         rml_viewport_overlay_.setViewportBounds(
@@ -6249,10 +6259,6 @@ namespace lfs::vis::gui {
         }
 
         applyFrameInputCapture();
-
-        // Recompute viewport layout
-        viewport_layout_ = panel_layout_.computeViewportLayout(
-            show_main_panel_, ui_hidden_, window_states_["python_console"], screen);
 
         if (!ui_hidden_) {
             LOG_TIMER_THRESHOLD("gui_render.status_bar_and_StatusBar", 0.10);

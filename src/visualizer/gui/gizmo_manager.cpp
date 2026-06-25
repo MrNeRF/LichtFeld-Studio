@@ -132,6 +132,10 @@ namespace lfs::vis::gui {
         constexpr float VIEWPORT_GIZMO_LABEL_DISTANCE = 0.63f;
         constexpr float VIEWPORT_GIZMO_HIT_RADIUS_SCALE = 2.5f;
 
+        [[nodiscard]] float viewportGizmoUiScale() {
+            return std::max(1.0f, lfs::python::get_shared_dpi_scale());
+        }
+
         [[nodiscard]] std::optional<ViewportGizmoLayoutData> buildViewportGizmoLayout(
             const ViewportGizmoPanelTarget& panel,
             const float size,
@@ -2409,24 +2413,28 @@ namespace lfs::vis::gui {
         const auto& frame_input = viewer_->getWindowManager()->frameInput();
         const float mouse_x = frame_input.mouse_x;
         const float mouse_y = frame_input.mouse_y;
+        const float ui_scale = viewportGizmoUiScale();
+        const float gizmo_size = VIEWPORT_GIZMO_SIZE * ui_scale;
+        const float gizmo_margin_x = VIEWPORT_GIZMO_MARGIN_X * ui_scale;
+        const float gizmo_margin_y = VIEWPORT_GIZMO_MARGIN_Y * ui_scale;
 
         const bool ui_wants_mouse = guiFocusState().want_capture_mouse;
         int hovered_axis = -1;
         ViewportGizmoPanelTarget* hovered_panel = nullptr;
         if (!ui_wants_mouse) {
             for (auto& panel : panels) {
-                const float gizmo_x = panel.pos.x + panel.size.x - VIEWPORT_GIZMO_SIZE - VIEWPORT_GIZMO_MARGIN_X;
-                const float gizmo_y = panel.pos.y + VIEWPORT_GIZMO_MARGIN_Y;
+                const float gizmo_x = panel.pos.x + panel.size.x - gizmo_size - gizmo_margin_x;
+                const float gizmo_y = panel.pos.y + gizmo_margin_y;
                 const bool mouse_in_gizmo = mouse_x >= gizmo_x &&
-                                            mouse_x <= gizmo_x + VIEWPORT_GIZMO_SIZE &&
+                                            mouse_x <= gizmo_x + gizmo_size &&
                                             mouse_y >= gizmo_y &&
-                                            mouse_y <= gizmo_y + VIEWPORT_GIZMO_SIZE;
+                                            mouse_y <= gizmo_y + gizmo_size;
                 if (!mouse_in_gizmo) {
                     continue;
                 }
 
                 if (const auto layout = buildViewportGizmoLayout(
-                        panel, VIEWPORT_GIZMO_SIZE, VIEWPORT_GIZMO_MARGIN_X, VIEWPORT_GIZMO_MARGIN_Y)) {
+                        panel, gizmo_size, gizmo_margin_x, gizmo_margin_y)) {
                     hovered_axis = hitTestViewportGizmoLayout(*layout, glm::vec2(mouse_x, mouse_y));
                 }
                 hovered_panel = &panel;
@@ -2637,11 +2645,15 @@ namespace lfs::vis::gui {
         const auto vp_pos = viewer_->getGuiManager()->getViewportPos();
         const auto vp_size = viewer_->getGuiManager()->getViewportSize();
         const auto panels = collectViewportGizmoPanels(viewer_, vp_pos, vp_size);
+        const float ui_scale = viewportGizmoUiScale();
+        const float gizmo_size = VIEWPORT_GIZMO_SIZE * ui_scale;
+        const float gizmo_margin_x = VIEWPORT_GIZMO_MARGIN_X * ui_scale;
+        const float gizmo_margin_y = VIEWPORT_GIZMO_MARGIN_Y * ui_scale;
         for (const auto& panel : panels) {
-            const float gizmo_x = panel.pos.x + panel.size.x - VIEWPORT_GIZMO_SIZE - VIEWPORT_GIZMO_MARGIN_X;
-            const float gizmo_y = panel.pos.y + VIEWPORT_GIZMO_MARGIN_Y;
-            if (x >= gizmo_x && x <= gizmo_x + VIEWPORT_GIZMO_SIZE &&
-                y >= gizmo_y && y <= gizmo_y + VIEWPORT_GIZMO_SIZE) {
+            const float gizmo_x = panel.pos.x + panel.size.x - gizmo_size - gizmo_margin_x;
+            const float gizmo_y = panel.pos.y + gizmo_margin_y;
+            if (x >= gizmo_x && x <= gizmo_x + gizmo_size &&
+                y >= gizmo_y && y <= gizmo_y + gizmo_size) {
                 return true;
             }
         }
