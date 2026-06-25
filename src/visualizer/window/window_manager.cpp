@@ -530,6 +530,8 @@ namespace lfs::vis {
                 frame_input_.processEvent(event, main_window_id);
             processEvent(event);
         }
+        if (isManualResizeActive())
+            updateManualResize();
         finishTitlebarDragIfReleased();
         frame_input_.finalize(window_);
         suppressFrameInputForManualResize();
@@ -549,6 +551,8 @@ namespace lfs::vis {
                                            ? std::max(kPendingResizeMinWaitSeconds, resize_wait)
                                            : 0.0);
         }
+        if (isManualResizeActive())
+            timeout_seconds = std::min(timeout_seconds, 1.0 / 60.0);
         const int timeout_ms = static_cast<int>(timeout_seconds * 1000.0);
         if (SDL_WaitEventTimeout(&event, timeout_ms)) {
             bool suppress_gui_route = shouldSuppressGuiRoutingForResize(event, main_window_id);
@@ -566,6 +570,8 @@ namespace lfs::vis {
                 processEvent(event);
             }
         }
+        if (isManualResizeActive())
+            updateManualResize();
         finishTitlebarDragIfReleased();
         frame_input_.finalize(window_);
         suppressFrameInputForManualResize();
@@ -710,17 +716,19 @@ namespace lfs::vis {
 
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
         case SDL_EVENT_MOUSE_BUTTON_UP: {
+            if (event.type == SDL_EVENT_MOUSE_BUTTON_UP &&
+                event.button.button == SDL_BUTTON_LEFT &&
+                isManualResizeActive()) {
+                finishManualResize();
+                break;
+            }
+
             if (!eventTargetsWindow(event, main_window_id))
                 break;
             const int mouse_x = static_cast<int>(std::round(event.button.x));
             const int mouse_y = static_cast<int>(std::round(event.button.y));
             const bool titlebar_point = isTitlebarDragPoint(mouse_x, mouse_y);
             if (event.button.button == SDL_BUTTON_LEFT) {
-                if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && isManualResizeActive()) {
-                    finishManualResize();
-                    break;
-                }
-
                 if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
                     const ResizeEdge resize_edge = resizeEdgeAt(mouse_x, mouse_y);
                     if (resize_edge != ResizeEdge::NoEdge) {
@@ -761,12 +769,12 @@ namespace lfs::vis {
         }
 
         case SDL_EVENT_MOUSE_MOTION:
-            if (!eventTargetsWindow(event, main_window_id))
-                break;
             if (isManualResizeActive()) {
                 updateManualResize();
                 break;
             }
+            if (!eventTargetsWindow(event, main_window_id))
+                break;
             if (titlebar_drag_active_) {
                 updateTitlebarDrag();
                 break;
