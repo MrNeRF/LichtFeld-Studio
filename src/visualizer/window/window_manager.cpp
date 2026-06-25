@@ -1097,13 +1097,28 @@ namespace lfs::vis {
             next_h = std::max(next_h, kMinWindowHeight);
         }
 
-        if (next_x != manual_resize_start_pos_.x || next_y != manual_resize_start_pos_.y) {
+        int current_x = 0;
+        int current_y = 0;
+        int current_w = 0;
+        int current_h = 0;
+        SDL_GetWindowPosition(window_, &current_x, &current_y);
+        SDL_GetWindowSize(window_, &current_w, &current_h);
+
+        const bool position_changed = next_x != current_x || next_y != current_y;
+        const bool size_changed = next_w != current_w || next_h != current_h;
+        if (!position_changed && !size_changed) {
+            setResizeCursorForEdge(manual_resize_edge_);
+            return;
+        }
+
+        if (position_changed) {
             SDL_SetWindowPosition(window_, next_x, next_y);
         }
-        SDL_SetWindowSize(window_, next_w, next_h);
+        if (size_changed) {
+            SDL_SetWindowSize(window_, next_w, next_h);
+        }
         updateWindowSize("manual-resize-drag", ResizeIntent::Interactive);
         setResizeCursorForEdge(manual_resize_edge_);
-        wakeEventLoop();
     }
 
     void WindowManager::finishManualResize() {
