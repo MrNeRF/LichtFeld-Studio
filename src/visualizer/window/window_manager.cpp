@@ -488,13 +488,16 @@ namespace lfs::vis {
         const SDL_WindowID main_window_id = window_ ? SDL_GetWindowID(window_) : 0;
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
-            if (imgui_ready)
+            const bool suppress_gui_route = shouldSuppressGuiRoutingForResize(event, main_window_id);
+            if (imgui_ready && !suppress_gui_route)
                 ImGui_ImplSDL3_ProcessEvent(&event);
-            frame_input_.processEvent(event, main_window_id);
+            if (!suppress_gui_route)
+                frame_input_.processEvent(event, main_window_id);
             processEvent(event);
         }
         finishTitlebarDragIfReleased();
         frame_input_.finalize(window_);
+        suppressFrameInputForManualResize();
         flushPendingTitlebarDoubleClick();
     }
 
@@ -513,19 +516,24 @@ namespace lfs::vis {
         }
         const int timeout_ms = static_cast<int>(timeout_seconds * 1000.0);
         if (SDL_WaitEventTimeout(&event, timeout_ms)) {
-            if (imgui_ready)
+            bool suppress_gui_route = shouldSuppressGuiRoutingForResize(event, main_window_id);
+            if (imgui_ready && !suppress_gui_route)
                 ImGui_ImplSDL3_ProcessEvent(&event);
-            frame_input_.processEvent(event, main_window_id);
+            if (!suppress_gui_route)
+                frame_input_.processEvent(event, main_window_id);
             processEvent(event);
             while (SDL_PollEvent(&event)) {
-                if (imgui_ready)
+                suppress_gui_route = shouldSuppressGuiRoutingForResize(event, main_window_id);
+                if (imgui_ready && !suppress_gui_route)
                     ImGui_ImplSDL3_ProcessEvent(&event);
-                frame_input_.processEvent(event, main_window_id);
+                if (!suppress_gui_route)
+                    frame_input_.processEvent(event, main_window_id);
                 processEvent(event);
             }
         }
         finishTitlebarDragIfReleased();
         frame_input_.finalize(window_);
+        suppressFrameInputForManualResize();
         flushPendingTitlebarDoubleClick();
     }
 
@@ -546,6 +554,33 @@ namespace lfs::vis {
         SDL_Event event{};
         event.type = SDL_EVENT_USER;
         SDL_PushEvent(&event);
+    }
+
+    bool WindowManager::shouldSuppressGuiRoutingForResize(const SDL_Event& event,
+                                                          const unsigned int main_window_id) const {
+        switch (event.type) {
+        case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        case SDL_EVENT_MOUSE_BUTTON_UP:
+        case SDL_EVENT_MOUSE_MOTION:
+        case SDL_EVENT_MOUSE_WHEEL:
+            if (!eventTargetsWindow(event, main_window_id))
+                return false;
+            break;
+        default:
+            return false;
+        }
+
+        if (isManualResizeActive())
+            return true;
+
+        if (event.type != SDL_EVENT_MOUSE_BUTTON_DOWN ||
+            event.button.button != SDL_BUTTON_LEFT) {
+            return false;
+        }
+
+        const int mouse_x = static_cast<int>(std::round(event.button.x));
+        const int mouse_y = static_cast<int>(std::round(event.button.y));
+        return resizeEdgeAt(mouse_x, mouse_y) != ResizeEdge::None;
     }
 
     void WindowManager::processEvent(const SDL_Event& event) {
@@ -1016,6 +1051,25 @@ namespace lfs::vis {
         SDL_SetCursor(SDL_GetDefaultCursor());
         updateWindowSize("manual-resize-end", ResizeIntent::Exact);
         wakeEventLoop();
+    }
+
+    void WindowManager::suppressFrameInputForManualResize() {
+        if (!isManualResizeActive())
+            return;
+
+        frame_input_.mouse_x = -100000.0f;
+        frame_input_.mouse_y = -100000.0f;
+        frame_input_.mouse_down[0] = false;
+        frame_input_.mouse_down[1] = false;
+        frame_input_.mouse_down[2] = false;
+        frame_input_.mouse_clicked[0] = false;
+        frame_input_.mouse_clicked[1] = false;
+        frame_input_.mouse_clicked[2] = false;
+        frame_input_.mouse_released[0] = false;
+        frame_input_.mouse_released[1] = false;
+        frame_input_.mouse_released[2] = false;
+        frame_input_.mouse_wheel = 0.0f;
+        frame_input_.mouse_moved = false;
     }
 
     void WindowManager::beginTitlebarDrag(const int local_x, const int local_y) {

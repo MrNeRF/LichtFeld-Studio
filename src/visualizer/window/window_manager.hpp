@@ -84,6 +84,8 @@ namespace lfs::vis {
 
     private:
         void processEvent(const ::SDL_Event& event);
+        [[nodiscard]] bool shouldSuppressGuiRoutingForResize(const ::SDL_Event& event,
+                                                             unsigned int main_window_id) const;
 
         enum class ResizeEdge : unsigned {
             None = 0,
@@ -138,6 +140,7 @@ namespace lfs::vis {
         void beginManualResize(ResizeEdge edge);
         void updateManualResize();
         void finishManualResize();
+        void suppressFrameInputForManualResize();
         [[nodiscard]] bool isManualResizeActive() const { return manual_resize_edge_ != ResizeEdge::None; }
         void beginTitlebarDrag(int local_x, int local_y);
         void updateTitlebarDrag();

@@ -5538,6 +5538,13 @@ namespace lfs::vis::gui {
             const auto* mvp = ImGui::GetMainViewport();
             const float status_bar_h = PanelLayoutManager::STATUS_BAR_HEIGHT * current_ui_scale_;
             const float panel_h = mvp->WorkSize.y - status_bar_h;
+            panel_layout_.enforceWidthConstraints(show_main_panel_, ui_hidden_,
+                                                  {
+                                                      .work_pos = {mvp->WorkPos.x, mvp->WorkPos.y},
+                                                      .work_size = {mvp->WorkSize.x, mvp->WorkSize.y},
+                                                      .any_item_active = ImGui::IsAnyItemActive() ||
+                                                                         rmlui_manager_.anyItemActive(),
+                                                  });
 
             ShellRegions shell_regions;
             shell_regions.screen = {mvp->Pos.x, mvp->Pos.y, mvp->Size.x, mvp->Size.y};
@@ -5651,6 +5658,7 @@ namespace lfs::vis::gui {
             screen.work_size = {mvp_input->WorkSize.x, mvp_input->WorkSize.y};
             screen.any_item_active = ImGui::IsAnyItemActive() || rmlui_manager_.anyItemActive();
         }
+        panel_layout_.enforceWidthConstraints(show_main_panel_, ui_hidden_, screen);
 
         constexpr uint8_t kUiLayoutSettleFrames = 3;
         const bool python_console_visible = window_states_["python_console"];

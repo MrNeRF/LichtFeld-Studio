@@ -114,6 +114,8 @@ namespace lfs::vis::gui {
         CursorRequest getCursorRequest() const { return cursor_request_; }
 
         void applyResizeDelta(float dx, const ScreenState& screen);
+        void enforceWidthConstraints(bool show_main_panel, bool ui_hidden,
+                                     const ScreenState& screen);
 
         float getRightPanelWidth() const { return right_panel_width_; }
         float getScenePanelRatio() const { return scene_panel_ratio_; }
@@ -151,6 +153,10 @@ namespace lfs::vis::gui {
                                               const ScreenState& screen) const;
         float computeLeftDockReservedWidth(bool show_main_panel, bool ui_hidden,
                                            const ScreenState& screen) const;
+        [[nodiscard]] float maxLeftDockPanelWidth(bool show_main_panel, bool ui_hidden,
+                                                  const ScreenState& screen) const;
+        [[nodiscard]] float maxRightPanelWidth(bool show_main_panel, bool ui_hidden,
+                                               const ScreenState& screen) const;
 
         float right_panel_width_ = 340.0f;
         float scene_panel_ratio_ = 0.4f;
@@ -182,13 +188,16 @@ namespace lfs::vis::gui {
 
         static constexpr float RIGHT_PANEL_MIN_RATIO = 0.01f;
         static constexpr float RIGHT_PANEL_MAX_RATIO = 0.99f;
+        static constexpr float RIGHT_PANEL_MIN_VISIBLE_WIDTH = 260.0f;
         static constexpr float PYTHON_CONSOLE_MIN_WIDTH = 200.0f;
         static constexpr float PYTHON_CONSOLE_MAX_RATIO = 0.5f;
         static constexpr float BOTTOM_DOCK_MIN_HEIGHT = 180.0f;
         static constexpr float BOTTOM_DOCK_DEFAULT_HEIGHT = 440.0f;
         static constexpr float BOTTOM_DOCK_MAX_RATIO = 0.65f;
         static constexpr float MIN_VIEWPORT_HEIGHT = 140.0f;
+        static constexpr float MIN_VIEWPORT_WIDTH = 180.0f;
         static constexpr float LEFT_DOCK_MIN_WIDTH = 180.0f;
+        static constexpr float LEFT_DOCK_MIN_VISIBLE_WIDTH = 220.0f;
         static constexpr float LEFT_DOCK_DEFAULT_WIDTH = 320.0f;
         static constexpr float ICON_BAR_WIDTH = 40.0f;
     };
