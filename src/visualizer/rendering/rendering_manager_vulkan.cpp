@@ -1017,7 +1017,7 @@ namespace lfs::vis {
         } resize_pause_release_on_return{release_resize_pause_on_return,
                                          resize_training_pause_active_ && !resize_deferring};
 
-        if (frame_dirty == 0 && has_cached_viewport_output) {
+        if (!vksplat_viewport_resize && frame_dirty == 0 && has_cached_viewport_output) {
             LOG_PERF("renderVulkanFrame: cache HIT (returning cached image)");
             render_lock.reset();
             return cached_frame_result();
