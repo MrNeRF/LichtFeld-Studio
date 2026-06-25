@@ -580,7 +580,7 @@ namespace lfs::vis {
 
         const int mouse_x = static_cast<int>(std::round(event.button.x));
         const int mouse_y = static_cast<int>(std::round(event.button.y));
-        return resizeEdgeAt(mouse_x, mouse_y) != ResizeEdge::None;
+        return resizeEdgeAt(mouse_x, mouse_y) != ResizeEdge::NoEdge;
     }
 
     void WindowManager::processEvent(const SDL_Event& event) {
@@ -685,7 +685,7 @@ namespace lfs::vis {
 
                 if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
                     const ResizeEdge resize_edge = resizeEdgeAt(mouse_x, mouse_y);
-                    if (resize_edge != ResizeEdge::None) {
+                    if (resize_edge != ResizeEdge::NoEdge) {
                         beginManualResize(resize_edge);
                         break;
                     }
@@ -906,11 +906,11 @@ namespace lfs::vis {
 
     WindowManager::ResizeEdge WindowManager::resizeEdgeAt(const int x, const int y) const {
         if (!window_ || is_fullscreen_ || isMaximized())
-            return ResizeEdge::None;
+            return ResizeEdge::NoEdge;
 
         const glm::ivec2 size = getWindowSize();
         if (size.x <= 0 || size.y <= 0)
-            return ResizeEdge::None;
+            return ResizeEdge::NoEdge;
 
         const bool left = x >= 0 && x < kResizeBorder;
         const bool right = x >= size.x - kResizeBorder && x < size.x;
@@ -931,7 +931,7 @@ namespace lfs::vis {
     }
 
     void WindowManager::setResizeCursorForEdge(const ResizeEdge edge) {
-        if (edge == ResizeEdge::None)
+        if (edge == ResizeEdge::NoEdge)
             return;
 
         const auto has_edge = [edge](const ResizeEdge flag) {
@@ -985,7 +985,7 @@ namespace lfs::vis {
     }
 
     void WindowManager::beginManualResize(const ResizeEdge edge) {
-        if (!window_ || edge == ResizeEdge::None || is_fullscreen_ || isMaximized())
+        if (!window_ || edge == ResizeEdge::NoEdge || is_fullscreen_ || isMaximized())
             return;
 
         manual_resize_edge_ = edge;
@@ -1046,7 +1046,7 @@ namespace lfs::vis {
         if (!isManualResizeActive())
             return;
 
-        manual_resize_edge_ = ResizeEdge::None;
+        manual_resize_edge_ = ResizeEdge::NoEdge;
         SDL_CaptureMouse(false);
         SDL_SetCursor(SDL_GetDefaultCursor());
         updateWindowSize("manual-resize-end", ResizeIntent::Exact);

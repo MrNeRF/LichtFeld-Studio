@@ -88,7 +88,7 @@ namespace lfs::vis {
                                                              unsigned int main_window_id) const;
 
         enum class ResizeEdge : unsigned {
-            None = 0,
+            NoEdge = 0,
             Left = 1u << 0,
             Right = 1u << 1,
             Top = 1u << 2,
@@ -118,7 +118,7 @@ namespace lfs::vis {
         glm::ivec2 titlebar_drag_start_global_{0, 0};
         glm::ivec2 titlebar_drag_start_local_{0, 0};
         glm::ivec2 titlebar_drag_window_offset_{0, 0};
-        ResizeEdge manual_resize_edge_ = ResizeEdge::None;
+        ResizeEdge manual_resize_edge_ = ResizeEdge::NoEdge;
         glm::ivec2 manual_resize_start_global_{0, 0};
         glm::ivec2 manual_resize_start_pos_{0, 0};
         glm::ivec2 manual_resize_start_size_{0, 0};
@@ -141,7 +141,7 @@ namespace lfs::vis {
         void updateManualResize();
         void finishManualResize();
         void suppressFrameInputForManualResize();
-        [[nodiscard]] bool isManualResizeActive() const { return manual_resize_edge_ != ResizeEdge::None; }
+        [[nodiscard]] bool isManualResizeActive() const { return manual_resize_edge_ != ResizeEdge::NoEdge; }
         void beginTitlebarDrag(int local_x, int local_y);
         void updateTitlebarDrag();
         void finishTitlebarDrag();
