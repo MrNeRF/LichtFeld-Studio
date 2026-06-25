@@ -30,8 +30,17 @@ namespace lfs::vis {
     namespace {
         constexpr double kPendingResizeMinWaitSeconds = 0.001;
         constexpr int kResizeBorder = 6;
-        constexpr int kMinManualResizeWidth = 640;
-        constexpr int kMinManualResizeHeight = 360;
+        constexpr int kMinWindowWidth = 640;
+        constexpr int kMinWindowHeight = 360;
+#if defined(_WIN32)
+        constexpr bool kUseManualBorderlessResize = true;
+#else
+        constexpr bool kUseManualBorderlessResize = false;
+#endif
+        constexpr unsigned kResizeLeft = 1u << 0;
+        constexpr unsigned kResizeRight = 1u << 1;
+        constexpr unsigned kResizeTop = 1u << 2;
+        constexpr unsigned kResizeBottom = 1u << 3;
 
         const char* windowEventName(const Uint32 event_type) {
             switch (event_type) {
@@ -199,6 +208,31 @@ namespace lfs::vis {
         }
 #endif
 
+        SDL_HitTestResult resizeHitTestResult(const unsigned edge_mask) {
+            const bool left = (edge_mask & kResizeLeft) != 0;
+            const bool right = (edge_mask & kResizeRight) != 0;
+            const bool top = (edge_mask & kResizeTop) != 0;
+            const bool bottom = (edge_mask & kResizeBottom) != 0;
+
+            if (top && left)
+                return SDL_HITTEST_RESIZE_TOPLEFT;
+            if (top && right)
+                return SDL_HITTEST_RESIZE_TOPRIGHT;
+            if (bottom && left)
+                return SDL_HITTEST_RESIZE_BOTTOMLEFT;
+            if (bottom && right)
+                return SDL_HITTEST_RESIZE_BOTTOMRIGHT;
+            if (left)
+                return SDL_HITTEST_RESIZE_LEFT;
+            if (right)
+                return SDL_HITTEST_RESIZE_RIGHT;
+            if (top)
+                return SDL_HITTEST_RESIZE_TOP;
+            if (bottom)
+                return SDL_HITTEST_RESIZE_BOTTOM;
+            return SDL_HITTEST_NORMAL;
+        }
+
         SDL_HitTestResult SDLCALL borderlessWindowHitTest(SDL_Window* window, const SDL_Point* const area, void* data) {
             auto* const self = static_cast<WindowManager*>(data);
             if (!self || !area)
@@ -206,28 +240,10 @@ namespace lfs::vis {
             if (self->isFullscreen())
                 return SDL_HITTEST_NORMAL;
 
-            const unsigned active_resize_edge = self->manualResizeEdgeMask();
-            if (active_resize_edge != 0) {
-                const bool left = (active_resize_edge & 1u) != 0;
-                const bool right = (active_resize_edge & 2u) != 0;
-                const bool top = (active_resize_edge & 4u) != 0;
-                const bool bottom = (active_resize_edge & 8u) != 0;
-                if (top && left)
-                    return SDL_HITTEST_RESIZE_TOPLEFT;
-                if (top && right)
-                    return SDL_HITTEST_RESIZE_TOPRIGHT;
-                if (bottom && left)
-                    return SDL_HITTEST_RESIZE_BOTTOMLEFT;
-                if (bottom && right)
-                    return SDL_HITTEST_RESIZE_BOTTOMRIGHT;
-                if (left)
-                    return SDL_HITTEST_RESIZE_LEFT;
-                if (right)
-                    return SDL_HITTEST_RESIZE_RIGHT;
-                if (top)
-                    return SDL_HITTEST_RESIZE_TOP;
-                if (bottom)
-                    return SDL_HITTEST_RESIZE_BOTTOM;
+            if constexpr (kUseManualBorderlessResize) {
+                const unsigned active_resize_edge = self->manualResizeEdgeMask();
+                if (active_resize_edge != 0)
+                    return resizeHitTestResult(active_resize_edge);
             }
 
             glm::ivec2 size = self->getWindowSize();
@@ -241,8 +257,24 @@ namespace lfs::vis {
             const bool titlebar_point = self->isTitlebarDragPoint(area->x, area->y);
 
             if (!self->isMaximized()) {
-                if (left || right || (top && !titlebar_point) || bottom)
-                    return SDL_HITTEST_NORMAL;
+                unsigned edge_mask = 0;
+                if (left)
+                    edge_mask |= kResizeLeft;
+                if (right)
+                    edge_mask |= kResizeRight;
+                if (top && !titlebar_point)
+                    edge_mask |= kResizeTop;
+                if (bottom)
+                    edge_mask |= kResizeBottom;
+
+                if constexpr (kUseManualBorderlessResize) {
+                    if (edge_mask != 0)
+                        return SDL_HITTEST_NORMAL;
+                } else {
+                    const SDL_HitTestResult resize_result = resizeHitTestResult(edge_mask);
+                    if (resize_result != SDL_HITTEST_NORMAL)
+                        return resize_result;
+                }
             }
 
             if (titlebar_point) {
@@ -356,6 +388,9 @@ namespace lfs::vis {
             std::cerr << "Failed to create SDL window: " << SDL_GetError() << std::endl;
             SDL_Quit();
             return false;
+        }
+        if (!SDL_SetWindowMinimumSize(window_, kMinWindowWidth, kMinWindowHeight)) {
+            LOG_DEBUG("Failed to set window minimum size: {}", SDL_GetError());
         }
 
         native_titlebar_move_available_ = hasX11NativeMoveSupport(window_);
@@ -558,6 +593,9 @@ namespace lfs::vis {
 
     bool WindowManager::shouldSuppressGuiRoutingForResize(const SDL_Event& event,
                                                           const unsigned int main_window_id) const {
+        if constexpr (!kUseManualBorderlessResize)
+            return false;
+
         switch (event.type) {
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
         case SDL_EVENT_MOUSE_BUTTON_UP:
@@ -686,7 +724,10 @@ namespace lfs::vis {
                 if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
                     const ResizeEdge resize_edge = resizeEdgeAt(mouse_x, mouse_y);
                     if (resize_edge != ResizeEdge::NoEdge) {
-                        beginManualResize(resize_edge);
+                        if constexpr (kUseManualBorderlessResize) {
+                            beginManualResize(resize_edge);
+                            break;
+                        }
                         break;
                     }
                 }
@@ -908,7 +949,8 @@ namespace lfs::vis {
         if (!window_ || is_fullscreen_ || isMaximized())
             return ResizeEdge::NoEdge;
 
-        const glm::ivec2 size = getWindowSize();
+        glm::ivec2 size = getWindowSize();
+        SDL_GetWindowSize(window_, &size.x, &size.y);
         if (size.x <= 0 || size.y <= 0)
             return ResizeEdge::NoEdge;
 
@@ -931,6 +973,9 @@ namespace lfs::vis {
     }
 
     void WindowManager::setResizeCursorForEdge(const ResizeEdge edge) {
+        if constexpr (!kUseManualBorderlessResize)
+            return;
+
         if (edge == ResizeEdge::NoEdge)
             return;
 
@@ -959,6 +1004,9 @@ namespace lfs::vis {
     }
 
     void WindowManager::refreshResizeCursor() {
+        if constexpr (!kUseManualBorderlessResize)
+            return;
+
         if (!window_ || is_fullscreen_ || isMaximized())
             return;
 
@@ -978,6 +1026,9 @@ namespace lfs::vis {
     }
 
     void WindowManager::updateResizeCursor(const int x, const int y) {
+        if constexpr (!kUseManualBorderlessResize)
+            return;
+
         if (!window_ || isManualResizeActive() || is_fullscreen_ || isMaximized())
             return;
 
@@ -985,6 +1036,9 @@ namespace lfs::vis {
     }
 
     void WindowManager::beginManualResize(const ResizeEdge edge) {
+        if constexpr (!kUseManualBorderlessResize)
+            return;
+
         if (!window_ || edge == ResizeEdge::NoEdge || is_fullscreen_ || isMaximized())
             return;
 
@@ -1014,28 +1068,30 @@ namespace lfs::vis {
         if (has_edge(ResizeEdge::Left)) {
             next_w = manual_resize_start_size_.x - delta.x;
             next_x = manual_resize_start_pos_.x + delta.x;
-            if (next_w < kMinManualResizeWidth) {
-                next_w = kMinManualResizeWidth;
+            if (next_w < kMinWindowWidth) {
+                next_w = kMinWindowWidth;
                 next_x = manual_resize_start_pos_.x + manual_resize_start_size_.x - next_w;
             }
         } else if (has_edge(ResizeEdge::Right)) {
             next_w = manual_resize_start_size_.x + delta.x;
-            next_w = std::max(next_w, kMinManualResizeWidth);
+            next_w = std::max(next_w, kMinWindowWidth);
         }
 
         if (has_edge(ResizeEdge::Top)) {
             next_h = manual_resize_start_size_.y - delta.y;
             next_y = manual_resize_start_pos_.y + delta.y;
-            if (next_h < kMinManualResizeHeight) {
-                next_h = kMinManualResizeHeight;
+            if (next_h < kMinWindowHeight) {
+                next_h = kMinWindowHeight;
                 next_y = manual_resize_start_pos_.y + manual_resize_start_size_.y - next_h;
             }
         } else if (has_edge(ResizeEdge::Bottom)) {
             next_h = manual_resize_start_size_.y + delta.y;
-            next_h = std::max(next_h, kMinManualResizeHeight);
+            next_h = std::max(next_h, kMinWindowHeight);
         }
 
-        SDL_SetWindowPosition(window_, next_x, next_y);
+        if (next_x != manual_resize_start_pos_.x || next_y != manual_resize_start_pos_.y) {
+            SDL_SetWindowPosition(window_, next_x, next_y);
+        }
         SDL_SetWindowSize(window_, next_w, next_h);
         updateWindowSize("manual-resize-drag", ResizeIntent::Interactive);
         setResizeCursorForEdge(manual_resize_edge_);

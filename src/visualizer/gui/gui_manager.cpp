@@ -5226,6 +5226,13 @@ namespace lfs::vis::gui {
     bool GuiManager::shouldUseCachedImGuiResizeFrame(
         const WindowManager* const window_manager,
         const VulkanContext* const vulkan_context) const {
+#if defined(__linux__)
+        // The cached platform frame is a Windows manual-resize optimization. On
+        // X11, SDL's live platform frame keeps ImGui in sync with exposed pixels.
+        (void)window_manager;
+        (void)vulkan_context;
+        return false;
+#else
         if (!window_manager || !vulkan_context) {
             return false;
         }
@@ -5238,6 +5245,7 @@ namespace lfs::vis::gui {
         return active_window_resize &&
                window_size.x > 0 && window_size.y > 0 &&
                framebuffer_size.x > 0 && framebuffer_size.y > 0;
+#endif
     }
 
     void GuiManager::beginImGuiPlatformFrame(WindowManager* const window_manager,

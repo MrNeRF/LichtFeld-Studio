@@ -54,6 +54,9 @@ namespace lfs::vis {
         }
 
         constexpr double kResizeSettleMinWaitSeconds = 0.001;
+#if defined(__linux__)
+        constexpr auto kWindowResizePaintDemandWindow = std::chrono::milliseconds(160);
+#endif
 
         std::optional<glm::mat3> buildValidatedViewRotation(const glm::vec3& eye,
                                                             const glm::vec3& target,
@@ -1243,6 +1246,12 @@ namespace lfs::vis {
             demand.swapchain_resize_ready = demand.swapchain_resize_pending &&
                                             vulkan_context->pendingSwapchainResizeReady();
         }
+#if defined(__linux__)
+        if (window_manager_) {
+            demand.window_resize_paint_pending =
+                window_manager_->hasRecentWindowSizeChange(kWindowResizePaintDemandWindow);
+        }
+#endif
         demand.viewport_resize_deferring = rendering_manager_ &&
                                            rendering_manager_->isViewportResizeDeferring();
         demand.viewport_resize_settle_ready = rendering_manager_ &&
@@ -1363,7 +1372,7 @@ namespace lfs::vis {
         const bool is_training = trainer_manager_ && trainer_manager_->isRunning();
         const FrameDemand frame_demand = collectFrameDemand(viewport_export_locked, store_dirty);
         if (gui_frame_rendered_ && !frame_demand.shouldRenderFrame()) {
-            LOG_PERF("loop_idle skip_gui_render=true needs_render={} continuous_input={} py_anim={} py_overlay={} py_redraw={} gui_anim={} input_event={} posted_work={} render_work={} store_dirty={} swapchain_resize_pending={} swapchain_resize_ready={} viewport_resize_deferring={} viewport_resize_settle_ready={}",
+            LOG_PERF("loop_idle skip_gui_render=true needs_render={} continuous_input={} py_anim={} py_overlay={} py_redraw={} gui_anim={} input_event={} posted_work={} render_work={} store_dirty={} swapchain_resize_pending={} swapchain_resize_ready={} window_resize_paint_pending={} viewport_resize_deferring={} viewport_resize_settle_ready={}",
                      frame_demand.scene_dirty,
                      frame_demand.continuous_input,
                      frame_demand.python_animation,
@@ -1376,6 +1385,7 @@ namespace lfs::vis {
                      frame_demand.store_dirty,
                      frame_demand.swapchain_resize_pending,
                      frame_demand.swapchain_resize_ready,
+                     frame_demand.window_resize_paint_pending,
                      frame_demand.viewport_resize_deferring,
                      frame_demand.viewport_resize_settle_ready);
             python::flush_signals();
@@ -1455,7 +1465,7 @@ namespace lfs::vis {
         // Render-on-demand: VSync handles frame pacing, waitEvents saves CPU when idle
         const FrameDemand next_demand = collectFrameDemand(viewport_export_locked);
 
-        LOG_PERF("loop_end needs_render={} continuous_input={} py_anim={} py_overlay={} py_redraw={} gui_anim={} input_event={} posted_work={} render_work={} store_dirty={} swapchain_resize_pending={} swapchain_resize_ready={} viewport_resize_deferring={} viewport_resize_settle_ready={}",
+        LOG_PERF("loop_end needs_render={} continuous_input={} py_anim={} py_overlay={} py_redraw={} gui_anim={} input_event={} posted_work={} render_work={} store_dirty={} swapchain_resize_pending={} swapchain_resize_ready={} window_resize_paint_pending={} viewport_resize_deferring={} viewport_resize_settle_ready={}",
                  next_demand.scene_dirty,
                  next_demand.continuous_input,
                  next_demand.python_animation,
@@ -1468,6 +1478,7 @@ namespace lfs::vis {
                  next_demand.store_dirty,
                  next_demand.swapchain_resize_pending,
                  next_demand.swapchain_resize_ready,
+                 next_demand.window_resize_paint_pending,
                  next_demand.viewport_resize_deferring,
                  next_demand.viewport_resize_settle_ready);
 

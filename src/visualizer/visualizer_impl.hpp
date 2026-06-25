@@ -190,6 +190,7 @@ namespace lfs::vis {
             bool store_dirty = false;
             bool swapchain_resize_pending = false;
             bool swapchain_resize_ready = false;
+            bool window_resize_paint_pending = false;
             bool viewport_resize_deferring = false;
             bool viewport_resize_settle_ready = false;
 
@@ -197,7 +198,8 @@ namespace lfs::vis {
                 return viewport_export_locked || scene_dirty || continuous_input ||
                        python_animation || python_overlay || python_redraw ||
                        gui_animation || input_event || posted_work || render_work ||
-                       store_dirty || swapchain_resize_ready || viewport_resize_settle_ready;
+                       store_dirty || swapchain_resize_ready || window_resize_paint_pending ||
+                       viewport_resize_settle_ready;
             }
 
             [[nodiscard]] bool needsContinuousLoop() const {
@@ -208,7 +210,8 @@ namespace lfs::vis {
                        python_overlay || python_redraw ||
                        (gui_animation && !resize_deferral_throttles_animation) ||
                        render_work || viewport_export_locked || store_dirty ||
-                       swapchain_resize_ready || viewport_resize_settle_ready;
+                       swapchain_resize_ready || window_resize_paint_pending ||
+                       viewport_resize_settle_ready;
             }
         };
 

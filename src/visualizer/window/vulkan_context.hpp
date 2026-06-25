@@ -48,7 +48,7 @@ namespace lfs::vis {
         void shutdown();
         void notifyFramebufferResized(int width, int height, ResizeIntent intent = ResizeIntent::Exact);
         [[nodiscard]] bool hasPendingSwapchainResize() const {
-            return framebuffer_resize_deferred_ || framebuffer_resize_exact_after_headroom_;
+            return framebuffer_resize_deferred_ || framebuffer_resize_exact_after_interactive_;
         }
         [[nodiscard]] bool pendingSwapchainResizeReady() const;
         [[nodiscard]] double secondsUntilPendingSwapchainResizeReady() const;
@@ -368,7 +368,7 @@ namespace lfs::vis {
         bool framebuffer_resize_deferred_ = false;
         bool framebuffer_resize_requires_recreate_ = false;
         bool framebuffer_resize_allow_headroom_ = false;
-        bool framebuffer_resize_exact_after_headroom_ = false;
+        bool framebuffer_resize_exact_after_interactive_ = false;
         bool swapchain_extent_fixed_to_surface_ = false;
         std::chrono::steady_clock::time_point framebuffer_resize_last_change_{};
         std::chrono::steady_clock::time_point framebuffer_resize_last_recreate_{};
