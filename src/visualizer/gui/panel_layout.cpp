@@ -755,7 +755,7 @@ namespace lfs::vis::gui {
         const float viewport_min_w = MIN_VIEWPORT_WIDTH * dpi;
         const float right_min_w = RIGHT_PANEL_MIN_VISIBLE_WIDTH * dpi;
         const float panel_budget = std::max(0.0f, screen.work_size.x - icon_bar_w - viewport_min_w - PANEL_GAP);
-        const float left_w = left_dock_visible_
+        const float left_w = shouldReserveLeftDockWidth()
                                  ? std::min(std::max(0.0f, left_dock_width_),
                                             std::max(0.0f, panel_budget - right_min_w))
                                  : 0.0f;
@@ -796,7 +796,7 @@ namespace lfs::vis::gui {
         const float right_min_w = std::min(RIGHT_PANEL_MIN_VISIBLE_WIDTH * dpi, panel_budget);
         const float right_pref_w = std::max(right_panel_width_, right_min_w);
 
-        if (left_dock_visible_) {
+        if (shouldReserveLeftDockWidth()) {
             const float left_pref_w = std::max(0.0f, left_dock_width_);
             const float left_soft_min_w = std::min(LEFT_DOCK_MIN_VISIBLE_WIDTH * dpi,
                                                    std::max(0.0f, panel_budget - right_min_w));
@@ -821,6 +821,10 @@ namespace lfs::vis::gui {
                                             right_min_w,
                                             std::max(right_min_w, panel_budget));
         }
+    }
+
+    bool PanelLayoutManager::shouldReserveLeftDockWidth() const {
+        return PanelRegistry::instance().has_panels(PanelSpace::LeftDock);
     }
 
     float PanelLayoutManager::computeViewportWidth(const bool show_main_panel,
