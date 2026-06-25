@@ -2144,6 +2144,9 @@ def has_gaussian_clipboard() -> bool:
 def copy_gaussian_selection() -> None:
     """Copy selected Gaussians to the internal Gaussian clipboard"""
 
+def cut_gaussian_selection() -> None:
+    """Cut selected Gaussians to the internal Gaussian clipboard"""
+
 def paste_gaussian_selection() -> None:
     """Paste copied Gaussians from the internal Gaussian clipboard"""
 

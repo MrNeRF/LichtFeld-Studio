@@ -1189,6 +1189,40 @@ TEST_F(UndoHistoryTest, TopologyUndoRestoresSoftDeletedMasks) {
     EXPECT_EQ(deleted_mask_values(*node->model), (std::vector<bool>{true, false}));
 }
 
+TEST_F(UndoHistoryTest, CutSelectedGaussiansCopiesAndUndoRestoresDelete) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addSplat(
+        "model",
+        make_test_splat({
+            0.0f,
+            0.0f,
+            0.0f,
+            1.0f,
+            0.0f,
+            0.0f,
+        }));
+
+    scene_manager->getScene().setSelectionMask(
+        std::make_shared<Tensor>(make_uint8_mask({1, 0})));
+
+    EXPECT_TRUE(scene_manager->cutSelectedGaussians());
+    EXPECT_TRUE(scene_manager->hasGaussianClipboard());
+
+    auto* node = scene_manager->getScene().getNode("model");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->model, nullptr);
+    EXPECT_EQ(deleted_mask_values(*node->model), (std::vector<bool>{true, false}));
+
+    auto undo_result = lfs::vis::op::undoHistory().undo();
+    ASSERT_TRUE(undo_result.success) << undo_result.error;
+    EXPECT_FALSE(node->model->has_deleted_mask());
+    EXPECT_TRUE(scene_manager->hasGaussianClipboard());
+}
+
 TEST_F(UndoHistoryTest, TopologyUndoRoundTripsVisibleNodeDeleteWithHiddenSibling) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();

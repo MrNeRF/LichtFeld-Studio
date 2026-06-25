@@ -1787,6 +1787,10 @@ namespace lfs::vis {
                 cmd::CopySelection{}.emit();
                 return;
 
+            case input::Action::CUT_SELECTION:
+                cmd::CutSelection{}.emit();
+                return;
+
             case input::Action::PASTE_SELECTION:
                 cmd::PasteSelection{}.emit();
                 return;

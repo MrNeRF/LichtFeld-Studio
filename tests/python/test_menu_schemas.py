@@ -26,6 +26,7 @@ def _install_lichtfeld_stub(monkeypatch):
         "undo_called": False,
         "redo_called": False,
         "copy_called": False,
+        "cut_called": False,
         "paste_called": False,
         "invert_called": False,
         "select_all_called": False,
@@ -56,6 +57,7 @@ def _install_lichtfeld_stub(monkeypatch):
         has_gaussian_clipboard=lambda: state["has_gaussian_clipboard"],
         get_active_tool=lambda: state["active_tool"],
         copy_gaussian_selection=lambda: state.__setitem__("copy_called", True),
+        cut_gaussian_selection=lambda: state.__setitem__("cut_called", True),
         paste_gaussian_selection=lambda: state.__setitem__("paste_called", True),
         invert_gaussian_selection=lambda: state.__setitem__("invert_called", True),
         select_all_gaussians=lambda: state.__setitem__("select_all_called", True),
@@ -66,6 +68,7 @@ def _install_lichtfeld_stub(monkeypatch):
             UNDO="undo",
             REDO="redo",
             COPY_SELECTION="copy_selection",
+            CUT_SELECTION="cut_selection",
             PASTE_SELECTION="paste_selection",
             INVERT_SELECTION="invert_selection",
             SELECT_ALL="select_all",
@@ -77,6 +80,7 @@ def _install_lichtfeld_stub(monkeypatch):
             "undo": "Ctrl+Z",
             "redo": "Ctrl+Shift+Z",
             "copy_selection": "Ctrl+C",
+            "cut_selection": "Ctrl+X",
             "paste_selection": "Ctrl+V",
             "invert_selection": "Ctrl+I",
             "select_all": "Ctrl+A",
@@ -143,46 +147,52 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert edit_mod.EditMenu.order < select_mod.SelectMenu.order < tools_mod.ToolsMenu.order
 
     select_items = select_mod.SelectMenu().menu_items()
-    assert len(select_items) == 6
+    assert len(select_items) == 7
     assert select_items[0]["label"] == "tr:menu.select.copy_selection"
     assert select_items[0]["shortcut"] == "Ctrl+C"
     assert select_items[0]["enabled"] is True
     select_items[0]["callback"]()
     assert state["copy_called"] is True
-    assert select_items[1]["label"] == "tr:menu.select.paste_selection"
-    assert select_items[1]["shortcut"] == "Ctrl+V"
-    assert select_items[1]["enabled"] is False
-    assert select_items[2]["type"] == "separator"
-    assert select_items[3]["label"] == "tr:menu.select.invert_selection"
-    assert select_items[3]["enabled"] is True
-    select_items[3]["callback"]()
-    assert state["invert_called"] is True
-    assert select_items[4]["label"] == "tr:menu.select.select_all"
-    assert select_items[4]["shortcut"] == "Ctrl+A"
+    assert select_items[1]["label"] == "tr:menu.select.cut_selection"
+    assert select_items[1]["shortcut"] == "Ctrl+X"
+    assert select_items[1]["enabled"] is True
+    select_items[1]["callback"]()
+    assert state["cut_called"] is True
+    assert select_items[2]["label"] == "tr:menu.select.paste_selection"
+    assert select_items[2]["shortcut"] == "Ctrl+V"
+    assert select_items[2]["enabled"] is False
+    assert select_items[3]["type"] == "separator"
+    assert select_items[4]["label"] == "tr:menu.select.invert_selection"
+    assert select_items[4]["enabled"] is True
     select_items[4]["callback"]()
-    assert state["select_all_called"] is True
-    assert select_items[5]["label"] == "tr:menu.select.deselect_all"
-    assert select_items[5]["shortcut"] == "Ctrl+D"
-    assert select_items[5]["enabled"] is True
+    assert state["invert_called"] is True
+    assert select_items[5]["label"] == "tr:menu.select.select_all"
+    assert select_items[5]["shortcut"] == "Ctrl+A"
     select_items[5]["callback"]()
+    assert state["select_all_called"] is True
+    assert select_items[6]["label"] == "tr:menu.select.deselect_all"
+    assert select_items[6]["shortcut"] == "Ctrl+D"
+    assert select_items[6]["enabled"] is True
+    select_items[6]["callback"]()
     assert state["deselect_all_called"] is True
 
     state["has_gaussian_selection"] = False
     state["has_gaussian_clipboard"] = True
     select_items = select_mod.SelectMenu().menu_items()
     assert select_items[0]["enabled"] is False
-    assert select_items[1]["enabled"] is True
-    assert select_items[5]["enabled"] is False
+    assert select_items[1]["enabled"] is False
+    assert select_items[2]["enabled"] is True
+    assert select_items[6]["enabled"] is False
 
     state["active_tool"] = "builtin.translate"
     select_items = select_mod.SelectMenu().menu_items()
-    assert select_items[3]["enabled"] is True
-    assert select_items[4]["enabled"] is False
+    assert select_items[4]["enabled"] is True
+    assert select_items[5]["enabled"] is False
 
     state["active_tool"] = "builtin.select"
     state["can_edit_gaussian_selection"] = False
     select_items = select_mod.SelectMenu().menu_items()
-    assert [item.get("enabled") for item in select_items if item["type"] == "item"] == [False] * 5
+    assert [item.get("enabled") for item in select_items if item["type"] == "item"] == [False] * 6
 
     view_items = view_mod.ViewMenu().menu_items()
     assert view_items[0]["type"] == "submenu"

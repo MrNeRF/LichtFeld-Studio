@@ -71,6 +71,12 @@ class SelectMenu:
                 enabled=can_edit and has_selection,
             ),
             menu_action(
+                tr("menu.select.cut_selection"),
+                lf.ui.cut_gaussian_selection,
+                shortcut=_shortcut(action.CUT_SELECTION, "Ctrl+X"),
+                enabled=can_edit and has_selection,
+            ),
+            menu_action(
                 tr("menu.select.paste_selection"),
                 lf.ui.paste_gaussian_selection,
                 shortcut=_shortcut(action.PASTE_SELECTION, "Ctrl+V"),

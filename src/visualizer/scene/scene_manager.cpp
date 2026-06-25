@@ -538,6 +538,7 @@ namespace lfs::vis {
         cmd::DeselectAll::when([this](const auto&) { deselectAllGaussians(); });
         cmd::SelectAll::when([this](const auto&) { selectAllGaussians(); });
         cmd::CopySelection::when([this](const auto&) { copySelectionToClipboard(); });
+        cmd::CutSelection::when([this](const auto&) { cutSelectedGaussians(); });
         cmd::PasteSelection::when([this](const auto&) { pasteSelectionFromClipboard(); });
         cmd::SelectBrush::when([this](const auto& e) { (void)selectBrush(e.x, e.y, e.radius, e.mode, e.camera_index); });
         cmd::SelectRect::when([this](const auto& e) { (void)selectRect(e.x0, e.y0, e.x1, e.y1, e.mode, e.camera_index); });
@@ -4211,6 +4212,20 @@ namespace lfs::vis {
         clipboard_kind_ = ClipboardKind::Gaussians;
 
         LOG_INFO("Copied {} Gaussians", gaussian_clipboard_->size());
+        return true;
+    }
+
+    bool SceneManager::cutSelectedGaussians() {
+        if (!copySelectedGaussians()) {
+            return false;
+        }
+
+        if (const auto result = deleteSelectedGaussiansWithHistory(); !result) {
+            LOG_WARN("Failed to cut selected Gaussians: {}", result.error());
+            return false;
+        }
+
+        LOG_INFO("Cut selected Gaussians");
         return true;
     }
 

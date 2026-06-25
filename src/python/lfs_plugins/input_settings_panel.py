@@ -95,6 +95,7 @@ class InputSettingsPanel(Panel):
             lf.keymap.Action.REDO,
             lf.keymap.Action.SELECT_ALL,
             lf.keymap.Action.COPY_SELECTION,
+            lf.keymap.Action.CUT_SELECTION,
             lf.keymap.Action.PASTE_SELECTION,
             lf.keymap.Action.INVERT_SELECTION,
             lf.keymap.Action.DESELECT_ALL,

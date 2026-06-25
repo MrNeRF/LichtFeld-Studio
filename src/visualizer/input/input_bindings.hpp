@@ -130,6 +130,7 @@ namespace lfs::vis::input {
         // Appended to avoid renumbering existing persisted action ids.
         SELECT_MODE_BOX,
         SELECT_MODE_SPHERE,
+        CUT_SELECTION,
 
     };
 

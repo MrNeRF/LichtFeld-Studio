@@ -1206,6 +1206,29 @@ namespace lfs::vis {
         EXPECT_EQ(delete_count, 0);
     }
 
+    TEST_F(InputControllerFocusTest, CutSelectionDefaultShortcutDispatchesCommand) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+
+        EXPECT_EQ(controller.getBindings().getActionForKey(
+                      input::ToolMode::GLOBAL,
+                      input::KEY_X,
+                      input::MODIFIER_CTRL),
+                  input::Action::CUT_SELECTION);
+
+        lfs::event::ScopedHandler handlers;
+        int cut_count = 0;
+        handlers.subscribe<core::events::cmd::CutSelection>(
+            [&](const auto&) { ++cut_count; });
+
+        controller.handleKey(input::KEY_X, input::ACTION_PRESS, input::MODIFIER_CTRL);
+
+        EXPECT_EQ(cut_count, 1);
+    }
+
     TEST_F(InputControllerFocusTest, LegacyProfileMigrationAddsOnlyVersionedModalDefaults) {
         const auto profile_path = std::filesystem::temp_directory_path() / "lfs_input_bindings_legacy_v5.json";
         std::filesystem::remove(profile_path);

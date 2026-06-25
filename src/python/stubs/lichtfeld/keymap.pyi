@@ -73,6 +73,8 @@ class Action(enum.Enum):
 
     COPY_SELECTION = 32
 
+    CUT_SELECTION = 76
+
     PASTE_SELECTION = 33
 
     DEPTH_ADJUST_FAR = 34

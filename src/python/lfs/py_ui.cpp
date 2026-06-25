@@ -4449,6 +4449,17 @@ namespace lfs::python {
             "Copy selected Gaussians to the internal Gaussian clipboard");
 
         m.def(
+            "cut_gaussian_selection", []() {
+                auto* editor = get_editor_context();
+                auto* sm = get_scene_manager();
+                if (!editor || !editor->canSelectGaussians() || !sm || !sm->getScene().hasSelection()) {
+                    return;
+                }
+                sm->cutSelectedGaussians();
+            },
+            "Cut selected Gaussians to the internal Gaussian clipboard");
+
+        m.def(
             "paste_gaussian_selection", []() {
                 auto* editor = get_editor_context();
                 auto* sm = get_scene_manager();

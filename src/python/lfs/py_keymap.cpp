@@ -137,6 +137,7 @@ namespace lfs::python {
             .value("DESELECT_ALL", Action::DESELECT_ALL)
             .value("SELECT_ALL", Action::SELECT_ALL)
             .value("COPY_SELECTION", Action::COPY_SELECTION)
+            .value("CUT_SELECTION", Action::CUT_SELECTION)
             .value("PASTE_SELECTION", Action::PASTE_SELECTION)
             .value("DEPTH_ADJUST_FAR", Action::DEPTH_ADJUST_FAR)
             .value("DEPTH_ADJUST_SIDE", Action::DEPTH_ADJUST_SIDE)

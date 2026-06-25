@@ -26,8 +26,8 @@ namespace lfs::vis::input {
 
     namespace {
 
-        constexpr int PROFILE_VERSION = 18; // Version 18 adds box/sphere selection shortcuts.
-        constexpr Action LAST_ACTION = Action::SELECT_MODE_SPHERE;
+        constexpr int PROFILE_VERSION = 19; // Version 19 adds cut selection.
+        constexpr Action LAST_ACTION = Action::CUT_SELECTION;
         constexpr int REMOVED_TOOL_MODE_2 = 2;
         constexpr int REMOVED_ACTION_39 = 39;
         constexpr int REMOVED_ACTION_66 = 66;
@@ -501,7 +501,8 @@ namespace lfs::vis::input {
                 (version < 15 && def.action == Action::APPLY_CROP_BOX) ||
                 (version < 16 && def.action == Action::TOGGLE_CAMERA_FRUSTUMS) ||
                 (version < 17 && def.action == Action::SELECTION_INTERSECT) ||
-                (version < 18 && selection_volume_shortcut);
+                (version < 18 && selection_volume_shortcut) ||
+                (version < 19 && def.action == Action::CUT_SELECTION);
             if (!should_add) {
                 continue;
             }
@@ -988,6 +989,7 @@ namespace lfs::vis::input {
             {KeyTrigger{KEY_D, MODIFIER_CTRL}, Action::DESELECT_ALL, "Deselect"},
             {KeyTrigger{KEY_A, MODIFIER_CTRL}, Action::SELECT_ALL, "Select all"},
             {KeyTrigger{KEY_C, MODIFIER_CTRL}, Action::COPY_SELECTION, "Copy"},
+            {KeyTrigger{KEY_X, MODIFIER_CTRL}, Action::CUT_SELECTION, "Cut"},
             {KeyTrigger{KEY_V, MODIFIER_CTRL}, Action::PASTE_SELECTION, "Paste"},
             // Selection mode shortcuts
             {KeyTrigger{KEY_T, MODIFIER_CTRL}, Action::CYCLE_SELECTION_VIS, "Sel vis"},
@@ -1122,6 +1124,7 @@ namespace lfs::vis::input {
         case Action::INVERT_SELECTION: return "Invert Selection";
         case Action::DESELECT_ALL: return "Deselect All";
         case Action::COPY_SELECTION: return "Copy Selection";
+        case Action::CUT_SELECTION: return "Cut Selection";
         case Action::PASTE_SELECTION: return "Paste Selection";
         case Action::DEPTH_ADJUST_NEAR: return "Adjust Depth Box";
         case Action::DEPTH_ADJUST_FAR: return "Adjust Depth Box";
@@ -1202,6 +1205,7 @@ namespace lfs::vis::input {
         case Action::INVERT_SELECTION: return "invert_selection";
         case Action::DESELECT_ALL: return "deselect_all";
         case Action::COPY_SELECTION: return "copy_selection";
+        case Action::CUT_SELECTION: return "cut_selection";
         case Action::PASTE_SELECTION: return "paste_selection";
         case Action::DEPTH_ADJUST_NEAR: return "depth_adjust_near";
         case Action::DEPTH_ADJUST_FAR: return "depth_adjust_far";
@@ -1873,6 +1877,7 @@ namespace lfs::vis::input {
         case Action::DESELECT_ALL:
         case Action::SELECT_ALL:
         case Action::COPY_SELECTION:
+        case Action::CUT_SELECTION:
         case Action::PASTE_SELECTION:
             return d_editing_inherit;
 
@@ -1969,6 +1974,7 @@ namespace lfs::vis::input {
         case Action::DESELECT_ALL:
         case Action::SELECT_ALL:
         case Action::COPY_SELECTION:
+        case Action::CUT_SELECTION:
         case Action::PASTE_SELECTION:
         case Action::TOGGLE_DEPTH_MODE:
         case Action::TOGGLE_SELECTION_DEPTH_FILTER:
