@@ -111,6 +111,10 @@ namespace lfs::vis::gui {
                    left_dock_resizing_ || left_dock_hovering_edge_;
         }
 
+        bool isResizeInteractionActive() const {
+            return python_console_resizing_ || bottom_dock_resizing_ || left_dock_resizing_;
+        }
+
         CursorRequest getCursorRequest() const { return cursor_request_; }
 
         void applyResizeDelta(float dx, const ScreenState& screen);

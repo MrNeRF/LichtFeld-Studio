@@ -419,6 +419,7 @@ namespace lfs::vis {
                 RightPanelPointerRegion::None;
             bool bottom_dock_pointer_live_capture_ = false;
             bool left_dock_pointer_live_capture_ = false;
+            bool dock_resize_interaction_active_ = false;
             std::string last_ui_layout_active_tab_;
             std::uint64_t last_pre_scene_panel_sync_generation_ = 0;
 

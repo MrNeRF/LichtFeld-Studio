@@ -5993,6 +5993,12 @@ namespace lfs::vis::gui {
         if (!hasMouseButtonDown(sdl_input))
             left_dock_pointer_live_capture_ = false;
 
+        const bool dock_resize_interaction_active = panel_layout_.isResizeInteractionActive();
+        if (dock_resize_interaction_active != dock_resize_interaction_active_) {
+            viewer_->getRenderingManager()->setViewportResizeActive(dock_resize_interaction_active);
+            dock_resize_interaction_active_ = dock_resize_interaction_active;
+        }
+
         if (has_side_panel_plugins || has_floating_panels || has_status_bar_panels ||
             right_panel_requires_live_layout || bottom_dock_requires_live_layout ||
             left_dock_requires_live_layout ||

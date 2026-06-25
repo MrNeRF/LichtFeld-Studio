@@ -624,6 +624,8 @@ namespace lfs::vis {
         void queueCameraMetricsRefreshIfStale(SceneManager* scene_manager);
         void invalidateCameraMetricsRequests(bool clear_latest = false);
         void notifyAsyncLodResultsReady();
+        void requestResizeTrainingPause(TrainerManager* trainer_manager);
+        void releaseResizeTrainingPause();
         void cameraMetricsWorkerLoop(std::stop_token stop_token);
         void releaseSceneModelResources();
         void releaseSceneRenderResources();
@@ -683,6 +685,8 @@ namespace lfs::vis {
         glm::ivec2 vulkan_viewport_image_size_{0, 0};
         bool vulkan_viewport_image_flip_y_ = false;
         glm::ivec2 vulkan_gt_comparison_content_size_{0, 0};
+        TrainerManager* resize_training_pause_trainer_ = nullptr;
+        bool resize_training_pause_active_ = false;
 
         // Granular dirty tracking
         std::atomic<uint32_t> dirty_mask_{DirtyFlag::ALL};

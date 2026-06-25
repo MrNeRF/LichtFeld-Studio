@@ -35,7 +35,6 @@
 namespace lfs::vis {
 
     namespace {
-        constexpr auto kVulkanViewportResizeTrainingPauseWait = std::chrono::milliseconds(300);
         constexpr bool kEnableLodTransitionWeights = true;
         constexpr double kGpuLodRenderCapacityOverhead = 1.20;
         constexpr float kInteractiveResizeRenderScale = 0.33f;
@@ -96,38 +95,6 @@ namespace lfs::vis {
             state.orthographic = params.orthographic;
             return state;
         }
-
-        class ScopedTemporaryTrainingPause {
-        public:
-            ScopedTemporaryTrainingPause(TrainerManager* const trainer_manager,
-                                         const std::chrono::milliseconds timeout)
-                : trainer_manager_(trainer_manager) {
-                if (!trainer_manager_ || !trainer_manager_->isRunning()) {
-                    return;
-                }
-
-                const auto pause_result = trainer_manager_->pauseTrainingTemporaryAndWait(timeout);
-                synchronized_ = pause_result.synchronized;
-                resume_required_ = pause_result.resume_required;
-            }
-
-            ScopedTemporaryTrainingPause(const ScopedTemporaryTrainingPause&) = delete;
-            ScopedTemporaryTrainingPause& operator=(const ScopedTemporaryTrainingPause&) = delete;
-
-            ~ScopedTemporaryTrainingPause() {
-                if (resume_required_ && trainer_manager_ && trainer_manager_->isRunning()) {
-                    trainer_manager_->resumeTrainingTemporary();
-                    LOG_TRACE("Training resumed after Vulkan viewport resize");
-                }
-            }
-
-            [[nodiscard]] bool synchronized() const { return synchronized_; }
-
-        private:
-            TrainerManager* trainer_manager_ = nullptr;
-            bool synchronized_ = false;
-            bool resume_required_ = false;
-        };
 
         [[nodiscard]] std::optional<std::shared_lock<std::shared_mutex>> acquireLiveModelRenderLock(
             const SceneManager* const scene_manager) {
@@ -760,12 +727,23 @@ namespace lfs::vis {
             update_cached_split_position(!only_split_position_pending)) {
             dirty_mask_.fetch_and(~DirtyFlag::SPLIT_POSITION, std::memory_order_relaxed);
             LOG_PERF("renderVulkanFrame: split-position early cache HIT (returning cached image)");
+            if (!resize_deferring) {
+                releaseResizeTrainingPause();
+            }
             return cached_frame_result();
         }
 
         auto* const trainer_manager = scene_manager ? scene_manager->getTrainerManager() : nullptr;
         const bool is_training = scene_manager && scene_manager->hasDataset() &&
                                  trainer_manager && trainer_manager->isRunning();
+        if (resize_deferring && is_training) {
+            requestResizeTrainingPause(trainer_manager);
+        }
+        const auto release_resize_pause_if_idle = [this, resize_deferring]() {
+            if (!resize_deferring) {
+                releaseResizeTrainingPause();
+            }
+        };
 
         auto render_lock = acquireLiveModelRenderLock(scene_manager);
 
@@ -959,6 +937,7 @@ namespace lfs::vis {
             viewport_artifact_service_.clearViewportOutput();
             clearVulkanMeshFrame();
             render_lock.reset();
+            release_resize_pause_if_idle();
             return {};
         }
 
@@ -973,6 +952,7 @@ namespace lfs::vis {
             LOG_PERF("renderVulkanFrame: split-position cache HIT (returning cached image, deferred_dirty=0x{:x})",
                      deferred_dirty);
             render_lock.reset();
+            release_resize_pause_if_idle();
             return cached_frame_result();
         }
 
@@ -991,13 +971,6 @@ namespace lfs::vis {
             return cached_frame_result();
         }
 
-        if (frame_dirty == 0 && has_cached_viewport_output) {
-            LOG_PERF("renderVulkanFrame: cache HIT (returning cached image)");
-            render_lock.reset();
-            return cached_frame_result();
-        }
-
-        std::optional<ScopedTemporaryTrainingPause> viewport_resize_training_pause;
         const bool vksplat_viewport_resize =
             is_training &&
             context.vulkan_context != nullptr &&
@@ -1007,18 +980,47 @@ namespace lfs::vis {
                 VksplatViewportRenderer::OutputSlot::Main) &&
             lfs::rendering::isVkSplatBackend(settings_.raster_backend);
         if (vksplat_viewport_resize) {
-            viewport_resize_training_pause.emplace(trainer_manager,
-                                                   kVulkanViewportResizeTrainingPauseWait);
-            if (!viewport_resize_training_pause->synchronized()) {
+            const auto* const trainer = trainer_manager ? trainer_manager->getTrainer() : nullptr;
+            if (!trainer || !trainer->is_paused()) {
+                requestResizeTrainingPause(trainer_manager);
                 dirty_mask_.fetch_or(vksplatOutputResizeRetryDirty(frame_dirty),
                                      std::memory_order_relaxed);
-                LOG_WARN("Skipping Vulkan viewport resize because training did not pause in time");
+                LOG_PERF("renderVulkanFrame: deferring VkSplat output resize until training pause takes effect");
                 render_lock.reset();
                 return cached_frame_result();
             }
-            LOG_DEBUG("Training paused around VkSplat output resize to {}x{}",
-                      render_size.x,
-                      render_size.y);
+            const cudaError_t sync_status = cudaDeviceSynchronize();
+            if (sync_status != cudaSuccess) {
+                dirty_mask_.fetch_or(vksplatOutputResizeRetryDirty(frame_dirty),
+                                     std::memory_order_relaxed);
+                LOG_WARN("Skipping Vulkan viewport resize because CUDA sync after resize pause failed: {}",
+                         cudaGetErrorString(sync_status));
+                render_lock.reset();
+                release_resize_pause_if_idle();
+                return cached_frame_result();
+            }
+            LOG_DEBUG("Training paused for VkSplat output resize to {}x{}", render_size.x, render_size.y);
+        }
+        const auto release_resize_pause_on_return = [this, resize_deferring]() {
+            if (!resize_deferring) {
+                releaseResizeTrainingPause();
+            }
+        };
+        struct ResizePauseReleaseOnReturn {
+            const decltype(release_resize_pause_on_return)& release;
+            bool active = false;
+            ~ResizePauseReleaseOnReturn() {
+                if (active) {
+                    release();
+                }
+            }
+        } resize_pause_release_on_return{release_resize_pause_on_return,
+                                         resize_training_pause_active_ && !resize_deferring};
+
+        if (frame_dirty == 0 && has_cached_viewport_output) {
+            LOG_PERF("renderVulkanFrame: cache HIT (returning cached image)");
+            render_lock.reset();
+            return cached_frame_result();
         }
 
         framerate_controller_.beginFrame();
