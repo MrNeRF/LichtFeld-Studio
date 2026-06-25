@@ -29,6 +29,9 @@ namespace lfs::vis {
 
     namespace {
         constexpr double kPendingResizeMinWaitSeconds = 0.001;
+        constexpr int kResizeBorder = 6;
+        constexpr int kMinManualResizeWidth = 640;
+        constexpr int kMinManualResizeHeight = 360;
 
         const char* windowEventName(const Uint32 event_type) {
             switch (event_type) {
@@ -203,18 +206,12 @@ namespace lfs::vis {
             if (self->isFullscreen())
                 return SDL_HITTEST_NORMAL;
 
-            glm::ivec2 size = self->getWindowSize();
-            if (window)
-                SDL_GetWindowSize(window, &size.x, &size.y);
-            constexpr int kResizeBorder = 6;
-
-            const bool left = area->x >= 0 && area->x < kResizeBorder;
-            const bool right = area->x >= size.x - kResizeBorder && area->x < size.x;
-            const bool top = area->y >= 0 && area->y < kResizeBorder;
-            const bool bottom = area->y >= size.y - kResizeBorder && area->y < size.y;
-            const bool titlebar_point = self->isTitlebarDragPoint(area->x, area->y);
-
-            if (!self->isMaximized()) {
+            const unsigned active_resize_edge = self->manualResizeEdgeMask();
+            if (active_resize_edge != 0) {
+                const bool left = (active_resize_edge & 1u) != 0;
+                const bool right = (active_resize_edge & 2u) != 0;
+                const bool top = (active_resize_edge & 4u) != 0;
+                const bool bottom = (active_resize_edge & 8u) != 0;
                 if (top && left)
                     return SDL_HITTEST_RESIZE_TOPLEFT;
                 if (top && right)
@@ -227,10 +224,25 @@ namespace lfs::vis {
                     return SDL_HITTEST_RESIZE_LEFT;
                 if (right)
                     return SDL_HITTEST_RESIZE_RIGHT;
-                if (top && !titlebar_point)
+                if (top)
                     return SDL_HITTEST_RESIZE_TOP;
                 if (bottom)
                     return SDL_HITTEST_RESIZE_BOTTOM;
+            }
+
+            glm::ivec2 size = self->getWindowSize();
+            if (window)
+                SDL_GetWindowSize(window, &size.x, &size.y);
+
+            const bool left = area->x >= 0 && area->x < kResizeBorder;
+            const bool right = area->x >= size.x - kResizeBorder && area->x < size.x;
+            const bool top = area->y >= 0 && area->y < kResizeBorder;
+            const bool bottom = area->y >= size.y - kResizeBorder && area->y < size.y;
+            const bool titlebar_point = self->isTitlebarDragPoint(area->x, area->y);
+
+            if (!self->isMaximized()) {
+                if (left || right || (top && !titlebar_point) || bottom)
+                    return SDL_HITTEST_NORMAL;
             }
 
             if (titlebar_point) {
@@ -559,6 +571,7 @@ namespace lfs::vis {
                 input_controller_->onWindowFocusLost();
             }
             titlebar_drag_active_ = false;
+            finishManualResize();
             break;
 
         case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
@@ -630,6 +643,19 @@ namespace lfs::vis {
             const int mouse_y = static_cast<int>(std::round(event.button.y));
             const bool titlebar_point = isTitlebarDragPoint(mouse_x, mouse_y);
             if (event.button.button == SDL_BUTTON_LEFT) {
+                if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && isManualResizeActive()) {
+                    finishManualResize();
+                    break;
+                }
+
+                if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+                    const ResizeEdge resize_edge = resizeEdgeAt(mouse_x, mouse_y);
+                    if (resize_edge != ResizeEdge::None) {
+                        beginManualResize(resize_edge);
+                        break;
+                    }
+                }
+
                 if (event.type == SDL_EVENT_MOUSE_BUTTON_UP && titlebar_drag_active_) {
                     finishTitlebarDrag();
                     break;
@@ -661,6 +687,10 @@ namespace lfs::vis {
         case SDL_EVENT_MOUSE_MOTION:
             if (!eventTargetsWindow(event, main_window_id))
                 break;
+            if (isManualResizeActive()) {
+                updateManualResize();
+                break;
+            }
             if (titlebar_drag_active_) {
                 updateTitlebarDrag();
                 break;
@@ -668,6 +698,8 @@ namespace lfs::vis {
             if (input_controller_) {
                 input_controller_->handleMouseMove(event.motion.x, event.motion.y);
             }
+            updateResizeCursor(static_cast<int>(std::round(event.motion.x)),
+                               static_cast<int>(std::round(event.motion.y)));
             break;
 
         case SDL_EVENT_MOUSE_WHEEL:
@@ -833,6 +865,159 @@ namespace lfs::vis {
         }
     }
 
+    unsigned WindowManager::manualResizeEdgeMask() const {
+        return static_cast<unsigned>(manual_resize_edge_);
+    }
+
+    WindowManager::ResizeEdge WindowManager::resizeEdgeAt(const int x, const int y) const {
+        if (!window_ || is_fullscreen_ || isMaximized())
+            return ResizeEdge::None;
+
+        const glm::ivec2 size = getWindowSize();
+        if (size.x <= 0 || size.y <= 0)
+            return ResizeEdge::None;
+
+        const bool left = x >= 0 && x < kResizeBorder;
+        const bool right = x >= size.x - kResizeBorder && x < size.x;
+        const bool top = y >= 0 && y < kResizeBorder;
+        const bool bottom = y >= size.y - kResizeBorder && y < size.y;
+
+        unsigned edge = 0;
+        if (left)
+            edge |= static_cast<unsigned>(ResizeEdge::Left);
+        if (right)
+            edge |= static_cast<unsigned>(ResizeEdge::Right);
+        if (top && !isTitlebarDragPoint(x, y))
+            edge |= static_cast<unsigned>(ResizeEdge::Top);
+        if (bottom)
+            edge |= static_cast<unsigned>(ResizeEdge::Bottom);
+
+        return static_cast<ResizeEdge>(edge);
+    }
+
+    void WindowManager::setResizeCursorForEdge(const ResizeEdge edge) {
+        if (edge == ResizeEdge::None)
+            return;
+
+        const auto has_edge = [edge](const ResizeEdge flag) {
+            return (static_cast<unsigned>(edge) & static_cast<unsigned>(flag)) != 0;
+        };
+        SDL_Cursor* cursor = nullptr;
+        static SDL_Cursor* ew_cursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_EW_RESIZE);
+        static SDL_Cursor* ns_cursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NS_RESIZE);
+        static SDL_Cursor* nwse_cursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NWSE_RESIZE);
+        static SDL_Cursor* nesw_cursor = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NESW_RESIZE);
+
+        if ((has_edge(ResizeEdge::Left) && has_edge(ResizeEdge::Top)) ||
+            (has_edge(ResizeEdge::Right) && has_edge(ResizeEdge::Bottom))) {
+            cursor = nwse_cursor;
+        } else if ((has_edge(ResizeEdge::Right) && has_edge(ResizeEdge::Top)) ||
+                   (has_edge(ResizeEdge::Left) && has_edge(ResizeEdge::Bottom))) {
+            cursor = nesw_cursor;
+        } else if (has_edge(ResizeEdge::Left) || has_edge(ResizeEdge::Right)) {
+            cursor = ew_cursor;
+        } else if (has_edge(ResizeEdge::Top) || has_edge(ResizeEdge::Bottom)) {
+            cursor = ns_cursor;
+        }
+        if (cursor)
+            SDL_SetCursor(cursor);
+    }
+
+    void WindowManager::refreshResizeCursor() {
+        if (!window_ || is_fullscreen_ || isMaximized())
+            return;
+
+        if (isManualResizeActive()) {
+            setResizeCursorForEdge(manual_resize_edge_);
+            return;
+        }
+
+        if ((SDL_GetWindowFlags(window_) & SDL_WINDOW_MOUSE_FOCUS) == 0)
+            return;
+
+        float mouse_x = 0.0f;
+        float mouse_y = 0.0f;
+        SDL_GetMouseState(&mouse_x, &mouse_y);
+        setResizeCursorForEdge(resizeEdgeAt(static_cast<int>(std::round(mouse_x)),
+                                            static_cast<int>(std::round(mouse_y))));
+    }
+
+    void WindowManager::updateResizeCursor(const int x, const int y) {
+        if (!window_ || isManualResizeActive() || is_fullscreen_ || isMaximized())
+            return;
+
+        setResizeCursorForEdge(resizeEdgeAt(x, y));
+    }
+
+    void WindowManager::beginManualResize(const ResizeEdge edge) {
+        if (!window_ || edge == ResizeEdge::None || is_fullscreen_ || isMaximized())
+            return;
+
+        manual_resize_edge_ = edge;
+        manual_resize_start_global_ = globalMousePosition();
+        SDL_GetWindowPosition(window_, &manual_resize_start_pos_.x, &manual_resize_start_pos_.y);
+        SDL_GetWindowSize(window_, &manual_resize_start_size_.x, &manual_resize_start_size_.y);
+        saveBorderlessRestoreGeometry();
+        SDL_CaptureMouse(true);
+    }
+
+    void WindowManager::updateManualResize() {
+        if (!window_ || !isManualResizeActive())
+            return;
+
+        const auto has_edge = [this](const ResizeEdge flag) {
+            return (static_cast<unsigned>(manual_resize_edge_) & static_cast<unsigned>(flag)) != 0;
+        };
+        const glm::ivec2 current_global = globalMousePosition();
+        const glm::ivec2 delta = current_global - manual_resize_start_global_;
+
+        int next_x = manual_resize_start_pos_.x;
+        int next_y = manual_resize_start_pos_.y;
+        int next_w = manual_resize_start_size_.x;
+        int next_h = manual_resize_start_size_.y;
+
+        if (has_edge(ResizeEdge::Left)) {
+            next_w = manual_resize_start_size_.x - delta.x;
+            next_x = manual_resize_start_pos_.x + delta.x;
+            if (next_w < kMinManualResizeWidth) {
+                next_w = kMinManualResizeWidth;
+                next_x = manual_resize_start_pos_.x + manual_resize_start_size_.x - next_w;
+            }
+        } else if (has_edge(ResizeEdge::Right)) {
+            next_w = manual_resize_start_size_.x + delta.x;
+            next_w = std::max(next_w, kMinManualResizeWidth);
+        }
+
+        if (has_edge(ResizeEdge::Top)) {
+            next_h = manual_resize_start_size_.y - delta.y;
+            next_y = manual_resize_start_pos_.y + delta.y;
+            if (next_h < kMinManualResizeHeight) {
+                next_h = kMinManualResizeHeight;
+                next_y = manual_resize_start_pos_.y + manual_resize_start_size_.y - next_h;
+            }
+        } else if (has_edge(ResizeEdge::Bottom)) {
+            next_h = manual_resize_start_size_.y + delta.y;
+            next_h = std::max(next_h, kMinManualResizeHeight);
+        }
+
+        SDL_SetWindowPosition(window_, next_x, next_y);
+        SDL_SetWindowSize(window_, next_w, next_h);
+        updateWindowSize("manual-resize-drag", ResizeIntent::Interactive);
+        setResizeCursorForEdge(manual_resize_edge_);
+        wakeEventLoop();
+    }
+
+    void WindowManager::finishManualResize() {
+        if (!isManualResizeActive())
+            return;
+
+        manual_resize_edge_ = ResizeEdge::None;
+        SDL_CaptureMouse(false);
+        SDL_SetCursor(SDL_GetDefaultCursor());
+        updateWindowSize("manual-resize-end", ResizeIntent::Exact);
+        wakeEventLoop();
+    }
+
     void WindowManager::beginTitlebarDrag(const int local_x, const int local_y) {
         if (!window_ || is_fullscreen_)
             return;
@@ -885,14 +1070,17 @@ namespace lfs::vis {
     }
 
     void WindowManager::finishTitlebarDragIfReleased() {
-        if (!titlebar_drag_active_)
+        if (!titlebar_drag_active_ && !isManualResizeActive())
             return;
 
         const SDL_MouseButtonFlags buttons = SDL_GetGlobalMouseState(nullptr, nullptr);
         if ((buttons & SDL_BUTTON_LMASK) != 0)
             return;
 
-        finishTitlebarDrag();
+        if (isManualResizeActive())
+            finishManualResize();
+        if (titlebar_drag_active_)
+            finishTitlebarDrag();
     }
 
     bool WindowManager::isSdlMaximized() const {

@@ -63,6 +63,7 @@
 #include "tools/selection_tool.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
+#include "window/window_manager.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer_impl.hpp"
@@ -6268,14 +6269,22 @@ namespace lfs::vis::gui {
             LOG_TIMER_THRESHOLD("gui_render.rml_modal_processInput", 0.25);
             rml_modal_overlay_->processInput(raw_panel_input);
         }
-        if (ImGui::GetMouseCursor() == ImGuiMouseCursor_Arrow)
-            applyRmlCursorRequest(rmlui_manager_.consumeCursorRequest());
-        apply_cursor(rml_right_panel_.getCursorRequest());
-        apply_cursor(panel_layout_.getCursorRequest());
-        if (SDL_Cursor* const cursor = systemCursorForImGuiCursor(ImGui::GetMouseCursor()))
-            SDL_SetCursor(cursor);
-        if (auto* input_controller = viewer_->getInputController())
-            input_controller->applySplitterCursorOverride();
+        const bool window_resize_active =
+            viewer_ &&
+            viewer_->getWindowManager() &&
+            viewer_->getWindowManager()->manualResizeEdgeMask() != 0;
+        if (!window_resize_active) {
+            if (ImGui::GetMouseCursor() == ImGuiMouseCursor_Arrow)
+                applyRmlCursorRequest(rmlui_manager_.consumeCursorRequest());
+            apply_cursor(rml_right_panel_.getCursorRequest());
+            apply_cursor(panel_layout_.getCursorRequest());
+            if (SDL_Cursor* const cursor = systemCursorForImGuiCursor(ImGui::GetMouseCursor()))
+                SDL_SetCursor(cursor);
+            if (auto* input_controller = viewer_->getInputController())
+                input_controller->applySplitterCursorOverride();
+        } else if (auto* const wm = viewer_->getWindowManager()) {
+            wm->refreshResizeCursor();
+        }
         syncWindowTextInput(viewer_->getWindow());
 
         if (vulkan_gui_) {

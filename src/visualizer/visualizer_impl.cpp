@@ -1443,6 +1443,7 @@ namespace lfs::vis {
             LOG_TIMER("VisualizerImpl::render.gui_frame_total_with_swapchain_wait");
             window_manager_->updateWindowSize("pre_gui_render");
             gui_manager_->render();
+            window_manager_->refreshResizeCursor();
         } else {
             processRenderWorkQueue();
         }
