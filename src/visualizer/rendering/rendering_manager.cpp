@@ -211,7 +211,7 @@ namespace lfs::vis {
             return;
         }
 
-        if (resize_training_pause_trainer_ && resize_training_pause_trainer_->isRunning()) {
+        if (resize_training_pause_trainer_) {
             resize_training_pause_trainer_->resumeTrainingTemporary();
         }
         resize_training_pause_trainer_ = nullptr;
