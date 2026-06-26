@@ -433,6 +433,7 @@
     "options.mask.none": "None",
     "options.mask.segment": "Segment",
     "options.mask.ignore": "Ignore",
+    "options.mask.segment_and_ignore": "Segment + Ignore",
     "options.mask.alpha_consistent": "Alpha Consistent",
     "options.depth_loss.pearson": "Pearson Correlation",
     "options.depth_loss.adaptive_warped_l1": "Adaptive Warped L1",
@@ -495,6 +496,7 @@
           "none": "Train on the entire image, no masking",
           "segment": "Use the segmentation mask for foreground",
           "ignore": "Ignore masked pixels in the loss",
+          "segment_and_ignore": "Combination of Segment and Ignore",
           "alpha_consistent": "Enforce alpha consistency with the mask"
         },
         "bg_mode": {

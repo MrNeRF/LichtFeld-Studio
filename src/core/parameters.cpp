@@ -166,7 +166,7 @@ namespace lfs::core {
             }
 
             // Mask parameters
-            static constexpr const char* MASK_MODE_NAMES[] = {"none", "segment", "ignore", "alpha_consistent"};
+            static constexpr const char* MASK_MODE_NAMES[] = {"none", "segment", "ignore", "segment_and_ignore", "alpha_consistent"};
             opt_json["mask_mode"] = MASK_MODE_NAMES[static_cast<int>(mask_mode)];
             opt_json["invert_masks"] = invert_masks;
             opt_json["mask_opacity_penalty_weight"] = mask_opacity_penalty_weight;
@@ -495,6 +495,8 @@ namespace lfs::core {
                     params.mask_mode = MaskMode::Segment;
                 } else if (mode == "ignore") {
                     params.mask_mode = MaskMode::Ignore;
+                } else if (mode == "segment_and_ignore") {
+                    params.mask_mode = MaskMode::SegmentAndIgnore;
                 } else if (mode == "alpha_consistent") {
                     params.mask_mode = MaskMode::AlphaConsistent;
                 }

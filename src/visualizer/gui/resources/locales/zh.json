@@ -266,6 +266,7 @@
     "options.mask.none": "无",
     "options.mask.segment": "分割",
     "options.mask.ignore": "忽略",
+    "options.mask.segment_and_ignore": "分割 + 忽略",
     "options.mask.alpha_consistent": "与 Alpha 一致",
     "options.bg.color": "颜色",
     "options.bg.modulation": "调制",
@@ -316,6 +317,7 @@
           "none": "在整张图像上训练，无掩码",
           "segment": "使用分割掩码作为前景",
           "ignore": "在损失中忽略被掩码的像素",
+          "segment_and_ignore": "分割与忽略的组合",
           "alpha_consistent": "强制 alpha 与掩码一致"
         },
         "bg_mode": {

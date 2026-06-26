@@ -384,7 +384,8 @@ namespace lfs::core {
     }
 
     Tensor Camera::load_and_get_mask(const int resize_factor, const int max_width,
-                                     const bool invert_mask, const float mask_threshold) {
+                                     const bool invert_mask, const float mask_threshold,
+                                     const bool binarize) {
         if (_mask_loaded && _cached_mask.is_valid()) {
             return _cached_mask;
         }
@@ -446,7 +447,7 @@ namespace lfs::core {
         }
 
         // Threshold before undistort; final binarization happens after geometric resampling.
-        if (mask_threshold > 0.0f && mask_threshold < 1.0f) {
+        if (binarize && mask_threshold > 0.0f && mask_threshold < 1.0f) {
             mask = mask.ge(mask_threshold).to(DataType::Float32);
         }
 
@@ -458,7 +459,11 @@ namespace lfs::core {
             mask = undistort_mask(mask, scaled, _stream);
         }
 
-        mask = mask.ge(0.5f).to(DataType::UInt8).contiguous();
+        if (binarize) {
+            mask = mask.ge(0.5f).to(DataType::UInt8).contiguous();
+        } else {
+            mask = (mask * 255.f).to(DataType::UInt8).contiguous();
+        }
         _cached_mask = mask;
         _mask_loaded = true;
 

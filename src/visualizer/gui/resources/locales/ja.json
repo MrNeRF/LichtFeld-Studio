@@ -436,6 +436,7 @@
     "options.mask.none": "なし",
     "options.mask.segment": "セグメント",
     "options.mask.ignore": "無視",
+    "options.mask.segment_and_ignore": "セグメント + 無視",
     "options.mask.alpha_consistent": "アルファ整合",
     "options.bg.color": "色",
     "options.bg.modulation": "変調",
@@ -486,6 +487,7 @@
           "none": "画像全体で学習、マスクなし",
           "segment": "前景にセグメンテーションマスクを使用",
           "ignore": "損失でマスクされたピクセルを無視",
+          "segment_and_ignore": "セグメントと無視の組み合わせ",
           "alpha_consistent": "マスクとのアルファ一貫性を強制"
         },
         "bg_mode": {

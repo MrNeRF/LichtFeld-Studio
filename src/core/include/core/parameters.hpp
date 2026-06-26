@@ -22,10 +22,11 @@ namespace lfs::core {
     namespace param {
         // Mask mode for attention mask behavior during training
         enum class MaskMode {
-            None,           // No masking applied
-            Segment,        // Soft penalty to enforce alpha→0 in masked areas
-            Ignore,         // Completely ignore masked regions in loss
-            AlphaConsistent // Enforce exact alpha values from mask
+            None,             // No masking applied
+            Segment,          // Soft penalty to enforce alpha→0 in masked areas
+            Ignore,           // Completely ignore masked regions in loss
+            SegmentAndIgnore, // 3-band mask (0-255): value<128 ignore, 128<=value<=250 segment, value>250 keep
+            AlphaConsistent   // Enforce exact alpha values from mask
         };
 
         // Background mode for training - only one can be active at a time

@@ -91,6 +91,27 @@ namespace lfs::vis {
             return false;
         }
 
+        // True when the given Vulkan physical device is the same physical GPU as
+        // the CUDA device the trainer will use (cuda_device, the current CUDA
+        // ordering's device 0 by default). On multi-GPU machines with identical
+        // cards, Vulkan's enumeration order can differ from CUDA's; matching by
+        // UUID lets pickPhysicalDevice keep the viewer on the same card as the
+        // trainer so CUDA<->Vulkan external-memory interop can import the block.
+        [[nodiscard]] bool vulkanDeviceMatchesCudaDevice(const VkPhysicalDevice device, const int cuda_device) {
+            cudaDeviceProp cuda_props{};
+            if (cudaGetDeviceProperties(&cuda_props, cuda_device) != cudaSuccess) {
+                return false;
+            }
+            VkPhysicalDeviceIDProperties vk_id{};
+            vk_id.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
+            VkPhysicalDeviceProperties2 vk_props2{};
+            vk_props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+            vk_props2.pNext = &vk_id;
+            vkGetPhysicalDeviceProperties2(device, &vk_props2);
+            static_assert(sizeof(cuda_props.uuid.bytes) == VK_UUID_SIZE);
+            return std::memcmp(cuda_props.uuid.bytes, vk_id.deviceUUID, VK_UUID_SIZE) == 0;
+        }
+
         [[nodiscard]] std::string vulkanApiVersionString(const uint32_t api_version) {
             return std::format("{}.{}.{}",
                                VK_API_VERSION_MAJOR(api_version),
@@ -1185,6 +1206,7 @@ namespace lfs::vis {
         vkEnumeratePhysicalDevices(instance_, &count, devices.data());
 
         VkPhysicalDevice fallback = VK_NULL_HANDLE;
+        VkPhysicalDevice first_discrete = VK_NULL_HANDLE;
         for (const auto device : devices) {
             const QueueFamilies families = findQueueFamilies(device);
             if (!families.complete() || !deviceSupportsSwapchain(device)) {
@@ -1217,11 +1239,27 @@ namespace lfs::vis {
                 fallback = device;
             }
             if (props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
-                physical_device_ = device;
-                break;
+                // Prefer the discrete GPU that matches CUDA's device 0. Picking
+                // the first discrete GPU in Vulkan's enumeration order can land
+                // the viewer on a different physical card than the CUDA trainer
+                // on multi-GPU systems; CUDA<->Vulkan external-memory import then
+                // fails (VK_ERROR_OUT_OF_DEVICE_MEMORY) and corrupts the CUDA
+                // context, surfacing as a spurious "out of GPU memory".
+                if (first_discrete == VK_NULL_HANDLE) {
+                    first_discrete = device;
+                }
+                if (vulkanDeviceMatchesCudaDevice(device, 0)) {
+                    physical_device_ = device;
+                    break;
+                }
             }
         }
 
+        // No CUDA-matched discrete GPU: keep the legacy "first discrete" choice,
+        // then any presentable device.
+        if (physical_device_ == VK_NULL_HANDLE) {
+            physical_device_ = first_discrete;
+        }
         if (physical_device_ == VK_NULL_HANDLE) {
             physical_device_ = fallback;
         }

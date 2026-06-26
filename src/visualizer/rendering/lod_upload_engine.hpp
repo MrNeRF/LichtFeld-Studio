@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "io/formats/rad_packed_page.hpp"
 #include "lod_page_cache.hpp"
 #include "rendering/cuda_vulkan_interop.hpp"
@@ -27,7 +28,7 @@ namespace lfs::vis {
     // stream. The render thread polls collectPublished() and publishes
     // residency only for pages whose kernel completed, so the selector never
     // observes a partially written page. Staging slots are the backpressure.
-    class LodUploadEngine {
+    class LFS_VIS_API LodUploadEngine {
     public:
         struct DeviceLayout {
             // Payload pool (page-input regions, InputRegion order): xyz_ws,

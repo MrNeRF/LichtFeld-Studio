@@ -405,7 +405,8 @@ namespace lfs::training {
             const auto mask_mode = opt_params.mask_mode;
             const bool use_masking =
                 mask_mode == lfs::core::param::MaskMode::Segment ||
-                mask_mode == lfs::core::param::MaskMode::Ignore;
+                mask_mode == lfs::core::param::MaskMode::Ignore ||
+                mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore;
 
             // Sidecar mask file wins when present; alpha-as-mask is only used as fallback
             // (some datasets ship RGBA images with a degenerate constant alpha alongside
@@ -1466,6 +1467,12 @@ namespace lfs::training {
             return {};
         }
 
+        // Segment and ignore does not support mask invert
+        if (opt.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore && opt.invert_masks) {
+            LOG_WARN("invert_masks is ignored in SegmentAndIgnore mode (would scramble the mask bands)");
+            params_.optimization.invert_masks = false;
+        }
+
         size_t alpha_count = 0;
         size_t masks_found = 0;
         for (const auto& cam : train_dataset_->get_cameras()) {
@@ -1513,10 +1520,16 @@ namespace lfs::training {
 
         const auto mode = opt_params.mask_mode;
         const Tensor mask_2d = mask.ndim() == 3 ? mask.squeeze(0) : mask;
-        const auto mask_as_float = [&]() -> Tensor {
-            return (mask_2d.dtype() == DataType::UInt8 || mask_2d.dtype() == DataType::Bool)
-                       ? mask_2d.to(DataType::Float32)
-                       : mask_2d;
+        Tensor mask_2d_th = mask_2d;
+        if (mode == param::MaskMode::SegmentAndIgnore) {
+            mask_2d_th = mask_2d_th.masked_fill(mask_2d_th <= 250, 0);  // Set all Ignore and Segment to 0
+            mask_2d_th = mask_2d_th.masked_fill(mask_2d_th > 250, 255); // Keep everything > 250
+        }
+
+        const auto mask_as_float = [](const Tensor t) -> Tensor {
+            return (t.dtype() == DataType::UInt8 || t.dtype() == DataType::Bool)
+                       ? t.gt(0).to(DataType::Float32)
+                       : t;
         };
 
         Tensor loss, grad_corrected, grad_raw, grad_alpha;
@@ -1525,10 +1538,10 @@ namespace lfs::training {
             raw_rendered.numel() > 0 &&
             opt_params.lambda_dssim > 0.0f;
 
-        if (mode == param::MaskMode::Segment || mode == param::MaskMode::Ignore) {
+        if (mode == param::MaskMode::Segment || mode == param::MaskMode::Ignore || mode == param::MaskMode::SegmentAndIgnore) {
             if (use_decoupled_appearance_loss) {
                 auto [loss_tensor, ctx] = lfs::training::kernels::masked_decoupled_fused_l1_ssim_forward(
-                    corrected, raw_rendered, gt_image, mask_2d, opt_params.lambda_dssim,
+                    corrected, raw_rendered, gt_image, mask_2d_th, opt_params.lambda_dssim,
                     masked_decoupled_fused_workspace_);
                 auto grads = lfs::training::kernels::masked_decoupled_fused_l1_ssim_backward(
                     ctx, masked_decoupled_fused_workspace_);
@@ -1545,7 +1558,7 @@ namespace lfs::training {
                 }
             } else {
                 auto [loss_tensor, ctx] = lfs::training::kernels::masked_fused_l1_ssim_forward(
-                    corrected, gt_image, mask_2d, opt_params.lambda_dssim, masked_fused_workspace_);
+                    corrected, gt_image, mask_2d_th, opt_params.lambda_dssim, masked_fused_workspace_);
 
                 grad_corrected = lfs::training::kernels::masked_fused_l1_ssim_backward(ctx, masked_fused_workspace_);
                 loss = loss_tensor;
@@ -1556,10 +1569,19 @@ namespace lfs::training {
             }
 
             // Segment: opacity penalty for background
-            if (mode == param::MaskMode::Segment && alpha.is_valid()) {
+            if ((mode == param::MaskMode::Segment || mode == param::MaskMode::SegmentAndIgnore) && alpha.is_valid()) {
+                Tensor mask_2d_th_segment = mask_2d;
+                if (mode == param::MaskMode::SegmentAndIgnore) {
+                    // Values used for ignore (<128) do not contribute to opacity penalty
+                    // Values in the range 128<=x<=250 contribute to the opacity penalty
+                    // Values > 250 are kept
+                    mask_2d_th_segment = mask_2d_th_segment.masked_fill(mask_2d_th_segment < 128, 255);
+                    mask_2d_th_segment = mask_2d_th_segment.masked_fill(mask_2d_th_segment >= 128 && mask_2d_th_segment <= 250, 0);
+                    mask_2d_th_segment = mask_2d_th_segment.masked_fill(mask_2d_th_segment > 250, 255);
+                }
+                const Tensor mask_2d_th_segment_f = mask_as_float(mask_2d_th_segment);
                 const Tensor alpha_2d = alpha.ndim() == 3 ? alpha.squeeze(0) : alpha;
-                const Tensor mask_f = mask_as_float();
-                const Tensor bg_mask = Tensor::full(mask_f.shape(), 1.0f, mask_f.device()) - mask_f;
+                const Tensor bg_mask = Tensor::full(mask_2d_th_segment_f.shape(), 1.0f, mask_2d_th_segment_f.device()) - mask_2d_th_segment_f;
                 const Tensor penalty_weights = bg_mask.pow(opt_params.mask_opacity_penalty_power);
                 const Tensor penalty = (alpha_2d * penalty_weights).mean() * opt_params.mask_opacity_penalty_weight;
 
@@ -1581,7 +1603,7 @@ namespace lfs::training {
             // Alpha should match mask
             if (alpha.is_valid()) {
                 const Tensor alpha_2d = alpha.ndim() == 3 ? alpha.squeeze(0) : alpha;
-                const Tensor mask_f = mask_as_float();
+                const Tensor mask_f = mask_as_float(mask_2d_th);
                 const Tensor alpha_loss = (alpha_2d - mask_f).abs().mean() * ALPHA_CONSISTENCY_WEIGHT;
                 loss = loss + alpha_loss;
                 grad_alpha = (alpha_2d - mask_f).sign() * (ALPHA_CONSISTENCY_WEIGHT / static_cast<float>(alpha_2d.numel()));
@@ -2263,7 +2285,7 @@ namespace lfs::training {
             LOG_INFO("Visualization: {}", params.optimization.headless ? "disabled" : "enabled");
             LOG_INFO("Strategy: {}", params.optimization.strategy);
             if (params.optimization.mask_mode != lfs::core::param::MaskMode::None) {
-                static constexpr const char* MASK_MODE_NAMES[] = {"none", "segment", "ignore", "alpha_consistent"};
+                static constexpr const char* MASK_MODE_NAMES[] = {"none", "segment", "ignore", "segment_and_ignore", "alpha_consistent"};
                 LOG_INFO("Mask mode: {}", MASK_MODE_NAMES[static_cast<int>(params.optimization.mask_mode)]);
             }
             if (current_iteration_ > 0) {
@@ -3204,7 +3226,8 @@ namespace lfs::training {
                                     params_.dataset.resize_factor,
                                     params_.dataset.max_width,
                                     params_.optimization.invert_masks,
-                                    params_.optimization.mask_threshold);
+                                    params_.optimization.mask_threshold,
+                                    params_.optimization.mask_mode != lfs::core::param::MaskMode::SegmentAndIgnore);
                             }
 
                             lfs::core::Tensor mask_tile = mask;
@@ -3309,7 +3332,8 @@ namespace lfs::training {
                     const bool used_masked_fused =
                         use_mask &&
                         (params_.optimization.mask_mode == lfs::core::param::MaskMode::Segment ||
-                         params_.optimization.mask_mode == lfs::core::param::MaskMode::Ignore) &&
+                         params_.optimization.mask_mode == lfs::core::param::MaskMode::Ignore ||
+                         params_.optimization.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore) &&
                         params_.optimization.lambda_dssim > 0.0f;
                     {
                         LFS_VRAM_SCOPE("train.photometric_loss");
@@ -3323,7 +3347,8 @@ namespace lfs::training {
                                     params_.dataset.resize_factor,
                                     params_.dataset.max_width,
                                     params_.optimization.invert_masks,
-                                    params_.optimization.mask_threshold);
+                                    params_.optimization.mask_threshold,
+                                    params_.optimization.mask_mode != lfs::core::param::MaskMode::SegmentAndIgnore);
                             }
 
                             mask_tile = mask;
@@ -3546,6 +3571,12 @@ namespace lfs::training {
                                 tile_error_map = abs_diff;
                             }
                             tile_error_map = tile_error_map.contiguous();
+                        }
+
+                        if (use_mask &&
+                            params_.optimization.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore) {
+                            const auto mask_for_error = mask_tile.gt(250).to(lfs::core::DataType::Float32);
+                            tile_error_map.mul_(mask_for_error);
                         }
 
                         if (use_mask &&
@@ -4197,6 +4228,9 @@ namespace lfs::training {
             if (params_.optimization.mask_mode != lfs::core::param::MaskMode::None) {
                 aux_pipeline_config.invert_masks = params_.optimization.invert_masks;
                 aux_pipeline_config.mask_threshold = params_.optimization.mask_threshold;
+                if (params_.optimization.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore) {
+                    aux_pipeline_config.mask_threshold = 0.0f;
+                }
                 if (params_.optimization.use_alpha_as_mask && alpha_available) {
                     aux_pipeline_config.use_alpha_as_mask = true;
                     aux_pipeline_config.load_masks = true;

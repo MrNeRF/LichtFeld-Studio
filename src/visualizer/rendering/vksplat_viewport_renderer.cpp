@@ -6069,7 +6069,12 @@ namespace lfs::vis {
         if (auto ok = waitForRingSlot(ring_slot, "render"); !ok) {
             return std::unexpected(ok.error());
         }
+        // Track whether each deferred capacity readback produced fresh stats
+        // this frame; feeds the one-shot-capture settle signal computed below.
+        bool visibility_stats_polled = false;
+        bool instance_stats_polled = false;
         if (const auto visibility_stats = renderer_.pollDeferredPrimitiveVisibilityStats()) {
+            visibility_stats_polled = true;
             const double ratio = visibility_stats->num_splats == 0
                                      ? 0.0
                                      : static_cast<double>(visibility_stats->visible_count) /
@@ -6097,6 +6102,7 @@ namespace lfs::vis {
             }
         }
         if (const auto macro_stats = renderer_.pollDeferredMacroInstanceStats()) {
+            instance_stats_polled = true;
             // One frame stale; drives the capacity high-water mark. A clamped
             // frame (raw > clamped) grows the mark so the next frames render
             // complete content.
@@ -6113,6 +6119,30 @@ namespace lfs::vis {
                          macro_stats->raw_count,
                          macro_stats->instance_count);
             }
+        }
+        {
+            // Settle signal for one-shot preview/export captures. The interactive
+            // loop tolerates a capacity-clamped frame because it self-heals on the
+            // next frame; a single-shot capture reads back immediately, so it must
+            // not present a clamped (partial) frame. Mark "settled" only when the
+            // deferred readback of the previous render — which must have used the
+            // same steady-state chain the next pass will use, so a warm-up frame is
+            // rejected — reports complete, unclamped content.
+            const bool config_uses_macro =
+                !request.gut && renderer_.supportsFloat16Storage() &&
+                !synchronize_input_upload && !depth_capture_mode_;
+            const bool stats_complete =
+                visibility_stats_polled && (!config_uses_macro || instance_stats_polled);
+            const bool clamp_observed =
+                visible_clamp_pending_ || (config_uses_macro && instance_clamp_pending_);
+            // last_render_used_macro_chain_ still reflects the just-polled
+            // (previous) render here; it is updated for the current render only
+            // after rasterization. Requiring it to match the steady-state chain
+            // rejects the legacy warm-up frame as a convergence point.
+            const bool observed_matches_steady_state =
+                last_render_used_macro_chain_ == config_uses_macro;
+            last_preview_capture_settled_ =
+                stats_complete && !clamp_observed && observed_matches_steady_state;
         }
         if (const auto lod_stats = renderer_.pollDeferredLodSelectionStats()) {
             gpu_lod_last_candidate_count_ = lod_stats->candidate_count;

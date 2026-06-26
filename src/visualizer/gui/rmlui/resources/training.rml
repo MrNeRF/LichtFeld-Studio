@@ -109,7 +109,8 @@
           <option value="0" data-tooltip="training.tooltip.opt.mask_mode.none">{{label_mask_none}}</option>
           <option value="1" data-tooltip="training.tooltip.opt.mask_mode.segment">{{label_mask_segment}}</option>
           <option value="2" data-tooltip="training.tooltip.opt.mask_mode.ignore">{{label_mask_ignore}}</option>
-          <option value="3" data-tooltip="training.tooltip.opt.mask_mode.alpha_consistent">{{label_mask_alpha_consistent}}</option>
+          <option value="3" data-tooltip="training.tooltip.opt.mask_mode.segment_and_ignore">{{label_mask_segment_and_ignore}}</option>
+          <option value="4" data-tooltip="training.tooltip.opt.mask_mode.alpha_consistent">{{label_mask_alpha_consistent}}</option>
         </select>
       </div>
       <div class="setting-row" data-tooltip="training.tooltip.use_depth_loss">
@@ -134,7 +135,7 @@
           <span class="prop-label">{{label_invert_masks}}</span>
           <input type="checkbox" data-checked="invert_masks" />
         </div>
-        <div class="setting-row" data-tooltip="training.tooltip.mask_threshold">
+        <div class="setting-row" data-if="dep_mask_threshold" data-tooltip="training.tooltip.mask_threshold">
           <span class="prop-label">{{label_mask_threshold}}</span>
           <input type="text" class="number-input" data-value="mask_threshold_str" />
           <button class="num-step-btn" data-event-mousedown="num_step('mask_threshold', -1)">-</button>

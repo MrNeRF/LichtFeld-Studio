@@ -436,6 +436,7 @@
     "options.mask.none": "Keine",
     "options.mask.segment": "Segment",
     "options.mask.ignore": "Ignorieren",
+    "options.mask.segment_and_ignore": "Segment + Ignorieren",
     "options.mask.alpha_consistent": "Alpha-konsistent",
     "options.bg.color": "Farbe",
     "options.bg.modulation": "Modulation",
@@ -486,6 +487,7 @@
           "none": "Auf dem gesamten Bild trainieren, keine Maskierung",
           "segment": "Segmentierungsmaske für den Vordergrund verwenden",
           "ignore": "Maskierte Pixel im Verlust ignorieren",
+          "segment_and_ignore": "Kombination aus Segmentierung und Ignorieren",
           "alpha_consistent": "Alpha-Konsistenz mit der Maske erzwingen"
         },
         "bg_mode": {

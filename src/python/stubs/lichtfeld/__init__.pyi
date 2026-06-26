@@ -1771,7 +1771,9 @@ class MaskMode(enum.Enum):
 
     IGNORE = 2
 
-    ALPHA_CONSISTENT = 3
+    SEGMENT_AND_IGNORE = 3
+
+    ALPHA_CONSISTENT = 4
 
 class BackgroundMode(enum.Enum):
     SOLID_COLOR = 0

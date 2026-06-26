@@ -214,6 +214,13 @@ namespace lfs::vis {
         };
         [[nodiscard]] GpuLodSelectionStatus gpuLodSelectionStatus() const;
 
+        // True when the most recent render's start-of-frame deferred poll
+        // confirmed the previously rendered frame produced complete, unclamped
+        // content using the steady-state rasterizer chain. One-shot preview/
+        // export captures poll this to avoid reading back a capacity-clamped
+        // (partial) frame; see RenderingManager::renderPreviewImageToPreviewSlotWithState.
+        [[nodiscard]] bool previewCaptureSettled() const { return last_preview_capture_settled_; }
+
     private:
         struct ComposePipeline;
         struct InputBindingResult {
@@ -544,6 +551,13 @@ namespace lfs::vis {
         // keeps frames scheduled while idle so the capacity self-heal converges.
         bool visible_clamp_pending_ = false;
         bool instance_clamp_pending_ = false;
+        // Set each render from the start-of-frame deferred poll: true once a
+        // representative frame (one that used the same steady-state rasterizer
+        // chain the next pass will use) is confirmed complete and unclamped.
+        // Drives the synchronous capacity self-heal used by one-shot preview/
+        // export captures, which cannot tolerate the interactive loop's
+        // one-frame clamp transient.
+        bool last_preview_capture_settled_ = false;
 
         // Fallback CUDA-backed input buffers for models that are not already
         // backed by Vulkan-external tensor storage. Direct Vulkan-external

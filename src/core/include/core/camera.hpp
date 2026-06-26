@@ -60,7 +60,7 @@ namespace lfs::core {
 
         // Load mask from disk, process it, and return it (cached)
         Tensor load_and_get_mask(int resize_factor = -1, int max_width = 0,
-                                 bool invert_mask = false, float mask_threshold = 0.5f);
+                                 bool invert_mask = false, float mask_threshold = 0.5f, bool binarize = true);
 
         // Load depth map from disk, convert to [H,W] float32 [0,1], and return it (cached)
         Tensor load_and_get_depth(int resize_factor = -1, int max_width = 0);

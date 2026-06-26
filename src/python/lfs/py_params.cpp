@@ -115,6 +115,7 @@ namespace lfs::python {
                        {{"None", MaskMode::None},
                         {"Segment", MaskMode::Segment},
                         {"Ignore", MaskMode::Ignore},
+                        {"SegmentAndIgnore", MaskMode::SegmentAndIgnore},
                         {"AlphaConsistent", MaskMode::AlphaConsistent}},
                        "Attention mask behavior during training")
             .bool_prop(&OptimizationParameters::invert_masks,
@@ -999,6 +1000,7 @@ namespace lfs::python {
             .value("NONE", MaskMode::None)
             .value("SEGMENT", MaskMode::Segment)
             .value("IGNORE", MaskMode::Ignore)
+            .value("SEGMENT_AND_IGNORE", MaskMode::SegmentAndIgnore)
             .value("ALPHA_CONSISTENT", MaskMode::AlphaConsistent);
 
         nb::enum_<BackgroundMode>(m, "BackgroundMode")

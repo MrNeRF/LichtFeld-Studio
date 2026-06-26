@@ -200,12 +200,13 @@ namespace lfs::io {
             }
         }
 
-        lfs::core::Tensor binarize_mask(lfs::core::Tensor mask) {
+        lfs::core::Tensor process_mask(lfs::core::Tensor mask, bool binarize) {
             if (!mask.is_valid())
                 return {};
             if (mask.dtype() == lfs::core::DataType::UInt8 || mask.dtype() == lfs::core::DataType::Bool)
                 return mask.contiguous();
-            return mask.ge(0.5f).to(lfs::core::DataType::UInt8).contiguous();
+            mask = binarize ? mask.ge(0.5f) : mask * 255.f;
+            return mask.to(lfs::core::DataType::UInt8).contiguous();
         }
 
         [[nodiscard]] bool is_jpeg_file_signature(const std::filesystem::path& path) {
@@ -1192,7 +1193,7 @@ namespace lfs::io {
                                 throw std::runtime_error("Invalid mask tensor");
                             }
 
-                            mask_tensor = binarize_mask(std::move(mask_tensor));
+                            mask_tensor = process_mask(std::move(mask_tensor), batch[i].mask_params.threshold > 0);
                             try_complete_pair(batch[i].sequence_id, std::nullopt, std::move(mask_tensor), nullptr);
 
                         } else {
@@ -1397,7 +1398,7 @@ namespace lfs::io {
                         }
                     }
 
-                    alpha = binarize_mask(std::move(alpha));
+                    alpha = process_mask(std::move(alpha), item.alpha_mask_params.threshold > 0);
                     if (const cudaError_t err = cudaStreamSynchronize(nullptr); err != cudaSuccess) {
                         throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
                     }
@@ -1489,7 +1490,7 @@ namespace lfs::io {
                     }
 
                     if (item.is_mask) {
-                        aux_tensor = binarize_mask(std::move(aux_tensor));
+                        aux_tensor = process_mask(std::move(aux_tensor), item.mask_params.threshold > 0);
                     } else {
                         aux_tensor = aux_tensor.contiguous();
                     }

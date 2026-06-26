@@ -436,6 +436,7 @@
     "options.mask.none": "Geen",
     "options.mask.segment": "Segment",
     "options.mask.ignore": "Negeren",
+    "options.mask.segment_and_ignore": "Segmenteren + Negeren",
     "options.mask.alpha_consistent": "Alpha-consistent",
     "options.bg.color": "Kleur",
     "options.bg.modulation": "Modulatie",
@@ -486,6 +487,7 @@
           "none": "Train op de hele afbeelding, geen masker",
           "segment": "Gebruik segmentatiemasker voor voorgrond",
           "ignore": "Negeer gemaskeerde pixels in de loss",
+          "segment_and_ignore": "Combinatie van Segmenteren en Negeren",
           "alpha_consistent": "Alpha-consistentie met masker afdwingen"
         },
         "bg_mode": {
