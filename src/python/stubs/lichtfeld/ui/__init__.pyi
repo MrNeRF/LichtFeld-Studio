@@ -2135,6 +2135,30 @@ def clear_active_operator() -> None:
 def has_active_operator() -> bool:
     """Check if an operator is currently active"""
 
+def can_edit_gaussian_selection() -> bool:
+    """Return true when Gaussian selection editing is available"""
+
+def has_gaussian_selection() -> bool:
+    """Return true when any Gaussians are selected"""
+
+def has_gaussian_clipboard() -> bool:
+    """Return true when copied Gaussians are available for paste"""
+
+def copy_gaussian_selection() -> None:
+    """Copy selected Gaussians to the internal Gaussian clipboard"""
+
+def paste_gaussian_selection() -> None:
+    """Paste copied Gaussians from the internal Gaussian clipboard"""
+
+def invert_gaussian_selection() -> None:
+    """Invert the current Gaussian selection"""
+
+def select_all_gaussians() -> None:
+    """Select all editable Gaussians"""
+
+def deselect_all_gaussians() -> None:
+    """Deselect all selected Gaussians"""
+
 def set_gizmo_type(type: str) -> None:
     """Set gizmo type without blocking camera"""
 
@@ -2177,6 +2201,14 @@ def set_crop_tool_shape(shape: str) -> None:
 
 def get_crop_tool_shape() -> str:
     """Get the active crop tool shape"""
+
+def set_crop_tool_operation(operation: str) -> None:
+    """
+    Set the active crop or selection-volume gizmo operation: translate, rotate, or scale
+    """
+
+def get_crop_tool_operation() -> str:
+    """Get the active crop or selection-volume gizmo operation"""
 
 def apply_crop_tool() -> None:
     """Apply the active crop tool primitive"""
@@ -2565,7 +2597,7 @@ def set_cancel_operator_callback(callback: Callable) -> None:
 
 def get_selection_submode() -> int:
     """
-    Get current selection sub-mode (0=Brush, 1=Rectangle, 2=Polygon, 3=Lasso, 4=Rings)
+    Get current selection sub-mode (0=Centers, 1=Rectangle, 2=Polygon, 3=Lasso, 4=Rings, 5=Color, 6=Box, 7=Sphere)
     """
 
 def request_keyboard_capture(owner_id: str) -> None:

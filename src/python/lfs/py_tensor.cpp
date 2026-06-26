@@ -4,6 +4,8 @@
 
 #include "py_tensor.hpp"
 #include "core/logger.hpp"
+#include "core/tensor/internal/cuda_event_pool.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "python/python_runtime.hpp"
 
 #include <cstring>
@@ -1323,9 +1325,40 @@ namespace lfs::python {
         return nb::make_tuple(device_type, 0);
     }
 
+    namespace {
+        constexpr int64_t kDLPackNoSync = -1;
+        constexpr int64_t kDLPackLegacyDefault = 1;
+        constexpr int64_t kDLPackPerThreadDefault = 2;
+
+        cudaStream_t dlpack_stream_to_cuda(int64_t s) {
+            switch (s) {
+            case 0:
+            case kDLPackLegacyDefault:
+                return nullptr;
+            case kDLPackPerThreadDefault:
+                return cudaStreamPerThread;
+            default:
+                return reinterpret_cast<cudaStream_t>(static_cast<uintptr_t>(s));
+            }
+        }
+
+        int64_t cuda_stream_to_dlpack(cudaStream_t s) {
+            const uintptr_t v = reinterpret_cast<uintptr_t>(s);
+            return v == 0 ? kDLPackLegacyDefault : static_cast<int64_t>(v);
+        }
+    } // namespace
+
     nb::capsule PyTensor::dlpack(nb::object stream) const {
-        if (tensor_.device() == Device::CUDA && stream.is_none()) {
-            cudaDeviceSynchronize();
+        if (tensor_.device() == Device::CUDA) {
+            const cudaStream_t home = tensor_.stream();
+            if (stream.is_none()) {
+                cudaStreamSynchronize(home);
+            } else if (const int64_t s = nb::cast<int64_t>(stream); s != kDLPackNoSync) {
+                const cudaStream_t consumer = dlpack_stream_to_cuda(s);
+                if (consumer != home) {
+                    lfs::core::bridgeStreams(home, consumer);
+                }
+            }
         }
 
         auto* ctx = new DLPackContext(tensor_);
@@ -1353,9 +1386,17 @@ namespace lfs::python {
 
     PyTensor PyTensor::from_dlpack(nb::object obj) {
         nb::capsule capsule;
+        bool stream_handshake = false;
 
         if (nb::hasattr(obj, "__dlpack__")) {
-            capsule = nb::cast<nb::capsule>(obj.attr("__dlpack__")());
+            nb::object dlpack_fn = obj.attr("__dlpack__");
+            const int64_t consumer = cuda_stream_to_dlpack(lfs::core::getCurrentCUDAStream());
+            try {
+                capsule = nb::cast<nb::capsule>(dlpack_fn(nb::arg("stream") = consumer));
+                stream_handshake = true;
+            } catch (const std::exception&) {
+                capsule = nb::cast<nb::capsule>(dlpack_fn());
+            }
         } else if (nb::isinstance<nb::capsule>(obj)) {
             capsule = nb::cast<nb::capsule>(obj);
         } else {
@@ -1395,6 +1436,12 @@ namespace lfs::python {
         const DataType dtype = from_dl_dtype(dl.dtype);
 
         Tensor tensor(data, TensorShape(shape_vec), device, dtype);
+        if (stream_handshake && device == Device::CUDA) {
+            // The producer ordered the data onto our current stream via the
+            // __dlpack__(stream=) handshake; home the tensor there so a later
+            // cross-stream op bridges from the consumer stream, not legacy.
+            tensor.set_stream(lfs::core::getCurrentCUDAStream());
+        }
 
         // Store the DLManagedTensor with a custom deleter that calls the DLPack deleter
         auto result = PyTensor(std::move(tensor), false);

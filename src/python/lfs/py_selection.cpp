@@ -98,7 +98,8 @@ namespace lfs::python {
         nb::enum_<vis::SelectionMode>(sel, "SelectionMode")
             .value("Replace", vis::SelectionMode::Replace)
             .value("Add", vis::SelectionMode::Add)
-            .value("Remove", vis::SelectionMode::Remove);
+            .value("Remove", vis::SelectionMode::Remove)
+            .value("Intersect", vis::SelectionMode::Intersect);
 
         // ─────────────────────────────────────────────────────────────────────
         // STROKE MANAGEMENT

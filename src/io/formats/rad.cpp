@@ -73,9 +73,11 @@ namespace lfs::io {
 
         constexpr uint32_t RAD_MAGIC = 0x30444152;       // "RAD0" in little-endian
         constexpr uint32_t RAD_CHUNK_MAGIC = 0x43444152; // "RADC" in little-endian
-        constexpr uint32_t CHUNK_SIZE = 2048;            // Splats per chunk
-        static_assert(CHUNK_SIZE == lfs::core::SplatLodTree::kChunkSplats,
-                      "RAD chunk size and LOD page size are the same unit");
+        constexpr uint32_t NATIVE_CHUNK_SIZE = kRadNativeChunkSplats;
+        constexpr uint32_t SPARK_CHUNK_SIZE = kRadStreamableChunkSplats;
+        constexpr uint32_t DEFAULT_RAD_FILE_CHUNK_SIZE = SPARK_CHUNK_SIZE;
+        static_assert(SPARK_CHUNK_SIZE % NATIVE_CHUNK_SIZE == 0,
+                      "Spark RAD file chunks must split evenly into native pages");
         constexpr int GZ_LEVEL = 6;                   // Default gzip compression level
         constexpr float SH_C0 = 0.28209479177387814f; // Degree-0 SH basis constant
 
@@ -1152,14 +1154,14 @@ namespace lfs::io {
         struct RadMeta {
             uint32_t version = 1;
             std::string type = "gsplat";
-            uint64_t count = 0;                 // Changed from uint32_t
-            std::optional<int> max_sh;          // Changed to optional
-            std::optional<bool> lod_tree;       // Changed to optional
-            std::optional<uint32_t> chunk_size; // Changed to optional
+            uint64_t count = 0;
+            std::optional<int> max_sh;
+            std::optional<bool> lod_tree;
+            std::optional<uint32_t> chunk_size;
             uint64_t all_chunk_bytes = 0;
-            std::vector<RadChunkRange> chunks; // Changed from RadChunkMeta
+            std::vector<RadChunkRange> chunks;
             std::optional<nlohmann::json> splat_encoding;
-            std::optional<uint32_t> sh_code_count; // Added missing field
+            std::optional<uint32_t> sh_code_count;
             std::optional<std::string> comment;
 
             nlohmann::json to_json() const {
@@ -1222,6 +1224,68 @@ namespace lfs::io {
                 return meta;
             }
         };
+
+        std::uint32_t normalized_lod_file_chunk_size(const RadMeta& meta) {
+            return meta.chunk_size.value_or(NATIVE_CHUNK_SIZE);
+        }
+
+        bool supported_lod_file_chunk_size(const std::uint32_t chunk_size) {
+            return chunk_size >= NATIVE_CHUNK_SIZE &&
+                   chunk_size % NATIVE_CHUNK_SIZE == 0;
+        }
+
+        std::uint32_t normalized_export_chunk_size(const std::uint32_t chunk_size) {
+            if (!supported_lod_file_chunk_size(chunk_size)) {
+                LOG_WARN("RAD export chunk_size={} is not a positive multiple of {}; using {}",
+                         chunk_size, NATIVE_CHUNK_SIZE, DEFAULT_RAD_FILE_CHUNK_SIZE);
+                return DEFAULT_RAD_FILE_CHUNK_SIZE;
+            }
+            return chunk_size;
+        }
+
+        std::size_t native_lod_chunk_count(const std::uint64_t node_count) {
+            return static_cast<std::size_t>(
+                (node_count + NATIVE_CHUNK_SIZE - 1) / NATIVE_CHUNK_SIZE);
+        }
+
+        void assign_native_chunk_ranges(
+            std::vector<lfs::core::SplatLodTree::ChunkFileRange>& out,
+            const std::uint64_t file_offset,
+            const std::uint64_t file_bytes,
+            const std::uint64_t payload_offset,
+            const std::uint64_t payload_bytes,
+            const std::uint64_t file_base,
+            const std::uint64_t file_count) {
+            if (file_count == 0) {
+                return;
+            }
+            const std::uint64_t file_end = file_base + file_count;
+            std::uint64_t logical_base =
+                (file_base / NATIVE_CHUNK_SIZE) * static_cast<std::uint64_t>(NATIVE_CHUNK_SIZE);
+            if (logical_base < file_base) {
+                logical_base += NATIVE_CHUNK_SIZE;
+            }
+            for (; logical_base < file_end; logical_base += NATIVE_CHUNK_SIZE) {
+                const std::uint64_t logical_end =
+                    std::min<std::uint64_t>(logical_base + NATIVE_CHUNK_SIZE, file_end);
+                const std::uint64_t logical_count = logical_end - logical_base;
+                const std::size_t logical_chunk =
+                    static_cast<std::size_t>(logical_base / NATIVE_CHUNK_SIZE);
+                if (logical_chunk >= out.size()) {
+                    continue;
+                }
+                out[logical_chunk] = {
+                    .file_offset = file_offset,
+                    .file_bytes = file_bytes,
+                    .payload_offset = payload_offset,
+                    .payload_bytes = payload_bytes,
+                    .file_base = file_base,
+                    .file_count = file_count,
+                    .base = logical_base,
+                    .count = logical_count,
+                };
+            }
+        }
 
         // ============================================================================
         // Property Encoding/Decoding
@@ -2348,9 +2412,11 @@ namespace lfs::io {
         public:
             explicit RadEncoder(int compression_level = GZ_LEVEL,
                                 bool flip_y = false,
+                                std::uint32_t file_chunk_size = DEFAULT_RAD_FILE_CHUNK_SIZE,
                                 ExportProgressCallback progress_callback = nullptr)
                 : compression_level_(compression_level),
                   flip_y_(flip_y),
+                  file_chunk_size_(normalized_export_chunk_size(file_chunk_size)),
                   progress_callback_(std::move(progress_callback)) {}
 
             std::vector<uint8_t> encode(const SplatData& splat_data) {
@@ -2412,14 +2478,15 @@ namespace lfs::io {
                 const int sh_coeffs = packed.sh_coeffs;
                 const bool lod_tree = packed.lod_tree;
 
-                const uint32_t num_chunks = (num_splats + CHUNK_SIZE - 1) / CHUNK_SIZE;
+                const uint32_t num_chunks =
+                    (num_splats + file_chunk_size_ - 1) / file_chunk_size_;
 
                 // Build metadata
                 RadMeta meta;
                 meta.count = num_splats;
                 meta.max_sh = sh_degree;
                 meta.lod_tree = lod_tree ? std::optional<bool>(true) : std::nullopt;
-                meta.chunk_size = CHUNK_SIZE;
+                meta.chunk_size = file_chunk_size_;
                 if (lod_tree) {
                     meta.splat_encoding = nlohmann::json{{"lodOpacity", true}};
                 }
@@ -2439,8 +2506,8 @@ namespace lfs::io {
                     tbb::blocked_range<uint32_t>(0, num_chunks, 1),
                     [&](const tbb::blocked_range<uint32_t>& range) {
                         for (uint32_t chunk_idx = range.begin(); chunk_idx != range.end(); ++chunk_idx) {
-                            const uint32_t base = chunk_idx * CHUNK_SIZE;
-                            const uint32_t count = std::min(CHUNK_SIZE, num_splats - base);
+                            const uint32_t base = chunk_idx * file_chunk_size_;
+                            const uint32_t count = std::min(file_chunk_size_, num_splats - base);
 
                             auto chunk_progress_cb = [&](float /*progress*/) -> bool {
                                 const uint32_t completed = completed_chunks.load(std::memory_order_relaxed);
@@ -2650,6 +2717,7 @@ namespace lfs::io {
 
             int compression_level_;
             bool flip_y_;
+            std::uint32_t file_chunk_size_;
             ExportProgressCallback progress_callback_;
 
             bool report_progress(float progress, const std::string& stage) const {
@@ -2731,7 +2799,7 @@ namespace lfs::io {
                 slices.reserve(meta.chunks.size());
                 std::vector<lfs::core::SplatLodTree::ChunkFileRange> chunk_file_ranges;
                 if (has_lod_tree) {
-                    chunk_file_ranges.reserve(meta.chunks.size());
+                    chunk_file_ranges.resize(native_lod_chunk_count(N));
                 }
 
                 uint64_t scanned_count = 0;
@@ -2782,14 +2850,14 @@ namespace lfs::io {
                         }
                     }
                     if (has_lod_tree) {
-                        chunk_file_ranges.push_back({
-                            .file_offset = static_cast<uint64_t>(chunk_file_offset),
-                            .file_bytes = static_cast<uint64_t>(chunk_end - chunk_file_offset),
-                            .payload_offset = static_cast<uint64_t>(payload_start),
-                            .payload_bytes = chunk.payload_bytes,
-                            .base = chunk.base,
-                            .count = chunk.count,
-                        });
+                        assign_native_chunk_ranges(
+                            chunk_file_ranges,
+                            static_cast<uint64_t>(chunk_file_offset),
+                            static_cast<uint64_t>(chunk_end - chunk_file_offset),
+                            static_cast<uint64_t>(payload_start),
+                            chunk.payload_bytes,
+                            chunk.base,
+                            chunk.count);
                     }
 
                     // Chunks must tile [0, N) in file order for the parallel
@@ -2942,12 +3010,11 @@ namespace lfs::io {
 
                 // Attach LOD tree if present
                 if (tree && N > 0) {
-                    if (const std::uint32_t file_chunk = meta.chunk_size.value_or(0);
-                        file_chunk != CHUNK_SIZE) {
+                    if (const std::uint32_t file_chunk = normalized_lod_file_chunk_size(meta);
+                        !supported_lod_file_chunk_size(file_chunk)) {
                         return std::unexpected(std::format(
-                            "RAD LOD file uses {}-splat chunks; this build requires {}. "
-                            "Re-convert the source with the LichtFeld converter.",
-                            file_chunk, CHUNK_SIZE));
+                            "RAD LOD file uses unsupported {}-splat chunks; expected a multiple of {}.",
+                            file_chunk, NATIVE_CHUNK_SIZE));
                     }
                     tree->child_count = std::move(all_child_count);
                     tree->child_start = std::move(all_child_start);
@@ -2979,7 +3046,7 @@ namespace lfs::io {
                     std::iota(tree->page_to_chunk.begin(), tree->page_to_chunk.end(), 0u);
                     if (source_path != nullptr && !source_path->empty()) {
                         tree->rad_source.path = *source_path;
-                        tree->rad_source.chunk_size = meta.chunk_size.value_or(CHUNK_SIZE);
+                        tree->rad_source.chunk_size = normalized_lod_file_chunk_size(meta);
                         tree->rad_source.metadata_bytes = 8 + pad8(meta_size);
                         tree->rad_source.chunks = std::move(chunk_file_ranges);
                     }
@@ -3452,7 +3519,7 @@ namespace lfs::io {
                     tree->centers.resize(N);
                     tree->sizes.resize(N);
                 }
-                chunk_file_ranges.resize(meta.chunks.size());
+                chunk_file_ranges.resize(native_lod_chunk_count(N));
             }
 
             // With a sidecar the per-node metadata stays on disk; chunk payload
@@ -3461,21 +3528,43 @@ namespace lfs::io {
             if (use_view) {
                 RadMetaHeader sidecar_header{};
                 std::memcpy(&sidecar_header, meta_view->file->data(), sizeof(sidecar_header));
-                if (sidecar_header.chunk_count != meta.chunks.size()) {
+                if (sidecar_header.chunk_count != native_lod_chunk_count(N)) {
                     return std::unexpected("RAD metadata sidecar chunk count mismatch");
                 }
                 sidecar_chunk_table = reinterpret_cast<const RadMetaChunkEntry*>(
                     meta_view->file->data() + sidecar_header.chunk_table_offset);
                 for (std::size_t ci = 0; ci < meta.chunks.size(); ++ci) {
                     const auto& range = meta.chunks[ci];
-                    chunk_file_ranges[ci] = {
-                        .file_offset = info.chunk_area_start + static_cast<std::size_t>(range.offset),
-                        .file_bytes = range.bytes,
-                        .payload_offset = sidecar_chunk_table[ci].payload_offset,
-                        .payload_bytes = sidecar_chunk_table[ci].payload_bytes,
-                        .base = *range.base,
-                        .count = *range.count,
-                    };
+                    if (!range.base.has_value() || !range.count.has_value()) {
+                        return std::unexpected("RAD chunk index lacks base/count");
+                    }
+                    const std::uint64_t file_base = *range.base;
+                    const std::uint64_t file_count = *range.count;
+                    const std::uint64_t file_end = file_base + file_count;
+                    std::uint64_t logical_base =
+                        (file_base / NATIVE_CHUNK_SIZE) * static_cast<std::uint64_t>(NATIVE_CHUNK_SIZE);
+                    if (logical_base < file_base) {
+                        logical_base += NATIVE_CHUNK_SIZE;
+                    }
+                    for (; logical_base < file_end; logical_base += NATIVE_CHUNK_SIZE) {
+                        const std::size_t logical_chunk =
+                            static_cast<std::size_t>(logical_base / NATIVE_CHUNK_SIZE);
+                        if (logical_chunk >= chunk_file_ranges.size()) {
+                            break;
+                        }
+                        const auto& page_record = sidecar_chunk_table[logical_chunk];
+                        chunk_file_ranges[logical_chunk] = {
+                            .file_offset = info.chunk_area_start + static_cast<std::size_t>(range.offset),
+                            .file_bytes = range.bytes,
+                            .payload_offset = page_record.payload_offset,
+                            .payload_bytes = page_record.payload_bytes,
+                            .file_base = file_base,
+                            .file_count = file_count,
+                            .base = logical_base,
+                            .count = std::min<std::uint64_t>(
+                                NATIVE_CHUNK_SIZE, file_end - logical_base),
+                        };
+                    }
                 }
             }
 
@@ -3633,14 +3722,14 @@ namespace lfs::io {
                                 }
                                 tree->sizes[base + i] = 2.0f * expansion * max_scale;
                             }
-                            chunk_file_ranges[ci] = {
-                                .file_offset = file_offset,
-                                .file_bytes = static_cast<std::uint64_t>(parsed->chunk_end),
-                                .payload_offset = file_offset + parsed->payload_start,
-                                .payload_bytes = chunk.payload_bytes,
-                                .base = chunk.base,
-                                .count = chunk.count,
-                            };
+                            assign_native_chunk_ranges(
+                                chunk_file_ranges,
+                                file_offset,
+                                static_cast<std::uint64_t>(parsed->chunk_end),
+                                file_offset + parsed->payload_start,
+                                chunk.payload_bytes,
+                                chunk.base,
+                                chunk.count);
                         }
                         if (resident) {
                             for (std::size_t i = 0; i < count * 3; ++i) {
@@ -3666,12 +3755,11 @@ namespace lfs::io {
             );
 
             if (tree && N > 0) {
-                if (const std::uint32_t file_chunk = meta.chunk_size.value_or(0);
-                    file_chunk != CHUNK_SIZE) {
+                if (const std::uint32_t file_chunk = normalized_lod_file_chunk_size(meta);
+                    !supported_lod_file_chunk_size(file_chunk)) {
                     return std::unexpected(std::format(
-                        "RAD LOD file uses {}-splat chunks; this build requires {}. "
-                        "Re-convert the source with the LichtFeld converter.",
-                        file_chunk, CHUNK_SIZE));
+                        "RAD LOD file uses unsupported {}-splat chunks; expected a multiple of {}.",
+                        file_chunk, NATIVE_CHUNK_SIZE));
                 }
                 if (use_view) {
                     tree->meta_view = *meta_view;
@@ -3705,7 +3793,7 @@ namespace lfs::io {
                 std::iota(tree->chunk_to_page.begin(), tree->chunk_to_page.end(), 0u);
                 std::iota(tree->page_to_chunk.begin(), tree->page_to_chunk.end(), 0u);
                 tree->rad_source.path = filepath;
-                tree->rad_source.chunk_size = meta.chunk_size.value_or(CHUNK_SIZE);
+                tree->rad_source.chunk_size = normalized_lod_file_chunk_size(meta);
                 tree->rad_source.metadata_bytes = info.chunk_area_start;
                 tree->rad_source.chunks = std::move(chunk_file_ranges);
                 tree->lod_opacity_encoded = lod_opacity_encoded;
@@ -3752,9 +3840,11 @@ namespace lfs::io {
                 if (out_of_core) {
                     // Chunk count keeps the preview a clean prefix; every
                     // chunk is either fully resident or tree-only.
+                    const std::size_t file_chunk =
+                        normalized_lod_file_chunk_size(meta);
                     std::size_t preview =
-                        overrides.preview_splats.value_or(2048 * CHUNK_SIZE);
-                    preview = ((preview + CHUNK_SIZE - 1) / CHUNK_SIZE) * CHUNK_SIZE;
+                        overrides.preview_splats.value_or(2048 * NATIVE_CHUNK_SIZE);
+                    preview = ((preview + file_chunk - 1) / file_chunk) * file_chunk;
                     payload_count = std::min<std::size_t>(N, preview);
                     LOG_INFO("RAD out-of-core load: {} nodes, keeping {} resident "
                              "(coarsest LOD prefix); leaves stream from disk",
@@ -3992,6 +4082,58 @@ namespace lfs::io {
             return std::nullopt;
         }
 
+        std::size_t packed_encoding_element_bytes(const RadPackedEncoding encoding) {
+            switch (encoding) {
+            case RadPackedEncoding::F32:
+            case RadPackedEncoding::F32LeBytes:
+                return 4;
+            case RadPackedEncoding::F16:
+            case RadPackedEncoding::F16LeBytes:
+            case RadPackedEncoding::LnF16:
+                return 2;
+            case RadPackedEncoding::R8:
+            case RadPackedEncoding::S8:
+            case RadPackedEncoding::Ln0R8:
+                return 1;
+            case RadPackedEncoding::Oct88R8:
+                return 1;
+            }
+            return 0;
+        }
+
+        void copy_packed_plane_window(const std::uint8_t* const src,
+                                      const std::size_t source_count,
+                                      const std::size_t source_offset,
+                                      const std::size_t count,
+                                      const PackedPropInfo& info,
+                                      const RadPackedEncoding encoding,
+                                      std::uint8_t* const dst) {
+            if (encoding == RadPackedEncoding::Oct88R8) {
+                std::memcpy(dst, src + source_offset * 3, count * 3);
+                return;
+            }
+            const std::size_t elem = packed_encoding_element_bytes(encoding);
+            if (encoding == RadPackedEncoding::F32LeBytes ||
+                encoding == RadPackedEncoding::F16LeBytes) {
+                const std::size_t source_stride = source_count * info.dims;
+                const std::size_t dst_stride = count * info.dims;
+                for (std::size_t b = 0; b < elem; ++b) {
+                    for (std::size_t d = 0; d < info.dims; ++d) {
+                        const std::size_t src_off =
+                            b * source_stride + d * source_count + source_offset;
+                        const std::size_t dst_off = b * dst_stride + d * count;
+                        std::memcpy(dst + dst_off, src + src_off, count);
+                    }
+                }
+                return;
+            }
+            for (std::size_t d = 0; d < info.dims; ++d) {
+                const std::size_t src_off = (d * source_count + source_offset) * elem;
+                const std::size_t dst_off = d * count * elem;
+                std::memcpy(dst + dst_off, src + src_off, count * elem);
+            }
+        }
+
     } // namespace
 
     std::expected<RadPagePackedDesc, std::string> decode_rad_chunk_packed(
@@ -4017,7 +4159,26 @@ namespace lfs::io {
         }
         const int max_sh = std::clamp(chunk_meta.max_sh > 0 ? chunk_meta.max_sh : fallback_max_sh, 0, 3);
         const int sh_coeffs = max_sh > 0 ? SH_COEFFS_FOR_DEGREE[max_sh] : 0;
-        const std::size_t count = static_cast<std::size_t>(chunk_meta.count);
+        const std::size_t source_count = static_cast<std::size_t>(chunk_meta.count);
+        const std::uint64_t logical_base =
+            static_cast<std::uint64_t>(chunk) * NATIVE_CHUNK_SIZE;
+        const std::uint64_t file_base = chunk_meta.base;
+        const std::uint64_t file_end = file_base + source_count;
+        if (logical_base < file_base || logical_base >= file_end) {
+            return std::unexpected(std::format(
+                "RAD logical chunk {} (base {}) is outside file chunk [{}, {})",
+                chunk, logical_base, file_base, file_end));
+        }
+        const std::size_t source_offset = static_cast<std::size_t>(logical_base - file_base);
+        std::size_t count = std::min<std::size_t>(
+            NATIVE_CHUNK_SIZE, source_count - source_offset);
+        if (meta_view.valid()) {
+            if (logical_base >= meta_view.node_count) {
+                return std::unexpected("RAD logical chunk exceeds sidecar node count");
+            }
+            count = std::min<std::size_t>(
+                count, meta_view.node_count - static_cast<std::size_t>(logical_base));
+        }
         if (count == 0 || count > dst_capacity) {
             return std::unexpected(std::format(
                 "RAD chunk holds {} splats, destination capacity is {}", count, dst_capacity));
@@ -4064,9 +4225,11 @@ namespace lfs::io {
                 return std::unexpected("RAD chunk exceeds packed property limit");
             }
 
+            const std::size_t source_plane_bytes =
+                rad_property_decoded_bytes(prop.property, prop.encoding, source_count);
             const std::size_t plane_bytes =
                 rad_property_decoded_bytes(prop.property, prop.encoding, count);
-            if (plane_bytes == 0) {
+            if (source_plane_bytes == 0 || plane_bytes == 0) {
                 return std::unexpected(std::format(
                     "Cannot size RAD property '{}' ({})", prop.property, prop.encoding));
             }
@@ -4088,21 +4251,46 @@ namespace lfs::io {
             const bool compressed =
                 prop.compression.has_value() &&
                 (prop.compression.value() == "gz" || prop.compression.value() == "gzip");
-            if (compressed) {
-                if (!rad_decompress_into(&data[absolute_offset], prop_bytes, plane, plane_bytes)) {
-                    return std::unexpected(std::format(
-                        "Failed to decompress RAD chunk property: {}", prop.property));
+            const bool windowed =
+                source_offset != 0 || count != source_count;
+            if (!windowed) {
+                if (compressed) {
+                    if (!rad_decompress_into(&data[absolute_offset], prop_bytes, plane, plane_bytes)) {
+                        return std::unexpected(std::format(
+                            "Failed to decompress RAD chunk property: {}", prop.property));
+                    }
+                } else {
+                    if (prop_bytes != plane_bytes) {
+                        return std::unexpected(std::format(
+                            "RAD property '{}' size mismatch: {} bytes on disk, {} expected",
+                            prop.property, prop_bytes, plane_bytes));
+                    }
+                    std::memcpy(plane, &data[absolute_offset], plane_bytes);
+                }
+                if (enc->delta) {
+                    undelta_planes_u8(plane, info->dims, count);
                 }
             } else {
-                if (prop_bytes != plane_bytes) {
-                    return std::unexpected(std::format(
-                        "RAD property '{}' size mismatch: {} bytes on disk, {} expected",
-                        prop.property, prop_bytes, plane_bytes));
+                std::vector<std::uint8_t> full_plane(source_plane_bytes);
+                if (compressed) {
+                    if (!rad_decompress_into(&data[absolute_offset], prop_bytes,
+                                             full_plane.data(), source_plane_bytes)) {
+                        return std::unexpected(std::format(
+                            "Failed to decompress RAD chunk property: {}", prop.property));
+                    }
+                } else {
+                    if (prop_bytes != source_plane_bytes) {
+                        return std::unexpected(std::format(
+                            "RAD property '{}' size mismatch: {} bytes on disk, {} expected",
+                            prop.property, prop_bytes, source_plane_bytes));
+                    }
+                    std::memcpy(full_plane.data(), &data[absolute_offset], source_plane_bytes);
                 }
-                std::memcpy(plane, &data[absolute_offset], plane_bytes);
-            }
-            if (enc->delta) {
-                undelta_planes_u8(plane, info->dims, count);
+                if (enc->delta) {
+                    undelta_planes_u8(full_plane.data(), info->dims, source_count);
+                }
+                copy_packed_plane_window(full_plane.data(), source_count, source_offset,
+                                         count, *info, enc->encoding, plane);
             }
 
             auto& out = desc.props[desc.property_count++];
@@ -4119,8 +4307,7 @@ namespace lfs::io {
         }
 
         if (meta_view.valid() && chunk < meta_view.chunk_count) {
-            const std::size_t logical_start =
-                static_cast<std::size_t>(chunk) * lfs::core::SplatLodTree::kChunkSplats;
+            const std::size_t logical_start = static_cast<std::size_t>(logical_base);
             if (logical_start < meta_view.node_count) {
                 const std::size_t run = std::min(lfs::core::SplatLodTree::kChunkSplats,
                                                  meta_view.node_count - logical_start);
@@ -4203,17 +4390,65 @@ namespace lfs::io {
         if (!decoded) {
             return decoded;
         }
-        if (range.base != 0 || range.count != 0) {
-            if (decoded->base != range.base || decoded->count != range.count) {
+        const std::uint64_t expected_file_base =
+            range.file_count != 0 ? range.file_base : range.base;
+        const std::uint64_t expected_file_count =
+            range.file_count != 0 ? range.file_count : range.count;
+        if (expected_file_base != 0 || expected_file_count != 0) {
+            if (decoded->base != expected_file_base || decoded->count != expected_file_count) {
                 return std::unexpected(std::format(
                     "RAD chunk range mismatch: range base/count={}/{}, decoded base/count={}/{}",
-                    range.base,
-                    range.count,
+                    expected_file_base,
+                    expected_file_count,
                     decoded->base,
                     decoded->count));
             }
         }
-        return decoded;
+        if (range.count == 0 ||
+            (range.base == decoded->base && range.count == decoded->count)) {
+            return decoded;
+        }
+        if (range.base < decoded->base || range.base + range.count > decoded->base + decoded->count) {
+            return std::unexpected(std::format(
+                "RAD logical chunk range {}/{} is outside decoded file chunk {}/{}",
+                range.base, range.count, decoded->base, decoded->count));
+        }
+        const std::size_t first = static_cast<std::size_t>(range.base - decoded->base);
+        const std::size_t count = static_cast<std::size_t>(range.count);
+        RadDecodedChunk sliced;
+        sliced.base = range.base;
+        sliced.count = range.count;
+        sliced.max_sh_degree = decoded->max_sh_degree;
+        sliced.sh_coeffs_rest = decoded->sh_coeffs_rest;
+        sliced.lod_opacity_encoded = decoded->lod_opacity_encoded;
+        const auto copy_floats = [&](const std::vector<float>& src,
+                                     std::vector<float>& dst,
+                                     const std::size_t dims) {
+            if (src.empty()) {
+                return;
+            }
+            dst.resize(count * dims);
+            std::memcpy(dst.data(), src.data() + first * dims,
+                        count * dims * sizeof(float));
+        };
+        copy_floats(decoded->means, sliced.means, 3);
+        copy_floats(decoded->opacity_raw, sliced.opacity_raw, 1);
+        copy_floats(decoded->sh0_raw, sliced.sh0_raw, 3);
+        copy_floats(decoded->scaling_raw, sliced.scaling_raw, 3);
+        copy_floats(decoded->rotation_raw, sliced.rotation_raw, 4);
+        copy_floats(decoded->shN_canonical, sliced.shN_canonical,
+                    static_cast<std::size_t>(decoded->sh_coeffs_rest) * 3);
+        if (!decoded->child_count.empty()) {
+            sliced.child_count.resize(count);
+            std::memcpy(sliced.child_count.data(), decoded->child_count.data() + first,
+                        count * sizeof(std::uint16_t));
+        }
+        if (!decoded->child_start.empty()) {
+            sliced.child_start.resize(count);
+            std::memcpy(sliced.child_start.data(), decoded->child_start.data() + first,
+                        count * sizeof(std::uint32_t));
+        }
+        return sliced;
     }
 
     Result<void> save_rad(const SplatData& splat_data, const RadSaveOptions& options) {
@@ -4232,6 +4467,7 @@ namespace lfs::io {
         // Encode
         RadEncoder encoder(compression_level,
                            options.flip_y,
+                           options.chunk_size,
                            scale_export_progress(options.progress_callback, 0.0f, 0.95f));
         std::vector<uint8_t> data;
         try {
@@ -4496,6 +4732,7 @@ namespace lfs::io {
         int sh_coeffs = 0;
         bool lod_tree = false;
         int compression_level = GZ_LEVEL;
+        std::uint32_t file_chunk_size = DEFAULT_RAD_FILE_CHUNK_SIZE;
 
         std::optional<ScopedAtomicOutputFile> atomic_output;
         std::ofstream out;
@@ -4538,13 +4775,15 @@ namespace lfs::io {
                                      const int sh_degree,
                                      const bool lod_tree,
                                      const int compression_level,
-                                     const bool emit_meta_sidecar)
+                                     const bool emit_meta_sidecar,
+                                     const std::uint32_t chunk_size)
         : impl_(std::make_unique<Impl>()) {
         impl_->output_path = std::move(output_path);
         impl_->total_count = total_count;
         impl_->sh_degree = std::clamp(sh_degree, 0, 3);
         impl_->sh_coeffs = impl_->sh_degree > 0 ? SH_COEFFS_FOR_DEGREE[impl_->sh_degree] : 0;
         impl_->lod_tree = lod_tree;
+        impl_->file_chunk_size = normalized_export_chunk_size(chunk_size);
         impl_->compression_level =
             (compression_level >= Z_NO_COMPRESSION && compression_level <= Z_BEST_COMPRESSION)
                 ? compression_level
@@ -4570,7 +4809,8 @@ namespace lfs::io {
             return std::unexpected(dir_result.error().message);
         }
 
-        const std::uint64_t expected_chunks = (s.total_count + CHUNK_SIZE - 1) / CHUNK_SIZE;
+        const std::uint64_t expected_chunks =
+            (s.total_count + s.file_chunk_size - 1) / s.file_chunk_size;
         s.meta_reserved = pad8(static_cast<std::size_t>(512 + expected_chunks * 120));
         s.ranges.reserve(static_cast<std::size_t>(expected_chunks));
 
@@ -4595,7 +4835,8 @@ namespace lfs::io {
         s.opened = true;
 
         if (s.emit_meta_sidecar) {
-            if (auto meta_opened = s.meta_writer.open(s.output_path, s.total_count, expected_chunks);
+            if (auto meta_opened = s.meta_writer.open(
+                    s.output_path, s.total_count, native_lod_chunk_count(s.total_count));
                 !meta_opened) {
                 s.dropMetaWriter(meta_opened.error());
             }
@@ -4621,8 +4862,12 @@ namespace lfs::io {
         std::uint64_t cursor = s.written_count;
         for (std::size_t i = 0; i < chunks.size(); ++i) {
             const auto& chunk = chunks[i];
-            if (chunk.count == 0 || chunk.count > CHUNK_SIZE) {
+            if (chunk.count == 0 || chunk.count > s.file_chunk_size) {
                 return std::unexpected("RadStreamWriter: invalid chunk splat count");
+            }
+            if (cursor + chunk.count < s.total_count &&
+                chunk.count != s.file_chunk_size) {
+                return std::unexpected("RadStreamWriter: non-final chunk is smaller than file chunk size");
             }
             if (chunk.means == nullptr || chunk.alpha == nullptr || chunk.rgb == nullptr ||
                 chunk.scales == nullptr || chunk.rotation == nullptr) {
@@ -4641,11 +4886,16 @@ namespace lfs::io {
         // Sidecar planes quantize from the chunk's encoded-then-decoded values
         // so they match a standalone rebuild over the finished file bit for
         // bit (lossy property encodings shift means/scales/alpha slightly).
-        struct MetaSlice {
+        struct MetaPageSlice {
+            std::uint64_t base = 0;
             std::vector<lfs::core::RadMetaBoundsQ> bounds;
             std::vector<lfs::core::RadMetaLinksQ> links;
             RadMetaChunkEntry entry{};
+        };
+        struct MetaSlice {
+            std::vector<MetaPageSlice> pages;
             std::size_t payload_start = 0;
+            std::uint64_t payload_bytes = 0;
             std::string error;
         };
         const bool emit_meta = s.meta_writer.isOpen();
@@ -4712,15 +4962,26 @@ namespace lfs::io {
                 slice.error = std::move(*err);
                 return;
             }
-            std::vector<float> sizes;
-            slice.bounds.resize(count);
-            slice.links.resize(count);
-            quantizeRadMetaChunk(bases[i], count, means.data(), scales.data(),
-                                 alpha.data(), chunk.child_count, chunk.child_start,
-                                 /*lod_opacity_encoded=*/true, sizes,
-                                 slice.bounds.data(), slice.links.data(), slice.entry);
+            slice.pages.clear();
+            for (std::size_t offset = 0; offset < count; offset += NATIVE_CHUNK_SIZE) {
+                const std::size_t run = std::min<std::size_t>(NATIVE_CHUNK_SIZE, count - offset);
+                MetaPageSlice page;
+                page.base = bases[i] + offset;
+                page.bounds.resize(run);
+                page.links.resize(run);
+                std::vector<float> sizes;
+                quantizeRadMetaChunk(page.base, run,
+                                     means.data() + offset * 3,
+                                     scales.data() + offset * 3,
+                                     alpha.data() + offset,
+                                     chunk.child_count + offset,
+                                     chunk.child_start + offset,
+                                     /*lod_opacity_encoded=*/true, sizes,
+                                     page.bounds.data(), page.links.data(), page.entry);
+                slice.pages.push_back(std::move(page));
+            }
             slice.payload_start = parsed->payload_start;
-            slice.entry.payload_bytes = parsed->meta.payload_bytes;
+            slice.payload_bytes = parsed->meta.payload_bytes;
         });
 
         for (std::size_t i = 0; i < chunks.size(); ++i) {
@@ -4744,13 +5005,18 @@ namespace lfs::io {
                 if (!slice.error.empty()) {
                     s.dropMetaWriter(slice.error);
                 } else {
-                    slice.entry.payload_offset =
+                    const std::uint64_t payload_offset =
                         8 + s.meta_reserved + range.offset + slice.payload_start;
-                    if (auto written = s.meta_writer.writeChunk(
-                            s.ranges.size() - 1, bases[i],
-                            slice.bounds, slice.links, slice.entry);
-                        !written) {
-                        s.dropMetaWriter(written.error());
+                    for (auto& page : slice.pages) {
+                        page.entry.payload_offset = payload_offset;
+                        page.entry.payload_bytes = slice.payload_bytes;
+                        const std::uint64_t page_idx = page.base / NATIVE_CHUNK_SIZE;
+                        if (auto written = s.meta_writer.writeChunk(
+                                page_idx, page.base, page.bounds, page.links, page.entry);
+                            !written) {
+                            s.dropMetaWriter(written.error());
+                            break;
+                        }
                     }
                 }
             }
@@ -4776,7 +5042,7 @@ namespace lfs::io {
         meta.count = s.written_count;
         meta.max_sh = s.sh_degree;
         meta.lod_tree = s.lod_tree ? std::optional<bool>(true) : std::nullopt;
-        meta.chunk_size = CHUNK_SIZE;
+        meta.chunk_size = s.file_chunk_size;
         meta.all_chunk_bytes = s.chunk_area_bytes;
         meta.chunks = std::move(s.ranges);
         if (s.lod_tree) {
@@ -4979,13 +5245,11 @@ namespace lfs::io {
             return make_error(ErrorCode::CORRUPTED_DATA,
                               "RAD file has no usable LOD chunk index", rad_path);
         }
-        if (const std::uint32_t file_chunk = meta.chunk_size.value_or(0);
-            file_chunk != CHUNK_SIZE) {
+        if (const std::uint32_t file_chunk = normalized_lod_file_chunk_size(meta);
+            !supported_lod_file_chunk_size(file_chunk)) {
             return make_error(ErrorCode::CORRUPTED_DATA,
-                              std::format("RAD LOD file uses {}-splat chunks; this build "
-                                          "requires {}. Re-convert the source with the "
-                                          "LichtFeld converter.",
-                                          file_chunk, CHUNK_SIZE),
+                              std::format("RAD LOD file uses unsupported {}-splat chunks; expected a multiple of {}.",
+                                          file_chunk, NATIVE_CHUNK_SIZE),
                               rad_path);
         }
         const std::uint64_t n = meta.count;
@@ -5013,7 +5277,7 @@ namespace lfs::io {
         header.endian_sentinel = RAD_META_ENDIAN_SENTINEL;
         header.chunk_size = static_cast<std::uint32_t>(lfs::core::SplatLodTree::kChunkSplats);
         header.node_count = n;
-        header.chunk_count = meta.chunks.size();
+        header.chunk_count = native_lod_chunk_count(n);
         header.source_file_size = stamp->file_size;
         header.source_mtime = stamp->mtime;
         header.source_header_hash = stamp->header_hash;
@@ -5025,7 +5289,7 @@ namespace lfs::io {
         header.lod_opacity_encoded = lod_opacity_encoded ? 1 : 0;
         header.complete = 0;
         const std::uint64_t total_bytes =
-            header.chunk_table_offset + meta.chunks.size() * sizeof(RadMetaChunkEntry);
+            header.chunk_table_offset + header.chunk_count * sizeof(RadMetaChunkEntry);
 
         const auto meta_path = rad_meta_sidecar_path(rad_path);
         {
@@ -5080,7 +5344,7 @@ namespace lfs::io {
 
         // Phase 1 (parallel): decode each chunk's tree-relevant properties and
         // write bounds + partial links (level/parent patched in phase 2).
-        std::vector<RadMetaChunkEntry> chunk_table(meta.chunks.size());
+        std::vector<RadMetaChunkEntry> chunk_table(static_cast<std::size_t>(header.chunk_count));
         std::atomic<bool> failed{false};
         std::mutex error_mutex;
         std::string build_error;
@@ -5177,37 +5441,49 @@ namespace lfs::io {
                         return;
                     }
 
-                    scratch.bounds.resize(count);
-                    scratch.links.resize(count);
-                    RadMetaChunkEntry entry{};
-                    quantizeRadMetaChunk(base, count,
-                                         scratch.means.data(), scratch.scales.data(),
-                                         scratch.alpha.data(), scratch.child_count.data(),
-                                         scratch.child_start.data(), lod_opacity_encoded,
-                                         scratch.sizes,
-                                         scratch.bounds.data(), scratch.links.data(), entry);
+                    for (std::size_t s = 0; s < count; s += NATIVE_CHUNK_SIZE) {
+                        const std::size_t run = std::min<std::size_t>(NATIVE_CHUNK_SIZE, count - s);
+                        const std::size_t logical_base = base + s;
+                        const std::size_t logical_chunk = logical_base / NATIVE_CHUNK_SIZE;
+                        if (logical_chunk >= chunk_table.size()) {
+                            record_error("RAD sidecar logical chunk index exceeds table");
+                            return;
+                        }
+                        scratch.bounds.resize(run);
+                        scratch.links.resize(run);
+                        RadMetaChunkEntry entry{};
+                        quantizeRadMetaChunk(logical_base, run,
+                                             scratch.means.data() + s * 3,
+                                             scratch.scales.data() + s * 3,
+                                             scratch.alpha.data() + s,
+                                             scratch.child_count.data() + s,
+                                             scratch.child_start.data() + s,
+                                             lod_opacity_encoded,
+                                             scratch.sizes,
+                                             scratch.bounds.data(), scratch.links.data(), entry);
 
-                    scratch.out.clear();
-                    scratch.out.seekp(static_cast<std::streamoff>(
-                                          header.bounds_offset +
-                                          base * sizeof(lfs::core::RadMetaBoundsQ)),
-                                      std::ios::beg);
-                    scratch.out.write(reinterpret_cast<const char*>(scratch.bounds.data()),
-                                      static_cast<std::streamsize>(count * sizeof(lfs::core::RadMetaBoundsQ)));
-                    scratch.out.seekp(static_cast<std::streamoff>(
-                                          header.links_offset +
-                                          base * sizeof(lfs::core::RadMetaLinksQ)),
-                                      std::ios::beg);
-                    scratch.out.write(reinterpret_cast<const char*>(scratch.links.data()),
-                                      static_cast<std::streamsize>(count * sizeof(lfs::core::RadMetaLinksQ)));
-                    if (!scratch.out.good()) {
-                        record_error(std::format("Failed to write sidecar planes: {}", io_error_detail()));
-                        return;
+                        scratch.out.clear();
+                        scratch.out.seekp(static_cast<std::streamoff>(
+                                              header.bounds_offset +
+                                              logical_base * sizeof(lfs::core::RadMetaBoundsQ)),
+                                          std::ios::beg);
+                        scratch.out.write(reinterpret_cast<const char*>(scratch.bounds.data()),
+                                          static_cast<std::streamsize>(run * sizeof(lfs::core::RadMetaBoundsQ)));
+                        scratch.out.seekp(static_cast<std::streamoff>(
+                                              header.links_offset +
+                                              logical_base * sizeof(lfs::core::RadMetaLinksQ)),
+                                          std::ios::beg);
+                        scratch.out.write(reinterpret_cast<const char*>(scratch.links.data()),
+                                          static_cast<std::streamsize>(run * sizeof(lfs::core::RadMetaLinksQ)));
+                        if (!scratch.out.good()) {
+                            record_error(std::format("Failed to write sidecar planes: {}", io_error_detail()));
+                            return;
+                        }
+
+                        entry.payload_offset = file_offset + parsed->payload_start;
+                        entry.payload_bytes = chunk.payload_bytes;
+                        chunk_table[logical_chunk] = entry;
                     }
-
-                    entry.payload_offset = file_offset + parsed->payload_start;
-                    entry.payload_bytes = chunk.payload_bytes;
-                    chunk_table[ci] = entry;
 
                     const std::size_t done = chunks_done.fetch_add(1) + 1;
                     if ((done & 0x3f) == 0 || done == meta.chunks.size()) {
@@ -5289,19 +5565,21 @@ namespace lfs::io {
         return {};
     }
 
-    std::expected<bool, std::string> rad_lod_needs_rechunk(const std::filesystem::path& input) {
+    std::expected<std::optional<std::uint32_t>, std::string> rad_lod_file_chunk_size(
+        const std::filesystem::path& input) {
         auto info = read_rad_file_info(input);
         if (!info) {
             return std::unexpected(info.error());
         }
         if (!info->meta.lod_tree.value_or(false)) {
-            return false;
+            return std::optional<std::uint32_t>{};
         }
-        return info->meta.chunk_size.value_or(0) != CHUNK_SIZE;
+        return std::optional<std::uint32_t>{normalized_lod_file_chunk_size(info->meta)};
     }
 
     Result<void> rechunk_rad_lod(const std::filesystem::path& input,
                                  const std::filesystem::path& output,
+                                 const std::uint32_t target_chunk_size,
                                  const RechunkProgressCallback& progress) {
         auto info = read_rad_file_info(input);
         if (!info) {
@@ -5316,16 +5594,13 @@ namespace lfs::io {
             return make_error(ErrorCode::CORRUPTED_DATA,
                               "RAD file has no usable LOD chunk index", input);
         }
-        const std::uint32_t source_chunk = meta.chunk_size.value_or(0);
-        if (source_chunk == CHUNK_SIZE) {
-            return make_error(ErrorCode::CORRUPTED_DATA,
-                              "RAD file already uses the current chunk size", input);
-        }
-        if (source_chunk == 0 || source_chunk % CHUNK_SIZE != 0) {
+        const std::uint32_t source_chunk = normalized_lod_file_chunk_size(meta);
+        if (!supported_lod_file_chunk_size(source_chunk)) {
             return make_error(ErrorCode::CORRUPTED_DATA,
                               std::format("Unsupported source chunk size {}", source_chunk),
                               input);
         }
+        const std::uint32_t output_chunk_size = normalized_export_chunk_size(target_chunk_size);
         const int max_sh = meta.max_sh.value_or(0);
         const int sh_coeffs = max_sh > 0 ? SH_COEFFS_FOR_DEGREE[max_sh] : 0;
 
@@ -5334,12 +5609,14 @@ namespace lfs::io {
             return make_error(ErrorCode::PATH_NOT_FOUND, "Failed to open RAD file", input);
         }
 
-        RadStreamWriter writer(output, meta.count, max_sh, /*lod_tree=*/true);
+        RadStreamWriter writer(output, meta.count, max_sh, /*lod_tree=*/true,
+                               GZ_LEVEL, /*emit_meta_sidecar=*/false, output_chunk_size);
         if (auto opened = writer.open(); !opened) {
             return make_error(ErrorCode::WRITE_FAILURE, opened.error(), output);
         }
 
         const std::size_t old_count = source_chunk;
+        const std::size_t out_capacity = output_chunk_size;
         std::vector<float> means(old_count * 3), opacity(old_count), rgb(old_count * 3);
         std::vector<float> scales(old_count * 3), rotation(old_count * 4);
         std::vector<float> shN(sh_coeffs > 0
@@ -5347,12 +5624,93 @@ namespace lfs::io {
                                    : 0);
         std::vector<std::uint16_t> child_count(old_count);
         std::vector<std::uint32_t> child_start(old_count);
+        std::vector<float> out_means(out_capacity * 3), out_opacity(out_capacity), out_rgb(out_capacity * 3);
+        std::vector<float> out_scales(out_capacity * 3), out_rotation(out_capacity * 4);
+        std::vector<float> out_shN(sh_coeffs > 0
+                                       ? out_capacity * static_cast<std::size_t>(sh_coeffs) * 3
+                                       : 0);
+        std::vector<std::uint16_t> out_child_count(out_capacity);
+        std::vector<std::uint32_t> out_child_start(out_capacity);
         std::vector<std::uint8_t> chunk_bytes;
-        std::vector<RadStreamChunkSource> slices;
+        std::uint32_t out_fill = 0;
+
+        auto flush_output_chunk = [&]() -> Result<void> {
+            if (out_fill == 0) {
+                return {};
+            }
+            const RadStreamChunkSource chunk{
+                .count = out_fill,
+                .means = out_means.data(),
+                .alpha = out_opacity.data(),
+                .rgb = out_rgb.data(),
+                .scales = out_scales.data(),
+                .rotation = out_rotation.data(),
+                .shN = sh_coeffs > 0 ? out_shN.data() : nullptr,
+                .child_count = out_child_count.data(),
+                .child_start = out_child_start.data(),
+            };
+            if (auto appended = writer.append(chunk); !appended) {
+                return make_error(ErrorCode::WRITE_FAILURE, appended.error(), output);
+            }
+            out_fill = 0;
+            return {};
+        };
+
+        auto append_decoded_range = [&](std::uint32_t src_offset,
+                                        std::uint32_t count) -> Result<void> {
+            while (count > 0) {
+                const std::uint32_t take = std::min<std::uint32_t>(
+                    output_chunk_size - out_fill, count);
+                const std::size_t dst = out_fill;
+                const std::size_t src = src_offset;
+                std::memcpy(out_means.data() + dst * 3,
+                            means.data() + src * 3,
+                            static_cast<std::size_t>(take) * 3 * sizeof(float));
+                std::memcpy(out_opacity.data() + dst,
+                            opacity.data() + src,
+                            static_cast<std::size_t>(take) * sizeof(float));
+                std::memcpy(out_rgb.data() + dst * 3,
+                            rgb.data() + src * 3,
+                            static_cast<std::size_t>(take) * 3 * sizeof(float));
+                std::memcpy(out_scales.data() + dst * 3,
+                            scales.data() + src * 3,
+                            static_cast<std::size_t>(take) * 3 * sizeof(float));
+                std::memcpy(out_rotation.data() + dst * 4,
+                            rotation.data() + src * 4,
+                            static_cast<std::size_t>(take) * 4 * sizeof(float));
+                if (sh_coeffs > 0) {
+                    const std::size_t dims = static_cast<std::size_t>(sh_coeffs) * 3;
+                    std::memcpy(out_shN.data() + dst * dims,
+                                shN.data() + src * dims,
+                                static_cast<std::size_t>(take) * dims * sizeof(float));
+                }
+                std::memcpy(out_child_count.data() + dst,
+                            child_count.data() + src,
+                            static_cast<std::size_t>(take) * sizeof(std::uint16_t));
+                std::memcpy(out_child_start.data() + dst,
+                            child_start.data() + src,
+                            static_cast<std::size_t>(take) * sizeof(std::uint32_t));
+
+                out_fill += take;
+                src_offset += take;
+                count -= take;
+                if (out_fill == output_chunk_size) {
+                    if (auto flushed = flush_output_chunk(); !flushed) {
+                        return flushed;
+                    }
+                }
+            }
+            return {};
+        };
 
         for (std::size_t c = 0; c < meta.chunks.size(); ++c) {
             const auto& range = meta.chunks[c];
-            chunk_bytes.resize(range.bytes);
+            if (range.bytes > std::numeric_limits<std::size_t>::max()) {
+                return make_error(ErrorCode::CORRUPTED_DATA,
+                                  std::format("Chunk {} is too large for this platform", c),
+                                  input);
+            }
+            chunk_bytes.resize(static_cast<std::size_t>(range.bytes));
             in.seekg(static_cast<std::streamoff>(info->chunk_area_start + range.offset),
                      std::ios::beg);
             in.read(reinterpret_cast<char*>(chunk_bytes.data()),
@@ -5366,9 +5724,13 @@ namespace lfs::io {
                 return make_error(ErrorCode::CORRUPTED_DATA, parsed.error(), input);
             }
             const std::uint32_t count = parsed->meta.count;
-            if (count == 0 || count > old_count || count != *range.count) {
+            if (parsed->meta.base != *range.base || count != *range.count) {
                 return make_error(ErrorCode::CORRUPTED_DATA,
-                                  std::format("Chunk {} count mismatch", c), input);
+                                  std::format("Chunk {} range mismatch", c), input);
+            }
+            if (count == 0 || count > old_count) {
+                return make_error(ErrorCode::CORRUPTED_DATA,
+                                  std::format("Chunk {} has invalid count {}", c, count), input);
             }
             if (sh_coeffs > 0) {
                 std::fill(shN.begin(), shN.end(), 0.0f);
@@ -5392,25 +5754,8 @@ namespace lfs::io {
                 return make_error(ErrorCode::CORRUPTED_DATA, std::move(*err), input);
             }
 
-            slices.clear();
-            for (std::uint32_t s = 0; s < count; s += CHUNK_SIZE) {
-                const std::uint32_t n = std::min(CHUNK_SIZE, count - s);
-                slices.push_back({
-                    .count = n,
-                    .means = means.data() + static_cast<std::size_t>(s) * 3,
-                    .alpha = opacity.data() + s,
-                    .rgb = rgb.data() + static_cast<std::size_t>(s) * 3,
-                    .scales = scales.data() + static_cast<std::size_t>(s) * 3,
-                    .rotation = rotation.data() + static_cast<std::size_t>(s) * 4,
-                    .shN = sh_coeffs > 0
-                               ? shN.data() + static_cast<std::size_t>(s) * sh_coeffs * 3
-                               : nullptr,
-                    .child_count = child_count.data() + s,
-                    .child_start = child_start.data() + s,
-                });
-            }
-            if (auto appended = writer.append_batch(slices); !appended) {
-                return make_error(ErrorCode::WRITE_FAILURE, appended.error(), output);
+            if (auto appended = append_decoded_range(0, count); !appended) {
+                return appended;
             }
             if (progress &&
                 !progress(static_cast<float>(c + 1) / static_cast<float>(meta.chunks.size()))) {
@@ -5418,12 +5763,15 @@ namespace lfs::io {
             }
         }
         in.close();
+        if (auto flushed = flush_output_chunk(); !flushed) {
+            return flushed;
+        }
         if (auto finished = writer.finish(); !finished) {
             return make_error(ErrorCode::WRITE_FAILURE, finished.error(), output);
         }
         LOG_INFO("RAD re-chunked: {} -> {} ({} nodes, {}-splat chunks -> {})",
                  lfs::core::path_to_utf8(input), lfs::core::path_to_utf8(output),
-                 meta.count, source_chunk, CHUNK_SIZE);
+                 meta.count, source_chunk, output_chunk_size);
         return {};
     }
 

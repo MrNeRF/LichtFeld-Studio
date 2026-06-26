@@ -119,6 +119,8 @@ namespace lfs::vis {
         Polygon,
         Lasso,
         Rings,
+        Box,
+        Sphere,
         Color
     };
 

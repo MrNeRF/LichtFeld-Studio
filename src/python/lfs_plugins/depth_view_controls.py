@@ -3,7 +3,6 @@
 """Depth-map controls controller for the viewport overlay."""
 
 import math
-
 import lichtfeld as lf
 
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
@@ -12,6 +11,7 @@ from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 _DEPTH_MIN = 0.0
 _DEPTH_MAX = 10000.0
 _DEPTH_GAP = 0.01
+_DEPTH_STEP = 1.0
 _DEFAULT_DEPTH_NEAR = 0.1
 _DEFAULT_DEPTH_FAR = 100.0
 _DEFAULT_MODE = "palette"
@@ -113,6 +113,7 @@ class DepthViewControlsController:
         model.bind_func("depth_view_far_slider_min", lambda: f"{self._far_slider_bounds()[0]:.3f}")
         model.bind_func("depth_view_far_slider_max", lambda: f"{self._far_slider_bounds()[1]:.3f}")
         model.bind_event("depth_view_action", self._on_action)
+        model.bind_event("depth_view_num_step", self._on_num_step)
 
         self._handle = model.get_handle()
 
@@ -147,6 +148,7 @@ class DepthViewControlsController:
 
         self._refresh_state()
         self._scrub_fields.sync_all()
+
         state_items = self._state_items()
         state_key = self._state_key(state_items)
         if state_key != self._last_state_key:
@@ -275,6 +277,31 @@ class DepthViewControlsController:
             self._report_error(str(exc).strip() or "Could not update depth-map range.")
         self._scrub_fields.sync_all()
         self._dirty_all()
+
+    def _on_num_step(self, handle, event, args):
+        del handle, event
+        if len(args) < 2:
+            return
+        self._apply_step(str(args[0]), int(args[1]))
+
+    def _apply_step(self, target, direction):
+        direction = int(direction)
+        if target not in {"near", "far"} or direction == 0:
+            return
+
+        self._refresh_state()
+        if not self._has_scene:
+            return
+
+        direction = 1 if direction > 0 else -1
+        delta = _DEPTH_STEP * direction
+        if target == "near":
+            near = _clamp(self._depth_near + delta, _DEPTH_MIN, _DEPTH_MAX - _DEPTH_GAP)
+            far = max(self._depth_far, near + _DEPTH_GAP)
+        elif target == "far":
+            far = _clamp(self._depth_far + delta, _DEPTH_MIN + _DEPTH_GAP, _DEPTH_MAX)
+            near = min(self._depth_near, far - _DEPTH_GAP)
+        self._apply_depth_range(near, far)
 
     def _on_action(self, handle, event, args):
         del handle, event, args

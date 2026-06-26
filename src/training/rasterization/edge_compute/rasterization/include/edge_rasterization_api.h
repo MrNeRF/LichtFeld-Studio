@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cuda_runtime.h>
 
 namespace edge_compute::rasterization {
 
@@ -31,7 +32,8 @@ namespace edge_compute::rasterization {
         float far_plane,
         bool mip_filter,
         const float* pixel_weights,
-        float* accum_weights);
+        float* accum_weights,
+        cudaStream_t stream = nullptr); // nullptr → getCurrentCUDAStream()
 
     // Pre-compile all CUDA kernels to avoid JIT delays during rendering
     void warmup_kernels();

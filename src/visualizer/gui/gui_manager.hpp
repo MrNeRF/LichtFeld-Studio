@@ -205,6 +205,11 @@ namespace lfs::vis {
             void loadImGuiSettings();
             void saveImGuiSettings() const;
             void persistImGuiSettingsIfNeeded();
+            void beginImGuiPlatformFrame(WindowManager* window_manager,
+                                         VulkanContext* vulkan_context);
+            [[nodiscard]] bool shouldUseCachedImGuiResizeFrame(
+                const WindowManager* window_manager,
+                const VulkanContext* vulkan_context) const;
             void initCustomCursors();
             void destroyCustomCursors();
             void applyRmlCursorRequest(RmlCursorRequest req);
@@ -342,6 +347,9 @@ namespace lfs::vis {
 
             // RmlUI integration
             RmlUIManager rmlui_manager_;
+            std::chrono::steady_clock::time_point last_imgui_platform_frame_time_{};
+            std::uint64_t cached_imgui_resize_frame_count_ = 0;
+            bool used_cached_imgui_resize_frame_ = false;
             std::unique_ptr<lfs::vis::VulkanViewportPass> vulkan_viewport_pass_;
             std::vector<std::unique_ptr<VulkanSceneInteropTarget>> vulkan_scene_interop_;
             std::shared_ptr<const lfs::core::Tensor> vulkan_scene_image_;
@@ -412,6 +420,7 @@ namespace lfs::vis {
                 RightPanelPointerRegion::None;
             bool bottom_dock_pointer_live_capture_ = false;
             bool left_dock_pointer_live_capture_ = false;
+            bool dock_resize_interaction_active_ = false;
             std::string last_ui_layout_active_tab_;
             std::uint64_t last_pre_scene_panel_sync_generation_ = 0;
 

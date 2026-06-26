@@ -46,7 +46,7 @@ namespace lfs::core {
         if (src.device() == Device::CUDA) {
             const cudaStream_t execution_stream =
                 getCurrentCUDAStream() ? getCurrentCUDAStream() : src.stream();
-            waitForCUDAStream(execution_stream, src.stream());
+            src.sync_to_stream(execution_stream);
             CUDAStreamGuard guard(execution_stream);
             result = Tensor::empty(target, src.device(), src.dtype());
         } else {

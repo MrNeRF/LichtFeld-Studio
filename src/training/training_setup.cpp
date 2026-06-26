@@ -566,6 +566,14 @@ namespace lfs::training {
             if (auto result = appendAddedSplats(params, *model); !result) {
                 return result;
             }
+
+            const int max_cap = params.optimization.max_cap;
+            if (max_cap > 0 && model->size() > max_cap) {
+                LOG_WARN("Max cap ({}) is less than initial splat count ({}), randomly selecting {} splats",
+                         max_cap, model->size(), max_cap);
+                lfs::core::random_choose(*model, max_cap);
+            }
+
             if (auto result = migrateTrainingModelToAllocator(params, *model, tensor_allocator); !result) {
                 return result;
             }

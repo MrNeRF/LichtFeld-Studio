@@ -18,6 +18,19 @@ body,
     background-color: @{primary};
 }
 
+.progress-marker {
+    background-color: @{statusbar.progress_marker};
+}
+
+.progress-marker.is-past {
+    background-color: @{statusbar.progress_marker_past};
+}
+
+.progress-marker.is-hovered,
+.progress-marker.is-preview {
+    background-color: @{statusbar.progress_marker_active};
+}
+
 #gpu-icon {
     image-color: @{text_dim};
 }

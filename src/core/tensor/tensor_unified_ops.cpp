@@ -41,7 +41,7 @@ namespace lfs::core {
             }
 
             const cudaStream_t execution_stream = resolve_cuda_execution_stream(tensor);
-            waitForCUDAStream(execution_stream, tensor.stream());
+            tensor.sync_to_stream(execution_stream);
             CUDAStreamGuard guard(execution_stream);
             return Tensor::empty(shape, device, dtype);
         }
@@ -701,7 +701,7 @@ namespace lfs::core {
                     Tensor result;
                     {
                         const cudaStream_t execution_stream = resolve_cuda_execution_stream(fused_source);
-                        waitForCUDAStream(execution_stream, fused_source.stream());
+                        fused_source.sync_to_stream(execution_stream);
                         CUDAStreamGuard guard(execution_stream);
                         result = Tensor::empty(
                             TensorShape(args.keepdim
@@ -764,7 +764,7 @@ namespace lfs::core {
                     Tensor result;
                     {
                         const cudaStream_t execution_stream = resolve_cuda_execution_stream(fused_source);
-                        waitForCUDAStream(execution_stream, fused_source.stream());
+                        fused_source.sync_to_stream(execution_stream);
                         CUDAStreamGuard guard(execution_stream);
                         result = Tensor::empty(TensorShape(out_shape), Device::CUDA, DataType::Float32);
                         tensor_ops::launch_fused_segmented_transform_reduce(
@@ -956,7 +956,7 @@ namespace lfs::core {
         std::optional<CUDAStreamGuard> execution_guard;
         if (input->device_ == Device::CUDA) {
             const cudaStream_t execution_stream = resolve_cuda_execution_stream(*input);
-            waitForCUDAStream(execution_stream, input->stream());
+            input->sync_to_stream(execution_stream);
             execution_guard.emplace(execution_stream);
         }
 

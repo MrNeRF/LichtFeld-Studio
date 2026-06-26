@@ -9,6 +9,7 @@
             <span class="separator">|</span>
             <div id="progress-container">
                 <div id="progress-fill" data-style-width="progress_width"></div>
+                <div id="progress-markers"></div>
                 <span id="progress-text">{{ progress_text }}</span>
             </div>
             <span id="step-label" class="dim">{{ step_label }}</span>

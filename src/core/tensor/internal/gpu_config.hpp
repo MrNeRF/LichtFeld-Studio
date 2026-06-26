@@ -120,14 +120,6 @@ namespace lfs::core {
         }
     };
 
-    /**
-     * @brief Global device properties (for use in kernels)
-     *
-     * This is exported so kernels can access GPU properties without
-     * additional function calls.
-     */
-    inline const GPUConfig& gpu_config = GPUConfig::get();
-
 // ============================================================================
 // Compile-Time Constants (for __launch_bounds__)
 // ============================================================================
@@ -162,7 +154,7 @@ namespace lfs::core {
  *   my_kernel<<<grid, 256>>>(...)
  */
 #define OPTIMAL_GRID_SIZE(block_size) \
-    (lfs::core::gpu_config.optimal_grid_size(block_size))
+    (lfs::core::GPUConfig::get().optimal_grid_size(block_size))
 
 /**
  * @brief Get optimal grid size with a cap
@@ -171,6 +163,6 @@ namespace lfs::core {
  *   int grid = OPTIMAL_GRID_SIZE_CAPPED(256, 2048);  // Max 2048 blocks
  */
 #define OPTIMAL_GRID_SIZE_CAPPED(block_size, max_blocks) \
-    (lfs::core::gpu_config.optimal_grid_size_capped(block_size, max_blocks))
+    (lfs::core::GPUConfig::get().optimal_grid_size_capped(block_size, max_blocks))
 
 } // namespace lfs::core

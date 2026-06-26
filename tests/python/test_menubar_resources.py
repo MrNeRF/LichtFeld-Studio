@@ -56,6 +56,18 @@ def test_menubar_submenus_are_stacked_above_overlay_and_hit_testable():
     assert ".submenu-container.open > .submenu-popup" in rcss
     assert "pointer-events: auto;" in rcss
     assert ".menu-item.active" in theme_rcss
+    assert 'id="menu-window-fullscreen"' not in rml
+    assert 'data-action="window_toggle_fullscreen"' not in rml
+    assert 'id="menu-window-toggle-ui"' in rml
+    assert 'data-action="window_toggle_ui"' in rml
+    assert rml.count('data-for="button : menu_camera_buttons"') == 1
+    assert rml.count('data-for="button : menu_render_buttons"') == 1
+    assert rml.index('data-for="button : menu_camera_buttons"') < rml.index(
+        'data-for="button : menu_render_buttons"'
+    )
+    assert rml.index('data-for="button : menu_render_buttons"') < rml.index(
+        'data-for="button : menu_projection_buttons"'
+    )
 
 
 def test_rml_tooltips_request_only_pending_animation_frames():
@@ -119,6 +131,11 @@ def test_menu_bar_uses_retained_bounds_for_submenu_hover():
     assert "GetAbsoluteOffset(Rml::BoxArea::Border)" in menu_bar_cpp
     assert "setOpenSubmenu(submenuIndexForElement(hit_element))" in menu_bar_cpp
     assert "rml_context_->GetElementAtPoint" not in menu_bar_cpp
+    assert 'action == "window_toggle_fullscreen"' not in menu_bar_cpp
+    assert 'ctor.Bind("menu_camera_buttons", &camera_buttons_)' in menu_bar_cpp
+    assert 'action == "set_camera_navigation_mode"' in menu_bar_cpp
+    assert "setCameraNavigationMode" in menu_bar_cpp
+    assert "std::vector<MenuToolbarButtonView> camera_buttons_" in menu_bar_header
 
 
 def test_open_menu_requests_passive_mouse_render_and_blocks_viewport_hit_testing():
@@ -131,4 +148,58 @@ def test_open_menu_requests_passive_mouse_render_and_blocks_viewport_hit_testing
     ).read_text(encoding="utf-8")
 
     assert "if (rml_menu_bar_.isOpen())\n            return true;" in gui_manager_cpp
-    assert "if (!ui_hidden_ && rml_menu_bar_.isOpen())" in gui_manager_cpp
+    assert (
+        "if (rml_menu_bar_.isOpen()) {\n"
+        "            return {.blocks_pointer = true, .takes_keyboard_focus = true};\n"
+        "        }"
+    ) in gui_manager_cpp
+    assert "if (!ui_hidden_ && rml_menu_bar_.isOpen())" not in gui_manager_cpp
+
+
+def test_viewport_overlay_toolbar_origin_tracks_viewport_content_offset():
+    gui_manager_cpp = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "gui_manager.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert "const float viewport_content_offset = viewport_layout_.pos.x - screen.work_pos.x;" in gui_manager_cpp
+    assert "float primary_toolbar_x = viewport_content_offset;" in gui_manager_cpp
+    assert "rml_viewport_overlay_.setViewportContentOffset(viewport_content_offset);" in gui_manager_cpp
+
+
+def test_scene_header_hosts_asset_manager_launcher():
+    scene_rml = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "resources"
+        / "scene_tree.rml"
+    ).read_text(encoding="utf-8")
+    scene_rcss = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "resources"
+        / "scene_tree.rcss"
+    ).read_text(encoding="utf-8")
+    scene_cpp = (
+        PROJECT_ROOT / "src" / "visualizer" / "gui" / "scene_panel_native.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert 'id="asset-manager-button"' in scene_rml
+    assert 'data-tooltip="toolbar.asset_manager"' in scene_rml
+    assert ".scene-header-icon-button" in scene_rcss
+    assert "width: 30dp;" in scene_rcss
+    assert "height: 30dp;" in scene_rcss
+    assert "width: 20dp;" in scene_rcss
+    assert "height: 20dp;" in scene_rcss
+    assert 'resolveRmlImageSource("icon/archive.png")' in scene_cpp
+    assert 'panel_registry.is_panel_enabled("lfs.asset_manager")' in scene_cpp
+    assert 'panel_registry.set_panel_enabled("lfs.asset_manager", !currently_open);' in scene_cpp

@@ -67,14 +67,14 @@ namespace lfs::core {
 
         inline cudaStream_t prepare_cuda_execution_stream(const Tensor& primary) {
             const cudaStream_t execution_stream = resolve_cuda_execution_stream(primary);
-            waitForCUDAStream(execution_stream, primary.stream());
+            primary.sync_to_stream(execution_stream);
             return execution_stream;
         }
 
         inline cudaStream_t prepare_cuda_execution_stream(const Tensor& primary, const Tensor& secondary) {
             const cudaStream_t execution_stream = resolve_cuda_execution_stream(primary, secondary);
-            waitForCUDAStream(execution_stream, primary.stream());
-            waitForCUDAStream(execution_stream, secondary.stream());
+            primary.sync_to_stream(execution_stream);
+            secondary.sync_to_stream(execution_stream);
             return execution_stream;
         }
 

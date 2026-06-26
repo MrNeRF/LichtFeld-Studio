@@ -57,14 +57,26 @@ namespace lfs::core {
          * Instead of immediately calling cudaFreeHost, the block is cached
          * for potential reuse by future allocations of similar size.
          *
-         * STREAM-AWARE: Records a CUDA event on the given stream to track when
-         * the memory is safe to reuse. The cached block will not be reused until
-         * the event signals completion.
+         * STREAM-AWARE: Records a pooled CUDA event on `stream` and on every
+         * stream registered via record_stream(). The cached block is not reused
+         * until all of those events have completed.
          *
          * @param ptr Pointer to pinned memory to free
          * @param stream CUDA stream that last used this memory (nullptr = default stream)
          */
         void deallocate(void* ptr, cudaStream_t stream = nullptr);
+
+        /**
+         * @brief Marks `ptr` as used by an additional stream (H2D on one stream,
+         * D2H on another). The free defers reuse until that stream passes the use.
+         */
+        void record_stream(void* ptr, cudaStream_t stream);
+
+        /**
+         * @brief Severs references to `stream` before it is destroyed: waits for
+         * its pending work, then drops it from all recorded uses.
+         */
+        void release_stream(cudaStream_t stream);
 
         /**
          * @brief Clear all cached blocks and free them to the system
@@ -137,20 +149,29 @@ namespace lfs::core {
         struct Block {
             void* ptr{nullptr};
             size_t size{0};
-            cudaStream_t last_stream{nullptr}; ///< Stream that last used this memory
-            cudaEvent_t ready_event{nullptr};  ///< Event signaling when safe to reuse
+            // Pooled events, one per stream that used this memory; the block is
+            // safe to reuse once every event has completed. Events stay valid
+            // after their recording stream is destroyed.
+            std::vector<cudaEvent_t> ready_events;
 
             Block() = default;
-
-            Block(void* p, size_t s, cudaStream_t stream = nullptr);
+            Block(void* p, size_t s) : ptr(p),
+                                       size(s) {}
 
             ~Block();
 
-            // Move-only (events can't be copied)
             Block(Block&& other) noexcept;
             Block& operator=(Block&& other) noexcept;
             Block(const Block&) = delete;
             Block& operator=(const Block&) = delete;
+
+            bool all_uses_complete() const;
+            void release_events();
+        };
+
+        struct AllocationInfo {
+            size_t size{0};
+            std::vector<cudaStream_t> extra_streams;
         };
 
         // Cache of free blocks organized by size
@@ -158,7 +179,7 @@ namespace lfs::core {
         std::unordered_map<size_t, std::vector<Block>> cache_;
 
         // Track all allocated blocks (for deallocation lookup)
-        std::unordered_map<void*, size_t> allocated_blocks_;
+        std::unordered_map<void*, AllocationInfo> allocated_blocks_;
 
         mutable std::mutex mutex_;
         Stats stats_;

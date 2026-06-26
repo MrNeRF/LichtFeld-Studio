@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Training Panel - RmlUI with native data binding."""
 
+from contextlib import contextmanager
 import os
 import re
 import threading
@@ -34,6 +35,22 @@ __lfs_panel_ids__ = ["lfs.training"]
 def tr(key):
     result = lf.ui.tr(key)
     return result if result else key
+
+
+def tr_fallback(key, fallback):
+    result = lf.ui.tr(key)
+    return result if result and result != key else fallback
+
+
+@contextmanager
+def _disabled_scope(layout, disabled):
+    if disabled:
+        layout.begin_disabled(True)
+    try:
+        yield
+    finally:
+        if disabled:
+            layout.end_disabled()
 
 
 class IterationRateTracker:
@@ -194,9 +211,6 @@ LOCALE_KEYS = {
     "bg_option_modulation": "training.options.bg.modulation",
     "bg_option_image": "training.options.bg.image",
     "bg_option_random": "training.options.bg.random",
-    "bg_color_red_prefix": "training_panel.color_red_prefix",
-    "bg_color_green_prefix": "training_panel.color_green_prefix",
-    "bg_color_blue_prefix": "training_panel.color_blue_prefix",
     "enable_eval": "training_params.enable_eval",
     "test_every": "training.dataset.test_every",
 }
@@ -372,22 +386,16 @@ INITIALLY_COLLAPSED = {
 }
 
 
-def _color_to_hex(c):
-    return f"#{int(c[0] * 255):02x}{int(c[1] * 255):02x}{int(c[2] * 255):02x}"
-
-
-def _hex_to_color(h):
-    h = h.lstrip("#")
-    if len(h) != 6:
-        return None
-    try:
-        return (
-            int(h[0:2], 16) / 255.0,
-            int(h[2:4], 16) / 255.0,
-            int(h[4:6], 16) / 255.0,
-        )
-    except ValueError:
-        return None
+BG_COLOR_CHANNELS = (
+    ("bg_color_r", 0),
+    ("bg_color_g", 1),
+    ("bg_color_b", 2),
+)
+BG_COLOR_CHANNEL_INDEX = dict(BG_COLOR_CHANNELS)
+BG_COLOR_HEX_KEY = "bg_color_hex"
+BG_COLOR_TEXT_KEYS = tuple(key for key, _index in BG_COLOR_CHANNELS) + (
+    BG_COLOR_HEX_KEY,
+)
 
 
 class TrainingPanel(Panel):
@@ -404,6 +412,8 @@ class TrainingPanel(Panel):
         self._checkpoint_saved_time = 0.0
         self._new_save_step = 7000
         self._auto_scaled_for_cameras = 0
+        self._auto_scale_steps_locked = True
+        self._auto_scale_scene_generation = RuntimeState.scene_generation.value
         self._last_state = ""
         self._last_save_steps = None
         self._color_edit_prop = None
@@ -502,6 +512,16 @@ class TrainingPanel(Panel):
         model.bind_func("label_status_error", lambda: tr("status.error"))
         model.bind_func("label_status_stopping", lambda: tr("status.stopping"))
         model.bind_func("label_ppisp_sidecar_clear", lambda: tr("training_panel.clear"))
+        model.bind_func(
+            "steps_scaling_lock_label", self._step_scaling_lock_label
+        )
+        model.bind_func(
+            "steps_scaling_lock_tooltip", self._step_scaling_lock_tooltip
+        )
+        model.bind_func("steps_scaling_lock_icon", self._step_scaling_lock_icon)
+        model.bind_func(
+            "steps_scaling_lock_selected", lambda: self._auto_scale_steps_locked
+        )
 
         def _btn_start():
             it = RuntimeState.iteration.value
@@ -684,6 +704,10 @@ class TrainingPanel(Panel):
         model.bind_func("struct_disabled", _params_edit_locked)
         model.bind_func("live_disabled", _params_edit_locked)
         model.bind_func("adv_disabled", _params_edit_locked)
+        model.bind_func(
+            "step_scaling_params_locked",
+            lambda: self._auto_scale_steps_locked,
+        )
         model.bind_func(
             "gut_disabled",
             lambda: p() is not None and p().has_params() and p().strategy == "igs+",
@@ -889,14 +913,10 @@ class TrainingPanel(Panel):
         return tuple(params.bg_color)
 
     def _restore_bg_color_snapshot(self, snapshot):
-        params = lf.optimization_params()
-        if not params or not params.has_params():
-            return
         color = tuple(snapshot or (0.0, 0.0, 0.0))
-        params.bg_color = color
-        rs = lf.get_render_settings()
-        if rs:
-            rs.set("background_color", color)
+        if not self._set_training_bg_color(color):
+            return
+        self._sync_bg_color_text_bufs()
         if self._handle:
             self._handle.dirty_all()
 
@@ -929,9 +949,21 @@ class TrainingPanel(Panel):
         if key == "new_step_str":
             return f"{self._new_save_step:,}"
 
+        if key == BG_COLOR_HEX_KEY:
+            if p and p.has_params():
+                return w.color_to_hex(p.bg_color)
+            return "#000000"
+
+        for channel_key, channel_index in BG_COLOR_CHANNELS:
+            if key == channel_key:
+                if p and p.has_params():
+                    return w.color_channel_text(p.bg_color, channel_index)
+                return "0"
+
         return None
 
     def _commit_number_input_key(self, key):
+        original = self._text_bufs.get(key)
         buf_val = self._text_bufs.get(key)
         if buf_val is not None and buf_val.strip() and key.endswith("_str"):
             prop = key[:-4]
@@ -951,8 +983,27 @@ class TrainingPanel(Panel):
         canonical = self._canonical_text_buf_value(key)
         if canonical is None:
             return
-        if self._text_bufs.get(key) != canonical:
+        if original != canonical:
             self._text_bufs[key] = canonical
+            self._mark_text_buf_dirty(key)
+
+    def _commit_bg_color_text_key(self, key):
+        buf_val = self._text_bufs.get(key)
+        updated = False
+        if buf_val is not None and str(buf_val).strip():
+            if key == BG_COLOR_HEX_KEY:
+                updated = self._set_bg_color_hex(buf_val)
+            elif key in BG_COLOR_CHANNEL_INDEX:
+                updated = self._set_bg_color_channel(key, buf_val)
+
+        canonical = self._canonical_text_buf_value(key)
+        if canonical is None:
+            return
+        self._text_bufs[key] = canonical
+        if updated:
+            self._sync_bg_color_text_bufs()
+            self._dirty_bg_color_bindings()
+        else:
             self._mark_text_buf_dirty(key)
 
     def _sync_text_bufs(self):
@@ -978,6 +1029,25 @@ class TrainingPanel(Panel):
             f"{d.test_every:,}" if d and d.has_params() else "8"
         )
         self._text_bufs["new_step_str"] = f"{self._new_save_step:,}"
+        self._sync_bg_color_text_bufs(p)
+
+    def _sync_bg_color_text_bufs(self, params=None):
+        if params is None:
+            params = lf.optimization_params()
+        color = (
+            params.bg_color
+            if params and params.has_params()
+            else (0.0, 0.0, 0.0)
+        )
+        for key, channel_index in BG_COLOR_CHANNELS:
+            self._text_bufs[key] = w.color_channel_text(color, channel_index)
+        self._text_bufs[BG_COLOR_HEX_KEY] = w.color_to_hex(color)
+
+    def _dirty_bg_color_bindings(self):
+        if not self._handle:
+            return
+        for key in BG_COLOR_TEXT_KEYS:
+            self._handle.dirty(key)
 
     def _bind_slider_props(self, model, p):
         for prop in SLIDER_PROPS:
@@ -997,26 +1067,33 @@ class TrainingPanel(Panel):
                 else (0, 0, 0)
             )
 
-        model.bind_func(
-            "bg_color_r",
-            lambda: f"{tr('training_panel.color_red_prefix')}{int(_bg()[0] * 255):>3d}",
-        )
-        model.bind_func(
-            "bg_color_g",
-            lambda: (
-                f"{tr('training_panel.color_green_prefix')}{int(_bg()[1] * 255):>3d}"
-            ),
-        )
-        model.bind_func(
-            "bg_color_b",
-            lambda: (
-                f"{tr('training_panel.color_blue_prefix')}{int(_bg()[2] * 255):>3d}"
-            ),
-        )
+        for key, channel_index in BG_COLOR_CHANNELS:
+            self._text_bufs[key] = None
+
+            def getter(k=key, idx=channel_index):
+                if self._text_bufs[k] is None:
+                    self._text_bufs[k] = w.color_channel_text(_bg(), idx)
+                return self._text_bufs[k]
+
+            def setter(v, k=key):
+                self._text_bufs[k] = str(v)
+
+            model.bind(key, getter, setter)
+
+        self._text_bufs[BG_COLOR_HEX_KEY] = None
+
+        def hex_getter():
+            if self._text_bufs[BG_COLOR_HEX_KEY] is None:
+                self._text_bufs[BG_COLOR_HEX_KEY] = w.color_to_hex(_bg())
+            return self._text_bufs[BG_COLOR_HEX_KEY]
+
+        def hex_setter(v):
+            self._text_bufs[BG_COLOR_HEX_KEY] = str(v)
+
         model.bind(
-            "bg_color_hex",
-            lambda: _color_to_hex(_bg()),
-            lambda v: self._set_bg_color_hex(v),
+            BG_COLOR_HEX_KEY,
+            hex_getter,
+            hex_setter,
         )
 
         model.bind_func(
@@ -1136,6 +1213,29 @@ class TrainingPanel(Panel):
         model.bind_event("action", self._on_action)
         model.bind_event("remove_step", self._on_remove_step_event)
         model.bind_event("num_step", self._on_num_step)
+        model.bind_event(
+            "toggle_step_scaling_lock", self._on_step_scaling_lock_toggle
+        )
+
+    def _step_scaling_lock_label(self):
+        if self._auto_scale_steps_locked:
+            return tr_fallback("training.step_scaling.locked", "Auto")
+        return tr_fallback("training.step_scaling.unlocked", "Manual")
+
+    def _step_scaling_lock_tooltip(self):
+        if self._auto_scale_steps_locked:
+            return tr_fallback(
+                "training.tooltip.step_scaling_locked",
+                "Auto-scales relevant training parameters.",
+            )
+        return tr_fallback(
+            "training.tooltip.step_scaling_unlocked",
+            "Manual: training parameters are not auto-scaled.",
+        )
+
+    def _step_scaling_lock_icon(self):
+        state = "locked" if self._auto_scale_steps_locked else "unlocked"
+        return f"../icon/scene/{state}.png"
 
     def on_mount(self, doc):
         self._doc = doc
@@ -1170,6 +1270,21 @@ class TrainingPanel(Panel):
                     self._capture_bg_color_snapshot,
                     self._restore_bg_color_snapshot,
                 )
+                el.add_event_listener("change", self._on_bg_color_hex_change)
+                el.add_event_listener("blur", self._on_bg_color_hex_blur)
+        for el in doc.query_selector_all("input.color-channel"):
+            key = el.get_attribute("data-value", "")
+            if key not in BG_COLOR_CHANNEL_INDEX:
+                continue
+            w.bind_select_all_on_focus(el)
+            self._escape_revert.bind(
+                el,
+                key,
+                self._capture_bg_color_snapshot,
+                self._restore_bg_color_snapshot,
+            )
+            el.add_event_listener("change", self._on_color_channel_input_change)
+            el.add_event_listener("blur", self._on_color_channel_input_blur)
         sidecar_input = doc.query_selector('input[data-value="ppisp_sidecar_path"]')
         if sidecar_input:
             w.bind_select_all_on_focus(sidecar_input)
@@ -1203,6 +1318,14 @@ class TrainingPanel(Panel):
             RuntimeState.language_generation,
         )
         self._reactive_binding.set_handle(self._handle).watch(*native_signals)
+
+    def _sync_auto_scale_scene_generation(self):
+        scene_generation = RuntimeState.scene_generation.value
+        if scene_generation == self._auto_scale_scene_generation:
+            return False
+        self._auto_scale_scene_generation = scene_generation
+        self._auto_scaled_for_cameras = 0
+        return True
 
     def _unsubscribe_reactive_state(self):
         self._reactive_binding.close()
@@ -1266,6 +1389,7 @@ class TrainingPanel(Panel):
         if not self._handle:
             return False
         self._sync_panel_label()
+        self._sync_auto_scale_scene_generation()
 
         dirty = False
         state = RuntimeState.trainer_state.value
@@ -1368,13 +1492,20 @@ class TrainingPanel(Panel):
         if c == self._last_bg_color:
             return False
         self._last_bg_color = c
+        self._sync_render_background_to_training(params)
+        self._sync_bg_color_text_bufs(params)
         swatch = doc.get_element_by_id("swatch-bg_color")
         if swatch:
-            r, g, b = int(c[0] * 255), int(c[1] * 255), int(c[2] * 255)
+            r = w.color_channel_byte(c, 0)
+            g = w.color_channel_byte(c, 1)
+            b = w.color_channel_byte(c, 2)
             swatch.set_property("background-color", f"rgb({r},{g},{b})")
+        if self._handle:
+            self._dirty_bg_color_bindings()
         return True
 
     def on_scene_changed(self, doc):
+        self._sync_render_background_to_training()
         if self._handle:
             self._sync_text_bufs()
             self._handle.dirty_all()
@@ -1478,10 +1609,10 @@ class TrainingPanel(Panel):
         r = float(event.get_parameter("red", "0"))
         g = float(event.get_parameter("green", "0"))
         b = float(event.get_parameter("blue", "0"))
-        setattr(params, self._color_edit_prop, (r, g, b))
-        rs = lf.get_render_settings()
-        if rs and self._color_edit_prop == "bg_color":
-            rs.set("background_color", (r, g, b))
+        if self._color_edit_prop == "bg_color":
+            self._set_training_bg_color((r, g, b))
+        else:
+            setattr(params, self._color_edit_prop, (r, g, b))
         if self._handle:
             self._sync_text_bufs()
             self._handle.dirty_all()
@@ -1507,6 +1638,23 @@ class TrainingPanel(Panel):
             rs.set("raster_backend", "3dgut" if val else "3dgs")
             return
         rs.set(prop, val)
+
+    def _set_training_bg_color(self, color):
+        params = lf.optimization_params()
+        if not params or not params.has_params():
+            return False
+        normalized = w.normalize_color(color)
+        params.bg_color = normalized
+        self._sync_render_setting("background_color", normalized)
+        return True
+
+    def _sync_render_background_to_training(self, params=None):
+        if params is None:
+            params = lf.optimization_params()
+        if not params or not params.has_params():
+            return False
+        self._sync_render_setting("background_color", w.normalize_color(params.bg_color))
+        return True
 
     def _set_bool_prop(self, prop, val):
         params = lf.optimization_params()
@@ -1639,10 +1787,34 @@ class TrainingPanel(Panel):
                 if self._handle:
                     self._sync_text_bufs()
                     self._handle.dirty_all()
+            elif prop == "iterations":
+                return self._set_iterations(params, val)
             else:
                 params.set(prop, val)
         except (ValueError, TypeError, RuntimeError):
             return False
+        return True
+
+    def _set_iterations(self, params, val):
+        if val <= 0:
+            return False
+        if not self._auto_scale_steps_locked:
+            params.iterations = val
+            return True
+
+        current = max(1, int(getattr(params, "iterations", 0)))
+        if current == val:
+            return True
+
+        current_scaler = float(getattr(params, "steps_scaler", 1.0))
+        if current_scaler <= 0.0:
+            current_scaler = 1.0
+        next_scaler = current_scaler * (float(val) / float(current))
+        params.apply_step_scaling(next_scaler)
+        params.iterations = val
+        if self._handle:
+            self._sync_text_bufs()
+            self._handle.dirty_all()
         return True
 
     def _set_ppisp_activation_step(self, val_str):
@@ -1765,18 +1937,24 @@ class TrainingPanel(Panel):
         self._set_slider_prop(prop, value)
 
     def _set_bg_color_hex(self, hex_val):
+        color = w.hex_to_color(hex_val)
+        if color is not None and self._set_training_bg_color(color):
+            return True
+        return False
+
+    def _set_bg_color_channel(self, key, val_str):
         params = lf.optimization_params()
         if not params or not params.has_params():
-            return
-        color = _hex_to_color(hex_val)
-        if color:
-            params.bg_color = color
-            rs = lf.get_render_settings()
-            if rs:
-                rs.set("background_color", color)
-            if self._handle:
-                self._sync_text_bufs()
-                self._handle.dirty_all()
+            return False
+        parsed = w.parse_color_channel(val_str)
+        if parsed is None:
+            return False
+        channel_index = BG_COLOR_CHANNEL_INDEX.get(key)
+        if channel_index is None:
+            return False
+        color = list(w.normalize_color(params.bg_color))
+        color[channel_index] = parsed
+        return self._set_training_bg_color(color)
 
     # ── Event handlers ─────────────────────────────────────
 
@@ -1806,6 +1984,31 @@ class TrainingPanel(Panel):
         if target is None:
             return
         self._commit_number_input_key(target.get_attribute("data-value", ""))
+
+    def _on_color_channel_input_change(self, event):
+        if not event.get_bool_parameter("linebreak", False):
+            return
+        target = event.current_target()
+        if target is None:
+            return
+        self._commit_bg_color_text_key(target.get_attribute("data-value", ""))
+
+    def _on_color_channel_input_blur(self, event):
+        target = event.current_target()
+        if target is None:
+            return
+        self._commit_bg_color_text_key(target.get_attribute("data-value", ""))
+
+    def _on_bg_color_hex_change(self, event):
+        if not event.get_bool_parameter("linebreak", False):
+            return
+        self._commit_bg_color_text_key(BG_COLOR_HEX_KEY)
+
+    def _on_bg_color_hex_blur(self, event):
+        self._commit_bg_color_text_key(BG_COLOR_HEX_KEY)
+
+    def _on_step_scaling_lock_toggle(self, *_args):
+        self._set_auto_scale_steps_locked(not self._auto_scale_steps_locked)
 
     def _apply_num_step(self, prop, direction):
         entry = _NUM_PROP_LOOKUP.get(prop)
@@ -2148,6 +2351,9 @@ class TrainingPanel(Panel):
         params.remove_eval_step(step)
 
     def _try_auto_scale_steps(self, params):
+        self._sync_auto_scale_scene_generation()
+        if not self._auto_scale_steps_locked:
+            return False
         scene = lf.get_scene()
         if scene is None:
             return False
@@ -2157,6 +2363,21 @@ class TrainingPanel(Panel):
         self._auto_scaled_for_cameras = camera_count
         params.auto_scale_steps(camera_count)
         return True
+
+    def _set_auto_scale_steps_locked(self, locked):
+        locked = bool(locked)
+        if self._auto_scale_steps_locked == locked:
+            return
+        self._auto_scale_steps_locked = locked
+
+        if locked:
+            self._auto_scaled_for_cameras = 0
+            params = lf.optimization_params()
+            if params and params.has_params() and self._try_auto_scale_steps(params):
+                self._sync_text_bufs()
+
+        if self._handle:
+            self._handle.dirty_all()
 
     def _draw_controls(self, layout, state, iteration):
         if state == "ready":
@@ -2318,15 +2539,25 @@ class TrainingPanel(Panel):
             layout.table_next_column()
             layout.label(tr("training_params.iterations"))
             layout.table_next_column()
-            layout.push_item_width(-1)
+            layout.push_item_width(-64)
             changed, new_val = layout.input_int_formatted(
                 "##py_iterations", int(params.iterations), 1000, 5000
             )
             if changed and new_val > 0:
-                params.iterations = new_val
+                self._set_iterations(params, new_val)
             layout.pop_item_width()
             if layout.is_item_hovered():
                 layout.set_tooltip(tr("training.tooltip.iterations"))
+            layout.same_line()
+            lock_style = "primary" if self._auto_scale_steps_locked else "secondary"
+            if layout.button_styled(
+                self._step_scaling_lock_label() + "##py_step_scaling_lock",
+                lock_style,
+                (58, 0),
+            ):
+                self._set_auto_scale_steps_locked(not self._auto_scale_steps_locked)
+            if layout.is_item_hovered():
+                layout.set_tooltip(self._step_scaling_lock_tooltip())
 
             layout.table_next_row()
             layout.table_next_column()
@@ -2376,20 +2607,6 @@ class TrainingPanel(Panel):
                 layout.pop_item_width()
                 if layout.is_item_hovered():
                     layout.set_tooltip(tr("training.tooltip.tile_mode"))
-
-            layout.table_next_row()
-            layout.table_next_column()
-            layout.label(tr("training_params.steps_scaler"))
-            layout.table_next_column()
-            layout.push_item_width(-1)
-            changed, new_val = layout.input_float(
-                "##py_steps_scaler", params.steps_scaler, 0.1, 0.5, "%.2f"
-            )
-            if changed:
-                params.apply_step_scaling(new_val)
-            layout.pop_item_width()
-            if layout.is_item_hovered():
-                layout.set_tooltip(tr("training.tooltip.steps_scaler"))
 
             layout.end_disabled()
 
@@ -2670,8 +2887,7 @@ class TrainingPanel(Panel):
                     "##py_bg_color", params.bg_color
                 )
                 if changed:
-                    params.bg_color = new_color
-                    self._sync_render_setting("background_color", new_color)
+                    self._set_training_bg_color(new_color)
                 layout.pop_item_width()
 
             if bg_mode_val == 2:
@@ -2905,30 +3121,31 @@ class TrainingPanel(Panel):
                     )
                     layout.table_next_column()
 
-                    self._input_int_row(
-                        layout,
-                        tr("training.refinement.refine_every"),
-                        "refine_every",
-                        params,
-                        10,
-                        100,
-                    )
-                    self._input_int_row(
-                        layout,
-                        tr("training.refinement.start_refine"),
-                        "start_refine",
-                        params,
-                        100,
-                        500,
-                    )
-                    self._input_int_row(
-                        layout,
-                        tr("training.refinement.stop_refine"),
-                        "stop_refine",
-                        params,
-                        1000,
-                        5000,
-                    )
+                    with _disabled_scope(layout, self._auto_scale_steps_locked):
+                        self._input_int_row(
+                            layout,
+                            tr("training.refinement.refine_every"),
+                            "refine_every",
+                            params,
+                            10,
+                            100,
+                        )
+                        self._input_int_row(
+                            layout,
+                            tr("training.refinement.start_refine"),
+                            "start_refine",
+                            params,
+                            100,
+                            500,
+                        )
+                        self._input_int_row(
+                            layout,
+                            tr("training.refinement.stop_refine"),
+                            "stop_refine",
+                            params,
+                            1000,
+                            5000,
+                        )
                     self._input_float_prop_row(
                         layout,
                         tr("training.refinement.gradient_thr"),
@@ -2938,22 +3155,23 @@ class TrainingPanel(Panel):
                         0.0001,
                         "%.6f",
                     )
-                    self._input_int_row(
-                        layout,
-                        tr("training.refinement.reset_every"),
-                        "reset_every",
-                        params,
-                        100,
-                        1000,
-                    )
-                    self._input_int_row(
-                        layout,
-                        tr("training.refinement.sh_upgrade_every"),
-                        "sh_degree_interval",
-                        params,
-                        100,
-                        500,
-                    )
+                    with _disabled_scope(layout, self._auto_scale_steps_locked):
+                        self._input_int_row(
+                            layout,
+                            tr("training.refinement.reset_every"),
+                            "reset_every",
+                            params,
+                            100,
+                            1000,
+                        )
+                        self._input_int_row(
+                            layout,
+                            tr("training.refinement.sh_upgrade_every"),
+                            "sh_degree_interval",
+                            params,
+                            100,
+                            500,
+                        )
                     layout.end_disabled()
             finally:
                 if table_open:
@@ -3228,9 +3446,15 @@ class TrainingPanel(Panel):
                         min_val=0.0,
                         max_val=1.0,
                     )
-                    self._input_int_row(
-                        layout, "Grow Until Iter", "grow_until_iter", params, 1000, 5000
-                    )
+                    with _disabled_scope(layout, self._auto_scale_steps_locked):
+                        self._input_int_row(
+                            layout,
+                            "Grow Until Iter",
+                            "grow_until_iter",
+                            params,
+                            1000,
+                            5000,
+                        )
                     self._input_float_prop_row(
                         layout,
                         "Opacity Decay",
@@ -3351,38 +3575,39 @@ class TrainingPanel(Panel):
         steps = list(params.save_steps)
 
         if can_edit:
-            _, self._new_save_step = layout.input_int_formatted(
-                "##py_new_step", self._new_save_step, 100, 1000
-            )
-            layout.same_line()
-            if layout.button(tr("common.add") + "##py_add"):
-                if self._new_save_step > 0:
-                    params.add_save_step(self._new_save_step)
-                    if params.enable_eval:
-                        self._sync_eval_steps_with_save_steps(params)
-
-            layout.separator()
-
-            for i, step in enumerate(steps):
-                layout.push_id(f"py_step_{i}")
-                layout.set_next_item_width(100)
-                changed, new_val = layout.input_int_formatted("##step", step, 0, 0)
-                if changed and new_val > 0 and new_val != step:
-                    params.remove_save_step(step)
-                    params.add_save_step(new_val)
-                    if params.enable_eval:
-                        self._sync_eval_steps_with_save_steps(params)
-                layout.same_line()
-                if layout.button(tr("common.remove") + "##rm"):
-                    params.remove_save_step(step)
-                    if params.enable_eval:
-                        self._remove_from_eval_steps(params, step)
-                layout.pop_id()
-
-            if not steps:
-                layout.text_colored(
-                    tr("training_panel.no_save_steps"), theme.palette.text_dim
+            with _disabled_scope(layout, self._auto_scale_steps_locked):
+                _, self._new_save_step = layout.input_int_formatted(
+                    "##py_new_step", self._new_save_step, 100, 1000
                 )
+                layout.same_line()
+                if layout.button(tr("common.add") + "##py_add"):
+                    if self._new_save_step > 0:
+                        params.add_save_step(self._new_save_step)
+                        if params.enable_eval:
+                            self._sync_eval_steps_with_save_steps(params)
+
+                layout.separator()
+
+                for i, step in enumerate(steps):
+                    layout.push_id(f"py_step_{i}")
+                    layout.set_next_item_width(100)
+                    changed, new_val = layout.input_int_formatted("##step", step, 0, 0)
+                    if changed and new_val > 0 and new_val != step:
+                        params.remove_save_step(step)
+                        params.add_save_step(new_val)
+                        if params.enable_eval:
+                            self._sync_eval_steps_with_save_steps(params)
+                    layout.same_line()
+                    if layout.button(tr("common.remove") + "##rm"):
+                        params.remove_save_step(step)
+                        if params.enable_eval:
+                            self._remove_from_eval_steps(params, step)
+                    layout.pop_id()
+
+                if not steps:
+                    layout.text_colored(
+                        tr("training_panel.no_save_steps"), theme.palette.text_dim
+                    )
         else:
             if steps:
                 layout.label(", ".join(str(s) for s in steps))

@@ -5,6 +5,8 @@
 #include "grad_alpha.hpp"
 #include <cstdint>
 
+#include "kernel_stream.hpp"
+
 namespace lfs::training::kernels {
 
     namespace {
@@ -143,6 +145,7 @@ namespace lfs::training::kernels {
         int H, int W,
         bool is_chw_layout,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         const int total = H * W;
         const unsigned int blocks = num_blocks_1d(total);
 
@@ -192,6 +195,7 @@ namespace lfs::training::kernels {
         float* grad_alpha,
         int H, int W,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         const int total = H * W;
         const unsigned int blocks = num_blocks_1d(total);
 
@@ -206,6 +210,7 @@ namespace lfs::training::kernels {
         float* output,
         int H, int W,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         const int total = H * W;
         const unsigned int blocks = num_blocks_1d(total);
         fused_background_compose_kernel<false, false><<<blocks, kThreadsPerBlock, 0, stream>>>(
@@ -219,6 +224,7 @@ namespace lfs::training::kernels {
         float* output,
         int H, int W,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         const int total = H * W;
         const unsigned int blocks = num_blocks_1d(total);
         fused_background_compose_kernel<true, false><<<blocks, kThreadsPerBlock, 0, stream>>>(
@@ -231,6 +237,7 @@ namespace lfs::training::kernels {
         const float* bg_color,
         int H, int W,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         const int total = H * W;
         const unsigned int blocks = num_blocks_1d(total);
         fused_background_compose_kernel<false, true><<<blocks, kThreadsPerBlock, 0, stream>>>(
@@ -243,6 +250,7 @@ namespace lfs::training::kernels {
         const float* bg_image,
         int H, int W,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         const int total = H * W;
         const unsigned int blocks = num_blocks_1d(total);
         fused_background_compose_kernel<true, true><<<blocks, kThreadsPerBlock, 0, stream>>>(
@@ -269,6 +277,7 @@ namespace lfs::training::kernels {
         const float* sigmoid,
         int64_t N,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         const unsigned int blocks = num_blocks_1d(N);
         sigmoid_backward_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
             v_opacities, sigmoid, N);
@@ -293,6 +302,7 @@ namespace lfs::training::kernels {
         const float* scales,
         int64_t N,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         const int64_t total = N * 3;
         const unsigned int blocks = num_blocks_1d(total);
         exp_backward_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
@@ -359,6 +369,7 @@ namespace lfs::training::kernels {
         const float* quats_raw,
         int64_t N,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         const unsigned int blocks = num_blocks_1d(N);
         quat_normalize_backward_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
             v_quats, quats_normalized, quats_raw, N);
@@ -382,6 +393,7 @@ namespace lfs::training::kernels {
         const float* src,
         int64_t n_elements,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         const unsigned int blocks = num_blocks_1d(n_elements);
         grad_accumulate_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
             dst, src, n_elements);
@@ -394,6 +406,7 @@ namespace lfs::training::kernels {
         const float* src,
         int64_t N,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         // [N] and [N, 1] have the same memory layout
         launch_grad_accumulate(dst, src, N, stream);
     }
@@ -441,6 +454,7 @@ namespace lfs::training::kernels {
         int64_t K_src,
         uint32_t shN_layout_rest,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         const unsigned int blocks = num_blocks_1d(N);
         grad_accumulate_sh_swizzled_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
             dst_sh0, dst_shN, src, N, K_src, shN_layout_rest);
@@ -474,6 +488,7 @@ namespace lfs::training::kernels {
         const float* grad_means,
         int64_t N,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         const unsigned int blocks = num_blocks_1d(N);
         grad_norm_accumulate_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
             densification_info, grad_means, N);
@@ -505,6 +520,7 @@ namespace lfs::training::kernels {
         float* dst,
         int C, int H, int W,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         const int total = H * W;
         const unsigned int blocks = num_blocks_1d(total);
         permute_chw_to_hwc_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
@@ -535,6 +551,7 @@ namespace lfs::training::kernels {
         float* dst,
         int C, int H, int W,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         const int total = H * W;
         const unsigned int blocks = num_blocks_1d(total);
         permute_hwc_to_chw_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
@@ -549,6 +566,7 @@ namespace lfs::training::kernels {
         float* dst,       // [H, W]
         int H, int W,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         // Memory layout is identical, just copy
         cudaMemcpyAsync(dst, src, H * W * sizeof(float), cudaMemcpyDeviceToDevice, stream);
     }
@@ -614,6 +632,7 @@ namespace lfs::training::kernels {
         int src_H, int src_W,
         int dst_H, int dst_W,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         const int total = dst_H * dst_W;
         const unsigned int blocks = num_blocks_1d(total);
         bilinear_resize_chw_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(
@@ -650,6 +669,7 @@ namespace lfs::training::kernels {
         const int H, const int W,
         const uint64_t seed,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         const int HW = H * W;
         const unsigned int blocks = num_blocks_1d(HW);
         random_background_kernel<<<blocks, kThreadsPerBlock, 0, stream>>>(

@@ -40,6 +40,15 @@ namespace lfs::core {
     RasterizerMemoryArena::~RasterizerMemoryArena() {
         dump_statistics();
 
+        {
+            std::lock_guard<std::mutex> event_lock(last_frame_event_mutex_);
+            if (last_frame_event_) {
+                cudaEventDestroy(last_frame_event_);
+                last_frame_event_ = nullptr;
+                last_frame_event_valid_ = false;
+            }
+        }
+
         std::lock_guard<std::mutex> lock(arena_mutex_);
         for (auto& [device, arena_ptr] : device_arenas_) {
             if (arena_ptr) {
@@ -53,7 +62,8 @@ namespace lfs::core {
     }
 
     RasterizerMemoryArena::RasterizerMemoryArena(RasterizerMemoryArena&& other) noexcept {
-        std::scoped_lock lock(other.arena_mutex_, other.frame_mutex_, other.sync_mutex_);
+        std::scoped_lock lock(other.arena_mutex_, other.frame_mutex_, other.sync_mutex_,
+                              other.last_frame_event_mutex_);
         device_arenas_ = std::move(other.device_arenas_);
         frame_contexts_ = std::move(other.frame_contexts_);
         config_ = other.config_;
@@ -64,6 +74,14 @@ namespace lfs::core {
         active_frames_ = other.active_frames_;
         pending_render_frames_ = other.pending_render_frames_;
         active_training_frames_ = other.active_training_frames_;
+        last_frame_event_ = other.last_frame_event_;
+        last_frame_event_valid_ = other.last_frame_event_valid_;
+        external_release_semaphore_ = other.external_release_semaphore_;
+        external_release_value_ = other.external_release_value_;
+        other.last_frame_event_ = nullptr;
+        other.last_frame_event_valid_ = false;
+        other.external_release_semaphore_ = nullptr;
+        other.external_release_value_ = 0;
     }
 
     RasterizerMemoryArena& RasterizerMemoryArena::operator=(RasterizerMemoryArena&& other) noexcept {
@@ -74,7 +92,9 @@ namespace lfs::core {
                 frame_mutex_,
                 other.frame_mutex_,
                 sync_mutex_,
-                other.sync_mutex_);
+                other.sync_mutex_,
+                last_frame_event_mutex_,
+                other.last_frame_event_mutex_);
             device_arenas_ = std::move(other.device_arenas_);
             frame_contexts_ = std::move(other.frame_contexts_);
             config_ = other.config_;
@@ -85,6 +105,17 @@ namespace lfs::core {
             active_frames_ = other.active_frames_;
             pending_render_frames_ = other.pending_render_frames_;
             active_training_frames_ = other.active_training_frames_;
+            if (last_frame_event_) {
+                cudaEventDestroy(last_frame_event_);
+            }
+            last_frame_event_ = other.last_frame_event_;
+            last_frame_event_valid_ = other.last_frame_event_valid_;
+            external_release_semaphore_ = other.external_release_semaphore_;
+            external_release_value_ = other.external_release_value_;
+            other.last_frame_event_ = nullptr;
+            other.last_frame_event_valid_ = false;
+            other.external_release_semaphore_ = nullptr;
+            other.external_release_value_ = 0;
         }
         return *this;
     }
@@ -119,27 +150,151 @@ namespace lfs::core {
         return false;
     }
 
-    uint64_t RasterizerMemoryArena::begin_frame(bool from_rendering) {
-        auto frame_id = begin_frame_impl(from_rendering, true);
+    namespace {
+        // Per-thread cap on wait-forever begin_frame(); 0 = block forever.
+        thread_local uint32_t tl_begin_frame_timeout_ms = 0;
+    } // namespace
+
+    RasterizerMemoryArena::ScopedBeginFrameTimeout::ScopedBeginFrameTimeout(uint32_t timeout_ms)
+        : previous_(tl_begin_frame_timeout_ms) {
+        tl_begin_frame_timeout_ms = timeout_ms;
+    }
+
+    RasterizerMemoryArena::ScopedBeginFrameTimeout::~ScopedBeginFrameTimeout() {
+        tl_begin_frame_timeout_ms = previous_;
+    }
+
+    uint64_t RasterizerMemoryArena::begin_frame(cudaStream_t stream, bool from_rendering) {
+        // A thread that opted into bounded acquisition (GUI metric render) gets
+        // a timed wait instead of waiting forever, so it can't deadlock holding
+        // render_mutex_ against a refining trainer that holds the arena frame.
+        const std::optional<uint32_t> wait =
+            tl_begin_frame_timeout_ms > 0 ? std::optional<uint32_t>(tl_begin_frame_timeout_ms)
+                                          : std::optional<uint32_t>(0u);
+        auto frame_id = begin_frame_impl(stream, from_rendering, wait);
         if (!frame_id) {
             throw std::runtime_error("RasterizerMemoryArena::begin_frame failed to acquire arena frame");
         }
         return *frame_id;
     }
 
-    std::optional<uint64_t> RasterizerMemoryArena::try_begin_frame(bool from_rendering) {
-        return begin_frame_impl(from_rendering, false);
+    std::optional<uint64_t> RasterizerMemoryArena::try_begin_frame(cudaStream_t stream, bool from_rendering) {
+        return begin_frame_impl(stream, from_rendering, std::nullopt);
     }
 
-    std::optional<uint64_t> RasterizerMemoryArena::begin_frame_impl(bool from_rendering, bool wait) {
+    std::optional<uint64_t> RasterizerMemoryArena::try_begin_frame_for(uint32_t timeout_ms,
+                                                                       cudaStream_t stream,
+                                                                       bool from_rendering) {
+        return begin_frame_impl(stream, from_rendering, timeout_ms);
+    }
+
+    void RasterizerMemoryArena::note_external_release(cudaExternalSemaphore_t semaphore, uint64_t value) {
+        std::lock_guard<std::mutex> lock(last_frame_event_mutex_);
+        external_release_semaphore_ = semaphore;
+        external_release_value_ = value;
+    }
+
+    void RasterizerMemoryArena::drain_external_release() {
+        cudaExternalSemaphore_t release_semaphore = nullptr;
+        uint64_t release_value = 0;
+        {
+            std::lock_guard<std::mutex> lock(last_frame_event_mutex_);
+            release_semaphore = external_release_semaphore_;
+            release_value = external_release_value_;
+            external_release_semaphore_ = nullptr;
+            external_release_value_ = 0;
+        }
+        if (release_semaphore == nullptr || release_value == 0) {
+            return;
+        }
+        // A device sync cannot observe the in-flight Vulkan batch that signals
+        // this release, so host-block on the fence before backing is freed or
+        // replaced under it.
+        cudaExternalSemaphoreWaitParams wait_params{};
+        wait_params.params.fence.value = release_value;
+        if (cudaWaitExternalSemaphoresAsync(&release_semaphore, &wait_params, 1, nullptr) != cudaSuccess) {
+            LOG_WARN("RasterizerMemoryArena: external release drain wait failed (value {})", release_value);
+            // The GPU-side fence wait couldn't be enqueued; fall back to a full
+            // device sync so the caller doesn't free/replace the backing under
+            // in-flight CUDA work (the Vulkan batch can't be observed here).
+            cudaDeviceSynchronize();
+            return;
+        }
+        if (cudaStreamSynchronize(nullptr) != cudaSuccess) {
+            LOG_WARN("RasterizerMemoryArena: external release drain sync failed (value {})", release_value);
+        }
+    }
+
+    // Orders the new frame's work after the previous frame before the arena
+    // offset resets and memory gets overwritten. Stream-aware frames chain via
+    // the completion event (GPU-side, no host stall); legacy frames or a broken
+    // chain fall back to a device-wide sync. A pending Vulkan release (viewport
+    // frames) is waited explicitly — neither the chain event nor a device sync
+    // can see in-flight Vulkan work.
+    bool RasterizerMemoryArena::wait_for_previous_frame(cudaStream_t stream) {
+        static const bool legacy_sync = []() {
+            const char* env = std::getenv("LFS_ARENA_LEGACY_SYNC");
+            return env && env[0] == '1';
+        }();
+
+        cudaExternalSemaphore_t release_semaphore = nullptr;
+        uint64_t release_value = 0;
+        bool chain_ok = false;
+        {
+            std::lock_guard<std::mutex> lock(last_frame_event_mutex_);
+            release_semaphore = external_release_semaphore_;
+            release_value = external_release_value_;
+            external_release_semaphore_ = nullptr;
+            external_release_value_ = 0;
+            if (stream && !legacy_sync) {
+                chain_ok = last_frame_event_valid_ &&
+                           cudaStreamWaitEvent(stream, last_frame_event_, 0) == cudaSuccess;
+            }
+        }
+
+        if (release_semaphore != nullptr && release_value != 0) {
+            // Enqueue on the frame's stream (or the legacy stream for streamless
+            // frames, where the device sync below then blocks until it passes).
+            cudaExternalSemaphoreWaitParams wait_params{};
+            wait_params.params.fence.value = release_value;
+            const cudaStream_t wait_stream = (stream && !legacy_sync) ? stream : nullptr;
+            if (cudaWaitExternalSemaphoresAsync(&release_semaphore, &wait_params, 1, wait_stream) != cudaSuccess) {
+                LOG_WARN("RasterizerMemoryArena: external release wait failed (value {})", release_value);
+                // The GPU-side wait wasn't enqueued; host-block on the fence so the
+                // arena isn't reset/reused while the Vulkan batch still reads it
+                // (the device-sync fallback below only covers in-flight CUDA work).
+                if (cudaWaitExternalSemaphoresAsync(&release_semaphore, &wait_params, 1, nullptr) == cudaSuccess) {
+                    cudaStreamSynchronize(nullptr);
+                }
+                chain_ok = false;
+            } else if (wait_stream != nullptr) {
+                // The Vulkan tenant device-synced all prior CUDA work at its own
+                // streamless begin, and its arena work is Vulkan-only — this
+                // wait alone re-establishes the chain GPU-side.
+                chain_ok = true;
+            }
+        }
+
+        if (chain_ok) {
+            return true;
+        }
+        return cudaDeviceSynchronize() == cudaSuccess;
+    }
+
+    std::optional<uint64_t> RasterizerMemoryArena::begin_frame_impl(cudaStream_t stream, bool from_rendering,
+                                                                    std::optional<uint32_t> wait_timeout_ms) {
         {
             std::unique_lock<std::mutex> sync_lock(sync_mutex_);
             const auto can_begin = [this, from_rendering]() {
                 return active_frames_ == 0 && (from_rendering || pending_render_frames_ == 0);
             };
-            if (wait) {
+            if (!wait_timeout_ms.has_value()) {
+                if (!can_begin()) {
+                    return std::nullopt;
+                }
+            } else if (*wait_timeout_ms == 0u) {
                 sync_cv_.wait(sync_lock, can_begin);
-            } else if (!can_begin()) {
+            } else if (!sync_cv_.wait_for(sync_lock, std::chrono::milliseconds(*wait_timeout_ms), can_begin)) {
                 return std::nullopt;
             }
             ++active_frames_;
@@ -150,10 +305,8 @@ namespace lfs::core {
 
         uint64_t frame_id = frame_counter_.fetch_add(1, std::memory_order_relaxed);
 
-        // Synchronize to ensure previous frame's GPU work is complete
-        // before we reset the arena offset and start overwriting memory
-        const cudaError_t sync_err = cudaDeviceSynchronize();
-        if (sync_err != cudaSuccess) {
+        if (!wait_for_previous_frame(stream)) {
+            const cudaError_t sync_err = cudaGetLastError();
             end_frame(frame_id, from_rendering);
             throw std::runtime_error("RasterizerMemoryArena::begin_frame failed while synchronizing prior GPU work: " +
                                      std::string(cudaGetErrorName(sync_err)) + ": " +
@@ -196,7 +349,25 @@ namespace lfs::core {
         return frame_id;
     }
 
-    void RasterizerMemoryArena::end_frame(uint64_t frame_id, bool from_rendering) {
+    void RasterizerMemoryArena::end_frame(uint64_t frame_id, cudaStream_t stream, bool from_rendering) {
+        // Record the frame's completion event before releasing frame ownership:
+        // once active_frames_ drops, the next begin_frame may chain on it. A
+        // frame ended without a stream breaks the chain (next begin device-syncs).
+        {
+            std::lock_guard<std::mutex> event_lock(last_frame_event_mutex_);
+            if (stream) {
+                if (!last_frame_event_) {
+                    if (cudaEventCreateWithFlags(&last_frame_event_, cudaEventDisableTiming) != cudaSuccess) {
+                        last_frame_event_ = nullptr;
+                    }
+                }
+                last_frame_event_valid_ =
+                    last_frame_event_ && cudaEventRecord(last_frame_event_, stream) == cudaSuccess;
+            } else {
+                last_frame_event_valid_ = false;
+            }
+        }
+
         // Track peak usage before resetting
         int device;
         cudaError_t err = cudaGetDevice(&device);
@@ -434,6 +605,10 @@ namespace lfs::core {
             return active_frames_ == 0 && pending_render_frames_ == 0;
         });
 
+        // A submitted viewport batch may still be reading arena scratch; drain
+        // its release fence before the reset frees or decommits the backing.
+        drain_external_release();
+
         const std::scoped_lock lock(arena_mutex_, frame_mutex_);
 
         frame_contexts_.clear();
@@ -480,6 +655,10 @@ namespace lfs::core {
         } else if (!can_install()) {
             return false;
         }
+
+        // A submitted viewport batch may still be reading the current backing;
+        // drain its release fence before the swap releases that storage.
+        drain_external_release();
 
         cudaSetDevice(backing.device);
         cudaDeviceSynchronize();

@@ -95,6 +95,8 @@ namespace lfs::core {
             uint64_t file_bytes = 0;
             uint64_t payload_offset = 0;
             uint64_t payload_bytes = 0;
+            uint64_t file_base = 0;
+            uint64_t file_count = 0;
             uint64_t base = 0;
             uint64_t count = 0;
         };

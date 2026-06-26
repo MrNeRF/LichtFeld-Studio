@@ -5,6 +5,8 @@
 #include "densification_kernels.hpp"
 #include <cub/cub.cuh>
 
+#include "kernel_stream.hpp"
+
 namespace lfs::training::kernels {
 
     // ============================================================================
@@ -412,6 +414,7 @@ namespace lfs::training::kernels {
         int num_selected,
         int shN_dim,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         // Step 1: Copy all N Gaussians using cudaMemcpyAsync (DMA-accelerated, like LibTorch's cat)
         if (N > 0) {
             cudaMemcpyAsync(positions_out, positions_in, N * 3 * sizeof(float), cudaMemcpyDeviceToDevice, stream);
@@ -455,6 +458,7 @@ namespace lfs::training::kernels {
         int shN_dim,
         bool revised_opacity,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         const int block_size = 256;
 
         // Kernel 1: Copy kept Gaussians
@@ -633,6 +637,7 @@ namespace lfs::training::kernels {
         int shN_dim,
         bool revised_opacity,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         if (num_split == 0)
             return;
 
@@ -786,6 +791,7 @@ namespace lfs::training::kernels {
         int num_split,
         int shN_dim,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         if (num_split == 0)
             return;
 

@@ -11,6 +11,8 @@
 #include <cassert>
 #include <cub/cub.cuh>
 
+#include "kernel_stream.hpp"
+
 namespace lfs::training::kernels {
 
     namespace {
@@ -372,6 +374,7 @@ namespace lfs::training::kernels {
                                   const float* color_params, const float* crf_params, const float* rgb_in,
                                   float* rgb_out, int height, int width, int num_cameras, int num_frames,
                                   int camera_idx, int frame_idx, cudaStream_t stream) {
+        stream = resolve_stream(stream);
         int num_pixels = height * width;
         int threads = PPISP_BLOCK_SIZE;
         int blocks = divUp(num_pixels, threads);
@@ -392,6 +395,7 @@ namespace lfs::training::kernels {
                                    float* grad_vignetting_params, float* grad_color_params, float* grad_crf_params,
                                    float* grad_rgb_in, int height, int width, int num_cameras, int num_frames,
                                    int camera_idx, int frame_idx, cudaStream_t stream) {
+        stream = resolve_stream(stream);
         int num_pixels = height * width;
         int threads = PPISP_BLOCK_SIZE;
         int blocks = divUp(num_pixels, threads);
@@ -412,6 +416,7 @@ namespace lfs::training::kernels {
     void launch_ppisp_adam_update(float* params, float* exp_avg, float* exp_avg_sq, const float* grad, int num_elements,
                                   float lr, float beta1, float beta2, float bc1_rcp, float bc2_sqrt_rcp, float eps,
                                   cudaStream_t stream) {
+        stream = resolve_stream(stream);
         int threads = PPISP_BLOCK_SIZE;
         int blocks = divUp(num_elements, threads);
 
@@ -424,6 +429,7 @@ namespace lfs::training::kernels {
 
     void launch_ppisp_init_identity(float* exposure, float* vignetting, float* color, float* crf, int num_cameras,
                                     int num_frames, cudaStream_t stream) {
+        stream = resolve_stream(stream);
         int a = num_frames;
         int b = num_cameras * 3 * 5;
         int c = num_frames * 8;
@@ -440,6 +446,7 @@ namespace lfs::training::kernels {
     }
 
     void launch_ppisp_reg_loss(const float* params, float* loss_out, int num_elements, cudaStream_t stream) {
+        stream = resolve_stream(stream);
         int threads = PPISP_BLOCK_SIZE;
         int blocks = divUp(num_elements, threads);
 
@@ -451,6 +458,7 @@ namespace lfs::training::kernels {
 
     void launch_ppisp_reg_backward(const float* params, float* grad, float weight, int num_elements,
                                    cudaStream_t stream) {
+        stream = resolve_stream(stream);
         int threads = PPISP_BLOCK_SIZE;
         int blocks = divUp(num_elements, threads);
 

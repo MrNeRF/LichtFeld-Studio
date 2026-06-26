@@ -25,7 +25,9 @@ namespace {
     class StreamOrderedDeviceBuffer {
     public:
         StreamOrderedDeviceBuffer() = default;
-        explicit StreamOrderedDeviceBuffer(const char* label) : label_(label) {}
+        explicit StreamOrderedDeviceBuffer(const char* label, cudaStream_t stream = nullptr)
+            : label_(label),
+              stream_(stream) {}
 
         StreamOrderedDeviceBuffer(const StreamOrderedDeviceBuffer&) = delete;
         StreamOrderedDeviceBuffer& operator=(const StreamOrderedDeviceBuffer&) = delete;
@@ -33,7 +35,8 @@ namespace {
         StreamOrderedDeviceBuffer(StreamOrderedDeviceBuffer&& other) noexcept
             : ptr_(other.ptr_),
               size_(other.size_),
-              label_(other.label_) {
+              label_(other.label_),
+              stream_(other.stream_) {
             other.ptr_ = nullptr;
             other.size_ = 0;
         }
@@ -50,7 +53,7 @@ namespace {
 
             void* ptr = nullptr;
 #if CUDART_VERSION >= 11020
-            const cudaError_t err = cudaMallocAsync(&ptr, size, nullptr);
+            const cudaError_t err = cudaMallocAsync(&ptr, size, stream_);
 #else
             const cudaError_t err = cudaMalloc(&ptr, size);
 #endif
@@ -72,7 +75,9 @@ namespace {
             }
             lfs::diagnostics::VramProfiler::instance().recordDeallocation(ptr_);
 #if CUDART_VERSION >= 11020
-            cudaFreeAsync(ptr_, nullptr);
+            // Free on the stream that used the buffer — a nullptr free would be
+            // unordered with the sort kernels once they run on a real stream.
+            cudaFreeAsync(ptr_, stream_);
 #else
             cudaFree(ptr_);
 #endif
@@ -100,6 +105,7 @@ namespace {
         void* ptr_ = nullptr;
         size_t size_ = 0;
         const char* label_ = "rasterizer.fastgs.scratch";
+        cudaStream_t stream_ = nullptr;
     };
 
 } // namespace
@@ -129,7 +135,8 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     const float cy,
     const float near_, // near and far are macros in windows
     const float far_,
-    bool mip_filter) {
+    bool mip_filter,
+    cudaStream_t stream) {
 
     const dim3 grid(div_round_up(width, config::tile_width), div_round_up(height, config::tile_height), 1);
     const dim3 block(config::tile_width, config::tile_height, 1);
@@ -144,35 +151,23 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     char* per_tile_buffers_blob = per_tile_buffers_func(required<PerTileBuffers>(n_tiles));
     PerTileBuffers per_tile_buffers = PerTileBuffers::from_blob(per_tile_buffers_blob, n_tiles);
 
-    // Initialize tile instance ranges
-    static cudaStream_t memset_stream = 0;
-    static cudaEvent_t memset_event = 0;
-    if constexpr (!config::debug) {
-        static bool memset_stream_initialized = false;
-        if (!memset_stream_initialized) {
-            CUDA_CHECK(cudaStreamCreate(&memset_stream), "cudaStreamCreate(memset_stream)");
-            CUDA_CHECK(cudaEventCreate(&memset_event), "cudaEventCreate(memset_event)");
-            memset_stream_initialized = true;
-        }
-        CUDA_CHECK(cudaMemsetAsync(per_tile_buffers.instance_ranges, 0, sizeof(uint2) * n_tiles, memset_stream),
-                   "cudaMemsetAsync(tile instance ranges)");
-        CUDA_CHECK(cudaEventRecord(memset_event, memset_stream),
-                   "cudaEventRecord(memset_event)"); // Record event when memset completes
-    } else {
-        CUDA_CHECK(cudaMemset(per_tile_buffers.instance_ranges, 0, sizeof(uint2) * n_tiles),
-                   "cudaMemset(tile instance ranges)");
-    }
+    // Initialize tile instance ranges on the main stream. The old side-stream
+    // overlap trick (~64KB memset) relied on legacy-stream implicit ordering
+    // with the previous frame's reads of this same arena memory — gone once
+    // the kernels run on an explicit stream.
+    CUDA_CHECK(cudaMemsetAsync(per_tile_buffers.instance_ranges, 0, sizeof(uint2) * n_tiles, stream),
+               "cudaMemsetAsync(tile instance ranges)");
 
     // Allocate per-primitive buffers through arena
     char* per_primitive_buffers_blob = per_primitive_buffers_func(required<PerPrimitiveBuffers>(n_primitives));
     PerPrimitiveBuffers per_primitive_buffers = PerPrimitiveBuffers::from_blob(per_primitive_buffers_blob, n_primitives);
 
     auto* forward_status = per_primitive_buffers.forward_status;
-    CUDA_CHECK(cudaMemsetAsync(forward_status, 0, sizeof(raster::FastGSForwardStatus)),
+    CUDA_CHECK(cudaMemsetAsync(forward_status, 0, sizeof(raster::FastGSForwardStatus), stream),
                "cudaMemsetAsync(FastGS forward status)");
 
     // Preprocess primitives
-    kernels::forward::preprocess_cu<<<div_round_up(n_primitives, config::block_size_preprocess), config::block_size_preprocess>>>(
+    kernels::forward::preprocess_cu<<<div_round_up(n_primitives, config::block_size_preprocess), config::block_size_preprocess, 0, stream>>>(
         means,
         scales_raw,
         rotations_raw,
@@ -217,7 +212,8 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
             per_primitive_buffers.cub_workspace_size,
             per_primitive_buffers.n_touched_tiles,
             per_primitive_buffers.offset,
-            n_primitives),
+            n_primitives,
+            stream),
         "cub::DeviceScan::InclusiveSum (Primitive Offsets)",
         forward_status,
         "primitive offset scan",
@@ -233,9 +229,19 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
             n_tiles_u64);
     }
 
+    // Sizing readback: host-blocking by necessity (buffer sizes depend on it),
+    // but scoped to this stream instead of relying on legacy-stream ordering.
     std::uint64_t n_instances_u64 = 0;
     check_cuda_with_fastgs_status(
-        cudaMemcpy(&n_instances_u64, per_primitive_buffers.offset + n_primitives - 1, sizeof(n_instances_u64), cudaMemcpyDeviceToHost),
+        [&] {
+            const cudaError_t copy_err = cudaMemcpyAsync(
+                &n_instances_u64, per_primitive_buffers.offset + n_primitives - 1,
+                sizeof(n_instances_u64), cudaMemcpyDeviceToHost, stream);
+            if (copy_err != cudaSuccess) {
+                return copy_err;
+            }
+            return cudaStreamSynchronize(stream);
+        }(),
         "cudaMemcpy(n_instances)",
         forward_status,
         "primitive offset scan",
@@ -244,11 +250,11 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     CHECK_CUDA(config::debug, "cudaMemcpy(n_instances)");
     const int n_instances = checked_fastgs_instance_count(n_instances_u64, static_cast<uint64_t>(n_primitives), n_tiles_u64);
 
-    StreamOrderedDeviceBuffer keys_current("rasterizer.fastgs.sort_keys");
-    StreamOrderedDeviceBuffer keys_alternate("rasterizer.fastgs.sort_keys_alt");
-    StreamOrderedDeviceBuffer primitive_indices_current("rasterizer.fastgs.sort_indices");
-    StreamOrderedDeviceBuffer primitive_indices_alternate("rasterizer.fastgs.sort_indices_alt");
-    StreamOrderedDeviceBuffer cub_workspace("rasterizer.fastgs.cub_workspace");
+    StreamOrderedDeviceBuffer keys_current("rasterizer.fastgs.sort_keys", stream);
+    StreamOrderedDeviceBuffer keys_alternate("rasterizer.fastgs.sort_keys_alt", stream);
+    StreamOrderedDeviceBuffer primitive_indices_current("rasterizer.fastgs.sort_indices", stream);
+    StreamOrderedDeviceBuffer primitive_indices_alternate("rasterizer.fastgs.sort_indices_alt", stream);
+    StreamOrderedDeviceBuffer cub_workspace("rasterizer.fastgs.cub_workspace", stream);
 
     cub::DoubleBuffer<InstanceKey> keys;
     cub::DoubleBuffer<uint> primitive_indices;
@@ -289,7 +295,7 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
             primitive_indices_alternate.size() +
             cub_workspace.size();
 
-        kernels::forward::create_instances_cu<<<div_round_up(n_primitives, config::block_size_create_instances), config::block_size_create_instances>>>(
+        kernels::forward::create_instances_cu<<<div_round_up(n_primitives, config::block_size_create_instances), config::block_size_create_instances, 0, stream>>>(
             per_primitive_buffers.n_touched_tiles,
             per_primitive_buffers.offset,
             per_primitive_buffers.depth_keys,
@@ -316,7 +322,8 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
                 cub_workspace_size,
                 keys,
                 primitive_indices,
-                n_instances, 0, key_end_bit),
+                n_instances, 0, key_end_bit,
+                stream),
             "cub::DeviceRadixSort::SortPairs (Tile/Depth)",
             forward_status,
             "radix sort",
@@ -335,15 +342,9 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
         sorted_primitive_indices = primitive_indices.Current();
     }
 
-    // Wait for memset to complete (GPU-side wait, doesn't block CPU)
-    if constexpr (!config::debug) {
-        CUDA_CHECK(cudaStreamWaitEvent(nullptr, memset_event, 0),
-                   "cudaStreamWaitEvent(memset_event)"); // Default stream waits for memset
-    }
-
     // Extract instance ranges
     if (n_instances > 0) {
-        kernels::forward::extract_instance_ranges_cu<<<div_round_up(n_instances, config::block_size_extract_instance_ranges), config::block_size_extract_instance_ranges>>>(
+        kernels::forward::extract_instance_ranges_cu<<<div_round_up(n_instances, config::block_size_extract_instance_ranges), config::block_size_extract_instance_ranges, 0, stream>>>(
             keys.Current(),
             per_tile_buffers.instance_ranges,
             forward_status,
@@ -360,7 +361,7 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     }
 
     // Perform blending
-    kernels::forward::blend_cu<<<grid, block>>>(
+    kernels::forward::blend_cu<<<grid, block, 0, stream>>>(
         per_tile_buffers.instance_ranges,
         sorted_primitive_indices,
         per_primitive_buffers.mean2d,

@@ -510,6 +510,8 @@ namespace lichtfeld::Strings {
         inline constexpr const char* POLYGON_SELECTION = "toolbar.polygon_selection";
         inline constexpr const char* LASSO_SELECTION = "toolbar.lasso_selection";
         inline constexpr const char* RING_SELECTION = "toolbar.ring_selection";
+        inline constexpr const char* BOX_SELECTION = "toolbar.box_selection";
+        inline constexpr const char* SPHERE_SELECTION = "toolbar.sphere_selection";
         inline constexpr const char* LOCAL_SPACE = "toolbar.local_space";
         inline constexpr const char* WORLD_SPACE = "toolbar.world_space";
         inline constexpr const char* ORIGIN_PIVOT = "toolbar.origin_pivot";

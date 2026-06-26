@@ -503,6 +503,13 @@ namespace lfs::vis::gui {
                    secondary_toolbar_x_,
                    secondary_toolbar_width_,
                    show_secondary_toolbar_ && secondary_toolbar_width_ > 0.0f);
+        const auto apply_left_toolbar_offset = [&](const char* element_id, const float x) {
+            if (auto* const element = document_->GetElementById(element_id)) {
+                element->SetProperty("left", std::format("{:.1f}px", x));
+            }
+        };
+        apply_left_toolbar_offset("primary-shelf-background", -primary_toolbar_x_);
+        apply_left_toolbar_offset("primary-utility-toolbar", -primary_toolbar_x_);
         applied_primary_toolbar_x_ = primary_toolbar_x_;
         applied_primary_toolbar_width_ = primary_toolbar_width_;
         applied_show_secondary_toolbar_ = show_secondary_toolbar_;

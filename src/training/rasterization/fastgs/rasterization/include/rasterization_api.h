@@ -38,6 +38,9 @@ namespace fast_lfs::rasterization {
         int n_instances = 0;
         int sh_layout_bases = 1;
         uint64_t frame_id = 0;
+        // The stream all of this context's kernels/allocations are ordered on;
+        // releases (sorted indices, arena frame, helper buffers) must use it.
+        cudaStream_t stream = nullptr;
         // Add helper buffer pointers to avoid re-allocation in backward
         void* grad_mean2d_helper = nullptr;
         void* grad_conic_helper = nullptr;
@@ -72,7 +75,8 @@ namespace fast_lfs::rasterization {
         float center_y,
         float near_plane,
         float far_plane,
-        bool mip_filter = false);
+        bool mip_filter = false,
+        cudaStream_t stream = nullptr); // nullptr → getCurrentCUDAStream()
 
     void release_forward_context(const ForwardContext& forward_ctx);
 

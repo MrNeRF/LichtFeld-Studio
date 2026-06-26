@@ -55,6 +55,7 @@ namespace lfs::vis {
         ui::SplitPositionChanged::when([this](const auto& event) { handleSplitPositionChanged(event.position); });
         ui::RenderSettingsChanged::when([this](const auto& event) { handleRenderSettingsChanged(event); });
         ui::WindowResized::when([this](const auto&) { handleWindowResized(); });
+        ui::WindowResizeInteraction::when([this](const auto& event) { setViewportResizeActive(event.active); });
         ui::GridSettingsChanged::when([this](const auto& event) { handleGridSettingsChanged(event); });
         ui::NodeSelected::when([this](const auto&) { triggerSelectionFlash(); });
         state::TrainingStarted::when([this](const auto&) { handleTrainingStarted(); });

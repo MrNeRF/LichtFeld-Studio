@@ -221,6 +221,9 @@ namespace lfs::training {
             if (params.init_path.has_value()) {
                 params_json["init_path"] = params.init_path.value();
             }
+            if (params.exclude_frozen_add_splats_from_export) {
+                params_json["exclude_frozen_add_splats_from_export"] = true;
+            }
             if (!params.disabled_camera_uids.empty()) {
                 params_json["disabled_camera_uids"] = params.disabled_camera_uids;
             }
@@ -317,6 +320,10 @@ namespace lfs::training {
                     }
                     if (params_json.contains("init_path")) {
                         params.init_path = params_json["init_path"].get<std::string>();
+                    }
+                    if (params_json.contains("exclude_frozen_add_splats_from_export")) {
+                        params.exclude_frozen_add_splats_from_export =
+                            params_json["exclude_frozen_add_splats_from_export"].get<bool>();
                     }
                     if (params_json.contains("disabled_camera_uids")) {
                         params.disabled_camera_uids = params_json["disabled_camera_uids"].get<std::vector<int>>();

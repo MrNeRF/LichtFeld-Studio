@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstddef>
 #include <future>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -40,6 +41,13 @@ namespace lfs::vis::gui {
                           float bar_w, float bar_h);
 
     private:
+        struct ProgressBarGeometry {
+            float x = 0.0f;
+            float y = 0.0f;
+            float w = 0.0f;
+            float h = 0.0f;
+        };
+
         bool updateContent(const PanelDrawContext& ctx, bool force_refresh);
         bool updateTheme();
         void queueCachedVulkanContext(float x, float y, float w_px, float h_px,
@@ -49,6 +57,19 @@ namespace lfs::vis::gui {
         void pollGpuMemoryQuery(std::chrono::steady_clock::time_point now);
         void setModelString(const char* name, std::string& field, std::string value);
         void setModelBool(const char* name, bool& field, bool value);
+        void setProgressMarkersRml(std::string value);
+        std::optional<ProgressBarGeometry> progressBarGeometry() const;
+        void resetSaveStepInteraction();
+        std::optional<size_t> hitSaveStep(float local_x, float local_y,
+                                          const ProgressBarGeometry& geom,
+                                          const std::vector<size_t>& save_steps,
+                                          int total_iterations) const;
+        size_t saveStepFromProgressX(float local_x, const ProgressBarGeometry& geom,
+                                     int current_iteration, int total_iterations) const;
+        void handleSaveStepInteraction(const PanelInputState& input, float local_x, float local_y);
+        void commitSaveStepEdit();
+        void removeSaveStep(size_t step);
+        void clearSaveStepHover();
         void attachElementListeners();
         void bindReactiveStore();
         void markModelDirty();
@@ -83,12 +104,23 @@ namespace lfs::vis::gui {
         SpeedOverlayState speed_state_;
         bool speed_events_initialized_ = false;
 
+        struct SaveStepInteractionState {
+            bool dragging = false;
+            bool adding = false;
+            size_t original_step = 0;
+            size_t preview_step = 0;
+            size_t hover_step = 0;
+        };
+
+        SaveStepInteractionState save_step_interaction_;
+
         struct ModelState {
             std::string mode_text;
             std::string mode_color;
             bool show_training = false;
             std::string progress_width = "0%";
             std::string progress_text;
+            std::string progress_markers_rml;
             std::string step_label;
             std::string step_value;
             std::string loss_label;

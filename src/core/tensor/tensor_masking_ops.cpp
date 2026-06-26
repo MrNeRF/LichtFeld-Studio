@@ -497,8 +497,8 @@ namespace lfs::core {
         if (device_ == Device::CUDA) {
             const cudaStream_t execution_stream =
                 getCurrentCUDAStream() ? getCurrentCUDAStream() : stream();
-            waitForCUDAStream(execution_stream, stream());
-            waitForCUDAStream(execution_stream, indices_same_device.stream());
+            sync_to_stream(execution_stream);
+            indices_same_device.sync_to_stream(execution_stream);
             CUDAStreamGuard guard(execution_stream);
             result = empty(indices_same_device.shape(), device_, dtype_);
             tensor_ops::launch_take(flat.ptr<float>(), indices_same_device.ptr<int>(),

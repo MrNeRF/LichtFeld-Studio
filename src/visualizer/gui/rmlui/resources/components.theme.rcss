@@ -204,15 +204,18 @@ progress fill {
 }
 
 .color-comp,
+.color-channel,
 .color-hex {
     background-color: @{surface};
     border-color: @{border};
 }
 
+.color-channel,
 .color-hex {
     color: @{text};
 }
 
+.color-channel:focus,
 .color-hex:focus {
     border-color: @{primary};
 }

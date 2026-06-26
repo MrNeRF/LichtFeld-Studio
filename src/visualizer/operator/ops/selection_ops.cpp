@@ -6,17 +6,23 @@
 #include "input/key_codes.hpp"
 #include "operator/operator_registry.hpp"
 #include "scene/scene_manager.hpp"
+#include "visualizer/core/editor_context.hpp"
 
 namespace lfs::vis::op {
 
     namespace {
+        constexpr int kSelectionModeColor = static_cast<int>(lfs::vis::SelectionSubMode::Color);
 
         [[nodiscard]] lfs::vis::SelectionShape toSelectionShape(const int mode) {
-            switch (mode) {
-            case 1: return lfs::vis::SelectionShape::Rectangle;
-            case 2: return lfs::vis::SelectionShape::Polygon;
-            case 3: return lfs::vis::SelectionShape::Lasso;
-            case 4: return lfs::vis::SelectionShape::Rings;
+            switch (static_cast<lfs::vis::SelectionSubMode>(mode)) {
+            case lfs::vis::SelectionSubMode::Rectangle: return lfs::vis::SelectionShape::Rectangle;
+            case lfs::vis::SelectionSubMode::Polygon: return lfs::vis::SelectionShape::Polygon;
+            case lfs::vis::SelectionSubMode::Lasso: return lfs::vis::SelectionShape::Lasso;
+            case lfs::vis::SelectionSubMode::Rings: return lfs::vis::SelectionShape::Rings;
+            case lfs::vis::SelectionSubMode::Box: return lfs::vis::SelectionShape::Box;
+            case lfs::vis::SelectionSubMode::Sphere: return lfs::vis::SelectionShape::Sphere;
+            case lfs::vis::SelectionSubMode::Centers:
+            case lfs::vis::SelectionSubMode::Color:
             default: return lfs::vis::SelectionShape::Brush;
             }
         }
@@ -25,6 +31,7 @@ namespace lfs::vis::op {
             switch (mode) {
             case 1: return lfs::vis::SelectionMode::Add;
             case 2: return lfs::vis::SelectionMode::Remove;
+            case 3: return lfs::vis::SelectionMode::Intersect;
             default: return lfs::vis::SelectionMode::Replace;
             }
         }
@@ -35,6 +42,9 @@ namespace lfs::vis::op {
             }
             if (mods & input::KEYMOD_CTRL) {
                 return lfs::vis::SelectionMode::Remove;
+            }
+            if (mods & input::KEYMOD_ALT) {
+                return lfs::vis::SelectionMode::Intersect;
             }
             return lfs::vis::SelectionMode::Replace;
         }
@@ -72,8 +82,7 @@ namespace lfs::vis::op {
         filters_.depth_filter = props.get_or<bool>("use_depth_filter", false);
         filters_.restrict_to_selected_nodes = props.get_or<bool>("restrict_to_selected_nodes", true);
 
-        // Color selection mode (5): pick Gaussian under cursor and select by color similarity.
-        if (mode_int == 5) {
+        if (mode_int == kSelectionModeColor) {
             const float click_x = static_cast<float>(props.get_or<double>("x", 0.0));
             const float click_y = static_cast<float>(props.get_or<double>("y", 0.0));
             const auto result = service->selectByColorAt(click_x, click_y, mode_, filters_);
@@ -107,6 +116,10 @@ namespace lfs::vis::op {
             }
 
             service->updateInteractiveSelection(glm::vec2(move->position));
+            if (shape_ == lfs::vis::SelectionShape::Box ||
+                shape_ == lfs::vis::SelectionShape::Sphere) {
+                service->refreshInteractivePreview();
+            }
             if (shape_ == lfs::vis::SelectionShape::Polygon) {
                 return service->isInteractivePolygonVertexDragActive()
                            ? OperatorResult::RUNNING_MODAL

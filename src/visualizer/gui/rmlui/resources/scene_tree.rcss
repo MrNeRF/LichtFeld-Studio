@@ -64,6 +64,37 @@ body {
     border-bottom-color: rgba(137, 180, 250, 255);
 }
 
+.scene-header-icon-button {
+    width: 30dp;
+    height: 30dp;
+    min-width: 30dp;
+    min-height: 30dp;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    background-color: rgba(49, 50, 68, 140);
+    border-width: 1dp;
+    border-color: #45475a;
+    border-radius: 4dp;
+    cursor: pointer;
+    transition: border-color background-color color 0.12s quadratic-out;
+}
+
+.scene-header-icon-button:hover,
+.scene-header-icon-button:focus-visible {
+    border-color: rgba(137, 180, 250, 110);
+    background-color: rgba(137, 180, 250, 24);
+}
+
+.scene-header-icon-button img {
+    width: 20dp;
+    height: 20dp;
+    image-color: #cdd6f4;
+}
+
 .scene-chip-row {
     display: flex;
     flex-wrap: wrap;

@@ -127,7 +127,8 @@ namespace lfs::rendering {
 
     inline constexpr std::size_t kSelectionGroupColorCount = 256;
     inline constexpr std::size_t kSelectionPreviewColorIndex = kSelectionGroupColorCount;
-    inline constexpr std::size_t kSelectionColorTableCount = kSelectionGroupColorCount + 1;
+    inline constexpr std::size_t kSelectionSelectedHoverColorIndex = kSelectionGroupColorCount + 1;
+    inline constexpr std::size_t kSelectionColorTableCount = kSelectionGroupColorCount + 2;
 
     [[nodiscard]] inline std::array<glm::vec4, kSelectionColorTableCount> defaultSelectionColorTable() {
         std::array<glm::vec4, kSelectionColorTableCount> colors{};
@@ -146,6 +147,7 @@ namespace lfs::rendering {
             colors[group] = glm::vec4(palette[(group - 1) % palette.size()], 1.0f);
         }
         colors[kSelectionPreviewColorIndex] = glm::vec4(0.0f, 0.871f, 0.298f, 1.0f);
+        colors[kSelectionSelectedHoverColorIndex] = glm::vec4(1.0f, 0.08f, 0.08f, 1.0f);
         return colors;
     }
 

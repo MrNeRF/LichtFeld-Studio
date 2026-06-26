@@ -13,6 +13,8 @@ class SelectionMode(enum.Enum):
 
     Remove = 2
 
+    Intersect = 3
+
 def begin_stroke() -> None:
     """Begin a new selection stroke (saves undo state)"""
 

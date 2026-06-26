@@ -322,6 +322,11 @@ namespace lfs::io {
         std::thread gpu_decode_thread_;
         std::vector<std::thread> cold_process_threads_;
 
+        // Non-blocking stream for the hot GPU decode path, so image decode and
+        // H2D work overlap training instead of serializing on the legacy stream.
+        // Images are still stream-synced before handoff (materialized on arrival).
+        cudaStream_t decode_stream_ = nullptr;
+
         ThreadSafeQueue<ImageRequest> prefetch_queue_;
         ThreadSafeQueue<PrefetchedImage> hot_queue_;
         ThreadSafeQueue<PrefetchedImage> cold_queue_;

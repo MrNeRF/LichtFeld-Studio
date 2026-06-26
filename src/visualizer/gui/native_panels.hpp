@@ -27,6 +27,20 @@ namespace lfs::vis::gui::native_panels {
     public:
         explicit VideoExtractorPanel(lfs::gui::IVideoExtractorWidget* widget);
         void draw(const PanelDrawContext& ctx) override;
+        void preloadDirect(float w, float h, const PanelDrawContext& ctx,
+                           float clip_y_min, float clip_y_max,
+                           const PanelInputState* input) override;
+        bool supportsDirectDraw() const override;
+        void drawDirect(float x, float y, float w, float h, const PanelDrawContext& ctx) override;
+        bool drawDirectCached(float x, float y, float w, float h,
+                              const PanelDrawContext& ctx) override;
+        float getDirectDrawHeight() const override;
+        void setInputClipY(float y_min, float y_max) override;
+        void setInput(const PanelInputState* input) override;
+        void setForcedHeight(float h) override;
+        bool wantsKeyboard() const override;
+        bool needsAnimationFrame() const override;
+        void reloadRmlResources() override;
 
     private:
         lfs::gui::IVideoExtractorWidget* widget_;

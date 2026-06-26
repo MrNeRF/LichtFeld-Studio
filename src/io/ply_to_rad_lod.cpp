@@ -828,11 +828,14 @@ namespace lfs::io {
         // reused across batches.
         class ChunkAccumulator {
         public:
-            ChunkAccumulator(RadStreamWriter& writer, const int rest_coeffs)
+            ChunkAccumulator(RadStreamWriter& writer,
+                             const int rest_coeffs,
+                             const std::size_t chunk_splats)
                 : writer_(writer),
-                  rest_coeffs_(rest_coeffs) {
+                  rest_coeffs_(rest_coeffs),
+                  chunk_splats_(std::max<std::size_t>(chunk_splats, 1)) {
                 const std::size_t chunk_bytes =
-                    kChunkSplats *
+                    chunk_splats_ *
                     ((14 + static_cast<std::size_t>(rest_coeffs_) * 3) * sizeof(float) + 6);
                 const std::size_t hw = std::max<std::size_t>(std::thread::hardware_concurrency(), 1);
                 batch_capacity_ = std::clamp<std::size_t>(
@@ -843,12 +846,12 @@ namespace lfs::io {
                 const BucketNodes& nodes, std::size_t first, std::size_t count) {
                 while (count > 0) {
                     Stage& stage = filling_stage();
-                    const std::size_t take = std::min(kChunkSplats - stage.fill, count);
+                    const std::size_t take = std::min(chunk_splats_ - stage.fill, count);
                     copy_range(stage, nodes, first, take);
                     stage.fill += take;
                     first += take;
                     count -= take;
-                    if (stage.fill == kChunkSplats) {
+                    if (stage.fill == chunk_splats_) {
                         ++fill_->full;
                         if (fill_->full == batch_capacity_) {
                             if (auto ok = launch_flush(); !ok) {
@@ -884,16 +887,16 @@ namespace lfs::io {
                 Pool& pool = *fill_;
                 if (pool.full == pool.stages.size()) {
                     Stage stage;
-                    stage.means.resize(kChunkSplats * 3);
-                    stage.rgb.resize(kChunkSplats * 3);
-                    stage.alpha.resize(kChunkSplats);
-                    stage.scales.resize(kChunkSplats * 3);
-                    stage.rotation.resize(kChunkSplats * 4);
+                    stage.means.resize(chunk_splats_ * 3);
+                    stage.rgb.resize(chunk_splats_ * 3);
+                    stage.alpha.resize(chunk_splats_);
+                    stage.scales.resize(chunk_splats_ * 3);
+                    stage.rotation.resize(chunk_splats_ * 4);
                     if (rest_coeffs_ > 0) {
-                        stage.shN.resize(kChunkSplats * static_cast<std::size_t>(rest_coeffs_) * 3);
+                        stage.shN.resize(chunk_splats_ * static_cast<std::size_t>(rest_coeffs_) * 3);
                     }
-                    stage.child_count.resize(kChunkSplats);
-                    stage.child_start.resize(kChunkSplats);
+                    stage.child_count.resize(chunk_splats_);
+                    stage.child_start.resize(chunk_splats_);
                     pool.stages.push_back(std::move(stage));
                 }
                 return pool.stages[pool.full];
@@ -975,6 +978,7 @@ namespace lfs::io {
 
             RadStreamWriter& writer_;
             int rest_coeffs_;
+            std::size_t chunk_splats_;
             std::size_t batch_capacity_ = 0;
             Pool pools_[2];
             Pool* fill_ = &pools_[0];
@@ -1710,13 +1714,22 @@ namespace lfs::io {
             return cancelled();
         }
         const auto t_write_start = std::chrono::high_resolution_clock::now();
+        std::size_t output_chunk_splats = options.chunk_size;
+        if (output_chunk_splats < kChunkSplats || output_chunk_splats % kChunkSplats != 0) {
+            LOG_WARN(
+                "ply_to_rad_lod: invalid RAD chunk size {}; using {}",
+                output_chunk_splats,
+                kRadStreamableChunkSplats);
+            output_chunk_splats = kRadStreamableChunkSplats;
+        }
 
         RadStreamWriter writer(output_path, total_nodes, layout.sh_degree, true,
-                               options.compression_level, /*emit_meta_sidecar=*/true);
+                               options.compression_level, /*emit_meta_sidecar=*/true,
+                               static_cast<std::uint32_t>(output_chunk_splats));
         if (auto ok = writer.open(); !ok) {
             return make_error(ErrorCode::WRITE_FAILURE, ok.error(), output_path);
         }
-        ChunkAccumulator accumulator(writer, rest_coeffs);
+        ChunkAccumulator accumulator(writer, rest_coeffs, output_chunk_splats);
 
         if (bucket_count > 1) {
             // Top-tree fixups: interior children remap into the next level's

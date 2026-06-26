@@ -742,7 +742,8 @@ namespace lfs::vis::gui {
 
     void AsyncTaskManager::performExport(ExportFormat format, const std::filesystem::path& path,
                                          const std::vector<std::string>& node_names, int sh_degree,
-                                         bool rad_flip_y) {
+                                         bool rad_flip_y,
+                                         bool rad_streamable) {
         if (isExporting())
             return;
 
@@ -784,7 +785,8 @@ namespace lfs::vis::gui {
                          sh_degree,
                          borrow_plan.storage_mode == core::Scene::MergeStorageMode::BorrowSingleIdentity,
                          borrow_plan.model_mutex,
-                         rad_flip_y);
+                         rad_flip_y,
+                         rad_streamable);
     }
 
     void AsyncTaskManager::startColmapExport(const std::filesystem::path& path) {
@@ -912,7 +914,8 @@ namespace lfs::vis::gui {
                                             int sh_degree,
                                             bool borrow_single_identity,
                                             std::shared_mutex* model_mutex,
-                                            bool rad_flip_y) {
+                                            bool rad_flip_y,
+                                            bool rad_streamable) {
         if (splats.empty()) {
             LOG_ERROR("No splat data to export");
             publishExportFailureState(format, path, "No splat data to export");
@@ -941,7 +944,8 @@ namespace lfs::vis::gui {
              sh_degree,
              borrow_single_identity,
              model_mutex,
-             rad_flip_y](
+             rad_flip_y,
+             rad_streamable](
                 std::stop_token stop_token) mutable {
                 bool cancellation_logged = false;
                 auto update_progress = [this, &stop_token, &cancellation_logged](float progress, const std::string& stage) -> bool {
@@ -1109,6 +1113,9 @@ namespace lfs::vis::gui {
                                 .output_path = path,
                                 .compression_level = 6,
                                 .flip_y = rad_flip_y,
+                                .chunk_size = rad_streamable
+                                                  ? lfs::io::kRadStreamableChunkSplats
+                                                  : lfs::io::kRadNativeChunkSplats,
                                 .progress_callback = update_progress};
                             if (auto result = lfs::io::save_rad(*splat_data, options); result) {
                                 success = true;

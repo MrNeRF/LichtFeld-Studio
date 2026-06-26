@@ -5,6 +5,8 @@
 #include "lfs/kernels/bilateral_grid.cuh"
 #include <cuda_runtime.h>
 
+#include "kernel_stream.hpp"
+
 namespace lfs::training::kernels {
 
     using namespace lfs::core;
@@ -82,6 +84,7 @@ namespace lfs::training::kernels {
         const float* grid, const float* rgb, float* output,
         int L, int H, int W, int h, int w,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
 
         const int blocks = (h * w + BLOCK_SIZE - 1) / BLOCK_SIZE;
         bilateral_grid_slice_forward_kernel<<<blocks, BLOCK_SIZE, 0, stream>>>(
@@ -160,6 +163,7 @@ namespace lfs::training::kernels {
         const float* grid, const float* rgb, float* output,
         int L, int H, int W, int h, int w,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
 
         const int blocks = (h * w + BLOCK_SIZE - 1) / BLOCK_SIZE;
         bilateral_grid_slice_forward_chw_kernel<<<blocks, BLOCK_SIZE, 0, stream>>>(

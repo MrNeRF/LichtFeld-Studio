@@ -104,11 +104,11 @@ class Viewport {
             clearTransientMotion();
         }
 
-        // Record the whole-scene radius (half the bounds diagonal). It scales both
-        // WASD speed and the pan floor so navigation tracks splat size; the
-        // controller feeds it the whole-scene extent.
+        // Record the whole-scene radius (half the bounds diagonal). It scales
+        // WASD speed and caps pan distance so navigation tracks splat size; the
+        // controller feeds it the trimmed whole-scene extent. 0 clears the cache.
         void setSceneExtent(float radius) {
-            if (std::isfinite(radius) && radius > 0.0f)
+            if (std::isfinite(radius) && radius >= 0.0f)
                 scene_extent_ = radius;
         }
 
@@ -455,9 +455,9 @@ class Viewport {
         static constexpr float kWasdInertiaRate = 12.0f;
         static constexpr float kWasdStopFraction = 0.02f;
 
-        // Whole-scene radius (half the bounds diagonal), fed by the controller and
-        // used to make both WASD and panning scale with splat size. 0 = unknown, in
-        // which case movement keeps its scene-independent behavior. Scenes load in
+        // Whole-scene radius (half the bounds diagonal), fed by the controller.
+        // WASD scales by it and panning is capped by it. 0 = unknown, in
+        // which case movement keeps its distance-based behavior. Scenes load in
         // arbitrary world units (no normalization), so an absolute speed feels right
         // on one scene and wrong on the next; scaling by this removes that.
         //
@@ -469,9 +469,10 @@ class Viewport {
         static constexpr float kWasdReferenceExtent = 50.0f;
         static constexpr float kMinMoveScale = 0.05f;
         static constexpr float kMaxMoveScale = 100.0f;
-        // Lower bound on the pan distance, as a fraction of the scene radius, so a
-        // near/stale pivot can't make panning crawl on a large scene.
-        static constexpr float kPanMinDistanceFraction = 0.25f;
+        // Cap pan distance against the trimmed scene radius. A minimum tied to
+        // scene size makes large scenes pan too fast when the camera/pivot is
+        // still close to the origin.
+        static constexpr float kPanMaxDistanceFraction = 1.0f;
 
         // WASD multiplier from the scene radius, clamped so degenerate or enormous
         // bounds can't produce unusable speeds; 1.0 when the extent is unknown.
@@ -533,11 +534,11 @@ class Viewport {
         // callers can track momentum.
         glm::vec3 applyPanDrag(const glm::vec2& pos) {
             const glm::vec2 delta = pos - prePos;
-            // Pan tracks camera-to-pivot distance (so it eases off as you zoom in),
-            // but a stale or near pivot must not make it crawl on a large scene, so
-            // floor that distance at a fraction of the scene radius.
             const float dist_to_pivot = glm::length(pivot - t);
-            const float pan_dist = std::max(dist_to_pivot, scene_extent_ * kPanMinDistanceFraction);
+            float pan_dist = dist_to_pivot;
+            if (scene_extent_ > 0.0f) {
+                pan_dist = std::min(pan_dist, scene_extent_ * kPanMaxDistanceFraction);
+            }
             const float adaptive_speed = translateSpeed * pan_dist;
             const glm::vec3 movement = -(delta.x * adaptive_speed) * R[0] + (delta.y * adaptive_speed) * R[1];
             t += movement;

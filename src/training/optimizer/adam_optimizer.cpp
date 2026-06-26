@@ -310,6 +310,10 @@ namespace lfs::training {
         state.exp_avg_scale = lfs::core::Tensor::empty(lfs::core::TensorShape({prim_rows}), lfs::core::Device::CUDA);
         state.exp_avg_sq_scale = lfs::core::Tensor::empty(lfs::core::TensorShape({prim_rows}), lfs::core::Device::CUDA);
 
+        const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+        lfs::core::waitForCUDAStream(stream, exp_avg.stream());
+        lfs::core::waitForCUDAStream(stream, exp_avg_sq.stream());
+
         if (type == ParamType::ShN) {
             const auto layout_rest = static_cast<uint32_t>(splat_data_.max_sh_coeffs_rest());
             const int slots = static_cast<int>(lfs::core::sh_float4_slots_for_rest(layout_rest));
@@ -317,15 +321,20 @@ namespace lfs::training {
                 exp_avg.ptr<float>(), exp_avg_sq.ptr<float>(),
                 state.exp_avg.ptr<uint8_t>(), state.exp_avg_scale.ptr<float>(),
                 state.exp_avg_sq.ptr<uint8_t>(), state.exp_avg_sq_scale.ptr<float>(),
-                static_cast<int>(prim_rows), slots);
+                static_cast<int>(prim_rows), slots, stream);
         } else {
             const size_t row_size = exp_avg.numel() / exp_avg.shape()[0];
             fast_lfs::optimizer::quantize_adam_moments_raw(
                 exp_avg.ptr<float>(), exp_avg_sq.ptr<float>(),
                 state.exp_avg.ptr<uint8_t>(), state.exp_avg_scale.ptr<float>(),
                 state.exp_avg_sq.ptr<uint8_t>(), state.exp_avg_sq_scale.ptr<float>(),
-                static_cast<int>(exp_avg.shape()[0]), static_cast<int>(row_size));
+                static_cast<int>(exp_avg.shape()[0]), static_cast<int>(row_size), stream);
         }
+
+        state.exp_avg.set_stream(stream);
+        state.exp_avg_sq.set_stream(stream);
+        state.exp_avg_scale.set_stream(stream);
+        state.exp_avg_sq_scale.set_stream(stream);
     }
 
     void AdamOptimizer::init_state(ParamType type, bool allocate_grad) {
@@ -624,32 +633,45 @@ namespace lfs::training {
             return;
         }
 
-        int64_t* d_indices;
-        CHECK_CUDA(cudaMalloc(&d_indices, indices.size() * sizeof(int64_t)));
-        CHECK_CUDA(cudaMemcpy(d_indices, indices.data(), indices.size() * sizeof(int64_t), cudaMemcpyHostToDevice));
+        const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+        const size_t idx_bytes = indices.size() * sizeof(int64_t);
+        int64_t* d_indices = nullptr;
+        CHECK_CUDA(cudaMallocAsync(&d_indices, idx_bytes, stream));
+        CHECK_CUDA(cudaMemcpyAsync(d_indices, indices.data(), idx_bytes, cudaMemcpyHostToDevice, stream));
+
+        lfs::core::waitForCUDAStream(stream, state.exp_avg_scale.stream());
+        lfs::core::waitForCUDAStream(stream, state.exp_avg_sq_scale.stream());
 
         if (type != ParamType::ShN && state.exp_avg.is_valid() && state.exp_avg_sq.is_valid()) {
             const int row_size = static_cast<int>(tensor_row_size(state.exp_avg));
+            lfs::core::waitForCUDAStream(stream, state.exp_avg.stream());
+            lfs::core::waitForCUDAStream(stream, state.exp_avg_sq.stream());
             fast_lfs::optimizer::zero_quantized_rows_at_indices(
                 state.exp_avg.ptr<uint8_t>(),
                 state.exp_avg_scale.ptr<float>(),
                 d_indices,
                 indices.size(),
                 row_size,
-                QUANTIZED_MOMENT_ZERO_POINT);
+                QUANTIZED_MOMENT_ZERO_POINT,
+                stream);
             fast_lfs::optimizer::zero_quantized_rows_at_indices(
                 state.exp_avg_sq.ptr<uint8_t>(),
                 state.exp_avg_sq_scale.ptr<float>(),
                 d_indices,
                 indices.size(),
                 row_size,
-                0);
+                0,
+                stream);
+            state.exp_avg.set_stream(stream);
+            state.exp_avg_sq.set_stream(stream);
         } else {
-            fast_lfs::optimizer::zero_rows_at_indices(state.exp_avg_scale.ptr<float>(), d_indices, indices.size(), 1);
-            fast_lfs::optimizer::zero_rows_at_indices(state.exp_avg_sq_scale.ptr<float>(), d_indices, indices.size(), 1);
+            fast_lfs::optimizer::zero_rows_at_indices(state.exp_avg_scale.ptr<float>(), d_indices, indices.size(), 1, stream);
+            fast_lfs::optimizer::zero_rows_at_indices(state.exp_avg_sq_scale.ptr<float>(), d_indices, indices.size(), 1, stream);
         }
 
-        CHECK_CUDA(cudaFree(d_indices));
+        state.exp_avg_scale.set_stream(stream);
+        state.exp_avg_sq_scale.set_stream(stream);
+        CHECK_CUDA(cudaFreeAsync(d_indices, stream));
     }
 
     void AdamOptimizer::extend_state_by_gather(ParamType type, const lfs::core::Tensor& indices) {
@@ -816,18 +838,21 @@ namespace lfs::training {
 
         auto new_exp_avg = lfs::core::Tensor::empty(tensor_shape, param.device(), lfs::core::DataType::UInt8);
         auto new_exp_avg_sq = lfs::core::Tensor::empty(tensor_shape, param.device(), lfs::core::DataType::UInt8);
+        const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
 
         const size_t row_size = shape[0] == 0 ? 0 : param.numel() / shape[0];
         if (state.size > 0 && state.exp_avg.numel() > 0) {
             const size_t old_bytes = state.exp_avg.numel() * sizeof(uint8_t);
-            CHECK_CUDA(cudaMemcpyAsync(new_exp_avg.ptr<uint8_t>(), state.exp_avg.ptr<uint8_t>(), old_bytes, cudaMemcpyDeviceToDevice, nullptr));
-            CHECK_CUDA(cudaMemcpyAsync(new_exp_avg_sq.ptr<uint8_t>(), state.exp_avg_sq.ptr<uint8_t>(), old_bytes, cudaMemcpyDeviceToDevice, nullptr));
+            CHECK_CUDA(cudaMemcpyAsync(new_exp_avg.ptr<uint8_t>(), state.exp_avg.ptr<uint8_t>(), old_bytes, cudaMemcpyDeviceToDevice, stream));
+            CHECK_CUDA(cudaMemcpyAsync(new_exp_avg_sq.ptr<uint8_t>(), state.exp_avg_sq.ptr<uint8_t>(), old_bytes, cudaMemcpyDeviceToDevice, stream));
         }
         const size_t offset = state.exp_avg.numel() * sizeof(uint8_t);
         const size_t new_bytes = growth * row_size * sizeof(uint8_t);
-        CHECK_CUDA(cudaMemsetAsync(reinterpret_cast<char*>(new_exp_avg.ptr<uint8_t>()) + offset, QUANTIZED_MOMENT_ZERO_POINT, new_bytes, nullptr));
-        CHECK_CUDA(cudaMemsetAsync(reinterpret_cast<char*>(new_exp_avg_sq.ptr<uint8_t>()) + offset, 0, new_bytes, nullptr));
+        CHECK_CUDA(cudaMemsetAsync(reinterpret_cast<char*>(new_exp_avg.ptr<uint8_t>()) + offset, QUANTIZED_MOMENT_ZERO_POINT, new_bytes, stream));
+        CHECK_CUDA(cudaMemsetAsync(reinterpret_cast<char*>(new_exp_avg_sq.ptr<uint8_t>()) + offset, 0, new_bytes, stream));
 
+        new_exp_avg.set_stream(stream);
+        new_exp_avg_sq.set_stream(stream);
         state.exp_avg = std::move(new_exp_avg);
         state.exp_avg_sq = std::move(new_exp_avg_sq);
 
@@ -835,9 +860,11 @@ namespace lfs::training {
         auto new_m_scale = lfs::core::Tensor::zeros(scale_shape, param.device());
         auto new_v_scale = lfs::core::Tensor::zeros(scale_shape, param.device());
         if (scale_cur > 0 && state.exp_avg_scale.numel() > 0) {
-            CHECK_CUDA(cudaMemcpyAsync(new_m_scale.ptr<float>(), state.exp_avg_scale.ptr<float>(), scale_cur * sizeof(float), cudaMemcpyDeviceToDevice, nullptr));
-            CHECK_CUDA(cudaMemcpyAsync(new_v_scale.ptr<float>(), state.exp_avg_sq_scale.ptr<float>(), scale_cur * sizeof(float), cudaMemcpyDeviceToDevice, nullptr));
+            CHECK_CUDA(cudaMemcpyAsync(new_m_scale.ptr<float>(), state.exp_avg_scale.ptr<float>(), scale_cur * sizeof(float), cudaMemcpyDeviceToDevice, stream));
+            CHECK_CUDA(cudaMemcpyAsync(new_v_scale.ptr<float>(), state.exp_avg_sq_scale.ptr<float>(), scale_cur * sizeof(float), cudaMemcpyDeviceToDevice, stream));
         }
+        new_m_scale.set_stream(stream);
+        new_v_scale.set_stream(stream);
         state.exp_avg_scale = std::move(new_m_scale);
         state.exp_avg_sq_scale = std::move(new_v_scale);
 
@@ -1067,11 +1094,13 @@ namespace lfs::training {
             }
         }
 
-        int64_t* d_indices;
-        CHECK_CUDA(cudaMalloc(&d_indices, indices.size() * sizeof(int64_t)));
-        CHECK_CUDA(cudaMemcpy(d_indices, indices.data(), indices.size() * sizeof(int64_t), cudaMemcpyHostToDevice));
+        const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+        const size_t idx_bytes = indices.size() * sizeof(int64_t);
+        int64_t* d_indices = nullptr;
+        CHECK_CUDA(cudaMallocAsync(&d_indices, idx_bytes, stream));
+        CHECK_CUDA(cudaMemcpyAsync(d_indices, indices.data(), idx_bytes, cudaMemcpyHostToDevice, stream));
         relocate_params_at_indices_gpu(type, d_indices, indices.size());
-        CHECK_CUDA(cudaFree(d_indices));
+        CHECK_CUDA(cudaFreeAsync(d_indices, stream));
     }
 
     void AdamOptimizer::relocate_params_at_indices_gpu(ParamType type, const int64_t* indices_device, const size_t n_indices) {
@@ -1101,26 +1130,39 @@ namespace lfs::training {
             return;
         }
 
+        const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+        lfs::core::waitForCUDAStream(stream, state.exp_avg_scale.stream());
+        lfs::core::waitForCUDAStream(stream, state.exp_avg_sq_scale.stream());
+
         if (type != ParamType::ShN && state.exp_avg.is_valid() && state.exp_avg_sq.is_valid()) {
             const int row_size = static_cast<int>(tensor_row_size(state.exp_avg));
+            lfs::core::waitForCUDAStream(stream, state.exp_avg.stream());
+            lfs::core::waitForCUDAStream(stream, state.exp_avg_sq.stream());
             fast_lfs::optimizer::zero_quantized_rows_at_indices(
                 state.exp_avg.ptr<uint8_t>(),
                 state.exp_avg_scale.ptr<float>(),
                 indices_device,
                 n_indices,
                 row_size,
-                QUANTIZED_MOMENT_ZERO_POINT);
+                QUANTIZED_MOMENT_ZERO_POINT,
+                stream);
             fast_lfs::optimizer::zero_quantized_rows_at_indices(
                 state.exp_avg_sq.ptr<uint8_t>(),
                 state.exp_avg_sq_scale.ptr<float>(),
                 indices_device,
                 n_indices,
                 row_size,
-                0);
+                0,
+                stream);
+            state.exp_avg.set_stream(stream);
+            state.exp_avg_sq.set_stream(stream);
         } else {
-            fast_lfs::optimizer::zero_rows_at_indices(state.exp_avg_scale.ptr<float>(), indices_device, n_indices, 1);
-            fast_lfs::optimizer::zero_rows_at_indices(state.exp_avg_sq_scale.ptr<float>(), indices_device, n_indices, 1);
+            fast_lfs::optimizer::zero_rows_at_indices(state.exp_avg_scale.ptr<float>(), indices_device, n_indices, 1, stream);
+            fast_lfs::optimizer::zero_rows_at_indices(state.exp_avg_sq_scale.ptr<float>(), indices_device, n_indices, 1, stream);
         }
+
+        state.exp_avg_scale.set_stream(stream);
+        state.exp_avg_sq_scale.set_stream(stream);
     }
 
     namespace {

@@ -113,7 +113,12 @@ PACK_STRUCT(struct VulkanGSSelectionMaskUniforms {
     uint32_t aabb_y0;
     uint32_t aabb_w;
     uint32_t aabb_h;
+    float ring_width;
+    uint32_t mip_filter;
+    uint32_t ring_pick_phase;
+    uint32_t pad2;
 });
+static_assert(sizeof(VulkanGSSelectionMaskUniforms) == 176);
 
 PACK_STRUCT(struct VulkanGSSelectionPolygonRasterizeUniforms {
     uint32_t vertex_count;
@@ -293,7 +298,8 @@ public:
                               const _VulkanBuffer& primitives,
                               const _VulkanBuffer& model_transforms,
                               const _VulkanBuffer& selection_out,
-                              const _VulkanBuffer& polygon_mask);
+                              const _VulkanBuffer& polygon_mask,
+                              const _VulkanBuffer& ring_pick_out);
 
     void executeSelectionPolygonRasterize(const VulkanGSSelectionPolygonRasterizeUniforms& uniforms,
                                           const _VulkanBuffer& polygon_vertices,
@@ -357,7 +363,7 @@ protected:
     // per-page dequant frames appended last.
     _ComputePipeline pipeline_projection_forward_quant = _ComputePipeline(25);
     _ComputePipeline pipeline_projection_forward_quant_3dgut = _ComputePipeline(25);
-    _ComputePipeline pipeline_selection_mask = _ComputePipeline(9);
+    _ComputePipeline pipeline_selection_mask = _ComputePipeline(11);
     _ComputePipeline pipeline_selection_polygon_rasterize = _ComputePipeline(2);
     _ComputePipeline pipeline_generate_keys = _ComputePipeline(7);
     _ComputePipeline pipeline_seed_primitive_indices = _ComputePipeline(1);

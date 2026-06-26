@@ -19,13 +19,16 @@
 #include "geometry/bounding_box.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data_transform.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/gpu_slab_allocator.hpp"
+#include "core/tensor/internal/memory_pool.hpp"
 #include "core/tensor/internal/size_bucketed_pool.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "io/cache_image_loader.hpp"
 #include "io/cuda/image_format_kernels.cuh"
 #include "io/exporter.hpp"
 #include "io/filesystem_utils.hpp"
+#include "kernels/image_kernels.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include "losses/losses.hpp"
 #include "optimizer/adam_optimizer.hpp"
@@ -56,12 +59,14 @@
 #include <memory>
 #include <numeric>
 #include <nvtx3/nvToolsExt.h>
+#include <nvtx3/nvToolsExtCudaRt.h>
 #include <span>
 #include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace lfs::training {
 
@@ -85,6 +90,62 @@ namespace lfs::training {
             return value != "0" && value != "false" && value != "FALSE" &&
                    value != "off" && value != "OFF" &&
                    value != "no" && value != "NO";
+        }
+
+        [[nodiscard]] std::unique_ptr<lfs::core::SplatData> make_ply_export_model(
+            const lfs::core::SplatData& model,
+            const bool exclude_frozen_ranges) {
+            if (!exclude_frozen_ranges || !model.has_frozen_ranges()) {
+                return nullptr;
+            }
+
+            const size_t count = model.size();
+            if (count == 0) {
+                return nullptr;
+            }
+
+            std::vector<bool> keep(count, true);
+            size_t excluded_count = 0;
+            for (const auto& range : model.frozen_ranges()) {
+                if (range.count == 0 || range.start >= count) {
+                    continue;
+                }
+                const size_t remaining = count - range.start;
+                const size_t end = range.start + std::min(range.count, remaining);
+                for (size_t idx = range.start; idx < end; ++idx) {
+                    if (keep[idx]) {
+                        keep[idx] = false;
+                        ++excluded_count;
+                    }
+                }
+            }
+
+            if (excluded_count == 0) {
+                return nullptr;
+            }
+            if (excluded_count == count) {
+                LOG_WARN("Skipping frozen-add-splat export exclusion because it would remove all {} Gaussians",
+                         count);
+                return nullptr;
+            }
+
+            auto keep_mask = lfs::core::Tensor::from_vector(
+                keep,
+                lfs::core::TensorShape({count}),
+                model.means_raw().device());
+            auto filtered = std::make_unique<lfs::core::SplatData>(
+                lfs::core::extract_by_mask(model, keep_mask));
+            if (!filtered->means_raw().is_valid() || filtered->size() == 0) {
+                LOG_WARN("Failed to build frozen-add-splat filtered export model; exporting full model");
+                return nullptr;
+            }
+
+            LOG_INFO("Excluding {} frozen added Gaussian{} from PLY export ({} -> {})",
+                     excluded_count,
+                     excluded_count == 1 ? "" : "s",
+                     count,
+                     filtered->size());
+            return filtered;
         }
 
         [[nodiscard]] int env_int_or_default(const char* name, const int fallback) {
@@ -964,6 +1025,22 @@ namespace lfs::training {
         }
     } // namespace
 
+    Trainer::CameraLossHeatmapState::~CameraLossHeatmapState() {
+        if (copy_stream) {
+            cudaStreamSynchronize(copy_stream);
+        }
+        if (done_event) {
+            cudaEventDestroy(done_event);
+        }
+        if (ready_event) {
+            cudaEventDestroy(ready_event);
+        }
+        if (copy_stream) {
+            lfs::core::CudaMemoryPool::instance().release_stream(copy_stream);
+            cudaStreamDestroy(copy_stream);
+        }
+    }
+
     void Trainer::cleanup() {
         LOG_DEBUG("Cleaning up trainer for re-initialization");
 
@@ -1704,6 +1781,15 @@ namespace lfs::training {
         }
 
         cudaStreamCreateWithFlags(&callback_stream_, cudaStreamNonBlocking);
+        // Use the default stream flags so synchronous readbacks and cold-path
+        // uploads remain ordered with training work. Overlap partners use
+        // non-blocking streams with explicit event edges.
+        cudaStreamCreate(&training_stream_);
+        cudaStreamCreateWithFlags(&metrics_stream_, cudaStreamNonBlocking);
+        nvtxNameCudaStreamA(training_stream_, "lfs.train");
+        nvtxNameCudaStreamA(callback_stream_, "lfs.train.callback");
+        nvtxNameCudaStreamA(metrics_stream_, "lfs.metrics");
+        createSyncPrimitives();
 
         LOG_DEBUG("Trainer constructed with {} cameras", base_dataset_->get_cameras().size());
     }
@@ -1717,12 +1803,215 @@ namespace lfs::training {
         }
 
         cudaStreamCreateWithFlags(&callback_stream_, cudaStreamNonBlocking);
+        // Use the default stream flags so synchronous readbacks and cold-path
+        // uploads remain ordered with training work. Overlap partners use
+        // non-blocking streams with explicit event edges.
+        cudaStreamCreate(&training_stream_);
+        cudaStreamCreateWithFlags(&metrics_stream_, cudaStreamNonBlocking);
+        nvtxNameCudaStreamA(training_stream_, "lfs.train");
+        nvtxNameCudaStreamA(callback_stream_, "lfs.train.callback");
+        nvtxNameCudaStreamA(metrics_stream_, "lfs.metrics");
+        createSyncPrimitives();
 
         if (!scene.hasTrainingData()) {
             throw std::runtime_error("Scene has no cameras");
         }
 
         LOG_DEBUG("Trainer constructed from Scene with {} cameras", scene.getAllCameras().size());
+    }
+
+    void Trainer::createSyncPrimitives() {
+        cudaEventCreateWithFlags(&params_ready_event_, cudaEventDisableTiming);
+        for (auto& event : reader_done_events_) {
+            cudaEventCreateWithFlags(&event, cudaEventDisableTiming);
+        }
+        for (auto& slot : loss_slots_) {
+            slot.pinned = static_cast<float*>(
+                lfs::core::PinnedMemoryAllocator::instance().allocate(sizeof(float)));
+            cudaEventCreateWithFlags(&slot.done, cudaEventDisableTiming);
+        }
+    }
+
+    void Trainer::destroySyncPrimitives() {
+        std::lock_guard<std::mutex> lock(stream_sync_mutex_);
+        params_ready_recorded_ = false;
+        reader_done_pending_ = 0;
+        viewer_release_semaphore_ = nullptr;
+        if (params_ready_event_) {
+            cudaEventDestroy(params_ready_event_);
+            params_ready_event_ = nullptr;
+        }
+        for (auto& event : reader_done_events_) {
+            if (event) {
+                cudaEventDestroy(event);
+                event = nullptr;
+            }
+        }
+        for (auto& slot : loss_slots_) {
+            if (slot.done) {
+                cudaEventDestroy(slot.done);
+                slot.done = nullptr;
+            }
+            if (slot.pinned) {
+                lfs::core::PinnedMemoryAllocator::instance().deallocate(slot.pinned, nullptr);
+                slot.pinned = nullptr;
+            }
+            slot.in_flight = false;
+        }
+    }
+
+    void Trainer::submitLossReadback(const lfs::core::Tensor& total_loss, int iter) {
+        LossReadbackSlot& slot = loss_slots_[loss_slot_head_];
+        if (!slot.pinned || !slot.done) {
+            return;
+        }
+        if (slot.in_flight) {
+            // Ring full: the GPU is LOSS_RING submit intervals behind —
+            // explicit backpressure instead of silently dropping the sample.
+            // The caller harvests right before submitting, so this slot's
+            // value was already consumed once the event completes.
+            cudaEventSynchronize(slot.done);
+            slot.in_flight = false;
+        }
+        if (cudaMemcpyAsync(slot.pinned, total_loss.ptr<float>(), sizeof(float),
+                            cudaMemcpyDeviceToHost, training_stream_) != cudaSuccess) {
+            return;
+        }
+        if (cudaEventRecord(slot.done, training_stream_) == cudaSuccess) {
+            slot.iter = iter;
+            slot.in_flight = true;
+            loss_slot_head_ = (loss_slot_head_ + 1) % LOSS_RING;
+        }
+    }
+
+    std::expected<void, std::string> Trainer::harvestLossReadbacks(bool drain, bool in_controller_phase) {
+        for (size_t i = 0; i < LOSS_RING; ++i) {
+            LossReadbackSlot& slot = loss_slots_[(loss_slot_head_ + i) % LOSS_RING];
+            if (!slot.in_flight) {
+                continue;
+            }
+            if (drain) {
+                if (cudaEventSynchronize(slot.done) != cudaSuccess) {
+                    slot.in_flight = false;
+                    continue;
+                }
+            } else if (cudaEventQuery(slot.done) != cudaSuccess) {
+                break;
+            }
+            slot.in_flight = false;
+
+            const float loss_value = *slot.pinned;
+            if (std::isnan(loss_value) || std::isinf(loss_value)) {
+                return std::unexpected(std::format("NaN/Inf loss at iteration {}", slot.iter));
+            }
+
+            current_loss_ = loss_value;
+            if (progress_) {
+                progress_->update(
+                    slot.iter,
+                    loss_value,
+                    static_cast<int>(strategy_->get_model().size()),
+                    get_progress_phase(slot.iter, in_controller_phase));
+            }
+            lfs::core::events::state::TrainingProgress{
+                .iteration = slot.iter,
+                .loss = loss_value,
+                .num_gaussians = static_cast<int>(strategy_->get_model().size()),
+                .is_refining = strategy_->is_refining(slot.iter)}
+                .emit();
+        }
+        return {};
+    }
+
+    bool Trainer::modelAccessLockEnabled() {
+        static const bool enabled = [] {
+            const char* v = std::getenv("LFS_NO_MODEL_ACCESS_LOCK");
+            return !(v && v[0] == '1');
+        }();
+        return enabled;
+    }
+
+    void Trainer::beginModelRead(cudaStream_t reader_stream) {
+        std::lock_guard<std::mutex> lock(stream_sync_mutex_);
+        if (params_ready_event_ && params_ready_recorded_) {
+            cudaStreamWaitEvent(reader_stream, params_ready_event_, 0);
+        }
+    }
+
+    void Trainer::endModelRead(cudaStream_t reader_stream) {
+        std::lock_guard<std::mutex> lock(stream_sync_mutex_);
+        cudaEvent_t& slot = reader_done_events_[reader_done_head_];
+        if (!slot) {
+            return;
+        }
+        const uint32_t bit = 1u << reader_done_head_;
+        if (reader_done_pending_ & bit) {
+            // Ring full: the slot's previous record hasn't been consumed by a
+            // step yet. Drain it host-side before reuse — re-recording would
+            // drop the older reader's edge.
+            cudaEventSynchronize(slot);
+        }
+        if (cudaEventRecord(slot, reader_stream) == cudaSuccess) {
+            reader_done_pending_ |= bit;
+        }
+        reader_done_head_ = (reader_done_head_ + 1) % READER_DONE_RING;
+    }
+
+    void Trainer::setViewerReleaseFence(cudaExternalSemaphore_t semaphore) {
+        std::lock_guard<std::mutex> lock(stream_sync_mutex_);
+        if (viewer_release_semaphore_ == semaphore) {
+            return;
+        }
+        viewer_release_semaphore_ = semaphore;
+        viewer_borrow_waited_ = 0;
+        // A new fence is a fresh timeline starting at 0 — a borrow value from
+        // the previous timeline would make the trainer wait a value the new
+        // semaphore never reaches.
+        viewer_borrow_value_.store(0, std::memory_order_release);
+    }
+
+    void Trainer::publishViewerBorrow(uint64_t value) {
+        // Monotonic: prompt per-submit publishes and the frame-scope publisher
+        // may interleave; never regress to an older value.
+        uint64_t current = viewer_borrow_value_.load(std::memory_order_relaxed);
+        while (current < value &&
+               !viewer_borrow_value_.compare_exchange_weak(
+                   current, value, std::memory_order_release, std::memory_order_relaxed)) {
+        }
+    }
+
+    void Trainer::recordParamsReady() {
+        std::lock_guard<std::mutex> lock(stream_sync_mutex_);
+        if (!params_ready_event_) {
+            return;
+        }
+        // training_stream_ is a blocking stream, so the record is also ordered
+        // after the legacy-stream rasterizer writes enqueued this step.
+        if (cudaEventRecord(params_ready_event_, training_stream_) == cudaSuccess) {
+            params_ready_recorded_ = true;
+        }
+    }
+
+    void Trainer::waitForModelReaders() {
+        std::lock_guard<std::mutex> lock(stream_sync_mutex_);
+        if (reader_done_pending_ != 0) {
+            for (size_t i = 0; i < READER_DONE_RING; ++i) {
+                if (reader_done_pending_ & (1u << i)) {
+                    cudaStreamWaitEvent(training_stream_, reader_done_events_[i], 0);
+                }
+            }
+            reader_done_pending_ = 0;
+        }
+
+        const uint64_t borrow = viewer_borrow_value_.load(std::memory_order_acquire);
+        if (viewer_release_semaphore_ && borrow > viewer_borrow_waited_) {
+            cudaExternalSemaphoreWaitParams wait_params{};
+            wait_params.params.fence.value = borrow;
+            if (cudaWaitExternalSemaphoresAsync(&viewer_release_semaphore_, &wait_params, 1,
+                                                training_stream_) == cudaSuccess) {
+                viewer_borrow_waited_ = borrow;
+            }
+        }
     }
 
     bool Trainer::fillCameraLossColors(
@@ -2097,9 +2386,10 @@ namespace lfs::training {
 
             auto& splat = strategy_->get_model();
 
-            int max_cap = params.optimization.max_cap;
-            if (max_cap < splat.size()) {
-                LOG_WARN("Max cap is less than to {} initial splats {}. Choosing randomly {} splats", max_cap, splat.size(), max_cap);
+            const int max_cap = params.optimization.max_cap;
+            if (max_cap > 0 && max_cap < splat.size()) {
+                LOG_WARN("Max cap ({}) is less than initial splat count ({}), randomly selecting {} splats",
+                         max_cap, splat.size(), max_cap);
                 lfs::core::random_choose(splat, max_cap);
                 syncTrainingSceneTopology(scene_, splat);
             }
@@ -2460,26 +2750,53 @@ namespace lfs::training {
         lfs::core::Tensor rendered;
         {
             const std::shared_lock lock(render_mutex_);
+            // Exclude the non-refining optimizer writes for the metric read window
+            // so the live model can't be mutated mid-render (see getModelAccessMutex).
+            std::optional<std::shared_lock<std::shared_mutex>> model_read_lock;
+            if (modelAccessLockEnabled()) {
+                model_read_lock.emplace(model_access_mutex_);
+            }
+            // Run the metric render on the dedicated metrics stream (its kernels
+            // and tensor ops overlap training; item() readbacks drain it). Cap
+            // arena acquisition so a refining iteration holding the arena can't
+            // deadlock this reader (which holds render_mutex_ shared) — on
+            // timeout the rasterizer throws and the metric is skipped this call.
+            const cudaStream_t reader_stream = metrics_stream_ ? metrics_stream_
+                                                               : lfs::core::getCurrentCUDAStream();
+            std::optional<lfs::core::CUDAStreamGuard> metrics_guard;
+            if (metrics_stream_) {
+                metrics_guard.emplace(metrics_stream_);
+            }
+            const lfs::core::RasterizerMemoryArena::ScopedBeginFrameTimeout arena_timeout(100);
+            beginModelRead(reader_stream);
 
             auto& model = strategy_->get_model();
             auto& background = background_;
 
-            RenderOutput output;
-            if (params_.optimization.gut) {
-                output = gsplat_rasterize(
-                    camera, model, background,
-                    1.0f, false, GsplatRenderMode::RGB, true);
-            } else {
-                output = fast_rasterize(
-                    camera, model, background, params_.optimization.mip_filter);
-            }
+            try {
+                RenderOutput output;
+                if (params_.optimization.gut) {
+                    output = gsplat_rasterize(
+                        camera, model, background,
+                        1.0f, false, GsplatRenderMode::RGB, true);
+                } else {
+                    output = fast_rasterize(
+                        camera, model, background, params_.optimization.mip_filter);
+                }
 
-            rendered = output.image;
-            if (appearance.enabled) {
-                rendered = applyPPISPForViewport(
-                    rendered, camera.uid(), appearance.overrides, appearance.use_controller);
+                rendered = output.image;
+                if (appearance.enabled) {
+                    rendered = applyPPISPForViewport(
+                        rendered, camera.uid(), appearance.overrides, appearance.use_controller);
+                }
+                rendered = rendered.clamp(0.0f, 1.0f);
+            } catch (const std::exception& e) {
+                // Arena busy (refining trainer holds the frame) or render error:
+                // skip this metric sample; the panel retries on its next update.
+                endModelRead(reader_stream);
+                return std::unexpected(std::format("metric render unavailable: {}", e.what()));
             }
-            rendered = rendered.clamp(0.0f, 1.0f);
+            endModelRead(reader_stream);
         }
 
         CameraMetricsSnapshot snapshot;
@@ -2547,10 +2864,26 @@ namespace lfs::training {
 
         if (callback_stream_) {
             cudaStreamSynchronize(callback_stream_);
+            lfs::core::CudaMemoryPool::instance().release_stream(callback_stream_);
             cudaStreamDestroy(callback_stream_);
             callback_stream_ = nullptr;
         }
         callback_busy_ = false;
+
+        if (metrics_stream_) {
+            cudaStreamSynchronize(metrics_stream_);
+            lfs::core::CudaMemoryPool::instance().release_stream(metrics_stream_);
+            cudaStreamDestroy(metrics_stream_);
+            metrics_stream_ = nullptr;
+        }
+
+        if (training_stream_) {
+            cudaStreamSynchronize(training_stream_);
+            destroySyncPrimitives();
+            lfs::core::CudaMemoryPool::instance().release_stream(training_stream_);
+            cudaStreamDestroy(training_stream_);
+            training_stream_ = nullptr;
+        }
 
         cudaDeviceSynchronize();
 
@@ -2868,6 +3201,11 @@ namespace lfs::training {
             if (on_iteration_start_)
                 on_iteration_start_();
 
+            // Gate this step's in-place parameter writes behind in-flight model
+            // reads (viewer packs, metric renders) — GPU-side waits, ~free once
+            // the reads have retired.
+            waitForModelReaders();
+
             // Python hook: iteration start (safe, pre-forward)
             {
                 lfs::training::HookContext ctx{
@@ -2999,8 +3337,15 @@ namespace lfs::training {
                 // first step's output, which this write-lock — taken before that step —
                 // blocks. See trainer.cpp step() lock below; both must be gated.
                 std::unique_lock<std::shared_mutex> lock(render_mutex_, std::defer_lock);
-                if (strategy_->is_refining(iter))
+                if (strategy_->is_refining(iter)) {
                     lock.lock();
+                }
+                // Drain in-flight reader events immediately before post_backward's
+                // in-place writes — not only at the loop top — so the trainer stream
+                // is ordered after any read that began mid-step, collapsing the
+                // reader↔writer overlap to a sub-microsecond CPU window. The
+                // exclusive lock (when refining) additionally bars new readers.
+                waitForModelReaders();
                 auto& model = strategy_->get_model();
                 const size_t model_size_before = static_cast<size_t>(model.size());
                 strategy_->post_backward(iter, r_output);
@@ -3029,6 +3374,11 @@ namespace lfs::training {
                 }
                 if (auto result = ensureModelTensorAllocatorStorage(model, "fastgs strategy post_backward"); !result) {
                     return std::unexpected(result.error());
+                }
+                // Readers can re-acquire the shared lock the moment the
+                // exclusive lock drops — re-mark consistency before that.
+                if (lock.owns_lock()) {
+                    recordParamsReady();
                 }
             }
 
@@ -3177,7 +3527,7 @@ namespace lfs::training {
                             cudaFree(gsplat_ctx->flatten_ids_ptr);
                             gsplat_ctx->flatten_ids_ptr = nullptr;
                         }
-                        arena.end_frame(gsplat_ctx->frame_id);
+                        arena.end_frame(gsplat_ctx->frame_id, lfs::core::getCurrentCUDAStream());
                         gsplat_ctx.reset();
                     }
                 };
@@ -3594,9 +3944,10 @@ namespace lfs::training {
                     if (tile_error_map.is_valid() && core::param::is_mrnf_strategy(params_.optimization.strategy)) {
                         LFS_VRAM_SCOPE("train.densification_error_map");
                         LOG_VRAM_DIFF("train.densification_error_map.normalize");
-                        const float map_mean = tile_error_map.mean().item();
-                        if (map_mean > 1e-6f)
-                            tile_error_map.div_(map_mean);
+                        const auto map_mean = tile_error_map.mean();
+                        lfs::training::kernels::launch_normalize_by_device_scalar(
+                            tile_error_map.ptr<float>(), tile_error_map.numel(),
+                            map_mean.ptr<float>(), 1e-6f);
                     }
 
                     if (live_vram_profiler_enabled()) {
@@ -3768,6 +4119,9 @@ namespace lfs::training {
                                                         fused_extra_gradients,
                                                         tile_grad_depth,
                                                         tile_grad_depth.is_valid() && tile_grad_depth.numel() > 0);
+                                if (model_write_lock.owns_lock()) {
+                                    recordParamsReady();
+                                }
                             } else {
                                 cleanup_tile_context();
                             }
@@ -3900,34 +4254,18 @@ namespace lfs::training {
                 }
             }
 
-            // Sync loss to CPU only at intervals - single sync point
+            // Loss readback at intervals, async: enqueue the D2H into the
+            // pinned ring and report harvested samples from earlier iterations
+            // — no pipeline stall.
             constexpr int LOSS_SYNC_INTERVAL = 10;
-            float loss_value = 0.0f;
             if (iter % LOSS_SYNC_INTERVAL == 0 || iter == 1) {
-                // Accumulate on GPU then sync once
-                auto total_loss = sparsity_loss_gpu.numel() > 0
-                                      ? (loss_tensor_gpu + sparsity_loss_gpu)
-                                      : loss_tensor_gpu;
-                loss_value = total_loss.item<float>();
-
-                if (std::isnan(loss_value) || std::isinf(loss_value)) {
-                    return std::unexpected(std::format("NaN/Inf loss at iteration {}", iter));
+                lfs::core::Tensor total_loss = sparsity_loss_gpu.numel() > 0
+                                                   ? (loss_tensor_gpu + sparsity_loss_gpu)
+                                                   : loss_tensor_gpu;
+                if (auto harvested = harvestLossReadbacks(false, in_controller_phase); !harvested) {
+                    return std::unexpected(harvested.error());
                 }
-
-                current_loss_ = loss_value;
-                if (progress_) {
-                    progress_->update(
-                        iter,
-                        loss_value,
-                        static_cast<int>(strategy_->get_model().size()),
-                        get_progress_phase(iter, in_controller_phase));
-                }
-                lfs::core::events::state::TrainingProgress{
-                    .iteration = iter,
-                    .loss = loss_value,
-                    .num_gaussians = static_cast<int>(strategy_->get_model().size()),
-                    .is_refining = strategy_->is_refining(iter)}
-                    .emit();
+                submitLossReadback(total_loss, iter);
             }
 
             if (!in_sparsification && !fastgs_strategy_hooks_at_start) {
@@ -3943,8 +4281,21 @@ namespace lfs::training {
                     // the interop semaphore (the render waits for the step's signal before
                     // reading), so the CPU write-lock is needed only for reallocation.
                     std::unique_lock<std::shared_mutex> lock(render_mutex_, std::defer_lock);
-                    if (strategy_->is_refining(iter))
+                    std::unique_lock<std::shared_mutex> model_write_lock(model_access_mutex_, std::defer_lock);
+                    if (strategy_->is_refining(iter)) {
                         lock.lock();
+                    } else if (modelAccessLockEnabled()) {
+                        // Non-refining in-place writes: hold the model-access lock
+                        // exclusive across the optimizer step so viewer/metric
+                        // readers (which take it shared) cannot enter mid-write and
+                        // tear the model. Refining excludes them via render_mutex_.
+                        model_write_lock.lock();
+                    }
+                    // Drain in-flight reader events immediately before the optimizer
+                    // step's in-place writes — not only at the loop top — so the
+                    // trainer stream is ordered after any read that began mid-step.
+                    // The exclusive lock (when refining) additionally bars new readers.
+                    waitForModelReaders();
                     LFS_VRAM_SCOPE("train.optimizer.strategy_step");
                     LOG_VRAM_DIFF("train.optimizer.strategy_step");
                     auto& model = strategy_->get_model();
@@ -4012,6 +4363,10 @@ namespace lfs::training {
                     if (auto result = ensureModelTensorAllocatorStorage(model, "strategy step"); !result) {
                         return std::unexpected(result.error());
                     }
+
+                    // End-of-step: parameters are consistent until the next
+                    // step's writes; readers wait on this point.
+                    recordParamsReady();
                 }
 
                 // Clean evaluation - let the evaluator handle everything
@@ -4181,6 +4536,14 @@ namespace lfs::training {
         }
 
         try {
+            std::optional<lfs::core::CUDAStreamGuard> stream_guard;
+            if (training_stream_) {
+                stream_guard.emplace(training_stream_);
+                // initialize() ran on another thread; order all of its CUDA work
+                // before the first training-stream kernel.
+                cudaDeviceSynchronize();
+            }
+
             // Start from current_iteration_ (allows resume from checkpoint)
             int iter = current_iteration_.load() > 0 ? current_iteration_.load() + 1 : 1;
             const RenderMode render_mode = RenderMode::RGB;
@@ -4324,6 +4687,12 @@ namespace lfs::training {
                         cudaDeviceSynchronize();
                         cudaGetLastError();
 
+                        // Device is drained — consume completed loss readbacks
+                        // before the retry resubmits into the ring.
+                        if (auto harvested = harvestLossReadbacks(true, false); !harvested) {
+                            return std::unexpected(harvested.error());
+                        }
+
                         lfs::core::GlobalArenaManager::instance().get_arena().full_reset();
                         lfs::core::Tensor::trim_memory_pool();
 
@@ -4388,6 +4757,10 @@ namespace lfs::training {
 
             maybe_publish_camera_loss_heatmap(current_iteration_.load(), true);
 
+            if (auto harvested = harvestLossReadbacks(true, false); !harvested) {
+                return std::unexpected(harvested.error());
+            }
+
             if (progress_) {
                 progress_->complete();
             }
@@ -4444,7 +4817,12 @@ namespace lfs::training {
             .binary = true,
             .async = !join_threads};
 
-        const auto ply_result = lfs::io::save_ply(strategy_->get_model(), ply_options);
+        const auto& model = strategy_->get_model();
+        const auto export_model = make_ply_export_model(
+            model,
+            params_.exclude_frozen_add_splats_from_export);
+        const auto& model_for_export = export_model ? *export_model : model;
+        const auto ply_result = lfs::io::save_ply(model_for_export, ply_options);
         if (!ply_result) {
             if (ply_result.error().code == lfs::io::ErrorCode::INSUFFICIENT_DISK_SPACE) {
                 lfs::core::events::state::DiskSpaceSaveFailed{

@@ -231,7 +231,7 @@ namespace lfs::vis {
         Viewport* wasd_momentum_viewport_ = nullptr;
 
         // Cached whole-scene radius (half the bounds diagonal) that scales WASD
-        // speed and pan distance with splat size; 0 means "recompute" (after scene
+        // speed and caps pan distance by splat size; 0 means "recompute" (after scene
         // load/clear).
         float scene_extent_ = 0.0f;
         // One-shot guard: the depth-view range is seeded from the trimmed scene

@@ -82,10 +82,12 @@ body {
 
 #progress-container {
     position: relative;
-    width: 120dp;
+    width: 360dp;
     height: 16dp;
     overflow: hidden;
     border-radius: 2dp;
+    flex-shrink: 0;
+    cursor: pointer;
 }
 
 #progress-fill {
@@ -94,6 +96,32 @@ body {
     top: 0;
     height: 100%;
     width: 0%;
+}
+
+#progress-markers {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+}
+
+.progress-marker {
+    position: absolute;
+    top: 1dp;
+    bottom: 1dp;
+    width: 6dp;
+    margin-left: -3dp;
+    border-radius: 2dp;
+    cursor: pointer;
+}
+
+.progress-marker.is-hovered,
+.progress-marker.is-preview {
+    top: 0;
+    bottom: 0;
+    width: 8dp;
+    margin-left: -4dp;
 }
 
 #progress-text {

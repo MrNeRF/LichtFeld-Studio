@@ -78,6 +78,6 @@ Use this only after confirming the target node, indices, and field width:
 
 ## Notes
 
-- `mode` is `replace`, `add`, or `remove`
+- `mode` is `replace`, `add`, `remove`, or `intersect`
 - `selection.by_description` is higher-latency because it uses an LLM vision round-trip
 - after writes, re-read `lichtfeld://selection/current` or `gaussians.read` instead of assuming the mutation landed

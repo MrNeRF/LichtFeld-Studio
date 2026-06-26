@@ -6,6 +6,7 @@
 
 #include "core/export.hpp"
 #include "input/key_codes.hpp"
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -31,6 +32,15 @@ namespace lfs::vis::input {
 
     // Highest persisted ToolMode value plus one. Value 2 was the removed brush tool mode.
     inline constexpr size_t kToolModeCount = 8;
+    inline constexpr std::array<ToolMode, 7> kAllToolModes = {
+        ToolMode::GLOBAL,
+        ToolMode::SELECTION,
+        ToolMode::ALIGN,
+        ToolMode::CROP_BOX,
+        ToolMode::TRANSLATE,
+        ToolMode::ROTATE,
+        ToolMode::SCALE,
+    };
 
     enum class Action {
         NONE = 0,
@@ -115,6 +125,11 @@ namespace lfs::vis::input {
         DEPTH_ADJUST_NEAR, // Deprecated: migrated to DEPTH_ADJUST_FAR on load
         CAMERA_RESET_HOME,
         HISTOGRAM_ZOOM_MARKED,
+        TOGGLE_CAMERA_FRUSTUMS,
+        SELECTION_INTERSECT,
+        // Appended to avoid renumbering existing persisted action ids.
+        SELECT_MODE_BOX,
+        SELECT_MODE_SPHERE,
 
     };
 

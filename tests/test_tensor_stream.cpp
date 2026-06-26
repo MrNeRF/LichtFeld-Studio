@@ -8,8 +8,18 @@
 
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/internal/memory_pool.hpp"
 
 using namespace lfs::core;
+
+namespace {
+    // Streams that touched pool memory must be severed from the allocator
+    // before destruction (see CudaMemoryPool::release_stream).
+    void destroyStreamSafely(cudaStream_t stream) {
+        CudaMemoryPool::instance().release_stream(stream);
+        cudaStreamDestroy(stream);
+    }
+} // namespace
 
 class TensorStreamTest : public ::testing::Test {
 protected:
@@ -55,7 +65,7 @@ TEST_F(TensorStreamTest, FactoryPicksUpThreadLocalStream) {
     auto t2 = Tensor::empty({4, 4}, Device::CUDA);
     EXPECT_EQ(t2.stream(), nullptr);
 
-    cudaStreamDestroy(stream);
+    destroyStreamSafely(stream);
 }
 
 TEST_F(TensorStreamTest, ViewInheritsStreamReshape) {
@@ -78,7 +88,7 @@ TEST_F(TensorStreamTest, ViewInheritsStreamReshape) {
     auto squeezed = unsqueezed.squeeze(0);
     EXPECT_EQ(squeezed.stream(), stream);
 
-    cudaStreamDestroy(stream);
+    destroyStreamSafely(stream);
 }
 
 TEST_F(TensorStreamTest, ViewInheritsStreamSlice) {
@@ -95,7 +105,7 @@ TEST_F(TensorStreamTest, ViewInheritsStreamSlice) {
     auto sliced = t.slice(0, 0, 5);
     EXPECT_EQ(sliced.stream(), stream);
 
-    cudaStreamDestroy(stream);
+    destroyStreamSafely(stream);
 }
 
 TEST_F(TensorStreamTest, ViewInheritsStreamPermute) {
@@ -115,7 +125,7 @@ TEST_F(TensorStreamTest, ViewInheritsStreamPermute) {
     auto transposed = t.transpose(0, 1);
     EXPECT_EQ(transposed.stream(), stream);
 
-    cudaStreamDestroy(stream);
+    destroyStreamSafely(stream);
 }
 
 TEST_F(TensorStreamTest, OperationsProduceResultWithCorrectStream) {
@@ -144,7 +154,7 @@ TEST_F(TensorStreamTest, OperationsProduceResultWithCorrectStream) {
     auto e = c.sum();
     EXPECT_EQ(e.stream(), stream);
 
-    cudaStreamDestroy(stream);
+    destroyStreamSafely(stream);
 }
 
 TEST_F(TensorStreamTest, EmptyLikeInheritsStream) {
@@ -164,7 +174,7 @@ TEST_F(TensorStreamTest, EmptyLikeInheritsStream) {
     auto flike = Tensor::full_like(t, 42.0f);
     EXPECT_EQ(flike.stream(), stream);
 
-    cudaStreamDestroy(stream);
+    destroyStreamSafely(stream);
 }
 
 TEST_F(TensorStreamTest, StreamOrderingCorrectness) {
@@ -188,7 +198,7 @@ TEST_F(TensorStreamTest, StreamOrderingCorrectness) {
     EXPECT_NEAR(vals[0], 4.0f, 1e-5f);
     EXPECT_NEAR(vals.back(), 4.0f, 1e-5f);
 
-    cudaStreamDestroy(stream);
+    destroyStreamSafely(stream);
 }
 
 TEST_F(TensorStreamTest, CrossStreamOrderingWithEventWait) {
@@ -220,8 +230,8 @@ TEST_F(TensorStreamTest, CrossStreamOrderingWithEventWait) {
     EXPECT_NEAR(vals.back(), 7.0f, 1e-5f);
 
     cudaEventDestroy(ready);
-    cudaStreamDestroy(consumer);
-    cudaStreamDestroy(producer);
+    destroyStreamSafely(consumer);
+    destroyStreamSafely(producer);
 }
 
 TEST_F(TensorStreamTest, SetStreamManual) {
@@ -237,7 +247,7 @@ TEST_F(TensorStreamTest, SetStreamManual) {
     t.set_stream(nullptr);
     EXPECT_EQ(t.stream(), nullptr);
 
-    cudaStreamDestroy(stream);
+    destroyStreamSafely(stream);
 }
 
 TEST_F(TensorStreamTest, GuardRestoresPreviousStream) {
@@ -259,8 +269,8 @@ TEST_F(TensorStreamTest, GuardRestoresPreviousStream) {
 
     EXPECT_EQ(getCurrentCUDAStream(), nullptr);
 
-    cudaStreamDestroy(s1);
-    cudaStreamDestroy(s2);
+    destroyStreamSafely(s1);
+    destroyStreamSafely(s2);
 }
 
 TEST_F(TensorStreamTest, InplaceOpsUseOwnStream) {
@@ -293,7 +303,7 @@ TEST_F(TensorStreamTest, InplaceOpsUseOwnStream) {
     ASSERT_GT(vals.size(), 0u);
     EXPECT_NEAR(vals[0], 3.0f, 1e-5f);
 
-    cudaStreamDestroy(stream);
+    destroyStreamSafely(stream);
 }
 
 TEST_F(TensorStreamTest, MaskedFillRespectsTensorStreamWithoutGuard) {
@@ -324,7 +334,7 @@ TEST_F(TensorStreamTest, MaskedFillRespectsTensorStreamWithoutGuard) {
     EXPECT_NEAR(vals.back(), 2.0f, 1e-5f);
 
     cudaEventDestroy(gate);
-    cudaStreamDestroy(stream);
+    destroyStreamSafely(stream);
 }
 
 TEST_F(TensorStreamTest, GatherRespectsTensorStreamWithoutGuard) {
@@ -359,7 +369,7 @@ TEST_F(TensorStreamTest, GatherRespectsTensorStreamWithoutGuard) {
     EXPECT_NEAR(vals.back(), 3.0f, 1e-5f);
 
     cudaEventDestroy(gate);
-    cudaStreamDestroy(stream);
+    destroyStreamSafely(stream);
 }
 
 TEST_F(TensorStreamTest, ToDeviceNonContiguousCpuToCudaRespectsExplicitStream) {
@@ -385,7 +395,7 @@ TEST_F(TensorStreamTest, ToDeviceNonContiguousCpuToCudaRespectsExplicitStream) {
     EXPECT_FLOAT_EQ(back[4], 6.0f);
     EXPECT_FLOAT_EQ(back[11], 14.0f);
 
-    cudaStreamDestroy(stream);
+    destroyStreamSafely(stream);
 }
 
 TEST_F(TensorStreamTest, ToDeviceCudaToCpuRespectsExplicitStreamMetadata) {
@@ -402,7 +412,7 @@ TEST_F(TensorStreamTest, ToDeviceCudaToCpuRespectsExplicitStreamMetadata) {
     EXPECT_NEAR(vals.front(), 2.0f, 1e-5f);
     EXPECT_NEAR(vals.back(), 2.0f, 1e-5f);
 
-    cudaStreamDestroy(stream);
+    destroyStreamSafely(stream);
 }
 
 TEST_F(TensorStreamTest, DtypeConversionLaunchesOnCurrentResultStream) {
@@ -435,5 +445,5 @@ TEST_F(TensorStreamTest, DtypeConversionLaunchesOnCurrentResultStream) {
     EXPECT_EQ(cpu_ptr[kNumel - 1], static_cast<int>(kNumel - 1));
 
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
-    cudaStreamDestroy(stream);
+    destroyStreamSafely(stream);
 }

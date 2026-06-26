@@ -322,6 +322,9 @@ namespace lfs::training {
 
         // Call forward_raw with raw pointers (no PyTorch wrappers)
         // Use adjusted cx/cy for tile rendering
+        const cudaStream_t raster_stream = lfs::core::getCurrentCUDAStream()
+                                               ? lfs::core::getCurrentCUDAStream()
+                                               : image.stream();
         fast_lfs::rasterization::ForwardContext forward_ctx;
         try {
             forward_ctx = fast_lfs::rasterization::forward_raw(
@@ -347,7 +350,8 @@ namespace lfs::training {
                 cy_adjusted, // Use adjusted cy for tile offset
                 near_plane,
                 far_plane,
-                mip_filter);
+                mip_filter,
+                raster_stream);
         } catch (const std::exception& e) {
             // Dump all input data for debugging
             dump_crash_data(

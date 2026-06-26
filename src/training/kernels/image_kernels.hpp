@@ -22,10 +22,14 @@ namespace lfs::training::kernels {
         const int height,
         const int width,
         cudaStream_t stream = nullptr);
+    // Divides d_data by *d_scalar in place; the whole kernel no-ops when
+    // *d_scalar <= skip_below (device-side replacement for host mean/median
+    // readback + branch).
     void launch_normalize_by_device_scalar(
         float* d_data,
         const std::size_t n,
         const float* d_scalar,
+        float skip_below = 0.0f,
         cudaStream_t stream = nullptr);
 
 } // namespace lfs::training::kernels

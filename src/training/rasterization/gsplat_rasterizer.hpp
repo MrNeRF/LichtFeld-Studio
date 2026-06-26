@@ -90,6 +90,8 @@ namespace lfs::training {
 
         // Memory arena frame ID (for releasing arena memory in backward)
         uint64_t frame_id = 0;
+        // Stream the forward chained the arena frame on; release/backward match.
+        cudaStream_t stream = nullptr;
 
         // Tile-based training (0 = full image)
         int render_tile_x_offset = 0;
@@ -141,16 +143,29 @@ namespace lfs::training {
         if (!result) {
             throw std::runtime_error(result.error());
         }
-        // Free internally allocated buffers since backward won't be called
+        // Free internally allocated buffers since backward won't be called.
+        // Stream-ordered so the arena chain stays intact (a streamless
+        // end_frame would force a device sync on the calling — often UI —
+        // thread every inference render).
+        const cudaStream_t stream = result->second.stream;
+#if CUDART_VERSION >= 11020
+        if (result->second.isect_ids_ptr != nullptr) {
+            cudaFreeAsync(result->second.isect_ids_ptr, stream);
+        }
+        if (result->second.flatten_ids_ptr != nullptr) {
+            cudaFreeAsync(result->second.flatten_ids_ptr, stream);
+        }
+#else
         if (result->second.isect_ids_ptr != nullptr) {
             cudaFree(result->second.isect_ids_ptr);
         }
         if (result->second.flatten_ids_ptr != nullptr) {
             cudaFree(result->second.flatten_ids_ptr);
         }
+#endif
         // Release arena frame since no backward will be called
         auto& arena = core::GlobalArenaManager::instance().get_arena();
-        arena.end_frame(result->second.frame_id);
+        arena.end_frame(result->second.frame_id, stream);
         return result->first;
     }
 

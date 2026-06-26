@@ -7,6 +7,7 @@
 #include "core/image_io.hpp"
 #include "core/image_loader.hpp"
 #include "core/logger.hpp"
+#include "core/tensor/internal/memory_pool.hpp"
 #include <cassert>
 #include <cuda_runtime.h>
 
@@ -114,13 +115,18 @@ namespace lfs::core {
         _FoVx = focal2fov(_focal_x, _camera_width);
         _FoVy = focal2fov(_focal_y, _camera_height);
 
-        // Create CUDA stream for async image loading (like reference implementation)
-        cudaStreamCreate(&_stream);
+        // Non-blocking so image loading doesn't serialize with the legacy stream.
+        // On failure fall back to the default stream rather than a bad handle.
+        if (const cudaError_t err = cudaStreamCreateWithFlags(&_stream, cudaStreamNonBlocking); err != cudaSuccess) {
+            LOG_WARN("Camera: cudaStreamCreateWithFlags failed ({}), falling back to default stream", cudaGetErrorString(err));
+            _stream = nullptr;
+        }
     }
 
     Camera::~Camera() {
         // Destroy CUDA stream if it was created
         if (_stream) {
+            CudaMemoryPool::instance().release_stream(_stream);
             cudaStreamDestroy(_stream);
             _stream = nullptr;
         }
@@ -171,6 +177,7 @@ namespace lfs::core {
         if (this != &other) {
             // Destroy our current stream
             if (_stream) {
+                CudaMemoryPool::instance().release_stream(_stream);
                 cudaStreamDestroy(_stream);
             }
 
@@ -244,8 +251,12 @@ namespace lfs::core {
           _FoVy(other._FoVy) {
         _world_view_transform = transform;
 
-        // Create CUDA stream for async image loading
-        cudaStreamCreate(&_stream);
+        // Non-blocking so image loading doesn't serialize with the legacy stream.
+        // On failure fall back to the default stream rather than a bad handle.
+        if (const cudaError_t err = cudaStreamCreateWithFlags(&_stream, cudaStreamNonBlocking); err != cudaSuccess) {
+            LOG_WARN("Camera: cudaStreamCreateWithFlags failed ({}), falling back to default stream", cudaGetErrorString(err));
+            _stream = nullptr;
+        }
     }
     Tensor Camera::K() const {
         // Create [1, 3, 3] zero matrix on same device as world_view_transform
@@ -590,6 +601,11 @@ namespace lfs::core {
     }
 
     bool Camera::has_distortion() const noexcept {
+        // Equirectangular is a complete projection model handled natively by the
+        // rasterizer; there is no pinhole image to "undistort" to, so it must not
+        // be routed through the undistortion path.
+        if (_camera_model_type == CameraModelType::EQUIRECTANGULAR)
+            return false;
         if (_radial_distortion.is_valid() && _radial_distortion.numel() > 0)
             return true;
         if (_tangential_distortion.is_valid() && _tangential_distortion.numel() > 0)

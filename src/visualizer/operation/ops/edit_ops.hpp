@@ -19,7 +19,7 @@ namespace lfs::vis::op {
         [[nodiscard]] std::string id() const override { return "edit.delete"; }
         [[nodiscard]] std::string label() const override { return "Delete Selected"; }
         [[nodiscard]] ModifiesFlag modifies() const override {
-            return ModifiesFlag::SELECTION | ModifiesFlag::TOPOLOGY;
+            return ModifiesFlag::NONE;
         }
     };
 

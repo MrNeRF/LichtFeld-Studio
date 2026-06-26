@@ -69,8 +69,8 @@
     color: @{text_dim};
 }
 
-#asset-popup {
-    border-right-color: @{alpha(primary,0.30)};
+#asset-viewport-edge {
+    background-color: @{right_panel.border};
 }
 
 /* ── Sidebar ─────────────────────────────────────────────── */

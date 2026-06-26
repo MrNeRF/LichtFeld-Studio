@@ -117,6 +117,7 @@ namespace lfs::vis {
             Brush = 0,
             Rectangle = 1,
             Polygon = 2,
+            Ring = 3,
         };
         [[nodiscard]] std::expected<lfs::core::Tensor, std::string> buildVksplatSelectionMask(
             SceneManager& scene_manager,
@@ -124,7 +125,8 @@ namespace lfs::vis {
             bool equirectangular,
             VksplatSelectionMaskShape shape,
             const std::vector<glm::vec4>& primitives,
-            const std::vector<glm::vec2>& polygon_vertices = {});
+            const std::vector<glm::vec2>& polygon_vertices = {},
+            std::uint32_t* picked_ring_id_out = nullptr);
 
         // Render preview image without touching the shared viewport presentation textures.
         std::shared_ptr<lfs::core::Tensor> renderPreviewImage(SceneManager* scene_manager,
@@ -496,12 +498,12 @@ namespace lfs::vis {
 
         // Gizmo state for wireframe sync during manipulation
         void setCropboxGizmoState(bool active, const glm::vec3& min, const glm::vec3& max,
-                                  const glm::mat4& world_transform) {
-            viewport_overlay_service_.setCropbox(active, min, max, world_transform);
+                                  const glm::mat4& world_transform, bool affects_render = true) {
+            viewport_overlay_service_.setCropbox(active, min, max, world_transform, affects_render);
         }
         void setEllipsoidGizmoState(bool active, const glm::vec3& radii,
-                                    const glm::mat4& world_transform) {
-            viewport_overlay_service_.setEllipsoid(active, radii, world_transform);
+                                    const glm::mat4& world_transform, bool affects_render = true) {
+            viewport_overlay_service_.setEllipsoid(active, radii, world_transform, affects_render);
         }
         void setCropboxGizmoActive(bool active) { viewport_overlay_service_.setCropboxActive(active); }
         void setEllipsoidGizmoActive(bool active) { viewport_overlay_service_.setEllipsoidActive(active); }
@@ -510,6 +512,15 @@ namespace lfs::vis {
         void setViewportResizeActive(bool active);
         [[nodiscard]] bool isViewportResizeDeferring() const {
             return frame_lifecycle_service_.isResizeDeferring();
+        }
+        [[nodiscard]] bool hasPendingViewportResizeSettle() const {
+            return frame_lifecycle_service_.hasPendingResizeSettle();
+        }
+        [[nodiscard]] bool viewportResizeSettleReady() const {
+            return frame_lifecycle_service_.resizeSettleReady();
+        }
+        [[nodiscard]] double secondsUntilViewportResizeSettleReady() const {
+            return frame_lifecycle_service_.secondsUntilResizeSettleReady();
         }
         bool consumeResizeCompleted() { return frame_lifecycle_service_.consumeResizeCompleted(); }
 
@@ -613,6 +624,8 @@ namespace lfs::vis {
         void queueCameraMetricsRefreshIfStale(SceneManager* scene_manager);
         void invalidateCameraMetricsRequests(bool clear_latest = false);
         void notifyAsyncLodResultsReady();
+        void requestResizeTrainingPause(TrainerManager* trainer_manager);
+        void releaseResizeTrainingPause();
         void cameraMetricsWorkerLoop(std::stop_token stop_token);
         void releaseSceneModelResources();
         void releaseSceneRenderResources();
@@ -672,6 +685,8 @@ namespace lfs::vis {
         glm::ivec2 vulkan_viewport_image_size_{0, 0};
         bool vulkan_viewport_image_flip_y_ = false;
         glm::ivec2 vulkan_gt_comparison_content_size_{0, 0};
+        TrainerManager* resize_training_pause_trainer_ = nullptr;
+        bool resize_training_pause_active_ = false;
 
         // Granular dirty tracking
         std::atomic<uint32_t> dirty_mask_{DirtyFlag::ALL};

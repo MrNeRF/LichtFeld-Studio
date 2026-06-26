@@ -5,6 +5,8 @@
 #include "pruning_kernels.hpp"
 #include <cuda_runtime.h>
 
+#include "kernel_stream.hpp"
+
 namespace lfs::training::pruning {
 
     __global__ void compute_dead_mask_kernel(
@@ -43,7 +45,7 @@ namespace lfs::training::pruning {
         dim3 threads(256);
         dim3 grid((N + threads.x - 1) / threads.x);
 
-        cudaStream_t cuda_stream = stream ? static_cast<cudaStream_t>(stream) : nullptr;
+        cudaStream_t cuda_stream = resolve_stream(stream);
         compute_dead_mask_kernel<<<grid, threads, 0, cuda_stream>>>(
             opacities,
             rotations,
@@ -79,7 +81,7 @@ namespace lfs::training::pruning {
         dim3 threads(256);
         dim3 grid((N + threads.x - 1) / threads.x);
 
-        cudaStream_t cuda_stream = stream ? static_cast<cudaStream_t>(stream) : nullptr;
+        cudaStream_t cuda_stream = resolve_stream(stream);
         compute_near_zero_rotation_mask_kernel<<<grid, threads, 0, cuda_stream>>>(
             rotations,
             mask,

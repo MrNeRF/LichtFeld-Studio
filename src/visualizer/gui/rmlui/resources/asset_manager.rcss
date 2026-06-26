@@ -49,6 +49,7 @@
 /* ── Shell wrapper ─────────────────────────────────────── */
 
 #asset-shell {
+    position: relative;
     flex: 1;
     display: flex;
     flex-direction: column;
@@ -69,7 +70,21 @@
     min-height: 240dp;
     background-color: #24221f;
     color: #d8d0c3;
-    border-right-width: 2dp;
+}
+
+#asset-viewport-edge {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 1dp;
+    background-color: rgba(88, 91, 112, 153);
+    pointer-events: none;
+    z-index: 20;
+}
+
+#asset-shell.is-floating #asset-viewport-edge {
+    display: none;
 }
 
 #asset-popup-toolbar {

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/editor_context.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/services.hpp"
@@ -11,6 +12,7 @@
 #include "internal/viewport.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "rendering/rendering_manager.hpp"
 
 #include <cstdint>
 #include <cstdlib>
@@ -299,6 +301,41 @@ namespace lfs::vis {
         EXPECT_EQ(bindings.getActionForDrag(
                       input::ToolMode::ALIGN, input::MouseButton::RIGHT, input::KEYMOD_NONE),
                   input::Action::CAMERA_PAN);
+    }
+
+    TEST_F(InputControllerFocusTest, GlobalSetPivotDoubleClickWorksInEveryToolMode) {
+        input::InputBindings bindings;
+
+        for (const auto mode : input::kAllToolModes) {
+            EXPECT_EQ(bindings.getActionForMouseButton(
+                          mode, input::MouseButton::RIGHT, input::MODIFIER_NONE, true),
+                      input::Action::CAMERA_SET_PIVOT)
+                << "tool mode " << static_cast<int>(mode);
+        }
+
+        // Selection deliberately owns an ordinary right-click for polygon undo;
+        // that single-click action must not shadow the global double-click.
+        EXPECT_EQ(bindings.getActionForMouseButton(
+                      input::ToolMode::SELECTION,
+                      input::MouseButton::RIGHT,
+                      input::MODIFIER_NONE,
+                      false),
+                  input::Action::UNDO_POLYGON_VERTEX);
+    }
+
+    TEST_F(InputControllerFocusTest, LocalDoubleClickOverridesGlobalSetPivot) {
+        input::InputBindings bindings;
+        bindings.setBinding(
+            input::ToolMode::SELECTION,
+            input::Action::CAMERA_ORBIT,
+            input::MouseButtonTrigger{input::MouseButton::RIGHT, input::MODIFIER_NONE, true});
+
+        EXPECT_EQ(bindings.getActionForMouseButton(
+                      input::ToolMode::SELECTION,
+                      input::MouseButton::RIGHT,
+                      input::MODIFIER_NONE,
+                      true),
+                  input::Action::CAMERA_ORBIT);
     }
 
     TEST_F(InputControllerFocusTest, BindingConflictChecksInheritedGlobalBindings) {
@@ -987,6 +1024,89 @@ namespace lfs::vis {
                     input::TRIGGER_KIND_MOUSE_SCROLL);
     }
 
+    TEST_F(InputControllerFocusTest, CameraFrustumsDefaultToAltCAndToggleRenderSetting) {
+        RenderingManager rendering_manager;
+        services().set(&rendering_manager);
+
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+        router.focusViewportKeyboard();
+
+        EXPECT_EQ(controller.getBindings().getActionForKey(input::ToolMode::GLOBAL,
+                                                           input::KEY_C,
+                                                           input::MODIFIER_ALT),
+                  input::Action::TOGGLE_CAMERA_FRUSTUMS);
+        EXPECT_EQ(input::shortcutScopeForAction(input::Action::TOGGLE_CAMERA_FRUSTUMS),
+                  input::ShortcutScope::Viewport);
+
+        EXPECT_FALSE(rendering_manager.getSettings().show_camera_frustums);
+        controller.handleKey(input::KEY_C, input::ACTION_PRESS, input::KEYMOD_ALT);
+        EXPECT_TRUE(rendering_manager.getSettings().show_camera_frustums);
+        controller.handleKey(input::KEY_C, input::ACTION_PRESS, input::KEYMOD_ALT);
+        EXPECT_FALSE(rendering_manager.getSettings().show_camera_frustums);
+    }
+
+    TEST_F(InputControllerFocusTest, VersionFifteenProfileMigratesCameraFrustumShortcutWhenFree) {
+        const auto profile_path = std::filesystem::temp_directory_path() / "lfs_input_bindings_legacy_v15.json";
+        std::filesystem::remove(profile_path);
+        {
+            std::ofstream file(profile_path);
+            ASSERT_TRUE(file.is_open());
+            file << R"({
+  "name": "LegacyV15",
+  "version": 15,
+  "bindings": []
+})";
+        }
+
+        input::InputBindings loaded;
+        ASSERT_TRUE(loaded.loadProfileFromFile(profile_path));
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL,
+                                         input::KEY_C,
+                                         input::MODIFIER_ALT),
+                  input::Action::TOGGLE_CAMERA_FRUSTUMS);
+
+        std::filesystem::remove(profile_path);
+    }
+
+    TEST_F(InputControllerFocusTest, VersionFifteenProfilePreservesOccupiedAltC) {
+        const auto profile_path = std::filesystem::temp_directory_path() / "lfs_input_bindings_legacy_v15_alt_c.json";
+        std::filesystem::remove(profile_path);
+        {
+            std::ofstream file(profile_path);
+            ASSERT_TRUE(file.is_open());
+            file << R"({
+  "name": "LegacyV15AltC",
+  "version": 15,
+  "bindings": [
+    {
+      "mode": 0,
+      "action": 25,
+      "description": "Cycle PLY",
+      "trigger_type": "key",
+      "key": 67,
+      "modifiers": 4
+    }
+  ]
+})";
+        }
+
+        input::InputBindings loaded;
+        ASSERT_TRUE(loaded.loadProfileFromFile(profile_path));
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::GLOBAL,
+                                         input::KEY_C,
+                                         input::MODIFIER_ALT),
+                  input::Action::CYCLE_PLY);
+        EXPECT_FALSE(loaded.getTriggerForAction(input::Action::TOGGLE_CAMERA_FRUSTUMS,
+                                                input::ToolMode::GLOBAL)
+                         .has_value());
+
+        std::filesystem::remove(profile_path);
+    }
+
     TEST_F(InputControllerFocusTest, CropApplyDefaultsToEnterAndNumEnter) {
         input::InputBindings bindings;
 
@@ -1034,6 +1154,56 @@ namespace lfs::vis {
                   input::Action::APPLY_CROP_BOX);
 
         std::filesystem::remove(profile_path);
+    }
+
+    TEST_F(InputControllerFocusTest, ToolControlActivationShortcutsResolveAcrossModesAtRuntime) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+
+        controller.getBindings().setBinding(input::ToolMode::SELECTION,
+                                            input::Action::TOOL_MIRROR,
+                                            input::KeyTrigger{input::KEY_M, input::MODIFIER_CTRL});
+
+        lfs::event::ScopedHandler handlers;
+        int tool_mode = -1;
+        handlers.subscribe<core::events::tools::SetToolbarTool>(
+            [&](const auto& event) { tool_mode = event.tool_mode; });
+
+        controller.handleKey(input::KEY_M, input::ACTION_PRESS, input::MODIFIER_CTRL);
+
+        EXPECT_EQ(tool_mode, static_cast<int>(ToolType::Mirror));
+        EXPECT_TRUE(controller.getBindings()
+                        .getTriggerForAction(input::Action::TOOL_MIRROR,
+                                             input::ToolMode::SELECTION)
+                        .has_value());
+        EXPECT_FALSE(controller.getBindings()
+                         .getTriggerForAction(input::Action::TOOL_MIRROR,
+                                              input::ToolMode::GLOBAL)
+                         .has_value());
+    }
+
+    TEST_F(InputControllerFocusTest, ToolLocalOperationalShortcutsDoNotResolveAcrossModes) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+
+        controller.getBindings().setBinding(input::ToolMode::SELECTION,
+                                            input::Action::DELETE_SELECTED,
+                                            input::KeyTrigger{input::KEY_B, input::MODIFIER_CTRL});
+
+        lfs::event::ScopedHandler handlers;
+        int delete_count = 0;
+        handlers.subscribe<core::events::cmd::DeleteSelected>(
+            [&](const auto&) { ++delete_count; });
+
+        controller.handleKey(input::KEY_B, input::ACTION_PRESS, input::MODIFIER_CTRL);
+
+        EXPECT_EQ(delete_count, 0);
     }
 
     TEST_F(InputControllerFocusTest, LegacyProfileMigrationAddsOnlyVersionedModalDefaults) {

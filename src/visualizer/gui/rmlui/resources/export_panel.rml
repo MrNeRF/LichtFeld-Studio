@@ -63,6 +63,15 @@
       <div data-if="show_rad_settings">
         <div class="separator"></div>
         <div class="ep-section">
+          <div class="setting-row setting-row--aligned">
+            <span class="setting-row__label-col">@tr:export_dialog.rad_export_mode</span>
+            <div class="setting-row__control-col setting-row__control-col--fill">
+              <select data-value="rad_export_mode">
+                <option value="stream">@tr:export_dialog.rad_streamable</option>
+                <option value="non_stream">@tr:export_dialog.rad_native</option>
+              </select>
+            </div>
+          </div>
           <!-- Y-flip checkbox -->
           <div class="setting-row setting-row--aligned">
             <span class="setting-row__label-col">@tr:export_dialog.rad_flip_y</span>

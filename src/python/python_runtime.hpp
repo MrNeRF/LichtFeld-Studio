@@ -184,11 +184,13 @@ namespace lfs::python {
 
     using ExportCallback = void (*)(int format, const char* path, const char** node_names,
                                     int node_count, int sh_degree,
-                                    bool rad_flip_y);
+                                    bool rad_flip_y,
+                                    bool rad_streamable);
     LFS_PYTHON_RUNTIME_API void set_export_callback(ExportCallback cb);
     LFS_PYTHON_RUNTIME_API void invoke_export(int format, const std::string& path,
                                               const std::vector<std::string>& node_names, int sh_degree,
-                                              bool rad_flip_y = false);
+                                              bool rad_flip_y = false,
+                                              bool rad_streamable = true);
 
     using HasToolbarCallback = bool (*)();
 
@@ -201,7 +203,7 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API void cancel_active_operator();
     LFS_PYTHON_RUNTIME_API bool invoke_operator(const std::string& operator_id);
 
-    // Selection sub-mode (mirrors panels::SelectionSubMode for Python access)
+    // Selection sub-mode (mirrors vis::SelectionSubMode for Python access)
     LFS_PYTHON_RUNTIME_API void set_selection_submode(int mode);
     LFS_PYTHON_RUNTIME_API int get_selection_submode();
 

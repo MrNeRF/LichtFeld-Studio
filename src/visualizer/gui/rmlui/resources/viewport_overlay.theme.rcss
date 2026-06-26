@@ -18,6 +18,10 @@
     border-radius: 0;
 }
 
+.viewport-gizmo-controls .icon-btn {
+    background-color: @{toolbar.background};
+}
+
 .toolbar-separator {
     background-color: @{alpha(border,0.39)};
 }
@@ -62,7 +66,8 @@
 }
 
 .toolbar-vertical .icon-btn:hover,
-.toolbar-hcenter .icon-btn:hover {
+.toolbar-hcenter .icon-btn:hover,
+.viewport-gizmo-controls .icon-btn:hover {
     background-color: @{alpha(primary,0.16)};
     border-color: @{alpha(primary,0.42)};
 }
@@ -72,7 +77,8 @@
 }
 
 .toolbar-vertical .icon-btn.selected,
-.toolbar-hcenter .icon-btn.selected {
+.toolbar-hcenter .icon-btn.selected,
+.viewport-gizmo-controls .icon-btn.selected {
     border-color: @{alpha(text,0.25)};
 }
 
@@ -81,7 +87,8 @@
 }
 
 .toolbar-vertical .icon-btn.selected:hover,
-.toolbar-hcenter .icon-btn.selected:hover {
+.toolbar-hcenter .icon-btn.selected:hover,
+.viewport-gizmo-controls .icon-btn.selected:hover {
     border-color: @{alpha(text,0.35)};
 }
 

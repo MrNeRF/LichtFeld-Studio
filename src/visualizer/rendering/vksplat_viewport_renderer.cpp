@@ -13,6 +13,7 @@
 #include "core/path_utils.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/internal/memory_pool.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "io/formats/rad.hpp"
 #include "rendering/coordinate_conventions.hpp"
@@ -51,6 +52,10 @@ namespace lfs::vis {
         constexpr std::uint32_t kVkSplatCameraModelEquirectangular = 3u;
         constexpr std::uint32_t kVkSplatProjectionModeShift = 8u;
         constexpr std::uint32_t kVkSplatProjectionModeGut = 1u;
+        constexpr std::uint32_t kRingPickNoHit = std::numeric_limits<std::uint32_t>::max();
+        constexpr std::uint32_t kRingPickPhaseNone = 0u;
+        constexpr std::uint32_t kRingPickPhaseFindMin = 1u;
+        constexpr std::uint32_t kRingPickPhaseWritePick = 2u;
 
         // Readback frames of deferred-wants-with-zero-admissions before the
         // pool counts as frozen: long enough to outlast the publish
@@ -194,7 +199,13 @@ namespace lfs::vis {
                 arena_->set_rendering_active(true);
                 render_pending_ = true;
                 try {
-                    auto frame_id = arena_->try_begin_frame(true);
+                    // The pending-render flag (set above) keeps the trainer from
+                    // STARTING a new frame, so this bounded wait is normally one
+                    // training iteration. It times out instead of deadlocking on
+                    // refining iterations, where the trainer holds the frame
+                    // while blocked on the exclusive render lock our caller's
+                    // shared lock excludes.
+                    auto frame_id = arena_->try_begin_frame_for(15, true);
                     if (!frame_id) {
                         throw std::runtime_error("rasterizer arena is busy");
                     }
@@ -222,6 +233,17 @@ namespace lfs::vis {
                 }
                 if (frame_active_) {
                     arena_->end_frame(frame_id_, true);
+                }
+            }
+
+            // Must be called after the frame's Vulkan submit: the arena's next
+            // tenant waits this timeline value GPU-side before reusing scratch
+            // — neither the chain event nor a device sync can see in-flight
+            // Vulkan work, which lets training kernels overwrite scratch a
+            // running batch still reads (Xid 109 device-lost class).
+            void noteVulkanRelease(cudaExternalSemaphore_t semaphore, std::uint64_t value) const {
+                if (arena_ && frame_active_ && semaphore != nullptr) {
+                    arena_->note_external_release(semaphore, value);
                 }
             }
 
@@ -756,10 +778,11 @@ namespace lfs::vis {
             SelectionQueryModelTransforms = 4,
             SelectionQueryPolygonVertices = 5,
             SelectionQueryPolygonMask = 6,
+            SelectionQueryRingPick = 7,
         };
 
         [[nodiscard]] bool hasOverlayTensor(const Tensor* const tensor, const std::size_t num_splats) {
-            return tensor && tensor->is_valid() && tensor->numel() >= num_splats && num_splats > 0;
+            return tensor && tensor->is_valid() && tensor->numel() == num_splats && num_splats > 0;
         }
 
         [[nodiscard]] bool hasOverlayTensor(const std::shared_ptr<Tensor>& tensor, const std::size_t num_splats) {
@@ -770,9 +793,9 @@ namespace lfs::vis {
             Tensor tensor,
             const std::size_t num_splats,
             const std::string_view label) {
-            if (!tensor.is_valid() || tensor.numel() < num_splats) {
+            if (!tensor.is_valid() || tensor.numel() != num_splats || num_splats == 0) {
                 return std::unexpected(std::format(
-                    "VkSplat selection overlay expected {} mask with at least {} entries",
+                    "VkSplat selection overlay expected {} mask with exactly {} entries",
                     label,
                     num_splats));
             }
@@ -1201,7 +1224,11 @@ namespace lfs::vis {
             const Tensor& tensor,
             const std::string_view label) {
             try {
-                lfs::core::waitForCUDAStream(stream, tensor.stream());
+                // sync_to_stream (not waitForCUDAStream) so a null/legacy home
+                // stream and any recorded cross-stream uses are ordered before
+                // the render-stream read too; waitForCUDAStream no-ops a nullptr
+                // dependency, leaving default-stream producers unsynchronized.
+                tensor.sync_to_stream(stream);
                 return {};
             } catch (const std::exception& e) {
                 return std::unexpected(std::format(
@@ -1461,7 +1488,11 @@ namespace lfs::vis {
         }
     };
 
-    VksplatViewportRenderer::VksplatViewportRenderer() = default;
+    VksplatViewportRenderer::VksplatViewportRenderer() {
+        // Created here (not in ensureInitialized) so the trainer↔viewer
+        // handshake can target the render stream from the very first frame.
+        cudaStreamCreateWithFlags(&render_stream_, cudaStreamNonBlocking);
+    }
 
     VksplatViewportRenderer::~VksplatViewportRenderer() {
         reset();
@@ -1609,6 +1640,14 @@ namespace lfs::vis {
         }
         releaseSharedScratchArena();
         drainRetiredScratchBuffers(true);
+        if (render_stream_) {
+            // release_stream synchronizes the stream before migrating its blocks
+            // (and vkDeviceWaitIdle above already idled the device), so no separate
+            // cudaStreamSynchronize is needed here.
+            lfs::core::CudaMemoryPool::instance().release_stream(render_stream_);
+            cudaStreamDestroy(render_stream_);
+            render_stream_ = nullptr;
+        }
         // Detach our managed VkBuffers from buffers_ before the renderer's
         // cleanupBuffers runs so it does not vkDestroyBuffer them out from
         // under us.
@@ -1698,12 +1737,22 @@ namespace lfs::vis {
             if (compose_) {
                 compose_->destroy(context_->device());
             }
-            if (render_complete_timeline_ != VK_NULL_HANDLE) {
+            render_complete_cuda_.reset();
+            if (render_complete_external_.semaphore != VK_NULL_HANDLE) {
+                context_->destroyExternalSemaphore(render_complete_external_);
+            } else if (render_complete_timeline_ != VK_NULL_HANDLE) {
                 vkDestroySemaphore(context_->device(), render_complete_timeline_, nullptr);
             }
         }
+        render_complete_external_ = {};
         render_complete_timeline_ = VK_NULL_HANDLE;
         render_complete_value_ = 0;
+        // The fresh timeline restarts at 0; clear the published value too, else
+        // renderCompleteValue() would hand the trainer a stale value from the old
+        // timeline that the new CUDA semaphore will never signal.
+        last_signaled_render_value_ = 0;
+        last_lod_page_borrow_value_ = 0;
+        retired_input_storages_.clear();
         latest_output_ring_slot_ = {};
         output_generations_ = {};
         ring_completion_values_ = {};
@@ -2535,6 +2584,17 @@ namespace lfs::vis {
             return std::unexpected("VkSplat LOD page upload requires initialized page input storage");
         }
 
+        // lod_page_inputs_ is a single persistent buffer (not per-ring): order
+        // this frame's page uploads after the last frame that read it, GPU-side
+        // via the imported render-complete timeline.
+        if (last_lod_page_borrow_value_ != 0 && render_complete_cuda_.valid()) {
+            if (!render_complete_cuda_.cudaWait(last_lod_page_borrow_value_, render_stream_)) {
+                return std::unexpected(std::format(
+                    "VkSplat LOD page upload fence wait failed: {}",
+                    render_complete_cuda_.lastError()));
+            }
+        }
+
         auto* const base = static_cast<std::uint8_t*>(lod_page_inputs_.interop.devicePointer());
         const auto region_ptr = [&](const std::size_t region) -> std::uint8_t* {
             return base + lod_page_inputs_.region_offset[region];
@@ -2585,7 +2645,7 @@ namespace lfs::vis {
             return std::unexpected(ok.error());
         }
 
-        const cudaStream_t stream = means.stream();
+        const cudaStream_t stream = render_stream_;
         if (auto ok = waitForSplatInputStreams(stream, splat_data); !ok) {
             return std::unexpected(ok.error());
         }
@@ -3386,7 +3446,8 @@ namespace lfs::vis {
     }
 
     void VksplatViewportRenderer::drainRetiredScratchBuffers(bool force) {
-        if (context_ == nullptr || retired_scratch_buffers_.empty()) {
+        if (context_ == nullptr ||
+            (retired_scratch_buffers_.empty() && retired_input_storages_.empty())) {
             return;
         }
         auto retired = [&](std::uint64_t value) {
@@ -3406,6 +3467,29 @@ namespace lfs::vis {
                 it = retired_scratch_buffers_.erase(it);
             } else {
                 ++it;
+            }
+        }
+        auto storage_it = retired_input_storages_.begin();
+        while (storage_it != retired_input_storages_.end()) {
+            if (retired(storage_it->first)) {
+                storage_it = retired_input_storages_.erase(storage_it);
+            } else {
+                ++storage_it;
+            }
+        }
+    }
+
+    void VksplatViewportRenderer::clampOrphanedInputRetirements() {
+        // prepareInputs/overlay key a retirement to the frame's predicted
+        // completion value before the submit is confirmed. If the frame fails or
+        // returns before signalling that value, the entry would only be reclaimed
+        // once a later frame's monotonic timeline happens to pass it — and never,
+        // under a persistent-failure storm. Clamp any entry past the last
+        // confirmed value down to it: the unsubmitted batch never read those
+        // storages, so reclaiming them when the last real frame completes is safe.
+        for (auto& entry : retired_input_storages_) {
+            if (entry.first > last_signaled_render_value_) {
+                entry.first = last_signaled_render_value_;
             }
         }
     }
@@ -3660,15 +3744,13 @@ namespace lfs::vis {
             }
         }
 
-        // Restore the original per-source stream pick. With the upload running
-        // on the current stream (NULL by default), legacy implicit-FIFO
-        // ordering already chains us correctly behind whichever stream wrote
-        // the foreign sources.
-        cudaStream_t stream = nullptr;
+        // Upload on the render stream; bridge from whichever stream wrote the
+        // overlay sources with explicit event edges.
+        const cudaStream_t stream = render_stream_;
         if (selection_enabled) {
-            stream = slot.selection_source.stream();
+            slot.selection_source.sync_to_stream(stream);
         } else if (preview_enabled) {
-            stream = slot.preview_source.stream();
+            slot.preview_source.sync_to_stream(stream);
         }
 
         {
@@ -3803,6 +3885,9 @@ namespace lfs::vis {
             return {};
         }
         try {
+            if (!render_stream_) {
+                cudaStreamCreateWithFlags(&render_stream_, cudaStreamNonBlocking);
+            }
             // Submit the splat dispatch chain on the dedicated async-compute queue
             // when the device exposes one (NVIDIA family 2, AMD family 1, etc.). The
             // existing per-frame timeline-semaphore wait that gates the swapchain pass
@@ -3836,19 +3921,30 @@ namespace lfs::vis {
                 }
             });
 
-            VkSemaphoreTypeCreateInfo timeline_info{};
-            timeline_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
-            timeline_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
-            timeline_info.initialValue = 0;
-            VkSemaphoreCreateInfo semaphore_info{};
-            semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-            semaphore_info.pNext = &timeline_info;
-            const VkResult semaphore_result =
-                vkCreateSemaphore(context.device(), &semaphore_info, nullptr, &render_complete_timeline_);
-            if (semaphore_result != VK_SUCCESS) {
+            // Exportable so CUDA (the trainer's release-fence wait) can consume
+            // the same monotonic counter Vulkan signals at batch completion.
+            if (!context.createExternalTimelineSemaphore(0, render_complete_external_)) {
                 return std::unexpected(std::format(
                     "VkSplat render completion timeline creation failed: {}",
-                    vkError("vkCreateSemaphore", semaphore_result)));
+                    context.lastError()));
+            }
+            render_complete_timeline_ = render_complete_external_.semaphore;
+            const auto completion_handle =
+                context.releaseExternalSemaphoreNativeHandle(render_complete_external_);
+            if (!VulkanContext::externalNativeHandleValid(completion_handle)) {
+                context.destroyExternalSemaphore(render_complete_external_);
+                render_complete_timeline_ = VK_NULL_HANDLE;
+                return std::unexpected("VkSplat render completion timeline export failed");
+            }
+            lfs::rendering::CudaVulkanExternalSemaphoreImport completion_import{};
+            completion_import.semaphore_handle = completion_handle;
+            completion_import.initial_value = render_complete_external_.initial_value;
+            if (!render_complete_cuda_.init(completion_import)) {
+                std::string err = render_complete_cuda_.lastError();
+                context.destroyExternalSemaphore(render_complete_external_);
+                render_complete_timeline_ = VK_NULL_HANDLE;
+                return std::unexpected(std::format(
+                    "VkSplat render completion timeline CUDA import failed: {}", err));
             }
             context.setDebugObjectName(VK_OBJECT_TYPE_SEMAPHORE,
                                        render_complete_timeline_,
@@ -3959,6 +4055,30 @@ namespace lfs::vis {
 
         initialized_ = true;
         return {};
+    }
+
+    // Exception-path safety: the batch may or may not have submitted/signaled.
+    // Publishing an unsignaled value would hang the trainer's borrow wait, and
+    // not waiting would let the trainer reuse arena scratch a partially
+    // submitted batch still reads — so block (bounded) until the value lands
+    // or the timeout proves the submit never happened.
+    bool VksplatViewportRenderer::waitCompletionValueBounded(const std::uint64_t value) noexcept {
+        if (context_ == nullptr || render_complete_timeline_ == VK_NULL_HANDLE || value == 0) {
+            return false;
+        }
+        VkSemaphoreWaitInfo wait_info{};
+        wait_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
+        wait_info.semaphoreCount = 1;
+        wait_info.pSemaphores = &render_complete_timeline_;
+        wait_info.pValues = &value;
+        constexpr std::uint64_t kTimeoutNs = 2'000'000'000ull;
+        const VkResult result = vkWaitSemaphores(context_->device(), &wait_info, kTimeoutNs);
+        if (result != VK_SUCCESS) {
+            LOG_WARN("VkSplat completion wait after failed pass returned {} (value {})",
+                     static_cast<int>(result), value);
+            return false;
+        }
+        return true;
     }
 
     std::expected<void, std::string> VksplatViewportRenderer::waitForRingSlot(
@@ -4261,9 +4381,18 @@ namespace lfs::vis {
                 buffers_.quant_pool = false;
                 buffers_.pool_page_splats = 0;
                 update_input_metadata(input_snapshot_changed);
+
+                // Keep the borrowed storages alive until the frame that binds
+                // them retires: a trainer topology reallocation may drop its
+                // references while this frame's batch is still in flight.
+                retired_input_storages_.emplace_back(
+                    render_complete_value_ + 1,
+                    std::vector<std::shared_ptr<void>>{
+                        means_storage, sh0_storage, shN_storage,
+                        rotations_storage, scaling_storage, opacity_storage});
             }
 
-            const cudaStream_t stream = splat_data.means_raw().stream();
+            const cudaStream_t stream = render_stream_;
             {
                 LOG_TIMER("prepareInputs.wait_streams");
                 if (auto ok = waitForSplatInputStreams(stream, splat_data); !ok) {
@@ -4280,15 +4409,10 @@ namespace lfs::vis {
                     return std::unexpected(ok.error());
                 }
             }
-            if (synchronize_upload) {
-                LOG_TIMER("prepareInputs.stream_sync");
-                if (const cudaError_t status = cudaStreamSynchronize(stream); status != cudaSuccess) {
-                    return std::unexpected(std::format("VkSplat CUDA input stream sync failed: {} ({})",
-                                                       cudaGetErrorName(status),
-                                                       cudaGetErrorString(status)));
-                }
-            }
-
+            // No CPU sync for live training models anymore: the upload-timeline
+            // signal below is enqueued on the render stream after the copies, so
+            // Vulkan's wait covers them; trainer writes are ordered by the
+            // beginModelRead/publishViewerBorrow handshake.
             {
                 LOG_TIMER("prepareInputs.cuda_signal");
                 auto& timeline = upload_timelines_[ring_slot];
@@ -5401,6 +5525,10 @@ namespace lfs::vis {
             return std::unexpected("VkSplat equirectangular selection requires the 3DGUT backend");
         }
         const bool polygon_mode = (request.shape == SelectionMaskShape::Polygon);
+        const bool ring_mode = (request.shape == SelectionMaskShape::Ring);
+        if (request.picked_ring_id_out) {
+            *request.picked_ring_id_out = kRingPickNoHit;
+        }
         if (polygon_mode) {
             if (request.polygon_vertices.size() < 3) {
                 return std::unexpected("VkSplat polygon selection requires at least 3 vertices");
@@ -5451,6 +5579,7 @@ namespace lfs::vis {
                 return std::unexpected(ok.error());
             }
         }
+        const lfs::core::CUDAStreamGuard stream_guard(render_stream_);
 
         std::size_t ring_slot = 0;
         {
@@ -5502,6 +5631,7 @@ namespace lfs::vis {
                          : std::size_t{0};
         const std::size_t polygon_mask_region_bytes =
             alignUp(std::max<std::size_t>(polygon_mask_pixels, 1u), 4u);
+        const std::size_t ring_pick_region_bytes = 2u * sizeof(std::uint32_t);
         std::array<std::size_t, kSelectionQueryRegionCount> region_bytes{};
         region_bytes[SelectionQueryOutput] = unused_query_output_region_bytes;
         region_bytes[SelectionQueryTransformIndices] = transform_region_bytes;
@@ -5510,6 +5640,7 @@ namespace lfs::vis {
         region_bytes[SelectionQueryModelTransforms] = model_transforms_region_bytes;
         region_bytes[SelectionQueryPolygonVertices] = polygon_vertices_region_bytes;
         region_bytes[SelectionQueryPolygonMask] = polygon_mask_region_bytes;
+        region_bytes[SelectionQueryRingPick] = ring_pick_region_bytes;
         auto region_capacity_bytes = slot.region_capacity_bytes;
         const auto grow_fixed = [&](const std::size_t region) {
             region_capacity_bytes[region] =
@@ -5528,6 +5659,7 @@ namespace lfs::vis {
         const std::size_t viewport_polygon_mask_bytes =
             alignUp(static_cast<std::size_t>(size.x) * static_cast<std::size_t>(size.y), 4u);
         grow_dynamic(SelectionQueryPolygonMask, viewport_polygon_mask_bytes);
+        grow_fixed(SelectionQueryRingPick);
         std::array<std::size_t, kSelectionQueryRegionCount> region_offset{};
         const std::size_t total_bytes = layoutRegions(region_capacity_bytes, region_offset, kRegionAlignment);
         const bool query_buffer_reallocated =
@@ -5674,7 +5806,7 @@ namespace lfs::vis {
             }
         }
 
-        const cudaStream_t selection_query_stream = nullptr;
+        const cudaStream_t selection_query_stream = render_stream_;
         {
             LOG_TIMER("VksplatViewportRenderer::buildSelectionMask.upload");
             if (transform_indices_enabled && !slot.transform_indices_uploaded) {
@@ -5748,6 +5880,21 @@ namespace lfs::vis {
                                                        cudaGetErrorString(status)));
                 }
             }
+            if (ring_mode) {
+                auto* const ring_pick_ptr =
+                    static_cast<std::uint8_t*>(slot.interop.devicePointer()) +
+                    slot.region_offset[SelectionQueryRingPick];
+                if (const cudaError_t status =
+                        cudaMemsetAsync(ring_pick_ptr,
+                                        0xFF,
+                                        slot.region_bytes[SelectionQueryRingPick],
+                                        selection_query_stream);
+                    status != cudaSuccess) {
+                    return std::unexpected(std::format("VkSplat ring-pick clear failed: {} ({})",
+                                                       cudaGetErrorName(status),
+                                                       cudaGetErrorString(status)));
+                }
+            }
         }
 
         const auto view = [&](const std::size_t region) {
@@ -5764,7 +5911,7 @@ namespace lfs::vis {
                                       num_splats,
                                       request.equirectangular,
                                       request.gut,
-                                      false);
+                                      request.mip_filter);
         VulkanGSSelectionMaskUniforms selection_uniforms{};
         selection_uniforms.num_splats = static_cast<std::uint32_t>(num_splats);
         selection_uniforms.primitive_count = static_cast<std::uint32_t>(request.primitives.size());
@@ -5778,6 +5925,9 @@ namespace lfs::vis {
         selection_uniforms.image_height = camera_uniforms.image_height;
         selection_uniforms.image_width = camera_uniforms.image_width;
         selection_uniforms.camera_model = camera_uniforms.camera_model;
+        selection_uniforms.ring_width = request.ring_width;
+        selection_uniforms.mip_filter = request.mip_filter ? 1u : 0u;
+        selection_uniforms.ring_pick_phase = kRingPickPhaseNone;
         selection_uniforms.fx = camera_uniforms.fx;
         selection_uniforms.fy = camera_uniforms.fy;
         selection_uniforms.cx = camera_uniforms.cx;
@@ -5834,14 +5984,25 @@ namespace lfs::vis {
                 }
                 {
                     LOG_TIMER("VksplatViewportRenderer::buildSelectionMask.dispatch.selection_mask");
-                    renderer_.executeSelectionMask(selection_uniforms,
-                                                   buffers_,
-                                                   view(SelectionQueryTransformIndices),
-                                                   view(SelectionQueryNodeMask),
-                                                   view(SelectionQueryPrimitives),
-                                                   view(SelectionQueryModelTransforms),
-                                                   output_view,
-                                                   view(SelectionQueryPolygonMask));
+                    auto dispatch_selection_mask = [&](const std::uint32_t ring_pick_phase) {
+                        auto uniforms = selection_uniforms;
+                        uniforms.ring_pick_phase = ring_pick_phase;
+                        renderer_.executeSelectionMask(uniforms,
+                                                       buffers_,
+                                                       view(SelectionQueryTransformIndices),
+                                                       view(SelectionQueryNodeMask),
+                                                       view(SelectionQueryPrimitives),
+                                                       view(SelectionQueryModelTransforms),
+                                                       output_view,
+                                                       view(SelectionQueryPolygonMask),
+                                                       view(SelectionQueryRingPick));
+                    };
+                    if (ring_mode) {
+                        dispatch_selection_mask(kRingPickPhaseFindMin);
+                        dispatch_selection_mask(kRingPickPhaseWritePick);
+                    } else {
+                        dispatch_selection_mask(kRingPickPhaseNone);
+                    }
                 }
             } catch (const std::exception& e) {
                 return std::unexpected(std::format("VkSplat selection query failed: {}", e.what()));
@@ -5854,6 +6015,64 @@ namespace lfs::vis {
                                                                    selection_query_stream)) {
                 return std::unexpected(std::format("VkSplat selection query completion wait failed: {}",
                                                    selection_query_timeline_.cuda_semaphore.lastError()));
+            }
+        }
+
+        if (ring_mode) {
+            LOG_TIMER("VksplatViewportRenderer::buildSelectionMask.ring_pick");
+            std::array<std::uint32_t, 2> ring_pick{kRingPickNoHit, kRingPickNoHit};
+            const auto* const ring_pick_src =
+                static_cast<const std::uint8_t*>(slot.interop.devicePointer()) +
+                slot.region_offset[SelectionQueryRingPick];
+            if (const cudaError_t status = cudaMemcpyAsync(&ring_pick,
+                                                           ring_pick_src,
+                                                           sizeof(ring_pick),
+                                                           cudaMemcpyDeviceToHost,
+                                                           selection_query_stream);
+                status != cudaSuccess) {
+                return std::unexpected(std::format("VkSplat ring-pick readback failed: {} ({})",
+                                                   cudaGetErrorName(status),
+                                                   cudaGetErrorString(status)));
+            }
+            if (const cudaError_t status = cudaStreamSynchronize(selection_query_stream);
+                status != cudaSuccess) {
+                return std::unexpected(std::format("VkSplat ring-pick readback sync failed: {} ({})",
+                                                   cudaGetErrorName(status),
+                                                   cudaGetErrorString(status)));
+            }
+
+            auto* const output_bytes = static_cast<std::uint8_t*>(slot.output_tensor.data_ptr());
+            if (const cudaError_t status =
+                    cudaMemsetAsync(output_bytes, 0, output_tensor_region_bytes, selection_query_stream);
+                status != cudaSuccess) {
+                return std::unexpected(std::format("VkSplat ring-pick output clear failed: {} ({})",
+                                                   cudaGetErrorName(status),
+                                                   cudaGetErrorString(status)));
+            }
+            if (ring_pick[0] != kRingPickNoHit && ring_pick[1] != kRingPickNoHit) {
+                const std::uint32_t picked_id = ring_pick[1];
+                if (picked_id < num_splats) {
+                    if (request.picked_ring_id_out) {
+                        *request.picked_ring_id_out = picked_id;
+                    }
+                    const std::uint8_t selected = 1;
+                    if (const cudaError_t status = cudaMemcpyAsync(output_bytes + picked_id,
+                                                                   &selected,
+                                                                   sizeof(selected),
+                                                                   cudaMemcpyHostToDevice,
+                                                                   selection_query_stream);
+                        status != cudaSuccess) {
+                        return std::unexpected(std::format("VkSplat ring-pick output write failed: {} ({})",
+                                                           cudaGetErrorName(status),
+                                                           cudaGetErrorString(status)));
+                    }
+                }
+            }
+            if (const cudaError_t status = cudaStreamSynchronize(selection_query_stream);
+                status != cudaSuccess) {
+                return std::unexpected(std::format("VkSplat ring-pick output sync failed: {} ({})",
+                                                   cudaGetErrorName(status),
+                                                   cudaGetErrorString(status)));
             }
         }
 
@@ -5887,6 +6106,13 @@ namespace lfs::vis {
         if (!initialized_ || context_ != &context) {
             return std::unexpected("VkSplat selection overlay requested without reusable render state");
         }
+        // See render(): clamp any retirement this pass extended past a value its
+        // submit never signalled, on every exit path.
+        struct RetirementReconcile {
+            VksplatViewportRenderer* self;
+            ~RetirementReconcile() { self->clampOrphanedInputRetirements(); }
+        } retirement_reconcile{this};
+        const lfs::core::CUDAStreamGuard stream_guard(render_stream_);
 
         const std::size_t ring_slot = acquireRingSlot();
         if (auto ok = waitForRingSlot(ring_slot, "selection overlay"); !ok) {
@@ -5962,12 +6188,31 @@ namespace lfs::vis {
                                       static_cast<std::size_t>(std::numeric_limits<uint32_t>::max())));
         }
 
+        // This pass re-reads the resident sort buffers in shared arena scratch:
+        // hold the arena frame across the submit so a training iteration cannot
+        // reset the offset and overwrite them mid-batch.
+        std::optional<RasterizerArenaRenderGuard> overlay_arena_guard;
+        if (synchronize_input_read && shared_scratch_.block) {
+            try {
+                overlay_arena_guard.emplace();
+            } catch (const std::exception& e) {
+                return std::unexpected(std::format(
+                    "VkSplat selection overlay arena unavailable: {}", e.what()));
+            }
+        }
+
         std::expected<void, std::string> compose_status;
         const std::uint64_t completion_value = ++render_complete_value_;
+        // This pass re-reads the storages bound by the previous prepareInputs;
+        // extend their retirement to cover this submit.
+        if (!retired_input_storages_.empty()) {
+            retired_input_storages_.back().first =
+                std::max(retired_input_storages_.back().first, completion_value);
+        }
         try {
             LOG_TIMER("vksplat.selection_overlay.batch_total");
             auto batch = DeviceGuard(&renderer_,
-                                     synchronize_input_read,
+                                     /*use_fence=*/false,
                                      render_complete_timeline_,
                                      completion_value);
             {
@@ -6016,7 +6261,23 @@ namespace lfs::vis {
                 }
             }
         } catch (const std::exception& e) {
+            // Only hand the release to the arena if the timeline signal actually
+            // landed; a failed submit never signals completion_value, and waiting
+            // it later would hang the arena/trainer.
+            if (waitCompletionValueBounded(completion_value)) {
+                last_signaled_render_value_ = completion_value;
+                if (overlay_arena_guard) {
+                    overlay_arena_guard->noteVulkanRelease(render_complete_cuda_.handle(), completion_value);
+                }
+            }
             return std::unexpected(std::format("VkSplat selection overlay pass failed: {}", e.what()));
+        }
+        last_signaled_render_value_ = completion_value;
+        if (overlay_arena_guard) {
+            overlay_arena_guard->noteVulkanRelease(render_complete_cuda_.handle(), completion_value);
+        }
+        if (live_submit_callback_) {
+            live_submit_callback_(completion_value);
         }
         if (!compose_status) {
             return std::unexpected(compose_status.error());
@@ -6057,11 +6318,19 @@ namespace lfs::vis {
         if (!context.externalMemoryInteropEnabled()) {
             return std::unexpected("VkSplat forward path requires CUDA/Vulkan external-memory interop");
         }
+        // Reconcile input-storage retirements on every exit (success, early
+        // return, or exception) so a frame that never reached its submit can't
+        // leave an entry keyed to a timeline value that never signals.
+        struct RetirementReconcile {
+            VksplatViewportRenderer* self;
+            ~RetirementReconcile() { self->clampOrphanedInputRetirements(); }
+        } retirement_reconcile{this};
 
         const int active_sh_degree = effectiveRenderShDegree(splat_data, request.sh_degree);
         if (auto ok = ensureInitialized(context); !ok) {
             return std::unexpected(ok.error());
         }
+        const lfs::core::CUDAStreamGuard stream_guard(render_stream_);
 
         drainRetiredScratchBuffers(false);
 
@@ -6843,8 +7112,11 @@ namespace lfs::vis {
             // tensors. Otherwise CUDA training can mutate scales/opacities for
             // the next iteration while this frame is still in flight.
             LOG_TIMER("vksplat.render.batch_total");
+            // No CPU fence spin: live-model lifetime is covered by the storage
+            // retire-list + the trainer's release-fence wait, and the LOD page
+            // buffer self-hazard waits GPU-side on the imported timeline.
             auto batch = DeviceGuard(&renderer_,
-                                     synchronize_input_upload || lod_page_inputs_active,
+                                     /*use_fence=*/false,
                                      render_complete_timeline_,
                                      completion_value);
             {
@@ -7152,7 +7424,26 @@ namespace lfs::vis {
             // On try-block exit: `batch` destructs (endCommandBatch fence wait),
             // then batch_total timer logs.
         } catch (const std::exception& e) {
+            // Only hand the release to the arena if the timeline signal actually
+            // landed; a failed submit never signals completion_value, and waiting
+            // it later would hang the arena/trainer after this frame.
+            if (waitCompletionValueBounded(completion_value)) {
+                last_signaled_render_value_ = completion_value;
+                if (shared_arena_guard) {
+                    shared_arena_guard->noteVulkanRelease(render_complete_cuda_.handle(), completion_value);
+                }
+            }
             return std::unexpected(std::format("VkSplat forward pass failed: {}", e.what()));
+        }
+        // The batch (and its timeline signal) is submitted; hand the release to
+        // the arena and the trainer before the guard/locks let them reuse the
+        // scratch this batch still reads.
+        last_signaled_render_value_ = completion_value;
+        if (shared_arena_guard) {
+            shared_arena_guard->noteVulkanRelease(render_complete_cuda_.handle(), completion_value);
+        }
+        if (live_submit_callback_) {
+            live_submit_callback_(completion_value);
         }
         logVramBreakdownIfChanged("render");
         if (!compose_status) {
@@ -7162,6 +7453,9 @@ namespace lfs::vis {
         renderer_.tagDeferredVisibleCountReadback(render_complete_timeline_, completion_value);
         renderer_.tagDeferredLodSelectionReadback(render_complete_timeline_, completion_value);
         renderer_.tagDeferredInstanceCountReadback(render_complete_timeline_, completion_value);
+        if (lod_page_inputs_active) {
+            last_lod_page_borrow_value_ = completion_value;
+        }
         if (higs_warmup_frame) {
             macro_chain_warmup_pending_ = false;
         }

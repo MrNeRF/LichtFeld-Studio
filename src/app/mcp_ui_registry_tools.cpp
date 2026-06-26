@@ -44,11 +44,14 @@ namespace lfs::app {
         };
 
         constexpr std::array kSelectionSubmodes = {
-            std::pair<std::string_view, int>{"centers", 0},
-            std::pair<std::string_view, int>{"rectangle", 1},
-            std::pair<std::string_view, int>{"polygon", 2},
-            std::pair<std::string_view, int>{"lasso", 3},
-            std::pair<std::string_view, int>{"rings", 4},
+            std::pair<std::string_view, int>{"centers", static_cast<int>(vis::SelectionSubMode::Centers)},
+            std::pair<std::string_view, int>{"rectangle", static_cast<int>(vis::SelectionSubMode::Rectangle)},
+            std::pair<std::string_view, int>{"polygon", static_cast<int>(vis::SelectionSubMode::Polygon)},
+            std::pair<std::string_view, int>{"lasso", static_cast<int>(vis::SelectionSubMode::Lasso)},
+            std::pair<std::string_view, int>{"rings", static_cast<int>(vis::SelectionSubMode::Rings)},
+            std::pair<std::string_view, int>{"color", static_cast<int>(vis::SelectionSubMode::Color)},
+            std::pair<std::string_view, int>{"box", static_cast<int>(vis::SelectionSubMode::Box)},
+            std::pair<std::string_view, int>{"sphere", static_cast<int>(vis::SelectionSubMode::Sphere)},
         };
 
         struct CollectedMenuItem {
@@ -883,7 +886,7 @@ namespace lfs::app {
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"submode_id", json{{"type", "string"}, {"enum", json::array({"centers", "rectangle", "polygon", "lasso", "rings"})}, {"description", "Selection submode id"}}}},
+                        {"submode_id", json{{"type", "string"}, {"enum", json::array({"centers", "rectangle", "polygon", "lasso", "rings", "box", "sphere", "color"})}, {"description", "Selection submode id"}}}},
                     .required = {"submode_id"}},
                 .metadata = mcp::McpToolMetadata{
                     .category = "ui",

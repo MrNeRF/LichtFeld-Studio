@@ -29,6 +29,7 @@
 #include "tools/builtin_tools.hpp"
 #include "tools/selection_tool.hpp"
 #include "visualizer/app_store.hpp"
+#include "window/vulkan_context.hpp"
 #include <SDL3/SDL_events.h>
 #include <algorithm>
 #include <cassert>
@@ -52,6 +53,12 @@ namespace lfs::vis {
                 window_manager->wakeEventLoop();
             }
         }
+
+        constexpr double kResizeSettleMinWaitSeconds = 0.001;
+#if defined(__linux__)
+        constexpr auto kWindowResizePaintDemandWindow = std::chrono::milliseconds(160);
+#endif
+
         std::optional<glm::mat3> buildValidatedViewRotation(const glm::vec3& eye,
                                                             const glm::vec3& target,
                                                             const glm::vec3& requested_up) {
@@ -558,7 +565,8 @@ namespace lfs::vis {
         callback_cleanup_.add([] { python::set_scene_manager(nullptr); });
 
         python::set_export_callback([](int format, const char* path, const char** node_names,
-                                       int node_count, int sh_degree, bool rad_flip_y) {
+                                       int node_count, int sh_degree, bool rad_flip_y,
+                                       bool rad_streamable) {
             if (auto* gm = python::get_gui_manager()) {
                 std::vector<std::string> names;
                 names.reserve(node_count);
@@ -567,7 +575,8 @@ namespace lfs::vis {
                 }
                 gm->asyncTasks().performExport(static_cast<lfs::core::ExportFormat>(format),
                                                lfs::core::utf8_to_path(path), names, sh_degree,
-                                               rad_flip_y);
+                                               rad_flip_y,
+                                               rad_streamable);
             }
         });
         callback_cleanup_.add([] { python::set_export_callback(nullptr); });
@@ -1272,6 +1281,21 @@ namespace lfs::vis {
         demand.posted_work = update_work_processed_;
         demand.render_work = hasPendingRenderWork();
         demand.store_dirty = drained_store_dirty || app_store().store().has_dirty();
+        if (auto* vulkan_context = window_manager_ ? window_manager_->getVulkanContext() : nullptr) {
+            demand.swapchain_resize_pending = vulkan_context->hasPendingSwapchainResize();
+            demand.swapchain_resize_ready = demand.swapchain_resize_pending &&
+                                            vulkan_context->pendingSwapchainResizeReady();
+        }
+#if defined(__linux__)
+        if (window_manager_) {
+            demand.window_resize_paint_pending =
+                window_manager_->hasRecentWindowSizeChange(kWindowResizePaintDemandWindow);
+        }
+#endif
+        demand.viewport_resize_deferring = rendering_manager_ &&
+                                           rendering_manager_->isViewportResizeDeferring();
+        demand.viewport_resize_settle_ready = rendering_manager_ &&
+                                              rendering_manager_->viewportResizeSettleReady();
         return demand;
     }
 
@@ -1279,12 +1303,17 @@ namespace lfs::vis {
         if (!window_manager_)
             return;
 
+        auto wait_seconds = is_training ? 0.1 : 0.5;
+        if (rendering_manager_ && rendering_manager_->hasPendingViewportResizeSettle()) {
+            const double settle_wait = rendering_manager_->secondsUntilViewportResizeSettleReady();
+            wait_seconds = std::min(wait_seconds,
+                                    std::max(kResizeSettleMinWaitSeconds, settle_wait));
+        }
+
         if (is_training) {
-            constexpr double TRAINING_WAIT_SEC = 0.1; // ~10 Hz
-            window_manager_->waitEvents(TRAINING_WAIT_SEC);
+            window_manager_->waitEvents(wait_seconds); // Training tick is capped at ~10 Hz when no resize settle is due.
         } else {
-            constexpr double IDLE_WAIT_SEC = 0.5;
-            window_manager_->waitEvents(IDLE_WAIT_SEC);
+            window_manager_->waitEvents(wait_seconds);
         }
     }
 
@@ -1298,6 +1327,9 @@ namespace lfs::vis {
         delta_time = std::min(delta_time, 1.0f / 30.0f);
 
         const bool viewport_export_locked = gui_manager_ && gui_manager_->isViewportExportLocked();
+        if (window_manager_) {
+            window_manager_->updateWindowSize("render_begin");
+        }
         if (viewport_export_locked && window_manager_) {
             window_manager_->pollEvents();
         }
@@ -1381,7 +1413,7 @@ namespace lfs::vis {
         const bool is_training = trainer_manager_ && trainer_manager_->isRunning();
         const FrameDemand frame_demand = collectFrameDemand(viewport_export_locked, store_dirty);
         if (gui_frame_rendered_ && !frame_demand.shouldRenderFrame()) {
-            LOG_PERF("loop_idle skip_gui_render=true needs_render={} continuous_input={} py_anim={} py_overlay={} py_redraw={} gui_anim={} input_event={} posted_work={} render_work={} store_dirty={}",
+            LOG_PERF("loop_idle skip_gui_render=true needs_render={} continuous_input={} py_anim={} py_overlay={} py_redraw={} gui_anim={} input_event={} posted_work={} render_work={} store_dirty={} swapchain_resize_pending={} swapchain_resize_ready={} window_resize_paint_pending={} viewport_resize_deferring={} viewport_resize_settle_ready={}",
                      frame_demand.scene_dirty,
                      frame_demand.continuous_input,
                      frame_demand.python_animation,
@@ -1391,7 +1423,12 @@ namespace lfs::vis {
                      frame_demand.input_event,
                      frame_demand.posted_work,
                      frame_demand.render_work,
-                     frame_demand.store_dirty);
+                     frame_demand.store_dirty,
+                     frame_demand.swapchain_resize_pending,
+                     frame_demand.swapchain_resize_ready,
+                     frame_demand.window_resize_paint_pending,
+                     frame_demand.viewport_resize_deferring,
+                     frame_demand.viewport_resize_settle_ready);
             if (!python::is_plugin_preload_running()) {
                 python::flush_signals();
             }
@@ -1457,7 +1494,9 @@ namespace lfs::vis {
         }
         if (gui_manager_) {
             LOG_TIMER("VisualizerImpl::render.gui_frame_total_with_swapchain_wait");
+            window_manager_->updateWindowSize("pre_gui_render");
             gui_manager_->render();
+            window_manager_->refreshResizeCursor();
         } else {
             processRenderWorkQueue();
         }
@@ -1471,7 +1510,7 @@ namespace lfs::vis {
         // Render-on-demand: VSync handles frame pacing, waitEvents saves CPU when idle
         const FrameDemand next_demand = collectFrameDemand(viewport_export_locked);
 
-        LOG_PERF("loop_end needs_render={} continuous_input={} py_anim={} py_overlay={} py_redraw={} gui_anim={} input_event={} posted_work={} render_work={} store_dirty={}",
+        LOG_PERF("loop_end needs_render={} continuous_input={} py_anim={} py_overlay={} py_redraw={} gui_anim={} input_event={} posted_work={} render_work={} store_dirty={} swapchain_resize_pending={} swapchain_resize_ready={} window_resize_paint_pending={} viewport_resize_deferring={} viewport_resize_settle_ready={}",
                  next_demand.scene_dirty,
                  next_demand.continuous_input,
                  next_demand.python_animation,
@@ -1481,7 +1520,12 @@ namespace lfs::vis {
                  next_demand.input_event,
                  next_demand.posted_work,
                  next_demand.render_work,
-                 next_demand.store_dirty);
+                 next_demand.store_dirty,
+                 next_demand.swapchain_resize_pending,
+                 next_demand.swapchain_resize_ready,
+                 next_demand.window_resize_paint_pending,
+                 next_demand.viewport_resize_deferring,
+                 next_demand.viewport_resize_settle_ready);
 
         if (next_demand.needsContinuousLoop()) {
             window_manager_->pollEvents();

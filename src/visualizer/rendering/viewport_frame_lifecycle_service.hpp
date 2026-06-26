@@ -20,6 +20,7 @@ namespace lfs::vis {
         struct ResizeResult {
             DirtyMask dirty = 0;
             bool completed = false;
+            bool render_interactive_frame = false;
         };
 
         struct ModelChangeResult {
@@ -35,8 +36,12 @@ namespace lfs::vis {
                                                   SplitViewMode split_view_mode) const;
         [[nodiscard]] DirtyMask setViewportResizeActive(bool active);
         [[nodiscard]] DirtyMask deferViewportRefresh();
+        [[nodiscard]] bool hasPendingResizeSettle() const;
+        [[nodiscard]] bool resizeSettleReady() const;
+        [[nodiscard]] double secondsUntilResizeSettleReady() const;
+        [[nodiscard]] bool resizeRecentlyChanged(std::chrono::steady_clock::duration max_age) const;
         [[nodiscard]] bool isResizeDeferring() const {
-            return resize_active_.load(std::memory_order_relaxed) || resize_debounce_ > 0;
+            return resize_active_.load(std::memory_order_relaxed) || resize_settle_pending_;
         }
         bool consumeResizeCompleted() { return std::exchange(resize_completed_, false); }
         void noteResizeCompleted() { resize_completed_ = true; }
@@ -48,8 +53,9 @@ namespace lfs::vis {
         glm::ivec2 last_viewport_size_{0, 0};
         size_t last_model_ptr_ = 0;
         std::chrono::steady_clock::time_point last_training_render_{};
+        std::chrono::steady_clock::time_point last_resize_change_{};
         std::atomic<bool> resize_active_{false};
-        int resize_debounce_ = 0;
+        bool resize_settle_pending_ = false;
         bool resize_completed_ = false;
     };
 

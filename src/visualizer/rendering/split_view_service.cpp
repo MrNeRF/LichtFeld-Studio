@@ -148,6 +148,8 @@ namespace lfs::vis {
     void SplitViewService::clear() {
         clearGTContext();
         pre_gt_equirectangular_ = false;
+        pre_gt_show_camera_frustums_ = false;
+        gt_forced_camera_frustums_off_ = false;
         focused_panel_ = SplitViewPanelId::Left;
         std::lock_guard<std::mutex> lock(info_mutex_);
         current_info_ = {};
@@ -167,6 +169,7 @@ namespace lfs::vis {
             .current_mode = previous_mode,
             .mode_changed = false,
             .clear_viewport_output = false,
+            .render_settings_changed = false,
             .restore_equirectangular = std::nullopt,
         };
 
@@ -178,9 +181,25 @@ namespace lfs::vis {
         const bool target_gt = splitViewUsesGTComparison(target_mode);
         if (!previous_gt && target_gt) {
             pre_gt_equirectangular_ = settings.equirectangular;
-        } else if (previous_gt && !target_gt && gt_exit_behavior == GTExitBehavior::RestorePrevious) {
-            settings.equirectangular = pre_gt_equirectangular_;
-            result.restore_equirectangular = pre_gt_equirectangular_;
+            pre_gt_show_camera_frustums_ = settings.show_camera_frustums;
+            gt_forced_camera_frustums_off_ = settings.show_camera_frustums;
+            if (gt_forced_camera_frustums_off_) {
+                settings.show_camera_frustums = false;
+                result.render_settings_changed = true;
+            }
+        } else if (previous_gt && !target_gt) {
+            if (gt_exit_behavior == GTExitBehavior::RestorePrevious) {
+                settings.equirectangular = pre_gt_equirectangular_;
+                result.restore_equirectangular = pre_gt_equirectangular_;
+                result.render_settings_changed = true;
+
+                if (gt_forced_camera_frustums_off_ &&
+                    settings.show_camera_frustums != pre_gt_show_camera_frustums_) {
+                    settings.show_camera_frustums = pre_gt_show_camera_frustums_;
+                    result.render_settings_changed = true;
+                }
+            }
+            gt_forced_camera_frustums_off_ = false;
         }
 
         clearGTContext();

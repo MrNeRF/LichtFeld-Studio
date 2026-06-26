@@ -5,6 +5,7 @@
 #include "lod_upload_engine.hpp"
 
 #include "core/logger.hpp"
+#include "core/tensor/internal/memory_pool.hpp"
 
 #include "lod_page_dequant_cuda.hpp"
 
@@ -55,6 +56,12 @@ namespace lfs::vis {
         event_pool_.clear();
         releaseStagingRingLocked();
         if (stream_ != nullptr) {
+            // The staging copies and dequant launches only touch raw cudaMalloc /
+            // cudaHostAlloc + Vulkan-external memory, never the tensor pool — but
+            // sever the stream from the pool anyway so the engine obeys the same
+            // lifetime contract as every other long-lived stream and stays UAF-safe
+            // if pool-backed memory ever flows through it.
+            lfs::core::CudaMemoryPool::instance().release_stream(stream_);
             (void)cudaStreamDestroy(stream_);
             stream_ = nullptr;
         }

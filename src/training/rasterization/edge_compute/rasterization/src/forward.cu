@@ -42,7 +42,8 @@ int edge_compute::rasterization::edge_forward(
     const float far_,
     bool mip_filter,
     const float* pixel_weights,
-    float* accum_weights) {
+    float* accum_weights,
+    cudaStream_t stream) {
     const dim3 grid(div_round_up(width, config::tile_width), div_round_up(height, config::tile_height), 1);
     const dim3 block(config::tile_width, config::tile_height, 1);
     const uint64_t n_tiles_u64 = static_cast<uint64_t>(grid.x) * static_cast<uint64_t>(grid.y);
@@ -55,28 +56,16 @@ int edge_compute::rasterization::edge_forward(
     char* per_tile_buffers_blob = per_tile_buffers_func(required<PerTileBuffers>(n_tiles));
     PerTileBuffers per_tile_buffers = PerTileBuffers::from_blob(per_tile_buffers_blob, n_tiles);
 
-    // Initialize tile instance ranges
-    static cudaStream_t memset_stream = 0;
-    static cudaEvent_t memset_event = 0;
-    if constexpr (!config::debug) {
-        static bool memset_stream_initialized = false;
-        if (!memset_stream_initialized) {
-            cudaStreamCreate(&memset_stream);
-            cudaEventCreate(&memset_event);
-            memset_stream_initialized = true;
-        }
-        cudaMemsetAsync(per_tile_buffers.instance_ranges, 0, sizeof(uint2) * n_tiles, memset_stream);
-        cudaEventRecord(memset_event, memset_stream); // Record event when memset completes
-    } else {
-        cudaMemset(per_tile_buffers.instance_ranges, 0, sizeof(uint2) * n_tiles);
-    }
+    // Initialize tile instance ranges on the frame's stream (see fastgs
+    // forward.cu: the old side-stream overlap relied on legacy ordering).
+    cudaMemsetAsync(per_tile_buffers.instance_ranges, 0, sizeof(uint2) * n_tiles, stream);
 
     // Allocate per-primitive buffers through arena
     char* per_primitive_buffers_blob = per_primitive_buffers_func(required<PerPrimitiveBuffers>(n_primitives));
     PerPrimitiveBuffers per_primitive_buffers = PerPrimitiveBuffers::from_blob(per_primitive_buffers_blob, n_primitives);
 
     // Preprocess primitives
-    kernels::forward::preprocess_cu<<<div_round_up(n_primitives, config::block_size_preprocess), config::block_size_preprocess>>>(
+    kernels::forward::preprocess_cu<<<div_round_up(n_primitives, config::block_size_preprocess), config::block_size_preprocess, 0, stream>>>(
         means,
         scales_raw,
         rotations_raw,
@@ -107,11 +96,13 @@ int edge_compute::rasterization::edge_forward(
         per_primitive_buffers.cub_workspace_size,
         per_primitive_buffers.n_touched_tiles,
         per_primitive_buffers.offset,
-        n_primitives);
+        n_primitives,
+        stream);
     CHECK_CUDA(config::debug, "cub::DeviceScan::InclusiveSum (Primitive Offsets)")
 
     uint32_t n_instances_u32;
-    cudaMemcpy(&n_instances_u32, per_primitive_buffers.offset + n_primitives - 1, sizeof(n_instances_u32), cudaMemcpyDeviceToHost);
+    cudaMemcpyAsync(&n_instances_u32, per_primitive_buffers.offset + n_primitives - 1, sizeof(n_instances_u32), cudaMemcpyDeviceToHost, stream);
+    cudaStreamSynchronize(stream);
     CHECK_CUDA(config::debug, "cudaMemcpy(n_instances)")
     const int n_instances = checked_to_int(n_instances_u32, "n_instances exceeds int range");
 
@@ -120,7 +111,7 @@ int edge_compute::rasterization::edge_forward(
     PerInstanceBuffers per_instance_buffers = PerInstanceBuffers::from_blob(per_instance_buffers_blob, alloc_instances, key_end_bit);
 
     if (n_instances > 0) {
-        kernels::forward::create_instances_cu<<<div_round_up(n_primitives, config::block_size_create_instances), config::block_size_create_instances>>>(
+        kernels::forward::create_instances_cu<<<div_round_up(n_primitives, config::block_size_create_instances), config::block_size_create_instances, 0, stream>>>(
             per_primitive_buffers.n_touched_tiles,
             per_primitive_buffers.offset,
             per_primitive_buffers.depth_keys,
@@ -139,18 +130,14 @@ int edge_compute::rasterization::edge_forward(
             per_instance_buffers.cub_workspace_size,
             per_instance_buffers.keys,
             per_instance_buffers.primitive_indices,
-            n_instances, 0, key_end_bit);
+            n_instances, 0, key_end_bit,
+            stream);
         CHECK_CUDA(config::debug, "cub::DeviceRadixSort::SortPairs (Tile/Depth)")
-    }
-
-    // Wait for memset to complete (GPU-side wait, doesn't block CPU)
-    if constexpr (!config::debug) {
-        cudaStreamWaitEvent(nullptr, memset_event, 0); // Default stream waits for memset
     }
 
     // Extract instance ranges
     if (n_instances > 0) {
-        kernels::forward::extract_instance_ranges_cu<<<div_round_up(n_instances, config::block_size_extract_instance_ranges), config::block_size_extract_instance_ranges>>>(
+        kernels::forward::extract_instance_ranges_cu<<<div_round_up(n_instances, config::block_size_extract_instance_ranges), config::block_size_extract_instance_ranges, 0, stream>>>(
             per_instance_buffers.keys.Current(),
             per_tile_buffers.instance_ranges,
             depth_bits,
@@ -159,7 +146,7 @@ int edge_compute::rasterization::edge_forward(
     }
 
     // Perform blending
-    kernels::forward::edge_blend_cu<<<grid, block>>>(
+    kernels::forward::edge_blend_cu<<<grid, block, 0, stream>>>(
         per_tile_buffers.instance_ranges,
         per_instance_buffers.primitive_indices.Current(),
         per_primitive_buffers.mean2d,

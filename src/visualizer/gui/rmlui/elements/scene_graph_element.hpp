@@ -68,6 +68,7 @@ namespace lfs::vis::gui {
             core::NodeType type = core::NodeType::GROUP;
             std::string name;
             bool visible = true;
+            bool camera_frustum_container = false;
             bool has_children = false;
             bool training_enabled = true;
             std::string label;
@@ -125,6 +126,7 @@ namespace lfs::vis::gui {
                                   std::vector<core::NodeId>& root_ids);
         bool syncTrainingTopologyLabel(const core::Scene& scene, bool update_cached_rows);
         bool syncCameraLossIconColors(const core::Scene& scene, bool update_cached_rows);
+        bool syncCameraFrustumVisibility();
         void appendSnapshotRows(core::NodeId node_id, int depth, std::vector<FlatRow>& rows,
                                 const std::string& filter_text_lower) const;
         void appendVisibleSubtreeRows(core::NodeId node_id, int depth,

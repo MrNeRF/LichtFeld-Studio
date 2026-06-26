@@ -143,6 +143,18 @@ namespace lfs::core {
         uint64_t pending_render_frames_ = 0;
         uint64_t active_training_frames_ = 0;
 
+        // Completion event of the most recent stream-aware frame. Invalid when
+        // the last frame was legacy (no stream) — the next begin then falls back
+        // to a device sync. Guarded by last_frame_event_mutex_.
+        std::mutex last_frame_event_mutex_;
+        cudaEvent_t last_frame_event_ = nullptr;
+        bool last_frame_event_valid_ = false;
+
+        // Pending Vulkan release of the previous frame's arena work (see
+        // note_external_release). Guarded by last_frame_event_mutex_.
+        cudaExternalSemaphore_t external_release_semaphore_ = nullptr;
+        uint64_t external_release_value_ = 0;
+
     public:
         // Constructors
         RasterizerMemoryArena();
@@ -157,9 +169,58 @@ namespace lfs::core {
         RasterizerMemoryArena(RasterizerMemoryArena&&) noexcept;
         RasterizerMemoryArena& operator=(RasterizerMemoryArena&&) noexcept;
 
-        uint64_t begin_frame(bool from_rendering = false);
-        std::optional<uint64_t> try_begin_frame(bool from_rendering = false);
-        void end_frame(uint64_t frame_id, bool from_rendering = false);
+        // Stream-aware frames chain begin→end with a GPU event edge: begin_frame
+        // waits (on `stream`) for the previous frame's completion event instead of
+        // a device-wide sync, and end_frame records the event on `stream` — which
+        // must be the stream all of the frame's arena work was enqueued on. Frames
+        // without a stream keep the legacy cudaDeviceSynchronize and invalidate
+        // the chain. LFS_ARENA_LEGACY_SYNC=1 forces the legacy sync everywhere.
+        //
+        // A tenant whose arena work runs on a VULKAN queue (the viewport) must
+        // call note_external_release before ending its frame: neither the chain
+        // event nor cudaDeviceSynchronize can see in-flight Vulkan work, so the
+        // next frame waits the imported timeline value instead.
+        uint64_t begin_frame(bool from_rendering = false) { return begin_frame(nullptr, from_rendering); }
+        uint64_t begin_frame(cudaStream_t stream, bool from_rendering = false);
+        std::optional<uint64_t> try_begin_frame(bool from_rendering = false) { return try_begin_frame(nullptr, from_rendering); }
+        std::optional<uint64_t> try_begin_frame(cudaStream_t stream, bool from_rendering = false);
+
+        // Bounded wait: with a render pending (set_rendering_active), the trainer
+        // cannot START a new frame, so waiting out its current one takes ~one
+        // iteration. The timeout covers the refining-iteration case where the
+        // trainer holds the frame while blocked on the exclusive render lock the
+        // caller's shared lock prevents — give up there instead of deadlocking.
+        std::optional<uint64_t> try_begin_frame_for(uint32_t timeout_ms, bool from_rendering = false) {
+            return try_begin_frame_for(timeout_ms, nullptr, from_rendering);
+        }
+        std::optional<uint64_t> try_begin_frame_for(uint32_t timeout_ms, cudaStream_t stream,
+                                                    bool from_rendering = false);
+        void end_frame(uint64_t frame_id, bool from_rendering = false) { end_frame(frame_id, nullptr, from_rendering); }
+        void end_frame(uint64_t frame_id, cudaStream_t stream, bool from_rendering = false);
+
+        // Registers the Vulkan-side completion of the current frame's arena work
+        // (an imported timeline + the value its submit signals). Consumed once by
+        // the next begin_frame, which waits it GPU-side (or via the legacy
+        // stream ahead of its device sync on the streamless path).
+        void note_external_release(cudaExternalSemaphore_t semaphore, uint64_t value);
+
+        // Caps wait-forever begin_frame() on the CURRENT thread to a bounded
+        // wait for its scope — so a cross-thread reader (GUI metric render) that
+        // holds render_mutex_ can't deadlock against a refining trainer that
+        // holds the arena frame and wants the exclusive lock: the reader's
+        // begin_frame bails (throws), the metric is skipped, the lock releases.
+        // Training threads never set this, so their acquisition stays blocking.
+        class ScopedBeginFrameTimeout {
+        public:
+            explicit ScopedBeginFrameTimeout(uint32_t timeout_ms);
+            ~ScopedBeginFrameTimeout();
+            ScopedBeginFrameTimeout(const ScopedBeginFrameTimeout&) = delete;
+            ScopedBeginFrameTimeout& operator=(const ScopedBeginFrameTimeout&) = delete;
+
+        private:
+            uint32_t previous_ = 0;
+        };
+
         std::function<char*(size_t)> get_allocator(uint64_t frame_id);
         std::vector<BufferHandle> get_frame_buffers(uint64_t frame_id) const;
         void reset_frame(uint64_t frame_id); // Keeps allocation, resets offset
@@ -190,7 +251,14 @@ namespace lfs::core {
 
     private:
         Arena& get_or_create_arena(int device);
-        std::optional<uint64_t> begin_frame_impl(bool from_rendering, bool wait);
+        // wait_timeout: nullopt = non-blocking try; 0 = wait forever; else bounded.
+        std::optional<uint64_t> begin_frame_impl(cudaStream_t stream, bool from_rendering,
+                                                 std::optional<uint32_t> wait_timeout_ms);
+        bool wait_for_previous_frame(cudaStream_t stream);
+        // Host-blocks on a pending Vulkan release fence (note_external_release)
+        // and clears it. Must run before any path that frees or replaces arena
+        // backing — a device sync cannot observe the in-flight Vulkan batch.
+        void drain_external_release();
         bool install_external_backing_impl(ExternalBacking backing, bool wait);
         char* allocate_internal(Arena& arena, size_t size, uint64_t frame_id);
         void release_arena_storage(Arena& arena);

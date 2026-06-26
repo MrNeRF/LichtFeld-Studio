@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cmath>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace lfs::training {
@@ -834,7 +835,7 @@ namespace lfs::training {
                     auto new_param = Tensor::zeros_direct(param.shape(), capacity);
                     cudaMemcpy(new_param.ptr<float>(), param.ptr<float>(),
                                param.numel() * sizeof(float), cudaMemcpyDeviceToDevice);
-                    param = new_param;
+                    param = std::move(new_param);
                 };
 
                 // shN is 1D swizzled — its capacity must be in FLOATS, not row count.
@@ -846,7 +847,7 @@ namespace lfs::training {
                     auto new_param = Tensor::zeros_direct(param.shape(), cap_floats);
                     cudaMemcpy(new_param.ptr<float>(), param.ptr<float>(),
                                param.numel() * sizeof(float), cudaMemcpyDeviceToDevice);
-                    param = new_param;
+                    param = std::move(new_param);
                 };
 
                 ensure_capacity_direct(_splat_data->means());

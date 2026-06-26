@@ -43,6 +43,47 @@ namespace lfs::vis {
             VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_FD_BIT;
 #endif
         constexpr std::uint64_t kExternalTimelineWaitTimeoutNs = 2'000'000'000ull;
+#if defined(__linux__)
+        constexpr bool kPromoteExposedResizeGrowthImmediately = true;
+        constexpr bool kUseResizeHeadroom = false;
+        constexpr bool kRecreateExactAfterInteractiveResize = true;
+        constexpr bool kRecreateExactAfterResizeHeadroom = false;
+#else
+        constexpr bool kPromoteExposedResizeGrowthImmediately = false;
+        constexpr bool kUseResizeHeadroom = true;
+        constexpr bool kRecreateExactAfterInteractiveResize = false;
+        constexpr bool kRecreateExactAfterResizeHeadroom = true;
+#endif
+        // Shrinks can settle because no new pixels are exposed. Windows manual
+        // borderless resize tolerates padded, throttled grow recreates. X11
+        // exposes grown client pixels immediately and must return to exact
+        // swapchain extents after shrink/restore to avoid compositor scaling blur.
+        constexpr auto kSwapchainResizeQuietDelay = std::chrono::milliseconds(33);
+        constexpr auto kSwapchainResizeGrowInterval = std::chrono::milliseconds(33);
+        constexpr auto kSwapchainResizeGrowQuietDelay = std::chrono::milliseconds(48);
+        constexpr auto kSwapchainResizeGrowMaxLatency = std::chrono::milliseconds(96);
+        constexpr int kSwapchainResizeGrowStepPx = 16;
+        constexpr std::uint32_t kSwapchainResizeHeadroomPx = 1024;
+
+        [[nodiscard]] int positiveResizeDelta(const int requested_width,
+                                              const int requested_height,
+                                              const VkExtent2D current_extent) {
+            const int grow_x = requested_width - static_cast<int>(current_extent.width);
+            const int grow_y = requested_height - static_cast<int>(current_extent.height);
+            return std::max({0, grow_x, grow_y});
+        }
+
+        [[nodiscard]] std::uint32_t addResizeHeadroom(const std::uint32_t requested,
+                                                      const std::uint32_t max_extent) {
+            // Pad both axes during interactive resize so direction changes do not
+            // force another WSI rebuild a few mouse deltas later. Do not carry
+            // forward the previous swapchain extent: during shrink/restore that
+            // can repeatedly compound the headroom into a huge offscreen surface.
+            if (requested >= max_extent) {
+                return max_extent;
+            }
+            return requested + std::min(kSwapchainResizeHeadroomPx, max_extent - requested);
+        }
 
         [[nodiscard]] double elapsedMs(const std::chrono::steady_clock::time_point start) {
             return std::chrono::duration<double, std::milli>(
@@ -472,13 +513,207 @@ namespace lfs::vis {
         }
     }
 
-    void VulkanContext::notifyFramebufferResized(const int width, const int height) {
-        if (width == framebuffer_width_ && height == framebuffer_height_) {
+    VkExtent2D VulkanContext::framebufferExtent() const {
+        VkExtent2D extent{};
+        extent.width = static_cast<std::uint32_t>(std::max(0, framebuffer_width_));
+        extent.height = static_cast<std::uint32_t>(std::max(0, framebuffer_height_));
+        if (swapchain_extent_.width > 0) {
+            extent.width = std::min(extent.width, swapchain_extent_.width);
+        }
+        if (swapchain_extent_.height > 0) {
+            extent.height = std::min(extent.height, swapchain_extent_.height);
+        }
+        return extent;
+    }
+
+    bool VulkanContext::framebufferFitsSwapchainExtent() const {
+        return swapchain_ != VK_NULL_HANDLE &&
+               framebuffer_width_ > 0 &&
+               framebuffer_height_ > 0 &&
+               static_cast<std::uint32_t>(framebuffer_width_) <= swapchain_extent_.width &&
+               static_cast<std::uint32_t>(framebuffer_height_) <= swapchain_extent_.height;
+    }
+
+    bool VulkanContext::framebufferResizeRequiresSwapchainRecreate() const {
+        if (!framebufferFitsSwapchainExtent()) {
+            return true;
+        }
+        return swapchain_extent_fixed_to_surface_ && !swapchain_present_scaling_enabled_;
+    }
+
+    void VulkanContext::deferSwapchainResizeRecreate(
+        const bool requires_recreate,
+        const std::optional<bool> allow_headroom) {
+        const auto now = std::chrono::steady_clock::now();
+        framebuffer_resize_deferred_ = true;
+        framebuffer_resize_requires_recreate_ = framebuffer_resize_requires_recreate_ || requires_recreate;
+        if (allow_headroom.has_value()) {
+            framebuffer_resize_allow_headroom_ = *allow_headroom;
+        }
+        framebuffer_resize_last_change_ = now;
+        framebuffer_resized_ = false;
+        last_error_.clear();
+    }
+
+    bool VulkanContext::pendingSwapchainResizeReady() const {
+        const auto now = std::chrono::steady_clock::now();
+        if (!framebuffer_resize_deferred_) {
+            if (!framebuffer_resize_exact_after_interactive_) {
+                return true;
+            }
+            return now - framebuffer_resize_last_change_ >= kSwapchainResizeQuietDelay;
+        }
+
+        if (!framebuffer_resize_requires_recreate_) {
+            return true;
+        }
+
+        const int grow_delta = positiveResizeDelta(framebuffer_width_,
+                                                   framebuffer_height_,
+                                                   swapchain_extent_);
+        if (grow_delta <= 0) {
+            return now - framebuffer_resize_last_change_ >= kSwapchainResizeQuietDelay;
+        }
+        if (kPromoteExposedResizeGrowthImmediately) {
+            return true;
+        }
+
+        if (framebuffer_resize_last_recreate_ == std::chrono::steady_clock::time_point{}) {
+            return true;
+        }
+
+        const auto since_last_recreate = now - framebuffer_resize_last_recreate_;
+        return (grow_delta >= kSwapchainResizeGrowStepPx &&
+                since_last_recreate >= kSwapchainResizeGrowInterval) ||
+               (now - framebuffer_resize_last_change_ >= kSwapchainResizeGrowQuietDelay &&
+                since_last_recreate >= kSwapchainResizeGrowInterval) ||
+               since_last_recreate >= kSwapchainResizeGrowMaxLatency;
+    }
+
+    double VulkanContext::secondsUntilPendingSwapchainResizeReady() const {
+        const auto now = std::chrono::steady_clock::now();
+        if (!framebuffer_resize_deferred_) {
+            if (!framebuffer_resize_exact_after_interactive_) {
+                return 0.0;
+            }
+            const auto since_last_change = now - framebuffer_resize_last_change_;
+            if (since_last_change >= kSwapchainResizeQuietDelay) {
+                return 0.0;
+            }
+            return std::chrono::duration<double>(
+                       kSwapchainResizeQuietDelay - since_last_change)
+                .count();
+        }
+
+        if (!framebuffer_resize_requires_recreate_) {
+            return 0.0;
+        }
+
+        const auto since_last_change = now - framebuffer_resize_last_change_;
+        const int grow_delta = positiveResizeDelta(framebuffer_width_,
+                                                   framebuffer_height_,
+                                                   swapchain_extent_);
+        if (grow_delta <= 0) {
+            if (since_last_change >= kSwapchainResizeQuietDelay) {
+                return 0.0;
+            }
+            const auto until_quiet = kSwapchainResizeQuietDelay - since_last_change;
+            return std::chrono::duration<double>(until_quiet).count();
+        }
+        if (kPromoteExposedResizeGrowthImmediately) {
+            return 0.0;
+        }
+
+        if (framebuffer_resize_last_recreate_ == std::chrono::steady_clock::time_point{}) {
+            return 0.0;
+        }
+
+        const auto since_last_recreate = now - framebuffer_resize_last_recreate_;
+        if (since_last_recreate >= kSwapchainResizeGrowMaxLatency ||
+            (grow_delta >= kSwapchainResizeGrowStepPx &&
+             since_last_recreate >= kSwapchainResizeGrowInterval) ||
+            (since_last_change >= kSwapchainResizeGrowQuietDelay &&
+             since_last_recreate >= kSwapchainResizeGrowInterval)) {
+            return 0.0;
+        }
+
+        auto until_grow = kSwapchainResizeGrowMaxLatency - since_last_recreate;
+        if (grow_delta >= kSwapchainResizeGrowStepPx) {
+            until_grow = std::min(until_grow,
+                                  kSwapchainResizeGrowInterval - since_last_recreate);
+        }
+        const auto until_quiet = since_last_change >= kSwapchainResizeGrowQuietDelay
+                                     ? std::chrono::steady_clock::duration::zero()
+                                     : kSwapchainResizeGrowQuietDelay - since_last_change;
+        const auto until_interval = since_last_recreate >= kSwapchainResizeGrowInterval
+                                        ? std::chrono::steady_clock::duration::zero()
+                                        : kSwapchainResizeGrowInterval - since_last_recreate;
+        until_grow = std::min(until_grow, std::max(until_quiet, until_interval));
+        return std::chrono::duration<double>(until_grow).count();
+    }
+
+    bool VulkanContext::promoteDeferredSwapchainResizeIfSettled() {
+        if (!framebuffer_resize_deferred_) {
+            return true;
+        }
+
+        if (!pendingSwapchainResizeReady()) {
+            last_error_.clear();
+#if defined(__linux__)
+            return framebufferFitsSwapchainExtent();
+#else
+            return false;
+#endif
+        }
+
+        const bool requires_recreate = framebuffer_resize_requires_recreate_;
+        framebuffer_resize_deferred_ = false;
+        framebuffer_resize_requires_recreate_ = false;
+        framebuffer_resized_ = requires_recreate;
+        return true;
+    }
+
+    void VulkanContext::notifyFramebufferResized(const int width,
+                                                 const int height,
+                                                 const ResizeIntent intent) {
+        const bool exact_resize = intent == ResizeIntent::Exact;
+        const bool exact_extent_mismatch =
+            exact_resize &&
+            swapchain_ != VK_NULL_HANDLE &&
+            width > 0 &&
+            height > 0 &&
+            (static_cast<std::uint32_t>(width) != swapchain_extent_.width ||
+             static_cast<std::uint32_t>(height) != swapchain_extent_.height);
+        if (width == framebuffer_width_ && height == framebuffer_height_ &&
+            !exact_extent_mismatch) {
             return;
         }
         framebuffer_width_ = width;
         framebuffer_height_ = height;
-        framebuffer_resized_ = true;
+        framebuffer_resize_allow_headroom_ = !exact_resize && kUseResizeHeadroom;
+        if (width <= 0 || height <= 0) {
+            framebuffer_resize_deferred_ = false;
+            framebuffer_resize_requires_recreate_ = false;
+            framebuffer_resize_allow_headroom_ = false;
+            framebuffer_resize_exact_after_interactive_ = false;
+            framebuffer_resized_ = true;
+            return;
+        }
+
+        framebuffer_resize_exact_after_interactive_ =
+            !exact_resize &&
+            (kRecreateExactAfterInteractiveResize ||
+             (framebuffer_resize_allow_headroom_ && kRecreateExactAfterResizeHeadroom));
+        const bool requires_recreate =
+            framebufferResizeRequiresSwapchainRecreate() || exact_extent_mismatch;
+        if (requires_recreate) {
+            deferSwapchainResizeRecreate(requires_recreate, framebuffer_resize_allow_headroom_);
+        } else {
+            framebuffer_resize_deferred_ = false;
+            framebuffer_resize_requires_recreate_ = false;
+            framebuffer_resize_last_change_ = std::chrono::steady_clock::now();
+            last_error_.clear();
+        }
     }
 
     bool VulkanContext::presentBootstrapFrame(const float r, const float g, const float b, const float a) {
@@ -503,6 +738,24 @@ namespace lfs::vis {
             return false;
         }
 
+        if (framebuffer_resize_exact_after_interactive_ && !framebuffer_resize_deferred_) {
+            const bool extent_matches_framebuffer =
+                swapchain_ != VK_NULL_HANDLE &&
+                static_cast<std::uint32_t>(framebuffer_width_) == swapchain_extent_.width &&
+                static_cast<std::uint32_t>(framebuffer_height_) == swapchain_extent_.height;
+            if (extent_matches_framebuffer) {
+                framebuffer_resize_exact_after_interactive_ = false;
+            } else if (pendingSwapchainResizeReady()) {
+                framebuffer_resize_exact_after_interactive_ = false;
+                framebuffer_resize_allow_headroom_ = false;
+                framebuffer_resized_ = true;
+            }
+        }
+
+        if (!promoteDeferredSwapchainResizeIfSettled()) {
+            return false;
+        }
+
         if (swapchain_ == VK_NULL_HANDLE || framebuffer_resized_) {
             LOG_DEBUG("Vulkan beginFrame requesting swapchain recreate: swapchain_present={}, framebuffer_resized={}, framebuffer={}x{}, old_extent={}x{}, images={}, frame_index={}",
                       swapchain_ != VK_NULL_HANDLE,
@@ -518,8 +771,9 @@ namespace lfs::vis {
             }
         }
 
+        const std::size_t current_frame = frame_index_;
         const bool depth_stencil_ready =
-            depth_stencil_resources_.size() == swapchain_images_.size() &&
+            depth_stencil_resources_.size() == kFramesInFlight &&
             std::all_of(depth_stencil_resources_.begin(),
                         depth_stencil_resources_.end(),
                         [](const DepthStencilResource& resource) {
@@ -530,7 +784,6 @@ namespace lfs::vis {
             return fail("Vulkan swapchain depth/stencil resources are incomplete");
         }
 
-        const std::size_t current_frame = frame_index_;
         VkFence frame_fence = in_flight_[current_frame];
         VkResult result = VK_SUCCESS;
         {
@@ -572,9 +825,8 @@ namespace lfs::vis {
                       framebuffer_height_,
                       swapchain_extent_.width,
                       swapchain_extent_.height);
-            if (recreateSwapchain()) {
-                last_error_.clear();
-            }
+            framebuffer_resize_exact_after_interactive_ = false;
+            deferSwapchainResizeRecreate(true, false);
             return false;
         }
         if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
@@ -623,18 +875,19 @@ namespace lfs::vis {
             return fail(std::format("vkBeginCommandBuffer failed: {}", vkResultToString(result)));
         }
 
+        const VkExtent2D render_extent = framebufferExtent();
         VkCommandBuffer command_buffer = command_buffers_[current_frame];
         image_barriers_.transitionImage(command_buffer,
                                         swapchain_images_[image_index],
                                         VK_IMAGE_ASPECT_COLOR_BIT,
                                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
-        if (image_index >= depth_stencil_resources_.size() ||
-            depth_stencil_resources_[image_index].image == VK_NULL_HANDLE ||
-            depth_stencil_resources_[image_index].view == VK_NULL_HANDLE) {
-            return fail(std::format("Missing depth/stencil resource for swapchain image {}", image_index));
+        if (current_frame >= depth_stencil_resources_.size() ||
+            depth_stencil_resources_[current_frame].image == VK_NULL_HANDLE ||
+            depth_stencil_resources_[current_frame].view == VK_NULL_HANDLE) {
+            return fail(std::format("Missing depth/stencil resource for frame slot {}", current_frame));
         }
-        const DepthStencilResource& depth_stencil = depth_stencil_resources_[image_index];
+        const DepthStencilResource& depth_stencil = depth_stencil_resources_[current_frame];
         image_barriers_.transitionImage(command_buffer,
                                         depth_stencil.image,
                                         depthStencilAspectMask(),
@@ -662,7 +915,7 @@ namespace lfs::vis {
         VkRenderingInfo rendering_info{};
         rendering_info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
         rendering_info.renderArea.offset = {0, 0};
-        rendering_info.renderArea.extent = swapchain_extent_;
+        rendering_info.renderArea.extent = render_extent;
         rendering_info.layerCount = 1;
         rendering_info.colorAttachmentCount = 1;
         rendering_info.pColorAttachments = &color_attachment;
@@ -678,7 +931,7 @@ namespace lfs::vis {
                                     : VK_NULL_HANDLE;
         frame.swapchain_image_view = swapchain_image_views_[image_index];
         frame.depth_stencil_image_view = depth_stencil.view;
-        frame.extent = swapchain_extent_;
+        frame.extent = render_extent;
         frame_active_ = true;
         frame_rendering_active_ = true;
         last_error_.clear();
@@ -809,7 +1062,11 @@ namespace lfs::vis {
 
         frame_active_ = false;
         frame_index_ = (frame_index_ + 1) % kFramesInFlight;
-        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || frame_suboptimal_) {
+        const bool swapchain_covers_framebuffer = framebufferFitsSwapchainExtent();
+        const bool should_recreate_for_present =
+            result == VK_ERROR_OUT_OF_DATE_KHR ||
+            ((result == VK_SUBOPTIMAL_KHR || frame_suboptimal_) && !swapchain_covers_framebuffer);
+        if (should_recreate_for_present) {
             LOG_DEBUG("Vulkan present requested swapchain recreate: result={}, frame_suboptimal={}, image={}, framebuffer={}x{}, extent={}x{}",
                       vkResultToString(result),
                       frame_suboptimal_,
@@ -819,13 +1076,12 @@ namespace lfs::vis {
                       swapchain_extent_.width,
                       swapchain_extent_.height);
             frame_suboptimal_ = false;
-            // A silent false (empty error) means the surface reported 0×0 extent (window minimized);
-            // treat as success so the caller doesn't log a spurious warning. framebuffer_resized_
-            // stays true, so recreation is retried each frame until the window is restored.
-            return recreateSwapchain() || last_error_.empty();
+            framebuffer_resize_exact_after_interactive_ = false;
+            deferSwapchainResizeRecreate(true, false);
+            return true;
         }
         frame_suboptimal_ = false;
-        if (result != VK_SUCCESS) {
+        if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
             return fail(std::format("vkQueuePresentKHR(image {}, frame slot {}) failed: {}",
                                     active_image_index_,
                                     current_frame,
@@ -861,7 +1117,7 @@ namespace lfs::vis {
                                             vkFormatToString(swapchain_format_)));
         }
 
-        const auto extent = swapchain_extent_;
+        const auto extent = framebufferExtent();
         if (extent.width == 0 || extent.height == 0)
             return fail_capture("Cannot capture a zero-sized Vulkan swapchain");
 
@@ -1056,6 +1312,14 @@ namespace lfs::vis {
             extensionAvailable(available_extensions, VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME);
         if (instance_external_semaphore_capabilities_enabled_) {
             appendUniqueExtension(extensions, VK_KHR_EXTERNAL_SEMAPHORE_CAPABILITIES_EXTENSION_NAME);
+        }
+
+        instance_surface_maintenance_enabled_ =
+            extensionAvailable(available_extensions, VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME) &&
+            extensionAvailable(available_extensions, VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
+        if (instance_surface_maintenance_enabled_) {
+            appendUniqueExtension(extensions, VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
+            appendUniqueExtension(extensions, VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
         }
 
         debug_utils_enabled_ = extensionAvailable(available_extensions, VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
@@ -1413,6 +1677,9 @@ namespace lfs::vis {
         if (enable_host_image_copy) {
             appendUniqueExtension(extensions, VK_EXT_HOST_IMAGE_COPY_EXTENSION_NAME);
         }
+        const bool swapchain_maintenance1_available =
+            instance_surface_maintenance_enabled_ &&
+            extensionAvailable(available_extensions, VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
 
         VkPhysicalDeviceShaderAtomicFloatFeaturesEXT supported_atomic_float_features{};
         supported_atomic_float_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
@@ -1439,8 +1706,15 @@ namespace lfs::vis {
         supported_coop_matrix.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR;
         VkPhysicalDeviceHostImageCopyFeaturesEXT supported_host_image_copy{};
         supported_host_image_copy.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_FEATURES_EXT;
+        VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT supported_swapchain_maintenance1{};
+        supported_swapchain_maintenance1.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT;
 
         void* opt_supported_head = nullptr;
+        if (swapchain_maintenance1_available) {
+            supported_swapchain_maintenance1.pNext = opt_supported_head;
+            opt_supported_head = &supported_swapchain_maintenance1;
+        }
         if (enable_shader_object) {
             supported_shader_object.pNext = opt_supported_head;
             opt_supported_head = &supported_shader_object;
@@ -1594,6 +1868,19 @@ namespace lfs::vis {
             enabled_chain_head = &host_image_copy_features;
         }
 
+        const bool enable_swapchain_maintenance1 =
+            swapchain_maintenance1_available &&
+            supported_swapchain_maintenance1.swapchainMaintenance1 == VK_TRUE;
+        VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT swapchain_maintenance1_features{};
+        swapchain_maintenance1_features.sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT;
+        if (enable_swapchain_maintenance1) {
+            appendUniqueExtension(extensions, VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
+            swapchain_maintenance1_features.swapchainMaintenance1 = VK_TRUE;
+            swapchain_maintenance1_features.pNext = enabled_chain_head;
+            enabled_chain_head = &swapchain_maintenance1_features;
+        }
+
         // 16-bit storage for the fp16 splat raster path (half4 partials,
         // half-packed staging). Mirrors device support; consumers must check
         // hasFloat16Storage() and fall back to fp32 shader variants.
@@ -1655,6 +1942,7 @@ namespace lfs::vis {
         external_memory_interop_enabled_ = enable_external_memory;
         external_semaphore_interop_enabled_ = enable_external_semaphore;
         external_memory_dedicated_allocation_enabled_ = enable_dedicated_allocation;
+        swapchain_maintenance1_enabled_ = enable_swapchain_maintenance1;
         has_push_descriptor_ = enable_push_descriptor;
         has_shader_object_ = enable_shader_object_feature;
         has_float16_storage_ = features12.shaderFloat16 == VK_TRUE &&
@@ -1672,13 +1960,14 @@ namespace lfs::vis {
         LOG_INFO("Vulkan external memory interop enabled{}",
                  external_memory_dedicated_allocation_enabled_ ? " with dedicated allocations" : "");
         LOG_INFO("Vulkan external timeline semaphore interop enabled");
-        LOG_INFO("Vulkan optional features: descriptor_indexing={} push_descriptor={} shader_object={} extended_dynamic_state3={} cooperative_matrix={} host_image_copy={}",
+        LOG_INFO("Vulkan optional features: descriptor_indexing={} push_descriptor={} shader_object={} extended_dynamic_state3={} cooperative_matrix={} host_image_copy={} swapchain_maintenance1={}",
                  has_descriptor_indexing_,
                  has_push_descriptor_,
                  has_shader_object_,
                  has_extended_dynamic_state3_,
                  has_cooperative_matrix_,
-                 has_host_image_copy_);
+                 has_host_image_copy_,
+                 swapchain_maintenance1_enabled_);
         return true;
     }
 
@@ -1783,18 +2072,71 @@ namespace lfs::vis {
         return VK_PRESENT_MODE_FIFO_KHR;
     }
 
+    std::optional<VkSurfacePresentScalingCapabilitiesEXT>
+    VulkanContext::queryPresentScalingCapabilities(const VkPresentModeKHR present_mode) const {
+        if (!instance_surface_maintenance_enabled_ || !swapchain_maintenance1_enabled_) {
+            return std::nullopt;
+        }
+
+        VkSurfacePresentModeEXT surface_present_mode{};
+        surface_present_mode.sType = VK_STRUCTURE_TYPE_SURFACE_PRESENT_MODE_EXT;
+        surface_present_mode.presentMode = present_mode;
+
+        VkPhysicalDeviceSurfaceInfo2KHR surface_info{};
+        surface_info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR;
+        surface_info.pNext = &surface_present_mode;
+        surface_info.surface = surface_;
+
+        VkSurfacePresentScalingCapabilitiesEXT scaling_capabilities{};
+        scaling_capabilities.sType = VK_STRUCTURE_TYPE_SURFACE_PRESENT_SCALING_CAPABILITIES_EXT;
+
+        VkSurfaceCapabilities2KHR capabilities{};
+        capabilities.sType = VK_STRUCTURE_TYPE_SURFACE_CAPABILITIES_2_KHR;
+        capabilities.pNext = &scaling_capabilities;
+
+        const VkResult result =
+            vkGetPhysicalDeviceSurfaceCapabilities2KHR(physical_device_, &surface_info, &capabilities);
+        if (result != VK_SUCCESS) {
+            LOG_DEBUG("Vulkan present scaling capability query failed: {}", vkResultToString(result));
+            return std::nullopt;
+        }
+
+        const bool supports_one_to_one =
+            (scaling_capabilities.supportedPresentScaling & VK_PRESENT_SCALING_ONE_TO_ONE_BIT_EXT) != 0;
+        const bool supports_min_gravity =
+            (scaling_capabilities.supportedPresentGravityX & VK_PRESENT_GRAVITY_MIN_BIT_EXT) != 0 &&
+            (scaling_capabilities.supportedPresentGravityY & VK_PRESENT_GRAVITY_MIN_BIT_EXT) != 0;
+        if (!supports_one_to_one || !supports_min_gravity) {
+            return std::nullopt;
+        }
+        return scaling_capabilities;
+    }
+
     VkExtent2D VulkanContext::chooseSwapchainExtent(const VkSurfaceCapabilitiesKHR& capabilities,
                                                     const int framebuffer_width,
-                                                    const int framebuffer_height) const {
-        if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max()) {
+                                                    const int framebuffer_height,
+                                                    const bool add_resize_headroom,
+                                                    const VkSurfacePresentScalingCapabilitiesEXT* scaling_capabilities) const {
+        if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max() &&
+            scaling_capabilities == nullptr) {
             return capabilities.currentExtent;
         }
 
         VkExtent2D extent{};
         extent.width = static_cast<uint32_t>(std::max(1, framebuffer_width));
         extent.height = static_cast<uint32_t>(std::max(1, framebuffer_height));
-        extent.width = std::clamp(extent.width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width);
-        extent.height = std::clamp(extent.height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
+        const VkExtent2D min_extent = scaling_capabilities != nullptr
+                                          ? scaling_capabilities->minScaledImageExtent
+                                          : capabilities.minImageExtent;
+        const VkExtent2D max_extent = scaling_capabilities != nullptr
+                                          ? scaling_capabilities->maxScaledImageExtent
+                                          : capabilities.maxImageExtent;
+        if (add_resize_headroom) {
+            extent.width = addResizeHeadroom(extent.width, max_extent.width);
+            extent.height = addResizeHeadroom(extent.height, max_extent.height);
+        }
+        extent.width = std::clamp(extent.width, min_extent.width, max_extent.width);
+        extent.height = std::clamp(extent.height, min_extent.height, max_extent.height);
         return extent;
     }
 
@@ -2640,7 +2982,18 @@ namespace lfs::vis {
 
         const VkSurfaceFormatKHR surface_format = chooseSurfaceFormat(support.formats);
         const VkPresentModeKHR present_mode = choosePresentMode(support.present_modes);
-        const VkExtent2D extent = chooseSwapchainExtent(support.capabilities, framebuffer_width, framebuffer_height);
+        const bool extent_fixed_to_surface =
+            support.capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max();
+        const auto present_scaling_capabilities = queryPresentScalingCapabilities(present_mode);
+        const bool use_present_scaling =
+            old_swapchain != VK_NULL_HANDLE && present_scaling_capabilities.has_value();
+        const bool add_resize_headroom =
+            old_swapchain != VK_NULL_HANDLE && framebuffer_resize_allow_headroom_;
+        const VkExtent2D extent = chooseSwapchainExtent(support.capabilities,
+                                                        framebuffer_width,
+                                                        framebuffer_height,
+                                                        add_resize_headroom,
+                                                        use_present_scaling ? &*present_scaling_capabilities : nullptr);
         if (extent.width == 0 || extent.height == 0) {
             // Surface reports zero extent (window minimized); skip creation and retry next frame.
             last_error_.clear();
@@ -2679,6 +3032,14 @@ namespace lfs::vis {
         create_info.presentMode = present_mode;
         create_info.clipped = VK_TRUE;
         create_info.oldSwapchain = old_swapchain;
+        VkSwapchainPresentScalingCreateInfoEXT present_scaling_info{};
+        if (use_present_scaling) {
+            present_scaling_info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_SCALING_CREATE_INFO_EXT;
+            present_scaling_info.scalingBehavior = VK_PRESENT_SCALING_ONE_TO_ONE_BIT_EXT;
+            present_scaling_info.presentGravityX = VK_PRESENT_GRAVITY_MIN_BIT_EXT;
+            present_scaling_info.presentGravityY = VK_PRESENT_GRAVITY_MIN_BIT_EXT;
+            create_info.pNext = &present_scaling_info;
+        }
 
         VkResult result;
         {
@@ -2705,14 +3066,28 @@ namespace lfs::vis {
         swapchain_images_in_flight_.assign(image_count, VK_NULL_HANDLE);
         swapchain_format_ = surface_format.format;
         swapchain_color_space_ = surface_format.colorSpace;
+        swapchain_extent_fixed_to_surface_ = extent_fixed_to_surface;
+        swapchain_present_scaling_enabled_ = use_present_scaling;
         has_hdr_ = surface_format.colorSpace != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
-        LOG_INFO("Vulkan swapchain: {} images, extent {}x{}, format {}, color space {}{}",
-                 image_count,
-                 extent.width,
-                 extent.height,
-                 vkFormatToString(surface_format.format),
-                 vkColorSpaceToString(surface_format.colorSpace),
-                 has_hdr_ ? " (HDR-capable)" : "");
+        if (old_swapchain == VK_NULL_HANDLE) {
+            LOG_INFO("Vulkan swapchain: {} images, extent {}x{}, format {}, color space {}{}{}",
+                     image_count,
+                     extent.width,
+                     extent.height,
+                     vkFormatToString(surface_format.format),
+                     vkColorSpaceToString(surface_format.colorSpace),
+                     has_hdr_ ? " (HDR-capable)" : "",
+                     use_present_scaling ? " (one-to-one present scaling)" : "");
+        } else {
+            LOG_DEBUG("Vulkan swapchain: {} images, extent {}x{}, format {}, color space {}{}{}",
+                      image_count,
+                      extent.width,
+                      extent.height,
+                      vkFormatToString(surface_format.format),
+                      vkColorSpaceToString(surface_format.colorSpace),
+                      has_hdr_ ? " (HDR-capable)" : "",
+                      use_present_scaling ? " (one-to-one present scaling)" : "");
+        }
 
         // One image-available semaphore per swapchain image (NOT per frame slot). The
         // active index is captured in beginFrame and held until endFrame's submit waits
@@ -2743,6 +3118,7 @@ namespace lfs::vis {
                                swapchain_images_[i],
                                std::format("Swapchain image {}", i));
         }
+        framebuffer_resize_last_recreate_ = std::chrono::steady_clock::now();
         return true;
     }
 
@@ -2814,12 +3190,12 @@ namespace lfs::vis {
         view_info.subresourceRange.baseArrayLayer = 0;
         view_info.subresourceRange.layerCount = 1;
 
-        depth_stencil_resources_.assign(swapchain_images_.size(), {});
+        depth_stencil_resources_.assign(kFramesInFlight, {});
         const auto destroy_created = [&]() {
             for (std::size_t i = 0; i < depth_stencil_resources_.size(); ++i) {
                 DepthStencilResource& resource = depth_stencil_resources_[i];
                 recordCurrentVulkanBytes("vulkan.swapchain.depth_stencil",
-                                         std::format("image#{}", i),
+                                         std::format("frame#{}", i),
                                          0);
                 if (resource.view != VK_NULL_HANDLE) {
                     vkDestroyImageView(device_, resource.view, nullptr);
@@ -2848,24 +3224,24 @@ namespace lfs::vis {
                                              &created_allocation_info);
             if (result != VK_SUCCESS) {
                 destroy_created();
-                return fail(std::format("vmaCreateImage(depth/stencil {}) failed: {}", i, vkResultToString(result)));
+                return fail(std::format("vmaCreateImage(depth/stencil frame {}) failed: {}", i, vkResultToString(result)));
             }
-            setDebugObjectName(VK_OBJECT_TYPE_IMAGE, resource.image, std::format("Depth/stencil image {}", i));
-            const std::string allocation_name = std::format("Depth/stencil allocation {}", i);
+            setDebugObjectName(VK_OBJECT_TYPE_IMAGE, resource.image, std::format("Depth/stencil image frame {}", i));
+            const std::string allocation_name = std::format("Depth/stencil allocation frame {}", i);
             vmaSetAllocationName(allocator_, resource.allocation, allocation_name.c_str());
             recordCurrentVulkanBytes("vulkan.swapchain.depth_stencil",
-                                     std::format("image#{}", i),
+                                     std::format("frame#{}", i),
                                      static_cast<std::size_t>(created_allocation_info.size));
 
             view_info.image = resource.image;
             result = vkCreateImageView(device_, &view_info, nullptr, &resource.view);
             if (result != VK_SUCCESS) {
                 destroy_created();
-                return fail(std::format("vkCreateImageView(depth/stencil {}) failed: {}", i, vkResultToString(result)));
+                return fail(std::format("vkCreateImageView(depth/stencil frame {}) failed: {}", i, vkResultToString(result)));
             }
             setDebugObjectName(VK_OBJECT_TYPE_IMAGE_VIEW,
                                resource.view,
-                               std::format("Depth/stencil image view {}", i));
+                               std::format("Depth/stencil image view frame {}", i));
 
             image_barriers_.registerImage(resource.image,
                                           depthStencilAspectMask(),
@@ -3097,7 +3473,7 @@ namespace lfs::vis {
         for (DepthStencilResource& resource : depth_stencil_resources_) {
             const auto resource_index = static_cast<std::size_t>(&resource - depth_stencil_resources_.data());
             recordCurrentVulkanBytes("vulkan.swapchain.depth_stencil",
-                                     std::format("image#{}", resource_index),
+                                     std::format("frame#{}", resource_index),
                                      0);
             if (resource.view != VK_NULL_HANDLE) {
                 vkDestroyImageView(device_, resource.view, nullptr);
@@ -3117,6 +3493,7 @@ namespace lfs::vis {
         swapchain_image_views_.clear();
         swapchain_images_.clear();
         swapchain_images_in_flight_.clear();
+        swapchain_present_scaling_enabled_ = false;
         for (VkSemaphore& semaphore : image_available_) {
             if (semaphore != VK_NULL_HANDLE) {
                 vkDestroySemaphore(device_, semaphore, nullptr);
@@ -3219,6 +3596,11 @@ namespace lfs::vis {
             return true;
         }
 
+        const auto timed = [](const char* name, auto&& fn) {
+            LOG_TIMER_THRESHOLD(name, 0.25);
+            return fn();
+        };
+
         LOG_DEBUG("Vulkan recreateSwapchain begin: framebuffer={}x{}, old_extent={}x{}, old_images={}, framebuffer_resized={}, frame_index={}",
                   framebuffer_width_,
                   framebuffer_height_,
@@ -3266,16 +3648,30 @@ namespace lfs::vis {
         // the new one is created (the spec requires the old handle stay valid until then).
         const VkSwapchainKHR old_swapchain = swapchain_;
         swapchain_ = VK_NULL_HANDLE;
-        destroySwapchain();
-        const bool created = createSwapchain(framebuffer_width_, framebuffer_height_, old_swapchain) &&
-                             createImageViews() &&
-                             createDepthStencilResources();
-        if (old_swapchain != VK_NULL_HANDLE) {
+        {
+            LOG_TIMER_THRESHOLD("frame_pacing.vulkan_recreateSwapchain.destroy_dependent_resources", 0.25);
+            destroySwapchain();
+        }
+        const bool swapchain_created =
+            timed("frame_pacing.vulkan_recreateSwapchain.createSwapchain",
+                  [&] { return createSwapchain(framebuffer_width_, framebuffer_height_, old_swapchain); });
+        const bool created =
+            swapchain_created &&
+            timed("frame_pacing.vulkan_recreateSwapchain.createImageViews",
+                  [&] { return createImageViews(); }) &&
+            timed("frame_pacing.vulkan_recreateSwapchain.createDepthStencilResources",
+                  [&] { return createDepthStencilResources(); });
+        if (swapchain_created && old_swapchain != VK_NULL_HANDLE) {
+            LOG_TIMER_THRESHOLD("frame_pacing.vulkan_recreateSwapchain.destroy_old_swapchain", 0.25);
             vkDestroySwapchainKHR(device_, old_swapchain, nullptr);
         }
         if (!created) {
             const std::string error = last_error_;
-            destroySwapchain();
+            if (swapchain_created) {
+                destroySwapchain();
+            } else {
+                swapchain_ = old_swapchain;
+            }
             framebuffer_resized_ = true;
             last_error_ = error;
             return false;

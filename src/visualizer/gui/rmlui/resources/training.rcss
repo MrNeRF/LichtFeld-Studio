@@ -74,6 +74,24 @@ body {
 .training-panel-block > .training-subsection:first-child > .section-header {
 }
 
+.steps-scale-lock-row > .steps-scale-lock-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22dp;
+    height: 20dp;
+    padding: 2dp;
+    flex-shrink: 0;
+    box-sizing: border-box;
+    line-height: 0;
+}
+
+.steps-scale-lock-row > .steps-scale-lock-btn img {
+    display: block;
+    width: 14dp;
+    height: 14dp;
+}
+
 .loss-graph-wrap {
     display: flex;
     align-items: stretch;

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "helper_math.h"
+#include <cuda_runtime.h>
 #include <functional>
 
 namespace edge_compute::rasterization {
@@ -29,6 +30,7 @@ namespace edge_compute::rasterization {
         const float far,
         bool mip_filter,
         const float* pixel_weights,
-        float* accum_weights);
+        float* accum_weights,
+        cudaStream_t stream = nullptr);
 
 }

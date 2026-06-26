@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <type_traits>
 
+#include "kernel_stream.hpp"
+
 namespace lfs::training::kernels {
 
     namespace {
@@ -215,6 +217,7 @@ namespace lfs::training::kernels {
         int N, int C, int H, int W,
         bool apply_valid_padding,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
 
         const size_t total_pixels = static_cast<size_t>(N) * C * H * W;
         const int num_blocks = reduction_num_blocks(total_pixels);
@@ -242,6 +245,7 @@ namespace lfs::training::kernels {
         int N, int C, int H, int W,
         bool apply_valid_padding,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
 
         const size_t total_pixels = static_cast<size_t>(N) * C * H * W;
         const int num_blocks = reduction_num_blocks(total_pixels);
@@ -267,6 +271,7 @@ namespace lfs::training::kernels {
         int N, int C, int H, int W,
         bool apply_valid_padding,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         launch_fused_l1_ssim_mean_device_impl(
             img1, img2, ssim_map, ssim_weight, temp_buffer, result_buffer,
             N, C, H, W, apply_valid_padding, stream);
@@ -282,6 +287,7 @@ namespace lfs::training::kernels {
         int N, int C, int H, int W,
         bool apply_valid_padding,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         launch_fused_l1_ssim_mean_device_impl(
             img1, img2, ssim_map, ssim_weight, temp_buffer, result_buffer,
             N, C, H, W, apply_valid_padding, stream);
@@ -299,6 +305,7 @@ namespace lfs::training::kernels {
         float* mask_sum_buffer,
         int N, int C, int H, int W,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
 
         constexpr int MAX_REDUCTION_BLOCKS = 1024;
         float* loss_temp_buffer = temp_buffer;
@@ -335,6 +342,7 @@ namespace lfs::training::kernels {
         float* mask_sum_buffer,
         int N, int C, int H, int W,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         launch_masked_fused_l1_ssim_mean_device_impl(
             img1, img2, ssim_map, mask, ssim_weight, temp_buffer, loss_buffer,
             mask_sum_buffer, N, C, H, W, stream);
@@ -351,6 +359,7 @@ namespace lfs::training::kernels {
         float* mask_sum_buffer,
         int N, int C, int H, int W,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         launch_masked_fused_l1_ssim_mean_device_impl(
             img1, img2, ssim_map, mask, ssim_weight, temp_buffer, loss_buffer,
             mask_sum_buffer, N, C, H, W, stream);
@@ -367,6 +376,7 @@ namespace lfs::training::kernels {
         float* mask_sum_buffer,
         int N, int C, int H, int W,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         launch_masked_fused_l1_ssim_mean_device_impl(
             img1, img2, ssim_map, mask, ssim_weight, temp_buffer, loss_buffer,
             mask_sum_buffer, N, C, H, W, stream);
@@ -383,6 +393,7 @@ namespace lfs::training::kernels {
         float* mask_sum_buffer,
         int N, int C, int H, int W,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         launch_masked_fused_l1_ssim_mean_device_impl(
             img1, img2, ssim_map, mask, ssim_weight, temp_buffer, loss_buffer,
             mask_sum_buffer, N, C, H, W, stream);

@@ -3,6 +3,8 @@
 
 #include "camera_loss_heatmap.cuh"
 
+#include "kernel_stream.hpp"
+
 namespace lfs::training::kernels {
 
     namespace {
@@ -36,6 +38,7 @@ namespace lfs::training::kernels {
         float* ema_losses,
         const std::size_t slot_count,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
 
         update_camera_loss_heatmap_kernel<<<1, 1, 0, stream>>>(
             loss_scalar, camera_slot, ema_alpha, latest_losses, ema_losses, slot_count);

@@ -6,6 +6,7 @@
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "operation/ops/select_ops.hpp"
 #include "operation/ops/transform_ops.hpp"
 #include "operation/undo_history.hpp"
 #include "operator/operator_properties.hpp"
@@ -19,6 +20,7 @@
 #include "visualizer/core/editor_context.hpp"
 #include "visualizer/gui_capabilities.hpp"
 
+#include <algorithm>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 #include <memory>
@@ -53,6 +55,20 @@ namespace {
             std::move(rotation),
             std::move(opacity),
             1.0f);
+    }
+
+    std::vector<uint8_t> selection_mask_values(const lfs::core::Scene& scene) {
+        const auto mask = scene.getSelectionMask();
+        if (!mask || !mask->is_valid()) {
+            return {};
+        }
+        return mask->cpu().to_vector_uint8();
+    }
+
+    Tensor make_uint8_mask(const std::vector<uint8_t>& values) {
+        auto tensor = Tensor::empty({values.size()}, Device::CPU, DataType::UInt8);
+        std::copy(values.begin(), values.end(), tensor.ptr<uint8_t>());
+        return tensor.cuda();
     }
 
 } // namespace
@@ -299,6 +315,25 @@ TEST_F(OperatorRegistryPropsTest, LegacySelectionWorldCenterRemainsDataWorld) {
     EXPECT_NEAR(visualizer_world[3].x, 10.0f, 1e-5f);
     EXPECT_NEAR(visualizer_world[3].y, -20.0f, 1e-5f);
     EXPECT_NEAR(visualizer_world[3].z, -30.0f, 1e-5f);
+}
+
+TEST_F(OperatorRegistryPropsTest, LegacySelectInvertUsesVisibleMaskWithHiddenSibling) {
+    add_node("original");
+    add_node("copy");
+
+    const auto original_id = scene_manager_->getScene().getNodeIdByName("original");
+    ASSERT_NE(original_id, lfs::core::NULL_NODE);
+    scene_manager_->setNodeVisibility(original_id, false);
+    scene_manager_->getScene().setSelectionMask(
+        std::make_shared<Tensor>(make_uint8_mask({0, 0, 1, 0})));
+
+    lfs::vis::op::SelectInvert op;
+    lfs::vis::op::OperatorProperties props;
+
+    const auto result = op.execute(*scene_manager_, props, {});
+
+    ASSERT_TRUE(result.ok());
+    EXPECT_EQ(selection_mask_values(scene_manager_->getScene()), (std::vector<uint8_t>{0, 0, 0, 1}));
 }
 
 TEST_F(OperatorRegistryPropsTest, ResolveCropBoxIdFindsAttachedChildForParentNodeAndSelection) {

@@ -7,6 +7,8 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/internal/memory_pool.hpp"
 #include "cuda/image_format_kernels.cuh"
 #include "diagnostics/vram_profiler.hpp"
 #include "io/nvcodec_image_loader.hpp"
@@ -307,6 +309,11 @@ namespace lfs::io {
         }
 
         if (nvcodec_available) {
+            // On failure fall back to the default stream rather than a bad handle.
+            if (const cudaError_t err = cudaStreamCreateWithFlags(&decode_stream_, cudaStreamNonBlocking); err != cudaSuccess) {
+                LOG_WARN("[PipelinedImageLoader] cudaStreamCreateWithFlags failed ({}), GPU decode falls back to default stream", cudaGetErrorString(err));
+                decode_stream_ = nullptr;
+            }
             gpu_decode_thread_ = std::thread([this] { gpu_batch_decode_thread_func(); });
         }
 
@@ -350,6 +357,11 @@ namespace lfs::io {
         }
 
         cudaDeviceSynchronize();
+        if (decode_stream_) {
+            lfs::core::CudaMemoryPool::instance().release_stream(decode_stream_);
+            cudaStreamDestroy(decode_stream_);
+            decode_stream_ = nullptr;
+        }
         release_nvcodec_loader_cache(config_.decoder_pool_size);
         if (config_.use_filesystem_cache && !fs_cache_folder_.empty()) {
             std::error_code ec;
@@ -1148,6 +1160,9 @@ namespace lfs::io {
 
     void PipelinedImageLoader::gpu_batch_decode_thread_func() {
         LFS_VRAM_SCOPE("io.image_loader");
+        // Tensor ops on this thread (decode targets, format conversion) home
+        // onto the decode stream so they order with the explicit-stream kernels.
+        const lfs::core::CUDAStreamGuard stream_guard(decode_stream_);
         std::vector<PrefetchedImage> batch;
         batch.reserve(config_.jpeg_batch_size);
 
@@ -1183,9 +1198,10 @@ namespace lfs::io {
 
                 for (size_t i = 0; i < batch.size(); ++i) {
                     try {
+                        batch[i].params.cuda_stream = decode_stream_;
                         if (batch[i].is_mask) {
                             auto mask_tensor = nvcodec->load_image_from_memory_gpu(
-                                *batch[i].jpeg_data, 1, 0, nullptr, DecodeFormat::Grayscale);
+                                *batch[i].jpeg_data, 1, 0, decode_stream_, DecodeFormat::Grayscale);
 
                             if (!mask_tensor.is_valid() || mask_tensor.numel() == 0) {
                                 LOG_WARN("[PipelinedImageLoader] GPU mask decode failed for {}",

@@ -510,7 +510,7 @@ namespace lfs::core::internal {
                     const float* in_ptr = source.ptr<float>();
                     assert(in_ptr != nullptr);
                     const cudaStream_t execution_stream = resolve_pointwise_execution_stream(source);
-                    waitForCUDAStream(execution_stream, source.stream());
+                    source.sync_to_stream(execution_stream);
                     CUDAStreamGuard guard(execution_stream);
                     Tensor out = Tensor::empty(source.shape(), Device::CUDA, DataType::Float32);
                     float* out_ptr = out.ptr<float>();
@@ -546,7 +546,7 @@ namespace lfs::core::internal {
                 const float* in_ptr = source.ptr<float>();
                 assert(in_ptr != nullptr);
                 const cudaStream_t execution_stream = resolve_pointwise_execution_stream(source);
-                waitForCUDAStream(execution_stream, source.stream());
+                source.sync_to_stream(execution_stream);
                 CUDAStreamGuard guard(execution_stream);
                 Tensor out = Tensor::empty(source.shape(), Device::CUDA, DataType::Float32);
                 float* out_ptr = out.ptr<float>();

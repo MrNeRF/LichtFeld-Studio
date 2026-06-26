@@ -7,6 +7,8 @@
 #include "lfs/kernels/bilateral_grid.cuh"
 #include <cuda_runtime.h>
 
+#include "kernel_stream.hpp"
+
 namespace lfs::training::kernels {
 
     using namespace lfs::core;
@@ -181,6 +183,7 @@ namespace lfs::training::kernels {
         float* temp_buffer,
         int N, int L, int H, int W,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
 
         const int threads = 256;
         const int total = N * L * H * W;
@@ -201,6 +204,7 @@ namespace lfs::training::kernels {
         float* grad_grids,
         int N, int L, int H, int W,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
 
         // 3D grid for better thread organization
         dim3 block(4, 4, 4);

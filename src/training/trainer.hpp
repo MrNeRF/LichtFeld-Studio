@@ -162,6 +162,33 @@ namespace lfs::training {
 
         // Allow viewer to lock for rendering
         std::shared_mutex& getRenderMutex() const { return render_mutex_; }
+        // Held shared by viewer/metric readers around their model read and
+        // exclusive by the trainer around the non-refining in-place optimizer
+        // step, so a reader can never observe a half-written model. Distinct from
+        // render_mutex_ (taken only on refining/topology steps) and never held
+        // across a synchronous readback, so it avoids the startup deadlock that
+        // gating render_mutex_ every step would hit. The GPU edges still order the
+        // actual reads/writes; this lock just makes their setup mutually
+        // exclusive. Disable via LFS_NO_MODEL_ACCESS_LOCK=1 (GPU-handshake only).
+        std::shared_mutex& getModelAccessMutex() const { return model_access_mutex_; }
+        [[nodiscard]] static bool modelAccessLockEnabled();
+
+        // GPU-side model-read handshake. Call both under a shared lock on
+        // getRenderMutex(), bracketing every GPU read of the live model enqueued
+        // on reader_stream: beginModelRead orders the reads after the last
+        // consistent parameter state; endModelRead records the reads so the next
+        // optimizer step waits for them (GPU-side, no CPU blocking).
+        void beginModelRead(cudaStream_t reader_stream);
+        void endModelRead(cudaStream_t reader_stream);
+
+        cudaStream_t trainingStream() const { return training_stream_; }
+
+        // Reverse edge for the zero-copy viewport: the viewer's render-complete
+        // timeline imported into CUDA, plus the latest timeline value covering
+        // submits that bound live training storage. The trainer waits the value
+        // on its stream before the next step's in-place writes.
+        void setViewerReleaseFence(cudaExternalSemaphore_t semaphore);
+        void publishViewerBorrow(uint64_t value);
 
         const lfs::core::param::TrainingParameters& getParams() const { return params_; }
         void setParams(const lfs::core::param::TrainingParameters& params);
@@ -371,20 +398,7 @@ namespace lfs::training {
             bool copy_in_flight = false;
             bool dirty = false;
 
-            ~CameraLossHeatmapState() {
-                if (copy_stream) {
-                    cudaStreamSynchronize(copy_stream);
-                }
-                if (done_event) {
-                    cudaEventDestroy(done_event);
-                }
-                if (ready_event) {
-                    cudaEventDestroy(ready_event);
-                }
-                if (copy_stream) {
-                    cudaStreamDestroy(copy_stream);
-                }
-            }
+            ~CameraLossHeatmapState();
         };
 
         std::shared_ptr<CameraLossHeatmapState> getCameraLossHeatmap() const;
@@ -455,6 +469,7 @@ namespace lfs::training {
 
         // Single mutex that protects the model during training
         mutable std::shared_mutex render_mutex_;
+        mutable std::shared_mutex model_access_mutex_;
 
         // Mutex for initialization to ensure thread safety
         mutable std::mutex init_mutex_;
@@ -489,6 +504,56 @@ namespace lfs::training {
         std::function<void()> callback_;
         std::atomic<bool> callback_busy_{false};
         cudaStream_t callback_stream_ = nullptr;
+
+        // Dedicated stream for all training-thread GPU work, installed as the
+        // thread's current stream in train().
+        cudaStream_t training_stream_ = nullptr;
+
+        // Non-blocking stream for on-demand GUI metric renders
+        // (computeCameraMetrics, called from the UI thread). Lets PSNR/SSIM
+        // tensor work overlap training and keeps the metric render's arena
+        // frame off a device-sync fallback.
+        cudaStream_t metrics_stream_ = nullptr;
+
+        // Trainer↔viewer GPU handshake. Forward edge: params_ready_event_ marks
+        // a consistent end-of-step parameter state; readers wait on it before
+        // enqueuing reads (beginModelRead). Reverse edges: reader_done ring
+        // events plus the viewer's exported release fence gate the next step's
+        // in-place writes behind in-flight reads — GPU-side only, no CPU stall.
+        // Lock order: render_mutex_ → stream_sync_mutex_ (leaf; only CUDA
+        // record/wait calls under it).
+        static constexpr size_t READER_DONE_RING = 4;
+        cudaEvent_t params_ready_event_ = nullptr;
+        bool params_ready_recorded_ = false;
+        std::array<cudaEvent_t, READER_DONE_RING> reader_done_events_{};
+        uint32_t reader_done_head_ = 0;
+        uint32_t reader_done_pending_ = 0;
+        cudaExternalSemaphore_t viewer_release_semaphore_ = nullptr;
+        std::atomic<uint64_t> viewer_borrow_value_{0};
+        uint64_t viewer_borrow_waited_ = 0;
+        mutable std::mutex stream_sync_mutex_;
+
+        void createSyncPrimitives();
+        void destroySyncPrimitives();
+        void recordParamsReady();
+        void waitForModelReaders();
+
+        // Async loss readback: the periodic loss sample is copied D2H into a
+        // small pinned ring and polled on later iterations instead of stalling
+        // the pipeline with .item(). NaN/Inf detection lags by at most
+        // LOSS_RING * LOSS_SYNC_INTERVAL iterations.
+        static constexpr size_t LOSS_RING = 4;
+        struct LossReadbackSlot {
+            float* pinned = nullptr;
+            cudaEvent_t done = nullptr;
+            int iter = 0;
+            bool in_flight = false;
+        };
+        std::array<LossReadbackSlot, LOSS_RING> loss_slots_{};
+        size_t loss_slot_head_ = 0;
+
+        void submitLossReadback(const lfs::core::Tensor& total_loss, int iter);
+        std::expected<void, std::string> harvestLossReadbacks(bool drain, bool in_controller_phase);
 
         // Python control scripts (file paths) to execute before training starts
         std::vector<std::filesystem::path> python_scripts_;

@@ -421,6 +421,7 @@
         </div>
       </div>
     </div>
+    <div id="asset-viewport-edge"></div>
   </div>
 </body>
 </rml>

@@ -73,7 +73,8 @@ namespace fast_lfs::optimizer {
         std::uint8_t* exp_avg_sq_q,
         float* exp_avg_sq_scale,
         const int n_rows,
-        const int row_size);
+        const int row_size,
+        cudaStream_t stream = nullptr);
 
     // Swizzled (shN) variant of quantize_adam_moments_raw.
     void quantize_adam_moments_swizzled_raw(
@@ -84,14 +85,16 @@ namespace fast_lfs::optimizer {
         std::uint8_t* exp_avg_sq_q,
         float* exp_avg_sq_scale,
         const int n_primitives,
-        const int slots_per_primitive);
+        const int slots_per_primitive,
+        cudaStream_t stream = nullptr);
 
     // Batched zero operation for MCMC relocation (much faster than CPU loop)
     void zero_rows_at_indices(
         float* tensor,
         const int64_t* indices_device, // Must be on device!
         const int n_indices,
-        const int row_size);
+        const int row_size,
+        cudaStream_t stream = nullptr);
 
     // Reset quantised rows: moment bytes -> zero_point, scale -> 0. Contiguous layout.
     void zero_quantized_rows_at_indices(
@@ -100,6 +103,7 @@ namespace fast_lfs::optimizer {
         const int64_t* indices_device, // Must be on device!
         const int n_indices,
         const int row_size,
-        const std::uint8_t zero_point);
+        const std::uint8_t zero_point,
+        cudaStream_t stream = nullptr);
 
 } // namespace fast_lfs::optimizer

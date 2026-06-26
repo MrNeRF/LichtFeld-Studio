@@ -293,8 +293,29 @@ namespace lfs::core {
             bool is_aligned_16 = false;  // 16-byte alignment for float4 vectorization
             bool is_aligned_128 = false; // 128-byte alignment for cache line optimization
 
-            // CUDA stream for async execution (assigned round-robin from StreamPool)
-            cudaStream_t stream = nullptr;
+            // Home stream: the stream the tensor's most recent enqueued write is
+            // ordered on. Atomic so cross-thread readers see untorn values;
+            // cross-thread *use* still requires host-side ordering plus
+            // sync_to_stream/record_stream for the allocator.
+            struct StreamHandle {
+                std::atomic<cudaStream_t> value{nullptr};
+
+                StreamHandle() = default;
+                StreamHandle(const StreamHandle& other)
+                    : value(other.value.load(std::memory_order_relaxed)) {}
+                StreamHandle& operator=(const StreamHandle& other) {
+                    value.store(other.value.load(std::memory_order_relaxed), std::memory_order_relaxed);
+                    return *this;
+                }
+                StreamHandle& operator=(cudaStream_t stream) {
+                    value.store(stream, std::memory_order_relaxed);
+                    return *this;
+                }
+                operator cudaStream_t() const {
+                    return value.load(std::memory_order_relaxed);
+                }
+            };
+            StreamHandle stream;
 
             // Debug tracking - when true, operations on this tensor are logged
             bool tracked = false;
@@ -1081,9 +1102,22 @@ namespace lfs::core {
         bool is_aligned_16() const { return state_->is_aligned_16; }
         bool is_aligned_128() const { return state_->is_aligned_128; }
 
-        // Stream accessor (for async CUDA operations)
+        // Home stream: where this tensor's pending writes are ordered. Frees route
+        // here; reads from other streams must be recorded (record_stream) or
+        // bridged + recorded (sync_to_stream).
         cudaStream_t stream() const { return state_->stream; }
-        void set_stream(cudaStream_t stream) { state_->stream = stream; }
+
+        // Declarative re-homing: future writes happen on `stream`. The old home
+        // becomes a recorded use so the eventual free stays ordered after it.
+        void set_stream(cudaStream_t stream);
+
+        // Marks a read of this tensor on `stream` (other than its home) so the
+        // allocator defers recycling until that stream passes the read.
+        void record_stream(cudaStream_t stream) const;
+
+        // Orders `execution_stream` after this tensor's pending work, then records
+        // the use. The standard prologue for consuming a tensor on another stream.
+        void sync_to_stream(cudaStream_t execution_stream) const;
 
         // Debug tracking - mark tensor to trace all operations it's involved in
         bool is_tracked() const { return state_->tracked; }
@@ -1742,6 +1776,11 @@ namespace lfs::core {
             const char* data_ptr = static_cast<const char*>(data_) + storage_offset_ * dtype_size(dtype_);
 
             if (device_ == Device::CUDA) {
+                // A blocking memcpy only orders against the legacy stream; data
+                // produced on the tensor's home stream must be drained first.
+                if (const cudaStream_t home = state_->stream; home != nullptr) {
+                    cudaStreamSynchronize(home);
+                }
                 cudaMemcpy(&value, data_ptr, sizeof(T), cudaMemcpyDeviceToHost);
             } else {
                 value = *static_cast<const T*>(static_cast<const void*>(data_ptr));
@@ -2160,6 +2199,11 @@ namespace lfs::core {
                 T value{};
                 size_t type_size = dtype_size(tensor_->dtype());
                 const void* src_ptr = static_cast<const char*>(tensor_->data_ptr()) + row_index_ * type_size;
+                // Blocking memcpy only orders against the legacy stream; drain
+                // the tensor's home stream first.
+                if (const cudaStream_t home = tensor_->stream(); home != nullptr) {
+                    cudaStreamSynchronize(home);
+                }
                 cudaError_t err = cudaMemcpy(&value, src_ptr, sizeof(T), cudaMemcpyDeviceToHost);
                 if (err != cudaSuccess) {
                     throw std::runtime_error(

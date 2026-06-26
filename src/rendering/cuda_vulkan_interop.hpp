@@ -149,6 +149,10 @@ namespace lfs::rendering {
         [[nodiscard]] bool valid() const { return cuda_timeline_ != nullptr; }
         [[nodiscard]] const std::string& lastError() const { return last_error_; }
 
+        // Raw handle for consumers that enqueue waits themselves (the trainer's
+        // viewer-release fence). Lifetime stays owned by this object.
+        [[nodiscard]] cudaExternalSemaphore_t handle() const { return cuda_timeline_; }
+
         [[nodiscard]] bool cudaSignal(std::uint64_t value, cudaStream_t stream = nullptr) const;
         [[nodiscard]] bool cudaWait(std::uint64_t value, cudaStream_t stream = nullptr) const;
 

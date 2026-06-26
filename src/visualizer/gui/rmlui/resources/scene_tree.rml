@@ -11,6 +11,12 @@
                 <button id="history-tab" type="button" class="scene-tab">History</button>
                 <button id="logging-tab" type="button" class="scene-tab">Logging</button>
             </div>
+            <button id="asset-manager-button"
+                    type="button"
+                    class="scene-header-icon-button"
+                    data-tooltip="toolbar.asset_manager">
+                <img id="asset-manager-icon" />
+            </button>
         </div>
         <div id="scene-chip-row" class="scene-chip-row">
             <span id="summary-model-chip" class="scene-chip scene-chip--accent"></span>

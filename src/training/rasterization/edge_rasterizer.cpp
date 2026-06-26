@@ -4,6 +4,7 @@
 
 #include "edge_rasterizer.hpp"
 #include "core/cuda/memory_arena.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include <cassert>
 #include <edge_rasterization_api.h>
 
@@ -76,7 +77,7 @@ namespace lfs::training {
 
         // Release arena frame — edge rasterization has no backward pass
         auto& arena = core::GlobalArenaManager::instance().get_arena();
-        arena.end_frame(forward_ctx.frame_id);
+        arena.end_frame(forward_ctx.frame_id, core::getCurrentCUDAStream());
 
         // Prepare render output
         RenderOutput render_output;

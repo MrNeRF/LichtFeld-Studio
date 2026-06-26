@@ -2909,7 +2909,7 @@ namespace lfs::app {
                         {"x1", json{{"type", "number"}, {"description", "Right edge X coordinate"}}},
                         {"y1", json{{"type", "number"}, {"description", "Bottom edge Y coordinate"}}},
                         {"camera_index", json{{"type", "integer"}, {"description", "Camera index (default: 0)"}}},
-                        {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add", "remove"})}, {"description", "Selection mode (default: replace)"}}}},
+                        {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add", "remove", "intersect"})}, {"description", "Selection mode (default: replace)"}}}},
                     .required = {"x0", "y0", "x1", "y1"}}},
             [viewer_impl](const json& args) -> json {
                 const float x0 = args["x0"].get<float>();
@@ -2937,7 +2937,7 @@ namespace lfs::app {
                     .properties = json{
                         {"points", json{{"type", "array"}, {"items", json{{"type", "array"}, {"items", json{{"type", "number"}}}}}, {"description", "Polygon vertices [[x0,y0], [x1,y1], ...]"}}},
                         {"camera_index", json{{"type", "integer"}, {"description", "Camera index (default: 0)"}}},
-                        {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add", "remove"})}, {"description", "Selection mode (default: replace)"}}}},
+                        {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add", "remove", "intersect"})}, {"description", "Selection mode (default: replace)"}}}},
                     .required = {"points"}}},
             [viewer_impl](const json& args) -> json {
                 const auto& points = args["points"];
@@ -2972,7 +2972,7 @@ namespace lfs::app {
                     .properties = json{
                         {"points", json{{"type", "array"}, {"items", json{{"type", "array"}, {"items", json{{"type", "number"}}}}}, {"description", "Lasso points [[x0,y0], [x1,y1], ...]"}}},
                         {"camera_index", json{{"type", "integer"}, {"description", "Camera index (default: 0)"}}},
-                        {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add", "remove"})}, {"description", "Selection mode (default: replace)"}}}},
+                        {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add", "remove", "intersect"})}, {"description", "Selection mode (default: replace)"}}}},
                     .required = {"points"}}},
             [viewer_impl](const json& args) -> json {
                 const auto& points = args["points"];
@@ -3008,7 +3008,7 @@ namespace lfs::app {
                         {"x", json{{"type", "number"}, {"description", "X coordinate"}}},
                         {"y", json{{"type", "number"}, {"description", "Y coordinate"}}},
                         {"camera_index", json{{"type", "integer"}, {"description", "Camera index (default: 0)"}}},
-                        {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add", "remove"})}, {"description", "Selection mode (default: replace)"}}}},
+                        {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add", "remove", "intersect"})}, {"description", "Selection mode (default: replace)"}}}},
                     .required = {"x", "y"}}},
             [viewer_impl](const json& args) -> json {
                 const float x = args["x"].get<float>();
@@ -3036,7 +3036,7 @@ namespace lfs::app {
                         {"y", json{{"type", "number"}, {"description", "Y coordinate"}}},
                         {"radius", json{{"type", "number"}, {"description", "Selection radius in pixels (default: 20)"}}},
                         {"camera_index", json{{"type", "integer"}, {"description", "Camera index (default: 0)"}}},
-                        {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add", "remove"})}, {"description", "Selection mode (default: replace)"}}}},
+                        {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add", "remove", "intersect"})}, {"description", "Selection mode (default: replace)"}}}},
                     .required = {"x", "y"}}},
             [viewer_impl](const json& args) -> json {
                 const float x = args["x"].get<float>();
@@ -3065,7 +3065,7 @@ namespace lfs::app {
                         {"y", json{{"type", "number"}, {"description", "Y coordinate"}}},
                         {"radius", json{{"type", "number"}, {"description", "Selection radius in pixels (default: 20)"}}},
                         {"camera_index", json{{"type", "integer"}, {"description", "Camera index (default: 0)"}}},
-                        {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add", "remove"})}, {"description", "Selection mode (default: replace)"}}}},
+                        {"mode", json{{"type", "string"}, {"enum", json::array({"replace", "add", "remove", "intersect"})}, {"description", "Selection mode (default: replace)"}}}},
                     .required = {"x", "y"}}},
             [viewer_impl](const json& args) -> json {
                 const float x = args["x"].get<float>();

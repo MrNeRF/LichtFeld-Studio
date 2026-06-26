@@ -98,6 +98,10 @@ namespace lfs::core {
                     if (params_json.contains("server")) {
                         params.server = param::ServerConfig::from_json(params_json["server"]);
                     }
+                    if (params_json.contains("exclude_frozen_add_splats_from_export")) {
+                        params.exclude_frozen_add_splats_from_export =
+                            params_json["exclude_frozen_add_splats_from_export"].get<bool>();
+                    }
                     if (params_json.contains("disabled_camera_uids")) {
                         params.disabled_camera_uids = params_json["disabled_camera_uids"].get<std::vector<int>>();
                     }

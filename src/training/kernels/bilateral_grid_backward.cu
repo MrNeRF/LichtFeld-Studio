@@ -5,6 +5,8 @@
 #include "lfs/kernels/bilateral_grid.cuh"
 #include <cuda_runtime.h>
 
+#include "kernel_stream.hpp"
+
 namespace lfs::training::kernels {
 
     using namespace lfs::core;
@@ -106,6 +108,7 @@ namespace lfs::training::kernels {
         float* grad_grid, float* grad_rgb,
         int L, int H, int W, int h, int w,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
 
         const dim3 block(16, 16);
         const dim3 grid_dim((w + block.x - 1) / block.x, (h + block.y - 1) / block.y);
@@ -218,6 +221,7 @@ namespace lfs::training::kernels {
         float* grad_grid, float* grad_rgb,
         int L, int H, int W, int h, int w,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
 
         const int blocks = (h * w + BLOCK_SIZE - 1) / BLOCK_SIZE;
         bilateral_grid_slice_backward_chw_kernel<<<blocks, BLOCK_SIZE, 0, stream>>>(
@@ -259,6 +263,7 @@ namespace lfs::training::kernels {
         int num_elements, float lr, float beta1, float beta2,
         float bias_corr1_rcp, float bias_corr2_sqrt_rcp, float eps,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
 
         const int blocks = (num_elements + BLOCK_SIZE - 1) / BLOCK_SIZE;
         bilateral_grid_adam_update_kernel<<<blocks, BLOCK_SIZE, 0, stream>>>(
@@ -281,6 +286,7 @@ namespace lfs::training::kernels {
     void launch_bilateral_grid_accumulate_grad(
         float* dst, const float* src, int num_elements,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
 
         const int blocks = (num_elements + BLOCK_SIZE - 1) / BLOCK_SIZE;
         bilateral_grid_accumulate_grad_kernel<<<blocks, BLOCK_SIZE, 0, stream>>>(
@@ -305,6 +311,7 @@ namespace lfs::training::kernels {
     void launch_bilateral_grid_init_identity(
         float* grids, int N, int L, int H, int W,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
 
         const int num_cells = L * H * W;
         const int threads = BLOCK_SIZE;

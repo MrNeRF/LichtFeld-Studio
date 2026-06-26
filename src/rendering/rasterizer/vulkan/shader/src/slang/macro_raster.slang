@@ -317,7 +317,13 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
                                                                 overlay_splat.xy_vs,
                                                                 flags,
                                                                 overlay_params);
-                    gauss_rgba = apply_ring_overlay(gauss_rgba, overlay_splat, pixel_coord[p], flags, overlay_params);
+                    gauss_rgba = apply_ring_overlay(gauss_rgba,
+                                                    overlay_splat,
+                                                    pixel_coord[p],
+                                                    sel_status,
+                                                    flags,
+                                                    overlay_params,
+                                                    selection_colors);
 
                     if (overlay_enabled(overlay_params[OVERLAY_PARAM_MARKER_FLAGS].y) && selectable) {
                         const float INNER_RADIUS_SQ = 2.25f;
@@ -328,10 +334,7 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
                         if (dist_sq > OUTER_RADIUS_SQ)
                             continue;
 
-                        const uint group_id = sel_status & SELECTION_GROUP_MASK;
-                        const bool is_preview = (sel_status & SELECTION_PREVIEW_FLAG) != 0u;
-                        float3 marker_color = is_preview ? selection_colors[SELECTION_PREVIEW_COLOR_INDEX].xyz
-                                                         : selection_colors[group_id].xyz;
+                        float3 marker_color = selection_overlay_target_color(sel_status, selection_colors);
                         if (dist_sq > INNER_RADIUS_SQ)
                             marker_color *= OUTLINE_DARKEN;
 

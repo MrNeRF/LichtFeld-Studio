@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/logger.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/tensor_ops.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include "lfs/kernels/ppisp.cuh"
@@ -224,11 +225,15 @@ namespace lfs::training {
         conv3_out.adaptive_avg_pool2d_out(POOL2_SIZE, POOL2_SIZE, buf_pool2_);
 
         auto flat = buf_pool2_.flatten(1);
+        // Resolve the current stream — under the GUI metrics guard this runs on
+        // the non-blocking metrics stream, where a legacy-stream copy would be
+        // unordered with the conv/linear ops that consume fc_input_buffer_.
+        const cudaStream_t predict_stream = lfs::core::getCurrentCUDAStream();
         cudaMemcpyAsync(fc_input_buffer_.ptr<float>(), flat.ptr<float>(), CNN_FLAT_DIM * sizeof(float),
-                        cudaMemcpyDeviceToDevice, nullptr);
+                        cudaMemcpyDeviceToDevice, predict_stream);
         if (exposure_prior != 1.0f) {
             cudaMemcpyAsync(fc_input_buffer_.ptr<float>() + CNN_FLAT_DIM, &exposure_prior, sizeof(float),
-                            cudaMemcpyHostToDevice, nullptr);
+                            cudaMemcpyHostToDevice, predict_stream);
         }
         cached_flat_ = fc_input_buffer_;
 
@@ -247,7 +252,7 @@ namespace lfs::training {
         assert(grad_output.shape()[0] == 1 && grad_output.shape()[1] == FC_OUTPUT_DIM);
 
         const float* const grad_fc4 = grad_output.ptr<float>();
-        cudaStream_t stream = nullptr;
+        cudaStream_t stream = lfs::core::getCurrentCUDAStream();
 
         launch_outer_product_accumulate(grad_fc4, buf_fc3_.ptr<float>(), fc4_w_grad_.ptr<float>(), FC_OUTPUT_DIM,
                                         FC_HIDDEN_DIM, 1.0f, stream);

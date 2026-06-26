@@ -74,6 +74,7 @@ ACTION_NAMES = (
     "SELECT_MODE_POLYGON",
     "SELECT_MODE_LASSO",
     "SELECT_MODE_RINGS",
+    "SELECT_MODE_COLOR",
     "APPLY_CROP_BOX",
     "NODE_PICK",
     "NODE_RECT_SELECT",
@@ -91,6 +92,10 @@ ACTION_NAMES = (
     "PIE_MENU",
     "DEPTH_ADJUST_NEAR",
     "HISTOGRAM_ZOOM_MARKED",
+    "TOGGLE_CAMERA_FRUSTUMS",
+    "SELECTION_INTERSECT",
+    "SELECT_MODE_BOX",
+    "SELECT_MODE_SPHERE",
 )
 
 
@@ -518,4 +523,5 @@ def test_input_settings_global_mode_exposes_system_sections(input_settings_modul
     assert str(module.lf.keymap.Action.TOOL_TRANSLATE.value) in action_ids
     assert str(module.lf.keymap.Action.TOGGLE_UI.value) in action_ids
     assert str(module.lf.keymap.Action.HISTOGRAM_ZOOM_MARKED.value) in action_ids
+    assert str(module.lf.keymap.Action.TOGGLE_CAMERA_FRUSTUMS.value) in action_ids
     assert str(module.lf.keymap.Action.SEQUENCER_PLAY_PAUSE.value) in action_ids

@@ -6,6 +6,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "core/services.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/gpu_memory_query.hpp"
 #include "gui/panel_layout.hpp"
@@ -32,6 +33,7 @@
 #include <cmath>
 #include <cstring>
 #include <format>
+#include <optional>
 #include <vector>
 
 #include "git_version.h"
@@ -92,6 +94,81 @@ namespace lfs::vis::gui {
             if (end == std::string::npos)
                 return s;
             return s.substr(0, end + 1);
+        }
+
+        std::string formatStepLabel(const size_t step) {
+            return std::format("{} {}", stripColon(LOC(lichtfeld::Strings::Status::STEP)), step);
+        }
+
+        struct ProgressMarkerRenderState {
+            bool dragging = false;
+            bool adding = false;
+            size_t original_step = 0;
+            size_t preview_step = 0;
+            size_t hover_step = 0;
+        };
+
+        void appendProgressMarkerRml(std::string& markers,
+                                     const size_t step,
+                                     const int total_iterations,
+                                     const bool past,
+                                     const bool hovered,
+                                     const bool preview) {
+            const float left_pct = std::clamp(
+                100.0f * static_cast<float>(step) / static_cast<float>(total_iterations),
+                0.5f,
+                99.5f);
+
+            std::string classes = "progress-marker";
+            if (past)
+                classes += " is-past";
+            if (hovered)
+                classes += " is-hovered";
+            if (preview)
+                classes += " is-preview";
+
+            markers += std::format(
+                "<div class=\"{}\" style=\"left:{:.3f}%;\"></div>",
+                classes,
+                left_pct);
+        }
+
+        std::string buildProgressMarkersRml(std::vector<size_t> save_steps,
+                                            const int total_iterations,
+                                            const int current_iteration,
+                                            const ProgressMarkerRenderState& state) {
+            if (total_iterations <= 0)
+                return {};
+
+            std::ranges::sort(save_steps);
+            save_steps.erase(std::ranges::unique(save_steps).begin(), save_steps.end());
+
+            std::string markers;
+            markers.reserve((save_steps.size() + 1) * 136);
+            for (const size_t save_step : save_steps) {
+                if (save_step == 0 || save_step > static_cast<size_t>(total_iterations))
+                    continue;
+                if (state.dragging && !state.adding && save_step == state.original_step)
+                    continue;
+
+                appendProgressMarkerRml(markers,
+                                        save_step,
+                                        total_iterations,
+                                        save_step <= static_cast<size_t>(std::max(0, current_iteration)),
+                                        !state.dragging && save_step == state.hover_step,
+                                        false);
+            }
+
+            if (state.dragging && state.preview_step > 0 &&
+                state.preview_step <= static_cast<size_t>(total_iterations)) {
+                appendProgressMarkerRml(markers,
+                                        state.preview_step,
+                                        total_iterations,
+                                        false,
+                                        true,
+                                        true);
+            }
+            return markers;
         }
 
         struct FramebufferBlitRect {
@@ -308,6 +385,7 @@ namespace lfs::vis::gui {
         document_ = nullptr;
         base_rcss_.clear();
         has_theme_signature_ = false;
+        model_.progress_markers_rml.clear();
         model_dirty_ = true;
         animation_active_ = true;
         last_render_w_ = 0;
@@ -441,6 +519,211 @@ namespace lfs::vis::gui {
         model_dirty_ = true;
     }
 
+    void RmlStatusBar::setProgressMarkersRml(std::string value) {
+        if (model_.progress_markers_rml == value)
+            return;
+
+        model_.progress_markers_rml = std::move(value);
+        if (document_) {
+            if (auto* el = document_->GetElementById("progress-markers"))
+                el->SetInnerRML(model_.progress_markers_rml);
+        }
+        model_dirty_ = true;
+    }
+
+    std::optional<RmlStatusBar::ProgressBarGeometry> RmlStatusBar::progressBarGeometry() const {
+        if (!document_)
+            return std::nullopt;
+
+        auto* el = document_->GetElementById("progress-container");
+        if (!el)
+            return std::nullopt;
+
+        const auto offset = el->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const float width = el->GetOffsetWidth();
+        const float height = el->GetOffsetHeight();
+        if (width <= 0.0f || height <= 0.0f)
+            return std::nullopt;
+
+        return ProgressBarGeometry{offset.x, offset.y, width, height};
+    }
+
+    void RmlStatusBar::resetSaveStepInteraction() {
+        if (!save_step_interaction_.dragging &&
+            !save_step_interaction_.adding &&
+            save_step_interaction_.original_step == 0 &&
+            save_step_interaction_.preview_step == 0 &&
+            save_step_interaction_.hover_step == 0) {
+            return;
+        }
+
+        save_step_interaction_ = {};
+        markModelDirty();
+    }
+
+    std::optional<size_t> RmlStatusBar::hitSaveStep(const float local_x, const float local_y,
+                                                    const ProgressBarGeometry& geom,
+                                                    const std::vector<size_t>& save_steps,
+                                                    const int total_iterations) const {
+        if (total_iterations <= 0 || save_steps.empty())
+            return std::nullopt;
+        if (local_y < geom.y - 4.0f || local_y > geom.y + geom.h + 4.0f)
+            return std::nullopt;
+
+        constexpr float kHitRadius = 8.0f;
+        float best_distance = kHitRadius + 1.0f;
+        std::optional<size_t> best_step;
+        for (const size_t step : save_steps) {
+            if (step == 0 || step > static_cast<size_t>(total_iterations))
+                continue;
+            const float x = geom.x + (static_cast<float>(step) / static_cast<float>(total_iterations)) * geom.w;
+            const float distance = std::abs(local_x - x);
+            if (distance <= kHitRadius && distance < best_distance) {
+                best_distance = distance;
+                best_step = step;
+            }
+        }
+        return best_step;
+    }
+
+    size_t RmlStatusBar::saveStepFromProgressX(const float local_x,
+                                               const ProgressBarGeometry& geom,
+                                               const int current_iteration,
+                                               const int total_iterations) const {
+        if (total_iterations <= 0)
+            return 0;
+
+        const float t = std::clamp((local_x - geom.x) / std::max(1.0f, geom.w), 0.0f, 1.0f);
+        size_t step = static_cast<size_t>(std::lround(t * static_cast<float>(total_iterations)));
+        const size_t min_step = current_iteration > 0
+                                    ? std::min(static_cast<size_t>(total_iterations),
+                                               static_cast<size_t>(current_iteration + 1))
+                                    : size_t{1};
+        step = std::clamp(step, min_step, static_cast<size_t>(total_iterations));
+        return step;
+    }
+
+    void RmlStatusBar::commitSaveStepEdit() {
+        auto* tm = lfs::vis::services().trainerOrNull();
+        if (!tm || !tm->canEditSaveSteps() || save_step_interaction_.preview_step == 0)
+            return;
+
+        auto steps = tm->getSaveSteps();
+        if (!save_step_interaction_.adding) {
+            const auto original = save_step_interaction_.original_step;
+            steps.erase(std::remove(steps.begin(), steps.end(), original), steps.end());
+        }
+        if (std::find(steps.begin(), steps.end(), save_step_interaction_.preview_step) == steps.end())
+            steps.push_back(save_step_interaction_.preview_step);
+        tm->setSaveSteps(std::move(steps));
+        markModelDirty();
+    }
+
+    void RmlStatusBar::removeSaveStep(const size_t step) {
+        auto* tm = lfs::vis::services().trainerOrNull();
+        if (!tm || !tm->canEditSaveSteps() || step == 0)
+            return;
+
+        auto steps = tm->getSaveSteps();
+        const auto old_size = steps.size();
+        steps.erase(std::remove(steps.begin(), steps.end(), step), steps.end());
+        if (steps.size() == old_size)
+            return;
+        tm->setSaveSteps(std::move(steps));
+        if (save_step_interaction_.hover_step == step)
+            save_step_interaction_.hover_step = 0;
+        markModelDirty();
+    }
+
+    void RmlStatusBar::clearSaveStepHover() {
+        if (save_step_interaction_.hover_step == 0)
+            return;
+        save_step_interaction_.hover_step = 0;
+        markModelDirty();
+    }
+
+    void RmlStatusBar::handleSaveStepInteraction(const PanelInputState& input,
+                                                 const float local_x,
+                                                 const float local_y) {
+        auto* tm = lfs::vis::services().trainerOrNull();
+        if (!tm || !tm->canEditSaveSteps() || tm->getTotalIterations() <= 0) {
+            resetSaveStepInteraction();
+            return;
+        }
+
+        const auto geom = progressBarGeometry();
+        if (!geom) {
+            clearSaveStepHover();
+            return;
+        }
+
+        const int total = tm->getTotalIterations();
+        const int current = tm->getCurrentIteration();
+        const auto save_steps = tm->getSaveSteps();
+        const bool inside_progress =
+            local_x >= geom->x && local_x <= geom->x + geom->w &&
+            local_y >= geom->y && local_y <= geom->y + geom->h;
+
+        if (save_step_interaction_.dragging) {
+            const size_t preview = saveStepFromProgressX(local_x, *geom, current, total);
+            if (preview != save_step_interaction_.preview_step) {
+                save_step_interaction_.preview_step = preview;
+                markModelDirty();
+            }
+            if (input.mouse_released[0] || !input.mouse_down[0]) {
+                commitSaveStepEdit();
+                save_step_interaction_.dragging = false;
+                save_step_interaction_.adding = false;
+                save_step_interaction_.original_step = 0;
+                save_step_interaction_.preview_step = 0;
+                markModelDirty();
+            }
+            return;
+        }
+
+        const auto hit_step = hitSaveStep(local_x, local_y, *geom, save_steps, total);
+        const bool hit_future_step = hit_step && static_cast<int>(*hit_step) > current;
+        if (input.mouse_clicked[1] && hit_step) {
+            removeSaveStep(*hit_step);
+            return;
+        }
+        if (input.mouse_clicked[0] && input.key_ctrl && hit_step) {
+            removeSaveStep(*hit_step);
+            return;
+        }
+
+        if (input.mouse_clicked[0]) {
+            if (hit_future_step) {
+                save_step_interaction_.dragging = true;
+                save_step_interaction_.adding = false;
+                save_step_interaction_.original_step = *hit_step;
+                save_step_interaction_.preview_step = *hit_step;
+                save_step_interaction_.hover_step = *hit_step;
+                markModelDirty();
+                return;
+            }
+            if (hit_step)
+                return;
+
+            if (inside_progress) {
+                const size_t step = saveStepFromProgressX(local_x, *geom, current, total);
+                save_step_interaction_.dragging = true;
+                save_step_interaction_.adding = true;
+                save_step_interaction_.original_step = 0;
+                save_step_interaction_.preview_step = step;
+                save_step_interaction_.hover_step = step;
+                markModelDirty();
+                return;
+            }
+        }
+
+        const size_t next_hover = hit_step.value_or(0);
+        if (next_hover != save_step_interaction_.hover_step) {
+            save_step_interaction_.hover_step = next_hover;
+            markModelDirty();
+        }
+    }
+
     bool RmlStatusBar::updateContent(const PanelDrawContext& ctx, const bool force_refresh) {
         if (!document_)
             return false;
@@ -549,9 +832,23 @@ namespace lfs::vis::gui {
             float eta = tm->getEstimatedRemainingSeconds();
             float progress = total > 0 ? static_cast<float>(cur) / static_cast<float>(total) : 0.0f;
             auto progress_pct = std::format("{:.0f}%", progress * 100.0f);
+            auto progress_text = progress_pct;
+            if (save_step_interaction_.dragging && save_step_interaction_.preview_step > 0) {
+                progress_text = formatStepLabel(save_step_interaction_.preview_step);
+            } else if (save_step_interaction_.hover_step > 0) {
+                progress_text = formatStepLabel(save_step_interaction_.hover_step);
+            }
 
             setModelString("progress_width", model_.progress_width, progress_pct);
-            setModelString("progress_text", model_.progress_text, progress_pct);
+            setModelString("progress_text", model_.progress_text, std::move(progress_text));
+            const ProgressMarkerRenderState marker_state{
+                .dragging = save_step_interaction_.dragging,
+                .adding = save_step_interaction_.adding,
+                .original_step = save_step_interaction_.original_step,
+                .preview_step = save_step_interaction_.preview_step,
+                .hover_step = save_step_interaction_.hover_step,
+            };
+            setProgressMarkersRml(buildProgressMarkersRml(tm->getSaveSteps(), total, cur, marker_state));
             setModelString("step_value", model_.step_value, std::format("{}/{}", cur, total));
             setModelString("loss_value", model_.loss_value, std::format("{:.4f}", loss));
             setModelString("gaussians_value", model_.gaussians_value,
@@ -572,8 +869,10 @@ namespace lfs::vis::gui {
                 setModelString("eval_metrics_value", model_.eval_metrics_value, "");
             }
         } else {
+            resetSaveStepInteraction();
             setModelString("progress_width", model_.progress_width, "0%");
             setModelString("progress_text", model_.progress_text, "");
+            setProgressMarkersRml("");
             setModelString("step_value", model_.step_value, "");
             setModelString("loss_value", model_.loss_value, "");
             setModelBool("show_eval_metrics", model_.show_eval_metrics, false);
@@ -706,8 +1005,13 @@ namespace lfs::vis::gui {
         const float local_y = input.mouse_y - bar_y;
         const bool is_inside = local_x >= 0.0f && local_x < bar_w &&
                                local_y >= 0.0f && local_y < bar_h;
-        if (!is_inside && !input.mouse_released[0])
+        if (!is_inside && !input.mouse_released[0] && !input.mouse_released[1] &&
+            !save_step_interaction_.dragging) {
+            clearSaveStepHover();
             return;
+        }
+
+        handleSaveStepInteraction(input, local_x, local_y);
 
         const int mods = sdlModsToRml(input.key_ctrl, input.key_shift,
                                       input.key_alt, input.key_super);
@@ -717,6 +1021,10 @@ namespace lfs::vis::gui {
             rml_context_->ProcessMouseButtonDown(0, mods);
         if (input.mouse_released[0])
             rml_context_->ProcessMouseButtonUp(0, mods);
+        if (is_inside && input.mouse_clicked[1])
+            rml_context_->ProcessMouseButtonDown(1, mods);
+        if (input.mouse_released[1])
+            rml_context_->ProcessMouseButtonUp(1, mods);
     }
 
     void RmlStatusBar::queueCachedVulkanContext(const float x, const float y,

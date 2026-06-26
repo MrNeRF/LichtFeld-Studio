@@ -68,11 +68,18 @@
           <option value="mcmc" data-tooltip="training.tooltip.opt.strategy.mcmc">{{label_strategy_mcmc}}</option>
         </select>
       </div>
-      <div class="setting-row" data-tooltip="training.tooltip.iterations">
+      <div class="setting-row steps-scale-lock-row" data-tooltip="training.tooltip.iterations">
         <span class="prop-label">{{label_iterations}}</span>
         <input type="text" class="number-input" data-value="iterations_str" />
         <button class="num-step-btn" data-event-mousedown="num_step('iterations', -1)">-</button>
         <button class="num-step-btn" data-event-mousedown="num_step('iterations', 1)">+</button>
+        <button type="button"
+                class="icon-btn steps-scale-lock-btn"
+                data-class-selected="steps_scaling_lock_selected"
+                data-attr-title="steps_scaling_lock_tooltip"
+                data-event-click="toggle_step_scaling_lock">
+          <img data-attr-src="steps_scaling_lock_icon" />
+        </button>
       </div>
       <div class="setting-row" data-tooltip="training.tooltip.max_gaussians">
         <span class="prop-label">{{label_max_cap}}</span>
@@ -88,12 +95,6 @@
           <option value="2" data-tooltip="training.tooltip.opt.sh_degree.2">2</option>
           <option value="3" data-tooltip="training.tooltip.opt.sh_degree.3">3</option>
         </select>
-      </div>
-      <div class="setting-row" data-tooltip="training.tooltip.steps_scaler">
-        <span class="prop-label">{{label_steps_scaler}}</span>
-        <input type="text" class="number-input" data-value="steps_scaler_str" />
-        <button class="num-step-btn" data-event-mousedown="num_step('steps_scaler', -1)">-</button>
-        <button class="num-step-btn" data-event-mousedown="num_step('steps_scaler', 1)">+</button>
       </div>
     </div>
 
@@ -231,12 +232,9 @@
       </div>
       <div class="setting-row setting-row--aligned" data-tooltip="training.tooltip.bg_color" data-if="dep_bg_color">
         <span class="setting-row__label-col">{{label_bg_color}}</span>
-        <div class="setting-row__control-col setting-row__control-col--color">
-          <span class="color-comp">{{bg_color_r}}</span>
-          <span class="color-comp">{{bg_color_g}}</span>
-          <span class="color-comp">{{bg_color_b}}</span>
+        <div class="setting-row__control-col setting-row__control-col--color color-compact-control">
           <div class="color-swatch" id="swatch-bg_color" data-event-click="color_click('bg_color')"></div>
-          <input type="text" class="color-hex" data-value="bg_color_hex" />
+          <input type="text" class="color-hex visible" data-value="bg_color_hex" />
         </div>
       </div>
       <div data-if="dep_bg_image">
@@ -363,25 +361,25 @@
             <button class="num-step-btn" data-event-mousedown="num_step('rotation_lr', 1)">+</button>
           </div>
           <span class="status-text status-muted">{{label_refinement_header}}</span>
-          <div class="setting-row" data-tooltip="training.tooltip.refine_every">
+          <div class="setting-row" data-tooltip="training.tooltip.refine_every" data-class-disabled-overlay="step_scaling_params_locked">
             <span class="prop-label">{{label_refine_every}}</span>
             <input type="text" class="number-input" data-value="refine_every_str" />
             <button class="num-step-btn" data-event-mousedown="num_step('refine_every', -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="num_step('refine_every', 1)">+</button>
           </div>
-          <div class="setting-row" data-tooltip="training.tooltip.start_refine">
+          <div class="setting-row" data-tooltip="training.tooltip.start_refine" data-class-disabled-overlay="step_scaling_params_locked">
             <span class="prop-label">{{label_start_refine}}</span>
             <input type="text" class="number-input" data-value="start_refine_str" />
             <button class="num-step-btn" data-event-mousedown="num_step('start_refine', -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="num_step('start_refine', 1)">+</button>
           </div>
-          <div class="setting-row" data-tooltip="training.tooltip.stop_refine">
+          <div class="setting-row" data-tooltip="training.tooltip.stop_refine" data-class-disabled-overlay="step_scaling_params_locked">
             <span class="prop-label">{{label_stop_refine}}</span>
             <input type="text" class="number-input" data-value="stop_refine_str" />
             <button class="num-step-btn" data-event-mousedown="num_step('stop_refine', -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="num_step('stop_refine', 1)">+</button>
           </div>
-          <div class="setting-row" data-if="dep_mrnf" data-tooltip="training.tooltip.grow_until_iter">
+          <div class="setting-row" data-if="dep_mrnf" data-tooltip="training.tooltip.grow_until_iter" data-class-disabled-overlay="step_scaling_params_locked">
             <span class="prop-label">{{label_grow_until_iter}}</span>
             <input type="text" class="number-input" data-value="grow_until_iter_str" />
             <button class="num-step-btn" data-event-mousedown="num_step('grow_until_iter', -1)">-</button>
@@ -393,13 +391,13 @@
             <button class="num-step-btn" data-event-mousedown="num_step('grad_threshold', -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="num_step('grad_threshold', 1)">+</button>
           </div>
-          <div class="setting-row" data-tooltip="training.tooltip.reset_every">
+          <div class="setting-row" data-tooltip="training.tooltip.reset_every" data-class-disabled-overlay="step_scaling_params_locked">
             <span class="prop-label">{{label_reset_every}}</span>
             <input type="text" class="number-input" data-value="reset_every_str" />
             <button class="num-step-btn" data-event-mousedown="num_step('reset_every', -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="num_step('reset_every', 1)">+</button>
           </div>
-          <div class="setting-row" data-tooltip="training.tooltip.sh_upgrade_every">
+          <div class="setting-row" data-tooltip="training.tooltip.sh_upgrade_every" data-class-disabled-overlay="step_scaling_params_locked">
             <span class="prop-label">{{label_sh_degree_interval}}</span>
             <input type="text" class="number-input" data-value="sh_degree_interval_str" />
             <button class="num-step-btn" data-event-mousedown="num_step('sh_degree_interval', -1)">-</button>
@@ -600,7 +598,7 @@
         <span class="text-accent">{{label_hdr_save_steps}}</span>
       </div>
       <div class="section-content collapsed" id="sec-save-steps">
-        <div data-if="save_edit_mode">
+        <div data-if="save_edit_mode" data-class-disabled-overlay="step_scaling_params_locked">
           <div class="setting-row" data-tooltip="training.tooltip.save_step_input">
             <input type="text" id="num-new_step" class="number-input" data-value="new_step_str" />
             <button class="num-step-btn" data-event-mousedown="num_step('new_step', -1)">-</button>
@@ -663,6 +661,13 @@
     <color-picker id="color-picker-el"
       data-attr-red="picker_r" data-attr-green="picker_g" data-attr-blue="picker_b"
       data-event-change="picker_change" />
+    <div class="color-popup-fields">
+      <div class="color-rgb-row">
+        <input type="text" class="color-channel" data-value="bg_color_r" />
+        <input type="text" class="color-channel" data-value="bg_color_g" />
+        <input type="text" class="color-channel" data-value="bg_color_b" />
+      </div>
+    </div>
   </div>
 
   </div>

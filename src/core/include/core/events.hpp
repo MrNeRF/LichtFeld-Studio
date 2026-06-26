@@ -252,6 +252,7 @@ namespace lfs::core {
         namespace ui {
             EVENT(FileDropReceived, ); // Emitted when files are dropped onto the window
             EVENT(WindowResized, int width; int height;);
+            EVENT(WindowResizeInteraction, bool active;);
             EVENT(CameraMove, glm::mat3 rotation; glm::vec3 translation;);
             EVENT(SpeedChanged, float current_speed; float max_speed;);
             EVENT(ZoomSpeedChanged, float zoom_speed; float max_zoom_speed;);

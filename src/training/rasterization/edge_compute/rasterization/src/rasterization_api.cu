@@ -4,6 +4,7 @@
 
 #include "buffer_utils.h"
 #include "core/cuda/memory_arena.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "cuda_utils.h"
 #include "edge_rasterization_api.h"
 #include "edge_rasterization_config.h"
@@ -34,7 +35,11 @@ namespace edge_compute::rasterization {
         float far_plane,
         bool mip_filter,
         const float* pixel_weights,
-        float* accum_weights) {
+        float* accum_weights,
+        cudaStream_t stream) {
+        if (stream == nullptr) {
+            stream = lfs::core::getCurrentCUDAStream();
+        }
         // Validate inputs using pure CUDA validation
         CHECK_CUDA_PTR(means_ptr, "means_ptr");
         CHECK_CUDA_PTR(scales_raw_ptr, "scales_raw_ptr");
@@ -53,7 +58,7 @@ namespace edge_compute::rasterization {
 
         // Get global arena and begin frame
         auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
-        uint64_t frame_id = arena.begin_frame();
+        uint64_t frame_id = arena.begin_frame(stream);
 
         // Get arena allocator for this frame
         auto arena_allocator = arena.get_allocator(frame_id);
@@ -66,7 +71,7 @@ namespace edge_compute::rasterization {
         char* per_tile_buffers_blob = arena_allocator(per_tile_size);
 
         if (!per_primitive_buffers_blob || !per_tile_buffers_blob) {
-            arena.end_frame(frame_id);
+            arena.end_frame(frame_id, stream);
             return {frame_id, false, "OUT_OF_MEMORY: Failed to allocate initial buffers from arena"};
         }
 
@@ -116,11 +121,12 @@ namespace edge_compute::rasterization {
                                                  far_plane,
                                                  mip_filter,
                                                  pixel_weights,
-                                                 accum_weights);
+                                                 accum_weights,
+                                                 stream);
 
             // Verify allocations happened
             if (n_instances > 0 && !per_instance_buffers_blob) {
-                arena.end_frame(frame_id);
+                arena.end_frame(frame_id, stream);
                 return {frame_id, false, "OUT_OF_MEMORY: Instance buffers were not allocated despite n_instances > 0"};
             }
 
@@ -128,7 +134,7 @@ namespace edge_compute::rasterization {
 
         } catch (const std::exception& e) {
             // Clean up frame on error and return error context instead of throwing
-            arena.end_frame(frame_id);
+            arena.end_frame(frame_id, stream);
             static thread_local std::string error_message;
             error_message = e.what();
             return {frame_id, false, error_message.c_str()};

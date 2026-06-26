@@ -24,18 +24,46 @@ body {
     max-height: 30dp;
 }
 
+#menu-left {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    flex: 1;
+    min-width: 0;
+    height: 30dp;
+}
+
+#menu-right {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    flex: none;
+    height: 30dp;
+    margin-right: 0;
+}
+
 #brand-logo {
     flex: none;
-    margin-left: 16dp;
-    margin-right: 12dp;
-    height: 18dp;
+    width: 20dp;
+    height: 20dp;
+    margin-left: 10dp;
+    margin-right: 8dp;
     decorator: none;
+}
+
+#menu-window-controls {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    flex: none;
+    height: 30dp;
+    margin-left: 2dp;
 }
 
 #menu-toolbar {
     position: absolute;
     top: 0;
-    right: 12dp;
+    right: 184dp;
     display: flex;
     flex-direction: row;
     align-items: center;
@@ -66,6 +94,104 @@ body {
     height: 18dp;
 }
 
+.menu-window-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30dp;
+    height: 30dp;
+    min-width: 30dp;
+    min-height: 30dp;
+    padding: 6dp;
+    border-width: 0;
+    border-radius: 0;
+    box-sizing: border-box;
+    flex-shrink: 0;
+    cursor: pointer;
+    transition: background-color 0.12s quadratic-out;
+}
+
+.menu-window-btn img {
+    width: 18dp;
+    height: 18dp;
+}
+
+.menu-window-separator {
+    width: 1dp;
+    height: 18dp;
+    margin: 0 3dp;
+    flex-shrink: 0;
+}
+
+.window-icon {
+    position: relative;
+    width: 18dp;
+    height: 18dp;
+    flex-shrink: 0;
+}
+
+.window-minimize-line {
+    position: absolute;
+    left: 3dp;
+    top: 9dp;
+    width: 12dp;
+    height: 1dp;
+}
+
+.window-maximize-box {
+    position: absolute;
+    left: 3dp;
+    top: 3dp;
+    width: 12dp;
+    height: 12dp;
+    border-width: 1dp;
+}
+
+.window-icon-restore {
+    display: none;
+}
+
+.window-restore-box {
+    position: absolute;
+    width: 10dp;
+    height: 10dp;
+    border-width: 1dp;
+}
+
+.window-restore-back {
+    left: 5dp;
+    top: 3dp;
+}
+
+.window-restore-front {
+    left: 3dp;
+    top: 5dp;
+}
+
+#menu-window-maximize.maximized .window-icon-maximize {
+    display: none;
+}
+
+#menu-window-maximize.maximized .window-icon-restore {
+    display: block;
+}
+
+.window-close-line {
+    position: absolute;
+    left: 3dp;
+    top: 8dp;
+    width: 12dp;
+    height: 1dp;
+}
+
+.window-close-line-a {
+    transform: rotate(45deg);
+}
+
+.window-close-line-b {
+    transform: rotate(-45deg);
+}
+
 .menu-toolbar-separator {
     width: 1dp;
     height: 18dp;
@@ -77,7 +203,8 @@ body {
     display: flex;
     flex-direction: row;
     align-items: center;
-    flex: 1;
+    flex: none;
+    min-width: 0;
     height: 30dp;
 }
 

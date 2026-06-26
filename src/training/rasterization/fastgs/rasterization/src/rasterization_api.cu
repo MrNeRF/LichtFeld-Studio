@@ -5,6 +5,7 @@
 #include "backward.h"
 #include "buffer_utils.h"
 #include "core/cuda/memory_arena.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "cuda_utils.h"
 #include "diagnostics/vram_profiler.hpp"
 #include "forward.h"
@@ -26,14 +27,15 @@ namespace fast_lfs::rasterization {
         thread_local std::string last_forward_error;
         thread_local std::string last_backward_error;
 
-        void free_sorted_primitive_indices(void* ptr) noexcept {
+        void free_sorted_primitive_indices(void* ptr, cudaStream_t stream) noexcept {
             if (!ptr) {
                 return;
             }
             lfs::diagnostics::VramProfiler::instance().recordDeallocation(ptr);
 #if CUDART_VERSION >= 11020
-            cudaFreeAsync(ptr, nullptr);
+            cudaFreeAsync(ptr, stream);
 #else
+            (void)stream;
             cudaFree(ptr);
 #endif
         }
@@ -201,7 +203,12 @@ namespace fast_lfs::rasterization {
         float center_y,
         float near_plane,
         float far_plane,
-        bool mip_filter) {
+        bool mip_filter,
+        cudaStream_t stream) {
+
+        if (stream == nullptr) {
+            stream = lfs::core::getCurrentCUDAStream();
+        }
 
         lfs::core::RasterizerMemoryArena* arena = nullptr;
         uint64_t frame_id = 0;
@@ -238,7 +245,7 @@ namespace fast_lfs::rasterization {
             // synchronizes prior arena users, so asynchronous CUDA failures are
             // attributed before the CUB workspace query below.
             arena = &lfs::core::GlobalArenaManager::instance().get_arena();
-            frame_id = arena->begin_frame();
+            frame_id = arena->begin_frame(stream);
             frame_started = true;
 
             validate_fastgs_forward_cuda_preflight(
@@ -323,7 +330,8 @@ namespace fast_lfs::rasterization {
                                                    center_y,
                                                    near_plane,
                                                    far_plane,
-                                                   mip_filter);
+                                                   mip_filter,
+                                                   stream);
 
             // Verify allocations happened
             if (forward_result.n_instances > 0 && !forward_result.sorted_primitive_indices) {
@@ -342,6 +350,7 @@ namespace fast_lfs::rasterization {
             ctx.n_instances = forward_result.n_instances;
             ctx.sh_layout_bases = sh_layout_bases;
             ctx.frame_id = frame_id;
+            ctx.stream = stream;
             ctx.grad_mean2d_helper = grad_mean2d_helper;
             ctx.grad_conic_helper = grad_conic_helper;
             ctx.grad_depth_helper = grad_depth_helper;
@@ -371,9 +380,11 @@ namespace fast_lfs::rasterization {
         if (!forward_ctx.success) {
             return;
         }
-        free_sorted_primitive_indices(forward_ctx.sorted_primitive_indices);
+        // Release on the context's stream, not the caller's current one —
+        // robust against unwind paths on threads whose guard already popped.
+        free_sorted_primitive_indices(forward_ctx.sorted_primitive_indices, forward_ctx.stream);
         auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
-        arena.end_frame(forward_ctx.frame_id);
+        arena.end_frame(forward_ctx.frame_id, forward_ctx.stream);
     }
 
     BackwardOutputs backward_raw(
@@ -406,6 +417,10 @@ namespace fast_lfs::rasterization {
         DensificationType densification_type,
         const FusedAdamSettings* fused_adam,
         bool detach_depth_weights) {
+
+        // The forward chose the stream and chained the arena frame on it; the
+        // backward shares the same context/arena frame and must match.
+        const cudaStream_t stream = forward_ctx.stream;
 
         BackwardOutputs outputs;
         outputs.success = false;
@@ -502,20 +517,20 @@ namespace fast_lfs::rasterization {
             const size_t grad_mean2d_size = static_cast<size_t>(n_primitives) * 2 * sizeof(float);
             const size_t grad_conic_size = static_cast<size_t>(n_primitives) * 3 * sizeof(float);
             const size_t grad_depth_size = static_cast<size_t>(n_primitives) * sizeof(float);
-            CUDA_CHECK(cudaMemset(grad_mean2d_helper, 0, grad_mean2d_size),
-                       "cudaMemset(grad_mean2d_helper)");
-            CUDA_CHECK(cudaMemset(grad_conic_helper, 0, grad_conic_size),
-                       "cudaMemset(grad_conic_helper)");
-            CUDA_CHECK(cudaMemset(grad_depth_helper, 0, grad_depth_size),
-                       "cudaMemset(grad_depth_helper)");
-            CUDA_CHECK(cudaMemset(grad_opacity_helper, 0, static_cast<size_t>(n_primitives) * sizeof(float)),
-                       "cudaMemset(grad_opacity_helper)");
-            CUDA_CHECK(cudaMemset(grad_color_helper, 0, static_cast<size_t>(n_primitives) * 3 * sizeof(float)),
-                       "cudaMemset(grad_color_helper)");
+            CUDA_CHECK(cudaMemsetAsync(grad_mean2d_helper, 0, grad_mean2d_size, stream),
+                       "cudaMemsetAsync(grad_mean2d_helper)");
+            CUDA_CHECK(cudaMemsetAsync(grad_conic_helper, 0, grad_conic_size, stream),
+                       "cudaMemsetAsync(grad_conic_helper)");
+            CUDA_CHECK(cudaMemsetAsync(grad_depth_helper, 0, grad_depth_size, stream),
+                       "cudaMemsetAsync(grad_depth_helper)");
+            CUDA_CHECK(cudaMemsetAsync(grad_opacity_helper, 0, static_cast<size_t>(n_primitives) * sizeof(float), stream),
+                       "cudaMemsetAsync(grad_opacity_helper)");
+            CUDA_CHECK(cudaMemsetAsync(grad_color_helper, 0, static_cast<size_t>(n_primitives) * 3 * sizeof(float), stream),
+                       "cudaMemsetAsync(grad_color_helper)");
 
             if (grad_w2c_ptr) {
-                CUDA_CHECK(cudaMemset(grad_w2c_ptr, 0, 4 * 4 * sizeof(float)),
-                           "cudaMemset(grad_w2c)");
+                CUDA_CHECK(cudaMemsetAsync(grad_w2c_ptr, 0, 4 * 4 * sizeof(float), stream),
+                           "cudaMemsetAsync(grad_w2c)");
             }
 
             // Call the actual backward implementation
@@ -556,7 +571,8 @@ namespace fast_lfs::rasterization {
                 mip_filter,
                 densification_type,
                 *fused_adam,
-                detach_depth_weights);
+                detach_depth_weights,
+                stream);
 
             // Mark frame as complete
             release_forward_context(forward_ctx);

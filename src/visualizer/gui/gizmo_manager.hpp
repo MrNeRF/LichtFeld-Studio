@@ -11,9 +11,12 @@
 #include "gui/pie_menu.hpp"
 #include "gui/ui_context.hpp"
 #include "rendering/rendering_types.hpp"
+#include "selection/selection_service.hpp"
 #include <chrono>
+#include <cstdint>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -43,6 +46,11 @@ namespace lfs::vis {
             void updateCropFlash();
             void deactivateAllTools();
             void setSelectionSubMode(SelectionSubMode mode);
+            void setSelectionVolumeFromDrag(SelectionSubMode mode,
+                                            SelectionMode apply_mode,
+                                            uint64_t source_generation,
+                                            const glm::vec3& center_world,
+                                            float radius);
 
             [[nodiscard]] TransformSpace getTransformSpace() const { return transform_space_; }
             void setTransformSpace(TransformSpace space);
@@ -56,6 +64,8 @@ namespace lfs::vis {
             [[nodiscard]] bool isEllipsoidGizmoActive() const;
             LFS_VIS_API void setCropToolShape(const std::string& shape);
             [[nodiscard]] LFS_VIS_API std::string cropToolShape() const;
+            LFS_VIS_API void setCropToolOperation(const std::string& operation);
+            [[nodiscard]] LFS_VIS_API std::string cropToolOperation() const;
             LFS_VIS_API void fitActiveCropTool(bool use_percentile);
             LFS_VIS_API void applyActiveCropTool();
             [[nodiscard]] bool isViewportGizmoDragging() const { return viewport_gizmo_dragging_; }
@@ -130,6 +140,12 @@ namespace lfs::vis {
             glm::vec3 crop_tool_box_max_{0.5f};
             glm::vec3 crop_tool_ellipsoid_radii_{1.0f};
             glm::mat4 crop_tool_visualizer_transform_{1.0f};
+            SelectionMode selection_volume_apply_mode_ = SelectionMode::Replace;
+            uint64_t selection_volume_source_generation_ = 0;
+            std::shared_ptr<core::Tensor> selection_volume_base_mask_;
+            core::Scene::SelectionStateSnapshot selection_volume_selection_before_drag_;
+            bool selection_volume_gizmo_active_ = false;
+            bool selection_volume_drag_changed_ = false;
 
             // Unified gizmo context
             GizmoTransformContext gizmo_context_;
@@ -172,6 +188,8 @@ namespace lfs::vis {
             void handlePieMenuSelection();
             void handleCropAction(const std::string& action_id);
             [[nodiscard]] bool isCropToolActive() const;
+            [[nodiscard]] bool isSelectionVolumeMode() const;
+            [[nodiscard]] bool isVolumeGizmoToolActive() const;
             [[nodiscard]] std::optional<core::NodeId> selectedCropTargetNodeId() const;
             [[nodiscard]] bool ensureCropToolState();
             [[nodiscard]] bool computeCropToolTargetBounds(core::NodeId target_id,
@@ -183,6 +201,11 @@ namespace lfs::vis {
                                    const glm::vec3& bounds_max);
             void updateCropToolOverlayState();
             void clearCropToolOverlayState();
+            void clearSelectionVolumeState();
+            void captureSelectionVolumeBase(uint64_t source_generation);
+            [[nodiscard]] bool applySelectionVolumeFromGizmo(bool push_undo);
+            void beginSelectionVolumeGizmoDrag();
+            void finishSelectionVolumeGizmoDrag();
             void renderCropToolBoxGizmo(const UIContext& ctx, const ViewportLayout& viewport);
             void renderCropToolEllipsoidGizmo(const UIContext& ctx, const ViewportLayout& viewport);
         };

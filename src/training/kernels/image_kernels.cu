@@ -12,6 +12,8 @@
 #include <device_launch_parameters.h>
 #include <type_traits>
 
+#include "kernel_stream.hpp"
+
 namespace lfs::filters {
 
     // Adapted from spirulae-splat Densify.cu canny_edge_filter_kernel
@@ -152,8 +154,13 @@ namespace lfs::training::kernels {
     __global__ void normalize_by_device_scalar_kernel(
         float* __restrict__ data,
         const std::size_t n,
-        const float* __restrict__ scalar) {
-        const float divisor = fmaxf(*scalar, 1e-9f);
+        const float* __restrict__ scalar,
+        const float skip_below) {
+        const float value = *scalar;
+        if (value <= skip_below) {
+            return;
+        }
+        const float divisor = fmaxf(value, 1e-9f);
         const std::size_t idx = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
         const std::size_t stride = static_cast<std::size_t>(blockDim.x) * gridDim.x;
         for (std::size_t i = idx; i < n; i += stride) {
@@ -172,6 +179,7 @@ namespace lfs::training::kernels {
         const int height,
         const int width,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         dim3 blockDim(32, 32, 1);
         dim3 gridDim((width + blockDim.x - 1) / blockDim.x,
                      (height + blockDim.y - 1) / blockDim.y);
@@ -186,6 +194,7 @@ namespace lfs::training::kernels {
         const int height,
         const int width,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         launch_fused_canny_edge_filter_chw_impl(d_input_chw, d_output_hw, height, width, stream);
     }
 
@@ -195,6 +204,7 @@ namespace lfs::training::kernels {
         const int height,
         const int width,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         launch_fused_canny_edge_filter_chw_impl(d_input_chw, d_output_hw, height, width, stream);
     }
 
@@ -202,14 +212,15 @@ namespace lfs::training::kernels {
         float* d_data,
         const std::size_t n,
         const float* d_scalar,
+        const float skip_below,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
         if (n == 0) {
             return;
         }
 
         constexpr int block_size = 256;
         const int grid_size = static_cast<int>(std::min<std::size_t>((n + block_size - 1) / block_size, 4096));
-        normalize_by_device_scalar_kernel<<<grid_size, block_size, 0, stream>>>(d_data, n, d_scalar);
-        cudaStreamSynchronize(stream);
+        normalize_by_device_scalar_kernel<<<grid_size, block_size, 0, stream>>>(d_data, n, d_scalar, skip_below);
     }
 } // namespace lfs::training::kernels

@@ -449,6 +449,43 @@ progress fill {
     gap: 4dp;
 }
 
+.color-compact-control {
+    justify-content: flex-end;
+    min-width: 0;
+}
+
+.color-compact-control > .color-swatch {
+    margin-right: 0;
+}
+
+.color-compact-control > .color-hex {
+    flex: 1;
+    width: auto;
+    min-width: 0;
+}
+
+.color-popup-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 4dp;
+    margin-top: 4dp;
+    min-width: 0;
+}
+
+.color-rgb-row {
+    display: flex;
+    align-items: center;
+    gap: 4dp;
+    min-width: 0;
+    width: 100%;
+}
+
+.color-rgb-row > .color-channel {
+    flex: 1;
+    width: 0;
+    min-width: 0;
+}
+
 .setting-row__control-col--color > .color-comp {
     width: 38dp;
     min-width: 38dp;
@@ -656,8 +693,20 @@ progress fill {
     flex: 1;
 }
 
+.color-channel {
+    display: inline-block;
+    font-size: 12dp;
+    color: #cdd6f4;
+    background-color: #313244;
+    border-width: 1dp;
+    border-color: #45475a;
+    padding: 1dp 3dp;
+    text-align: right;
+    transition: border-color 0.12s quadratic-out;
+}
+
 .color-hex {
-    width: 70dp;
+    width: 58dp;
     font-size: 12dp;
     padding: 2dp 4dp;
     color: #cdd6f4;
@@ -672,6 +721,7 @@ progress fill {
     display: inline-block;
 }
 
+.color-channel:focus,
 .color-hex:focus {
     border-color: #89b4fa;
 }

@@ -377,9 +377,15 @@ namespace gsplat_lfs {
             channels = 4;
         }
 
-        // Temporary buffers for gradients
+        // Temporary buffers for gradients — stream-ordered alloc/free so the
+        // scratch is ordered with the backward kernels that use it (a plain
+        // cudaMalloc/cudaFree only synchronizes against the legacy stream).
         float* v_colors = nullptr;
+#if CUDART_VERSION >= 11020
+        cudaMallocAsync(&v_colors, C * N * channels * sizeof(float), stream);
+#else
         cudaMalloc(&v_colors, C * N * channels * sizeof(float));
+#endif
         cudaMemsetAsync(v_colors, 0, C * N * channels * sizeof(float), stream);
 
         // Backward through rasterization
@@ -419,7 +425,11 @@ namespace gsplat_lfs {
             // TODO: Scale v_scales by scaling_modifier
         }
 
+#if CUDART_VERSION >= 11020
+        cudaFreeAsync(v_colors, stream);
+#else
         cudaFree(v_colors);
+#endif
     }
 
 } // namespace gsplat_lfs

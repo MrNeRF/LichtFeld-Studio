@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "kernel_stream.hpp"
+
 namespace lfs::training::kernels {
     namespace {
         constexpr int kThreadsPerBlock = 256;
@@ -281,6 +283,7 @@ namespace lfs::training::kernels {
         const float weight,
         const DepthLossMode mode,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
 
         const int num_blocks = static_cast<int>(depth_loss_block_count(num_pixels));
 

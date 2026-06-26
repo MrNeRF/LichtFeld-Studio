@@ -4,6 +4,7 @@
 #pragma once
 
 #include "core/logger.hpp"
+#include "cuda_event_pool.hpp"
 #include <atomic>
 #include <cstdint>
 #include <cuda_runtime.h>
@@ -18,7 +19,6 @@ namespace lfs::core {
     public:
         static constexpr size_t INITIAL_CAPACITY = 1024;
         static constexpr size_t PROCESS_BATCH_SIZE = 64;
-        static constexpr size_t EVENT_POOL_SIZE = 256;
 
         using FreeCallback = void (*)(void* ptr, size_t size);
 
@@ -32,7 +32,6 @@ namespace lfs::core {
             if (!shutdown_.compare_exchange_strong(expected, true))
                 return;
             flush();
-            cleanup_event_pool();
         }
 
         void defer_free(void* ptr, size_t size, cudaStream_t stream, FreeCallback callback) {
@@ -43,7 +42,7 @@ namespace lfs::core {
                 return;
             }
 
-            cudaEvent_t event = acquire_event();
+            cudaEvent_t event = CudaEventPool::instance().acquire();
             if (!event) {
                 cudaStreamSynchronize(stream);
                 callback(ptr, size);
@@ -52,7 +51,7 @@ namespace lfs::core {
 
             cudaError_t err = cudaEventRecord(event, stream);
             if (err != cudaSuccess) {
-                release_event(event);
+                CudaEventPool::instance().release(event);
                 cudaStreamSynchronize(stream);
                 callback(ptr, size);
                 return;
@@ -82,7 +81,7 @@ namespace lfs::core {
                     const cudaError_t err = cudaEventQuery(item.event);
                     if (err == cudaSuccess) {
                         to_free.push_back(item);
-                        release_event(item.event);
+                        CudaEventPool::instance().release(item.event);
                         pending_[i] = pending_.back();
                         pending_.pop_back();
                         ++count;
@@ -117,7 +116,7 @@ namespace lfs::core {
             cudaDeviceSynchronize();
 
             for (const auto& item : to_free) {
-                release_event(item.event);
+                CudaEventPool::instance().release(item.event);
                 item.callback(item.ptr, item.size);
                 stats_.freed_count.fetch_add(1, std::memory_order_relaxed);
                 stats_.freed_bytes.fetch_add(item.size, std::memory_order_relaxed);
@@ -153,61 +152,14 @@ namespace lfs::core {
 
         DeferredFreeQueue() {
             pending_.reserve(INITIAL_CAPACITY);
-            initialize_event_pool();
         }
 
         ~DeferredFreeQueue() {
             shutdown();
         }
 
-        void initialize_event_pool() {
-            std::lock_guard<std::mutex> lock(event_pool_mutex_);
-            for (size_t i = 0; i < EVENT_POOL_SIZE; i++) {
-                cudaEvent_t event;
-                cudaError_t err = cudaEventCreateWithFlags(&event, cudaEventDisableTiming);
-                if (err == cudaSuccess) {
-                    event_pool_.push_back(event);
-                }
-            }
-            LOG_DEBUG("DeferredFreeQueue: created {} CUDA events", event_pool_.size());
-        }
-
-        void cleanup_event_pool() {
-            std::lock_guard<std::mutex> lock(event_pool_mutex_);
-            for (cudaEvent_t event : event_pool_) {
-                cudaEventDestroy(event);
-            }
-            event_pool_.clear();
-        }
-
-        cudaEvent_t acquire_event() {
-            std::lock_guard<std::mutex> lock(event_pool_mutex_);
-            if (event_pool_.empty()) {
-                cudaEvent_t event;
-                if (cudaEventCreateWithFlags(&event, cudaEventDisableTiming) == cudaSuccess) {
-                    return event;
-                }
-                return nullptr;
-            }
-            cudaEvent_t event = event_pool_.back();
-            event_pool_.pop_back();
-            return event;
-        }
-
-        void release_event(cudaEvent_t event) {
-            std::lock_guard<std::mutex> lock(event_pool_mutex_);
-            if (event_pool_.size() < EVENT_POOL_SIZE * 2) {
-                event_pool_.push_back(event);
-            } else {
-                cudaEventDestroy(event);
-            }
-        }
-
         std::vector<PendingFree> pending_;
         mutable std::mutex queue_mutex_;
-
-        std::vector<cudaEvent_t> event_pool_;
-        std::mutex event_pool_mutex_;
 
         std::atomic<bool> shutdown_{false};
 

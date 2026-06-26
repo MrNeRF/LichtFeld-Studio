@@ -137,8 +137,10 @@ CHROM_FLOAT_PROPS = [
     "ppisp_wb_temperature", "ppisp_wb_tint",
 ]
 
+BACKGROUND_COLOR_PROP = "background_color"
+
 COLOR_PROPS = [
-    "background_color",
+    BACKGROUND_COLOR_PROP,
     "selection_color_committed", "selection_color_preview",
     "selection_color_center_marker",
     "mesh_wireframe_color",
@@ -237,18 +239,15 @@ def _normalize_raster_backend(value):
     return backend if backend in RASTER_BACKENDS else "3dgs"
 
 
-def _color_to_hex(c):
-    return f"#{int(c[0]*255):02x}{int(c[1]*255):02x}{int(c[2]*255):02x}"
+COLOR_CHANNELS = (
+    ("r", 0),
+    ("g", 1),
+    ("b", 2),
+)
 
 
-def _hex_to_color(h):
-    h = h.lstrip("#")
-    if len(h) != 6:
-        return None
-    try:
-        return (int(h[0:2], 16) / 255.0, int(h[2:4], 16) / 255.0, int(h[4:6], 16) / 255.0)
-    except ValueError:
-        return None
+def _color_channel_field(prop_id, suffix):
+    return f"{prop_id}_{suffix}"
 
 
 class RenderingPanel(Panel):
@@ -268,6 +267,7 @@ class RenderingPanel(Panel):
         self._doc = None
         self._picker_click_handled = False
         self._last_swatch_colors = {}
+        self._color_text_bufs = {}
         self._last_panel_label = ""
         self._simplify_target_count = 0
         self._simplify_target_touched = False
@@ -312,14 +312,35 @@ class RenderingPanel(Panel):
         for el in doc.query_selector_all("input.color-hex"):
             w.bind_select_all_on_focus(el)
             data_value = el.get_attribute("data-value", "")
-            if data_value.endswith("_hex"):
-                prop_id = data_value[:-4]
-                self._escape_revert.bind(
-                    el,
-                    data_value,
-                    lambda p=prop_id: self._capture_color_snapshot(p),
-                    lambda snapshot, p=prop_id: self._restore_color_snapshot(p, snapshot),
-                )
+            if not data_value.endswith("_hex"):
+                continue
+            prop_id = data_value[:-4]
+            if prop_id not in COLOR_PROPS:
+                continue
+            self._escape_revert.bind(
+                el,
+                data_value,
+                lambda p=prop_id: self._capture_color_snapshot(p),
+                lambda snapshot, p=prop_id: self._restore_color_snapshot(p, snapshot),
+            )
+            if prop_id == BACKGROUND_COLOR_PROP:
+                el.add_event_listener("change", self._on_color_text_change)
+                el.add_event_listener("blur", self._on_color_text_blur)
+        for el in doc.query_selector_all("input.color-channel"):
+            w.bind_select_all_on_focus(el)
+            data_value = el.get_attribute("data-value", "")
+            channel = self._split_color_channel_field(data_value)
+            if channel is None:
+                continue
+            prop_id, _channel_index = channel
+            self._escape_revert.bind(
+                el,
+                data_value,
+                lambda p=prop_id: self._capture_color_snapshot(p),
+                lambda snapshot, p=prop_id: self._restore_color_snapshot(p, snapshot),
+            )
+            el.add_event_listener("change", self._on_color_text_change)
+            el.add_event_listener("blur", self._on_color_text_blur)
         self._refresh_simplify_source(force=True)
         self._scrub_fields.mount(doc)
         self._sync_section_states()
@@ -415,15 +436,59 @@ class RenderingPanel(Panel):
         model.bind_func("label_lod_max_splats", lambda: _prop_label("lod_max_splats"))
 
         for prop_id in COLOR_PROPS:
-            model.bind_func(f"{prop_id}_r",
-                            lambda p=prop_id: f"R:{int(getattr(s(), p, (0,0,0))[0]*255):>3d}")
-            model.bind_func(f"{prop_id}_g",
-                            lambda p=prop_id: f"G:{int(getattr(s(), p, (0,0,0))[1]*255):>3d}")
-            model.bind_func(f"{prop_id}_b",
-                            lambda p=prop_id: f"B:{int(getattr(s(), p, (0,0,0))[2]*255):>3d}")
-            model.bind(f"{prop_id}_hex",
-                       lambda p=prop_id: _color_to_hex(getattr(s(), p, (0,0,0))),
-                       lambda v, p=prop_id: self._set_color_hex(p, v))
+            if prop_id == BACKGROUND_COLOR_PROP:
+                for suffix, channel_index in COLOR_CHANNELS:
+                    field = _color_channel_field(prop_id, suffix)
+                    self._color_text_bufs[field] = None
+
+                    def getter(f=field, p=prop_id, idx=channel_index):
+                        return self._color_text_value(
+                            f,
+                            lambda: w.color_channel_text(
+                                getattr(s(), p, (0, 0, 0)), idx
+                            ),
+                        )
+
+                    model.bind(
+                        field,
+                        getter,
+                        lambda v, f=field: self._set_color_text_buf(f, v),
+                    )
+                hex_field = f"{prop_id}_hex"
+                self._color_text_bufs[hex_field] = None
+                model.bind(
+                    hex_field,
+                    lambda f=hex_field, p=prop_id: self._color_text_value(
+                        f, lambda: w.color_to_hex(getattr(s(), p, (0, 0, 0)))
+                    ),
+                    lambda v, f=hex_field: self._set_color_text_buf(f, v),
+                )
+                continue
+
+            model.bind_func(
+                f"{prop_id}_r",
+                lambda p=prop_id: w.color_component_label(
+                    "R", getattr(s(), p, (0, 0, 0)), 0
+                ),
+            )
+            model.bind_func(
+                f"{prop_id}_g",
+                lambda p=prop_id: w.color_component_label(
+                    "G", getattr(s(), p, (0, 0, 0)), 1
+                ),
+            )
+            model.bind_func(
+                f"{prop_id}_b",
+                lambda p=prop_id: w.color_component_label(
+                    "B", getattr(s(), p, (0, 0, 0)), 2
+                ),
+            )
+            hex_field = f"{prop_id}_hex"
+            model.bind(
+                hex_field,
+                lambda p=prop_id: w.color_to_hex(getattr(s(), p, (0, 0, 0))),
+                lambda v, p=prop_id: self._set_color_hex(p, v),
+            )
 
         for prop_id in CHROM_FLOAT_PROPS:
             model.bind(prop_id,
@@ -498,6 +563,10 @@ class RenderingPanel(Panel):
         model.bind_func("picker_b",
                          lambda: float(getattr(s(), self._color_edit_prop, (0, 0, 0))[2])
                          if self._color_edit_prop and s() else 0.0)
+        model.bind_func(
+            "editing_background_color",
+            lambda: self._color_edit_prop == BACKGROUND_COLOR_PROP,
+        )
 
         model.bind_func("is_windows", lambda: lf.ui.is_windows_platform())
         model.bind_func("label_console",
@@ -564,7 +633,12 @@ class RenderingPanel(Panel):
         dirty |= self._sync_lod_budget()
         for prop_id in COLOR_PROPS:
             val = getattr(s, prop_id)
-            key = (prop_id, int(val[0] * 255), int(val[1] * 255), int(val[2] * 255))
+            key = (
+                prop_id,
+                w.color_channel_byte(val, 0),
+                w.color_channel_byte(val, 1),
+                w.color_channel_byte(val, 2),
+            )
             if key == self._last_swatch_colors.get(prop_id):
                 continue
             self._last_swatch_colors[prop_id] = key
@@ -572,6 +646,7 @@ class RenderingPanel(Panel):
             if swatch:
                 swatch.set_property("background-color", f"rgb({key[1]},{key[2]},{key[3]})")
                 dirty = True
+            self._dirty_color_bindings(prop_id)
         dirty |= self._refresh_simplify_source(force=False)
         dirty |= self._sync_simplify_task_state(force=False)
         dirty |= self._scrub_fields.sync_all()
@@ -858,13 +933,98 @@ class RenderingPanel(Panel):
         settings.lod_max_splats = budget
         self._dirty_model("lod_max_splats")
 
+    def _color_text_value(self, field, canonical):
+        if self._color_text_bufs.get(field) is None:
+            self._color_text_bufs[field] = canonical()
+        return self._color_text_bufs[field]
+
+    def _set_color_text_buf(self, field, value):
+        self._color_text_bufs[field] = str(value)
+
+    def _color_prop_from_hex_field(self, field):
+        if not field.endswith("_hex"):
+            return None
+        prop_id = field[:-4]
+        return prop_id if prop_id == BACKGROUND_COLOR_PROP else None
+
+    def _canonical_color_text_value(self, field):
+        settings = lf.get_render_settings()
+        if not settings:
+            return ""
+        channel = self._split_color_channel_field(field)
+        if channel is not None:
+            prop_id, channel_index = channel
+            return w.color_channel_text(
+                getattr(settings, prop_id, (0.0, 0.0, 0.0)), channel_index
+            )
+        prop_id = self._color_prop_from_hex_field(field)
+        if prop_id is not None:
+            return w.color_to_hex(getattr(settings, prop_id, (0.0, 0.0, 0.0)))
+        return None
+
+    def _sync_color_text_bufs(self, prop_id):
+        settings = lf.get_render_settings()
+        if not settings:
+            return
+        color = getattr(settings, prop_id, (0.0, 0.0, 0.0))
+        hex_field = f"{prop_id}_hex"
+        if hex_field in self._color_text_bufs:
+            self._color_text_bufs[hex_field] = w.color_to_hex(color)
+        if prop_id == BACKGROUND_COLOR_PROP:
+            for suffix, channel_index in COLOR_CHANNELS:
+                field = _color_channel_field(prop_id, suffix)
+                self._color_text_bufs[field] = w.color_channel_text(color, channel_index)
+
+    def _commit_color_text_field(self, field):
+        buf_val = self._color_text_bufs.get(field)
+        updated = False
+        if buf_val is not None and str(buf_val).strip():
+            channel = self._split_color_channel_field(field)
+            if channel is not None:
+                prop_id, channel_index = channel
+                updated = self._set_color_channel(prop_id, channel_index, buf_val)
+            else:
+                prop_id = self._color_prop_from_hex_field(field)
+                if prop_id is not None:
+                    updated = self._set_color_hex(prop_id, buf_val)
+
+        canonical = self._canonical_color_text_value(field)
+        if canonical is None:
+            return
+        self._color_text_bufs[field] = canonical
+        if updated:
+            channel = self._split_color_channel_field(field)
+            prop_id = (
+                channel[0]
+                if channel is not None
+                else self._color_prop_from_hex_field(field)
+            )
+            if prop_id is not None:
+                self._dirty_color_bindings(prop_id)
+        elif self._handle:
+            self._handle.dirty(field)
+
     def _set_color_hex(self, prop_id, hex_val):
         s = lf.get_render_settings()
         if not s:
-            return
-        color = _hex_to_color(hex_val)
-        if color:
-            setattr(s, prop_id, color)
+            return False
+        color = w.hex_to_color(hex_val)
+        if color is not None:
+            setattr(s, prop_id, w.normalize_color(color))
+            return True
+        return False
+
+    def _set_color_channel(self, prop_id, channel_index, val_str):
+        s = lf.get_render_settings()
+        if not s:
+            return False
+        parsed = w.parse_color_channel(val_str)
+        if parsed is None:
+            return False
+        color = list(w.normalize_color(getattr(s, prop_id, (0.0, 0.0, 0.0))))
+        color[channel_index] = parsed
+        setattr(s, prop_id, tuple(color))
+        return True
 
     def _capture_color_snapshot(self, prop_id):
         settings = lf.get_render_settings()
@@ -876,9 +1036,8 @@ class RenderingPanel(Panel):
         settings = lf.get_render_settings()
         if not settings:
             return
-        setattr(settings, prop_id, tuple(snapshot or (0.0, 0.0, 0.0)))
-        if self._handle:
-            self._handle.dirty_all()
+        setattr(settings, prop_id, w.normalize_color(snapshot or (0.0, 0.0, 0.0)))
+        self._dirty_color_bindings(prop_id)
 
     def _compute_fov(self):
         s = lf.get_render_settings()
@@ -942,6 +1101,7 @@ class RenderingPanel(Panel):
         handle.dirty("picker_r")
         handle.dirty("picker_g")
         handle.dirty("picker_b")
+        handle.dirty("editing_background_color")
 
     def _on_picker_change(self, handle, event, args):
         s = lf.get_render_settings()
@@ -951,11 +1111,22 @@ class RenderingPanel(Panel):
         g = float(event.get_parameter("green", "0"))
         b = float(event.get_parameter("blue", "0"))
         prop = self._color_edit_prop
-        setattr(s, prop, (r, g, b))
-        handle.dirty(f"{prop}_r")
-        handle.dirty(f"{prop}_g")
-        handle.dirty(f"{prop}_b")
-        handle.dirty(f"{prop}_hex")
+        setattr(s, prop, w.normalize_color((r, g, b)))
+        self._dirty_color_bindings(prop, handle)
+
+    def _on_color_text_change(self, event):
+        if not event.get_bool_parameter("linebreak", False):
+            return
+        target = event.current_target()
+        if target is None:
+            return
+        self._commit_color_text_field(target.get_attribute("data-value", ""))
+
+    def _on_color_text_blur(self, event):
+        target = event.current_target()
+        if target is None:
+            return
+        self._commit_color_text_field(target.get_attribute("data-value", ""))
 
     def _on_popup_click(self, event):
         event.stop_propagation()
@@ -970,6 +1141,8 @@ class RenderingPanel(Panel):
         self._color_edit_prop = None
         if self._popup_el:
             self._popup_el.set_class("visible", False)
+        if self._handle:
+            self._handle.dirty("editing_background_color")
 
     def _set_ppisp_mode(self, v):
         s = lf.get_render_settings()
@@ -986,6 +1159,24 @@ class RenderingPanel(Panel):
             return
         for field in fields:
             self._handle.dirty(field)
+
+    def _dirty_color_bindings(self, prop_id, handle=None):
+        self._sync_color_text_bufs(prop_id)
+        target = handle or self._handle
+        if not target:
+            return
+        for suffix, _channel_index in COLOR_CHANNELS:
+            target.dirty(_color_channel_field(prop_id, suffix))
+        target.dirty(f"{prop_id}_hex")
+
+    def _split_color_channel_field(self, field):
+        for suffix, channel_index in COLOR_CHANNELS:
+            suffix_text = f"_{suffix}"
+            if field.endswith(suffix_text):
+                prop_id = field[: -len(suffix_text)]
+                if prop_id == BACKGROUND_COLOR_PROP:
+                    return prop_id, channel_index
+        return None
 
     def _current_lod_budget(self) -> int:
         settings = lf.get_render_settings()

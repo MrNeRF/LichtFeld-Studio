@@ -237,7 +237,34 @@ namespace lfs::vis {
             return python::dispatch_modal_event(py_evt);
         }
 
-        bool handleSelectionModeShortcut(const input::Action action, gui::GuiManager* gui) {
+        std::optional<ToolType> ownerToolForActivationAction(const input::Action action) {
+            switch (action) {
+            case input::Action::TOOL_SELECT:
+            case input::Action::SELECT_MODE_CENTERS:
+            case input::Action::SELECT_MODE_RECTANGLE:
+            case input::Action::SELECT_MODE_POLYGON:
+            case input::Action::SELECT_MODE_LASSO:
+            case input::Action::SELECT_MODE_RINGS:
+            case input::Action::SELECT_MODE_COLOR:
+            case input::Action::SELECT_MODE_BOX:
+            case input::Action::SELECT_MODE_SPHERE:
+                return ToolType::Selection;
+            case input::Action::TOOL_TRANSLATE:
+                return ToolType::Translate;
+            case input::Action::TOOL_ROTATE:
+                return ToolType::Rotate;
+            case input::Action::TOOL_SCALE:
+                return ToolType::Scale;
+            case input::Action::TOOL_MIRROR:
+                return ToolType::Mirror;
+            case input::Action::TOOL_ALIGN:
+                return ToolType::Align;
+            default:
+                return std::nullopt;
+            }
+        }
+
+        bool applySelectionModeShortcut(const input::Action action, gui::GuiManager* gui) {
             if (!gui)
                 return false;
 
@@ -268,6 +295,14 @@ namespace lfs::vis {
                 submode = SelectionSubMode::Color;
                 submode_id = "color";
                 break;
+            case input::Action::SELECT_MODE_BOX:
+                submode = SelectionSubMode::Box;
+                submode_id = "box";
+                break;
+            case input::Action::SELECT_MODE_SPHERE:
+                submode = SelectionSubMode::Sphere;
+                submode_id = "sphere";
+                break;
             default:
                 return false;
             }
@@ -277,33 +312,31 @@ namespace lfs::vis {
             return true;
         }
 
-        bool handleToolbarToolShortcut(const input::Action action) {
-            ToolType tool = ToolType::None;
-            switch (action) {
-            case input::Action::TOOL_SELECT:
-                tool = ToolType::Selection;
-                break;
-            case input::Action::TOOL_TRANSLATE:
-                tool = ToolType::Translate;
-                break;
-            case input::Action::TOOL_ROTATE:
-                tool = ToolType::Rotate;
-                break;
-            case input::Action::TOOL_SCALE:
-                tool = ToolType::Scale;
-                break;
-            case input::Action::TOOL_MIRROR:
-                tool = ToolType::Mirror;
-                break;
-            case input::Action::TOOL_ALIGN:
-                tool = ToolType::Align;
-                break;
-            default:
+        bool handleToolControlActivationShortcut(const input::Action action, gui::GuiManager* gui) {
+            const auto tool = ownerToolForActivationAction(action);
+            if (!tool) {
                 return false;
             }
 
-            lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(tool)}.emit();
+            lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(*tool)}.emit();
+            (void)applySelectionModeShortcut(action, gui);
             return true;
+        }
+
+        input::Action resolveCrossToolActivationShortcut(const input::InputBindings& bindings,
+                                                         const input::ToolMode current_mode,
+                                                         const int key,
+                                                         const int mods) {
+            for (const auto mode : input::kAllToolModes) {
+                if (mode == current_mode) {
+                    continue;
+                }
+                const auto candidate = bindings.getActionForKey(mode, key, mods);
+                if (ownerToolForActivationAction(candidate).has_value()) {
+                    return candidate;
+                }
+            }
+            return input::Action::NONE;
         }
 
         [[nodiscard]] bool shouldDeferClickActionForDrag(const input::Action action) {
@@ -742,8 +775,11 @@ namespace lfs::vis {
                 return;
             }
 
-            // Block if a transform gizmo is being used or hovered
-            if (over_transform_gizmo) {
+            // Pivot placement is a viewport-global double-click gesture and must
+            // remain available when an editing gizmo is merely hovered. Active
+            // gizmo manipulation still owns the pointer until the drag finishes.
+            if (isTransformGizmoUsing() ||
+                (over_transform_gizmo && bound_action != input::Action::CAMERA_SET_PIVOT)) {
                 return;
             }
 
@@ -900,15 +936,20 @@ namespace lfs::vis {
             case input::Action::SELECTION_REPLACE:
             case input::Action::SELECTION_ADD:
             case input::Action::SELECTION_REMOVE:
+            case input::Action::SELECTION_INTERSECT:
                 if (!over_gui && !over_gizmo && tool_context_ &&
                     !over_transform_gizmo) {
                     if (selection_tool_ && selection_tool_->isEnabled()) {
                         // Invoke selection stroke operator
                         auto* gm = services().guiOrNull();
                         const auto sub_mode = gm ? static_cast<int>(gm->gizmo().getSelectionSubMode()) : 0;
-                        const int selection_op = (bound_action == input::Action::SELECTION_ADD)      ? 1
-                                                 : (bound_action == input::Action::SELECTION_REMOVE) ? 2
-                                                                                                     : 0;
+                        int selection_op = 0;
+                        switch (bound_action) {
+                        case input::Action::SELECTION_ADD: selection_op = 1; break;
+                        case input::Action::SELECTION_REMOVE: selection_op = 2; break;
+                        case input::Action::SELECTION_INTERSECT: selection_op = 3; break;
+                        default: break;
+                        }
 
                         op::OperatorProperties props;
                         props.set("x", x);
@@ -1503,7 +1544,10 @@ namespace lfs::vis {
         double mx = mx_f, my = my_f;
         const bool over_gui_hover = isPointerOverUiHover(mx, my);
         const auto tool_mode = getCurrentToolMode();
-        const auto bound_action = bindings_.getActionForKey(tool_mode, logical_key, mods);
+        auto bound_action = bindings_.getActionForKey(tool_mode, logical_key, mods);
+        if (bound_action == input::Action::NONE) {
+            bound_action = resolveCrossToolActivationShortcut(bindings_, tool_mode, logical_key, mods);
+        }
         if (action == input::ACTION_PRESS &&
             dispatchSelectionActionToModal(bound_action, mods, mx, my)) {
             return;
@@ -1569,10 +1613,7 @@ namespace lfs::vis {
         }
 
         if (action == input::ACTION_PRESS) {
-            if (handleSelectionModeShortcut(bound_action, gui))
-                return;
-
-            if (handleToolbarToolShortcut(bound_action))
+            if (handleToolControlActivationShortcut(bound_action, gui))
                 return;
         }
 
@@ -1589,6 +1630,14 @@ namespace lfs::vis {
 
             case input::Action::TOGGLE_GT_COMPARISON:
                 cmd::ToggleGTComparison{}.emit();
+                return;
+
+            case input::Action::TOGGLE_CAMERA_FRUSTUMS:
+                if (auto* rendering_manager = services().renderingOrNull()) {
+                    auto settings = rendering_manager->getSettings();
+                    settings.show_camera_frustums = !settings.show_camera_frustums;
+                    rendering_manager->updateSettings(settings);
+                }
                 return;
 
             case input::Action::CAMERA_NEXT_VIEW:
@@ -1677,6 +1726,8 @@ namespace lfs::vis {
                                 selection_service->setInteractiveSelectionMode(SelectionMode::Add);
                             } else if (mods & input::KEYMOD_CTRL) {
                                 selection_service->setInteractiveSelectionMode(SelectionMode::Remove);
+                            } else if (mods & input::KEYMOD_ALT) {
+                                selection_service->setInteractiveSelectionMode(SelectionMode::Intersect);
                             } else {
                                 selection_service->setInteractiveSelectionMode(SelectionMode::Replace);
                             }
@@ -2401,7 +2452,7 @@ namespace lfs::vis {
         return out_min.x <= out_max.x;
     }
 
-    // Cached whole-scene radius used to scale WASD speed and pan distance with
+    // Cached whole-scene radius used to scale WASD speed and cap pan distance by
     // splat size. Uses the trimmed (1st/99th percentile) bounds so a few far-flung
     // floaters can't blow up the extent and make navigation far too fast. Lazily
     // computed after load (bounds may not exist the instant SceneLoaded fires) and

@@ -4436,6 +4436,80 @@ namespace lfs::python {
             "Check if an operator is currently active");
 
         m.def(
+            "can_edit_gaussian_selection", []() -> bool {
+                const auto* editor = get_editor_context();
+                return editor && editor->canSelectGaussians();
+            },
+            "Return true when Gaussian selection editing is available");
+
+        m.def(
+            "has_gaussian_selection", []() -> bool {
+                const auto* sm = get_scene_manager();
+                return sm && sm->getScene().hasSelection();
+            },
+            "Return true when any Gaussians are selected");
+
+        m.def(
+            "has_gaussian_clipboard", []() -> bool {
+                const auto* sm = get_scene_manager();
+                return sm && sm->hasGaussianClipboard();
+            },
+            "Return true when copied Gaussians are available for paste");
+
+        m.def(
+            "copy_gaussian_selection", []() {
+                auto* editor = get_editor_context();
+                auto* sm = get_scene_manager();
+                if (!editor || !editor->canSelectGaussians() || !sm || !sm->getScene().hasSelection()) {
+                    return;
+                }
+                sm->copySelectedGaussians();
+            },
+            "Copy selected Gaussians to the internal Gaussian clipboard");
+
+        m.def(
+            "paste_gaussian_selection", []() {
+                auto* editor = get_editor_context();
+                auto* sm = get_scene_manager();
+                if (!editor || !editor->canSelectGaussians() || !sm || !sm->hasGaussianClipboard()) {
+                    return;
+                }
+                sm->pasteSelectionFromClipboard();
+            },
+            "Paste copied Gaussians from the internal Gaussian clipboard");
+
+        m.def(
+            "invert_gaussian_selection", []() {
+                const auto* editor = get_editor_context();
+                if (!editor || !editor->canSelectGaussians()) {
+                    return;
+                }
+                lfs::core::events::cmd::InvertSelection{}.emit();
+            },
+            "Invert the current Gaussian selection");
+
+        m.def(
+            "select_all_gaussians", []() {
+                const auto* editor = get_editor_context();
+                if (!editor || !editor->canSelectGaussians()) {
+                    return;
+                }
+                lfs::core::events::cmd::SelectAll{}.emit();
+            },
+            "Select all editable Gaussians");
+
+        m.def(
+            "deselect_all_gaussians", []() {
+                const auto* editor = get_editor_context();
+                auto* sm = get_scene_manager();
+                if (!editor || !editor->canSelectGaussians() || !sm || !sm->getScene().hasSelection()) {
+                    return;
+                }
+                lfs::core::events::cmd::DeselectAll{}.emit();
+            },
+            "Deselect all selected Gaussians");
+
+        m.def(
             "set_gizmo_type", [](const std::string& type) {
                 if (auto* editor = get_editor_context())
                     editor->setGizmoType(type);
@@ -4460,12 +4534,14 @@ namespace lfs::python {
                 vis::UnifiedToolRegistry::instance().setActiveSubmode(mode);
 
                 static const std::unordered_map<std::string, int> MODE_MAP = {
-                    {"centers", 0},
-                    {"rectangle", 1},
-                    {"polygon", 2},
-                    {"lasso", 3},
-                    {"rings", 4},
-                    {"color", 5}};
+                    {"centers", static_cast<int>(lfs::vis::SelectionSubMode::Centers)},
+                    {"rectangle", static_cast<int>(lfs::vis::SelectionSubMode::Rectangle)},
+                    {"polygon", static_cast<int>(lfs::vis::SelectionSubMode::Polygon)},
+                    {"lasso", static_cast<int>(lfs::vis::SelectionSubMode::Lasso)},
+                    {"rings", static_cast<int>(lfs::vis::SelectionSubMode::Rings)},
+                    {"color", static_cast<int>(lfs::vis::SelectionSubMode::Color)},
+                    {"box", static_cast<int>(lfs::vis::SelectionSubMode::Box)},
+                    {"sphere", static_cast<int>(lfs::vis::SelectionSubMode::Sphere)}};
                 if (const auto it = MODE_MAP.find(mode); it != MODE_MAP.end()) {
                     lfs::core::events::tools::SetSelectionSubMode{.selection_mode = it->second}.emit();
                 }
@@ -4538,6 +4614,26 @@ namespace lfs::python {
                 return "box";
             },
             "Get the active crop tool shape");
+
+        m.def(
+            "set_crop_tool_operation",
+            [](const std::string& operation) {
+                if (auto* const gui = lfs::python::get_gui_manager()) {
+                    gui->gizmo().setCropToolOperation(operation);
+                }
+            },
+            nb::arg("operation"),
+            "Set the active crop or selection-volume gizmo operation: translate, rotate, or scale");
+
+        m.def(
+            "get_crop_tool_operation",
+            []() -> std::string {
+                if (auto* const gui = lfs::python::get_gui_manager()) {
+                    return gui->gizmo().cropToolOperation();
+                }
+                return "translate";
+            },
+            "Get the active crop or selection-volume gizmo operation");
 
         m.def(
             "apply_crop_tool",
@@ -5392,7 +5488,8 @@ namespace lfs::python {
         }
 
         // Selection sub-mode access (for Python to read C++ toolbar state)
-        m.def("get_selection_submode", &get_selection_submode, "Get current selection sub-mode (0=Brush, 1=Rectangle, 2=Polygon, 3=Lasso, 4=Rings)");
+        m.def("get_selection_submode", &get_selection_submode,
+              "Get current selection sub-mode (0=Centers, 1=Rectangle, 2=Polygon, 3=Lasso, 4=Rings, 5=Color, 6=Box, 7=Sphere)");
 
         // Keyboard capture for popup windows
         m.def("request_keyboard_capture", &request_keyboard_capture, nb::arg("owner_id"), "Request exclusive keyboard capture for a named owner");

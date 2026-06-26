@@ -1449,14 +1449,25 @@ namespace lfs::vis::op {
                                            }
                                          : selection_after_metadata_;
 
+        auto current_selection = scene_.getScene().getSelectionMask();
+        const size_t current_total = scene_.getScene().getSelectionGaussianCount();
         if (selection_mask_storage_.mode == TensorSwapStorageMode::SPARSE &&
-            scene_.getScene().getTotalGaussianCount() != selection_mask_storage_.total_size) {
-            throw std::runtime_error("Cannot replay sparse selection history after topology changed");
+            current_total != selection_mask_storage_.total_size) {
+            LOG_WARN("Clearing stale sparse selection history after topology changed: scene has {}, history has {}",
+                     current_total,
+                     selection_mask_storage_.total_size);
+
+            lfs::core::Scene::SelectionStateSnapshot snapshot;
+            snapshot.groups = target_metadata.groups;
+            snapshot.active_group_id = target_metadata.active_group_id;
+            snapshot.next_group_id = target_metadata.next_group_id;
+            snapshot.has_selection = false;
+            scene_.getScene().restoreSelectionState(snapshot);
+            return;
         }
 
-        auto current_selection = scene_.getScene().getSelectionMask();
         const size_t total_size = std::max({selection_mask_storage_.total_size,
-                                            scene_.getScene().getTotalGaussianCount(),
+                                            current_total,
                                             tensorNumel(current_selection)});
         auto working_mask = materializeMaskTensor(
             current_selection, total_size, selection_mask_storage_.device, lfs::core::DataType::UInt8);

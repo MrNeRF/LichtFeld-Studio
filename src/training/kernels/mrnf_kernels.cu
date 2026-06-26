@@ -18,6 +18,8 @@
 #include <thrust/sequence.h>
 #include <thrust/sort.h>
 
+#include "kernel_stream.hpp"
+
 namespace lfs::training::mrnf_strategy {
 
     namespace {
@@ -94,7 +96,7 @@ namespace lfs::training::mrnf_strategy {
 
         constexpr int threads = 256;
         const int blocks = static_cast<int>((N + threads - 1) / threads);
-        cudaStream_t s = stream ? static_cast<cudaStream_t>(stream) : nullptr;
+        cudaStream_t s = resolve_stream(stream);
 
         mrnf_noise_injection_kernel<<<blocks, threads, 0, s>>>(
             means, raw_opacities, vis_count,
@@ -147,7 +149,7 @@ namespace lfs::training::mrnf_strategy {
 
         constexpr int threads = 256;
         const int blocks = static_cast<int>((N + threads - 1) / threads);
-        cudaStream_t s = stream ? static_cast<cudaStream_t>(stream) : nullptr;
+        cudaStream_t s = resolve_stream(stream);
 
         mrnf_decay_kernel<<<blocks, threads, 0, s>>>(
             raw_opacities, log_scales, frozen_mask, frozen_mask_size,
@@ -172,7 +174,7 @@ namespace lfs::training::mrnf_strategy {
             return;
         constexpr int threads = 256;
         const int blocks = static_cast<int>((N + threads - 1) / threads);
-        cudaStream_t s = stream ? static_cast<cudaStream_t>(stream) : nullptr;
+        cudaStream_t s = resolve_stream(stream);
         elementwise_add_inplace_kernel<<<blocks, threads, 0, s>>>(a, b, N);
     }
 
@@ -196,7 +198,7 @@ namespace lfs::training::mrnf_strategy {
         assert(N > 0);
         assert(bounds != nullptr);
 
-        cudaStream_t s = stream ? static_cast<cudaStream_t>(stream) : nullptr;
+        cudaStream_t s = resolve_stream(stream);
 
         const float low_pct = (1.0f - percentile) / 2.0f;
         const float high_pct = 1.0f - low_pct;
@@ -322,7 +324,7 @@ namespace lfs::training::mrnf_strategy {
         if (K == 0)
             return;
 
-        cudaStream_t s = stream ? static_cast<cudaStream_t>(stream) : nullptr;
+        cudaStream_t s = resolve_stream(stream);
 
         if (K == N) {
             auto out_ptr = thrust::device_pointer_cast(output_indices);

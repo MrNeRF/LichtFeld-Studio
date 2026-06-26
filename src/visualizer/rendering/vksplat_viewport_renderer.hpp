@@ -84,6 +84,7 @@ namespace lfs::vis {
             Brush = 0,
             Rectangle = 1,
             Polygon = 2,
+            Ring = 3,
         };
 
         enum class OutputSlot : std::size_t {
@@ -101,7 +102,10 @@ namespace lfs::vis {
             std::vector<glm::vec2> polygon_vertices;
             bool gut = false;
             bool equirectangular = false;
+            bool mip_filter = false;
+            float ring_width = 0.01f;
             bool synchronize_input_upload = false;
+            std::uint32_t* picked_ring_id_out = nullptr;
         };
 
         struct DepthSampleRequest {
@@ -131,6 +135,37 @@ namespace lfs::vis {
             const lfs::rendering::ViewportRenderRequest& request,
             OutputSlot output_slot = OutputSlot::Main,
             bool synchronize_input_read = false);
+        // Dedicated non-blocking CUDA stream for the render path (input
+        // packing, overlay staging, selection queries). Producer tensors
+        // bridge in with event edges; upload-timeline signals are enqueued on
+        // it so Vulkan's waits cover the packing.
+        [[nodiscard]] cudaStream_t renderStream() const { return render_stream_; }
+
+        // Reverse edge of the trainer↔viewer handshake: the render-complete
+        // timeline imported into CUDA, and the latest completion value covering
+        // submits that bound live training storage. The trainer enqueues
+        // "wait fence >= value" on its stream before in-place writes.
+        [[nodiscard]] cudaExternalSemaphore_t renderCompleteFence() const {
+            return render_complete_cuda_.handle();
+        }
+        [[nodiscard]] std::uint64_t renderCompleteValue() const { return last_signaled_render_value_; }
+
+        // Eagerly create the render stream + completion fence so the trainer↔viewer
+        // handshake can be installed before the first live frame submits (covers
+        // training start, scene switch, and post-reset() frames).
+        [[nodiscard]] std::expected<void, std::string> ensureHandshakeReady(VulkanContext& context) {
+            return ensureInitialized(context);
+        }
+
+        // Invoked with the completion value immediately after each live-model
+        // submit, BEFORE the shared arena frame is released — the trainer's
+        // borrow wait must cover the in-flight Vulkan batch before the trainer
+        // can reacquire the arena (publishing at frame-scope exit is too late
+        // and lets training kernels overwrite scratch the batch still reads).
+        void setLiveSubmitCallback(std::function<void(std::uint64_t)> callback) {
+            live_submit_callback_ = std::move(callback);
+        }
+
         [[nodiscard]] bool nextOutputImagesNeedResize(
             glm::ivec2 size,
             OutputSlot output_slot = OutputSlot::Main) const;
@@ -229,6 +264,9 @@ namespace lfs::vis {
         };
 
         [[nodiscard]] std::expected<void, std::string> ensureInitialized(VulkanContext& context);
+        // Returns true iff the timeline reached `value` within the bound (i.e. the
+        // submit that would signal it actually completed); false on timeout.
+        [[nodiscard]] bool waitCompletionValueBounded(std::uint64_t value) noexcept;
         [[nodiscard]] std::expected<InputBindingResult, std::string> prepareInputs(
             VulkanContext& context,
             const lfs::core::SplatData& splat_data,
@@ -296,7 +334,7 @@ namespace lfs::vis {
         // Vulkan-external buffers bypass this allocation and are bound directly.
         static constexpr std::size_t kInputRegionCount = 7;
         static constexpr std::size_t kOverlayRegionCount = 7;
-        static constexpr std::size_t kSelectionQueryRegionCount = 7;
+        static constexpr std::size_t kSelectionQueryRegionCount = 8;
         static constexpr std::size_t kRegionAlignment = 256; // VK minStorageBufferOffsetAlignment upper bound on common HW
         struct CudaInputSlot {
             VulkanContext::ExternalBuffer buffer{};
@@ -405,6 +443,9 @@ namespace lfs::vis {
         // reached. force=true destroys all of them unconditionally and is only
         // safe after vkDeviceWaitIdle (reset/teardown).
         void drainRetiredScratchBuffers(bool force);
+        // Clamps input-storage retirements left keyed to a timeline value a
+        // failed/early-exit frame never signalled (run on every render exit).
+        void clampOrphanedInputRetirements();
 
         // Lazily creates a persistent transfer command pool + buffer + fence reused by
         // readOutputImage / sampleDepthAtPixel instead of allocating a fresh pool/fence
@@ -529,6 +570,11 @@ namespace lfs::vis {
         std::array<std::uint64_t, kOutputSlotCount> output_generations_{};
         VkSemaphore render_complete_timeline_ = VK_NULL_HANDLE;
         std::uint64_t render_complete_value_ = 0;
+        // The latest completion value a submit actually signaled (or is guaranteed
+        // to signal). renderCompleteValue() returns this — never the reserved
+        // counter — so the trainer/arena never wait a value a failed frame left
+        // unsignaled.
+        std::uint64_t last_signaled_render_value_ = 0;
         // When set, render() takes the legacy per-pixel chain so the depth
         // readback captures per-pixel depth (see setDepthCaptureMode).
         bool depth_capture_mode_ = false;
@@ -599,6 +645,28 @@ namespace lfs::vis {
         std::array<UploadTimeline, kInputRingSize> upload_timelines_{};
         std::array<UploadTimeline, kInputRingSize> overlay_upload_timelines_{};
         UploadTimeline selection_query_timeline_{};
+
+        cudaStream_t render_stream_ = nullptr;
+
+        std::function<void(std::uint64_t)> live_submit_callback_;
+
+        // CUDA import of the render-complete timeline: the reverse edge of the
+        // trainer↔viewer handshake. The trainer waits "render_complete >=
+        // borrow value" GPU-side before its next in-place parameter writes.
+        VulkanContext::ExternalSemaphore render_complete_external_{};
+        lfs::rendering::CudaTimelineSemaphore render_complete_cuda_{};
+
+        // The last completion value whose frame read the persistent (non-ring)
+        // lod_page_inputs_ buffer; next-frame page uploads wait on it GPU-side.
+        std::uint64_t last_lod_page_borrow_value_ = 0;
+
+        // Zero-copy input storages bound to in-flight frames, keyed by the
+        // completion value at which the GPU is done reading them. Keeps
+        // VkBuffer + external memory + CUDA allocation alive across trainer
+        // topology reallocations.
+        std::vector<std::pair<std::uint64_t, std::vector<std::shared_ptr<void>>>>
+            retired_input_storages_;
+
         // Async RAD page streaming: decoded pages are packed and copied on the
         // engine's own thread/stream; render frames only publish completions.
         UploadTimeline lod_engine_timeline_{};

@@ -130,7 +130,8 @@ namespace fast_lfs::optimizer {
         std::uint8_t* exp_avg_sq_q,
         float* exp_avg_sq_scale,
         const int n_rows,
-        const int row_size) {
+        const int row_size,
+        cudaStream_t stream) {
 
         CHECK_CUDA_PTR(exp_avg, "exp_avg");
         CHECK_CUDA_PTR(exp_avg_sq, "exp_avg_sq");
@@ -141,7 +142,7 @@ namespace fast_lfs::optimizer {
         if (n_rows <= 0 || row_size <= 0)
             return;
 
-        kernels::adam::quantize_adam_moments_cu<<<div_round_up(n_rows, config::block_size_adam_step), config::block_size_adam_step>>>(
+        kernels::adam::quantize_adam_moments_cu<<<div_round_up(n_rows, config::block_size_adam_step), config::block_size_adam_step, 0, stream>>>(
             exp_avg, exp_avg_sq, exp_avg_q, exp_avg_scale, exp_avg_sq_q, exp_avg_sq_scale, n_rows, row_size);
 
         CHECK_CUDA(config::debug, "quantize_adam_moments");
@@ -155,7 +156,8 @@ namespace fast_lfs::optimizer {
         std::uint8_t* exp_avg_sq_q,
         float* exp_avg_sq_scale,
         const int n_primitives,
-        const int slots_per_primitive) {
+        const int slots_per_primitive,
+        cudaStream_t stream) {
 
         CHECK_CUDA_PTR(exp_avg, "exp_avg");
         CHECK_CUDA_PTR(exp_avg_sq, "exp_avg_sq");
@@ -166,7 +168,7 @@ namespace fast_lfs::optimizer {
         if (n_primitives <= 0 || slots_per_primitive <= 0)
             return;
 
-        kernels::adam::quantize_adam_moments_swizzled_cu<<<div_round_up(n_primitives, config::block_size_adam_step), config::block_size_adam_step>>>(
+        kernels::adam::quantize_adam_moments_swizzled_cu<<<div_round_up(n_primitives, config::block_size_adam_step), config::block_size_adam_step, 0, stream>>>(
             exp_avg, exp_avg_sq, exp_avg_q, exp_avg_scale, exp_avg_sq_q, exp_avg_sq_scale, n_primitives, slots_per_primitive);
 
         CHECK_CUDA(config::debug, "quantize_adam_moments_swizzled");
@@ -176,7 +178,8 @@ namespace fast_lfs::optimizer {
         float* tensor,
         const int64_t* indices_device,
         const int n_indices,
-        const int row_size) {
+        const int row_size,
+        cudaStream_t stream) {
 
         // Validate pointers
         CHECK_CUDA_PTR(tensor, "tensor");
@@ -190,7 +193,7 @@ namespace fast_lfs::optimizer {
         }
 
         // Launch kernel: one thread per index
-        kernels::adam::zero_rows_cu<<<div_round_up(n_indices, config::block_size_adam_step), config::block_size_adam_step>>>(
+        kernels::adam::zero_rows_cu<<<div_round_up(n_indices, config::block_size_adam_step), config::block_size_adam_step, 0, stream>>>(
             tensor,
             indices_device,
             n_indices,
@@ -205,7 +208,8 @@ namespace fast_lfs::optimizer {
         const int64_t* indices_device,
         const int n_indices,
         const int row_size,
-        const std::uint8_t zero_point) {
+        const std::uint8_t zero_point,
+        cudaStream_t stream) {
 
         CHECK_CUDA_PTR(tensor_q, "tensor_q");
         CHECK_CUDA_PTR(scales, "scales");
@@ -216,7 +220,7 @@ namespace fast_lfs::optimizer {
             throw std::runtime_error("row_size must be positive");
         }
 
-        kernels::adam::zero_quantized_rows_cu<<<div_round_up(n_indices, config::block_size_adam_step), config::block_size_adam_step>>>(
+        kernels::adam::zero_quantized_rows_cu<<<div_round_up(n_indices, config::block_size_adam_step), config::block_size_adam_step, 0, stream>>>(
             tensor_q, scales, indices_device, n_indices, row_size, zero_point);
 
         CHECK_CUDA(config::debug, "zero_quantized_rows_at_indices");

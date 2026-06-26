@@ -30,6 +30,20 @@ namespace lfs::vis {
     using namespace lfs::core::events;
 
     namespace {
+        [[nodiscard]] std::vector<size_t> normalize_save_steps(std::vector<size_t> steps) {
+            steps.erase(std::remove(steps.begin(), steps.end(), 0), steps.end());
+            std::sort(steps.begin(), steps.end());
+            steps.erase(std::unique(steps.begin(), steps.end()), steps.end());
+            return steps;
+        }
+
+        void apply_save_steps(lfs::core::param::OptimizationParameters& params,
+                              const std::vector<size_t>& steps) {
+            params.save_steps = steps;
+            if (params.enable_eval)
+                params.eval_steps = steps;
+        }
+
         [[nodiscard]] lfs::core::SplatTensorAllocator makeVulkanTrainingTensorAllocator(VisualizerImpl* viewer) {
             if (!viewer || !viewer->getWindowManager()) {
                 return {};
@@ -245,29 +259,29 @@ namespace lfs::vis {
     void TrainerManager::clearTrainer() {
         LOG_DEBUG("Clearing trainer");
 
-        // Stop any ongoing training first
         const auto state = getState();
         if (state == TrainingState::Running || state == TrainingState::Paused) {
             LOG_INFO("Stopping active training before clearing");
-            // If paused, resume first so thread can process stop request
             if (state == TrainingState::Paused && trainer_) {
                 trainer_->request_resume();
             }
             stopTraining();
-            waitForCompletion();
-        } else if (state == TrainingState::Stopping) {
-            // Already stopping, just wait for completion
-            LOG_INFO("Waiting for training to finish stopping");
+        }
+
+        if (training_thread_ && training_thread_->joinable()) {
+            if (training_thread_->get_id() == std::this_thread::get_id()) {
+                LOG_ERROR("Cannot clear trainer from its own training thread");
+                return;
+            }
+            LOG_INFO("Waiting for training thread before clearing trainer");
             waitForCompletion();
         }
 
-        // Destroy trainer - destructor handles cleanup
         {
             std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
             trainer_.reset();
         }
 
-        // Transition to Idle
         updateResourceTracking();
 
         if (getState() != TrainingState::Idle && !state_machine_.transitionTo(TrainingState::Idle)) {
@@ -717,6 +731,48 @@ namespace lfs::vis {
         if (!trainer_)
             return 0;
         return trainer_->getParams().optimization.max_cap;
+    }
+
+    std::vector<size_t> TrainerManager::getSaveSteps() const {
+        if (auto* const param_mgr = services().paramsOrNull(); param_mgr && param_mgr->isLoaded())
+            return param_mgr->copyActiveParams().save_steps;
+        if (trainer_)
+            return trainer_->getParams().optimization.save_steps;
+        return pending_opt_params_.save_steps;
+    }
+
+    bool TrainerManager::canEditSaveSteps() const {
+        return !trainer_ ||
+               !trainer_->isInitialized() ||
+               !trainer_->getParams().resume_checkpoint.has_value();
+    }
+
+    bool TrainerManager::setSaveSteps(std::vector<size_t> save_steps) {
+        if (!canEditSaveSteps())
+            return false;
+
+        save_steps = normalize_save_steps(std::move(save_steps));
+        apply_save_steps(pending_opt_params_, save_steps);
+
+        bool updated_active_params = false;
+        if (auto* const param_mgr = services().paramsOrNull()) {
+            if (const auto loaded = param_mgr->ensureLoaded(); loaded) {
+                param_mgr->modifyActiveParams([&save_steps](auto& params) {
+                    apply_save_steps(params, save_steps);
+                });
+                updated_active_params = true;
+            } else {
+                LOG_WARN("Could not update save steps: {}", loaded.error());
+            }
+        }
+
+        if (!updated_active_params && trainer_) {
+            auto params = trainer_->getParams();
+            apply_save_steps(params.optimization, save_steps);
+            trainer_->setParams(params);
+        }
+
+        return true;
     }
 
     const char* TrainerManager::getStrategyType() const {

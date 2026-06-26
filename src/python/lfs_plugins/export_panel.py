@@ -105,6 +105,7 @@ class ExportPanel(Panel):
         )
         # RAD export settings
         self._rad_flip_y = False  # Y-flip checkbox (off by default)
+        self._rad_streamable = True
         self._doc = None  # Document reference for DOM access
         self._last_export_path = None  # Track last export path for Asset Manager
         self._last_export_format = None  # Track last export format for Asset Manager
@@ -141,6 +142,11 @@ class ExportPanel(Panel):
         # RAD export settings bindings
         model.bind_func("show_rad_settings", lambda: self._format == ExportFormat.RAD)
         model.bind_func("rad_flip_y", lambda: self._rad_flip_y)
+        model.bind(
+            "rad_export_mode",
+            lambda: "stream" if self._rad_streamable else "non_stream",
+            self._set_rad_export_mode,
+        )
         model.bind_event("toggle_rad_flip_y", self._on_toggle_rad_flip_y)
 
         model.bind_event("do_cancel", self._on_cancel)
@@ -209,6 +215,13 @@ class ExportPanel(Panel):
     def _on_toggle_rad_flip_y(self, _handle, _ev, _args):
         self._rad_flip_y = not self._rad_flip_y
         self._dirty_model("rad_flip_y")
+
+    def _set_rad_export_mode(self, value):
+        streamable = str(value) != "non_stream"
+        if streamable == self._rad_streamable:
+            return
+        self._rad_streamable = streamable
+        self._dirty_model("rad_export_mode")
 
     def _get_scrub_value(self, prop):
         del prop
@@ -529,6 +542,7 @@ class ExportPanel(Panel):
             "show_sh_degree",
             "export_error_text",
             "rad_flip_y",
+            "rad_export_mode",
             "can_export",
             "export_label",
         )
@@ -709,6 +723,7 @@ class ExportPanel(Panel):
                     selected_nodes,
                     self._export_sh_degree,
                     rad_flip_y=self._rad_flip_y,
+                    rad_streamable=self._rad_streamable,
                 )
             finally:
                 self._request_reactive_update()

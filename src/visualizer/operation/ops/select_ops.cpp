@@ -43,7 +43,7 @@ namespace lfs::vis::op {
     OperationResult SelectInvert::execute(SceneManager& scene,
                                           const OperatorProperties& /*props*/,
                                           const std::any& /*input*/) {
-        auto mask = scene.getScene().getSelectionMask();
+        auto mask = scene.getScene().getVisibleSelectionMask();
         if (!mask) {
             auto* model = scene.getScene().getCombinedModel();
             if (!model) {
@@ -80,7 +80,7 @@ namespace lfs::vis::op {
     OperationResult SelectGrow::execute(SceneManager& scene,
                                         const OperatorProperties& props,
                                         const std::any& /*input*/) {
-        auto mask = scene.getScene().getSelectionMask();
+        auto mask = scene.getScene().getVisibleSelectionMask();
         if (!mask || !scene.getScene().hasSelection()) {
             return OperationResult::skipped("No selection to grow");
         }
@@ -112,7 +112,7 @@ namespace lfs::vis::op {
     OperationResult SelectShrink::execute(SceneManager& scene,
                                           const OperatorProperties& props,
                                           const std::any& /*input*/) {
-        auto mask = scene.getScene().getSelectionMask();
+        auto mask = scene.getScene().getVisibleSelectionMask();
         if (!mask || !scene.getScene().hasSelection()) {
             return OperationResult::skipped("No selection to shrink");
         }

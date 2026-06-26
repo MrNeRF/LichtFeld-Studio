@@ -11,6 +11,7 @@
 #include <iterator>
 #include <string>
 #include <variant>
+#include <vector>
 
 namespace {
 
@@ -177,6 +178,41 @@ TEST(ArgumentParserTest, TrainingParsesAddSplats) {
     ASSERT_EQ((*parsed)->add_splat_paths.size(), 2u);
     EXPECT_EQ((*parsed)->add_splat_paths[0], splat_a);
     EXPECT_EQ((*parsed)->add_splat_paths[1], splat_b);
+    EXPECT_EQ((*parsed)->add_splat_freeze, (std::vector<bool>{false, false}));
+    EXPECT_FALSE((*parsed)->exclude_frozen_add_splats_from_export);
+}
+
+TEST(ArgumentParserTest, TrainingParsesFrozenAddSplatExcludeExport) {
+    const auto dir = make_test_path("lfs_arg_parser_add_splat_exclude");
+    const auto data_path = std::filesystem::path(dir) / "data";
+    const auto output_path = std::filesystem::path(dir) / "output";
+    const auto splat = std::filesystem::path(dir) / "background.ply";
+    std::filesystem::create_directories(data_path);
+    std::filesystem::create_directories(output_path);
+    std::ofstream(splat).put('\n');
+
+    const std::string data_str = data_path.string();
+    const std::string output_str = output_path.string();
+    const std::string splat_str = splat.string();
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_str.c_str(),
+        "--output-path",
+        output_str.c_str(),
+        "--add-splat",
+        splat_str.c_str(),
+        "--freeze",
+        "--exclude-export"};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+
+    ASSERT_EQ((*parsed)->add_splat_paths.size(), 1u);
+    EXPECT_EQ((*parsed)->add_splat_paths[0], splat);
+    EXPECT_EQ((*parsed)->add_splat_freeze, (std::vector<bool>{true}));
+    EXPECT_TRUE((*parsed)->exclude_frozen_add_splats_from_export);
 }
 
 TEST(ArgumentParserTest, TrainingParsesExplicitDepthLossOptions) {

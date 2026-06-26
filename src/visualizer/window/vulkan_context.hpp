@@ -8,6 +8,7 @@
 #include "vulkan_image_barrier_tracker.hpp"
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -32,6 +33,11 @@ namespace lfs::vis {
 
     class VulkanContext {
     public:
+        enum class ResizeIntent {
+            Interactive,
+            Exact,
+        };
+
         VulkanContext() = default;
         ~VulkanContext();
 
@@ -40,7 +46,12 @@ namespace lfs::vis {
 
         bool init(SDL_Window* window, int framebuffer_width, int framebuffer_height);
         void shutdown();
-        void notifyFramebufferResized(int width, int height);
+        void notifyFramebufferResized(int width, int height, ResizeIntent intent = ResizeIntent::Exact);
+        [[nodiscard]] bool hasPendingSwapchainResize() const {
+            return framebuffer_resize_deferred_ || framebuffer_resize_exact_after_interactive_;
+        }
+        [[nodiscard]] bool pendingSwapchainResizeReady() const;
+        [[nodiscard]] double secondsUntilPendingSwapchainResizeReady() const;
 
         [[nodiscard]] bool presentBootstrapFrame(float r, float g, float b, float a);
         [[nodiscard]] const std::string& lastError() const { return last_error_; }
@@ -113,11 +124,12 @@ namespace lfs::vis {
         [[nodiscard]] bool hasHdr() const noexcept { return has_hdr_; }
         [[nodiscard]] VkFormat depthStencilFormat() const { return depth_stencil_format_; }
         [[nodiscard]] VkImageView depthStencilImageView() const {
-            return active_image_index_ < depth_stencil_resources_.size()
-                       ? depth_stencil_resources_[active_image_index_].view
+            return active_frame_index_ < depth_stencil_resources_.size()
+                       ? depth_stencil_resources_[active_frame_index_].view
                        : VK_NULL_HANDLE;
         }
         [[nodiscard]] VkExtent2D swapchainExtent() const { return swapchain_extent_; }
+        [[nodiscard]] VkExtent2D framebufferExtent() const;
         [[nodiscard]] uint32_t minImageCount() const { return min_image_count_; }
         [[nodiscard]] uint32_t imageCount() const { return static_cast<uint32_t>(swapchain_images_.size()); }
         [[nodiscard]] std::size_t framesInFlight() const { return kFramesInFlight; }
@@ -247,6 +259,11 @@ namespace lfs::vis {
         bool createPipelineCache();
         bool recreateSwapchain();
         bool finishActiveRendering(VkCommandBuffer command_buffer);
+        void deferSwapchainResizeRecreate(bool requires_recreate = true,
+                                          std::optional<bool> allow_headroom = std::nullopt);
+        [[nodiscard]] bool promoteDeferredSwapchainResizeIfSettled();
+        [[nodiscard]] bool framebufferFitsSwapchainExtent() const;
+        [[nodiscard]] bool framebufferResizeRequiresSwapchainRecreate() const;
 
         void destroyDebugMessenger();
         void destroyAllocator();
@@ -268,9 +285,13 @@ namespace lfs::vis {
         [[nodiscard]] SwapchainSupport querySwapchainSupport(VkPhysicalDevice device) const;
         [[nodiscard]] VkSurfaceFormatKHR chooseSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& formats) const;
         [[nodiscard]] VkPresentModeKHR choosePresentMode(const std::vector<VkPresentModeKHR>& modes) const;
+        [[nodiscard]] std::optional<VkSurfacePresentScalingCapabilitiesEXT>
+        queryPresentScalingCapabilities(VkPresentModeKHR present_mode) const;
         [[nodiscard]] VkExtent2D chooseSwapchainExtent(const VkSurfaceCapabilitiesKHR& capabilities,
                                                        int framebuffer_width,
-                                                       int framebuffer_height) const;
+                                                       int framebuffer_height,
+                                                       bool add_resize_headroom,
+                                                       const VkSurfacePresentScalingCapabilitiesEXT* scaling_capabilities) const;
         [[nodiscard]] VkFormat chooseDepthStencilFormat() const;
         [[nodiscard]] uint32_t findMemoryType(uint32_t type_filter, VkMemoryPropertyFlags properties) const;
         [[nodiscard]] VkImageAspectFlags depthStencilAspectMask() const;
@@ -310,10 +331,10 @@ namespace lfs::vis {
         VkFormat depth_stencil_format_ = VK_FORMAT_UNDEFINED;
         std::vector<DepthStencilResource> depth_stencil_resources_;
 
-        // Single frame in flight — CPU waits for GPU each frame instead of pre-recording
-        // the next one. Eliminates the frame of cursor latency that comes from "CPU is
-        // 1 frame ahead of GPU".
-        static constexpr std::size_t kFramesInFlight = 1;
+        // Two frame slots keep resize/input processing from blocking on the
+        // previous present's image-availability fence while remaining shallow
+        // enough to avoid the latency of a deep render queue.
+        static constexpr std::size_t kFramesInFlight = 2;
         std::array<VkCommandPool, kFramesInFlight> command_pools_{};
         std::array<VkCommandBuffer, kFramesInFlight> command_buffers_{};
         VkCommandPool immediate_command_pool_ = VK_NULL_HANDLE;
@@ -344,6 +365,13 @@ namespace lfs::vis {
         std::vector<VkFence> swapchain_images_in_flight_;
 
         bool framebuffer_resized_ = false;
+        bool framebuffer_resize_deferred_ = false;
+        bool framebuffer_resize_requires_recreate_ = false;
+        bool framebuffer_resize_allow_headroom_ = false;
+        bool framebuffer_resize_exact_after_interactive_ = false;
+        bool swapchain_extent_fixed_to_surface_ = false;
+        std::chrono::steady_clock::time_point framebuffer_resize_last_change_{};
+        std::chrono::steady_clock::time_point framebuffer_resize_last_recreate_{};
         bool frame_active_ = false;
         bool frame_rendering_active_ = false;
         bool frame_suboptimal_ = false;
@@ -351,9 +379,12 @@ namespace lfs::vis {
         bool validation_enabled_ = false;
         bool instance_external_memory_capabilities_enabled_ = false;
         bool instance_external_semaphore_capabilities_enabled_ = false;
+        bool instance_surface_maintenance_enabled_ = false;
         bool external_memory_interop_enabled_ = false;
         bool external_semaphore_interop_enabled_ = false;
         bool external_memory_dedicated_allocation_enabled_ = false;
+        bool swapchain_maintenance1_enabled_ = false;
+        bool swapchain_present_scaling_enabled_ = false;
         bool has_push_descriptor_ = false;
         bool has_shader_object_ = false;
         bool has_float16_storage_ = false;

@@ -5,6 +5,8 @@
 #include "lfs/core/warp_reduce.cuh"
 #include "lfs/kernels/regularization.cuh"
 
+#include "kernel_stream.hpp"
+
 namespace lfs::training::kernels {
 
     // =============================================================================
@@ -81,6 +83,7 @@ namespace lfs::training::kernels {
         size_t n,
         float weight,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
 
         if (n == 0 || weight == 0.0f) {
             return;
@@ -174,6 +177,7 @@ namespace lfs::training::kernels {
         size_t n,
         float weight,
         cudaStream_t stream) {
+        stream = resolve_stream(stream);
 
         if (n == 0 || weight == 0.0f) {
             return;

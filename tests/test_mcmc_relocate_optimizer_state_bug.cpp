@@ -71,17 +71,18 @@ TEST_F(MCMCRelocateOptimizerStateTest, ResetBothSourceAndDestinationRows) {
         optimizer->zero_grad(iter);
     }
 
-    // Verify momentum exists
+    // Quantized Adam stores moments as uint8 with a per-row float scale; a row
+    // that accumulated momentum has a non-zero exp_avg_scale.
     auto means_state = optimizer->get_state(ParamType::Means);
-    auto exp_avg_before = means_state->exp_avg.cpu();
-    float* exp_avg_before_data = exp_avg_before.ptr<float>();
+    auto scale_before = means_state->exp_avg_scale.cpu();
+    const float* scale_before_data = scale_before.ptr<float>();
 
-    float total_momentum_before = 0.0f;
-    for (size_t i = 0; i < n_gaussians * 3; i++) {
-        total_momentum_before += std::abs(exp_avg_before_data[i]);
+    float total_scale_before = 0.0f;
+    for (size_t i = 0; i < n_gaussians; i++) {
+        total_scale_before += std::abs(scale_before_data[i]);
     }
-    std::cout << "  Total momentum BEFORE: " << total_momentum_before << std::endl;
-    EXPECT_GT(total_momentum_before, 0.0f);
+    std::cout << "  Total momentum scale BEFORE: " << total_scale_before << std::endl;
+    EXPECT_GT(total_scale_before, 0.0f);
 
     // Setup indices
     std::vector<int64_t> dead_idx_vec = {8, 9};
@@ -104,23 +105,20 @@ TEST_F(MCMCRelocateOptimizerStateTest, ResetBothSourceAndDestinationRows) {
                                               dead_indices_gpu_ptr,
                                               static_cast<size_t>(dead_indices.numel()));
 
-    // Check that BOTH indices have zero momentum
-    auto exp_avg_after = optimizer->get_state(ParamType::Means)->exp_avg.cpu();
-    float* exp_avg_after_data = exp_avg_after.ptr<float>();
+    // Relocation resets the moment scale to zero for the touched rows, forcing
+    // their dequantized momentum to zero regardless of the stored bytes.
+    auto scale_after = optimizer->get_state(ParamType::Means)->exp_avg_scale.cpu();
+    const float* scale_after_data = scale_after.ptr<float>();
 
     bool all_reset = true;
     for (int idx : dead_idx_vec) {
-        for (int j = 0; j < 3; j++) {
-            if (std::abs(exp_avg_after_data[idx * 3 + j]) > 1e-6f) {
-                all_reset = false;
-            }
+        if (std::abs(scale_after_data[idx]) > 1e-6f) {
+            all_reset = false;
         }
     }
     for (int idx : sampled_idx_vec) {
-        for (int j = 0; j < 3; j++) {
-            if (std::abs(exp_avg_after_data[idx * 3 + j]) > 1e-6f) {
-                all_reset = false;
-            }
+        if (std::abs(scale_after_data[idx]) > 1e-6f) {
+            all_reset = false;
         }
     }
 

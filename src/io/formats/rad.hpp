@@ -122,18 +122,16 @@ namespace lfs::io {
     [[nodiscard]] Result<void> build_rad_meta_sidecar(
         const std::filesystem::path& rad_path,
         const ExportProgressCallback& progress = nullptr);
-    // One-time migration for RAD LOD files written with a different
-    // splats-per-chunk: decodes each source chunk to display-space values and
-    // streams them back out through the current encoders at CHUNK_SIZE. Node
-    // order, tree links, and logical indices are unchanged.
-    // True when the file is a RAD LOD written with a different
-    // splats-per-chunk than this build (header probe only, no decode).
-    [[nodiscard]] std::expected<bool, std::string> rad_lod_needs_rechunk(
+    // Header probe for RAD LOD files; flat RADs return std::nullopt.
+    [[nodiscard]] std::expected<std::optional<std::uint32_t>, std::string> rad_lod_file_chunk_size(
         const std::filesystem::path& input);
     using RechunkProgressCallback = std::function<bool(float)>;
+    // Re-encodes a RAD LOD file at the requested file chunk size. Node order,
+    // tree links, and logical indices are unchanged.
     [[nodiscard]] Result<void> rechunk_rad_lod(
         const std::filesystem::path& input,
         const std::filesystem::path& output,
+        std::uint32_t target_chunk_size,
         const RechunkProgressCallback& progress = nullptr);
     // Exposed for tests: scatter-derive parent/level over a BFS level-ordered,
     // children-contiguous links plane. child_start may be non-monotone across
@@ -179,7 +177,8 @@ namespace lfs::io {
                         int sh_degree,
                         bool lod_tree,
                         int compression_level = 6,
-                        bool emit_meta_sidecar = false);
+                        bool emit_meta_sidecar = false,
+                        std::uint32_t chunk_size = kRadStreamableChunkSplats);
         ~RadStreamWriter();
         RadStreamWriter(const RadStreamWriter&) = delete;
         RadStreamWriter& operator=(const RadStreamWriter&) = delete;

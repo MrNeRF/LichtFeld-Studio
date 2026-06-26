@@ -40,9 +40,11 @@ namespace lfs::vis {
         bool cropbox_active = false;
         glm::vec3 cropbox_min{0}, cropbox_max{0};
         glm::mat4 cropbox_transform{1};
+        bool cropbox_affects_render = true;
         bool ellipsoid_active = false;
         glm::vec3 ellipsoid_radii{1};
         glm::mat4 ellipsoid_transform{1};
+        bool ellipsoid_affects_render = true;
     };
 
     struct FrameViewPanel {
