@@ -114,8 +114,16 @@ namespace lfs::vis::gui::native_panels {
     }
 
     bool SequencerPanel::poll(const PanelDrawContext& ctx) {
+        // The sequencer is a camera/animation timeline, not a scene-editing
+        // tool, so it must not share the editing gizmos' isToolsDisabled() gate
+        // (true for TRAINING/PAUSED/FINISHED). The gizmos are disabled across all
+        // of those because the trainer owns the model tensors, but the sequencer
+        // has no such dependency. Disable it only while training is actively
+        // running; once training is paused/finished it should be usable without
+        // having to switch to Edit mode (which tears the trainer down).
+        const bool training_active = ctx.ui && ctx.ui->editor && ctx.ui->editor->isTraining();
         const bool is_enabled = !ctx.ui_hidden && ctx.ui && ctx.ui->editor &&
-                                !ctx.ui->editor->isToolsDisabled() && layout_->isShowSequencer();
+                                !training_active && layout_->isShowSequencer();
         if (!is_enabled && seq_)
             seq_->setSequencerEnabled(false);
         return is_enabled;
