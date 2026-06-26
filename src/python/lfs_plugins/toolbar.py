@@ -836,6 +836,11 @@ class _UtilityToolbarController:
         utility_bottom_buttons = []
         if has_render_manager:
             seq_visible = lf.ui.is_sequencer_visible()
+            # The sequencer is disabled while training is active (the native
+            # SequencerPanel gates on EditorContext::isToolsDisabled). Reflect
+            # that in the button so it greys out instead of appearing live but
+            # doing nothing on press, matching the editing-tool buttons.
+            seq_enabled = RuntimeState.trainer_state.value not in _TOOLBAR_HIDDEN_STATES
             utility_extra_buttons.append(
                 _button_record(
                     "util-sequencer",
@@ -845,6 +850,7 @@ class _UtilityToolbarController:
                     tooltip_key="toolbar.sequencer",
                     tooltip_text="Sequencer",
                     selected=seq_visible,
+                    enabled=seq_enabled,
                 )
             )
 
@@ -881,6 +887,8 @@ class _UtilityToolbarController:
             lf.focus_selection()
             return
         if action == "toggle_sequencer":
+            if RuntimeState.trainer_state.value in _TOOLBAR_HIDDEN_STATES:
+                return
             lf.ui.set_sequencer_visible(not lf.ui.is_sequencer_visible())
             return
         if action == "toggle_panel":
