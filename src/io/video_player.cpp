@@ -377,6 +377,8 @@ namespace lfs::io {
 
         [[nodiscard]] int width() const { return width_; }
         [[nodiscard]] int height() const { return height_; }
+        [[nodiscard]] int sourceWidth() const { return src_width_; }
+        [[nodiscard]] int sourceHeight() const { return src_height_; }
         [[nodiscard]] double currentTime() const { return current_time_; }
         [[nodiscard]] double duration() const { return duration_; }
         [[nodiscard]] int64_t currentFrameNumber() const { return current_frame_; }
@@ -578,6 +580,8 @@ namespace lfs::io {
     const uint8_t* VideoPlayer::currentFrameData() const { return impl_->currentFrameData(); }
     int VideoPlayer::width() const { return impl_->width(); }
     int VideoPlayer::height() const { return impl_->height(); }
+    int VideoPlayer::sourceWidth() const { return impl_->sourceWidth(); }
+    int VideoPlayer::sourceHeight() const { return impl_->sourceHeight(); }
 
     double VideoPlayer::currentTime() const { return impl_->currentTime(); }
     double VideoPlayer::duration() const { return impl_->duration(); }

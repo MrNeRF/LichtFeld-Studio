@@ -40,6 +40,8 @@ namespace lfs::io {
         const uint8_t* currentFrameData() const;
         int width() const;
         int height() const;
+        int sourceWidth() const;
+        int sourceHeight() const;
 
         double currentTime() const;
         double duration() const;

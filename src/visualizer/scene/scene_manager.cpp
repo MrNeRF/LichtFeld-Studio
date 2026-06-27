@@ -38,6 +38,8 @@
 #include "window/vulkan_context.hpp"
 #include "window/window_manager.hpp"
 #include <algorithm>
+#include <array>
+#include <cuda_runtime.h>
 #include <format>
 #include <glm/gtc/quaternion.hpp>
 #include <shared_mutex>
@@ -96,6 +98,58 @@ namespace lfs::vis {
                 lfs::core::SplatData::ShNLayout::Swizzled);
             result->set_active_sh_degree(src.get_active_sh_degree());
             return result;
+        }
+
+        void detachSplatDataFromTrainerStreams(lfs::core::SplatData& model) {
+            const std::array tensors{
+                &model.means_raw(),
+                &model.sh0_raw(),
+                &model.shN_raw(),
+                &model.scaling_raw(),
+                &model.rotation_raw(),
+                &model.opacity_raw(),
+                &model.deleted(),
+                &model._densification_info,
+            };
+
+            for (const lfs::core::Tensor* tensor : tensors) {
+                if (!tensor->is_valid() || tensor->device() != lfs::core::Device::CUDA) {
+                    continue;
+                }
+                const cudaStream_t stream = tensor->stream();
+                const cudaError_t sync_status = stream ? cudaStreamSynchronize(stream) : cudaSuccess;
+                if (sync_status != cudaSuccess) {
+                    LOG_WARN("CUDA stream sync before edit-mode trainer clear failed: {}",
+                             cudaGetErrorString(sync_status));
+                }
+            }
+
+            for (lfs::core::Tensor* tensor : tensors) {
+                if (tensor->is_valid() && tensor->device() == lfs::core::Device::CUDA) {
+                    tensor->set_stream(nullptr);
+                }
+            }
+        }
+
+        [[nodiscard]] bool prepareSplatDataForEditMode(lfs::core::SplatData& model) {
+            try {
+                if (model.has_deleted_mask()) {
+                    auto deleted = model.deleted().contiguous();
+                    if (!deleted.is_valid()) {
+                        LOG_ERROR("Failed to materialize deleted mask before edit-mode handoff");
+                        return false;
+                    }
+                    model.deleted() = std::move(deleted);
+                    model.refresh_deleted_count();
+                }
+                model._densification_info = lfs::core::Tensor{};
+                detachSplatDataFromTrainerStreams(model);
+            } catch (const std::exception& e) {
+                LOG_ERROR("Failed to prepare splat data for edit mode: {}", e.what());
+                return false;
+            }
+
+            return true;
         }
 
         void pushSceneGraphHistoryEntry(SceneManager& scene_manager,
@@ -538,6 +592,7 @@ namespace lfs::vis {
         cmd::DeselectAll::when([this](const auto&) { deselectAllGaussians(); });
         cmd::SelectAll::when([this](const auto&) { selectAllGaussians(); });
         cmd::CopySelection::when([this](const auto&) { copySelectionToClipboard(); });
+        cmd::CutSelection::when([this](const auto&) { cutSelectedGaussians(); });
         cmd::PasteSelection::when([this](const auto&) { pasteSelectionFromClipboard(); });
         cmd::SelectBrush::when([this](const auto& e) { (void)selectBrush(e.x, e.y, e.radius, e.mode, e.camera_index); });
         cmd::SelectRect::when([this](const auto& e) { (void)selectRect(e.x0, e.y0, e.x1, e.y1, e.mode, e.camera_index); });
@@ -2725,21 +2780,46 @@ namespace lfs::vis {
             return;
         }
 
+        std::unique_ptr<lfs::training::PPISP> ppisp;
+        std::unique_ptr<lfs::training::PPISPControllerPool> controller_pool;
+        auto* trainer_mgr = services().trainerOrNull();
+        lfs::training::Trainer* trainer = nullptr;
+        if (trainer_mgr) {
+            if (trainer_mgr->isPaused()) {
+                if (auto* active_trainer = trainer_mgr->getTrainer()) {
+                    active_trainer->request_resume();
+                }
+            }
+            if (trainer_mgr->isTrainingActive()) {
+                trainer_mgr->stopTraining();
+            }
+            trainer_mgr->waitForCompletion();
+            trainer = trainer_mgr->getTrainer();
+            if (trainer && trainer->hasPPISP()) {
+                ppisp = trainer->takePPISP();
+                controller_pool = trainer->takePPISPControllerPool();
+            }
+        }
+
+        model_node = scene_.getMutableNode(model_name);
+        if (!model_node || !model_node->model) {
+            LOG_WARN("switchToEditMode: no training model after stopping trainer");
+            return;
+        }
+
+        if (trainer && !prepareSplatDataForEditMode(*model_node->model)) {
+            return;
+        }
+
         core::Scene::Transaction txn(scene_);
 
         auto splat_data = std::move(model_node->model);
         const size_t num_gaussians = splat_data->size();
 
-        // Extract PPISP models from trainer before clearing
-        std::unique_ptr<lfs::training::PPISP> ppisp;
-        std::unique_ptr<lfs::training::PPISPControllerPool> controller_pool;
-        if (auto* trainer_mgr = services().trainerOrNull()) {
-            if (auto* trainer = trainer_mgr->getTrainer(); trainer && trainer->hasPPISP()) {
-                ppisp = trainer->takePPISP();
-                controller_pool = trainer->takePPISPControllerPool();
-            }
+        if (trainer_mgr) {
             trainer_mgr->clearTrainer();
         }
+
         scene_.clear();
 
         constexpr const char* MODEL_NAME = "Trained Model";
@@ -4211,6 +4291,20 @@ namespace lfs::vis {
         clipboard_kind_ = ClipboardKind::Gaussians;
 
         LOG_INFO("Copied {} Gaussians", gaussian_clipboard_->size());
+        return true;
+    }
+
+    bool SceneManager::cutSelectedGaussians() {
+        if (!copySelectedGaussians()) {
+            return false;
+        }
+
+        if (const auto result = deleteSelectedGaussiansWithHistory(); !result) {
+            LOG_WARN("Failed to cut selected Gaussians: {}", result.error());
+            return false;
+        }
+
+        LOG_INFO("Cut selected Gaussians");
         return true;
     }
 

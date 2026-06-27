@@ -39,6 +39,7 @@ namespace lfs::vis {
         constexpr double kGpuLodRenderCapacityOverhead = 1.20;
         constexpr float kInteractiveResizeRenderScale = 0.33f;
         constexpr auto kTrainingOutputResizeStableDelay = std::chrono::milliseconds(500);
+        constexpr int kMaxInteractiveVksplatSettlePasses = 8;
 
         struct LodObjectFrame {
             glm::mat4 object_to_view{1.0f};
@@ -917,6 +918,13 @@ namespace lfs::vis {
         if (lod_controller_ && lod_controller_->transitionActive()) {
             frame_dirty |= DirtyFlag::CAMERA;
         }
+        const bool camera_pose_changed =
+            camera_pose_dirty_.exchange(false, std::memory_order_acq_rel);
+        if (camera_pose_changed) {
+            vksplat_camera_settle_passes_remaining_ = kMaxInteractiveVksplatSettlePasses;
+        }
+        const bool settle_vksplat_capacity =
+            vksplat_camera_settle_passes_remaining_ > 0;
         constexpr DirtyMask projection_dirty =
             DirtyFlag::CAMERA | DirtyFlag::SPLATS | DirtyFlag::VIEWPORT | DirtyFlag::SPLIT_VIEW;
         if ((frame_dirty & projection_dirty) != 0) {
@@ -1096,6 +1104,28 @@ namespace lfs::vis {
                       lod_controller_page_map_generation_);
             notifyAsyncLodResultsReady();
         };
+        bool vksplat_capacity_settle_checked = false;
+        const auto note_vksplat_render_progress =
+            [&](const VksplatViewportRenderer::RenderResult& result) {
+                if (result.lod_streaming_active) {
+                    requestRenderFollowUp();
+                }
+                if (!settle_vksplat_capacity || vksplat_capacity_settle_checked) {
+                    return;
+                }
+                vksplat_capacity_settle_checked = true;
+                if (camera_pose_changed) {
+                    requestRenderFollowUp();
+                    return;
+                }
+                if (result.capacity_readback_settled) {
+                    vksplat_camera_settle_passes_remaining_ = 0;
+                    return;
+                }
+                if (--vksplat_camera_settle_passes_remaining_ > 0) {
+                    requestRenderFollowUp();
+                }
+            };
         const auto render_panel_image =
             [&](const Viewport& source_viewport,
                 const glm::ivec2 panel_size,
@@ -1266,9 +1296,7 @@ namespace lfs::vis {
                         vksplat_inputs_forced_this_frame = true;
                     }
                     note_lod_page_generation(result->lod_page_generation);
-                    if (result->lod_streaming_active) {
-                        notifyAsyncLodResultsReady();
-                    }
+                    note_vksplat_render_progress(*result);
                     latest_vksplat_completion_semaphore = result->completion_semaphore;
                     latest_vksplat_completion_value = result->completion_value;
                     lfs::rendering::FrameMetadata metadata{};
@@ -2026,11 +2054,7 @@ namespace lfs::vis {
                     const auto publish_vksplat_result = [&](const VksplatViewportRenderer::RenderResult& render_result) -> VulkanFrameResult {
                         render_lock.reset();
                         note_lod_page_generation(render_result.lod_page_generation);
-                        if (render_result.lod_streaming_active) {
-                            // Page decodes/uploads still in flight: keep frames
-                            // coming so streaming converges while the camera idles.
-                            notifyAsyncLodResultsReady();
-                        }
+                        note_vksplat_render_progress(render_result);
                         vulkan_viewport_image_.reset();
                         vulkan_external_viewport_image_ = render_result.image;
                         vulkan_external_viewport_image_view_ = render_result.image_view;

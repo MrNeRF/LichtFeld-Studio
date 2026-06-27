@@ -47,9 +47,12 @@ namespace lfs::vis {
             VkSemaphore completion_semaphore = VK_NULL_HANDLE;
             std::uint64_t completion_value = 0;
             std::uint64_t lod_page_generation = 0;
-            // True while page decodes/uploads are still in flight; the caller
-            // should keep scheduling frames so streaming converges while idle.
+            // True while page decodes/uploads are still in flight, or a
+            // deferred capacity readback found a clamped VkSplat frame.
             bool lod_streaming_active = false;
+            // True when the deferred capacity readbacks from the previous pass
+            // confirm an unclamped frame for the current steady-state path.
+            bool capacity_readback_settled = false;
         };
 
         struct ModelInputSnapshot {

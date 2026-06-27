@@ -224,6 +224,17 @@ namespace lfs::core {
             }
         }
 
+        // Caller must have synchronized the device first; after that cached
+        // blocks no longer need their last-use stream to free safely.
+        void retag_all_streams(cudaStream_t to) {
+            for (size_t i = 0; i < NUM_BUCKETS; ++i) {
+                std::lock_guard<std::mutex> lock(buckets_[i].mutex);
+                for (CachedBlock& block : buckets_[i].cache) {
+                    block.stream = to;
+                }
+            }
+        }
+
         void trim_cache() {
             for (size_t i = 0; i < NUM_BUCKETS; ++i) {
                 std::lock_guard<std::mutex> lock(buckets_[i].mutex);

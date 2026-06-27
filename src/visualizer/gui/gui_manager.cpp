@@ -6068,16 +6068,6 @@ namespace lfs::vis::gui {
         python::set_viewport_bounds(viewport_layout_.pos.x, viewport_layout_.pos.y,
                                     viewport_layout_.size.x, viewport_layout_.size.y);
 
-        PanelInputState floating_input = panel_input;
-        floating_input.bg_draw_list = ImGui::GetForegroundDrawList(ImGui::GetMainViewport());
-        panel_setup_timer.reset();
-        if (has_floating_panels) {
-            LOG_TIMER_THRESHOLD("gui_render.draw_panels.Floating", 0.25);
-            reg.draw_panels(PanelSpace::Floating, draw_ctx, &floating_input);
-        }
-
-        applyFrameInputCapture(&rml_right_panel_);
-
         {
             LOG_TIMER_THRESHOLD("gui_render.gizmo_update", 0.25);
             gizmo_manager_.updateToolState(ctx, ui_hidden_);
@@ -6212,19 +6202,25 @@ namespace lfs::vis::gui {
         } else {
             startup_overlay_.setInput(nullptr);
         }
+        PanelInputState viewport_overlay_input = panel_input;
+        if (has_floating_panels &&
+            reg.isPositionOverFloatingPanel(panel_input.mouse_x, panel_input.mouse_y)) {
+            viewport_overlay_input = maskInputForBlockedUi(std::move(viewport_overlay_input));
+        }
         {
             LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.processInput", 0.25);
             if (!block_underlay_input)
-                rml_viewport_overlay_.processInput(panel_input);
+                rml_viewport_overlay_.processInput(viewport_overlay_input);
         }
-        if (rml_viewport_overlay_.wantsInput() && panel_input.mouse_clicked[0]) {
+        if (rml_viewport_overlay_.wantsInput() && viewport_overlay_input.mouse_clicked[0]) {
             if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr;
                 rendering && rendering->isIndependentSplitViewActive()) {
                 if (const auto target_panel = rendering->resolveViewerPanel(
                         viewer_->getViewport(),
                         viewport_layout_.pos,
                         viewport_layout_.size,
-                        glm::vec2(panel_input.mouse_x, panel_input.mouse_y))) {
+                        glm::vec2(viewport_overlay_input.mouse_x,
+                                  viewport_overlay_input.mouse_y))) {
                     if (auto* const input_controller = viewer_->getInputController()) {
                         input_controller->setFocusedSplitPanel(target_panel->panel);
                     } else {
@@ -6265,7 +6261,15 @@ namespace lfs::vis::gui {
             rml_viewport_overlay_.renderCached();
         }
 
-        applyFrameInputCapture();
+        PanelInputState floating_input = panel_input;
+        floating_input.bg_draw_list = ImGui::GetForegroundDrawList(ImGui::GetMainViewport());
+        panel_setup_timer.reset();
+        if (has_floating_panels) {
+            LOG_TIMER_THRESHOLD("gui_render.draw_panels.Floating", 0.25);
+            reg.draw_panels(PanelSpace::Floating, draw_ctx, &floating_input);
+        }
+
+        applyFrameInputCapture(&rml_right_panel_);
 
         if (!ui_hidden_) {
             LOG_TIMER_THRESHOLD("gui_render.status_bar_and_StatusBar", 0.10);

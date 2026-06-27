@@ -1484,7 +1484,6 @@ namespace lfs::vis {
                         settings.ortho_scale = std::clamp(settings.ortho_scale * scale_factor, MIN_ORTHO_SCALE, MAX_ORTHO_SCALE);
                         services().renderingOrNull()->updateSettings(settings);
                     }
-                    services().renderingOrNull()->markDirty(DirtyFlag::CAMERA);
                 } else {
                     target_viewport.camera.zoom(delta, carry_pivot);
                 }
@@ -1795,6 +1794,10 @@ namespace lfs::vis {
 
             case input::Action::COPY_SELECTION:
                 cmd::CopySelection{}.emit();
+                return;
+
+            case input::Action::CUT_SELECTION:
+                cmd::CutSelection{}.emit();
                 return;
 
             case input::Action::PASTE_SELECTION:
@@ -2904,8 +2907,8 @@ namespace lfs::vis {
             selection_tool_->syncDepthFilterToCamera(*active_viewport);
         }
 
-        if (services().renderingOrNull()) {
-            services().renderingOrNull()->markDirty(DirtyFlag::CAMERA);
+        if (auto* const rendering = services().renderingOrNull()) {
+            rendering->markCameraPoseChanged();
         }
 
         // Throttle event emission

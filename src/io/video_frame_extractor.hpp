@@ -7,8 +7,12 @@
 #include <filesystem>
 #include <functional>
 #include <string>
+#include <string_view>
 
 namespace lfs::io {
+
+    // Supports %d, %0Nd zero-padding, %% escaping, and legacy %000 zero-padding.
+    [[nodiscard]] std::string formatFrameFilenameStem(std::string_view pattern, int frame_number);
 
     enum class ExtractionMode {
         FPS,     // Extract at specific FPS
@@ -40,6 +44,7 @@ namespace lfs::io {
             ImageFormat format = ImageFormat::PNG;
             int jpg_quality = 95;
             std::function<void(int, int)> progress_callback; // (current, total)
+            std::function<bool()> cancel_requested;
 
             // Trim range
             double start_time = 0.0;

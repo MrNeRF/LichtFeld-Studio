@@ -2864,29 +2864,17 @@ namespace lfs::training {
 
         if (callback_stream_) {
             cudaStreamSynchronize(callback_stream_);
-            lfs::core::CudaMemoryPool::instance().release_stream(callback_stream_);
-            cudaStreamDestroy(callback_stream_);
-            callback_stream_ = nullptr;
-        }
-        callback_busy_ = false;
-
-        if (metrics_stream_) {
-            cudaStreamSynchronize(metrics_stream_);
-            lfs::core::CudaMemoryPool::instance().release_stream(metrics_stream_);
-            cudaStreamDestroy(metrics_stream_);
-            metrics_stream_ = nullptr;
         }
 
         if (training_stream_) {
             cudaStreamSynchronize(training_stream_);
-            destroySyncPrimitives();
-            lfs::core::CudaMemoryPool::instance().release_stream(training_stream_);
-            cudaStreamDestroy(training_stream_);
-            training_stream_ = nullptr;
+        }
+
+        if (metrics_stream_) {
+            cudaStreamSynchronize(metrics_stream_);
         }
 
         cudaDeviceSynchronize();
-
         clearActiveImageLoader();
         strategy_.reset();
         bilateral_grid_.reset();
@@ -2898,6 +2886,26 @@ namespace lfs::training {
         train_dataset_.reset();
         val_dataset_.reset();
         setCameraLossHeatmap(nullptr);
+
+        if (callback_stream_) {
+            lfs::core::CudaMemoryPool::instance().release_stream(callback_stream_);
+            cudaStreamDestroy(callback_stream_);
+            callback_stream_ = nullptr;
+        }
+        callback_busy_ = false;
+
+        if (metrics_stream_) {
+            lfs::core::CudaMemoryPool::instance().release_stream(metrics_stream_);
+            cudaStreamDestroy(metrics_stream_);
+            metrics_stream_ = nullptr;
+        }
+
+        if (training_stream_) {
+            destroySyncPrimitives();
+            lfs::core::CudaMemoryPool::instance().release_stream(training_stream_);
+            cudaStreamDestroy(training_stream_);
+            training_stream_ = nullptr;
+        }
 
         // Release GPU memory pools back to system
         lfs::core::Tensor::trim_memory_pool();

@@ -84,11 +84,6 @@ namespace lfs::gui {
             void ProcessEvent(Rml::Event& event) override;
         };
 
-        struct ExtractionStatusSnapshot {
-            std::string error_message;
-            bool show_completion_message = false;
-        };
-
         enum class TimelineDragTarget {
             None,
             Playhead,
@@ -96,15 +91,27 @@ namespace lfs::gui {
             TrimEnd,
         };
 
+        enum class ExtractionStatusMessage {
+            None,
+            Complete,
+            Stopped,
+        };
+
+        struct ExtractionStatusSnapshot {
+            std::string error_message;
+            ExtractionStatusMessage status_message = ExtractionStatusMessage::None;
+        };
+
         void startExtraction(const VideoExtractionParams& params);
         void joinExtractionThread();
 
         void updateProgress(int current, int total);
         void setExtractionComplete();
+        void setExtractionStopped();
         void setExtractionError(const std::string& error);
         [[nodiscard]] ExtractionStatusSnapshot getExtractionStatusSnapshot() const;
         void clearExtractionStatus();
-        void clearCompletionMessage();
+        void clearStatusMessage();
         void clearErrorMessage();
 
         void updatePreviewTexture();
@@ -130,6 +137,7 @@ namespace lfs::gui {
         void setTrimFromTimeline(TimelineDragTarget target, float mouse_x);
         void applyTextInput(const std::string& id);
         void beginExtractionFromUi();
+        void requestStopExtraction();
         void markContentDirty();
         void disablePanel();
         [[nodiscard]] bool hasDynamicState() const;
@@ -156,12 +164,13 @@ namespace lfs::gui {
         float trim_end_ = -1.0f;
 
         std::atomic<bool> extracting_{false};
+        std::atomic<bool> stop_extraction_requested_{false};
         std::atomic<int> current_frame_{0};
         std::atomic<int> total_frames_{0};
         std::atomic<bool> extraction_status_dirty_{false};
         mutable std::mutex extraction_status_mutex_;
         std::string error_message_;
-        bool show_completion_message_ = false;
+        ExtractionStatusMessage status_message_ = ExtractionStatusMessage::None;
 
         std::unique_ptr<io::VideoPlayer> player_;
         std::unique_ptr<lfs::vis::gui::VulkanUiTexture> preview_texture_;
@@ -213,7 +222,7 @@ namespace lfs::gui {
         Rml::Element* fps_slider_el_ = nullptr;
         Rml::Element* fps_value_el_ = nullptr;
         Rml::Element* interval_row_el_ = nullptr;
-        Rml::Element* interval_slider_el_ = nullptr;
+        Rml::Element* interval_input_el_ = nullptr;
         Rml::Element* interval_value_el_ = nullptr;
         Rml::ElementFormControlSelect* format_select_el_ = nullptr;
         Rml::Element* quality_row_el_ = nullptr;
@@ -229,6 +238,7 @@ namespace lfs::gui {
         Rml::Element* pattern_input_el_ = nullptr;
         Rml::Element* pattern_example_el_ = nullptr;
         Rml::Element* start_btn_el_ = nullptr;
+        Rml::Element* stop_btn_el_ = nullptr;
         Rml::Element* cancel_btn_el_ = nullptr;
         Rml::Element* select_hint_el_ = nullptr;
         Rml::Element* progress_section_el_ = nullptr;
@@ -237,6 +247,9 @@ namespace lfs::gui {
         Rml::Element* complete_section_el_ = nullptr;
         Rml::Element* complete_text_el_ = nullptr;
         Rml::Element* ok_btn_el_ = nullptr;
+        Rml::Element* stopped_section_el_ = nullptr;
+        Rml::Element* stopped_text_el_ = nullptr;
+        Rml::Element* stopped_ok_btn_el_ = nullptr;
         Rml::Element* error_section_el_ = nullptr;
         Rml::Element* error_text_el_ = nullptr;
         Rml::Element* dismiss_btn_el_ = nullptr;

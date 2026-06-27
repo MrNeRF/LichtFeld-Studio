@@ -21,7 +21,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -121,8 +120,7 @@ namespace lfs::gui {
                 return false;
 
             const std::string attr_name = cacheAttrName("control", "value");
-            if (el->GetAttribute<Rml::String>(attr_name.c_str(), "") == value &&
-                controlValue(el) == value)
+            if (el->GetAttribute<Rml::String>(attr_name.c_str(), "") == value)
                 return false;
 
             if (auto* const input = dynamic_cast<Rml::ElementFormControlInput*>(el))
@@ -132,6 +130,14 @@ namespace lfs::gui {
 
             el->SetAttribute(attr_name, value);
             return true;
+        }
+
+        void invalidateCachedControlValue(Rml::Element* const el) {
+            if (!el)
+                return;
+
+            const std::string attr_name = cacheAttrName("control", "value");
+            el->RemoveAttribute(attr_name.c_str());
         }
 
         [[nodiscard]] bool setCachedDisabled(Rml::Element* const el, const bool disabled) {
@@ -184,55 +190,6 @@ namespace lfs::gui {
             if (!end || end == value.c_str())
                 return fallback;
             return static_cast<int>(std::clamp<long>(parsed, 1, 65535));
-        }
-
-        [[nodiscard]] std::string patternExampleStem(const std::string& pattern) {
-            std::string out;
-            out.reserve(pattern.size() + 8);
-
-            bool consumed_value = false;
-            for (size_t i = 0; i < pattern.size(); ++i) {
-                if (pattern[i] != '%' || i + 1 >= pattern.size()) {
-                    out.push_back(pattern[i]);
-                    continue;
-                }
-
-                if (pattern[i + 1] == '%') {
-                    out.push_back('%');
-                    ++i;
-                    continue;
-                }
-
-                size_t j = i + 1;
-                bool zero_pad = false;
-                if (j < pattern.size() && pattern[j] == '0') {
-                    zero_pad = true;
-                    ++j;
-                }
-                int width = 0;
-                while (j < pattern.size() && std::isdigit(static_cast<unsigned char>(pattern[j]))) {
-                    width = width * 10 + (pattern[j] - '0');
-                    ++j;
-                }
-
-                if (j < pattern.size() && pattern[j] == 'd') {
-                    if (zero_pad && width > 1) {
-                        out.append(static_cast<size_t>(width - 1), '0');
-                        out.push_back('1');
-                    } else {
-                        out += "1";
-                    }
-                    i = j;
-                    consumed_value = true;
-                    continue;
-                }
-
-                out.push_back('%');
-            }
-
-            if (!consumed_value)
-                out += "1";
-            return out;
         }
 
     } // namespace
@@ -355,6 +312,9 @@ namespace lfs::gui {
             extract_params.custom_width = params.custom_width;
             extract_params.custom_height = params.custom_height;
             extract_params.filename_pattern = params.filename_pattern;
+            extract_params.cancel_requested = [this]() {
+                return stop_extraction_requested_.load();
+            };
 
             extract_params.progress_callback = [this](const int current, const int total) {
                 updateProgress(current, total);
@@ -362,8 +322,13 @@ namespace lfs::gui {
 
             std::string error;
             if (!extractor.extract(extract_params, error)) {
-                LOG_ERROR("Video frame extraction failed: {}", error);
-                setExtractionError(error);
+                if (stop_extraction_requested_.load()) {
+                    LOG_INFO("Video frame extraction stopped");
+                    setExtractionStopped();
+                } else {
+                    LOG_ERROR("Video frame extraction failed: {}", error);
+                    setExtractionError(error);
+                }
             } else {
                 LOG_INFO("Video frame extraction completed successfully");
                 setExtractionComplete();
@@ -372,9 +337,13 @@ namespace lfs::gui {
     }
 
     void VideoExtractorDialog::joinExtractionThread() {
-        if (extraction_thread_ && extraction_thread_->joinable())
+        if (extraction_thread_ && extraction_thread_->joinable()) {
+            if (extracting_.load())
+                stop_extraction_requested_.store(true);
             extraction_thread_->join();
+        }
         extraction_thread_.reset();
+        stop_extraction_requested_.store(false);
     }
 
     void VideoExtractorDialog::updateProgress(const int current, const int total) {
@@ -385,17 +354,28 @@ namespace lfs::gui {
 
     void VideoExtractorDialog::setExtractionComplete() {
         extracting_.store(false);
+        stop_extraction_requested_.store(false);
         std::lock_guard lock(extraction_status_mutex_);
         error_message_.clear();
-        show_completion_message_ = true;
+        status_message_ = ExtractionStatusMessage::Complete;
+        extraction_status_dirty_.store(true);
+    }
+
+    void VideoExtractorDialog::setExtractionStopped() {
+        extracting_.store(false);
+        stop_extraction_requested_.store(false);
+        std::lock_guard lock(extraction_status_mutex_);
+        error_message_.clear();
+        status_message_ = ExtractionStatusMessage::Stopped;
         extraction_status_dirty_.store(true);
     }
 
     void VideoExtractorDialog::setExtractionError(const std::string& error) {
         extracting_.store(false);
+        stop_extraction_requested_.store(false);
         std::lock_guard lock(extraction_status_mutex_);
         error_message_ = error;
-        show_completion_message_ = false;
+        status_message_ = ExtractionStatusMessage::None;
         extraction_status_dirty_.store(true);
     }
 
@@ -403,20 +383,20 @@ namespace lfs::gui {
         std::lock_guard lock(extraction_status_mutex_);
         return {
             .error_message = error_message_,
-            .show_completion_message = show_completion_message_,
+            .status_message = status_message_,
         };
     }
 
     void VideoExtractorDialog::clearExtractionStatus() {
         std::lock_guard lock(extraction_status_mutex_);
         error_message_.clear();
-        show_completion_message_ = false;
+        status_message_ = ExtractionStatusMessage::None;
         markContentDirty();
     }
 
-    void VideoExtractorDialog::clearCompletionMessage() {
+    void VideoExtractorDialog::clearStatusMessage() {
         std::lock_guard lock(extraction_status_mutex_);
-        show_completion_message_ = false;
+        status_message_ = ExtractionStatusMessage::None;
         markContentDirty();
     }
 
@@ -435,8 +415,8 @@ namespace lfs::gui {
         video_path_ = path;
         trim_start_ = 0.0f;
         trim_end_ = static_cast<float>(player_->duration());
-        custom_width_ = std::max(16, player_->width());
-        custom_height_ = std::max(16, player_->height());
+        custom_width_ = std::max(16, player_->sourceWidth());
+        custom_height_ = std::max(16, player_->sourceHeight());
         texture_needs_update_ = true;
         preview_src_.clear();
 
@@ -461,11 +441,11 @@ namespace lfs::gui {
             return 0;
 
         if (mode_selection_ == 0)
-            return static_cast<int>(duration * static_cast<double>(fps_));
+            return static_cast<int>(std::ceil(duration * static_cast<double>(fps_)));
 
         const double video_fps = std::max(player_->fps(), 0.001);
-        return static_cast<int>((duration * video_fps) /
-                                static_cast<double>(std::max(1, frame_interval_)));
+        return static_cast<int>(std::ceil((duration * video_fps) /
+                                          static_cast<double>(std::max(1, frame_interval_))));
     }
 
     void VideoExtractorDialog::updatePreviewTexture() {
@@ -501,6 +481,7 @@ namespace lfs::gui {
             host_ = std::make_unique<lfs::vis::gui::RmlPanelHost>(
                 manager, "video_extractor", "rmlui/video_extractor.rml");
             host_->setHeightMode(lfs::vis::gui::PanelHeightMode::Fill);
+            host_->setForeground(true);
         }
 
         if (!host_->ensureDocumentLoaded())
@@ -552,7 +533,7 @@ namespace lfs::gui {
         fps_slider_el_ = nullptr;
         fps_value_el_ = nullptr;
         interval_row_el_ = nullptr;
-        interval_slider_el_ = nullptr;
+        interval_input_el_ = nullptr;
         interval_value_el_ = nullptr;
         format_select_el_ = nullptr;
         quality_row_el_ = nullptr;
@@ -568,6 +549,7 @@ namespace lfs::gui {
         pattern_input_el_ = nullptr;
         pattern_example_el_ = nullptr;
         start_btn_el_ = nullptr;
+        stop_btn_el_ = nullptr;
         cancel_btn_el_ = nullptr;
         select_hint_el_ = nullptr;
         progress_section_el_ = nullptr;
@@ -576,6 +558,9 @@ namespace lfs::gui {
         complete_section_el_ = nullptr;
         complete_text_el_ = nullptr;
         ok_btn_el_ = nullptr;
+        stopped_section_el_ = nullptr;
+        stopped_text_el_ = nullptr;
+        stopped_ok_btn_el_ = nullptr;
         error_section_el_ = nullptr;
         error_text_el_ = nullptr;
         dismiss_btn_el_ = nullptr;
@@ -617,7 +602,7 @@ namespace lfs::gui {
         fps_slider_el_ = document_->GetElementById("fps-slider");
         fps_value_el_ = document_->GetElementById("fps-value");
         interval_row_el_ = document_->GetElementById("interval-row");
-        interval_slider_el_ = document_->GetElementById("interval-slider");
+        interval_input_el_ = document_->GetElementById("interval-input");
         interval_value_el_ = document_->GetElementById("interval-value");
         format_select_el_ = dynamic_cast<Rml::ElementFormControlSelect*>(document_->GetElementById("format-select"));
         quality_row_el_ = document_->GetElementById("quality-row");
@@ -633,6 +618,7 @@ namespace lfs::gui {
         pattern_input_el_ = document_->GetElementById("pattern-input");
         pattern_example_el_ = document_->GetElementById("pattern-example");
         start_btn_el_ = document_->GetElementById("btn-start");
+        stop_btn_el_ = document_->GetElementById("btn-stop");
         cancel_btn_el_ = document_->GetElementById("btn-cancel");
         select_hint_el_ = document_->GetElementById("select-hint");
         progress_section_el_ = document_->GetElementById("progress-section");
@@ -641,6 +627,9 @@ namespace lfs::gui {
         complete_section_el_ = document_->GetElementById("complete-section");
         complete_text_el_ = document_->GetElementById("complete-text");
         ok_btn_el_ = document_->GetElementById("btn-complete-ok");
+        stopped_section_el_ = document_->GetElementById("stopped-section");
+        stopped_text_el_ = document_->GetElementById("stopped-text");
+        stopped_ok_btn_el_ = document_->GetElementById("btn-stopped-ok");
         error_section_el_ = document_->GetElementById("error-section");
         error_text_el_ = document_->GetElementById("error-text");
         dismiss_btn_el_ = document_->GetElementById("btn-error-dismiss");
@@ -654,15 +643,15 @@ namespace lfs::gui {
             trim_end_input_el_ && trim_start_set_el_ && trim_end_set_el_ && trim_reset_el_ &&
             estimated_frames_el_ && video_value_el_ && output_value_el_ && browse_video_el_ &&
             browse_output_el_ && mode_select_el_ && fps_row_el_ && fps_slider_el_ &&
-            fps_value_el_ && interval_row_el_ && interval_slider_el_ && interval_value_el_ &&
+            fps_value_el_ && interval_row_el_ && interval_input_el_ && interval_value_el_ &&
             format_select_el_ && quality_row_el_ && quality_slider_el_ && quality_value_el_ &&
             resolution_select_el_ && scale_row_el_ && scale_select_el_ &&
             custom_resolution_row_el_ && custom_width_input_el_ && custom_height_input_el_ &&
             output_resolution_el_ && pattern_input_el_ && pattern_example_el_ &&
-            start_btn_el_ && cancel_btn_el_ && select_hint_el_ && progress_section_el_ &&
+            start_btn_el_ && stop_btn_el_ && cancel_btn_el_ && select_hint_el_ && progress_section_el_ &&
             progress_text_el_ && progress_bar_el_ && complete_section_el_ &&
-            complete_text_el_ && ok_btn_el_ && error_section_el_ && error_text_el_ &&
-            dismiss_btn_el_;
+            complete_text_el_ && ok_btn_el_ && stopped_section_el_ && stopped_text_el_ &&
+            stopped_ok_btn_el_ && error_section_el_ && error_text_el_ && dismiss_btn_el_;
 
         if (!elements_cached_) {
             LOG_ERROR("VideoExtractorDialog: missing required Rml elements");
@@ -684,6 +673,10 @@ namespace lfs::gui {
                 el->AddEventListener(Rml::EventId::Blur, &listener_);
             }
         };
+        const auto listen_input = [this](Rml::Element* const el) {
+            if (el)
+                el->AddEventListener("input", &listener_);
+        };
 
         listen_click(close_btn_el_);
         listen_click(step_back_btn_el_);
@@ -695,15 +688,19 @@ namespace lfs::gui {
         listen_click(browse_video_el_);
         listen_click(browse_output_el_);
         listen_click(start_btn_el_);
+        listen_click(stop_btn_el_);
         listen_click(cancel_btn_el_);
         listen_click(ok_btn_el_);
+        listen_click(stopped_ok_btn_el_);
         listen_click(dismiss_btn_el_);
 
         listen_change(mode_select_el_);
         listen_change(fps_slider_el_);
-        listen_change(interval_slider_el_);
+        listen_input(fps_slider_el_);
+        listen_change(interval_input_el_);
         listen_change(format_select_el_);
         listen_change(quality_slider_el_);
+        listen_input(quality_slider_el_);
         listen_change(resolution_select_el_);
         listen_change(scale_select_el_);
         listen_change(custom_width_input_el_);
@@ -752,11 +749,13 @@ namespace lfs::gui {
         changed |= setCachedAttribute(trim_end_set_el_, "title", LOC(VideoExtractor::SET_END));
         changed |= setCachedAttribute(browse_output_el_, "title", LOC(VideoExtractor::SELECT_FOLDER));
         changed |= setCachedAttribute(fps_slider_el_, "title", LOC(VideoExtractor::FPS_TOOLTIP));
-        changed |= setCachedAttribute(interval_slider_el_, "title", LOC(VideoExtractor::INTERVAL_TOOLTIP));
+        changed |= setCachedAttribute(interval_input_el_, "title", LOC(VideoExtractor::INTERVAL_TOOLTIP));
         changed |= setCachedAttribute(quality_slider_el_, "title", LOC(VideoExtractor::QUALITY_LABEL));
         changed |= setCachedAttribute(custom_width_input_el_, "title", LOC(VideoExtractor::WIDTH));
         changed |= setCachedAttribute(custom_height_input_el_, "title", LOC(VideoExtractor::HEIGHT));
         changed |= setCachedAttribute(pattern_input_el_, "title", LOC(VideoExtractor::PATTERN_TOOLTIP));
+        changed |= setCachedText(stop_btn_el_, LOC(VideoExtractor::STOP));
+        changed |= setCachedText(cancel_btn_el_, LOC(VideoExtractor::CANCEL));
         markContentDirty();
         controls_dirty_ |= changed;
     }
@@ -851,9 +850,13 @@ namespace lfs::gui {
         const float start_pct = has_video ? (start / static_cast<float>(duration)) * 100.0f : 0.0f;
         const float end_pct = has_video ? (end / static_cast<float>(duration)) * 100.0f : 100.0f;
         const float current_pct = has_video ? (static_cast<float>(current / duration) * 100.0f) : 0.0f;
+        const float trim_progress_pct = has_video
+                                            ? std::clamp(current_pct, start_pct, end_pct)
+                                            : 0.0f;
         changed |= setCachedProperty(timeline_trim_el_, "left", std::format("{:.3f}%", start_pct));
         changed |= setCachedProperty(timeline_trim_el_, "width", std::format("{:.3f}%", std::max(0.0f, end_pct - start_pct)));
-        changed |= setCachedProperty(timeline_progress_el_, "width", std::format("{:.3f}%", current_pct));
+        changed |= setCachedProperty(timeline_progress_el_, "left", std::format("{:.3f}%", start_pct));
+        changed |= setCachedProperty(timeline_progress_el_, "width", std::format("{:.3f}%", std::max(0.0f, trim_progress_pct - start_pct)));
         changed |= setCachedProperty(timeline_playhead_el_, "left", std::format("{:.3f}%", current_pct));
         changed |= setCachedProperty(timeline_start_el_, "left", std::format("{:.3f}%", start_pct));
         changed |= setCachedProperty(timeline_end_el_, "left", std::format("{:.3f}%", end_pct));
@@ -894,6 +897,7 @@ namespace lfs::gui {
         bool changed = false;
         const bool has_video = player_->isOpen();
         const bool extracting = extracting_.load();
+        const bool stop_requested = stop_extraction_requested_.load();
         const bool can_start = has_video && !output_dir_.empty() && !extracting;
 
         changed |= setCachedDisabled(step_back_btn_el_, !has_video);
@@ -906,6 +910,7 @@ namespace lfs::gui {
         changed |= setCachedDisabled(trim_end_set_el_, !has_video);
         changed |= setCachedDisabled(trim_reset_el_, !has_video);
         changed |= setCachedDisabled(start_btn_el_, !can_start);
+        changed |= setCachedDisabled(stop_btn_el_, !extracting || stop_requested);
         changed |= setCachedDisabled(cancel_btn_el_, false);
 
         changed |= setCachedSelect(mode_select_el_, mode_selection_);
@@ -918,13 +923,12 @@ namespace lfs::gui {
         changed |= setCachedProperty(quality_row_el_, "display", format_selection_ == 1 ? "flex" : "none");
         changed |= setCachedProperty(scale_row_el_, "display", resolution_mode_ == 1 ? "flex" : "none");
         changed |= setCachedProperty(custom_resolution_row_el_, "display", resolution_mode_ == 2 ? "flex" : "none");
+        changed |= setCachedProperty(stop_btn_el_, "display", extracting ? "block" : "none");
 
         changed |= setCachedControlValue(fps_slider_el_, std::format("{:.1f}", fps_));
         changed |= setCachedText(fps_value_el_, std::format("{:.1f} {}", fps_, LOC(VideoExtractor::FPS_LABEL)));
-        changed |= setCachedControlValue(interval_slider_el_, std::to_string(frame_interval_));
-        changed |= setCachedText(interval_value_el_,
-                                 std::format("{} {}", LOC(VideoExtractor::EVERY_LABEL),
-                                             localizedFormat(VideoExtractor::FRAMES_FORMAT, frame_interval_)));
+        changed |= setCachedControlValue(interval_input_el_, std::to_string(frame_interval_));
+        changed |= setCachedText(interval_value_el_, LOC(VideoExtractor::FRAMES_UNIT));
         changed |= setCachedControlValue(quality_slider_el_, std::to_string(jpg_quality_));
         changed |= setCachedText(quality_value_el_, std::format("{}%", jpg_quality_));
         changed |= setCachedControlValue(custom_width_input_el_, std::to_string(custom_width_));
@@ -963,12 +967,21 @@ namespace lfs::gui {
 
         const auto snapshot = getExtractionStatusSnapshot();
         changed |= setCachedProperty(complete_section_el_, "display",
-                                     snapshot.show_completion_message && !extracting ? "flex" : "none");
-        if (snapshot.show_completion_message && !extracting) {
+                                     snapshot.status_message == ExtractionStatusMessage::Complete && !extracting
+                                         ? "flex"
+                                         : "none");
+        if (snapshot.status_message == ExtractionStatusMessage::Complete && !extracting) {
             changed |= setCachedText(complete_text_el_,
                                      std::format("{} {}", LOC(VideoExtractor::COMPLETE),
                                                  localizedFormat(VideoExtractor::EXTRACTED, current)));
         }
+
+        changed |= setCachedProperty(stopped_section_el_, "display",
+                                     snapshot.status_message == ExtractionStatusMessage::Stopped && !extracting
+                                         ? "flex"
+                                         : "none");
+        if (snapshot.status_message == ExtractionStatusMessage::Stopped && !extracting)
+            changed |= setCachedText(stopped_text_el_, LOC(VideoExtractor::STOPPED));
 
         const bool has_error = !snapshot.error_message.empty();
         changed |= setCachedProperty(error_section_el_, "display", has_error ? "flex" : "none");
@@ -984,8 +997,8 @@ namespace lfs::gui {
 
     void VideoExtractorDialog::syncOutputPreview() {
         bool changed = false;
-        int out_w = player_->isOpen() ? player_->width() : 0;
-        int out_h = player_->isOpen() ? player_->height() : 0;
+        int out_w = player_->isOpen() ? player_->sourceWidth() : 0;
+        int out_h = player_->isOpen() ? player_->sourceHeight() : 0;
 
         if (player_->isOpen()) {
             if (resolution_mode_ == 1) {
@@ -1003,7 +1016,7 @@ namespace lfs::gui {
                                      ? localizedFormat(VideoExtractor::OUTPUT_RES, out_w, out_h)
                                      : std::format("{} --", LOC(VideoExtractor::OUTPUT)));
         const char* const ext = format_selection_ == 0 ? ".png" : ".jpg";
-        const std::string preview = patternExampleStem(filename_pattern_.data());
+        const std::string preview = io::formatFrameFilenameStem(filename_pattern_.data(), 1);
         changed |= setCachedText(pattern_example_el_,
                                  localizedFormat(VideoExtractor::EXAMPLE, preview.c_str(), ext));
 
@@ -1040,7 +1053,8 @@ namespace lfs::gui {
             return;
         }
 
-        if (event_id == Rml::EventId::Change || event_id == Rml::EventId::Blur) {
+        if (event_id == Rml::EventId::Change || event_id == Rml::EventId::Blur ||
+            event.GetType() == "input") {
             handleChange(id);
             event.StopPropagation();
         }
@@ -1049,6 +1063,8 @@ namespace lfs::gui {
     void VideoExtractorDialog::handleClick(const std::string& id) {
         if (id == "close-btn" || id == "btn-cancel") {
             disablePanel();
+        } else if (id == "btn-stop") {
+            requestStopExtraction();
         } else if (id == "btn-browse-video") {
             const auto path = lfs::vis::gui::OpenVideoFileDialog(video_path_);
             if (!path.empty())
@@ -1090,8 +1106,8 @@ namespace lfs::gui {
             markContentDirty();
         } else if (id == "btn-start") {
             beginExtractionFromUi();
-        } else if (id == "btn-complete-ok") {
-            clearCompletionMessage();
+        } else if (id == "btn-complete-ok" || id == "btn-stopped-ok") {
+            clearStatusMessage();
             current_frame_.store(0);
             total_frames_.store(0);
         } else if (id == "btn-error-dismiss") {
@@ -1100,6 +1116,8 @@ namespace lfs::gui {
     }
 
     void VideoExtractorDialog::handleChange(const std::string& id) {
+        Rml::Element* changed_control = nullptr;
+
         if (id == "mode-select") {
             mode_selection_ = mode_select_el_ ? mode_select_el_->GetSelection() : mode_selection_;
         } else if (id == "format-select") {
@@ -1110,14 +1128,28 @@ namespace lfs::gui {
             scale_selection_ = scale_select_el_ ? scale_select_el_->GetSelection() : scale_selection_;
         } else if (id == "fps-slider") {
             fps_ = std::clamp(readFloatValue(fps_slider_el_, fps_), 0.1f, 30.0f);
-        } else if (id == "interval-slider") {
-            frame_interval_ = std::clamp(readIntValue(interval_slider_el_, frame_interval_), 1, 100);
+            changed_control = fps_slider_el_;
+        } else if (id == "interval-input") {
+            frame_interval_ = std::clamp(readIntValue(interval_input_el_, frame_interval_), 1, 100);
+            changed_control = interval_input_el_;
         } else if (id == "quality-slider") {
             jpg_quality_ = std::clamp(readIntValue(quality_slider_el_, jpg_quality_), 50, 100);
+            changed_control = quality_slider_el_;
         } else {
             applyTextInput(id);
+            if (id == "trim-start-input")
+                changed_control = trim_start_input_el_;
+            else if (id == "trim-end-input")
+                changed_control = trim_end_input_el_;
+            else if (id == "custom-width-input")
+                changed_control = custom_width_input_el_;
+            else if (id == "custom-height-input")
+                changed_control = custom_height_input_el_;
+            else if (id == "pattern-input")
+                changed_control = pattern_input_el_;
         }
 
+        invalidateCachedControlValue(changed_control);
         controls_dirty_ = true;
         markContentDirty();
     }
@@ -1247,11 +1279,20 @@ namespace lfs::gui {
         params.custom_height = custom_height_;
         params.filename_pattern = filename_pattern_.data();
 
+        stop_extraction_requested_.store(false);
         extracting_.store(true);
         current_frame_.store(0);
         total_frames_.store(0);
         clearExtractionStatus();
         startExtraction(params);
+        controls_dirty_ = true;
+        markContentDirty();
+    }
+
+    void VideoExtractorDialog::requestStopExtraction() {
+        if (!extracting_.load())
+            return;
+        stop_extraction_requested_.store(true);
         controls_dirty_ = true;
         markContentDirty();
     }

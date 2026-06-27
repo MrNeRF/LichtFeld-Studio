@@ -20,12 +20,62 @@ extern "C" {
 #include <cuda_runtime.h>
 #include <stb_image_write.h>
 
+#include <algorithm>
+#include <cctype>
+#include <cmath>
 #include <fstream>
+#include <stdexcept>
 
 namespace lfs::io {
 
     namespace {
         constexpr int JPEG_BATCH_SIZE = 32;
+
+        struct ExtractionCancelled final : std::exception {
+            [[nodiscard]] const char* what() const noexcept override { return "Extraction stopped"; }
+        };
+
+        constexpr int MAX_FILENAME_FRAME_WIDTH = 64;
+
+        void appendFrameNumber(std::string& out, const int frame_number, const int min_width) {
+            const std::string number = std::to_string(frame_number);
+            if (frame_number < 0 || min_width <= static_cast<int>(number.size())) {
+                out += number;
+                return;
+            }
+
+            out.append(static_cast<size_t>(min_width - static_cast<int>(number.size())), '0');
+            out += number;
+        }
+
+        [[nodiscard]] double validFrameRate(const AVRational frame_rate) {
+            const double fps = av_q2d(frame_rate);
+            return std::isfinite(fps) && fps > 0.0 ? fps : 0.0;
+        }
+
+        [[nodiscard]] double frameTimestampSeconds(const AVFrame* const frame,
+                                                   const double time_base,
+                                                   const int frame_index,
+                                                   const double fallback_fps) {
+            int64_t timestamp = frame->best_effort_timestamp;
+            if (timestamp == AV_NOPTS_VALUE)
+                timestamp = frame->pts;
+            if (timestamp != AV_NOPTS_VALUE && std::isfinite(time_base) && time_base > 0.0)
+                return static_cast<double>(timestamp) * time_base;
+            return static_cast<double>(frame_index) / std::max(fallback_fps, 0.001);
+        }
+
+        [[nodiscard]] int estimateFramesToExtract(const ExtractionMode mode,
+                                                  const double trim_duration,
+                                                  const double target_fps,
+                                                  const int64_t source_frame_count,
+                                                  const int frame_step) {
+            if (mode == ExtractionMode::FPS)
+                return std::max(1, static_cast<int>(std::ceil(std::max(0.0, trim_duration) * target_fps)));
+
+            const auto source_frames = static_cast<double>(std::max<int64_t>(1, source_frame_count));
+            return std::max(1, static_cast<int>(std::ceil(source_frames / static_cast<double>(frame_step))));
+        }
 
         bool write_image_file(const std::filesystem::path& path,
                               int width,
@@ -82,6 +132,79 @@ namespace lfs::io {
         }
 
     } // namespace
+
+    std::string formatFrameFilenameStem(const std::string_view pattern, const int frame_number) {
+        const std::string_view effective_pattern = pattern.empty() ? std::string_view{"frame_%d"} : pattern;
+        std::string out;
+        out.reserve(effective_pattern.size() + 8);
+
+        bool consumed_value = false;
+        for (size_t i = 0; i < effective_pattern.size(); ++i) {
+            if (effective_pattern[i] != '%' || i + 1 >= effective_pattern.size()) {
+                out.push_back(effective_pattern[i]);
+                continue;
+            }
+
+            if (effective_pattern[i + 1] == '%') {
+                out.push_back('%');
+                ++i;
+                continue;
+            }
+
+            size_t j = i + 1;
+            int min_width = 0;
+            bool found_value = false;
+
+            if (effective_pattern[j] == 'd') {
+                found_value = true;
+            } else if (effective_pattern[j] == '0') {
+                size_t zero_count = 0;
+                while (j < effective_pattern.size() && effective_pattern[j] == '0') {
+                    ++zero_count;
+                    ++j;
+                }
+
+                int parsed_width = 0;
+                while (j < effective_pattern.size() && std::isdigit(static_cast<unsigned char>(effective_pattern[j]))) {
+                    if (parsed_width < MAX_FILENAME_FRAME_WIDTH)
+                        parsed_width = std::min(parsed_width * 10 + (effective_pattern[j] - '0'),
+                                                MAX_FILENAME_FRAME_WIDTH);
+                    ++j;
+                }
+
+                const bool has_d_suffix = j < effective_pattern.size() && effective_pattern[j] == 'd';
+                const bool has_legacy_zero_run =
+                    parsed_width == 0 && zero_count > 1 &&
+                    (j >= effective_pattern.size() ||
+                     !std::isalpha(static_cast<unsigned char>(effective_pattern[j])));
+                found_value = has_d_suffix || has_legacy_zero_run;
+
+                if (found_value) {
+                    min_width = parsed_width > 0
+                                    ? parsed_width
+                                    : static_cast<int>(has_legacy_zero_run || zero_count > 1
+                                                           ? std::min<size_t>(zero_count + 1, MAX_FILENAME_FRAME_WIDTH)
+                                                           : 0);
+                    if (!has_d_suffix)
+                        --j;
+                }
+            }
+
+            if (found_value) {
+                appendFrameNumber(out, frame_number, min_width);
+                i = j;
+                consumed_value = true;
+                continue;
+            }
+
+            out.push_back('%');
+        }
+
+        if (!consumed_value)
+            appendFrameNumber(out, frame_number, 0);
+
+        return out;
+    }
 
     class VideoFrameExtractor::Impl {
     public:
@@ -216,7 +339,11 @@ namespace lfs::io {
                 const size_t frame_size = static_cast<size_t>(out_width) * out_height * 3;
                 const bool needs_scale = out_width != src_width || out_height != src_height;
 
-                double video_fps = av_q2d(video_stream->r_frame_rate);
+                double video_fps = validFrameRate(video_stream->avg_frame_rate);
+                if (video_fps <= 0.0)
+                    video_fps = validFrameRate(video_stream->r_frame_rate);
+                if (video_fps <= 0.0)
+                    video_fps = 30.0;
                 const double video_duration = static_cast<double>(fmt_ctx->duration) / AV_TIME_BASE;
                 const double time_base = av_q2d(video_stream->time_base);
 
@@ -232,14 +359,12 @@ namespace lfs::io {
                     total_frames = static_cast<int64_t>(trim_duration / video_duration * total_frames);
                 }
 
-                int frame_step = 1;
-                if (params.mode == ExtractionMode::FPS) {
-                    frame_step = static_cast<int>(video_fps / params.fps);
-                    if (frame_step < 1)
-                        frame_step = 1;
-                } else {
-                    frame_step = params.frame_interval;
-                }
+                const int frame_step = std::max(1, params.frame_interval);
+                const double target_fps = std::max(params.fps, 0.001);
+                const double target_interval = 1.0 / target_fps;
+                double next_capture_time = start_time;
+                const int estimated_total = estimateFramesToExtract(params.mode, trim_duration, target_fps,
+                                                                    total_frames, frame_step);
 
                 // Seek to start time if needed
                 if (start_time > 0.1) {
@@ -301,6 +426,10 @@ namespace lfs::io {
 
                 const bool gpu_encoding_enabled = use_gpu_jpeg && gpu_batch_buffer != nullptr;
                 const bool full_gpu_pipeline = using_hw_decode && gpu_encoding_enabled && gpu_rgb_buffer && !needs_scale;
+                const auto throw_if_cancelled = [&]() {
+                    if (params.cancel_requested && params.cancel_requested())
+                        throw ExtractionCancelled{};
+                };
 
                 if (full_gpu_pipeline) {
                     LOG_INFO("Full GPU pipeline: NVDEC decode → GPU color convert → GPU JPEG encode");
@@ -315,7 +444,8 @@ namespace lfs::io {
                     LOG_INFO("Using CPU PNG encoding");
                 }
 
-                int frame_count = 0;
+                int in_trim_frame_count = 0;
+                int decoded_frame_count = 0;
                 int saved_count = 0;
 
                 std::vector<void*> batch_gpu_ptrs;
@@ -325,6 +455,7 @@ namespace lfs::io {
                 auto flush_jpeg_batch = [&]() {
                     if (batch_gpu_ptrs.empty())
                         return;
+                    throw_if_cancelled();
 
                     auto encoded = nvcodec->encode_batch_rgb_to_jpeg(batch_gpu_ptrs, out_width, out_height,
                                                                      params.jpg_quality);
@@ -338,16 +469,32 @@ namespace lfs::io {
                     batch_gpu_ptrs.clear();
                     batch_filenames.clear();
                     batch_idx = 0;
+                    throw_if_cancelled();
                 };
 
                 auto generate_filename = [&](int frame_num) {
-                    char buf[256];
-                    std::snprintf(buf, sizeof(buf), params.filename_pattern.c_str(), frame_num);
                     std::string ext = params.format == ImageFormat::PNG ? ".png" : ".jpg";
-                    return params.output_dir / (std::string(buf) + ext);
+                    return params.output_dir / (formatFrameFilenameStem(params.filename_pattern, frame_num) + ext);
+                };
+
+                auto should_extract_frame = [&](const double frame_time) {
+                    bool should_extract = false;
+                    if (params.mode == ExtractionMode::FPS) {
+                        should_extract = frame_time + 1.0e-6 >= next_capture_time;
+                        if (should_extract) {
+                            do {
+                                next_capture_time += target_interval;
+                            } while (next_capture_time <= frame_time + 1.0e-6);
+                        }
+                    } else {
+                        should_extract = in_trim_frame_count % frame_step == 0;
+                    }
+                    in_trim_frame_count++;
+                    return should_extract;
                 };
 
                 auto process_frame_hw = [&](AVFrame* hw_frame) {
+                    throw_if_cancelled();
                     std::filesystem::path filename = generate_filename(saved_count + 1);
 
                     if (full_gpu_pipeline) {
@@ -419,12 +566,13 @@ namespace lfs::io {
                     saved_count++;
 
                     if (params.progress_callback) {
-                        int estimated_total = static_cast<int>(total_frames / frame_step);
                         params.progress_callback(saved_count, estimated_total);
                     }
+                    throw_if_cancelled();
                 };
 
                 auto process_frame_sw = [&](AVFrame* decoded_frame) {
+                    throw_if_cancelled();
                     uint8_t* dst_data[1] = {cpu_contiguous_buffer};
                     int dst_linesize[1] = {out_width * 3};
                     sws_scale(sws_ctx, decoded_frame->data, decoded_frame->linesize, 0, src_height,
@@ -453,18 +601,20 @@ namespace lfs::io {
                     saved_count++;
 
                     if (params.progress_callback) {
-                        int estimated_total = static_cast<int>(total_frames / frame_step);
                         params.progress_callback(saved_count, estimated_total);
                     }
+                    throw_if_cancelled();
                 };
 
                 bool reached_end = false;
                 while (!reached_end && av_read_frame(fmt_ctx, packet) >= 0) {
+                    throw_if_cancelled();
                     if (packet->stream_index == video_stream_idx) {
                         if (avcodec_send_packet(codec_ctx, packet) == 0) {
                             while (avcodec_receive_frame(codec_ctx, frame) == 0) {
                                 // Check if we've reached the end time
-                                double frame_time = frame->pts * time_base;
+                                const double frame_time =
+                                    frameTimestampSeconds(frame, time_base, decoded_frame_count++, video_fps);
                                 if (frame_time < start_time) {
                                     // Skip frames before start time (due to keyframe seeking)
                                     continue;
@@ -474,14 +624,13 @@ namespace lfs::io {
                                     break;
                                 }
 
-                                if (frame_count % frame_step == 0) {
+                                if (should_extract_frame(frame_time)) {
                                     if (using_hw_decode) {
                                         process_frame_hw(frame);
                                     } else {
                                         process_frame_sw(frame);
                                     }
                                 }
-                                frame_count++;
                             }
                         }
                     }
@@ -492,20 +641,21 @@ namespace lfs::io {
                 if (!reached_end) {
                     avcodec_send_packet(codec_ctx, nullptr);
                     while (avcodec_receive_frame(codec_ctx, frame) == 0) {
-                        double frame_time = frame->pts * time_base;
+                        throw_if_cancelled();
+                        const double frame_time =
+                            frameTimestampSeconds(frame, time_base, decoded_frame_count++, video_fps);
                         if (frame_time < start_time)
                             continue;
                         if (frame_time > end_time)
                             break;
 
-                        if (frame_count % frame_step == 0) {
+                        if (should_extract_frame(frame_time)) {
                             if (using_hw_decode) {
                                 process_frame_hw(frame);
                             } else {
                                 process_frame_sw(frame);
                             }
                         }
-                        frame_count++;
                     }
                 }
 

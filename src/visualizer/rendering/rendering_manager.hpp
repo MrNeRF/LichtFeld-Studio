@@ -199,6 +199,7 @@ namespace lfs::vis {
 
         void markDirty();
         void markDirty(DirtyMask flags);
+        void markCameraPoseChanged();
 
         [[nodiscard]] bool pollDirtyState();
 
@@ -623,6 +624,7 @@ namespace lfs::vis {
         void applySplitModeChange(const SplitViewService::ModeChangeResult& result);
         void queueCameraMetricsRefreshIfStale(SceneManager* scene_manager);
         void invalidateCameraMetricsRequests(bool clear_latest = false);
+        void requestRenderFollowUp();
         void notifyAsyncLodResultsReady();
         void requestResizeTrainingPause(TrainerManager* trainer_manager);
         void releaseResizeTrainingPause();
@@ -666,6 +668,7 @@ namespace lfs::vis {
         const lfs::core::SplatData* lod_controller_model_ = nullptr;
         bool lod_controller_needs_sync_traversal_ = false;
         std::uint64_t lod_controller_page_map_generation_ = 0;
+        int vksplat_camera_settle_passes_remaining_ = 0;
         // Cached SH0→RGB derivation for the point-cloud Vulkan path. Refreshed
         // only when the source sh0_raw() pointer/size changes so the Vulkan
         // renderer's per-tensor upload cache stays warm across frames.
@@ -690,6 +693,7 @@ namespace lfs::vis {
 
         // Granular dirty tracking
         std::atomic<uint32_t> dirty_mask_{DirtyFlag::ALL};
+        std::atomic_bool camera_pose_dirty_{false};
 
         RenderAnimationState animation_state_;
         ViewportArtifactService viewport_artifact_service_;

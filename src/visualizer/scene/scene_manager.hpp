@@ -251,6 +251,7 @@ namespace lfs::vis {
 
         // Gaussian-level copy/paste (for selection tools)
         bool copySelectedGaussians();
+        bool cutSelectedGaussians();
         std::vector<std::string> pasteGaussians();
         [[nodiscard]] bool hasGaussianClipboard() const;
 

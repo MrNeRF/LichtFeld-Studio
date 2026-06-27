@@ -328,6 +328,7 @@ namespace lfs::core {
                 }
             }
             GPUSlabAllocator::instance().merge_all_streams_into_virgin();
+            SizeBucketedPool::instance().retag_all_streams(nullptr);
             SizeBucketedPool::instance().trim_cache();
 
 #if CUDART_VERSION >= 12080

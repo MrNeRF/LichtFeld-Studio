@@ -2554,7 +2554,7 @@ namespace lfs::vis::gui {
                     const bool negative = hovered_axis >= 3;
                     active_viewport.camera.setAxisAlignedView(axis, negative);
                     rendering_manager->setGridPlaneForPanel(hovered_panel->panel, axis);
-                    rendering_manager->markDirty(DirtyFlag::CAMERA);
+                    rendering_manager->markCameraPoseChanged();
                 } else {
                     viewport_gizmo_dragging_ = true;
                     viewport_gizmo_active_panel_ = hovered_panel->panel;
@@ -2579,7 +2579,7 @@ namespace lfs::vis::gui {
                     } else {
                         active_panel->viewport->camera.updateRotateAroundCenter(capture_mouse_pos, time);
                     }
-                    rendering_manager->markDirty(DirtyFlag::CAMERA);
+                    rendering_manager->markCameraPoseChanged();
                 } else {
                     if (auto* const released_panel = find_panel(viewport_gizmo_active_panel_)) {
                         released_panel->viewport->camera.endRotateAroundCenter();
@@ -2592,7 +2592,7 @@ namespace lfs::vis::gui {
                                 rendering_manager->setGridPlaneForPanel(released_panel->panel, snapped_axis);
                             }
                         }
-                        rendering_manager->markDirty(DirtyFlag::CAMERA);
+                        rendering_manager->markCameraPoseChanged();
                     }
                     viewport_gizmo_dragging_ = false;
 

@@ -118,6 +118,7 @@ namespace lfs::core {
             EVENT(DeselectAll, );
             EVENT(SelectAll, );
             EVENT(CopySelection, );
+            EVENT(CutSelection, );
             EVENT(PasteSelection, );
             EVENT(SelectBrush, float x; float y; float radius; int camera_index; std::string mode;);
             EVENT(SelectRect, float x0; float y0; float x1; float y1; int camera_index; std::string mode;);

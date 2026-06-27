@@ -314,59 +314,129 @@ body {
 .wide-select {
     width: 150dp;
     min-width: 150dp;
-    height: 22dp;
-    min-height: 22dp;
+    height: 24dp;
+    min-height: 24dp;
+    line-height: 22dp;
+    padding: 0;
+    margin: 0;
+    flex-shrink: 0;
 }
 
 .compact-select {
     width: 80dp;
     min-width: 80dp;
-    height: 22dp;
-    min-height: 22dp;
+    height: 24dp;
+    min-height: 24dp;
+    line-height: 22dp;
+    padding: 0;
+    margin: 0;
+    flex-shrink: 0;
 }
 
 .wide-select selectvalue,
 .compact-select selectvalue {
     height: 22dp;
     line-height: 22dp;
-    top: -1dp;
+    margin-right: 20dp;
+    padding: 0 0 0 8dp;
+    position: relative;
+    top: 0;
 }
 
 .wide-select selectarrow,
 .compact-select selectarrow {
+    width: 20dp;
     height: 22dp;
     line-height: 22dp;
-    top: -1dp;
+    position: relative;
+    top: 0;
 }
 
 .inline-control {
     display: flex;
     align-items: center;
     gap: 8dp;
+    height: 24dp;
     min-width: 0;
 }
 
 .value-slider {
-    width: 98dp;
-    min-width: 98dp;
+    width: 112dp;
+    min-width: 112dp;
+    height: 24dp;
+    min-height: 24dp;
+    margin: 0;
+    padding: 0;
+    flex-shrink: 0;
+}
+
+.value-slider slidertrack {
+    height: 6dp;
+    margin-top: 9dp;
+    border-radius: 6dp;
+}
+
+.value-slider sliderprogress {
+    height: 6dp;
+    margin-top: 0;
+    border-radius: 6dp;
+}
+
+.value-slider sliderbar {
+    width: 14dp;
+    height: 14dp;
+    margin-top: 5dp;
+    background-color: #cdd6f4;
+    border-width: 1dp;
+    border-color: #89b4fa;
+    border-radius: 8dp;
+}
+
+.value-slider sliderbar:hover {
+    background-color: #f5f7ff;
 }
 
 .value-readout {
     width: 70dp;
     min-width: 70dp;
+    line-height: 24dp;
     color: #cdd6f4;
+}
+
+.interval-control {
+    gap: 6dp;
+}
+
+.interval-label,
+.interval-unit {
+    color: #cdd6f4;
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+.interval-input {
+    width: 42dp;
+    min-width: 42dp;
+    text-align: center;
+}
+
+.video-extractor-window input[type="text"] {
+    height: 24dp;
+    min-height: 24dp;
+    line-height: 22dp;
+    margin: 0;
+    padding: 0 6dp;
+    box-sizing: border-box;
 }
 
 .dimension-input {
     width: 72dp;
     min-width: 72dp;
-    height: 22dp;
 }
 
 .pattern-input {
     width: 200dp;
     min-width: 200dp;
-    height: 22dp;
 }
 
 .status-row {
@@ -391,6 +461,10 @@ body {
 
 .status-section--success {
     border-color: rgba(166, 227, 161, 160);
+}
+
+.status-section--stopped {
+    border-color: rgba(249, 226, 175, 180);
 }
 
 .status-section--error {

@@ -7511,6 +7511,7 @@ namespace lfs::vis {
             .completion_value = completion_value,
             .lod_page_generation = lod_page_generation,
             .lod_streaming_active = lod_streaming_active,
+            .capacity_readback_settled = last_preview_capture_settled_,
         };
     }
 

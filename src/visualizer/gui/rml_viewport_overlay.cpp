@@ -901,7 +901,7 @@ namespace lfs::vis::gui {
             .draw_width = vp_size_.x,
             .draw_height = vp_size_.y,
             .refresh = refresh_cache,
-            .foreground = true,
+            .foreground = false,
             .clip_enabled = true,
             .clip = {
                 .x1 = x,

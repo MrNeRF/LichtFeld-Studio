@@ -157,6 +157,11 @@ namespace lfs::vis {
         LOG_TRACE("Render marked dirty (flags: 0x{:x})", flags);
     }
 
+    void RenderingManager::markCameraPoseChanged() {
+        camera_pose_dirty_.store(true, std::memory_order_release);
+        markDirty(DirtyFlag::CAMERA);
+    }
+
     bool RenderingManager::pollDirtyState() {
         if (const DirtyMask animation_dirty = animation_state_.pollDirtyState(); animation_dirty) {
             dirty_mask_.fetch_or(animation_dirty, std::memory_order_relaxed);
@@ -169,7 +174,7 @@ namespace lfs::vis {
         return dirty_mask_.load(std::memory_order_relaxed) != 0;
     }
 
-    void RenderingManager::notifyAsyncLodResultsReady() {
+    void RenderingManager::requestRenderFollowUp() {
         dirty_mask_.fetch_or(DirtyFlag::CAMERA, std::memory_order_relaxed);
 
         std::function<void()> wake_callback;
@@ -180,6 +185,10 @@ namespace lfs::vis {
         if (wake_callback) {
             wake_callback();
         }
+    }
+
+    void RenderingManager::notifyAsyncLodResultsReady() {
+        requestRenderFollowUp();
     }
 
     void RenderingManager::setViewportResizeActive(bool active) {
