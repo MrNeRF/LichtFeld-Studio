@@ -365,7 +365,7 @@ progress fill {
 .icon-btn.disabled img,
 .icon-btn.is-disabled img,
 .icon-btn:disabled img {
-    image-color: @{blend(components.text_hi, surface, 0.6)};
+    image-color: @{text_dim};
 }
 
 .status-success {

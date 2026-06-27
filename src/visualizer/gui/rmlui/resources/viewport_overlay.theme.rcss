@@ -104,7 +104,7 @@
 }
 
 .icon-btn.disabled img {
-    image-color: @{alpha(viewport.icon_dim,0.38)};
+    image-color: @{text_dim};
 }
 
 .viewport-metrics-card {
