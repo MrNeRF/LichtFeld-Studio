@@ -16,8 +16,6 @@
 #include <algorithm>
 #include "scene/scene_manager.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
-
-#include <algorithm>
 #include <cmath>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -567,27 +565,6 @@ namespace lfs::vis::cap {
         const bool has_any_invalid = filtered->editable_names.size() != filtered->requested_names.size();
         if (filtered->editable_names.empty() || (policy == TransformTargetPolicy::RequireAllEditable && has_any_invalid))
             return std::unexpected(format_transform_target_error(*filtered, requested_node, policy));
-
-        // When a SPLAT or POINTCLOUD under a DATASET is transformed,
-        // also include the parent DATASET so cameras (siblings) move too.
-        {
-            const auto& scene = scene_manager.getScene();
-            for (size_t i = 0, n = filtered->editable_names.size(); i < n; ++i) {
-                const auto* node = scene.getNode(filtered->editable_names[i]);
-                if (!node || (node->type != core::NodeType::SPLAT &&
-                              node->type != core::NodeType::POINTCLOUD))
-                    continue;
-                const auto* parent = scene.getNodeById(node->parent_id);
-                if (parent && parent->type == core::NodeType::DATASET && !parent->locked) {
-                    const bool already_present = std::find(
-                        filtered->editable_names.begin(),
-                        filtered->editable_names.end(),
-                        parent->name) != filtered->editable_names.end();
-                    if (!already_present)
-                        filtered->editable_names.push_back(parent->name);
-                }
-            }
-        }
 
         const auto local_center =
             compute_transform_targets_center(scene_manager, filtered->editable_names, false).value_or(glm::vec3(0.0f));
