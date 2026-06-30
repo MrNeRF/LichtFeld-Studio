@@ -1068,6 +1068,9 @@
     "max_width": "Larghezza max. (px)",
     "max_width_disable": "Disattiva ridimensionamento",
     "max_width_hint": "Le immagini più larghe vengono ridimensionate. 0 disattiva il limite.",
+    "min_track_length": "Minimum Track Length",
+    "min_track_length_hint": "Keeps sparse points observed in at least this many images. 0 disables filtering.",
+    "min_track_length_init_warning": "Ignored while Init PLY is set.",
     "apply_auto_crop": "Applica ritaglio automatico"
   },
   "notification": {

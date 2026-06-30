@@ -39,7 +39,7 @@ class LoadResult:
     def is_dataset(self) -> bool:
         """Whether loaded data is a dataset with cameras"""
 
-def load(path: str | os.PathLike, format: str | None = None, resize_factor: int | None = None, max_width: int | None = None, images_folder: str | None = None, progress: object | None = None) -> LoadResult:
+def load(path: str | os.PathLike, format: str | None = None, resize_factor: int | None = None, max_width: int | None = None, images_folder: str | None = None, progress: object | None = None, min_track_length: int | None = None) -> LoadResult:
     """Load a scene or splat file from path"""
 
 def load_point_cloud(path: str | os.PathLike) -> tuple:

@@ -1982,6 +1982,11 @@ namespace lfs::vis::input {
         case Action::SEQUENCER_ADD_KEYFRAME:
         case Action::SEQUENCER_UPDATE_KEYFRAME:
         case Action::SEQUENCER_PLAY_PAUSE:
+        case Action::TOGGLE_SPLIT_VIEW:
+        case Action::TOGGLE_INDEPENDENT_SPLIT_VIEW:
+        case Action::TOGGLE_GT_COMPARISON:
+        case Action::TOGGLE_CAMERA_FRUSTUMS:
+        case Action::CYCLE_SELECTION_VIS:
             return ShortcutScope::GlobalWhenNotTextEditing;
 
         case Action::CAMERA_MOVE_FORWARD:
@@ -2000,11 +2005,6 @@ namespace lfs::vis::input {
         case Action::CAMERA_SPEED_DOWN:
         case Action::ZOOM_SPEED_UP:
         case Action::ZOOM_SPEED_DOWN:
-        case Action::TOGGLE_SPLIT_VIEW:
-        case Action::TOGGLE_INDEPENDENT_SPLIT_VIEW:
-        case Action::TOGGLE_GT_COMPARISON:
-        case Action::TOGGLE_CAMERA_FRUSTUMS:
-        case Action::CYCLE_SELECTION_VIS:
         case Action::PIE_MENU:
             return ShortcutScope::Viewport;
 

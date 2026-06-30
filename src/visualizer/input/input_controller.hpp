@@ -253,6 +253,7 @@ namespace lfs::vis {
         };
         PendingClickDragGesture pending_click_drag_;
         input::Action forced_mouse_press_action_ = input::Action::NONE;
+        int text_input_viewport_click_button_ = -1;
         struct PendingCameraContextMenuGesture {
             bool active = false;
             bool released = false;

@@ -1068,6 +1068,9 @@
     "max_width": "Max. breedte (px)",
     "max_width_disable": "Verkleinen uitschakelen",
     "max_width_hint": "Bredere afbeeldingen worden verkleind. 0 schakelt de limiet uit.",
+    "min_track_length": "Minimum Track Length",
+    "min_track_length_hint": "Keeps sparse points observed in at least this many images. 0 disables filtering.",
+    "min_track_length_init_warning": "Ignored while Init PLY is set.",
     "apply_auto_crop": "Automatisch bijsnijden toepassen"
   },
   "notification": {

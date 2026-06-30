@@ -257,6 +257,7 @@ namespace {
                                                                 {"4", 4},
                                                                 {"8", 8}});
             ::args::ValueFlag<int> max_width(dataset_group, "max_width", "Max width of images in px; 0 disables the cap (default: 3840)", {"max-width"});
+            ::args::ValueFlag<int> min_track_length(dataset_group, "min_track_length", "Minimum point track length for COLMAP sparse point import; 0 disables filtering", {"min-track-length"});
             ::args::Flag no_cpu_cache(dataset_group, "no_cpu_cache", "Disable CPU memory caching (default: enabled)", {"no-cpu-cache"});
             ::args::Flag no_fs_cache(dataset_group, "no_fs_cache", "Disable filesystem caching (default: enabled)", {"no-fs-cache"});
             ::args::Flag undistort(dataset_group, "undistort", "Undistort images on-the-fly before training", {"undistort"});
@@ -605,6 +606,12 @@ namespace {
                     return std::unexpected("ERROR: --max-width must be 0 or greater");
                 }
             }
+            if (min_track_length) {
+                int min_track = ::args::get(min_track_length);
+                if (min_track < 0) {
+                    return std::unexpected("ERROR: --min-track-length must be 0 or greater");
+                }
+            }
 
             // Validate sh_degree (0-3)
             if (sh_degree) {
@@ -683,6 +690,7 @@ namespace {
                                         iterations_val = cli_option_present({"-i", "--iter"}) ? std::optional<uint32_t>(::args::get(iterations)) : std::optional<uint32_t>(),
                                         resize_factor_val = resize_factor ? std::optional<int>(::args::get(resize_factor)) : std::optional<int>(1), // default 1
                                         max_width_val = max_width ? std::optional<int>(::args::get(max_width)) : std::optional<int>(3840),
+                                        min_track_length_val = cli_option_present({"--min-track-length"}) ? std::optional<int>(::args::get(min_track_length)) : std::optional<int>(),
                                         no_cpu_cache_flag = static_cast<bool>(no_cpu_cache),
                                         no_fs_cache_flag = static_cast<bool>(no_fs_cache),
                                         tcp_server_connection_port_val = tcp_server_connection_port ? std::optional<int>(::args::get(tcp_server_connection_port)) : std::optional<int>(),
@@ -763,6 +771,7 @@ namespace {
                 setVal(iterations_val, opt.iterations);
                 setVal(resize_factor_val, ds.resize_factor);
                 setVal(max_width_val, ds.max_width);
+                setVal(min_track_length_val, ds.min_track_length);
                 if (no_cpu_cache_flag)
                     ds.loading_params.use_cpu_memory = false;
                 if (no_fs_cache_flag)

@@ -1068,6 +1068,9 @@
     "max_width": "최대 너비 (px)",
     "max_width_disable": "다운스케일링 비활성화",
     "max_width_hint": "이보다 넓은 이미지는 축소됩니다. 0이면 제한 없음.",
+    "min_track_length": "Minimum Track Length",
+    "min_track_length_hint": "Keeps sparse points observed in at least this many images. 0 disables filtering.",
+    "min_track_length_init_warning": "Ignored while Init PLY is set.",
     "apply_auto_crop": "자동 자르기 적용"
   },
   "notification": {

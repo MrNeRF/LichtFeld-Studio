@@ -680,6 +680,7 @@ namespace lfs::core {
             json["resize_factor"] = resize_factor;
             json["test_every"] = test_every;
             json["max_width"] = max_width;
+            json["min_track_length"] = min_track_length;
             json["loading_params"] = loading_params.to_json();
             json["invert_masks"] = invert_masks;
             json["mask_threshold"] = mask_threshold;
@@ -697,6 +698,9 @@ namespace lfs::core {
             dataset.images = j["images"].get<std::string>();
             dataset.resize_factor = j["resize_factor"].get<int>();
             dataset.max_width = j["max_width"].get<int>();
+            if (j.contains("min_track_length")) {
+                dataset.min_track_length = j["min_track_length"].get<int>();
+            }
             dataset.test_every = j["test_every"].get<int>();
             dataset.output_path = utf8_to_path(j["output_folder"].get<std::string>());
 

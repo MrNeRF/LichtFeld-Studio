@@ -42,6 +42,7 @@ def _install_lf_stub(monkeypatch, tmp_path):
     state = SimpleNamespace(
         language=["en"],
         panel_enabled_calls=[],
+        log_warnings=[],
         load_file_calls=[],
         load_checkpoint_calls=[],
         clear_scene_calls=0,
@@ -65,6 +66,7 @@ def _install_lf_stub(monkeypatch, tmp_path):
         init_path="",
         centralize_dataset="off",
         max_width=None,
+        min_track_length=None,
         **_kwargs,
     ):
         state.load_file_calls.append(
@@ -75,10 +77,14 @@ def _install_lf_stub(monkeypatch, tmp_path):
                 "init_path": init_path,
                 "centralize_dataset": centralize_dataset,
                 "max_width": max_width,
+                "min_track_length": min_track_length,
             }
         )
 
     lf_stub = ModuleType("lichtfeld")
+    lf_stub.log = SimpleNamespace(
+        warn=lambda message: state.log_warnings.append(message),
+    )
     lf_stub.ui = SimpleNamespace(
         PanelSpace=panel_space,
         PanelHeightMode=panel_height_mode,
@@ -233,6 +239,7 @@ def test_dataset_import_panel_show_and_load(import_dialog_module):
             "init_path": "/tmp/seed_points.ply",
             "centralize_dataset": "off",
             "max_width": 3840,
+            "min_track_length": 0,
         }
     ]
     assert state.panel_enabled_calls[-1] == ("lfs.dataset_import", False)
@@ -252,6 +259,104 @@ def test_dataset_import_panel_can_clear_scene_on_confirm(import_dialog_module):
 
     assert state.clear_scene_calls == 1
     assert state.load_file_calls[0]["path"] == str(state.dataset_info.base_path)
+
+
+def test_dataset_import_panel_forwards_min_track_length(import_dialog_module):
+    module, state = import_dialog_module
+    panel = module.DatasetImportPanel()
+    panel._handle = _HandleStub()
+
+    assert panel.show(str(state.dataset_info.base_path)) is True
+
+    panel._set_min_track_length_str("4")
+    panel._on_do_load()
+
+    assert state.load_file_calls[0]["min_track_length"] == 4
+
+
+def test_dataset_import_panel_steps_min_track_length(import_dialog_module):
+    module, state = import_dialog_module
+    panel = module.DatasetImportPanel()
+    panel._handle = _HandleStub()
+
+    assert panel.show(str(state.dataset_info.base_path)) is True
+
+    panel._set_min_track_length_str("1")
+    panel._on_min_track_length_step(args=["1"])
+    assert panel._min_track_length == 2
+    assert panel._min_track_length_str == "2"
+
+    panel._on_min_track_length_step(args=["-1"])
+    assert panel._min_track_length == 1
+    assert panel._min_track_length_str == "1"
+
+    panel._set_min_track_length_str("120")
+    assert panel._min_track_length == 99
+    assert panel._min_track_length_str == "99"
+
+    panel._set_min_track_length_str("0")
+    panel._on_min_track_length_step(args=["-1"])
+    assert panel._min_track_length == 0
+    assert panel._min_track_length_str == "0"
+
+
+def test_dataset_import_panel_shows_track_length_for_colmap(import_dialog_module):
+    module, state = import_dialog_module
+    panel = module.DatasetImportPanel()
+    panel._handle = _HandleStub()
+
+    sparse_zero = Path(state.dataset_info.sparse_path) / "0"
+    sparse_zero.mkdir(parents=True)
+    (sparse_zero / "points3D.txt").write_text("", encoding="utf-8")
+
+    assert panel.show(str(state.dataset_info.base_path)) is True
+
+    assert panel._show_min_track_length() is True
+
+
+def test_dataset_import_panel_warns_track_length_ignored_with_init(import_dialog_module):
+    module, state = import_dialog_module
+    panel = module.DatasetImportPanel()
+    panel._handle = _HandleStub()
+
+    sparse_zero = Path(state.dataset_info.sparse_path) / "0"
+    sparse_zero.mkdir(parents=True)
+    (sparse_zero / "points3D.txt").write_text("", encoding="utf-8")
+
+    assert panel.show(str(state.dataset_info.base_path)) is True
+
+    panel._set_min_track_length_str("4")
+    assert panel._show_min_track_length_warning() is False
+
+    panel._set_init_path("/tmp/seed_points.ply")
+    assert panel._show_min_track_length_warning() is True
+
+    panel._set_min_track_length_str("0")
+    assert panel._show_min_track_length_warning() is False
+
+
+def test_dataset_import_panel_does_not_duplicate_track_length_init_warning(import_dialog_module):
+    module, state = import_dialog_module
+    panel = module.DatasetImportPanel()
+    panel._handle = _HandleStub()
+
+    assert panel.show(str(state.dataset_info.base_path)) is True
+
+    panel._set_min_track_length_str("4")
+    panel._set_init_path("/tmp/seed_points.ply")
+    panel._on_do_load()
+
+    assert state.log_warnings == []
+
+
+def test_dataset_import_panel_hides_track_length_for_non_colmap(import_dialog_module):
+    module, state = import_dialog_module
+    panel = module.DatasetImportPanel()
+    panel._handle = _HandleStub()
+
+    assert panel.show(str(state.dataset_info.base_path)) is True
+
+    assert panel._show_min_track_length() is False
 
 
 def test_dataset_import_panel_preserves_unicode_paths(import_dialog_module):
@@ -282,6 +387,7 @@ def test_dataset_import_panel_preserves_unicode_paths(import_dialog_module):
             "init_path": "/tmp/初期化ポイント.ply",
             "centralize_dataset": "off",
             "max_width": 3840,
+            "min_track_length": 0,
         }
     ]
     assert state.panel_enabled_calls[-1] == ("lfs.dataset_import", False)
@@ -317,6 +423,7 @@ def test_dataset_import_panel_loads_updated_dataset_path(import_dialog_module, t
             "init_path": "",
             "centralize_dataset": "off",
             "max_width": 3840,
+            "min_track_length": 0,
         }
     ]
 
@@ -534,6 +641,7 @@ def test_dataset_import_panel_clears_init_and_sidecar_on_dataset_change(import_d
             "init_path": "",
             "centralize_dataset": "off",
             "max_width": 3840,
+            "min_track_length": 0,
         }
     ]
 
@@ -652,6 +760,7 @@ def test_dataset_import_panel_binds_enter_and_escape(import_dialog_module):
             "init_path": "",
             "centralize_dataset": "off",
             "max_width": 3840,
+            "min_track_length": 0,
         }
     ]
     assert enter_event.propagation_stopped is True

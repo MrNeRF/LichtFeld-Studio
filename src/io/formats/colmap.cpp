@@ -781,6 +781,9 @@ namespace lfs::io {
 
     PointCloud point3D_records_to_point_cloud(const std::vector<Point3DData>& points) {
         const uint64_t N = points.size();
+        if (N == 0)
+            return PointCloud();
+
         std::vector<float> positions(N * 3);
         std::vector<uint8_t> colors(N * 3);
 
@@ -799,6 +802,28 @@ namespace lfs::io {
                                    .contiguous();
 
         return PointCloud(std::move(means), std::move(colors_tensor));
+    }
+
+    ColmapPointCloudLoadStats point3D_records_to_point_cloud_with_stats(
+        std::vector<Point3DData> points,
+        const LoadOptions& options) {
+        ColmapPointCloudLoadStats result{
+            .total_points = points.size(),
+            .points_after_filtering = points.size(),
+            .track_filter_applied = options.min_track_length > 0,
+        };
+
+        const int min_track_length = options.min_track_length;
+        if (min_track_length > 0) {
+            const auto min_track = static_cast<size_t>(min_track_length);
+            std::erase_if(points, [min_track](const Point3DData& point) {
+                return point.track.size() < min_track;
+            });
+            result.points_after_filtering = points.size();
+        }
+
+        result.point_cloud = point3D_records_to_point_cloud(points);
+        return result;
     }
 
     PointCloud read_point3D_binary(const std::filesystem::path& file_path,
@@ -2233,6 +2258,16 @@ namespace lfs::io {
         return read_point3D_binary(points3d_file, options);
     }
 
+    ColmapPointCloudLoadStats read_colmap_point_cloud_with_stats(
+        const std::filesystem::path& filepath,
+        const LoadOptions& options) {
+        LOG_TIMER_TRACE("Read COLMAP point cloud");
+        fs::path points3d_file = get_sparse_file_path(filepath, "points3D.bin");
+        return point3D_records_to_point_cloud_with_stats(
+            read_point3D_binary_records(points3d_file, options),
+            options);
+    }
+
     Result<void> validate_colmap_dataset_layout(const std::filesystem::path& base,
                                                 const std::string& images_folder,
                                                 const LoadOptions& options) {
@@ -2298,6 +2333,16 @@ namespace lfs::io {
         LOG_TIMER_TRACE("Read COLMAP point cloud (text)");
         fs::path points3d_file = get_sparse_file_path(filepath, "points3D.txt");
         return read_point3D_text(points3d_file, options);
+    }
+
+    ColmapPointCloudLoadStats read_colmap_point_cloud_text_with_stats(
+        const std::filesystem::path& filepath,
+        const LoadOptions& options) {
+        LOG_TIMER_TRACE("Read COLMAP point cloud (text)");
+        fs::path points3d_file = get_sparse_file_path(filepath, "points3D.txt");
+        return point3D_records_to_point_cloud_with_stats(
+            read_point3D_text_records(points3d_file, options, true),
+            options);
     }
 
     Result<std::tuple<std::vector<std::shared_ptr<Camera>>, Tensor>>

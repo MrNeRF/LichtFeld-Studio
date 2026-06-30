@@ -1068,6 +1068,9 @@
     "max_width": "Max. Breite (px)",
     "max_width_disable": "Herunterskalierung deaktivieren",
     "max_width_hint": "Breitere Bilder werden herunterskaliert. 0 deaktiviert die Begrenzung.",
+    "min_track_length": "Minimum Track Length",
+    "min_track_length_hint": "Keeps sparse points observed in at least this many images. 0 disables filtering.",
+    "min_track_length_init_warning": "Ignored while Init PLY is set.",
     "apply_auto_crop": "Auto-Zuschnitt anwenden"
   },
   "notification": {

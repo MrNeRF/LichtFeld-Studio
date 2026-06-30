@@ -9,6 +9,7 @@
 #include "core/tensor.hpp"
 #include "io/error.hpp"
 #include "io/loader.hpp"
+#include <cstddef>
 #include <filesystem>
 #include <glm/glm.hpp>
 #include <memory>
@@ -22,6 +23,13 @@ namespace lfs::io {
     using lfs::core::Device;
     using lfs::core::PointCloud;
     using lfs::core::Tensor;
+
+    struct ColmapPointCloudLoadStats {
+        PointCloud point_cloud;
+        std::size_t total_points = 0;
+        std::size_t points_after_filtering = 0;
+        bool track_filter_applied = false;
+    };
 
     // Camera data structure used for intermediate loading before Camera creation
     struct CameraData {
@@ -71,6 +79,10 @@ namespace lfs::io {
     PointCloud read_colmap_point_cloud(const std::filesystem::path& filepath,
                                        const LoadOptions& options = {});
 
+    ColmapPointCloudLoadStats read_colmap_point_cloud_with_stats(
+        const std::filesystem::path& filepath,
+        const LoadOptions& options = {});
+
     /**
      * @brief Read COLMAP cameras and images from text files
      * @param base Base directory containing COLMAP data
@@ -106,6 +118,10 @@ namespace lfs::io {
      */
     PointCloud read_colmap_point_cloud_text(const std::filesystem::path& filepath,
                                             const LoadOptions& options = {});
+
+    ColmapPointCloudLoadStats read_colmap_point_cloud_text_with_stats(
+        const std::filesystem::path& filepath,
+        const LoadOptions& options = {});
 
     /**
      * @brief Read COLMAP cameras only (no image file validation required)

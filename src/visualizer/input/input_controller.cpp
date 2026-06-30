@@ -513,6 +513,7 @@ namespace lfs::vis {
         held_keys_.clear();
         pending_click_drag_ = {};
         forced_mouse_press_action_ = input::Action::NONE;
+        text_input_viewport_click_button_ = -1;
         is_node_rect_dragging_ = false;
         node_rect_button_ = -1;
         node_point_pick_enabled_ = false;
@@ -611,6 +612,12 @@ namespace lfs::vis {
         const bool over_transform_gizmo = isTransformGizmoOverOrUsing();
         const int mods = getModifierKeys();
 
+        if (text_input_viewport_click_button_ == button &&
+            action == input::ACTION_RELEASE) {
+            text_input_viewport_click_button_ = -1;
+            return;
+        }
+
         // Consume all mouse events while pie menu is open
         if (gui && gui->gizmo().isPieMenuOpen()) {
             if (action == input::ACTION_PRESS && button == static_cast<int>(input::AppMouseButton::LEFT)) {
@@ -630,6 +637,17 @@ namespace lfs::vis {
             } else if (action == input::ACTION_RELEASE) {
                 gui->captureMouseButtonRelease(button);
             }
+            return;
+        }
+
+        const bool wants_text_input = input_router_
+                                          ? input_router_->isTextInputActive()
+                                          : gui::guiFocusState().want_text_input;
+        if (action == input::ACTION_PRESS &&
+            wants_text_input &&
+            !over_gui &&
+            isInViewport(x, y)) {
+            text_input_viewport_click_button_ = button;
             return;
         }
 

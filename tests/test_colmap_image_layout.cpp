@@ -192,6 +192,27 @@ TEST_F(ColmapImageLayoutTest, ResolvesNestedImagesByBasename) {
     EXPECT_TRUE(fs::equivalent(cameras[0]->mask_path(), nested_mask));
 }
 
+TEST_F(ColmapImageLayoutTest, FiltersTextPointCloudByMinimumTrackLength) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required for COLMAP point cloud load";
+    }
+
+    const fs::path dataset_dir = temp_dir_ / "dataset";
+    write_text_file(dataset_dir / "points3D.txt",
+                    "1 0 0 0 255 0 0 0.1 1 0\n"
+                    "2 1 0 0 0 255 0 0.2 1 0 2 0 3 0\n"
+                    "3 2 0 0 0 0 255 0.3 1 0 2 0\n");
+
+    const auto result = lfs::io::read_colmap_point_cloud_text_with_stats(
+        dataset_dir,
+        lfs::io::LoadOptions{.min_track_length = 3});
+
+    EXPECT_TRUE(result.track_filter_applied);
+    EXPECT_EQ(result.total_points, 3u);
+    EXPECT_EQ(result.points_after_filtering, 1u);
+    EXPECT_EQ(result.point_cloud.size(), 1u);
+}
+
 TEST_F(ColmapImageLayoutTest, ResolvesDepthMapsByImageName) {
     const fs::path dataset_dir = temp_dir_ / "dataset";
     const fs::path image_path = dataset_dir / "images" / "frame_0000.png";

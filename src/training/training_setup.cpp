@@ -32,6 +32,18 @@ namespace lfs::training {
             return std::make_shared<lfs::core::PointCloud>(positions, colors);
         }
 
+        int effectiveMinTrackLengthForLoad(const lfs::core::param::TrainingParameters& params) {
+            if (params.dataset.min_track_length > 0 &&
+                params.init_path.has_value() &&
+                !params.init_path->empty()) {
+                LOG_WARN(
+                    "min-track-length cannot be used with --init-ply; COLMAP sparse point filtering will not be applied because initialization uses '{}'",
+                    *params.init_path);
+                return 0;
+            }
+            return params.dataset.min_track_length;
+        }
+
         void randomChoosePointCloud(lfs::core::PointCloud& point_cloud,
                                     const int target_count,
                                     const int seed = 0) {
@@ -383,6 +395,7 @@ namespace lfs::training {
             .resize_factor = params.dataset.resize_factor,
             .max_width = params.dataset.max_width,
             .images_folder = params.dataset.images,
+            .min_track_length = effectiveMinTrackLengthForLoad(params),
             .validate_only = false,
             .centralize = parse_centralize(params.dataset.centralize_dataset),
             .progress = [&data_path](float percentage, const std::string& message) {
@@ -766,6 +779,7 @@ namespace lfs::training {
             .resize_factor = params.dataset.resize_factor,
             .max_width = params.dataset.max_width,
             .images_folder = params.dataset.images,
+            .min_track_length = params.dataset.min_track_length,
             .validate_only = true};
 
         auto result = data_loader->load(params.dataset.data_path, load_options);

@@ -656,6 +656,8 @@ namespace lfs::vis::gui {
                 params.dataset.centralize_dataset = cmd.centralize_dataset;
             if (cmd.max_width.has_value() && *cmd.max_width >= 0)
                 params.dataset.max_width = *cmd.max_width;
+            if (cmd.min_track_length.has_value() && *cmd.min_track_length >= 0)
+                params.dataset.min_track_length = *cmd.min_track_length;
             import_state_.apply_auto_crop.store(cmd.apply_auto_crop);
             startAsyncImport(cmd.path, params);
         });
@@ -1428,10 +1430,20 @@ namespace lfs::vis::gui {
                         return lfs::io::CentralizeDataset::ByCameras;
                     return lfs::io::CentralizeDataset::Off;
                 };
+                int effective_min_track_length = local_params.dataset.min_track_length;
+                if (effective_min_track_length > 0 &&
+                    local_params.init_path.has_value() &&
+                    !local_params.init_path->empty()) {
+                    LOG_WARN(
+                        "min-track-length cannot be used with --init; COLMAP sparse point filtering will not be applied because initialization uses '{}'",
+                        *local_params.init_path);
+                    effective_min_track_length = 0;
+                }
                 const lfs::io::LoadOptions load_options{
                     .resize_factor = local_params.dataset.resize_factor,
                     .max_width = local_params.dataset.max_width,
                     .images_folder = local_params.dataset.images,
+                    .min_track_length = effective_min_track_length,
                     .validate_only = false,
                     .centralize = parse_centralize(local_params.dataset.centralize_dataset),
                     .progress = [this, &stop_token](const float pct, const std::string& msg) {

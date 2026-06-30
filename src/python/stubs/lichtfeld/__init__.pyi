@@ -244,7 +244,7 @@ def clear_scene() -> None:
 def switch_to_edit_mode() -> None:
     """Switch from training to edit mode"""
 
-def load_file(path: str, is_dataset: bool = False, output_path: str = '', init_path: str = '', centralize_dataset: str = 'off', max_width: int | None = None, apply_auto_crop: bool = False) -> None:
+def load_file(path: str, is_dataset: bool = False, output_path: str = '', init_path: str = '', centralize_dataset: str = 'off', max_width: int | None = None, apply_auto_crop: bool = False, min_track_length: int | None = None) -> None:
     """Load a file (PLY, checkpoint) or dataset into the scene."""
 
 def load_config_file(path: str) -> None:
@@ -2178,6 +2178,13 @@ class DatasetParams:
 
     @max_width.setter
     def max_width(self, arg: int, /) -> None: ...
+
+    @property
+    def min_track_length(self) -> int:
+        """Minimum COLMAP sparse point track length; 0 disables filtering"""
+
+    @min_track_length.setter
+    def min_track_length(self, arg: int, /) -> None: ...
 
     @property
     def use_cpu_cache(self) -> bool:

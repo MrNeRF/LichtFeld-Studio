@@ -61,6 +61,7 @@ namespace lfs::io {
         int resize_factor = -1;
         int max_width = 0;
         std::string images_folder = "images";
+        int min_track_length = 0;
         bool validate_only = false;
         CentralizeDataset centralize = CentralizeDataset::Off;
         ProgressCallback progress = nullptr;

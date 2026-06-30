@@ -1068,6 +1068,9 @@
     "max_width": "最大幅 (px)",
     "max_width_disable": "ダウンスケーリングを無効化",
     "max_width_hint": "これより幅の大きい画像は縮小されます。0で制限なし。",
+    "min_track_length": "Minimum Track Length",
+    "min_track_length_hint": "Keeps sparse points observed in at least this many images. 0 disables filtering.",
+    "min_track_length_init_warning": "Ignored while Init PLY is set.",
     "apply_auto_crop": "自動クロップを適用"
   },
   "notification": {

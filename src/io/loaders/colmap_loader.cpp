@@ -245,9 +245,12 @@ namespace lfs::io {
 
             throw_if_load_cancel_requested(options, "COLMAP point cloud load cancelled");
 
-            // Load point cloud: points3D.ply > points3D.bin > points3D.txt
+            // Load point cloud: points3D.ply > points3D.bin > points3D.txt.
+            // Track filtering requires COLMAP sparse records, so prefer .bin/.txt when enabled.
             std::shared_ptr<PointCloud> point_cloud;
-            if (has_points_ply) {
+            std::vector<std::string> warnings;
+            const bool use_colmap_track_filter = options.min_track_length > 0;
+            if (has_points_ply && !use_colmap_track_filter) {
                 LOG_INFO("Loading custom point cloud from points3D.ply");
                 LOG_TIMER_DEBUG("COLMAP load points3D.ply");
                 auto pc_result = load_ply_point_cloud(points_ply, options);
@@ -260,18 +263,59 @@ namespace lfs::io {
                     }
                     LOG_WARN("Failed to load points3D.ply: {}, falling back", pc_result.error());
                 }
+            } else if (has_points_ply && use_colmap_track_filter) {
+                if (has_points || has_points_text) {
+                    LOG_INFO("Skipping points3D.ply because COLMAP min track length filter is enabled");
+                } else {
+                    LOG_WARN("COLMAP min track length filter requested, but only points3D.ply is available; loading unfiltered PLY");
+                    LOG_TIMER_DEBUG("COLMAP load points3D.ply");
+                    auto pc_result = load_ply_point_cloud(points_ply, options);
+                    if (pc_result) {
+                        point_cloud = std::make_shared<PointCloud>(std::move(*pc_result));
+                        LOG_INFO("Loaded {} points from points3D.ply", point_cloud->size());
+                    } else {
+                        if (is_load_cancel_requested(options)) {
+                            return std::unexpected(make_error(ErrorCode::CANCELLED, pc_result.error(), points_ply));
+                        }
+                        LOG_WARN("Failed to load points3D.ply: {}, falling back", pc_result.error());
+                    }
+                }
             }
             if (!point_cloud && has_points) {
                 LOG_DEBUG("Loading binary point cloud");
                 LOG_TIMER_DEBUG("COLMAP load binary point cloud");
-                auto loaded_pc = read_colmap_point_cloud(path, options);
-                point_cloud = std::make_shared<PointCloud>(std::move(loaded_pc));
+                if (use_colmap_track_filter) {
+                    auto loaded_pc = read_colmap_point_cloud_with_stats(path, options);
+                    point_cloud = std::make_shared<PointCloud>(std::move(loaded_pc.point_cloud));
+                    const std::string message = std::format(
+                        "COLMAP min track length filter: min track length {}, total points {}, after filtering {}",
+                        options.min_track_length,
+                        loaded_pc.total_points,
+                        loaded_pc.points_after_filtering);
+                    LOG_INFO("{}", message);
+                    warnings.push_back(message);
+                } else {
+                    auto loaded_pc = read_colmap_point_cloud(path, options);
+                    point_cloud = std::make_shared<PointCloud>(std::move(loaded_pc));
+                }
                 LOG_INFO("Loaded {} points from COLMAP", point_cloud->size());
             } else if (!point_cloud && has_points_text) {
                 LOG_DEBUG("Loading text point cloud");
                 LOG_TIMER_DEBUG("COLMAP load text point cloud");
-                auto loaded_pc = read_colmap_point_cloud_text(path, options);
-                point_cloud = std::make_shared<PointCloud>(std::move(loaded_pc));
+                if (use_colmap_track_filter) {
+                    auto loaded_pc = read_colmap_point_cloud_text_with_stats(path, options);
+                    point_cloud = std::make_shared<PointCloud>(std::move(loaded_pc.point_cloud));
+                    const std::string message = std::format(
+                        "COLMAP min track length filter: min track length {}, total points {}, after filtering {}",
+                        options.min_track_length,
+                        loaded_pc.total_points,
+                        loaded_pc.points_after_filtering);
+                    LOG_INFO("{}", message);
+                    warnings.push_back(message);
+                } else {
+                    auto loaded_pc = read_colmap_point_cloud_text(path, options);
+                    point_cloud = std::make_shared<PointCloud>(std::move(loaded_pc));
+                }
                 LOG_INFO("Loaded {} points from COLMAP text file", point_cloud->size());
             } else if (!point_cloud) {
                 LOG_WARN("No point cloud found - will use random initialization");
@@ -304,7 +348,11 @@ namespace lfs::io {
                 .images_have_alpha = images_have_alpha,
                 .loader_used = name(),
                 .load_time = load_time,
-                .warnings = (has_points || has_points_text || has_points_ply) ? std::vector<std::string>{} : std::vector<std::string>{"No sparse point cloud found - using random initialization"}};
+                .warnings = std::move(warnings)};
+
+            if (!has_points && !has_points_text && !has_points_ply) {
+                result.warnings.push_back("No sparse point cloud found - using random initialization");
+            }
 
             LOG_INFO("COLMAP dataset loaded successfully in {}ms", load_time.count());
             LOG_INFO("  - {} cameras", num_cameras);

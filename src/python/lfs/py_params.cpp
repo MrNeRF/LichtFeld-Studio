@@ -414,6 +414,12 @@ namespace lfs::python {
             [](const DatasetConfig& c) { return c.max_width; },
             [](DatasetConfig& c, int v) { c.max_width = v; });
 
+        add_int(
+            "min_track_length", "Minimum Track Length", 0, 0, 65535,
+            "Minimum COLMAP sparse point track length; 0 disables filtering", false,
+            [](const DatasetConfig& c) { return c.min_track_length; },
+            [](DatasetConfig& c, int v) { c.min_track_length = v; });
+
         add_bool(
             "use_cpu_cache", "CPU Cache", true, "Cache images in CPU memory", false,
             [](const DatasetConfig& c) { return c.loading_params.use_cpu_memory; },
@@ -1389,6 +1395,17 @@ namespace lfs::python {
                     self.params().max_width = v;
                 },
                 "Maximum image width in pixels; 0 disables the cap")
+            .def_prop_rw(
+                "min_track_length",
+                [](const PyDatasetConfig& self) { return self.params().min_track_length; },
+                [](PyDatasetConfig& self, int v) {
+                    if (!self.can_edit())
+                        throw std::runtime_error("Cannot edit dataset params during training");
+                    if (v < 0)
+                        throw std::invalid_argument("min_track_length must be non-negative; 0 disables filtering");
+                    self.params().min_track_length = v;
+                },
+                "Minimum COLMAP sparse point track length; 0 disables filtering")
             .def_prop_rw(
                 "use_cpu_cache",
                 [](const PyDatasetConfig& self) { return self.params().loading_params.use_cpu_memory; },

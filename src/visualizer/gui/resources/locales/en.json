@@ -1093,6 +1093,9 @@
     "max_width": "Max Width (px)",
     "max_width_disable": "Disable downscaling",
     "max_width_hint": "Images wider than this are downscaled. 0 disables the cap.",
+    "min_track_length": "Minimum Track Length",
+    "min_track_length_hint": "Keeps sparse points observed in at least this many images. 0 disables filtering.",
+    "min_track_length_init_warning": "Ignored while Init PLY is set.",
     "apply_auto_crop": "Apply Auto Crop"
   },
   "notification": {

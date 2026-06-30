@@ -109,6 +109,19 @@
       </div>
     </div>
 
+    <div class="impdlg-control-group" data-if="show_min_track_length">
+      <span class="impdlg-field-label text-muted">@tr:load_dataset_popup.min_track_length</span>
+      <div class="impdlg-control-main">
+        <div class="impdlg-control-row">
+          <input type="text" class="impdlg-input impdlg-track-length-input" data-value="min_track_length_str" />
+          <button class="num-step-btn" data-event-click="min_track_length_step(-1)">-</button>
+          <button class="num-step-btn" data-event-click="min_track_length_step(1)">+</button>
+        </div>
+        <span class="impdlg-meta text-muted">@tr:load_dataset_popup.min_track_length_hint</span>
+        <span class="impdlg-meta status-warning" data-if="show_min_track_length_warning">@tr:load_dataset_popup.min_track_length_init_warning</span>
+      </div>
+    </div>
+
     <span class="impdlg-note text-muted">@tr:load_dataset_popup.help_text</span>
 
     <div class="impdlg-buttons">

@@ -90,6 +90,13 @@
     min-width: 220dp;
 }
 
+.impdlg-track-length-input {
+    flex: 0 0 42dp;
+    width: 42dp;
+    min-width: 42dp;
+    text-align: center;
+}
+
 .impdlg-browse-btn {
     min-width: 88dp;
     text-align: center;

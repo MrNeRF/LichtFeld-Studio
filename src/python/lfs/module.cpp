@@ -791,7 +791,8 @@ NB_MODULE(lichtfeld, m) {
            const std::string& output_path, const std::string& init_path,
            const std::string& centralize_dataset,
            std::optional<int> max_width,
-           bool apply_auto_crop) {
+           bool apply_auto_crop,
+           std::optional<int> min_track_length) {
             nb::gil_scoped_release release;
             lfs::core::events::cmd::LoadFile{
                 .path = python_utf8_path(path),
@@ -800,6 +801,7 @@ NB_MODULE(lichtfeld, m) {
                 .init_path = python_utf8_path(init_path),
                 .centralize_dataset = centralize_dataset,
                 .max_width = max_width,
+                .min_track_length = min_track_length,
                 .apply_auto_crop = apply_auto_crop}
                 .emit();
         },
@@ -808,6 +810,7 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("centralize_dataset") = "off",
         nb::arg("max_width") = nb::none(),
         nb::arg("apply_auto_crop") = false,
+        nb::arg("min_track_length") = nb::none(),
         "Load a file (PLY, checkpoint) or dataset into the scene.");
 
     m.def(

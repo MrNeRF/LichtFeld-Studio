@@ -50,6 +50,12 @@ namespace lfs::mcp {
                 params.optimization.iterations = args["max_iterations"].get<size_t>();
             if (args.contains("output_path"))
                 params.dataset.output_path = args["output_path"].get<std::string>();
+            if (args.contains("min_track_length")) {
+                const int min_track = args["min_track_length"].get<int>();
+                if (min_track < 0)
+                    return std::unexpected("min_track_length must be 0 or greater");
+                params.dataset.min_track_length = min_track;
+            }
             if (params.dataset.output_path.empty())
                 params.dataset.output_path = core::param::default_dataset_output_path(params.dataset.data_path);
 
@@ -86,6 +92,7 @@ namespace lfs::mcp {
                         {"path", json{{"type", "string"}, {"description", "Path to COLMAP dataset directory"}}},
                         {"images_folder", json{{"type", "string"}, {"description", "Images subfolder (default: images)"}}},
                         {"output_path", json{{"type", "string"}, {"description", "Optional output directory for checkpoints and exports (default: <dataset>/output)"}}},
+                        {"min_track_length", json{{"type", "integer"}, {"minimum", 0}, {"description", "Minimum COLMAP track length for sparse point import; 0 disables filtering"}}},
                         {"max_iterations", json{{"type", "integer"}, {"description", "Maximum training iterations (default: 30000)"}}},
                         {"strategy", json{{"type", "string"}, {"enum", json::array({"default", "mcmc", "mrnf", "igs+"})}, {"description", "Training strategy or 'default' to keep the built-in default"}}}},
                     .required = {"path"}},
@@ -107,6 +114,7 @@ namespace lfs::mcp {
                     {"success", true},
                     {"path", core::path_to_utf8(path)},
                     {"output_path", core::path_to_utf8(params.dataset.output_path)},
+                    {"min_track_length", params.dataset.min_track_length},
                     {"strategy", params.optimization.strategy},
                 };
                 if (backend.gaussian_count) {

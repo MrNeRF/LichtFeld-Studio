@@ -183,7 +183,8 @@ namespace lfs::python {
             "load",
             [](const std::filesystem::path& path, std::optional<std::string> format,
                std::optional<int> resize_factor, std::optional<int> max_width,
-               std::optional<std::string> images_folder, nb::object progress) -> PyLoadResult {
+               std::optional<std::string> images_folder, nb::object progress,
+               std::optional<int> min_track_length) -> PyLoadResult {
                 auto loader = io::Loader::create();
 
                 io::LoadOptions options;
@@ -193,6 +194,8 @@ namespace lfs::python {
                     options.max_width = *max_width;
                 if (images_folder)
                     options.images_folder = *images_folder;
+                if (min_track_length)
+                    options.min_track_length = *min_track_length;
 
                 if (progress && !progress.is_none()) {
                     PyProgressCallback py_progress{nb::cast<nb::object>(progress)};
@@ -226,6 +229,7 @@ namespace lfs::python {
             nb::arg("path"), nb::arg("format") = nb::none(), nb::arg("resize_factor") = nb::none(),
             nb::arg("max_width") = nb::none(), nb::arg("images_folder") = nb::none(),
             nb::arg("progress") = nb::none(),
+            nb::arg("min_track_length") = nb::none(),
             "Load a scene or splat file from path");
 
         m.def(
