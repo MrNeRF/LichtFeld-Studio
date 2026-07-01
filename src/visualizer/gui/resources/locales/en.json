@@ -1519,7 +1519,17 @@
     "stopped": "Extraction stopped.",
     "ok": "OK",
     "error": "Error: %s",
-    "dismiss": "Dismiss"
+    "dismiss": "Dismiss",
+    "sharpness": "Sharpness Filter",
+    "sharpness_filter": "Discard blurry frames",
+    "sharpness_algorithm": "Algorithm",
+    "sharpness_algo_combined": "Tenengrad + Laplacian",
+    "sharpness_algo_tenengrad": "Tenengrad (Sobel)",
+    "sharpness_algo_laplacian": "Laplacian",
+    "sharpness_mode": "Method",
+    "sharpness_mode_threshold": "Discard below threshold",
+    "sharpness_mode_window": "Pick sharpest per interval",
+    "sharpness_threshold_label": "Threshold"
   },
   "rendering_panel": {
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V",

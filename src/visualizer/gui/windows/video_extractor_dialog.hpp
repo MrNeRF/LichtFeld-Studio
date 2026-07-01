@@ -53,6 +53,11 @@ namespace lfs::gui {
         int custom_height = 0;
 
         std::string filename_pattern = "frame_%d";
+
+        io::SharpnessAlgorithm sharpness_algorithm = io::SharpnessAlgorithm::COMBINED;
+        double sharpness_threshold = 40.0;
+        bool sharpness_window_mode = false;
+        bool sharpness_enabled = false;
     };
 
     class LFS_VIS_API VideoExtractorDialog : public IVideoExtractorWidget {
@@ -105,7 +110,7 @@ namespace lfs::gui {
         void startExtraction(const VideoExtractionParams& params);
         void joinExtractionThread();
 
-        void updateProgress(int current, int total);
+        void updateProgress(int current, int total, int discarded = 0);
         void setExtractionComplete();
         void setExtractionStopped();
         void setExtractionError(const std::string& error);
@@ -167,6 +172,7 @@ namespace lfs::gui {
         std::atomic<bool> stop_extraction_requested_{false};
         std::atomic<int> current_frame_{0};
         std::atomic<int> total_frames_{0};
+        std::atomic<int> discarded_frames_{0};
         std::atomic<bool> extraction_status_dirty_{false};
         mutable std::mutex extraction_status_mutex_;
         std::string error_message_;
@@ -253,6 +259,13 @@ namespace lfs::gui {
         Rml::Element* error_section_el_ = nullptr;
         Rml::Element* error_text_el_ = nullptr;
         Rml::Element* dismiss_btn_el_ = nullptr;
+        Rml::Element* sharpness_toggle_el_ = nullptr;
+        Rml::Element* sharpness_options_el_ = nullptr;
+        Rml::Element* sharpness_threshold_row_el_ = nullptr;
+        Rml::ElementFormControlSelect* sharpness_algorithm_select_el_ = nullptr;
+        Rml::ElementFormControlSelect* sharpness_mode_select_el_ = nullptr;
+        Rml::Element* sharpness_threshold_slider_el_ = nullptr;
+        Rml::Element* sharpness_threshold_value_el_ = nullptr;
     };
 
 } // namespace lfs::gui

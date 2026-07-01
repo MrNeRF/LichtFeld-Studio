@@ -96,6 +96,43 @@
         <div class="section">
           <div class="section-rule">
             <span class="section-rule__lead"></span>
+            <span class="section-rule__label">@tr:video_extractor.sharpness</span>
+            <span class="section-rule__line"></span>
+          </div>
+          <div class="settings-row">
+            <span class="field-label"></span>
+            <label class="toggle-label">
+              <input id="sharpness-toggle" type="checkbox" />
+              <span>@tr:video_extractor.sharpness_filter</span>
+            </label>
+          </div>
+          <div id="sharpness-options" class="sharpness-options">
+            <div class="settings-row">
+              <span class="field-label">@tr:video_extractor.sharpness_algorithm</span>
+              <select id="sharpness-algorithm-select" class="wide-select">
+                <option value="combined">@tr:video_extractor.sharpness_algo_combined</option>
+                <option value="tenengrad">@tr:video_extractor.sharpness_algo_tenengrad</option>
+                <option value="laplacian">@tr:video_extractor.sharpness_algo_laplacian</option>
+              </select>
+            </div>
+            <div class="settings-row">
+              <span class="field-label">@tr:video_extractor.sharpness_mode</span>
+              <select id="sharpness-mode-select" class="wide-select">
+                <option value="threshold">@tr:video_extractor.sharpness_mode_threshold</option>
+                <option value="window">@tr:video_extractor.sharpness_mode_window</option>
+              </select>
+            </div>
+            <div id="sharpness-threshold-row" class="settings-row">
+              <span class="field-label">@tr:video_extractor.sharpness_threshold_label</span>
+              <input id="sharpness-threshold-slider" class="value-slider" type="range" min="0" max="100" step="1" value="10" />
+              <span id="sharpness-threshold-value" class="value-readout">10%</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-rule">
+            <span class="section-rule__lead"></span>
             <span class="section-rule__label">@tr:video_extractor.output_format</span>
             <span class="section-rule__line"></span>
           </div>

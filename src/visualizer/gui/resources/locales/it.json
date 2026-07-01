@@ -1490,7 +1490,17 @@
     "stopped": "Estrazione interrotta.",
     "ok": "OK",
     "error": "Errore: %s",
-    "dismiss": "Chiudi"
+    "dismiss": "Chiudi",
+    "sharpness": "Filtro nitidezza",
+    "sharpness_filter": "Scarta fotogrammi mossi",
+    "sharpness_algorithm": "Algoritmo",
+    "sharpness_algo_combined": "Tenengrad + Laplacian",
+    "sharpness_algo_tenengrad": "Tenengrad (Sobel)",
+    "sharpness_algo_laplacian": "Laplacian",
+    "sharpness_mode": "Modalità",
+    "sharpness_mode_threshold": "Scarta sotto soglia",
+    "sharpness_mode_window": "Scegli più nitido per intervallo",
+    "sharpness_threshold_label": "Soglia"
   },
   "plugin_marketplace": {
     "title_line": "Sfoglia i plugin installabili dal registro dei plugin.",

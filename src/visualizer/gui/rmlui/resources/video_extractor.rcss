@@ -312,14 +312,21 @@ body {
 }
 
 .wide-select {
-    width: 150dp;
-    min-width: 150dp;
+    width: 180dp;
+    min-width: 180dp;
     height: 24dp;
     min-height: 24dp;
     line-height: 22dp;
     padding: 0;
     margin: 0;
     flex-shrink: 0;
+}
+
+/* Wider select variants for sharpness options which have longer labels */
+#sharpness-algorithm-select,
+#sharpness-mode-select {
+    width: 250dp;
+    min-width: 250dp;
 }
 
 .compact-select {
@@ -479,4 +486,22 @@ button:disabled,
 input:disabled,
 select:disabled {
     opacity: 0.45;
+}
+
+.toggle-label {
+    display: flex;
+    align-items: center;
+    gap: 6dp;
+    cursor: pointer;
+    color: #cdd6f4;
+}
+
+.sharpness-options {
+    display: flex;
+    flex-direction: column;
+    gap: 5dp;
+}
+
+.sharpness-options.hidden {
+    display: none;
 }

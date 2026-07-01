@@ -26,6 +26,7 @@ extern "C" {
 #include <cmath>
 #include <fstream>
 #include <stdexcept>
+#include <vector>
 
 namespace lfs::io {
 
@@ -147,6 +148,63 @@ namespace lfs::io {
         [[nodiscard]] const char* pixelFormatName(const AVPixelFormat format) {
             const char* const name = av_get_pix_fmt_name(format);
             return name ? name : "unknown";
+        }
+
+        [[nodiscard]] double computeSharpnessScore(const uint8_t* rgb,
+                                                     const int w,
+                                                     const int h,
+                                                     const SharpnessAlgorithm algo) {
+            const long long total_pixels = static_cast<long long>(w) * h;
+            // Laplacian threshold: pixel needs Laplacian > 10 to count as edge
+            // Tenengrad threshold: pixel needs Sobel energy > 40 to count as edge (4x)
+            const int lap_threshold = 10;
+            const int ten_threshold = 40;
+            long long edge_count = 0;
+
+            if (algo == SharpnessAlgorithm::COMBINED) {
+                // Single pass: count if EITHER condition is met (no double counting)
+                for (int y = 1; y < h - 1; ++y) {
+                    for (int x = 1; x < w - 1; ++x) {
+                        const uint8_t* const p = rgb + (y * w + x) * 3 + 1;
+                        const int lap = std::abs(static_cast<int>(p[0] * 4)
+                                                - p[-w * 3] - p[3] - p[-3] - p[w * 3]);
+                        if (lap > lap_threshold) {
+                            ++edge_count;
+                            continue;
+                        }
+                        const int gx = -p[-w * 3 - 3] + p[-w * 3 + 3]
+                                       - p[-3] * 2 + p[3] * 2
+                                       - p[+w * 3 - 3] + p[+w * 3 + 3];
+                        const int gy = -p[-w * 3 - 3] - p[-w * 3] * 2 - p[-w * 3 + 3]
+                                       + p[+w * 3 - 3] + p[+w * 3] * 2 + p[+w * 3 + 3];
+                        if (std::abs(gx) + std::abs(gy) > ten_threshold) ++edge_count;
+                    }
+                }
+            } else if (algo == SharpnessAlgorithm::LAPLACIAN) {
+                for (int y = 1; y < h - 1; ++y) {
+                    for (int x = 1; x < w - 1; ++x) {
+                        const uint8_t* const p = rgb + (y * w + x) * 3 + 1;
+                        if (std::abs(static_cast<int>(p[0] * 4)
+                                    - p[-w * 3] - p[3] - p[-3] - p[w * 3]) > lap_threshold)
+                            ++edge_count;
+                    }
+                }
+            } else { // TENENGRAD
+                for (int y = 1; y < h - 1; ++y) {
+                    for (int x = 1; x < w - 1; ++x) {
+                        const uint8_t* const p = rgb + (y * w + x) * 3 + 1;
+                        const int gx = -p[-w * 3 - 3] + p[-w * 3 + 3]
+                                       - p[-3] * 2 + p[3] * 2
+                                       - p[+w * 3 - 3] + p[+w * 3 + 3];
+                        const int gy = -p[-w * 3 - 3] - p[-w * 3] * 2 - p[-w * 3 + 3]
+                                       + p[+w * 3 - 3] + p[+w * 3] * 2 + p[+w * 3 + 3];
+                        if (std::abs(gx) + std::abs(gy) > ten_threshold) ++edge_count;
+                    }
+                }
+            }
+
+            // Edge ratio: percentage of pixels that are part of a sharp edge (0-100)
+            return static_cast<double>(edge_count) * 100.0 / static_cast<double>(total_pixels);
         }
 
     } // namespace
@@ -466,12 +524,21 @@ namespace lfs::io {
                 int in_trim_frame_count = 0;
                 int decoded_frame_count = 0;
                 int saved_count = 0;
-
+                int skipped_count = 0;
+                int written_count = 0;
                 std::vector<void*> batch_gpu_ptrs;
                 std::vector<std::filesystem::path> batch_filenames;
                 int batch_idx = 0;
                 bool logged_hw_format_fallback = false;
                 bool used_full_gpu_pipeline = false;
+                struct CandidateFrame {
+                    std::vector<uint8_t> rgb;
+                    std::filesystem::path filename;
+                    double score = 0.0;
+                };
+                std::vector<CandidateFrame> window_candidates;
+                int current_window_idx = 0;
+                int in_window_frame_count = 0;
 
                 auto flush_jpeg_batch = [&]() {
                     if (batch_gpu_ptrs.empty())
@@ -484,6 +551,7 @@ namespace lfs::io {
                     for (size_t i = 0; i < encoded.size(); i++) {
                         if (!encoded[i].empty()) {
                             write_jpeg_to_file(batch_filenames[i], encoded[i]);
+                            ++written_count;
                         }
                     }
 
@@ -514,6 +582,31 @@ namespace lfs::io {
                     return should_extract;
                 };
 
+                auto flush_window = [&]() {
+                    if (window_candidates.empty())
+                        return;
+                    const auto best = std::max_element(
+                        window_candidates.begin(), window_candidates.end(),
+                        [](const CandidateFrame& a, const CandidateFrame& b) {
+                            return a.score < b.score;
+                        });
+                    std::filesystem::path fname = generate_filename(
+                        written_count + 1);
+                    if (!write_image_file(fname, out_width, out_height,
+                                          best->rgb.data(), params.format,
+                                          params.jpg_quality)) {
+                        LOG_WARN("Failed to write sharpest window frame: {}",
+                                 lfs::core::path_to_utf8(fname));
+                    } else {
+                        ++written_count;
+                    }
+                    ++saved_count;
+                    if (params.progress_callback)
+                        params.progress_callback(saved_count, estimated_total, skipped_count);
+                    window_candidates.clear();
+                    throw_if_cancelled();
+                };
+
                 auto process_frame_hw = [&](AVFrame* hw_frame) {
                     throw_if_cancelled();
                     std::filesystem::path filename = generate_filename(saved_count + 1);
@@ -538,6 +631,31 @@ namespace lfs::io {
 
                         video::nv12ToRgbCuda(y_plane, uv_plane, gpu_rgb_buffer,
                                              src_width, src_height, y_pitch, uv_pitch, nullptr);
+
+                        // --- Sharpness evaluation (full GPU path) ---
+                        if (params.sharpness.enabled) {
+                            cudaMemcpy(cpu_contiguous_buffer, gpu_rgb_buffer, frame_size,
+                                       cudaMemcpyDeviceToHost);
+                            const double score = computeSharpnessScore(
+                                cpu_contiguous_buffer, out_width, out_height, params.sharpness.algorithm);
+                            if (params.sharpness.window_mode) {
+                                CandidateFrame cf;
+                                cf.rgb.assign(cpu_contiguous_buffer,
+                                              cpu_contiguous_buffer + frame_size);
+                                cf.filename = generate_filename(
+                                    saved_count + static_cast<int>(window_candidates.size()) + 1);
+                                cf.score = score;
+                                window_candidates.push_back(std::move(cf));
+                                return;
+                            }
+                            if (params.sharpness.threshold > 0.0 && score < params.sharpness.threshold) {
+                                ++skipped_count;
+                                if (params.progress_callback)
+                                    params.progress_callback(saved_count + skipped_count, estimated_total, skipped_count);
+                                return;
+                            }
+                        }
+                        // --- End sharpness ---
 
                         void* dst_ptr = gpu_batch_buffer + batch_idx * frame_size;
                         cudaError_t cuda_err = cudaMemcpyAsync(dst_ptr, gpu_rgb_buffer, frame_size,
@@ -589,6 +707,29 @@ namespace lfs::io {
                                   dst_data, dst_linesize);
                         sws_freeContext(hw_sws);
 
+                        // --- Sharpness evaluation (hybrid path) ---
+                        if (params.sharpness.enabled) {
+                            const double score = computeSharpnessScore(
+                                cpu_contiguous_buffer, out_width, out_height, params.sharpness.algorithm);
+                            if (params.sharpness.window_mode) {
+                                CandidateFrame cf;
+                                cf.rgb.assign(cpu_contiguous_buffer,
+                                              cpu_contiguous_buffer + frame_size);
+                                cf.filename = generate_filename(
+                                    saved_count + static_cast<int>(window_candidates.size()) + 1);
+                                cf.score = score;
+                                window_candidates.push_back(std::move(cf));
+                                return;
+                            }
+                            if (params.sharpness.threshold > 0.0 && score < params.sharpness.threshold) {
+                                ++skipped_count;
+                                if (params.progress_callback)
+                                    params.progress_callback(saved_count + skipped_count, estimated_total, skipped_count);
+                                return;
+                            }
+                        }
+                        // --- End sharpness ---
+
                         if (gpu_encoding_enabled) {
                             void* dst_ptr = gpu_batch_buffer + batch_idx * frame_size;
                             cudaMemcpy(dst_ptr, cpu_contiguous_buffer, frame_size,
@@ -601,9 +742,11 @@ namespace lfs::io {
                             if (batch_idx >= JPEG_BATCH_SIZE) {
                                 flush_jpeg_batch();
                             }
-                        } else if (!write_image_file(filename, out_width, out_height,
+                        } else if (write_image_file(filename, out_width, out_height,
                                                      cpu_contiguous_buffer, params.format,
                                                      params.jpg_quality)) {
+                            ++written_count;
+                        } else {
                             LOG_WARN("Failed to write extracted frame: {}", lfs::core::path_to_utf8(filename));
                         }
                     }
@@ -611,7 +754,7 @@ namespace lfs::io {
                     saved_count++;
 
                     if (params.progress_callback) {
-                        params.progress_callback(saved_count, estimated_total);
+                        params.progress_callback(saved_count + skipped_count, estimated_total, skipped_count);
                     }
                     throw_if_cancelled();
                 };
@@ -622,6 +765,32 @@ namespace lfs::io {
                     int dst_linesize[1] = {out_width * 3};
                     sws_scale(sws_ctx, decoded_frame->data, decoded_frame->linesize, 0, src_height,
                               dst_data, dst_linesize);
+
+                    // --- Sharpness evaluation (SW path) ---
+                    if (params.sharpness.enabled) {
+                        const double score = computeSharpnessScore(
+                            cpu_contiguous_buffer, out_width, out_height, params.sharpness.algorithm);
+
+                        if (params.sharpness.window_mode) {
+                            CandidateFrame cf;
+                            cf.rgb.assign(cpu_contiguous_buffer,
+                                          cpu_contiguous_buffer + frame_size);
+                            cf.filename = generate_filename(
+                                saved_count + static_cast<int>(window_candidates.size()) + 1);
+                            cf.score = score;
+                            window_candidates.push_back(std::move(cf));
+                            return;
+                        }
+
+                        // Threshold mode: discard blurry frames
+                        if (params.sharpness.threshold > 0.0 && score < params.sharpness.threshold) {
+                            ++skipped_count;
+                            if (params.progress_callback)
+                                params.progress_callback(saved_count + skipped_count, estimated_total, skipped_count);
+                            return;
+                        }
+                    }
+                    // --- End sharpness ---
 
                     std::filesystem::path filename = generate_filename(saved_count + 1);
 
@@ -637,16 +806,18 @@ namespace lfs::io {
                         if (batch_idx >= JPEG_BATCH_SIZE) {
                             flush_jpeg_batch();
                         }
-                    } else if (!write_image_file(filename, out_width, out_height,
+                    } else if (write_image_file(filename, out_width, out_height,
                                                  cpu_contiguous_buffer, params.format,
                                                  params.jpg_quality)) {
+                        ++written_count;
+                    } else {
                         LOG_WARN("Failed to write extracted frame: {}", lfs::core::path_to_utf8(filename));
                     }
 
                     saved_count++;
 
                     if (params.progress_callback) {
-                        params.progress_callback(saved_count, estimated_total);
+                        params.progress_callback(saved_count + skipped_count, estimated_total, skipped_count);
                     }
                     throw_if_cancelled();
                 };
@@ -669,7 +840,24 @@ namespace lfs::io {
                                     break;
                                 }
 
-                                if (should_extract_frame(frame_time)) {
+                                if (params.sharpness.enabled && params.sharpness.window_mode) {
+                                    int w_idx;
+                                    if (params.mode == ExtractionMode::FPS) {
+                                        w_idx = static_cast<int>(
+                                            std::floor((frame_time - start_time) / target_interval));
+                                    } else {
+                                        w_idx = in_window_frame_count / frame_step;
+                                    }
+                                    if (w_idx != current_window_idx) {
+                                        flush_window();
+                                        current_window_idx = w_idx;
+                                    }
+                                    if (using_hw_decode)
+                                        process_frame_hw(frame);
+                                    else
+                                        process_frame_sw(frame);
+                                    ++in_window_frame_count;
+                                } else if (should_extract_frame(frame_time)) {
                                     if (using_hw_decode) {
                                         process_frame_hw(frame);
                                     } else {
@@ -694,7 +882,24 @@ namespace lfs::io {
                         if (frame_time > end_time)
                             break;
 
-                        if (should_extract_frame(frame_time)) {
+                        if (params.sharpness.enabled && params.sharpness.window_mode) {
+                            int w_idx;
+                            if (params.mode == ExtractionMode::FPS) {
+                                w_idx = static_cast<int>(
+                                    std::floor((frame_time - start_time) / target_interval));
+                            } else {
+                                w_idx = in_window_frame_count / frame_step;
+                            }
+                            if (w_idx != current_window_idx) {
+                                flush_window();
+                                current_window_idx = w_idx;
+                            }
+                            if (using_hw_decode)
+                                process_frame_hw(frame);
+                            else
+                                process_frame_sw(frame);
+                            ++in_window_frame_count;
+                        } else if (should_extract_frame(frame_time)) {
                             if (using_hw_decode) {
                                 process_frame_hw(frame);
                             } else {
@@ -711,7 +916,15 @@ namespace lfs::io {
                     flush_jpeg_batch();
                 }
 
-                LOG_INFO("Extracted {} frames from video", saved_count);
+                // Flush remaining window candidates at end of video
+                flush_window();
+
+                if (skipped_count > 0) {
+                    LOG_INFO("Extracted {} frames from video ({} discarded for low sharpness)",
+                             written_count, skipped_count);
+                } else {
+                    LOG_INFO("Extracted {} frames from video", written_count);
+                }
 
                 // Cleanup
                 if (sws_ctx)

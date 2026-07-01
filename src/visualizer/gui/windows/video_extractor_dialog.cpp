@@ -312,12 +312,16 @@ namespace lfs::gui {
             extract_params.custom_width = params.custom_width;
             extract_params.custom_height = params.custom_height;
             extract_params.filename_pattern = params.filename_pattern;
+            extract_params.sharpness.enabled = params.sharpness_enabled;
+            extract_params.sharpness.algorithm = params.sharpness_algorithm;
+            extract_params.sharpness.threshold = params.sharpness_threshold;
+            extract_params.sharpness.window_mode = params.sharpness_window_mode;
             extract_params.cancel_requested = [this]() {
                 return stop_extraction_requested_.load();
             };
 
-            extract_params.progress_callback = [this](const int current, const int total) {
-                updateProgress(current, total);
+            extract_params.progress_callback = [this](const int current, const int total, const int discarded) {
+                updateProgress(current, total, discarded);
             };
 
             std::string error;
@@ -346,9 +350,10 @@ namespace lfs::gui {
         stop_extraction_requested_.store(false);
     }
 
-    void VideoExtractorDialog::updateProgress(const int current, const int total) {
+    void VideoExtractorDialog::updateProgress(const int current, const int total, const int discarded) {
         current_frame_.store(current);
         total_frames_.store(total);
+        discarded_frames_.store(discarded);
         extraction_status_dirty_.store(true);
     }
 
@@ -633,6 +638,15 @@ namespace lfs::gui {
         error_section_el_ = document_->GetElementById("error-section");
         error_text_el_ = document_->GetElementById("error-text");
         dismiss_btn_el_ = document_->GetElementById("btn-error-dismiss");
+        sharpness_toggle_el_ = document_->GetElementById("sharpness-toggle");
+        sharpness_options_el_ = document_->GetElementById("sharpness-options");
+        sharpness_threshold_row_el_ = document_->GetElementById("sharpness-threshold-row");
+        sharpness_algorithm_select_el_ = dynamic_cast<Rml::ElementFormControlSelect*>(
+            document_->GetElementById("sharpness-algorithm-select"));
+        sharpness_mode_select_el_ = dynamic_cast<Rml::ElementFormControlSelect*>(
+            document_->GetElementById("sharpness-mode-select"));
+        sharpness_threshold_slider_el_ = document_->GetElementById("sharpness-threshold-slider");
+        sharpness_threshold_value_el_ = document_->GetElementById("sharpness-threshold-value");
 
         elements_cached_ =
             title_el_ && close_btn_el_ && preview_shell_el_ && preview_image_el_ &&
@@ -651,7 +665,9 @@ namespace lfs::gui {
             start_btn_el_ && stop_btn_el_ && cancel_btn_el_ && select_hint_el_ && progress_section_el_ &&
             progress_text_el_ && progress_bar_el_ && complete_section_el_ &&
             complete_text_el_ && ok_btn_el_ && stopped_section_el_ && stopped_text_el_ &&
-            stopped_ok_btn_el_ && error_section_el_ && error_text_el_ && dismiss_btn_el_;
+            stopped_ok_btn_el_ && error_section_el_ && error_text_el_ && dismiss_btn_el_ &&
+            sharpness_toggle_el_ && sharpness_options_el_ && sharpness_algorithm_select_el_ &&
+            sharpness_mode_select_el_ && sharpness_threshold_slider_el_ && sharpness_threshold_value_el_;
 
         if (!elements_cached_) {
             LOG_ERROR("VideoExtractorDialog: missing required Rml elements");
@@ -708,6 +724,11 @@ namespace lfs::gui {
         listen_change(pattern_input_el_);
         listen_change(trim_start_input_el_);
         listen_change(trim_end_input_el_);
+        listen_change(sharpness_toggle_el_);
+        listen_change(sharpness_algorithm_select_el_);
+        listen_change(sharpness_mode_select_el_);
+        listen_change(sharpness_threshold_slider_el_);
+        listen_input(sharpness_threshold_slider_el_);
 
         timeline_el_->AddEventListener(Rml::EventId::Mousedown, &listener_);
         if (auto* const body = document_->GetElementById("body")) {
@@ -925,6 +946,20 @@ namespace lfs::gui {
         changed |= setCachedProperty(custom_resolution_row_el_, "display", resolution_mode_ == 2 ? "flex" : "none");
         changed |= setCachedProperty(stop_btn_el_, "display", extracting ? "block" : "none");
 
+        const bool sharpness_on = sharpness_toggle_el_ && sharpness_toggle_el_->HasAttribute("checked");
+        changed |= setCachedProperty(sharpness_options_el_, "display", sharpness_on ? "block" : "none");
+
+        // Show threshold slider only in threshold mode (hidden in window mode)
+        const bool window_mode = sharpness_mode_select_el_ &&
+            sharpness_mode_select_el_->GetSelection() == 1;
+        changed |= setCachedProperty(sharpness_threshold_row_el_, "display",
+                                     (sharpness_on && !window_mode) ? "flex" : "none");
+
+        if (sharpness_threshold_slider_el_ && sharpness_threshold_value_el_) {
+            const int val = readIntValue(sharpness_threshold_slider_el_, 10);
+            changed |= setCachedText(sharpness_threshold_value_el_, std::to_string(val) + "%");
+        }
+
         changed |= setCachedControlValue(fps_slider_el_, std::format("{:.1f}", fps_));
         changed |= setCachedText(fps_value_el_, std::format("{:.1f} {}", fps_, LOC(VideoExtractor::FPS_LABEL)));
         changed |= setCachedControlValue(interval_input_el_, std::to_string(frame_interval_));
@@ -960,9 +995,16 @@ namespace lfs::gui {
         if (extracting) {
             const float progress = total > 0 ? static_cast<float>(current) / static_cast<float>(total) : 0.0f;
             changed |= setCachedAttribute(progress_bar_el_, "value", std::format("{:.4f}", progress));
-            changed |= setCachedText(progress_text_el_, total > 0
-                                                            ? localizedFormat(VideoExtractor::EXTRACTING, current, total)
-                                                            : LOC(VideoExtractor::STARTING));
+            if (total > 0) {
+                const int discarded = discarded_frames_.load();
+                const std::string discard_str = discarded > 0
+                    ? std::format(" ({} discarded)", discarded)
+                    : "";
+                changed |= setCachedText(progress_text_el_,
+                                         std::format("{}/{}{}", current, total, discard_str));
+            } else {
+                changed |= setCachedText(progress_text_el_, LOC(VideoExtractor::STARTING));
+            }
         }
 
         const auto snapshot = getExtractionStatusSnapshot();
@@ -971,9 +1013,10 @@ namespace lfs::gui {
                                          ? "flex"
                                          : "none");
         if (snapshot.status_message == ExtractionStatusMessage::Complete && !extracting) {
+            const int saved = current - discarded_frames_.load();
             changed |= setCachedText(complete_text_el_,
                                      std::format("{} {}", LOC(VideoExtractor::COMPLETE),
-                                                 localizedFormat(VideoExtractor::EXTRACTED, current)));
+                                                 localizedFormat(VideoExtractor::EXTRACTED, saved)));
         }
 
         changed |= setCachedProperty(stopped_section_el_, "display",
@@ -1135,6 +1178,15 @@ namespace lfs::gui {
         } else if (id == "quality-slider") {
             jpg_quality_ = std::clamp(readIntValue(quality_slider_el_, jpg_quality_), 50, 100);
             changed_control = quality_slider_el_;
+        } else if (id == "sharpness-toggle") {
+            changed_control = sharpness_toggle_el_;
+        } else if (id == "sharpness-algorithm-select") {
+            changed_control = sharpness_algorithm_select_el_;
+        } else if (id == "sharpness-mode-select") {
+            changed_control = sharpness_mode_select_el_;
+        } else if (id == "sharpness-threshold-slider") {
+            // value read in syncControls
+            changed_control = sharpness_threshold_slider_el_;
         } else {
             applyTextInput(id);
             if (id == "trim-start-input")
@@ -1278,6 +1330,16 @@ namespace lfs::gui {
         params.custom_width = custom_width_;
         params.custom_height = custom_height_;
         params.filename_pattern = filename_pattern_.data();
+        params.sharpness_enabled = sharpness_toggle_el_ && sharpness_toggle_el_->HasAttribute("checked");
+        if (sharpness_algorithm_select_el_) {
+            static constexpr io::SharpnessAlgorithm ALGO_MAP[] = {
+                io::SharpnessAlgorithm::COMBINED,
+                io::SharpnessAlgorithm::TENENGRAD,
+                io::SharpnessAlgorithm::LAPLACIAN};
+            params.sharpness_algorithm = ALGO_MAP[std::clamp(sharpness_algorithm_select_el_->GetSelection(), 0, 2)];
+        }
+        params.sharpness_window_mode = sharpness_mode_select_el_ && sharpness_mode_select_el_->GetSelection() == 1;
+        params.sharpness_threshold = static_cast<double>(readIntValue(sharpness_threshold_slider_el_, 40));
 
         stop_extraction_requested_.store(false);
         extracting_.store(true);
