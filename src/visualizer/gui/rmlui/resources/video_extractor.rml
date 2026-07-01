@@ -146,6 +146,11 @@
               <input id="quality-slider" class="value-slider" type="range" min="50" max="100" step="1" value="95" />
               <span id="quality-value" class="value-readout">95%</span>
             </div>
+            <span style="flex:1; min-width:20dp;"></span>
+            <label class="toggle-label metadata-check">
+              <input id="generate-metadata" type="checkbox" />
+              <span>@tr:video_extractor.generate_metadata</span>
+            </label>
           </div>
         </div>
 

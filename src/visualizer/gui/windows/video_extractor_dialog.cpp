@@ -316,6 +316,7 @@ namespace lfs::gui {
             extract_params.sharpness.algorithm = params.sharpness_algorithm;
             extract_params.sharpness.threshold = params.sharpness_threshold;
             extract_params.sharpness.window_mode = params.sharpness_window_mode;
+            extract_params.generate_metadata = params.generate_metadata;
             extract_params.cancel_requested = [this]() {
                 return stop_extraction_requested_.load();
             };
@@ -647,6 +648,7 @@ namespace lfs::gui {
             document_->GetElementById("sharpness-mode-select"));
         sharpness_threshold_slider_el_ = document_->GetElementById("sharpness-threshold-slider");
         sharpness_threshold_value_el_ = document_->GetElementById("sharpness-threshold-value");
+        generate_metadata_el_ = document_->GetElementById("generate-metadata");
 
         elements_cached_ =
             title_el_ && close_btn_el_ && preview_shell_el_ && preview_image_el_ &&
@@ -729,6 +731,7 @@ namespace lfs::gui {
         listen_change(sharpness_mode_select_el_);
         listen_change(sharpness_threshold_slider_el_);
         listen_input(sharpness_threshold_slider_el_);
+        listen_change(generate_metadata_el_);
 
         timeline_el_->AddEventListener(Rml::EventId::Mousedown, &listener_);
         if (auto* const body = document_->GetElementById("body")) {
@@ -1187,6 +1190,8 @@ namespace lfs::gui {
         } else if (id == "sharpness-threshold-slider") {
             // value read in syncControls
             changed_control = sharpness_threshold_slider_el_;
+        } else if (id == "generate-metadata") {
+            changed_control = generate_metadata_el_;
         } else {
             applyTextInput(id);
             if (id == "trim-start-input")
@@ -1340,6 +1345,7 @@ namespace lfs::gui {
         }
         params.sharpness_window_mode = sharpness_mode_select_el_ && sharpness_mode_select_el_->GetSelection() == 1;
         params.sharpness_threshold = static_cast<double>(readIntValue(sharpness_threshold_slider_el_, 40));
+        params.generate_metadata = generate_metadata_el_ && generate_metadata_el_->HasAttribute("checked");
 
         stop_extraction_requested_.store(false);
         extracting_.store(true);

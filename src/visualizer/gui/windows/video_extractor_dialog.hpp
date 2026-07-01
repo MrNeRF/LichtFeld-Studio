@@ -58,6 +58,7 @@ namespace lfs::gui {
         double sharpness_threshold = 40.0;
         bool sharpness_window_mode = false;
         bool sharpness_enabled = false;
+        bool generate_metadata = false;
     };
 
     class LFS_VIS_API VideoExtractorDialog : public IVideoExtractorWidget {
@@ -266,6 +267,7 @@ namespace lfs::gui {
         Rml::ElementFormControlSelect* sharpness_mode_select_el_ = nullptr;
         Rml::Element* sharpness_threshold_slider_el_ = nullptr;
         Rml::Element* sharpness_threshold_value_el_ = nullptr;
+        Rml::Element* generate_metadata_el_ = nullptr;
     };
 
 } // namespace lfs::gui

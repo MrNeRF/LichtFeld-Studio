@@ -72,6 +72,7 @@ namespace lfs::io {
 
             // Output naming
             std::string filename_pattern = "frame_%d"; // %d = frame number
+            bool generate_metadata = false;
         };
 
         bool extract(const Params& params, std::string& error);
