@@ -223,6 +223,18 @@
         </div>
       </div>
     </div>
+
+    <!-- Overwrite confirmation overlay -->
+    <div id="overwrite-overlay" class="extractor-overlay hidden">
+      <div class="confirm-dialog">
+        <span id="overwrite-message" class="confirm-message">@tr:video_extractor.overwrite_prompt</span>
+        <div class="separator"></div>
+        <div class="confirm-buttons">
+          <button id="overwrite-no" class="btn btn--secondary" type="button">@tr:video_extractor.cancel</button>
+          <button id="overwrite-yes" class="btn btn--error" type="button">@tr:video_extractor.overwrite_clear</button>
+        </div>
+      </div>
+    </div>
   </div>
 </body>
 </rml>

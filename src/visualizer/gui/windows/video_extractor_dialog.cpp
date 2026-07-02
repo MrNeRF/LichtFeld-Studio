@@ -649,6 +649,7 @@ namespace lfs::gui {
         sharpness_threshold_slider_el_ = document_->GetElementById("sharpness-threshold-slider");
         sharpness_threshold_value_el_ = document_->GetElementById("sharpness-threshold-value");
         generate_metadata_el_ = document_->GetElementById("generate-metadata");
+        overwrite_overlay_el_ = document_->GetElementById("overwrite-overlay");
 
         elements_cached_ =
             title_el_ && close_btn_el_ && preview_shell_el_ && preview_image_el_ &&
@@ -711,6 +712,14 @@ namespace lfs::gui {
         listen_click(ok_btn_el_);
         listen_click(stopped_ok_btn_el_);
         listen_click(dismiss_btn_el_);
+
+        // Overwrite confirmation buttons
+        {
+            auto* no = document_->GetElementById("overwrite-no");
+            if (no) no->AddEventListener(Rml::EventId::Click, &listener_);
+            auto* yes = document_->GetElementById("overwrite-yes");
+            if (yes) yes->AddEventListener(Rml::EventId::Click, &listener_);
+        }
 
         listen_change(mode_select_el_);
         listen_change(fps_slider_el_);
@@ -1152,6 +1161,25 @@ namespace lfs::gui {
             markContentDirty();
         } else if (id == "btn-start") {
             beginExtractionFromUi();
+        } else if (id == "overwrite-yes") {
+            if (pending_params_set_) {
+                // Clear the folder
+                const auto& dir = pending_params_.output_dir;
+                if (std::filesystem::exists(dir)) {
+                    for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+                        std::error_code ec;
+                        std::filesystem::remove(entry.path(), ec);
+                    }
+                }
+                pending_params_set_ = false;
+                if (overwrite_overlay_el_)
+                    overwrite_overlay_el_->SetClass("hidden", true);
+                startExtraction(pending_params_);
+            }
+        } else if (id == "overwrite-no") {
+            pending_params_set_ = false;
+            if (overwrite_overlay_el_)
+                overwrite_overlay_el_->SetClass("hidden", true);
         } else if (id == "btn-complete-ok" || id == "btn-stopped-ok") {
             clearStatusMessage();
             current_frame_.store(0);
@@ -1325,7 +1353,6 @@ namespace lfs::gui {
         params.jpg_quality = jpg_quality_;
         params.start_time = static_cast<double>(trim_start_);
         params.end_time = static_cast<double>(trim_end_);
-
         static constexpr std::array<io::ResolutionMode, 3> RES_MODES{
             io::ResolutionMode::Original,
             io::ResolutionMode::Scale,
@@ -1346,6 +1373,27 @@ namespace lfs::gui {
         params.sharpness_window_mode = sharpness_mode_select_el_ && sharpness_mode_select_el_->GetSelection() == 1;
         params.sharpness_threshold = static_cast<double>(readIntValue(sharpness_threshold_slider_el_, 40));
         params.generate_metadata = generate_metadata_el_ && generate_metadata_el_->HasAttribute("checked");
+
+        // Check if output folder already contains files
+        if (std::filesystem::exists(output_dir_)) {
+            bool has_files = false;
+            for (const auto& entry : std::filesystem::directory_iterator(output_dir_)) {
+                if (entry.is_regular_file()) {
+                    const auto ext = entry.path().extension().string();
+                    if (ext == ".jpg" || ext == ".jpeg" || ext == ".png") {
+                        has_files = true;
+                        break;
+                    }
+                }
+            }
+            if (has_files) {
+                pending_params_ = params;
+                pending_params_set_ = true;
+                if (overwrite_overlay_el_)
+                    overwrite_overlay_el_->SetClass("hidden", false);
+                return;
+            }
+        }
 
         stop_extraction_requested_.store(false);
         extracting_.store(true);

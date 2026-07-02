@@ -268,6 +268,9 @@ namespace lfs::gui {
         Rml::Element* sharpness_threshold_slider_el_ = nullptr;
         Rml::Element* sharpness_threshold_value_el_ = nullptr;
         Rml::Element* generate_metadata_el_ = nullptr;
+        Rml::Element* overwrite_overlay_el_ = nullptr;
+        VideoExtractionParams pending_params_;
+        bool pending_params_set_ = false;
     };
 
 } // namespace lfs::gui

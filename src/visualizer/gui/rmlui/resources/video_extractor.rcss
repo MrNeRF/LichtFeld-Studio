@@ -12,6 +12,7 @@ body {
 .video-extractor-window {
     min-width: 0;
     min-height: 0;
+    position: relative;
 }
 
 #content-wrap {
@@ -504,4 +505,51 @@ select:disabled {
 
 .sharpness-options.hidden {
     display: none;
+}
+
+/* ── Overwrite confirmation overlay ────────────────────── */
+
+.extractor-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 50;
+    background-color: rgba(0, 0, 0, 0.48);
+}
+
+.extractor-overlay.hidden {
+    display: none;
+}
+
+.confirm-dialog {
+    border-width: 2dp;
+    padding: 16dp;
+    min-width: 280dp;
+    max-width: 380dp;
+    background-color: #1e1e2e;
+    color: #cdd6f4;
+    border-color: #a6e3a1;
+}
+
+.confirm-message {
+    display: block;
+    font-size: 12dp;
+    text-align: center;
+    margin-bottom: 8dp;
+}
+
+.confirm-buttons {
+    display: flex;
+    justify-content: center;
+    gap: 8dp;
+    margin-top: 8dp;
+}
+
+.confirm-buttons .btn {
+    min-width: 80dp;
 }

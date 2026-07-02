@@ -1530,7 +1530,9 @@
     "sharpness_mode_threshold": "Discard below threshold",
     "sharpness_mode_window": "Pick sharpest per interval",
     "sharpness_threshold_label": "Threshold",
-    "generate_metadata": "Generate metadata JSON"
+    "generate_metadata": "Generate metadata JSON",
+    "overwrite_prompt": "Output folder already contains extracted frames. Clear all contents and proceed?",
+    "overwrite_clear": "Proceed"
   },
   "rendering_panel": {
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V",
