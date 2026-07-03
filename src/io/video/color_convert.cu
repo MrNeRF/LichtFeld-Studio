@@ -260,4 +260,75 @@ namespace lfs::io::video {
             y_src, uv_src, rgb_dst, width, height, effective_y_pitch, effective_uv_pitch);
     }
 
+    __global__ void rotateRgbKernel(
+        const uint8_t* __restrict__ src,
+        uint8_t* __restrict__ dst,
+        const int width,
+        const int height,
+        const int angle) {
+
+        const int x = blockIdx.x * blockDim.x + threadIdx.x;
+        const int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+        if (angle == 90) {
+            const int h = width;
+            const int w = height;
+            if (x >= w || y >= h) return;
+            // 90° CW: dst[y][x] = src[width-1-x][y]
+            const int src_x = width - 1 - y;
+            const int src_y = x;
+            const int src_idx = (src_y * width + src_x) * 3;
+            const int dst_idx = (y * w + x) * 3;
+            dst[dst_idx] = src[src_idx];
+            dst[dst_idx + 1] = src[src_idx + 1];
+            dst[dst_idx + 2] = src[src_idx + 2];
+        } else if (angle == 180) {
+            if (x >= width || y >= height) return;
+            // 180°: dst[y][x] = src[height-1-y][width-1-x]
+            const int src_x = width - 1 - x;
+            const int src_y = height - 1 - y;
+            const int src_idx = (src_y * width + src_x) * 3;
+            const int dst_idx = (y * width + x) * 3;
+            dst[dst_idx] = src[src_idx];
+            dst[dst_idx + 1] = src[src_idx + 1];
+            dst[dst_idx + 2] = src[src_idx + 2];
+        } else { // 270
+            const int h = width;
+            const int w = height;
+            if (x >= w || y >= h) return;
+            // 270° CW (= 90° CCW): dst[y][x] = src[y][width-1-x]
+            const int src_x = y;
+            const int src_y = height - 1 - x;
+            const int src_idx = (src_y * width + src_x) * 3;
+            const int dst_idx = (y * w + x) * 3;
+            dst[dst_idx] = src[src_idx];
+            dst[dst_idx + 1] = src[src_idx + 1];
+            dst[dst_idx + 2] = src[src_idx + 2];
+        }
+    }
+
+    void rotateRgbCuda(
+        const uint8_t* const src,
+        uint8_t* const dst,
+        const int width,
+        const int height,
+        const int angle,
+        cudaStream_t stream) {
+
+        if (angle == 180) {
+            const dim3 block(BLOCK_SIZE, BLOCK_SIZE);
+            const dim3 grid((width + BLOCK_SIZE - 1) / BLOCK_SIZE,
+                            (height + BLOCK_SIZE - 1) / BLOCK_SIZE);
+            rotateRgbKernel<<<grid, block, 0, stream>>>(src, dst, width, height, angle);
+        } else {
+            // 90/270: swapped dimensions for output
+            const int h = width;
+            const int w = height;
+            const dim3 block(BLOCK_SIZE, BLOCK_SIZE);
+            const dim3 grid((w + BLOCK_SIZE - 1) / BLOCK_SIZE,
+                            (h + BLOCK_SIZE - 1) / BLOCK_SIZE);
+            rotateRgbKernel<<<grid, block, 0, stream>>>(src, dst, width, height, angle);
+        }
+    }
+
 } // namespace lfs::io::video

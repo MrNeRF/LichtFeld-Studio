@@ -27,6 +27,13 @@
             <img src="../icon/sequencer/step-forward.png" />
           </button>
           <span id="time-label">--:--.-- / --:--.--</span>
+          <button id="btn-rotation-ccw" class="transport-btn" type="button" title="@tr:video_extractor.rotate_ccw">
+            <img src="../icon/sequencer/rotate-ccw.png" />
+          </button>
+          <span id="rotation-value" style="color:#cdd6f4;min-width:28px;text-align:center;font-size:13dp">0°</span>
+          <button id="btn-rotation-cw" class="transport-btn" type="button" title="@tr:video_extractor.rotate_cw">
+            <img src="../icon/sequencer/rotate-cw.png" />
+          </button>
         </div>
 
         <div id="timeline">

@@ -317,6 +317,7 @@ namespace lfs::gui {
             extract_params.sharpness.threshold = params.sharpness_threshold;
             extract_params.sharpness.window_mode = params.sharpness_window_mode;
             extract_params.generate_metadata = params.generate_metadata;
+            extract_params.rotation = params.rotation;
             extract_params.cancel_requested = [this]() {
                 return stop_extraction_requested_.load();
             };
@@ -423,6 +424,9 @@ namespace lfs::gui {
         trim_end_ = static_cast<float>(player_->duration());
         custom_width_ = std::max(16, player_->sourceWidth());
         custom_height_ = std::max(16, player_->sourceHeight());
+        rotation_deg_ = player_->rotation();
+        if (rotation_value_el_)
+            rotation_value_el_->SetInnerRML(std::to_string(rotation_deg_) + "°");
         texture_needs_update_ = true;
         preview_src_.clear();
 
@@ -462,12 +466,44 @@ namespace lfs::gui {
         if (!data)
             return;
 
-        const int width = player_->width();
-        const int height = player_->height();
+        int width = player_->width();
+        int height = player_->height();
+        const uint8_t* upload_data = data;
+        std::vector<uint8_t> rotated_buf;
+
+        if (rotation_deg_ != 0) {
+            rotated_buf.resize(static_cast<size_t>(width) * height * 3);
+            if (rotation_deg_ == 180) {
+                for (int y = 0; y < height; ++y)
+                    for (int x = 0; x < width; ++x) {
+                        const int si = (y * width + x) * 3;
+                        const int di = ((height - 1 - y) * width + (width - 1 - x)) * 3;
+                        rotated_buf[di + 0] = data[si + 0];
+                        rotated_buf[di + 1] = data[si + 1];
+                        rotated_buf[di + 2] = data[si + 2];
+                    }
+            } else {
+                const int dst_w = height;
+                const int dst_h = width;
+                for (int y = 0; y < height; ++y)
+                    for (int x = 0; x < width; ++x) {
+                        const int si = (y * width + x) * 3;
+                        const int di = (rotation_deg_ == 90)
+                            ? (x * height + (height - 1 - y)) * 3       // CW
+                            : ((width - 1 - x) * height + y) * 3;      // CCW
+                        rotated_buf[di + 0] = data[si + 0];
+                        rotated_buf[di + 1] = data[si + 1];
+                        rotated_buf[di + 2] = data[si + 2];
+                    }
+                width = dst_w;
+                height = dst_h;
+            }
+            upload_data = rotated_buf.data();
+        }
+
         if (!preview_texture_)
             preview_texture_ = std::make_unique<lfs::vis::gui::VulkanUiTexture>();
-
-        if (preview_texture_->upload(data, width, height, 3)) {
+        if (preview_texture_->upload(upload_data, width, height, 3)) {
             preview_texture_width_ = width;
             preview_texture_height_ = height;
         } else {
@@ -677,6 +713,10 @@ namespace lfs::gui {
             return;
         }
 
+        rotation_cw_btn_el_ = document_->GetElementById("btn-rotation-cw");
+        rotation_ccw_btn_el_ = document_->GetElementById("btn-rotation-ccw");
+        rotation_value_el_ = document_->GetElementById("rotation-value");
+
         bindEventListeners();
         controls_dirty_ = true;
     }
@@ -741,6 +781,8 @@ namespace lfs::gui {
         listen_change(sharpness_threshold_slider_el_);
         listen_input(sharpness_threshold_slider_el_);
         listen_change(generate_metadata_el_);
+        listen_click(rotation_cw_btn_el_);
+        listen_click(rotation_ccw_btn_el_);
 
         timeline_el_->AddEventListener(Rml::EventId::Mousedown, &listener_);
         if (auto* const body = document_->GetElementById("body")) {
@@ -1174,6 +1216,11 @@ namespace lfs::gui {
                 pending_params_set_ = false;
                 if (overwrite_overlay_el_)
                     overwrite_overlay_el_->SetClass("hidden", true);
+                stop_extraction_requested_.store(false);
+                extracting_.store(true);
+                current_frame_.store(0);
+                total_frames_.store(0);
+                clearExtractionStatus();
                 startExtraction(pending_params_);
             }
         } else if (id == "overwrite-no") {
@@ -1186,6 +1233,18 @@ namespace lfs::gui {
             total_frames_.store(0);
         } else if (id == "btn-error-dismiss") {
             clearErrorMessage();
+        } else if (id == "btn-rotation-cw") {
+            rotation_deg_ = (rotation_deg_ + 90) % 360;
+            if (rotation_value_el_)
+                rotation_value_el_->SetInnerRML(std::to_string(rotation_deg_) + "°");
+            texture_needs_update_ = true;
+            markContentDirty();
+        } else if (id == "btn-rotation-ccw") {
+            rotation_deg_ = (rotation_deg_ + 270) % 360;
+            if (rotation_value_el_)
+                rotation_value_el_->SetInnerRML(std::to_string(rotation_deg_) + "°");
+            texture_needs_update_ = true;
+            markContentDirty();
         }
     }
 
@@ -1373,6 +1432,7 @@ namespace lfs::gui {
         params.sharpness_window_mode = sharpness_mode_select_el_ && sharpness_mode_select_el_->GetSelection() == 1;
         params.sharpness_threshold = static_cast<double>(readIntValue(sharpness_threshold_slider_el_, 40));
         params.generate_metadata = generate_metadata_el_ && generate_metadata_el_->HasAttribute("checked");
+        params.rotation = rotation_deg_;
 
         // Check if output folder already contains files
         if (std::filesystem::exists(output_dir_)) {

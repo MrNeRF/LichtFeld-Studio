@@ -773,6 +773,41 @@ namespace lfs::io {
                         }
                         // --- End sharpness ---
 
+                        // --- Rotation (hybrid HW path) ---
+                        int hw_rot_w = out_width;
+                        int hw_rot_h = out_height;
+                        if (params.rotation != 0) {
+                            std::vector<uint8_t> hw_rot_buf(static_cast<size_t>(out_width) * out_height * 3);
+                            if (params.rotation == 180) {
+                                for (int y = 0; y < out_height; ++y)
+                                    for (int x = 0; x < out_width; ++x) {
+                                        const int si = (y * out_width + x) * 3;
+                                        const int di = ((out_height - 1 - y) * out_width + (out_width - 1 - x)) * 3;
+                                        hw_rot_buf[di + 0] = cpu_contiguous_buffer[si + 0];
+                                        hw_rot_buf[di + 1] = cpu_contiguous_buffer[si + 1];
+                                        hw_rot_buf[di + 2] = cpu_contiguous_buffer[si + 2];
+                                    }
+                            } else {
+                                const int dst_w = out_height;
+                                const int dst_h = out_width;
+                                for (int y = 0; y < out_height; ++y)
+                                    for (int x = 0; x < out_width; ++x) {
+                                        const int si = (y * out_width + x) * 3;
+                                        const int di = (params.rotation == 90)
+                                            ? (x * out_height + (out_height - 1 - y)) * 3       // CW
+                                            : ((out_width - 1 - x) * out_height + y) * 3;       // CCW
+                                        hw_rot_buf[di + 0] = cpu_contiguous_buffer[si + 0];
+                                        hw_rot_buf[di + 1] = cpu_contiguous_buffer[si + 1];
+                                        hw_rot_buf[di + 2] = cpu_contiguous_buffer[si + 2];
+                                    }
+                                hw_rot_w = dst_w;
+                                hw_rot_h = dst_h;
+                            }
+                            std::memcpy(cpu_contiguous_buffer, hw_rot_buf.data(),
+                                        static_cast<size_t>(out_width) * out_height * 3);
+                        }
+                        // --- End rotation ---
+
                         if (gpu_encoding_enabled) {
                             void* dst_ptr = gpu_batch_buffer + batch_idx * frame_size;
                             cudaMemcpy(dst_ptr, cpu_contiguous_buffer, frame_size,
@@ -786,7 +821,7 @@ namespace lfs::io {
                             if (batch_idx >= JPEG_BATCH_SIZE) {
                                 flush_jpeg_batch();
                             }
-                        } else if (write_image_file(filename, out_width, out_height,
+                        } else if (write_image_file(filename, hw_rot_w, hw_rot_h,
                                                      cpu_contiguous_buffer, params.format,
                                                      params.jpg_quality)) {
                             ++written_count;
@@ -847,6 +882,41 @@ namespace lfs::io {
                     }
                     // --- End sharpness ---
 
+                    // --- Rotation (SW path) ---
+                    int sw_rot_w = out_width;
+                    int sw_rot_h = out_height;
+                    if (params.rotation != 0) {
+                        std::vector<uint8_t> sw_rot_buf(static_cast<size_t>(out_width) * out_height * 3);
+                        if (params.rotation == 180) {
+                            for (int y = 0; y < out_height; ++y)
+                                for (int x = 0; x < out_width; ++x) {
+                                    const int si = (y * out_width + x) * 3;
+                                    const int di = ((out_height - 1 - y) * out_width + (out_width - 1 - x)) * 3;
+                                    sw_rot_buf[di + 0] = cpu_contiguous_buffer[si + 0];
+                                    sw_rot_buf[di + 1] = cpu_contiguous_buffer[si + 1];
+                                    sw_rot_buf[di + 2] = cpu_contiguous_buffer[si + 2];
+                                }
+                        } else {
+                            const int dst_w = out_height;
+                            const int dst_h = out_width;
+                            for (int y = 0; y < out_height; ++y)
+                                for (int x = 0; x < out_width; ++x) {
+                                    const int si = (y * out_width + x) * 3;
+                                    const int di = (params.rotation == 90)
+                                        ? (x * out_height + (out_height - 1 - y)) * 3       // CW
+                                        : ((out_width - 1 - x) * out_height + y) * 3;       // CCW
+                                    sw_rot_buf[di + 0] = cpu_contiguous_buffer[si + 0];
+                                    sw_rot_buf[di + 1] = cpu_contiguous_buffer[si + 1];
+                                    sw_rot_buf[di + 2] = cpu_contiguous_buffer[si + 2];
+                                }
+                            sw_rot_w = dst_w;
+                            sw_rot_h = dst_h;
+                        }
+                        std::memcpy(cpu_contiguous_buffer, sw_rot_buf.data(),
+                                    static_cast<size_t>(out_width) * out_height * 3);
+                    }
+                    // --- End rotation ---
+
                     std::filesystem::path filename = generate_filename(saved_count + 1);
 
                     if (gpu_encoding_enabled) {
@@ -862,7 +932,7 @@ namespace lfs::io {
                         if (batch_idx >= JPEG_BATCH_SIZE) {
                             flush_jpeg_batch();
                         }
-                    } else if (write_image_file(filename, out_width, out_height,
+                    } else if (write_image_file(filename, sw_rot_w, sw_rot_h,
                                                  cpu_contiguous_buffer, params.format,
                                                  params.jpg_quality)) {
                         ++written_count;

@@ -59,6 +59,7 @@ namespace lfs::gui {
         bool sharpness_window_mode = false;
         bool sharpness_enabled = false;
         bool generate_metadata = false;
+        int rotation = 0; // 0, 90, 180, 270
     };
 
     class LFS_VIS_API VideoExtractorDialog : public IVideoExtractorWidget {
@@ -269,6 +270,10 @@ namespace lfs::gui {
         Rml::Element* sharpness_threshold_value_el_ = nullptr;
         Rml::Element* generate_metadata_el_ = nullptr;
         Rml::Element* overwrite_overlay_el_ = nullptr;
+        int rotation_deg_ = 0;
+        Rml::Element* rotation_cw_btn_el_ = nullptr;
+        Rml::Element* rotation_ccw_btn_el_ = nullptr;
+        Rml::Element* rotation_value_el_ = nullptr;
         VideoExtractionParams pending_params_;
         bool pending_params_set_ = false;
     };
