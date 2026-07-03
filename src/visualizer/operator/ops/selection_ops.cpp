@@ -166,6 +166,7 @@ namespace lfs::vis::op {
             }
 
             if (is_stroke_button && mb->action == input::ACTION_RELEASE) {
+                service->updateInteractiveSelection(glm::vec2(mb->position));
                 const auto result = service->finishInteractiveSelection();
                 return result.success ? OperatorResult::FINISHED : OperatorResult::CANCELLED;
             }

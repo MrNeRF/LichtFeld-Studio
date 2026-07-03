@@ -4266,10 +4266,16 @@ namespace lfs::vis {
         const auto add_selected_chunk = [&](const lfs::core::SplatData& src,
                                             lfs::core::Tensor mask,
                                             const glm::mat4& world_transform) {
-            if (mask.numel() != static_cast<size_t>(src.size()) || mask.count_nonzero() == 0)
+            if (mask.numel() != static_cast<size_t>(src.size()))
                 return;
 
             mask = mask.to(src.means_raw().device());
+            if (src.has_deleted_mask() && src.deleted().numel() == static_cast<size_t>(src.size())) {
+                mask = mask.logical_and(src.deleted().logical_not().to(mask.device()));
+            }
+            if (mask.count_nonzero() == 0)
+                return;
+
             auto extracted = std::make_unique<lfs::core::SplatData>(
                 lfs::core::extract_by_mask(src, mask));
             if (extracted->size() == 0)
@@ -4447,16 +4453,28 @@ namespace lfs::vis {
 
         for (auto* node : nodes) {
             auto& model = *node->model;
-            const size_t count = use_selection ? selection_count : model.size();
-            total_count += count;
-
             auto mask = use_selection
                             ? scene_mask
                             : std::make_shared<lfs::core::Tensor>(lfs::core::Tensor::ones(
                                   {model.size()}, model.means().device(), lfs::core::DataType::UInt8));
+            if (model.has_deleted_mask() && model.deleted().numel() == static_cast<size_t>(model.size())) {
+                auto live_mask = mask->to(lfs::core::DataType::Bool)
+                                     .logical_and(model.deleted().logical_not().to(mask->device()));
+                mask = std::make_shared<lfs::core::Tensor>(std::move(live_mask));
+            }
+            const size_t count = static_cast<size_t>(mask->count_nonzero());
+            if (count == 0) {
+                continue;
+            }
+            total_count += count;
 
             const auto center = lfs::core::compute_selection_center(model, *mask);
             lfs::core::mirror_gaussians(model, *mask, axis, center);
+        }
+
+        if (total_count == 0) {
+            LOG_WARN("Mirror: no live selected gaussians");
+            return false;
         }
 
         scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
@@ -4627,6 +4645,14 @@ namespace lfs::vis {
             if (static_cast<size_t>(plan.selection_mask.numel()) != static_cast<size_t>(combined->size())) {
                 return std::unexpected("Selection size mismatch");
             }
+            if (combined->has_deleted_mask() &&
+                combined->deleted().numel() == static_cast<size_t>(combined->size())) {
+                plan.selection_mask = plan.selection_mask.logical_and(
+                    combined->deleted().logical_not().to(plan.selection_mask.device()));
+                if (plan.selection_mask.count_nonzero() == 0) {
+                    return std::unexpected("Nothing selected");
+                }
+            }
 
             plan.consolidated = true;
             plan.any_visible_node = true;
@@ -4659,6 +4685,13 @@ namespace lfs::vis {
                     return std::unexpected(std::format("Visible node '{}' is missing a mutable model", node->name));
                 }
 
+                if (mutable_node->model->has_deleted_mask() &&
+                    mutable_node->model->deleted().numel() == node_size) {
+                    auto slice = plan.selection_mask.slice(0, offset, node_end);
+                    slice = slice.logical_and(mutable_node->model->deleted().logical_not().to(slice.device()));
+                    plan.selection_mask.slice(0, offset, node_end) = slice;
+                }
+
                 const size_t selected_count = plan.selection_mask.slice(0, offset, node_end).count_nonzero();
                 if (selected_count == node_size) {
                     plan.removed_node_names.push_back(node->name);
@@ -4678,6 +4711,10 @@ namespace lfs::vis {
             if (offset != full_total) {
                 return std::unexpected("Selection size mismatch");
             }
+        }
+
+        if (plan.selection_mask.count_nonzero() == 0) {
+            return std::unexpected("Nothing selected");
         }
 
         return plan;
@@ -4729,6 +4766,7 @@ namespace lfs::vis {
         scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
 
         if (auto* rm = services().renderingOrNull()) {
+            rm->clearCursorPreviewState();
             rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::SELECTION);
         }
 

@@ -74,6 +74,7 @@ namespace lfs::vis {
         };
 
         void pauseTrainingTemporary();
+        [[nodiscard]] bool pauseTrainingTemporaryIfActive();
         [[nodiscard]] TemporaryPauseResult pauseTrainingTemporaryAndWait(std::chrono::milliseconds timeout);
         void resumeTrainingTemporary();
 

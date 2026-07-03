@@ -552,6 +552,7 @@ namespace lfs::core {
           _densification_info(std::move(other._densification_info)),
           _deleted(std::move(other._deleted)),
           _deleted_count(other._deleted_count.load(std::memory_order_relaxed)),
+          _deleted_mask_version(other._deleted_mask_version.load(std::memory_order_relaxed)),
           _tensor_allocator(std::move(other._tensor_allocator)),
           lod_tree(std::move(other.lod_tree)),
           _frozen_ranges(std::move(other._frozen_ranges)) {
@@ -560,6 +561,7 @@ namespace lfs::core {
         other._max_sh_degree = 0;
         other._scene_scale = 0.0f;
         other._deleted_count.store(0, std::memory_order_relaxed);
+        other._deleted_mask_version.store(0, std::memory_order_relaxed);
         other._frozen_ranges.clear();
     }
 
@@ -584,9 +586,12 @@ namespace lfs::core {
             lod_tree = std::move(other.lod_tree);
             _deleted_count.store(other._deleted_count.load(std::memory_order_relaxed),
                                  std::memory_order_relaxed);
+            _deleted_mask_version.store(other._deleted_mask_version.load(std::memory_order_relaxed),
+                                        std::memory_order_relaxed);
             _tensor_allocator = std::move(other._tensor_allocator);
             _frozen_ranges = std::move(other._frozen_ranges);
             other._deleted_count.store(0, std::memory_order_relaxed);
+            other._deleted_mask_version.store(0, std::memory_order_relaxed);
             other._frozen_ranges.clear();
         }
         return *this;
@@ -859,8 +864,11 @@ namespace lfs::core {
             _deleted.set_name("splat.deleted_mask");
         }
 
-        _deleted = _deleted || mask;
-        return mask;
+        const Tensor newly_deleted = mask && _deleted.logical_not();
+        const Tensor updated = _deleted || mask;
+        _deleted.copy_from(updated);
+        _deleted_mask_version.fetch_add(1, std::memory_order_relaxed);
+        return newly_deleted;
     }
 
     void SplatData::undelete(const Tensor& mask) {
@@ -874,14 +882,20 @@ namespace lfs::core {
             return;
         }
 
-        _deleted = _deleted && mask.logical_not();
+        const Tensor updated = _deleted && mask.logical_not();
+        _deleted.copy_from(updated);
+        _deleted_mask_version.fetch_add(1, std::memory_order_relaxed);
     }
 
     void SplatData::clear_deleted() {
+        const bool had_deleted = _deleted.is_valid();
         if (_deleted.is_valid()) {
             _deleted = Tensor();
         }
         _deleted_count.store(0, std::memory_order_relaxed);
+        if (had_deleted) {
+            _deleted_mask_version.fetch_add(1, std::memory_order_relaxed);
+        }
     }
 
     size_t SplatData::apply_deleted() {

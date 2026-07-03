@@ -469,6 +469,13 @@ namespace lfs::core {
         void updateWorldTransform(const SceneNode& node) const;
         void removeNodeInternal(const std::string& name, bool keep_children, bool force);
         [[nodiscard]] size_t currentSelectionCapacity() const;
+        [[nodiscard]] lfs::core::Tensor liveSelectionMask(size_t expected_size,
+                                                          Device device,
+                                                          DataType dtype) const;
+        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> normalizeSelectionMask(
+            std::shared_ptr<lfs::core::Tensor> mask,
+            size_t expected_size,
+            size_t* selected_count = nullptr) const;
         void resizeSelectionIfSizeMismatch(size_t expected_size);
 
         SelectionGroup* findGroup(uint8_t id);

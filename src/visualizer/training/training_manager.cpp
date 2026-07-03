@@ -419,6 +419,26 @@ namespace lfs::vis {
             lfs::core::Tensor::trim_memory_pool();
         }
 
+        if (viewer_) {
+            auto* const rendering_manager = viewer_->getRenderingManager();
+            auto* const window_manager = viewer_->getWindowManager();
+            auto* const vulkan_context = window_manager ? window_manager->getVulkanContext() : nullptr;
+            auto* const model = scene_ ? scene_->getTrainingModel() : nullptr;
+            if (rendering_manager && vulkan_context && model) {
+                glm::ivec2 prime_size = rendering_manager->getRenderedSize();
+                if (prime_size.x <= 0 || prime_size.y <= 0) {
+                    prime_size = window_manager ? window_manager->getWindowSize() : glm::ivec2{1280, 720};
+                }
+                if (auto ok = rendering_manager->ensureVksplatTrainingSharedScratchReady(
+                        *vulkan_context,
+                        *model,
+                        prime_size);
+                    !ok) {
+                    LOG_WARN("VkSplat training shared-scratch pre-start prime skipped: {}", ok.error());
+                }
+            }
+        }
+
         {
             std::lock_guard<std::mutex> lock(completion_mutex_);
             training_complete_ = false;
@@ -513,6 +533,15 @@ namespace lfs::vis {
 
         trainer_->request_pause();
         LOG_TRACE("Training temporary pause requested at iteration {}", iteration);
+    }
+
+    bool TrainerManager::pauseTrainingTemporaryIfActive() {
+        if (!isRunning() || !trainer_ || trainer_->is_paused()) {
+            return false;
+        }
+
+        pauseTrainingTemporary();
+        return true;
     }
 
     TrainerManager::TemporaryPauseResult

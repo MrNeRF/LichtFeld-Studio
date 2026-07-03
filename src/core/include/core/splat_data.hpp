@@ -302,6 +302,9 @@ namespace lfs::core {
         [[nodiscard]] std::size_t deleted_count() const {
             return _deleted_count.load(std::memory_order_relaxed);
         }
+        [[nodiscard]] std::uint64_t deleted_mask_version() const {
+            return _deleted_mask_version.load(std::memory_order_relaxed);
+        }
         void refresh_deleted_count();
 
         [[nodiscard]] const std::vector<FrozenRange>& frozen_ranges() const { return _frozen_ranges; }
@@ -311,7 +314,7 @@ namespace lfs::core {
         void remap_frozen_ranges_after_keep(size_t old_size, const std::vector<int>& kept_old_indices);
         void remap_frozen_ranges_after_keep(size_t old_size, const std::vector<int64_t>& kept_old_indices);
 
-        // Mark gaussians as deleted, returns previous state for undo
+        // Mark gaussians as deleted, returns newly deleted mask for undo
         Tensor soft_delete(const Tensor& mask);
         void undelete(const Tensor& mask);
         void clear_deleted();
@@ -367,6 +370,9 @@ namespace lfs::core {
         // Cached nonzero count of _deleted; see refresh_deleted_count(). Atomic so
         // the render thread can read it without a data race on the writer.
         std::atomic<std::size_t> _deleted_count{0};
+        // Monotonic content revision for the soft-delete mask. The renderer uses
+        // this to refresh per-ring opacity copies when the mask is updated in place.
+        std::atomic<std::uint64_t> _deleted_mask_version{0};
 
         // Backing allocator for parameter tensors (see set_tensor_allocator).
         SplatTensorAllocator _tensor_allocator;

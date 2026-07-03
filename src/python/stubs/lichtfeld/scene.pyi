@@ -87,7 +87,7 @@ class SplatData:
         """Number of visible (non-deleted) Gaussians"""
 
     def soft_delete(self, mask: lichtfeld.Tensor) -> lichtfeld.Tensor:
-        """Mark Gaussians as deleted by mask, returns previous state for undo"""
+        """Mark Gaussians as deleted by mask, returns newly deleted mask for undo"""
 
     def undelete(self, mask: lichtfeld.Tensor) -> None:
         """Restore deleted Gaussians by mask"""

@@ -2110,6 +2110,12 @@ namespace lfs::vis {
             LOG_TIMER("commitSelection.setSelectionMask");
             scene.setSelectionMaskWithGroupCounts(new_selection, selected_count, group_counts);
         }
+        if (const auto normalized_selection = scene.getSelectionMask();
+            normalized_selection && normalized_selection->is_valid()) {
+            selected_count = normalized_selection->count_nonzero();
+        } else {
+            selected_count = 0;
+        }
 
         if (entry) {
             {
@@ -2418,17 +2424,22 @@ namespace lfs::vis {
             return false;
         }
 
-        selection_out = resetBoolScratchBuffer(session.working_selection, total);
-
         bool success = false;
         switch (session.shape) {
         case SelectionShape::Brush:
-            success = buildBrushSelection(session.points, session.brush_radius, selection_out);
+            success = buildInteractiveBrushPreviewIncremental();
+            success = success && session.preview_brush_point_count == session.points.size() &&
+                      session.working_selection.is_valid() && session.working_selection.numel() == total;
+            if (success) {
+                selection_out = session.working_selection;
+            }
             break;
         case SelectionShape::Rectangle:
+            selection_out = resetBoolScratchBuffer(session.working_selection, total);
             success = buildRectangleSelection(session.start_pos, session.cursor_pos, selection_out);
             break;
         case SelectionShape::Polygon: {
+            selection_out = resetBoolScratchBuffer(session.working_selection, total);
             if (!session.polygon_world_points.empty()) {
                 success = buildWorldPolygonSelection(session.polygon_world_points, selection_out);
             } else {
@@ -2438,14 +2449,17 @@ namespace lfs::vis {
             break;
         }
         case SelectionShape::Lasso:
+            selection_out = resetBoolScratchBuffer(session.working_selection, total);
             success = buildPolygonSelection(session.points, selection_out);
             break;
         case SelectionShape::Rings:
+            selection_out = resetBoolScratchBuffer(session.working_selection, total);
             success = buildRingSelection(
                 session.cursor_pos, selection_out, true, !include_polygon_cursor, picked_ring_id_out);
             break;
         case SelectionShape::Box:
         case SelectionShape::Sphere:
+            selection_out = resetBoolScratchBuffer(session.working_selection, total);
             if (const auto geometry = buildInteractiveVolumeGeometry()) {
                 success = buildVolumeSelection(*geometry, selection_out);
             }

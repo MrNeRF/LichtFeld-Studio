@@ -1366,7 +1366,7 @@ Accessible via `scene.combined_model()` (all nodes merged) or `node.splat_data()
 | `active_sh_degree`    | `int`        | Current SH degree               |
 | `max_sh_degree`       | `int`        | Maximum SH degree               |
 | `scene_scale`         | `float`      | Scene scale factor              |
-| `soft_delete(mask)`   | `Tensor`     | Mark for deletion, returns prev state |
+| `soft_delete(mask)`   | `Tensor`     | Mark for deletion, returns newly deleted mask |
 | `undelete(mask)`      | `None`       | Restore deleted gaussians       |
 | `apply_deleted()`     | `int`        | Permanently remove, returns count|
 | `clear_deleted()`     | `None`       | Clear deletion mask             |

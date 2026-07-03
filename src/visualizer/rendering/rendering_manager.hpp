@@ -112,6 +112,10 @@ namespace lfs::vis {
         // Main render function
         void renderFrame(const RenderContext& context);
         VulkanFrameResult renderVulkanFrame(const RenderContext& context);
+        [[nodiscard]] std::expected<void, std::string> ensureVksplatTrainingSharedScratchReady(
+            VulkanContext& context,
+            const lfs::core::SplatData& model,
+            glm::ivec2 viewport_size);
 
         enum class VksplatSelectionMaskShape : std::uint32_t {
             Brush = 0,

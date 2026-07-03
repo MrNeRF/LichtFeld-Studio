@@ -777,18 +777,22 @@ namespace lfs::vis {
             vulkan_viewport_image_size_ = {0, 0};
             vulkan_viewport_image_flip_y_ = false;
             if (vksplat_viewport_renderer_) {
-                // The trainer must drop the fence handle before reset destroys
-                // the CUDA import it points at.
-                if (trainer_manager) {
-                    if (auto* trainer = trainer_manager->getTrainer()) {
-                        trainer->setViewerReleaseFence(nullptr);
+                if (is_training && lfs::rendering::isVkSplatBackend(settings_.raster_backend)) {
+                    LOG_DEBUG("Preserving VkSplat renderer across training model change");
+                } else {
+                    // The trainer must drop the fence handle before reset destroys
+                    // the CUDA import it points at.
+                    if (trainer_manager) {
+                        if (auto* trainer = trainer_manager->getTrainer()) {
+                            trainer->setViewerReleaseFence(nullptr);
+                        }
                     }
+                    // reset() destroys render_stream_; drop it from the TLS current
+                    // stream first so the rest of the frame doesn't enqueue work on a
+                    // stale handle. Re-installed after the handshake re-init below.
+                    frame_stream_guard.reset();
+                    vksplat_viewport_renderer_->reset();
                 }
-                // reset() destroys render_stream_; drop it from the TLS current
-                // stream first so the rest of the frame doesn't enqueue work on a
-                // stale handle. Re-installed after the handshake re-init below.
-                frame_stream_guard.reset();
-                vksplat_viewport_renderer_->reset();
             }
             viewport_artifact_service_.clearViewportOutput();
             markDirty(DirtyFlag::ALL);
@@ -2569,6 +2573,31 @@ namespace lfs::vis {
                 .image_generation = vulkan_viewport_image_generation_,
                 .size = vulkan_viewport_image_size_,
                 .flip_y = vulkan_viewport_image_flip_y_};
+    }
+
+    std::expected<void, std::string> RenderingManager::ensureVksplatTrainingSharedScratchReady(
+        VulkanContext& context,
+        const lfs::core::SplatData& model,
+        glm::ivec2 viewport_size) {
+        if (!lfs::rendering::isVkSplatBackend(settings_.raster_backend) || model.size() <= 0) {
+            return {};
+        }
+        if (viewport_size.x <= 0 || viewport_size.y <= 0) {
+            viewport_size = getRenderedSize();
+        }
+        if (viewport_size.x <= 0 || viewport_size.y <= 0) {
+            viewport_size = {1280, 720};
+        }
+        if (!vksplat_viewport_renderer_) {
+            vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
+        }
+        if (auto ok = vksplat_viewport_renderer_->ensureHandshakeReady(context); !ok) {
+            return std::unexpected(ok.error());
+        }
+        return vksplat_viewport_renderer_->ensureTrainingSharedScratchReady(
+            context,
+            static_cast<std::size_t>(model.size()),
+            viewport_size);
     }
 
     lfs::io::SplatTensorAllocator RenderingManager::makeSplatTensorAllocator() const {

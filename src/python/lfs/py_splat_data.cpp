@@ -88,8 +88,8 @@ namespace lfs::python {
     }
 
     PyTensor PySplatData::soft_delete(const PyTensor& mask) {
-        core::Tensor prev_state = data_->soft_delete(mask.tensor());
-        return PyTensor(std::move(prev_state), true);
+        core::Tensor newly_deleted = data_->soft_delete(mask.tensor());
+        return PyTensor(std::move(newly_deleted), true);
     }
 
     void PySplatData::undelete(const PyTensor& mask) {

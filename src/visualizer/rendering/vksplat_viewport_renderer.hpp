@@ -65,11 +65,11 @@ namespace lfs::vis {
             const void* opacity = nullptr;
             const void* sh0 = nullptr;
             const void* shn = nullptr;
-            // Tracking the deleted mask pointer + byte count is enough to invalidate
-            // the resident-input cache when the user soft-deletes (or undoes a
-            // delete). The renderer then re-runs the copy path so the opacity
-            // upload applies the latest mask.
+            // The pointer/size catches mask allocation or removal; the version
+            // catches in-place content edits so every input ring opacity copy is
+            // refreshed without treating the edit as a full model change.
             const void* deleted = nullptr;
+            std::uint64_t deleted_version = 0;
             std::size_t means_bytes = 0;
             std::size_t scaling_bytes = 0;
             std::size_t rotation_bytes = 0;
@@ -159,6 +159,10 @@ namespace lfs::vis {
         [[nodiscard]] std::expected<void, std::string> ensureHandshakeReady(VulkanContext& context) {
             return ensureInitialized(context);
         }
+        [[nodiscard]] std::expected<void, std::string> ensureTrainingSharedScratchReady(
+            VulkanContext& context,
+            std::size_t num_splats,
+            glm::ivec2 viewport_size);
 
         // Invoked with the completion value immediately after each live-model
         // submit, BEFORE the shared arena frame is released — the trainer's
