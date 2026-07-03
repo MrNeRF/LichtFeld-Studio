@@ -39,7 +39,7 @@ namespace lfs::io {
     struct SharpnessParams {
         bool enabled = false;
         SharpnessAlgorithm algorithm = SharpnessAlgorithm::COMBINED;
-        double threshold = 0.0;        // 0 = auto (percentile-based, picks best 80%)
+        double threshold = 0.0;        // 0 = disabled (no threshold filtering)
         bool window_mode = false;       // true = sliding window (pick best per interval)
     };
 

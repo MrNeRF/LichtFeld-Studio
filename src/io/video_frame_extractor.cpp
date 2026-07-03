@@ -297,6 +297,7 @@ namespace lfs::io {
 
             uint8_t* gpu_batch_buffer = nullptr;
             uint8_t* gpu_rgb_buffer = nullptr;
+            uint8_t* gpu_rotated_buffer = nullptr;
             uint8_t* cpu_contiguous_buffer = nullptr;
             std::unique_ptr<NvCodecImageLoader> nvcodec;
             bool using_hw_decode = false;
@@ -620,8 +621,42 @@ namespace lfs::io {
                         });
                     std::filesystem::path fname = generate_filename(
                         written_count + 1);
-                    if (!write_image_file(fname, out_width, out_height,
-                                          best->rgb.data(), params.format,
+                    // Apply rotation to the best window frame before writing
+                    int write_w = out_width;
+                    int write_h = out_height;
+                    const uint8_t* write_data = best->rgb.data();
+                    std::vector<uint8_t> window_rot_buf;
+                    if (params.rotation != 0) {
+                        window_rot_buf.resize(static_cast<size_t>(out_width) * out_height * 3);
+                        if (params.rotation == 180) {
+                            for (int y = 0; y < out_height; ++y)
+                                for (int x = 0; x < out_width; ++x) {
+                                    const int si = (y * out_width + x) * 3;
+                                    const int di = ((out_height - 1 - y) * out_width + (out_width - 1 - x)) * 3;
+                                    window_rot_buf[di + 0] = best->rgb[si + 0];
+                                    window_rot_buf[di + 1] = best->rgb[si + 1];
+                                    window_rot_buf[di + 2] = best->rgb[si + 2];
+                                }
+                        } else {
+                            const int dst_w = out_height;
+                            const int dst_h = out_width;
+                            for (int y = 0; y < out_height; ++y)
+                                for (int x = 0; x < out_width; ++x) {
+                                    const int si = (y * out_width + x) * 3;
+                                    const int di = (params.rotation == 90)
+                                        ? (x * out_height + (out_height - 1 - y)) * 3
+                                        : ((out_width - 1 - x) * out_height + y) * 3;
+                                    window_rot_buf[di + 0] = best->rgb[si + 0];
+                                    window_rot_buf[di + 1] = best->rgb[si + 1];
+                                    window_rot_buf[di + 2] = best->rgb[si + 2];
+                                }
+                            write_w = dst_w;
+                            write_h = dst_h;
+                        }
+                        write_data = window_rot_buf.data();
+                    }
+                    if (!write_image_file(fname, write_w, write_h,
+                                          write_data, params.format,
                                           params.jpg_quality)) {
                         LOG_WARN("Failed to write sharpest window frame: {}",
                                  lfs::core::path_to_utf8(fname));
@@ -696,8 +731,35 @@ namespace lfs::io {
                         }
                         // --- End sharpness ---
 
-                        void* dst_ptr = gpu_batch_buffer + batch_idx * frame_size;
-                        cudaError_t cuda_err = cudaMemcpyAsync(dst_ptr, gpu_rgb_buffer, frame_size,
+                        // --- Rotation (full GPU path) ---
+                        const int rot = params.rotation;
+                        int batch_w = out_width;
+                        int batch_h = out_height;
+                        const uint8_t* batch_src = gpu_rgb_buffer;
+                        if (rot != 0) {
+                            const bool swap = (rot == 90 || rot == 270);
+                            const int rw = swap ? out_height : out_width;
+                            const int rh = swap ? out_width : out_height;
+                            const size_t rot_size = static_cast<size_t>(rw) * rh * 3;
+                            if (!gpu_rotated_buffer) {
+                                if (cudaMalloc(&gpu_rotated_buffer, rot_size) != cudaSuccess) {
+                                    LOG_WARN("Failed to allocate GPU rotation buffer, skipping rotation");
+                                    gpu_rotated_buffer = nullptr;
+                                }
+                            }
+                            if (gpu_rotated_buffer) {
+                                batch_w = rw;
+                                batch_h = rh;
+                                batch_src = gpu_rotated_buffer;
+                                video::rotateRgbCuda(gpu_rgb_buffer, gpu_rotated_buffer,
+                                                     out_width, out_height, rot, nullptr);
+                            }
+                        }
+                        const int batch_frame_size = batch_w * batch_h * 3;
+                        // --- End rotation ---
+
+                        void* dst_ptr = gpu_batch_buffer + batch_idx * batch_frame_size;
+                        cudaError_t cuda_err = cudaMemcpyAsync(dst_ptr, batch_src, batch_frame_size,
                                                                cudaMemcpyDeviceToDevice, nullptr);
                         if (cuda_err != cudaSuccess) {
                             LOG_WARN("Failed to copy GPU RGB frame into JPEG batch buffer: {}",
@@ -1065,7 +1127,10 @@ namespace lfs::io {
                         root["source_frames"] = total_frames;
                         root["source_duration"] = video_duration;
                         root["source_size"] = {src_width, src_height};
-                        root["output_size"] = {out_width, out_height};
+                        root["rotation"] = params.rotation;
+                        root["output_size"] = (params.rotation == 90 || params.rotation == 270)
+                            ? nlohmann::json{out_height, out_width}
+                            : nlohmann::json{out_width, out_height};
                         root["output_format"] = params.format == ImageFormat::PNG ? "png" : "jpg";
                         root["output_quality"] = params.jpg_quality;
                         root["filename_pattern"] = params.filename_pattern;
@@ -1129,6 +1194,8 @@ namespace lfs::io {
                     cudaFree(gpu_rgb_buffer);
                 if (gpu_batch_buffer)
                     cudaFree(gpu_batch_buffer);
+                if (gpu_rotated_buffer)
+                    cudaFree(gpu_rotated_buffer);
 
                 return true;
 
@@ -1152,6 +1219,8 @@ namespace lfs::io {
                     cudaFree(gpu_rgb_buffer);
                 if (gpu_batch_buffer)
                     cudaFree(gpu_batch_buffer);
+                if (gpu_rotated_buffer)
+                    cudaFree(gpu_rotated_buffer);
 
                 error = e.what();
                 return false;

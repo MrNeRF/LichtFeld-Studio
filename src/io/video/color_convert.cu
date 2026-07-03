@@ -274,9 +274,9 @@ namespace lfs::io::video {
             const int h = width;
             const int w = height;
             if (x >= w || y >= h) return;
-            // 90° CW: dst[y][x] = src[width-1-x][y]
-            const int src_x = width - 1 - y;
-            const int src_y = x;
+            // 90° CW: dst[y][x] = src[height-1-x][y]
+            const int src_x = y;
+            const int src_y = height - 1 - x;
             const int src_idx = (src_y * width + src_x) * 3;
             const int dst_idx = (y * w + x) * 3;
             dst[dst_idx] = src[src_idx];
@@ -296,9 +296,9 @@ namespace lfs::io::video {
             const int h = width;
             const int w = height;
             if (x >= w || y >= h) return;
-            // 270° CW (= 90° CCW): dst[y][x] = src[y][width-1-x]
-            const int src_x = y;
-            const int src_y = height - 1 - x;
+            // 270° CW (= 90° CCW): dst[y][x] = src[x][width-1-y]
+            const int src_x = width - 1 - y;
+            const int src_y = x;
             const int src_idx = (src_y * width + src_x) * 3;
             const int dst_idx = (y * w + x) * 3;
             dst[dst_idx] = src[src_idx];

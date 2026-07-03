@@ -1505,7 +1505,8 @@
     "overwrite_prompt": "La cartella contiene già fotogrammi. Svuotare tutto e procedere?",
     "overwrite_clear": "Procedi",
     "rotate_cw": "Ruota in senso orario",
-    "rotate_ccw": "Ruota in senso antiorario"
+    "rotate_ccw": "Ruota in senso antiorario",
+    "discarded_format": " (%d scartati)"
   },
   "plugin_marketplace": {
     "title_line": "Sfoglia i plugin installabili dal registro dei plugin.",

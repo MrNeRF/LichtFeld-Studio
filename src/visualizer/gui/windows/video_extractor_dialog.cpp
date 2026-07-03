@@ -1052,7 +1052,7 @@ namespace lfs::gui {
             if (total > 0) {
                 const int discarded = discarded_frames_.load();
                 const std::string discard_str = discarded > 0
-                    ? std::format(" ({} discarded)", discarded)
+                    ? localizedFormat(VideoExtractor::DISCARDED_FORMAT, discarded)
                     : "";
                 changed |= setCachedText(progress_text_el_,
                                          std::format("{}/{}{}", current, total, discard_str));
@@ -1068,9 +1068,13 @@ namespace lfs::gui {
                                          : "none");
         if (snapshot.status_message == ExtractionStatusMessage::Complete && !extracting) {
             const int saved = current - discarded_frames_.load();
-            changed |= setCachedText(complete_text_el_,
-                                     std::format("{} {}", LOC(VideoExtractor::COMPLETE),
-                                                 localizedFormat(VideoExtractor::EXTRACTED, saved)));
+            const int discarded = discarded_frames_.load();
+            std::string complete_msg = std::format("{} {}",
+                LOC(VideoExtractor::COMPLETE),
+                localizedFormat(VideoExtractor::EXTRACTED, saved));
+            if (discarded > 0)
+                complete_msg += localizedFormat(VideoExtractor::DISCARDED_FORMAT, discarded);
+            changed |= setCachedText(complete_text_el_, complete_msg);
         }
 
         changed |= setCachedProperty(stopped_section_el_, "display",
@@ -1208,9 +1212,9 @@ namespace lfs::gui {
                 // Clear the folder
                 const auto& dir = pending_params_.output_dir;
                 if (std::filesystem::exists(dir)) {
-                    for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+                    for (const auto& entry : std::filesystem::recursive_directory_iterator(dir)) {
                         std::error_code ec;
-                        std::filesystem::remove(entry.path(), ec);
+                        std::filesystem::remove_all(entry.path(), ec);
                     }
                 }
                 pending_params_set_ = false;
@@ -1220,6 +1224,7 @@ namespace lfs::gui {
                 extracting_.store(true);
                 current_frame_.store(0);
                 total_frames_.store(0);
+                discarded_frames_.store(0);
                 clearExtractionStatus();
                 startExtraction(pending_params_);
             }

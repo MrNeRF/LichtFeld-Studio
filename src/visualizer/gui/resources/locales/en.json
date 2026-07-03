@@ -1534,7 +1534,8 @@
     "overwrite_prompt": "Output folder already contains extracted frames. Clear all contents and proceed?",
     "overwrite_clear": "Proceed",
     "rotate_cw": "Rotate clockwise",
-    "rotate_ccw": "Rotate counter-clockwise"
+    "rotate_ccw": "Rotate counter-clockwise",
+    "discarded_format": " (%d discarded)"
   },
   "rendering_panel": {
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V",

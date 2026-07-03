@@ -909,6 +909,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* OK = "video_extractor.ok";
         inline constexpr const char* ERROR_MSG = "video_extractor.error";
         inline constexpr const char* DISMISS = "video_extractor.dismiss";
+        inline constexpr const char* DISCARDED_FORMAT = "video_extractor.discarded_format";
     } // namespace VideoExtractor
 
     namespace Mesh2Splat {
