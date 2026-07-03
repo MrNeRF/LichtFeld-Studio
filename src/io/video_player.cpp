@@ -128,8 +128,6 @@ namespace lfs::io {
             rotation_ = ((rotation_ % 360) + 360) % 360; // normalize
             if (rotation_ != 0 && rotation_ != 90 && rotation_ != 180 && rotation_ != 270)
                 rotation_ = 0;
-            if (rotation_ != 0)
-                LOG_INFO("Detected video rotation: {}°", rotation_);
 
             const char* hw_decoder_name = getHwDecoderName(codec_id);
             const AVCodec* codec = nullptr;
