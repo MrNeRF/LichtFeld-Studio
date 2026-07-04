@@ -299,6 +299,7 @@ namespace lfs::io {
             uint8_t* gpu_rgb_buffer = nullptr;
             uint8_t* gpu_rotated_buffer = nullptr;
             uint8_t* cpu_contiguous_buffer = nullptr;
+            std::vector<uint8_t> rot_buf;
             std::unique_ptr<NvCodecImageLoader> nvcodec;
             bool using_hw_decode = false;
 
@@ -625,17 +626,16 @@ namespace lfs::io {
                     int write_w = out_width;
                     int write_h = out_height;
                     const uint8_t* write_data = best->rgb.data();
-                    std::vector<uint8_t> window_rot_buf;
                     if (params.rotation != 0) {
-                        window_rot_buf.resize(static_cast<size_t>(out_width) * out_height * 3);
+                        rot_buf.resize(static_cast<size_t>(out_width) * out_height * 3);
                         if (params.rotation == 180) {
                             for (int y = 0; y < out_height; ++y)
                                 for (int x = 0; x < out_width; ++x) {
                                     const int si = (y * out_width + x) * 3;
                                     const int di = ((out_height - 1 - y) * out_width + (out_width - 1 - x)) * 3;
-                                    window_rot_buf[di + 0] = best->rgb[si + 0];
-                                    window_rot_buf[di + 1] = best->rgb[si + 1];
-                                    window_rot_buf[di + 2] = best->rgb[si + 2];
+                                    rot_buf[di + 0] = best->rgb[si + 0];
+                                    rot_buf[di + 1] = best->rgb[si + 1];
+                                    rot_buf[di + 2] = best->rgb[si + 2];
                                 }
                         } else {
                             const int dst_w = out_height;
@@ -646,14 +646,14 @@ namespace lfs::io {
                                     const int di = (params.rotation == 90)
                                         ? (x * out_height + (out_height - 1 - y)) * 3
                                         : ((out_width - 1 - x) * out_height + y) * 3;
-                                    window_rot_buf[di + 0] = best->rgb[si + 0];
-                                    window_rot_buf[di + 1] = best->rgb[si + 1];
-                                    window_rot_buf[di + 2] = best->rgb[si + 2];
+                                    rot_buf[di + 0] = best->rgb[si + 0];
+                                    rot_buf[di + 1] = best->rgb[si + 1];
+                                    rot_buf[di + 2] = best->rgb[si + 2];
                                 }
                             write_w = dst_w;
                             write_h = dst_h;
                         }
-                        write_data = window_rot_buf.data();
+                        write_data = rot_buf.data();
                     }
                     if (!write_image_file(fname, write_w, write_h,
                                           write_data, params.format,
@@ -706,6 +706,10 @@ namespace lfs::io {
                         // --- Sharpness evaluation (full GPU path) ---
                         double frame_score = 0.0;
                         if (params.sharpness.enabled) {
+                            // Sharpness computed on CPU after GPU→CPU transfer.
+                            // A future GPU-side sharpness kernel could skip this copy,
+                            // but for now the hybrid approach keeps the implementation
+                            // simple and shared across all paths.
                             cudaMemcpy(cpu_contiguous_buffer, gpu_rgb_buffer, frame_size,
                                        cudaMemcpyDeviceToHost);
                             frame_score = computeSharpnessScore(
@@ -714,8 +718,6 @@ namespace lfs::io {
                                 CandidateFrame cf;
                                 cf.rgb.assign(cpu_contiguous_buffer,
                                               cpu_contiguous_buffer + frame_size);
-                                cf.filename = generate_filename(
-                                    saved_count + static_cast<int>(window_candidates.size()) + 1);
                                 cf.score = frame_score;
                                 cf.timestamp = current_frame_time;
                                 cf.source_frame = current_src_frame;
@@ -818,8 +820,6 @@ namespace lfs::io {
                                 CandidateFrame cf;
                                 cf.rgb.assign(cpu_contiguous_buffer,
                                               cpu_contiguous_buffer + frame_size);
-                                cf.filename = generate_filename(
-                                    saved_count + static_cast<int>(window_candidates.size()) + 1);
                                 cf.score = frame_score;
                                 cf.timestamp = current_frame_time;
                                 cf.source_frame = current_src_frame;
@@ -839,15 +839,15 @@ namespace lfs::io {
                         int hw_rot_w = out_width;
                         int hw_rot_h = out_height;
                         if (params.rotation != 0) {
-                            std::vector<uint8_t> hw_rot_buf(static_cast<size_t>(out_width) * out_height * 3);
+                            rot_buf.resize(static_cast<size_t>(out_width) * out_height * 3);
                             if (params.rotation == 180) {
                                 for (int y = 0; y < out_height; ++y)
                                     for (int x = 0; x < out_width; ++x) {
                                         const int si = (y * out_width + x) * 3;
                                         const int di = ((out_height - 1 - y) * out_width + (out_width - 1 - x)) * 3;
-                                        hw_rot_buf[di + 0] = cpu_contiguous_buffer[si + 0];
-                                        hw_rot_buf[di + 1] = cpu_contiguous_buffer[si + 1];
-                                        hw_rot_buf[di + 2] = cpu_contiguous_buffer[si + 2];
+                                        rot_buf[di + 0] = cpu_contiguous_buffer[si + 0];
+                                        rot_buf[di + 1] = cpu_contiguous_buffer[si + 1];
+                                        rot_buf[di + 2] = cpu_contiguous_buffer[si + 2];
                                     }
                             } else {
                                 const int dst_w = out_height;
@@ -858,14 +858,14 @@ namespace lfs::io {
                                         const int di = (params.rotation == 90)
                                             ? (x * out_height + (out_height - 1 - y)) * 3       // CW
                                             : ((out_width - 1 - x) * out_height + y) * 3;       // CCW
-                                        hw_rot_buf[di + 0] = cpu_contiguous_buffer[si + 0];
-                                        hw_rot_buf[di + 1] = cpu_contiguous_buffer[si + 1];
-                                        hw_rot_buf[di + 2] = cpu_contiguous_buffer[si + 2];
+                                        rot_buf[di + 0] = cpu_contiguous_buffer[si + 0];
+                                        rot_buf[di + 1] = cpu_contiguous_buffer[si + 1];
+                                        rot_buf[di + 2] = cpu_contiguous_buffer[si + 2];
                                     }
                                 hw_rot_w = dst_w;
                                 hw_rot_h = dst_h;
                             }
-                            std::memcpy(cpu_contiguous_buffer, hw_rot_buf.data(),
+                            std::memcpy(cpu_contiguous_buffer, rot_buf.data(),
                                         static_cast<size_t>(out_width) * out_height * 3);
                         }
                         // --- End rotation ---
@@ -925,8 +925,6 @@ namespace lfs::io {
                             CandidateFrame cf;
                             cf.rgb.assign(cpu_contiguous_buffer,
                                           cpu_contiguous_buffer + frame_size);
-                            cf.filename = generate_filename(
-                                saved_count + static_cast<int>(window_candidates.size()) + 1);
                             cf.score = frame_score;
                             cf.timestamp = current_frame_time;
                             cf.source_frame = current_src_frame;
@@ -948,15 +946,15 @@ namespace lfs::io {
                     int sw_rot_w = out_width;
                     int sw_rot_h = out_height;
                     if (params.rotation != 0) {
-                        std::vector<uint8_t> sw_rot_buf(static_cast<size_t>(out_width) * out_height * 3);
+                        rot_buf.resize(static_cast<size_t>(out_width) * out_height * 3);
                         if (params.rotation == 180) {
                             for (int y = 0; y < out_height; ++y)
                                 for (int x = 0; x < out_width; ++x) {
                                     const int si = (y * out_width + x) * 3;
                                     const int di = ((out_height - 1 - y) * out_width + (out_width - 1 - x)) * 3;
-                                    sw_rot_buf[di + 0] = cpu_contiguous_buffer[si + 0];
-                                    sw_rot_buf[di + 1] = cpu_contiguous_buffer[si + 1];
-                                    sw_rot_buf[di + 2] = cpu_contiguous_buffer[si + 2];
+                                    rot_buf[di + 0] = cpu_contiguous_buffer[si + 0];
+                                    rot_buf[di + 1] = cpu_contiguous_buffer[si + 1];
+                                    rot_buf[di + 2] = cpu_contiguous_buffer[si + 2];
                                 }
                         } else {
                             const int dst_w = out_height;
@@ -967,14 +965,14 @@ namespace lfs::io {
                                     const int di = (params.rotation == 90)
                                         ? (x * out_height + (out_height - 1 - y)) * 3       // CW
                                         : ((out_width - 1 - x) * out_height + y) * 3;       // CCW
-                                    sw_rot_buf[di + 0] = cpu_contiguous_buffer[si + 0];
-                                    sw_rot_buf[di + 1] = cpu_contiguous_buffer[si + 1];
-                                    sw_rot_buf[di + 2] = cpu_contiguous_buffer[si + 2];
+                                    rot_buf[di + 0] = cpu_contiguous_buffer[si + 0];
+                                    rot_buf[di + 1] = cpu_contiguous_buffer[si + 1];
+                                    rot_buf[di + 2] = cpu_contiguous_buffer[si + 2];
                                 }
                             sw_rot_w = dst_w;
                             sw_rot_h = dst_h;
                         }
-                        std::memcpy(cpu_contiguous_buffer, sw_rot_buf.data(),
+                        std::memcpy(cpu_contiguous_buffer, rot_buf.data(),
                                     static_cast<size_t>(out_width) * out_height * 3);
                     }
                     // --- End rotation ---
@@ -1124,7 +1122,7 @@ namespace lfs::io {
                         nlohmann::json root;
                         root["source_file"] = lfs::core::path_to_utf8(params.video_path);
                         root["source_fps"] = video_fps;
-                        root["source_frames"] = total_frames;
+                        root["trimmed_source_frames"] = total_frames;
                         root["source_duration"] = video_duration;
                         root["source_size"] = {src_width, src_height};
                         root["rotation"] = params.rotation;

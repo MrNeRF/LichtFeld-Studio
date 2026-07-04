@@ -1435,7 +1435,7 @@ namespace lfs::gui {
             params.sharpness_algorithm = ALGO_MAP[std::clamp(sharpness_algorithm_select_el_->GetSelection(), 0, 2)];
         }
         params.sharpness_window_mode = sharpness_mode_select_el_ && sharpness_mode_select_el_->GetSelection() == 1;
-        params.sharpness_threshold = static_cast<double>(readIntValue(sharpness_threshold_slider_el_, 40));
+        params.sharpness_threshold = static_cast<double>(readIntValue(sharpness_threshold_slider_el_, 10));
         params.generate_metadata = generate_metadata_el_ && generate_metadata_el_->HasAttribute("checked");
         params.rotation = rotation_deg_;
 

@@ -19,6 +19,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace Rml {
     class Element;
@@ -55,7 +56,7 @@ namespace lfs::gui {
         std::string filename_pattern = "frame_%d";
 
         io::SharpnessAlgorithm sharpness_algorithm = io::SharpnessAlgorithm::COMBINED;
-        double sharpness_threshold = 40.0;
+        double sharpness_threshold = 10.0;
         bool sharpness_window_mode = false;
         bool sharpness_enabled = false;
         bool generate_metadata = false;
@@ -271,6 +272,7 @@ namespace lfs::gui {
         Rml::Element* generate_metadata_el_ = nullptr;
         Rml::Element* overwrite_overlay_el_ = nullptr;
         int rotation_deg_ = 0;
+        std::vector<uint8_t> rotated_buf_;
         Rml::Element* rotation_cw_btn_el_ = nullptr;
         Rml::Element* rotation_ccw_btn_el_ = nullptr;
         Rml::Element* rotation_value_el_ = nullptr;
