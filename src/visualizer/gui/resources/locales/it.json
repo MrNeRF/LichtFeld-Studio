@@ -1504,6 +1504,7 @@
     "generate_metadata": "Genera JSON metadati",
     "overwrite_prompt": "La cartella contiene già fotogrammi. Svuotare tutto e procedere?",
     "overwrite_clear": "Procedi",
+    "overwrite_cancel": "Annulla",
     "rotate_cw": "Ruota in senso orario",
     "rotate_ccw": "Ruota in senso antiorario",
     "discarded_format": " (%d scartati)"
