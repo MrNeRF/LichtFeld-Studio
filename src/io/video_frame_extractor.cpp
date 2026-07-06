@@ -445,6 +445,11 @@ namespace lfs::io {
                 double next_capture_time = start_time;
                 const int estimated_total = estimateFramesToExtract(params.mode, trim_duration, target_fps,
                                                                     total_frames, frame_step);
+                // Estimated frames per sliding window (for candidate sampling)
+                int window_est_frames = frame_step;
+                if (params.mode == ExtractionMode::FPS && video_fps > 0 && target_fps > 0)
+                    window_est_frames = static_cast<int>(std::round(video_fps / target_fps));
+                window_est_frames = std::max(1, window_est_frames);
 
                 // Seek to start time if needed
                 if (start_time > 0.1) {
@@ -553,7 +558,6 @@ namespace lfs::io {
                 std::vector<CandidateFrame> window_candidates;
                 int current_window_idx = 0;
                 int window_skip_counter = 0;
-                int window_step = 1;
                 int in_window_frame_count = 0;
                 struct FrameSaveInfo {
                     std::string filename;
@@ -677,19 +681,6 @@ namespace lfs::io {
                     if (params.progress_callback)
                         params.progress_callback(saved_count, estimated_total, skipped_count);
                     window_candidates.clear();
-                    // Calculate step for the NEXT interval based on this interval's size
-                    const int target = params.sharpness.window_candidates_target;
-                    if (target < 0) {
-                        // Auto: sqrt-based formula, clamped 5-20
-                        const int auto_target = std::clamp(static_cast<int>(
-                            std::round(std::sqrt(static_cast<double>(window_skip_counter))) * 2), 5, 20);
-                        window_step = std::max(1, window_skip_counter / std::max(1, auto_target));
-                    } else if (target == 0) {
-                        // All frames: no skip
-                        window_step = 1;
-                    } else {
-                        window_step = std::max(1, window_skip_counter / std::max(1, target));
-                    }
                     window_skip_counter = 0;
                     throw_if_cancelled();
                 };
@@ -1064,10 +1055,26 @@ namespace lfs::io {
                                         flush_window();
                                         current_window_idx = w_idx;
                                     }
-                                    ++in_window_frame_count;
-                                    ++window_skip_counter;
-                                    if (window_step > 1 && (window_skip_counter - 1) % window_step != 0)
-                                        continue;
+                                    if (params.sharpness.window_mode) {
+                                        ++window_skip_counter;
+                                        ++in_window_frame_count;
+                                        // Bucket sampling (zero-based): only process if this frame is a candidate
+                                        int effective = window_est_frames;
+                                        if (params.sharpness.window_candidates_target < 0) {
+                                            const int auto_target = std::clamp(static_cast<int>(std::round(std::sqrt(static_cast<double>(window_est_frames))) * 2), 5, 20);
+                                            effective = std::min(auto_target, window_est_frames);
+                                        } else if (params.sharpness.window_candidates_target > 0) {
+                                            effective = std::min(params.sharpness.window_candidates_target, window_est_frames);
+                                        }
+                                        if (effective < window_est_frames) {
+                                            const int i = window_skip_counter - 1;
+                                            const int bucket = i * effective / window_est_frames;
+                                            const int prev_bucket = (i > 0) ? ((i - 1) * effective / window_est_frames) : -1;
+                                            if (bucket == prev_bucket)
+                                                continue;
+                                        }
+                                    }
+
                                     if (using_hw_decode)
                                         process_frame_hw(frame);
                                     else
@@ -1111,10 +1118,26 @@ namespace lfs::io {
                                 flush_window();
                                 current_window_idx = w_idx;
                             }
-                            ++in_window_frame_count;
-                            ++window_skip_counter;
-                            if (window_step > 1 && (window_skip_counter - 1) % window_step != 0)
-                                continue;
+                            if (params.sharpness.window_mode) {
+                                ++window_skip_counter;
+                                ++in_window_frame_count;
+                                // Bucket sampling (zero-based): only process if this frame is a candidate
+                                int effective = window_est_frames;
+                                if (params.sharpness.window_candidates_target < 0) {
+                                    const int auto_target = std::clamp(static_cast<int>(std::round(std::sqrt(static_cast<double>(window_est_frames))) * 2), 5, 20);
+                                    effective = std::min(auto_target, window_est_frames);
+                                } else if (params.sharpness.window_candidates_target > 0) {
+                                    effective = std::min(params.sharpness.window_candidates_target, window_est_frames);
+                                }
+                                if (effective < window_est_frames) {
+                                    const int i = window_skip_counter - 1;
+                                    const int bucket = i * effective / window_est_frames;
+                                    const int prev_bucket = (i > 0) ? ((i - 1) * effective / window_est_frames) : -1;
+                                    if (bucket == prev_bucket)
+                                        continue;
+                                }
+                            }
+
                             if (using_hw_decode)
                                 process_frame_hw(frame);
                             else
@@ -1172,6 +1195,22 @@ namespace lfs::io {
                             root["sharpness"]["threshold"] = params.sharpness.threshold;
                             root["sharpness"]["window_mode"] = params.sharpness.window_mode;
                             root["sharpness"]["window_candidates_target"] = params.sharpness.window_candidates_target;
+                            // Save human-readable mode
+                            if (params.sharpness.window_candidates_target < 0)
+                                root["sharpness"]["window_candidate_mode"] = "auto";
+                            else if (params.sharpness.window_candidates_target == 0)
+                                root["sharpness"]["window_candidate_mode"] = "all";
+                            else
+                                root["sharpness"]["window_candidate_mode"] = "fixed";
+                            root["sharpness"]["estimated_window_frames"] = window_est_frames;
+                            // Effective candidates per window (for auto and fixed modes)
+                            int eff = window_est_frames;
+                            if (params.sharpness.window_candidates_target < 0)
+                                eff = std::min(std::clamp(static_cast<int>(
+                                    std::round(std::sqrt(static_cast<double>(window_est_frames))) * 2), 5, 20), window_est_frames);
+                            else if (params.sharpness.window_candidates_target > 0)
+                                eff = std::min(params.sharpness.window_candidates_target, window_est_frames);
+                            root["sharpness"]["effective_candidates_per_window"] = eff;
                         }
 
                         auto& frames = root["frames"];

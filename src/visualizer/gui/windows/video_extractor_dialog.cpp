@@ -1044,7 +1044,7 @@ namespace lfs::gui {
                 candidates = std::min(window_candidates_target_, std::max(1, est_window));
             }
             changed |= setCachedText(window_candidates_readout_el_,
-                                     std::to_string(candidates) + " / ~" + std::to_string(est_window) + " frames");
+                                     localizedFormat(VideoExtractor::CANDIDATES_READOUT_FMT, candidates, est_window));
         }
 
         if (sharpness_threshold_slider_el_ && sharpness_threshold_value_el_) {

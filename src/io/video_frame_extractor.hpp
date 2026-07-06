@@ -40,7 +40,7 @@ namespace lfs::io {
         bool enabled = false;
         SharpnessAlgorithm algorithm = SharpnessAlgorithm::COMBINED;
         double threshold = 0.0;        // 0 = disabled (no threshold filtering)
-        int window_candidates_target = 10;  // 0=auto, 3,5,10,20,50 = max candidates per interval
+        int window_candidates_target = 10;  // <0=auto, 0=all, >0=fixed candidates per interval
         bool window_mode = false;
     };
 
