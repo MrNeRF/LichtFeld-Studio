@@ -543,6 +543,19 @@ namespace lfs::vis {
                     gm->gizmo().setTransformSpace(static_cast<TransformSpace>(space));
             });
         callback_cleanup_.add([] { python::set_transform_space_callbacks(nullptr, nullptr); });
+        python::set_multi_transform_mode_callbacks(
+            []() -> int {
+                const auto* gm = python::get_gui_manager();
+                return gm ? static_cast<int>(gm->gizmo().getMultiTransformMode()) : 0;
+            },
+            [](int mode) {
+                if (auto* gm = python::get_gui_manager()) {
+                    const auto normalized_mode =
+                        gui::normalizeMultiTransformMode(static_cast<gui::MultiTransformMode>(mode));
+                    gm->gizmo().setMultiTransformMode(normalized_mode);
+                }
+            });
+        callback_cleanup_.add([] { python::set_multi_transform_mode_callbacks(nullptr, nullptr); });
         python::set_thumbnail_callbacks(
             [](const char* video_id) {
                 if (auto* gm = python::get_gui_manager())

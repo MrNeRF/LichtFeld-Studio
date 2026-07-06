@@ -414,7 +414,7 @@ def test_selection_tool_uses_centered_modes(toolbar_module, monkeypatch):
 def test_transform_and_mirror_tools_use_centered_subtool_rows(toolbar_module, monkeypatch):
     module, _hook_calls, _remove_calls = toolbar_module
     lf_stub = sys.modules["lichtfeld"]
-    state = SimpleNamespace(active_tool="", transform_space=1, pivot_mode=0, mirror_calls=[])
+    state = SimpleNamespace(active_tool="", transform_space=1, multi_transform_mode=0, pivot_mode=0, mirror_calls=[])
 
     transform_submodes = (
         SimpleNamespace(id="local", label="Local", icon="local", shortcut=""),
@@ -472,6 +472,8 @@ def test_transform_and_mirror_tools_use_centered_subtool_rows(toolbar_module, mo
     monkeypatch.setattr(lf_stub.ui, "get_active_submode", lambda: "", raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_transform_space", lambda: state.transform_space, raising=False)
     monkeypatch.setattr(lf_stub.ui, "set_transform_space", lambda value: setattr(state, "transform_space", value), raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_multi_transform_mode", lambda: state.multi_transform_mode, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "set_multi_transform_mode", lambda value: setattr(state, "multi_transform_mode", value), raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_pivot_mode", lambda: state.pivot_mode, raising=False)
     monkeypatch.setattr(lf_stub.ui, "set_pivot_mode", lambda value: setattr(state, "pivot_mode", value), raising=False)
     monkeypatch.setattr(lf_stub.ui, "execute_mirror", lambda axis: state.mirror_calls.append(axis), raising=False)
@@ -526,6 +528,7 @@ def test_transform_and_mirror_tools_use_centered_subtool_rows(toolbar_module, mo
     snapshot = controller.snapshot()
     assert snapshot["show_transform_toolbar"] is False
     assert next(button for button in snapshot["transform_tool_buttons"] if button["value"] == "builtin.translate")["selected"] is True
+    assert [button["value"] for button in snapshot["submode_buttons"]] == ["local", "world"]
 
     controller.dispatch("submode", "local")
     controller.dispatch("pivot", "bounds")
@@ -535,6 +538,25 @@ def test_transform_and_mirror_tools_use_centered_subtool_rows(toolbar_module, mo
     assert state.pivot_mode == 1
     assert next(button for button in snapshot["submode_buttons"] if button["value"] == "local")["selected"] is True
     assert next(button for button in snapshot["pivot_buttons"] if button["value"] == "bounds")["selected"] is True
+
+    monkeypatch.setattr(lf_stub, "get_selected_node_names", lambda: ["left", "right"], raising=False)
+    snapshot = controller.snapshot()
+
+    assert snapshot["show_transform_space_controls"] is True
+    assert [button["value"] for button in snapshot["submode_buttons"]] == ["selection", "individual"]
+    assert next(button for button in snapshot["submode_buttons"] if button["value"] == "selection")["selected"] is True
+    assert next(button for button in snapshot["submode_buttons"] if button["value"] == "selection")["tooltip_key"] == "toolbar.selection_transform"
+    assert next(button for button in snapshot["submode_buttons"] if button["value"] == "individual")["tooltip_key"] == "toolbar.individual_transform"
+
+    controller.dispatch("submode", "individual")
+    snapshot = controller.snapshot()
+
+    assert state.multi_transform_mode == 1
+    assert next(button for button in snapshot["submode_buttons"] if button["value"] == "individual")["selected"] is True
+
+    monkeypatch.setattr(lf_stub, "get_selected_node_names", lambda: ["target"], raising=False)
+    snapshot = controller.snapshot()
+    assert [button["value"] for button in snapshot["submode_buttons"]] == ["local", "world"]
 
     controller.dispatch("tool", "builtin.translate")
     snapshot = controller.snapshot()
@@ -767,6 +789,8 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     transform_toolbar_tooltip_keys = (
         "local_space",
         "world_space",
+        "selection_transform",
+        "individual_transform",
         "origin_pivot",
         "bounds_center_pivot",
     )
@@ -1025,6 +1049,7 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     monkeypatch.setattr(lf_stub.ui, "context", lambda: SimpleNamespace(), raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_active_tool", lambda: "", raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_transform_space", lambda: 1, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_multi_transform_mode", lambda: 0, raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_pivot_mode", lambda: 0, raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_split_view_mode", lambda: "single", raising=False)
     monkeypatch.setattr(lf_stub.ui, "is_sequencer_visible", lambda: False, raising=False)
@@ -1063,7 +1088,14 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     camera_buttons = model.handle.record_updates["camera_mode_buttons"]
     primary_buttons = model.handle.record_updates["utility_primary_buttons"]
     extra_buttons = model.handle.record_updates["utility_extra_buttons"]
-    assert len(camera_buttons) == 3
+    assert len(camera_buttons) == 4
+    assert [button["value"] for button in camera_buttons] == [
+        "orbit",
+        "trackball",
+        "fpv",
+        "drone",
+    ]
+    assert camera_buttons[3]["icon_src"] == "../icon/drone.png"
     assert [button["action"] for button in primary_buttons] == [
         "home",
         "focus_selection",

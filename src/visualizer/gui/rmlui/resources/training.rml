@@ -298,6 +298,10 @@
             <span class="prop-label">{{label_fs_cache}}</span>
             <input type="checkbox" data-checked="use_fs_cache" />
           </div>
+          <div class="setting-row" data-tooltip="training.tooltip.use_16bit_color">
+            <span class="prop-label">{{label_use_16bit_color}}</span>
+            <input type="checkbox" data-checked="use_16bit_color" />
+          </div>
           <div class="setting-row" data-tooltip="training.tooltip.enable_eval">
             <span class="prop-label">{{label_enable_eval}}</span>
             <input type="checkbox" data-checked="enable_eval" />

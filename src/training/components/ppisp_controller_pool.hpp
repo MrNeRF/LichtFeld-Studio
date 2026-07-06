@@ -6,6 +6,7 @@
 #include "core/tensor.hpp"
 #include <cstdint>
 #include <iosfwd>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -33,11 +34,16 @@ namespace lfs::training {
 
         PPISPControllerPool(const PPISPControllerPool&) = delete;
         PPISPControllerPool& operator=(const PPISPControllerPool&) = delete;
-        PPISPControllerPool(PPISPControllerPool&&) = default;
-        PPISPControllerPool& operator=(PPISPControllerPool&&) = default;
+        PPISPControllerPool(PPISPControllerPool&&) = delete;
+        PPISPControllerPool& operator=(PPISPControllerPool&&) = delete;
 
         /// Allocate shared buffers for the given max image size. Must be called before predict().
         void allocate_buffers(size_t max_h, size_t max_w);
+
+        /// Serializes predict()/backward() transactions: predict() fills shared forward
+        /// buffers (and the result aliases one of them) that backward() consumes, so a
+        /// concurrent viewport/export prediction would corrupt an in-flight training pair.
+        [[nodiscard]] std::mutex& predict_mutex() const { return predict_mutex_; }
 
         /// Forward pass for a specific camera.
         [[nodiscard]] lfs::core::Tensor predict(int camera_idx, const lfs::core::Tensor& rendered_rgb,
@@ -108,6 +114,7 @@ namespace lfs::training {
         lfs::core::Tensor buf_fc1_, buf_fc2_, buf_fc3_, buf_output_;
         lfs::core::Tensor fc_input_buffer_;
         lfs::core::Tensor cached_flat_;
+        mutable std::mutex predict_mutex_;
 
         // Shared backward buffers
         lfs::core::Tensor grad_fc3_out_, grad_fc2_out_, grad_fc1_out_;

@@ -888,27 +888,43 @@ namespace lfs::io {
         }
         const bool needs_resize = (target_width != src_width || target_height != src_height);
 
+        const auto src_sample_type = image_info.plane_info[0].sample_type;
+        if (src_sample_type != NVIMGCODEC_SAMPLE_DATA_TYPE_UINT8 &&
+            src_sample_type != NVIMGCODEC_SAMPLE_DATA_TYPE_UINT16) {
+            nvimgcodecCodeStreamDestroy(code_stream);
+            throw std::runtime_error("Unsupported source sample type: " +
+                                     std::to_string(static_cast<int>(src_sample_type)));
+        }
+
+        // Grayscale consumers (masks, depth) stay 8-bit; nvImageCodec converts on decode.
+        const bool decode_u16 = !is_grayscale &&
+                                src_sample_type == NVIMGCODEC_SAMPLE_DATA_TYPE_UINT16;
+        // Float16 is only a 2-byte container for the uint16 samples (no UInt16 dtype).
+        const auto tensor_datatype = decode_u16 ? lfs::core::DataType::Float16
+                                                : lfs::core::DataType::UInt8;
+        const size_t bytes_per_sample = decode_u16 ? 2 : 1;
+
         LOG_DEBUG("Image info: {}x{} -> {}x{} (resize_factor={}, max_width={})",
                   src_width, src_height, target_width, target_height, resize_factor, max_width);
 
         cudaSetDevice(impl_->device_id);
 
         using namespace lfs::core;
-        Tensor uint8_tensor;
+        Tensor image_tensor_aux;
         if (is_grayscale) {
-            uint8_tensor = Tensor::empty(
+            image_tensor_aux = Tensor::empty(
                 TensorShape({static_cast<size_t>(src_height), static_cast<size_t>(src_width)}),
                 Device::CUDA,
                 DataType::UInt8);
         } else {
-            uint8_tensor = Tensor::empty(
+            image_tensor_aux = Tensor::empty(
                 TensorShape({static_cast<size_t>(src_height), static_cast<size_t>(src_width), 3}),
                 Device::CUDA,
-                DataType::UInt8);
+                tensor_datatype);
         }
 
-        void* const gpu_uint8_buffer = uint8_tensor.data_ptr();
-        const size_t decoded_size = static_cast<size_t>(src_width) * src_height * num_channels;
+        void* const gpu_image_buffer = image_tensor_aux.data_ptr();
+        const size_t decoded_size = static_cast<size_t>(src_width) * src_height * num_channels * bytes_per_sample;
 
         nvimgcodecImage_t nv_image;
         nvimgcodecImageInfo_t output_info{};
@@ -927,12 +943,13 @@ namespace lfs::io {
         output_info.num_planes = 1;
         output_info.plane_info[0].height = src_height;
         output_info.plane_info[0].width = src_width;
-        output_info.plane_info[0].row_stride = src_width * num_channels;
+        output_info.plane_info[0].row_stride = src_width * num_channels * bytes_per_sample;
         output_info.plane_info[0].num_channels = num_channels;
-        output_info.plane_info[0].sample_type = NVIMGCODEC_SAMPLE_DATA_TYPE_UINT8;
+        output_info.plane_info[0].sample_type = decode_u16 ? NVIMGCODEC_SAMPLE_DATA_TYPE_UINT16
+                                                           : NVIMGCODEC_SAMPLE_DATA_TYPE_UINT8;
 
         output_info.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
-        output_info.buffer = gpu_uint8_buffer;
+        output_info.buffer = gpu_image_buffer;
         output_info.buffer_size = decoded_size;
         output_info.cuda_stream = static_cast<cudaStream_t>(cuda_stream);
 
@@ -992,13 +1009,30 @@ namespace lfs::io {
             throw std::runtime_error(std::string("Decode failed: ") + status_str);
         }
 
+        // Lanczos reads uint8 or float32; widen uint16 to normalized float first.
+        std::optional<Tensor> u16_as_float;
+        if (decode_u16 && needs_resize) {
+            u16_as_float.emplace(Tensor::empty(
+                TensorShape({static_cast<size_t>(src_height), static_cast<size_t>(src_width),
+                             static_cast<size_t>(num_channels)}),
+                Device::CUDA,
+                DataType::Float32));
+
+            cuda::launch_uint16_hwc_to_float32_hwc(
+                reinterpret_cast<const uint16_t*>(image_tensor_aux.data_ptr()),
+                u16_as_float->ptr<float>(),
+                src_height, src_width, num_channels, static_cast<cudaStream_t>(cuda_stream));
+        }
+
+        const Tensor& resize_input_image = u16_as_float ? *u16_as_float : image_tensor_aux;
+
         Tensor output_tensor;
         if (needs_resize) {
             if (is_grayscale) {
-                output_tensor = lanczos_resize_grayscale(uint8_tensor, target_height, target_width,
+                output_tensor = lanczos_resize_grayscale(resize_input_image, target_height, target_width,
                                                          LANCZOS_KERNEL_SIZE, static_cast<cudaStream_t>(cuda_stream));
             } else {
-                output_tensor = lanczos_resize(uint8_tensor, target_height, target_width,
+                output_tensor = lanczos_resize(resize_input_image, target_height, target_width,
                                                LANCZOS_KERNEL_SIZE, static_cast<cudaStream_t>(cuda_stream));
                 if (output_uint8) {
                     auto output_uint8_tensor = Tensor::empty(output_tensor.shape(), Device::CUDA, DataType::UInt8);
@@ -1014,28 +1048,42 @@ namespace lfs::io {
             }
         } else {
             if (is_grayscale) {
-                const auto shape = uint8_tensor.shape();
+                const auto shape = image_tensor_aux.shape();
                 const size_t H = shape[0], W = shape[1];
                 output_tensor = Tensor::empty(TensorShape({H, W}), Device::CUDA, DataType::Float32);
                 cuda::launch_uint8_hw_to_float32_hw(
-                    reinterpret_cast<const uint8_t*>(uint8_tensor.data_ptr()),
+                    reinterpret_cast<const uint8_t*>(image_tensor_aux.data_ptr()),
                     reinterpret_cast<float*>(output_tensor.data_ptr()),
                     H, W, static_cast<cudaStream_t>(cuda_stream));
             } else {
-                const auto shape = uint8_tensor.shape();
+                const auto shape = image_tensor_aux.shape();
                 const size_t H = shape[0], W = shape[1], C = shape[2];
                 if (output_uint8) {
                     output_tensor = Tensor::empty(TensorShape({C, H, W}), Device::CUDA, DataType::UInt8);
-                    cuda::launch_uint8_hwc_to_uint8_chw(
-                        reinterpret_cast<const uint8_t*>(uint8_tensor.data_ptr()),
-                        reinterpret_cast<uint8_t*>(output_tensor.data_ptr()),
-                        H, W, C, static_cast<cudaStream_t>(cuda_stream));
+                    if (decode_u16) {
+                        cuda::launch_uint16_hwc_to_uint8_chw(
+                            reinterpret_cast<const uint16_t*>(image_tensor_aux.data_ptr()),
+                            reinterpret_cast<uint8_t*>(output_tensor.data_ptr()),
+                            H, W, C, static_cast<cudaStream_t>(cuda_stream));
+                    } else {
+                        cuda::launch_uint8_hwc_to_uint8_chw(
+                            reinterpret_cast<const uint8_t*>(image_tensor_aux.data_ptr()),
+                            reinterpret_cast<uint8_t*>(output_tensor.data_ptr()),
+                            H, W, C, static_cast<cudaStream_t>(cuda_stream));
+                    }
                 } else {
                     output_tensor = Tensor::empty(TensorShape({C, H, W}), Device::CUDA, DataType::Float32);
-                    cuda::launch_uint8_hwc_to_float32_chw(
-                        reinterpret_cast<const uint8_t*>(uint8_tensor.data_ptr()),
-                        reinterpret_cast<float*>(output_tensor.data_ptr()),
-                        H, W, C, static_cast<cudaStream_t>(cuda_stream));
+                    if (decode_u16) {
+                        cuda::launch_uint16_hwc_to_float32_chw(
+                            reinterpret_cast<const uint16_t*>(image_tensor_aux.data_ptr()),
+                            reinterpret_cast<float*>(output_tensor.data_ptr()),
+                            H, W, C, static_cast<cudaStream_t>(cuda_stream));
+                    } else {
+                        cuda::launch_uint8_hwc_to_float32_chw(
+                            reinterpret_cast<const uint8_t*>(image_tensor_aux.data_ptr()),
+                            reinterpret_cast<float*>(output_tensor.data_ptr()),
+                            H, W, C, static_cast<cudaStream_t>(cuda_stream));
+                    }
                 }
             }
         }
@@ -1051,7 +1099,7 @@ namespace lfs::io {
         } else if (const cudaError_t err = cudaDeviceSynchronize(); err != cudaSuccess) {
             throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
         }
-        uint8_tensor = Tensor();
+        image_tensor_aux = Tensor();
 
         return output_tensor;
     }
@@ -1523,6 +1571,134 @@ namespace lfs::io {
             throw std::runtime_error("JPEG encoding failed: " +
                                      std::string(processing_status_to_string(encode_status)));
         }
+        return output_buffer;
+    }
+
+    std::vector<uint8_t> NvCodecImageLoader::encode_to_jpeg2k(
+        const lfs::core::Tensor& image,
+        void* cuda_stream) {
+
+        using namespace lfs::core;
+
+        if (!impl_->encoder) {
+            throw std::runtime_error("JPEG2000 encoder not available");
+        }
+
+        std::lock_guard<std::mutex> lock(impl_->encoder_mutex);
+
+        const auto& shape = image.shape();
+        if (shape.rank() != 3) {
+            throw std::runtime_error("Expected 3D tensor, got " + std::to_string(shape.rank()) + "D");
+        }
+
+        if (image.dtype() != DataType::Float32 || image.device() != Device::CUDA) {
+            throw std::runtime_error("encode_to_jpeg2k expects a Float32 CUDA tensor");
+        }
+
+        const bool is_hwc = (shape[2] == 3);
+        const bool is_chw = !is_hwc && (shape[0] == 3 && shape[1] > 3 && shape[2] > 3);
+        const uint32_t height = static_cast<uint32_t>(is_chw ? shape[1] : shape[0]);
+        const uint32_t width = static_cast<uint32_t>(is_chw ? shape[2] : shape[1]);
+        const uint32_t channels = 3;
+
+        // Scale float [0,1] -> uint16 [0, 65535] in HWC layout.
+        // Float16 is only a 2-byte container for the uint16 samples (no UInt16 dtype).
+        const Tensor hwc_float = is_chw ? image.permute({1, 2, 0}).contiguous()
+                                        : image.contiguous();
+        Tensor hwc_uint16 = Tensor::empty(
+            TensorShape({height, width, channels}), Device::CUDA, DataType::Float16);
+        cuda::launch_float32_hwc_to_uint16_hwc(
+            hwc_float.ptr<float>(),
+            reinterpret_cast<uint16_t*>(hwc_uint16.data_ptr()),
+            height, width, channels, static_cast<cudaStream_t>(cuda_stream));
+
+        nvimgcodecImageInfo_t image_info{};
+        image_info.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
+        image_info.struct_size = sizeof(nvimgcodecImageInfo_t);
+        image_info.sample_format = NVIMGCODEC_SAMPLEFORMAT_I_RGB;
+        image_info.color_spec = NVIMGCODEC_COLORSPEC_SRGB;
+        image_info.chroma_subsampling = NVIMGCODEC_SAMPLING_444;
+        image_info.num_planes = 1;
+        image_info.plane_info[0].height = height;
+        image_info.plane_info[0].width = width;
+        image_info.plane_info[0].num_channels = 3;
+        image_info.plane_info[0].row_stride = static_cast<size_t>(width) * 3 * sizeof(uint16_t);
+        image_info.plane_info[0].sample_type = NVIMGCODEC_SAMPLE_DATA_TYPE_UINT16;
+        image_info.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
+        image_info.buffer = hwc_uint16.data_ptr();
+        image_info.buffer_size = static_cast<size_t>(height) * width * 3 * sizeof(uint16_t);
+        image_info.cuda_stream = static_cast<cudaStream_t>(cuda_stream);
+
+        nvimgcodecImage_t nv_image;
+        auto status = nvimgcodecImageCreate(impl_->instance, &nv_image, &image_info);
+        if (status != NVIMGCODEC_STATUS_SUCCESS) {
+            throw std::runtime_error("Failed to create image for encoding: " +
+                                     std::string(nvimgcodec_status_to_string(status)));
+        }
+
+        std::vector<uint8_t> output_buffer;
+
+        nvimgcodecImageInfo_t output_info{};
+        output_info.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
+        output_info.struct_size = sizeof(nvimgcodecImageInfo_t);
+        std::snprintf(output_info.codec_name, sizeof(output_info.codec_name), "%s", "jpeg2k");
+
+        nvimgcodecCodeStream_t code_stream;
+        status = nvimgcodecCodeStreamCreateToHostMem(
+            impl_->instance, &code_stream, &output_buffer,
+            [](void* ctx, size_t req_size) -> unsigned char* {
+                auto* vec = static_cast<std::vector<uint8_t>*>(ctx);
+                vec->resize(req_size);
+                return vec->data();
+            },
+            &output_info);
+
+        if (status != NVIMGCODEC_STATUS_SUCCESS) {
+            nvimgcodecImageDestroy(nv_image);
+            throw std::runtime_error("Failed to create output code stream for JPEG2000");
+        }
+
+        // Lossless JPEG 2000: reversible DWT 5/3
+        nvimgcodecJpeg2kEncodeParams_t j2k_params{};
+        j2k_params.struct_type = NVIMGCODEC_STRUCTURE_TYPE_JPEG2K_ENCODE_PARAMS;
+        j2k_params.struct_size = sizeof(nvimgcodecJpeg2kEncodeParams_t);
+        j2k_params.struct_next = nullptr;
+        j2k_params.num_resolutions = 6;
+        j2k_params.code_block_w = 64;
+        j2k_params.code_block_h = 64;
+        j2k_params.prog_order = NVIMGCODEC_JPEG2K_PROG_ORDER_RPCL;
+
+        nvimgcodecEncodeParams_t encode_params{};
+        encode_params.struct_type = NVIMGCODEC_STRUCTURE_TYPE_ENCODE_PARAMS;
+        encode_params.struct_size = sizeof(nvimgcodecEncodeParams_t);
+        encode_params.struct_next = &j2k_params;
+        encode_params.quality_value = 0.0f; // unused in lossless mode
+        encode_params.quality_type = NVIMGCODEC_QUALITY_TYPE_LOSSLESS;
+
+        nvimgcodecFuture_t encode_future;
+        status = nvimgcodecEncoderEncode(
+            impl_->encoder, &nv_image, &code_stream, 1, &encode_params, &encode_future);
+
+        if (status != NVIMGCODEC_STATUS_SUCCESS) {
+            nvimgcodecCodeStreamDestroy(code_stream);
+            nvimgcodecImageDestroy(nv_image);
+            throw std::runtime_error("JPEG2000 encode launch failed");
+        }
+
+        nvimgcodecFutureWaitForAll(encode_future);
+
+        nvimgcodecProcessingStatus_t encode_status;
+        size_t status_size;
+        nvimgcodecFutureGetProcessingStatus(encode_future, &encode_status, &status_size);
+        nvimgcodecFutureDestroy(encode_future);
+        nvimgcodecCodeStreamDestroy(code_stream);
+        nvimgcodecImageDestroy(nv_image);
+
+        if (encode_status != NVIMGCODEC_PROCESSING_STATUS_SUCCESS) {
+            throw std::runtime_error("JPEG2000 encoding failed: " +
+                                     std::string(processing_status_to_string(encode_status)));
+        }
+
         return output_buffer;
     }
 

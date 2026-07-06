@@ -30,6 +30,11 @@ jobs:
       VCPKG_BUILD_TYPE: release
       VCPKG_FORCE_SYSTEM_BINARIES: 1
       CMAKE_MAKE_PROGRAM: /usr/bin/ninja
+      CUDA_PATH: /usr/local/cuda
+      CUDNN_ROOT_DIR: /usr/local/cuda
+      # CI has a CUDA toolkit but no visible GPU; pin ORT's CUDA build to the
+      # portable minimum instead of using CMAKE_CUDA_ARCHITECTURES=native.
+      LFS_ORT_CUDA_ARCHS: "75"
 
     steps:
       - name: Install Git
@@ -82,6 +87,39 @@ jobs:
           update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100 \
                               --slave /usr/bin/g++ g++ /usr/bin/g++-14
 
+      - name: Ensure cuDNN is available
+        shell: bash
+        run: |
+          set -euo pipefail
+          # /usr/local/cuda and its lib64 are symlinks, so find must follow them (-L).
+          if [ -f /usr/local/cuda/include/cudnn.h ] && \
+             find -L /usr/local/cuda /usr/lib /usr/lib/x86_64-linux-gnu -name 'libcudnn.so*' -print -quit | grep -q .; then
+            echo "Using preinstalled cuDNN:"
+            find -L /usr/local/cuda /usr/lib /usr/lib/x86_64-linux-gnu -name 'libcudnn.so*' -print | head
+            exit 0
+          fi
+
+          echo "cuDNN was not provided by the runner image; installing cuDNN 8.9.7 for CUDA 12 from NVIDIA redist."
+          CUDNN_URL="https://developer.download.nvidia.com/compute/cudnn/redist/cudnn/linux-x86_64/cudnn-linux-x86_64-8.9.7.29_cuda12-archive.tar.xz"
+          mkdir -p /tmp/cudnn-redist
+          curl -L --retry 5 --retry-delay 10 "$CUDNN_URL" -o /tmp/cudnn.tar.xz
+          # We link cuDNN dynamically, so extract only headers and shared libs; the
+          # static archives are multi-GB and unused. Drop the tarball and staging tree
+          # as soon as they are consumed to keep peak disk usage down.
+          tar -xf /tmp/cudnn.tar.xz --strip-components=1 -C /tmp/cudnn-redist --exclude='*.a'
+          rm -f /tmp/cudnn.tar.xz
+          cp -a /tmp/cudnn-redist/include/. /usr/local/cuda/include/
+          cp -a /tmp/cudnn-redist/lib/. /usr/local/cuda/lib64/
+          rm -rf /tmp/cudnn-redist
+          ldconfig
+          test -f /usr/local/cuda/include/cudnn.h
+          if ! find -L /usr/local/cuda/lib64 -name 'libcudnn.so*' -print -quit | grep -q .; then
+            echo "cuDNN library was not found after setup." >&2
+            exit 1
+          fi
+          find -L /usr/local/cuda/lib64 -name 'libcudnn.so*' -print | head
+          df -h
+
       - name: Cache vcpkg tool
         id: cache-vcpkg-tool
         uses: actions/cache@v4
@@ -115,8 +153,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /github/home/.cache/vcpkg/archives
-          key: vcpkg-pkgs-${{ runner.os }}-linux-gui-v1-${{ hashFiles('**/vcpkg.json') }}
-          restore-keys: vcpkg-pkgs-${{ runner.os }}-
+          key: vcpkg-pkgs-${{ runner.os }}-linux-gui-ort-sm75-cudnn8-v1-${{ hashFiles('**/vcpkg.json', 'vcpkg-configuration.json') }}
+          restore-keys: vcpkg-pkgs-${{ runner.os }}-linux-gui-ort-sm75-cudnn8-
 
       - name: Configure
         run: |

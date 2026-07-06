@@ -171,6 +171,7 @@ namespace {
                 "\nSUBCOMMANDS:\n"
                 "convert -- Convert between .ply, .sog, .spz, .usd/.usda/.usdc, .html\n"
                 "mesh2splat -- Convert a mesh file to Gaussian splats\n"
+                "preprocess -- Generate depth and/or normal maps for an image dataset\n"
                 "plugin -- Manage plugins (create, check, list)\n"
                 "\n"
                 "Run '<subcommand> --help' for details.\n"
@@ -181,6 +182,7 @@ namespace {
                 "lichtfeld-studio -v model.ply\n"
                 "lichtfeld-studio convert in.ply out.spz\n"
                 "lichtfeld-studio mesh2splat model.obj -o model_splat.ply\n"
+                "lichtfeld-studio preprocess ./data/scene --mode both\n"
                 "lichtfeld-studio plugin create my_plugin\n"
                 "\n"
                 "ENVIRONMENT:\n"
@@ -260,6 +262,7 @@ namespace {
             ::args::ValueFlag<int> min_track_length(dataset_group, "min_track_length", "Minimum point track length for COLMAP sparse point import; 0 disables filtering", {"min-track-length"});
             ::args::Flag no_cpu_cache(dataset_group, "no_cpu_cache", "Disable CPU memory caching (default: enabled)", {"no-cpu-cache"});
             ::args::Flag no_fs_cache(dataset_group, "no_fs_cache", "Disable filesystem caching (default: enabled)", {"no-fs-cache"});
+            ::args::Flag use_16bit(dataset_group, "use_16bit", "Train with 16-bit color images (HDR); caches losslessly as JPEG 2000 (default: 8-bit)", {"use-16bit"});
             ::args::Flag undistort(dataset_group, "undistort", "Undistort images on-the-fly before training", {"undistort"});
             ::args::MapFlag<std::string, std::string> centralize(dataset_group, "mode",
                                                                  "Centralize dataset origin: off, by_pointcloud, by_cameras (default: off)",
@@ -693,6 +696,7 @@ namespace {
                                         min_track_length_val = cli_option_present({"--min-track-length"}) ? std::optional<int>(::args::get(min_track_length)) : std::optional<int>(),
                                         no_cpu_cache_flag = static_cast<bool>(no_cpu_cache),
                                         no_fs_cache_flag = static_cast<bool>(no_fs_cache),
+                                        use_16bit_flag = static_cast<bool>(use_16bit),
                                         tcp_server_connection_port_val = tcp_server_connection_port ? std::optional<int>(::args::get(tcp_server_connection_port)) : std::optional<int>(),
                                         tcp_broadcast_connection_port_val = tcp_broadcast_connection_port ? std::optional<int>(::args::get(tcp_broadcast_connection_port)) : std::optional<int>(),
                                         tcp_connection_flag = bool(tcp_connection),
@@ -776,6 +780,7 @@ namespace {
                     ds.loading_params.use_cpu_memory = false;
                 if (no_fs_cache_flag)
                     ds.loading_params.use_fs_cache = false;
+                setFlag(use_16bit_flag, ds.loading_params.use_16bit_color);
                 setVal(max_cap_val, opt.max_cap);
                 setVal(tcp_server_connection_port_val, svs.tcp_server_connection_port);
                 setVal(tcp_broadcast_connection_port_val, svs.tcp_broadcast_connection_port);
@@ -897,7 +902,10 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
     auto params = std::make_unique<lfs::core::param::TrainingParameters>();
     auto args = convert_args(argc, argv);
 
-    if (args.size() >= 2 && !args[1].starts_with('-') && args[1] != "convert" && args[1] != "plugin") {
+    if (args.size() >= 2 && !args[1].starts_with('-') &&
+        args[1] != "convert" && args[1] != "mesh2splat" &&
+        args[1] != "mesh-to-splat" && args[1] != "preprocess" &&
+        args[1] != "plugin") {
         const std::filesystem::path p = lfs::core::utf8_to_path(args[1]);
         std::error_code ec;
         if (std::filesystem::exists(p, ec))
@@ -981,6 +989,24 @@ namespace {
         "  Input:  .obj, .fbx, .gltf, .glb, .stl, .dae, .3ds, .ply\n"
         "  Output: .ply, .sog, .spz, .usd, .usda, .usdc, .html, .rad\n"
         "  Multiple output formats: pass a comma-separated list to --format\n"
+        "\n";
+
+    constexpr const char* PREPROCESS_HELP_HEADER = "LichtFeld Studio - Generate dataset depth and normal maps with MoGe-2 ONNX\n";
+    constexpr const char* PREPROCESS_HELP_FOOTER =
+        "\n"
+        "EXAMPLES:\n"
+        "  LichtFeld-Studio preprocess ./data/scene\n"
+        "  LichtFeld-Studio preprocess ./data/scene --mode both --overwrite\n"
+        "  LichtFeld-Studio preprocess ./data/scene --png-compression 0 --threads 8\n"
+        "  LichtFeld-Studio preprocess --download-only\n"
+        "\n"
+        "OUTPUTS:\n"
+        "  depth/<relative-image>.png   8-bit grayscale depth map\n"
+        "  normals/<relative-image>.png RGB normal map encoded from [-1,1] to [0,255]\n"
+        "  Existing outputs are skipped by default for resumable runs.\n"
+        "  Use --overwrite to recreate existing outputs.\n"
+        "  PNG compression defaults to level 1; use 0 for fastest/largest files.\n"
+        "  The auto-downloaded default model is SHA-256 verified before use.\n"
         "\n";
 
     std::optional<lfs::core::param::OutputFormat> parseFormat(const std::string& str) {
@@ -1228,6 +1254,105 @@ namespace {
 
         return core_args::Mesh2SplatMode{params};
     }
+
+    std::expected<lfs::core::args::ParsedArgs, std::string> parsePreprocessArgs(const int argc, const char* const argv[]) {
+        namespace core_args = lfs::core::args;
+        namespace param = lfs::core::param;
+
+        ::args::ArgumentParser parser(PREPROCESS_HELP_HEADER, PREPROCESS_HELP_FOOTER);
+        ::args::HelpFlag help(parser, "help", "Display help menu", {'h', "help"});
+        ::args::Positional<std::string> input(parser, "dataset", "Dataset root containing the images folder");
+        ::args::MapFlag<std::string, param::PreprocessOutputMode> mode(parser, "mode",
+                                                                       "Output mode: depth, normals, both (default: both)",
+                                                                       {"mode"},
+                                                                       std::unordered_map<std::string, param::PreprocessOutputMode>{
+                                                                           {"depth", param::PreprocessOutputMode::Depth},
+                                                                           {"normal", param::PreprocessOutputMode::Normals},
+                                                                           {"normals", param::PreprocessOutputMode::Normals},
+                                                                           {"both", param::PreprocessOutputMode::Both}});
+        ::args::ValueFlag<std::string> images(parser, "folder", "Images subfolder (default: images)", {"images"});
+        ::args::ValueFlag<std::string> model(parser, "path", "Local ONNX model path; skips default cache download", {"model"});
+        ::args::ValueFlag<int> max_side(parser, "pixels", "Inference longest side, rounded to /14 (default: 518; 0 disables resize)", {"max-side"});
+        ::args::ValueFlag<std::int64_t> num_tokens(parser, "tokens", "MoGe dynamic-token input when present (default: 1800)", {"num-tokens"});
+        ::args::ValueFlag<int> threads(parser, "count", "ONNX Runtime CPU threads (default: all available cores)", {"threads"});
+        ::args::ValueFlag<int> png_compression(parser, "level", "PNG compression level 0-9 (default: 1; 0 is fastest/largest)", {"png-compression"});
+        ::args::Flag cpu(parser, "cpu", "Force CPU inference even if CUDA is available", {"cpu"});
+        ::args::Flag overwrite(parser, "overwrite", "Overwrite existing depth/normal files", {'y', "overwrite"});
+        ::args::Flag no_download(parser, "no-download", "Fail if the default model is not already cached", {"no-download"});
+        ::args::Flag download_only(parser, "download-only", "Download/verify the default model and exit", {"download-only"});
+
+        std::vector<std::string> args_vec(argv + 1, argv + argc);
+        args_vec[0] = std::string(argv[0]) + " preprocess";
+        parser.Prog(args_vec[0]);
+
+        try {
+            parser.ParseArgs(std::vector<std::string>(args_vec.begin() + 1, args_vec.end()));
+        } catch (const ::args::Help&) {
+            std::print("{}", parser.Help());
+            return core_args::HelpMode{};
+        } catch (const ::args::ParseError& e) {
+            return std::unexpected(std::format("{}\n\n{}", e.what(), parser.Help()));
+        }
+
+        param::PreprocessParameters params;
+        if (input) {
+            params.dataset_path = lfs::core::utf8_to_path(::args::get(input));
+        }
+        if (images) {
+            params.images_folder = ::args::get(images);
+        }
+        if (model) {
+            params.model_path = lfs::core::utf8_to_path(::args::get(model));
+        }
+        if (mode) {
+            params.mode = ::args::get(mode);
+        }
+        if (max_side) {
+            params.max_side = ::args::get(max_side);
+        }
+        if (num_tokens) {
+            params.num_tokens = ::args::get(num_tokens);
+        }
+        if (threads) {
+            params.threads = ::args::get(threads);
+        }
+        if (png_compression) {
+            params.png_compression = ::args::get(png_compression);
+        }
+        params.force_cpu = cpu;
+        params.overwrite = overwrite;
+        params.no_download = no_download;
+        params.download_only = download_only;
+
+        if (!params.download_only) {
+            if (params.dataset_path.empty()) {
+                return std::unexpected(std::format("Missing dataset path\n\n{}", parser.Help()));
+            }
+            if (!std::filesystem::exists(params.dataset_path)) {
+                return std::unexpected(std::format("Dataset not found: {}", lfs::core::path_to_utf8(params.dataset_path)));
+            }
+            if (!std::filesystem::is_directory(params.dataset_path)) {
+                return std::unexpected(std::format("Expected dataset directory: {}", lfs::core::path_to_utf8(params.dataset_path)));
+            }
+        }
+        if (params.max_side < 0) {
+            return std::unexpected("--max-side must be 0 or greater");
+        }
+        if (params.num_tokens <= 0) {
+            return std::unexpected("--num-tokens must be greater than 0");
+        }
+        if (params.threads < 0) {
+            return std::unexpected("--threads must be 0 or greater");
+        }
+        if (params.png_compression < 0 || params.png_compression > 9) {
+            return std::unexpected("--png-compression must be between 0 and 9");
+        }
+        if (!params.model_path.empty() && !std::filesystem::exists(params.model_path)) {
+            return std::unexpected(std::format("Model not found: {}", lfs::core::path_to_utf8(params.model_path)));
+        }
+
+        return core_args::PreprocessMode{params};
+    }
 } // namespace
 
 std::expected<lfs::core::args::ParsedArgs, std::string>
@@ -1247,6 +1372,8 @@ lfs::core::args::parse_args(const int argc, const char* const argv[]) {
             return parseConvertArgs(argc, argv);
         } else if (arg1 == "mesh2splat" || arg1 == "mesh-to-splat") {
             return parseMesh2SplatArgs(argc, argv);
+        } else if (arg1 == "preprocess") {
+            return parsePreprocessArgs(argc, argv);
         } else if (arg1 == "plugin") {
             if (argc < 3) {
                 return std::unexpected("Usage: LichtFeld-Studio plugin <create|check|list> [name]");

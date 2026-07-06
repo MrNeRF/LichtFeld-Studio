@@ -13,6 +13,8 @@ set(RENDERING_TENSOR_SOURCES
         selection_ops.cu
         raster_rendering_engine.cpp
         cuda_interaction_kernels.cu
+        export_post_process.cpp
+        export_post_process.cu
         point_cloud_raster.cu
         mesh2splat.cpp
         screen_overlay_renderer.cpp

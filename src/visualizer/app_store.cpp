@@ -30,6 +30,7 @@ namespace lfs::vis {
           active_submode(store_, Field::ActiveSubmode, "active_submode", std::string{}),
           transform_space(store_, Field::TransformSpaceValue, "transform_space", 0),
           pivot_mode(store_, Field::PivotModeValue, "pivot_mode", 0),
+          multi_transform_mode(store_, Field::MultiTransformModeValue, "multi_transform_mode", 0),
           import_overlay_state(store_, Field::ImportOverlayStateValue, "import_overlay_state", ImportOverlayState{}),
           video_export_overlay_state(store_,
                                      Field::VideoExportOverlayStateValue,

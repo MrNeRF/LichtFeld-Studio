@@ -433,7 +433,9 @@ def focus_selection() -> bool:
     """
 
 def get_camera_navigation_mode() -> str:
-    """Get the active camera navigation mode ('orbit', 'trackball', or 'fpv')"""
+    """
+    Get the active camera navigation mode ('orbit', 'trackball', 'fpv', or 'drone')
+    """
 
 def set_camera_navigation_mode(mode: str) -> None:
     """Set the active camera navigation mode"""
@@ -2199,6 +2201,13 @@ class DatasetParams:
 
     @use_fs_cache.setter
     def use_fs_cache(self, arg: bool, /) -> None: ...
+
+    @property
+    def use_16bit_color(self) -> bool:
+        """Train with 16-bit color images (HDR); caches losslessly as JPEG 2000"""
+
+    @use_16bit_color.setter
+    def use_16bit_color(self, arg: bool, /) -> None: ...
 
     @property
     def centralize_dataset(self) -> str:

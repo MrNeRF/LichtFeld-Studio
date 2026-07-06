@@ -564,22 +564,20 @@ namespace lfs::vis {
             loaded_path = params.map_path;
         }
 
-        void record(VkCommandBuffer cb, VkExtent2D extent, const VulkanEnvironmentParams& params) {
+        void record(VkCommandBuffer cb, VkRect2D rect, const VulkanEnvironmentParams& params) {
             if (!params.enabled || pipeline == VK_NULL_HANDLE || image_view == VK_NULL_HANDLE ||
                 screen_quad_buffer == VK_NULL_HANDLE) {
                 return;
             }
             VkViewport vp{};
-            vp.x = 0.0f;
-            vp.y = 0.0f;
-            vp.width = static_cast<float>(extent.width);
-            vp.height = static_cast<float>(extent.height);
+            vp.x = static_cast<float>(rect.offset.x);
+            vp.y = static_cast<float>(rect.offset.y);
+            vp.width = static_cast<float>(rect.extent.width);
+            vp.height = static_cast<float>(rect.extent.height);
             vp.minDepth = 0.0f;
             vp.maxDepth = 1.0f;
-            VkRect2D sc{};
-            sc.extent = extent;
             vkCmdSetViewport(cb, 0, 1, &vp);
-            vkCmdSetScissor(cb, 0, 1, &sc);
+            vkCmdSetScissor(cb, 0, 1, &rect);
 
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout,
@@ -628,10 +626,10 @@ namespace lfs::vis {
             impl_->prepare(params);
     }
 
-    void VulkanEnvironmentPass::record(VkCommandBuffer cb, VkExtent2D extent,
+    void VulkanEnvironmentPass::record(VkCommandBuffer cb, VkRect2D rect,
                                        const VulkanEnvironmentParams& params) {
         if (impl_)
-            impl_->record(cb, extent, params);
+            impl_->record(cb, rect, params);
     }
 
     void VulkanEnvironmentPass::shutdown() {

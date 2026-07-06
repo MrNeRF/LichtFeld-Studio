@@ -89,6 +89,10 @@ namespace lfs::python {
         GetTransformSpaceCallback g_get_transform_space_cb = nullptr;
         SetTransformSpaceCallback g_set_transform_space_cb = nullptr;
 
+        // Multi-transform mode callbacks
+        GetMultiTransformModeCallback g_get_multi_transform_mode_cb = nullptr;
+        SetMultiTransformModeCallback g_set_multi_transform_mode_cb = nullptr;
+
         // Asset Manager save callback
         SaveAssetCallback g_save_asset_cb = nullptr;
 
@@ -207,6 +211,9 @@ namespace lfs::python {
         }
         if (g_get_transform_space_cb) {
             g_frame_context.transform_space = g_get_transform_space_cb();
+        }
+        if (g_get_multi_transform_mode_cb) {
+            g_frame_context.multi_transform_mode = g_get_multi_transform_mode_cb();
         }
         g_frame_context.selection_submode = g_selection_submode.load();
     }
@@ -551,6 +558,20 @@ namespace lfs::python {
     void set_transform_space(int space) {
         if (g_set_transform_space_cb)
             g_set_transform_space_cb(space);
+    }
+
+    void set_multi_transform_mode_callbacks(GetMultiTransformModeCallback get_cb, SetMultiTransformModeCallback set_cb) {
+        g_get_multi_transform_mode_cb = get_cb;
+        g_set_multi_transform_mode_cb = set_cb;
+    }
+
+    int get_multi_transform_mode() {
+        return g_get_multi_transform_mode_cb ? g_get_multi_transform_mode_cb() : 0;
+    }
+
+    void set_multi_transform_mode(int mode) {
+        if (g_set_multi_transform_mode_cb)
+            g_set_multi_transform_mode_cb(mode);
     }
 
     void set_save_asset_callback(SaveAssetCallback save_cb) {

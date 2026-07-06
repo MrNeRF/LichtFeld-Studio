@@ -45,6 +45,7 @@ def test_runtime_state_exposes_panel_reactive_signals():
     assert isinstance(RuntimeState.active_submode, StateSignal)
     assert isinstance(RuntimeState.transform_space, StateSignal)
     assert isinstance(RuntimeState.pivot_mode, StateSignal)
+    assert isinstance(RuntimeState.multi_transform_mode, StateSignal)
     assert isinstance(RuntimeState.import_overlay_state, StateSignal)
     assert isinstance(RuntimeState.video_export_overlay_state, StateSignal)
     assert isinstance(RuntimeState.export_progress_state, StateSignal)

@@ -1592,8 +1592,10 @@ namespace lfs::vis {
                                    const VulkanViewportPassParams& params) {
             assert(params.environment.enabled && environment_pass.hasTexture());
             environment_pass.record(command_buffer,
-                                    {static_cast<std::uint32_t>(rect.width),
-                                     static_cast<std::uint32_t>(rect.height)},
+                                    VkRect2D{
+                                        .offset = {rect.x, rect.y},
+                                        .extent = {static_cast<std::uint32_t>(rect.width),
+                                                   static_cast<std::uint32_t>(rect.height)}},
                                     params.environment);
         }
 

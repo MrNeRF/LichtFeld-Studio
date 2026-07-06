@@ -25,6 +25,8 @@ using cudaStream_t = CUstream_st*;
 
 namespace lfs::io {
 
+    class NvCodecImageLoader;
+
     namespace config {
         constexpr size_t DEFAULT_BATCH_SIZE = 8;
         constexpr size_t DEFAULT_PREFETCH_COUNT = 8;
@@ -51,6 +53,7 @@ namespace lfs::io {
         int cache_jpeg_quality = config::DEFAULT_JPEG_QUALITY;
         std::chrono::milliseconds batch_collect_timeout{config::DEFAULT_BATCH_TIMEOUT_MS};
         std::chrono::milliseconds output_wait_timeout{config::DEFAULT_OUTPUT_TIMEOUT_MS};
+        bool use_16bit_color = false;
     };
 
     /**
@@ -292,7 +295,14 @@ namespace lfs::io {
         void save_to_fs_cache(const std::string& cache_key, const std::vector<uint8_t>& data);
         std::shared_ptr<std::vector<uint8_t>> load_cached_jpeg_blob(const std::string& cache_key);
         std::optional<CachedJpegHit> find_cached_jpeg(const std::string& cache_key,
-                                                      const std::string& base_key);
+                                                      const std::string& base_key,
+                                                      const std::filesystem::path& source_path);
+        lfs::core::Tensor decode_file_on_cpu(const std::filesystem::path& path,
+                                             const LoadParams& params) const;
+        void write_derived_cache(NvCodecImageLoader& nvcodec,
+                                 const lfs::core::Tensor& tensor,
+                                 const std::string& cache_key,
+                                 void* cuda_stream);
 
         std::shared_ptr<std::vector<uint8_t>> get_from_jpeg_cache(const std::string& cache_key);
         void put_in_jpeg_cache(const std::string& cache_key, std::shared_ptr<std::vector<uint8_t>> data);
@@ -344,6 +354,10 @@ namespace lfs::io {
         std::filesystem::path fs_cache_folder_;
         std::mutex fs_cache_mutex_;
         std::set<std::string> files_being_written_;
+
+        // Cleared on the first failed JPEG 2000 encode (e.g. nvjpeg2k extension not
+        // built) so 16-bit runs degrade to uncached decoding with a single error.
+        std::atomic<bool> jpeg2k_cache_available_{true};
 
         mutable std::mutex stats_mutex_;
         CacheStats stats_;

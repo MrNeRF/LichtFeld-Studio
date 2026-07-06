@@ -223,6 +223,7 @@ namespace lfs::training {
         bool hasPPISPController() const { return ppisp_controller_pool_ != nullptr && params_.optimization.ppisp_use_controller; }
 
         PPISPControllerPool* getPPISPControllerPool() const { return ppisp_controller_pool_.get(); }
+        PPISP* getPPISP() const { return ppisp_.get(); }
         std::unique_ptr<PPISP> takePPISP() { return std::move(ppisp_); }
         std::unique_ptr<PPISPControllerPool> takePPISPControllerPool() { return std::move(ppisp_controller_pool_); }
 

@@ -2478,6 +2478,12 @@ def get_transform_space() -> int:
 def set_transform_space(space: int) -> None:
     """Set transform space (0=Local, 1=World)"""
 
+def get_multi_transform_mode() -> int:
+    """Get multi-transform mode (0=Group, 1=Individual)"""
+
+def set_multi_transform_mode(mode: int) -> None:
+    """Set multi-transform mode (0=Group, 1=Individual)"""
+
 def request_thumbnail(video_id: str) -> None:
     """Request download of a YouTube thumbnail for the given video ID"""
 

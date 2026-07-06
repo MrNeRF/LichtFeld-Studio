@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/editor_context.hpp"
+#include "core/export.hpp"
 #include "core/scene.hpp"
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -55,6 +56,11 @@ namespace lfs::vis::gui {
 
     namespace gizmo_ops {
 
+        struct LFS_VIS_API NodeLocalTransformResult {
+            std::string name;
+            glm::mat4 local_transform{1.0f};
+        };
+
         // Matrix decomposition helpers
         glm::mat3 extractRotation(const glm::mat4& m);
         glm::vec3 extractScale(const glm::mat4& m);
@@ -62,6 +68,31 @@ namespace lfs::vis::gui {
         void setNodeVisualizerWorldTransform(core::Scene& scene,
                                              const std::string& name,
                                              const glm::mat4& visualizer_world_transform);
+
+        // Multi-node scene graph gizmos operate on selected top-level nodes only.
+        // If both a parent and one of its descendants are selected, transforming
+        // the parent already carries the child, so the descendant is omitted.
+        LFS_VIS_API std::vector<std::string> topLevelTransformTargets(
+            const core::Scene& scene,
+            const std::vector<std::string>& target_names);
+
+        LFS_VIS_API std::vector<NodeLocalTransformResult> computeNodeSharedSelectionLocalTransforms(
+            const core::Scene& scene,
+            const std::vector<std::string>& target_names,
+            const std::vector<glm::mat4>& original_visualizer_world_transforms,
+            const glm::mat4& visualizer_world_delta);
+
+        LFS_VIS_API std::vector<NodeLocalTransformResult> computeNodeIndividualLocalTransforms(
+            const core::Scene& scene,
+            const std::vector<std::string>& target_names,
+            const std::vector<glm::mat4>& original_visualizer_world_transforms,
+            const glm::mat4& local_visualizer_delta);
+
+        LFS_VIS_API bool computeCombinedVisualizerWorldBounds(
+            const core::Scene& scene,
+            const std::vector<std::string>& target_names,
+            glm::vec3& out_min,
+            glm::vec3& out_max);
 
         // Compute gizmo display matrix for the custom transform gizmos
         glm::mat4 computeGizmoMatrix(

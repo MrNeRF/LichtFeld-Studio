@@ -2422,15 +2422,10 @@ namespace lfs::core {
                 const auto* src_for_model = getNodeById(src_id);
                 if (src_for_model && src_for_model->model) {
                     const auto& model = *src_for_model->model;
-                    auto cloned = std::make_unique<lfs::core::SplatData>(
-                        model.get_max_sh_degree(),
-                        model.means_raw().clone(), model.sh0_raw().clone(),
-                        model.shN_raw().is_valid() ? model.shN_raw().clone() : lfs::core::Tensor{},
-                        model.scaling_raw().clone(), model.rotation_raw().clone(), model.opacity_raw().clone(),
-                        model.get_scene_scale(),
-                        lfs::core::SplatData::ShNLayout::Swizzled);
-                    cloned->set_active_sh_degree(model.get_active_sh_degree());
-                    new_id = addSplat(new_name, std::move(cloned), parent_id);
+                    auto cloned = mergeSplatsWithTransforms({{&model, glm::mat4{1.0f}}}, MergeStorageMode::Clone);
+                    if (cloned) {
+                        new_id = addSplat(new_name, std::move(cloned), parent_id);
+                    }
                 }
             }
 
@@ -2439,6 +2434,10 @@ namespace lfs::core {
                 new_node->visible = src_visible;
                 new_node->locked = src_locked;
                 new_node->transform_dirty = true;
+            }
+
+            if (new_id == NULL_NODE) {
+                return NULL_NODE;
             }
 
             for (const NodeId child_id : src_children) {
@@ -2450,9 +2449,13 @@ namespace lfs::core {
 
         const NodeId src_id = src_node->id;
         const NodeId src_parent_id = src_node->parent_id;
-        const std::string result_name = generate_unique_name(src_node->name);
+        const NodeId result_id = duplicate_recursive(src_id, src_parent_id);
+        if (result_id == NULL_NODE) {
+            return "";
+        }
 
-        duplicate_recursive(src_id, src_parent_id);
+        const auto* result_node = getNodeById(result_id);
+        const std::string result_name = result_node ? result_node->name : "";
 
         notifyMutation(MutationType::NODE_ADDED);
         LOG_DEBUG("Duplicated node '{}' as '{}'", name, result_name);

@@ -58,6 +58,12 @@ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND 
 | [NVIDIA nvImageCodec](https://github.com/NVIDIA/nvImageCodec) | GPU-accelerated image encoding/decoding | Apache-2.0 |
 | [Intel TBB](https://github.com/oneapi-src/oneTBB) | Threading Building Blocks | Apache-2.0 |
 
+## ML Inference & Models
+| Project | Description | License |
+|---------|-------------|---------|
+| [ONNX Runtime](https://github.com/microsoft/onnxruntime) | Cross-platform ML inference engine (preprocess CLI) | MIT |
+| [MoGe-2](https://github.com/microsoft/MoGe) | Monocular geometry estimation, depth/normal maps. Code and [model weights](https://huggingface.co/Ruicheng/moge-2-vitb-normal) © Microsoft, MIT; DINOv2 backbone components © Meta AI, Apache-2.0. Model downloaded at first use of `preprocess`, redistributed with attribution via GitHub release assets | MIT / Apache-2.0 |
+
 ## Video Encoding
 | Project | Description | License |
 |---------|-------------|---------|

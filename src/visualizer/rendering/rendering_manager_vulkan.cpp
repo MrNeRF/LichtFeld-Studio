@@ -23,6 +23,7 @@
 #include <cmath>
 #include <cstdint>
 #include <expected>
+#include <filesystem>
 #include <format>
 #include <optional>
 #include <shared_mutex>
@@ -360,6 +361,19 @@ namespace lfs::vis {
                  static_cast<std::size_t>(width)},
                 lfs::core::Device::CPU);
             return std::make_shared<lfs::core::Tensor>(std::move(tensor));
+        }
+
+        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> makeViewportCaptureImageHwc(
+            lfs::core::Tensor image) {
+            if (!image.is_valid() || image.ndim() != 3) {
+                return std::make_shared<lfs::core::Tensor>(std::move(image));
+            }
+
+            const auto layout = lfs::rendering::detectImageLayout(image);
+            if (layout == lfs::rendering::ImageLayout::CHW) {
+                image = image.permute({1, 2, 0});
+            }
+            return std::make_shared<lfs::core::Tensor>(image.cpu().contiguous());
         }
 
         struct SplitCompositeContentRect {
@@ -2105,9 +2119,12 @@ namespace lfs::vis {
                         render_lock.reset();
                         note_lod_page_generation(render_result.lod_page_generation);
                         note_vksplat_render_progress(render_result);
+                        const bool transparent_viewer_compositing =
+                            environmentBackgroundUsesTransparentViewerCompositing(settings_);
                         lfs::rendering::FrameMetadata metadata{};
                         metadata.valid = true;
                         metadata.flip_y = render_result.flip_y;
+                        metadata.color_has_alpha = transparent_viewer_compositing;
 
                         const auto publish_mesh_frame_for_vksplat = [&]() {
                             // VkSplat returns before the shared mesh-frame setup below.
@@ -2138,10 +2155,39 @@ namespace lfs::vis {
                             }
                         };
 
+                        const lfs::rendering::FrameView capture_frame_view = request.frame_view;
+                        const auto make_capture_composite_request =
+                            [&]() -> lfs::rendering::VideoCompositeFrameRequest {
+                            return {
+                                .viewport =
+                                    {.rotation = capture_frame_view.rotation,
+                                     .translation = capture_frame_view.translation,
+                                     .size = capture_frame_view.size,
+                                     .focal_length_mm = capture_frame_view.focal_length_mm,
+                                     .orthographic = capture_frame_view.orthographic,
+                                     .ortho_scale = capture_frame_view.ortho_scale},
+                                .frame_view = capture_frame_view,
+                                .background_color = settings_.background_color,
+                                .environment =
+                                    {.enabled = transparent_viewer_compositing,
+                                     .map_path = transparent_viewer_compositing
+                                                     ? std::filesystem::path(settings_.environment_map_path)
+                                                     : std::filesystem::path{},
+                                     .exposure = settings_.environment_exposure,
+                                     .rotation_degrees = settings_.environment_rotation_degrees,
+                                     .equirectangular = settings_.equirectangular},
+                                .meshes = {},
+                            };
+                        };
+
                         if (settings_.apply_appearance_correction) {
-                            auto image = vksplat_viewport_renderer_->readOutputImage(
-                                *context.vulkan_context,
-                                VksplatViewportRenderer::OutputSlot::Main);
+                            auto image = transparent_viewer_compositing
+                                             ? vksplat_viewport_renderer_->readOutputImageRgba(
+                                                   *context.vulkan_context,
+                                                   VksplatViewportRenderer::OutputSlot::Main)
+                                             : vksplat_viewport_renderer_->readOutputImage(
+                                                   *context.vulkan_context,
+                                                   VksplatViewportRenderer::OutputSlot::Main);
                             if (image && *image) {
                                 auto corrected_image = applyViewportAppearanceCorrection(
                                     std::move(*image),
@@ -2166,6 +2212,42 @@ namespace lfs::vis {
                                     vulkan_gt_comparison_content_size_ = {0, 0};
                                     viewport_artifact_service_.updateFromImageOutput(
                                         corrected_image, metadata, render_result.size, true);
+                                    if (transparent_viewer_compositing) {
+                                        const auto capture_composite_request = make_capture_composite_request();
+                                        viewport_artifact_service_.setLazyCaptureForCurrentOutput(
+                                            [this,
+                                             capture_composite_request,
+                                             metadata,
+                                             render_size = render_result.size,
+                                             corrected_capture_image = corrected_image]()
+                                                -> std::shared_ptr<lfs::core::Tensor> {
+                                                auto* const engine = getRenderingEngine();
+                                                if (!engine) {
+                                                    LOG_ERROR("Failed to composite VkSplat viewport capture: rendering engine unavailable");
+                                                    return {};
+                                                }
+                                                auto materialized = engine->materializeGpuFrame(
+                                                    corrected_capture_image,
+                                                    metadata,
+                                                    render_size);
+                                                if (!materialized || !materialized->valid()) {
+                                                    LOG_ERROR("Failed to materialize corrected VkSplat viewport capture for environment composite: {}",
+                                                              materialized ? "invalid frame" : materialized.error());
+                                                    return corrected_capture_image;
+                                                }
+                                                auto composited = engine->renderVideoCompositeFrame(
+                                                    *materialized,
+                                                    capture_composite_request);
+                                                if (!composited) {
+                                                    LOG_ERROR("Failed to composite environment into corrected VkSplat viewport capture: {}",
+                                                              composited.error());
+                                                    return corrected_capture_image;
+                                                }
+                                                return makeViewportCaptureImageHwc(std::move(*composited));
+                                            },
+                                            metadata,
+                                            render_result.size);
+                                    }
 
                                     if (resize_result.completed) {
                                         frame_lifecycle_service_.noteResizeCompleted();
@@ -2196,17 +2278,49 @@ namespace lfs::vis {
                         vulkan_viewport_image_size_ = render_result.size;
                         vulkan_viewport_image_flip_y_ = render_result.flip_y;
                         vulkan_gt_comparison_content_size_ = {0, 0};
+                        const auto capture_composite_request = make_capture_composite_request();
                         viewport_artifact_service_.setLazyCapture(
-                            [this]() -> std::shared_ptr<lfs::core::Tensor> {
+                            [this, transparent_viewer_compositing, capture_composite_request, metadata, render_size = render_result.size]()
+                                -> std::shared_ptr<lfs::core::Tensor> {
                                 if (!vksplat_viewport_renderer_ || !last_vulkan_context_) {
                                     return {};
                                 }
-                                auto image = vksplat_viewport_renderer_->readOutputImage(
-                                    *last_vulkan_context_,
-                                    VksplatViewportRenderer::OutputSlot::Main);
+                                auto image = transparent_viewer_compositing
+                                                 ? vksplat_viewport_renderer_->readOutputImageRgba(
+                                                       *last_vulkan_context_,
+                                                       VksplatViewportRenderer::OutputSlot::Main)
+                                                 : vksplat_viewport_renderer_->readOutputImage(
+                                                       *last_vulkan_context_,
+                                                       VksplatViewportRenderer::OutputSlot::Main);
                                 if (!image) {
                                     LOG_ERROR("Failed to capture VkSplat viewport image: {}", image.error());
                                     return {};
+                                }
+                                if (transparent_viewer_compositing) {
+                                    auto* const engine = getRenderingEngine();
+                                    if (!engine) {
+                                        LOG_ERROR("Failed to composite VkSplat viewport capture: rendering engine unavailable");
+                                        return {};
+                                    }
+                                    auto frame_image = std::move(*image);
+                                    auto materialized = engine->materializeGpuFrame(
+                                        frame_image,
+                                        metadata,
+                                        render_size);
+                                    if (!materialized || !materialized->valid()) {
+                                        LOG_ERROR("Failed to materialize VkSplat viewport capture for environment composite: {}",
+                                                  materialized ? "invalid frame" : materialized.error());
+                                        return frame_image;
+                                    }
+                                    auto composited = engine->renderVideoCompositeFrame(
+                                        *materialized,
+                                        capture_composite_request);
+                                    if (!composited) {
+                                        LOG_ERROR("Failed to composite environment into VkSplat viewport capture: {}",
+                                                  composited.error());
+                                        return frame_image;
+                                    }
+                                    return makeViewportCaptureImageHwc(std::move(*composited));
                                 }
                                 return std::move(*image);
                             },

@@ -1516,38 +1516,22 @@ NB_MODULE(lichtfeld, m) {
             const auto* controller = lfs::vis::InputController::instance();
             if (!controller)
                 return "orbit";
-            switch (controller->cameraNavigationMode()) {
-            case lfs::vis::InputController::CameraNavigationMode::Orbit: return "orbit";
-            case lfs::vis::InputController::CameraNavigationMode::Trackball: return "trackball";
-            case lfs::vis::InputController::CameraNavigationMode::FPV: return "fpv";
-            }
-            return "orbit";
+            return lfs::vis::InputController::cameraNavigationModeName(
+                controller->cameraNavigationMode());
         },
-        "Get the active camera navigation mode ('orbit', 'trackball', or 'fpv')");
+        "Get the active camera navigation mode ('orbit', 'trackball', 'fpv', or 'drone')");
     m.def(
         "set_camera_navigation_mode", [](const std::string& mode) {
             auto* controller = lfs::vis::InputController::instance();
             if (!controller)
                 return;
 
-            if (mode == "orbit") {
-                controller->setCameraNavigationMode(
-                    lfs::vis::InputController::CameraNavigationMode::Orbit);
-                return;
+            const auto parsed = lfs::vis::InputController::cameraNavigationModeFromName(mode);
+            if (!parsed) {
+                throw std::invalid_argument(
+                    "camera navigation mode must be 'orbit', 'trackball', 'turntable', 'fpv', 'fly', or 'drone'");
             }
-            if (mode == "trackball" || mode == "turntable") {
-                controller->setCameraNavigationMode(
-                    lfs::vis::InputController::CameraNavigationMode::Trackball);
-                return;
-            }
-            if (mode == "fpv" || mode == "fly") {
-                controller->setCameraNavigationMode(
-                    lfs::vis::InputController::CameraNavigationMode::FPV);
-                return;
-            }
-
-            throw std::invalid_argument(
-                "camera navigation mode must be 'orbit', 'trackball', 'turntable', 'fpv', or 'fly'");
+            controller->setCameraNavigationMode(*parsed);
         },
         nb::arg("mode"), "Set the active camera navigation mode");
     m.def(

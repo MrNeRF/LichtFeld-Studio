@@ -18,6 +18,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 struct SDL_Window;
@@ -41,8 +42,16 @@ namespace lfs::vis {
         enum class CameraNavigationMode {
             Orbit,
             Trackball,
-            FPV
+            FPV,
+            Drone
         };
+
+        // Single source of truth for the mode <-> name mapping used by the
+        // GUI toolbar and the Python API; fromName also accepts the aliases
+        // "turntable" and "fly".
+        [[nodiscard]] static const char* cameraNavigationModeName(CameraNavigationMode mode);
+        [[nodiscard]] static std::optional<CameraNavigationMode>
+        cameraNavigationModeFromName(std::string_view name);
 
         InputController(SDL_Window* window, Viewport& viewport);
         ~InputController();
@@ -112,8 +121,11 @@ namespace lfs::vis {
             const bool wasd_coasting =
                 (wasd_momentum_viewport_ && wasd_momentum_viewport_->camera.hasWasdMomentum()) ||
                 keyboard_camera.hasWasdMomentum();
+            const bool drone_settling =
+                (wasd_momentum_viewport_ && wasd_momentum_viewport_->camera.hasDroneMotion()) ||
+                keyboard_camera.hasDroneMotion();
             return movement_active || camera_drag || orbit_coasting || pan_coasting ||
-                   keyboard_camera.isGliding() || wasd_coasting;
+                   keyboard_camera.isGliding() || wasd_coasting || drone_settling;
         }
         [[nodiscard]] bool hasViewportKeyboardFocus() const;
         [[nodiscard]] bool isViewportPoint(double x, double y) const { return isInViewport(x, y); }

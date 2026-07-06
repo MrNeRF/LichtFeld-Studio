@@ -18,8 +18,10 @@
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/app_store.hpp"
+#include "visualizer/core/services.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/scene/selection_state.hpp"
+#include "visualizer/training/training_manager.hpp"
 
 namespace lfs::python {
 
@@ -55,6 +57,37 @@ namespace lfs::python {
             return std::make_shared<core::PointCloud>(
                 core::Tensor::from_vector(means, {count, size_t{3}}, core::Device::CPU),
                 core::Tensor::from_vector(colors, {count, size_t{3}}, core::Device::CPU));
+        }
+
+        struct TrainingSceneNodes {
+            core::NodeId dataset = core::NULL_NODE;
+            core::NodeId cameras = core::NULL_NODE;
+            core::NodeId train_group = core::NULL_NODE;
+            core::NodeId camera = core::NULL_NODE;
+            core::NodeId model = core::NULL_NODE;
+        };
+
+        struct ScopedServicesClear {
+            ScopedServicesClear() { lfs::vis::services().clear(); }
+            ~ScopedServicesClear() { lfs::vis::services().clear(); }
+        };
+
+        TrainingSceneNodes build_training_scene(lfs::vis::SceneManager& manager) {
+            auto& scene = manager.getScene();
+            TrainingSceneNodes nodes;
+            nodes.dataset = scene.addDataset("Dataset");
+            nodes.model = scene.addSplat("Model", make_test_splat(1), nodes.dataset);
+            scene.setTrainingModelNode("Model");
+            nodes.cameras = scene.addGroup("Cameras", nodes.dataset);
+            nodes.train_group = scene.addCameraGroup("Training (1)", nodes.cameras, 1);
+            nodes.camera = scene.addCamera("cam_0001.png", nodes.train_group, std::make_shared<core::Camera>());
+            return nodes;
+        }
+
+        bool transition_trainer_manager_for_test(lfs::vis::TrainerManager& trainer_manager,
+                                                 lfs::vis::TrainingState state) {
+            auto& state_machine = const_cast<lfs::vis::TrainingStateMachine&>(trainer_manager.getStateMachine());
+            return state_machine.transitionTo(state);
         }
 
         core::Tensor make_external_float_tensor(
@@ -751,6 +784,110 @@ namespace lfs::python {
 
         EXPECT_EQ(scene.getNodeById(splat)->parent_id, core::NULL_NODE);
         EXPECT_TRUE(scene.getNodeById(group)->children.empty());
+    }
+
+    TEST_F(SceneValidityTest, SceneManagerBlocksActiveCameraSubtreeAndAllowsInactiveCameraRemoval) {
+        const ScopedServicesClear services_scope;
+        lfs::vis::SceneManager sm;
+        lfs::vis::TrainerManager trainer_manager;
+        lfs::vis::services().set(&sm);
+        lfs::vis::services().set(&trainer_manager);
+
+        auto& scene = sm.getScene();
+        const auto nodes = build_training_scene(sm);
+        sm.selectNodesById({nodes.camera});
+        ASSERT_EQ(scene.getActiveCameraCount(), 1u);
+        ASSERT_EQ(scene.getTrainingModelNodeName(), "Model");
+
+        trainer_manager.setScene(&scene);
+        ASSERT_TRUE(transition_trainer_manager_for_test(trainer_manager, lfs::vis::TrainingState::Paused));
+        ASSERT_TRUE(transition_trainer_manager_for_test(trainer_manager, lfs::vis::TrainingState::Running));
+        ASSERT_TRUE(trainer_manager.isRunning());
+        ASSERT_FALSE(trainer_manager.canPerform(lfs::vis::TrainingAction::DeleteTrainingNode));
+
+        sm.removePLY("Training (1)");
+
+        EXPECT_NE(scene.getNodeById(nodes.train_group), nullptr);
+        EXPECT_NE(scene.getNodeById(nodes.camera), nullptr);
+        EXPECT_EQ(scene.getActiveCameraCount(), 1u);
+        EXPECT_EQ(scene.getTrainingModelNodeName(), "Model");
+
+        const auto selected = sm.getSelectedNodeNames();
+        ASSERT_EQ(selected.size(), 1u);
+        EXPECT_EQ(selected[0], "cam_0001.png");
+
+        ASSERT_TRUE(transition_trainer_manager_for_test(trainer_manager, lfs::vis::TrainingState::Stopping));
+        ASSERT_EQ(trainer_manager.getState(), lfs::vis::TrainingState::Stopping);
+        ASSERT_FALSE(trainer_manager.canPerform(lfs::vis::TrainingAction::DeleteTrainingNode));
+
+        sm.removePLY("Training (1)");
+
+        EXPECT_NE(scene.getNodeById(nodes.train_group), nullptr);
+        EXPECT_NE(scene.getNodeById(nodes.camera), nullptr);
+        EXPECT_EQ(scene.getActiveCameraCount(), 1u);
+        EXPECT_EQ(scene.getTrainingModelNodeName(), "Model");
+        ASSERT_EQ(sm.getSelectedNodeNames().size(), 1u);
+
+        scene.setCameraTrainingEnabled(nodes.camera, false);
+        ASSERT_EQ(scene.getActiveCameraCount(), 0u);
+        ASSERT_EQ(scene.getAllCameras().size(), 1u);
+
+        sm.removePLY("cam_0001.png");
+
+        EXPECT_EQ(scene.getNodeById(nodes.camera), nullptr);
+        EXPECT_TRUE(sm.getSelectedNodeNames().empty());
+        EXPECT_EQ(scene.getAllCameras().size(), 0u);
+        EXPECT_EQ(scene.getActiveCameraCount(), 0u);
+        EXPECT_EQ(scene.getTrainingModelNodeName(), "Model");
+    }
+
+    TEST_F(SceneValidityTest, SceneManagerRemovesAllowedActiveCameraSubtreeWithoutClearingTrainer) {
+        const ScopedServicesClear services_scope;
+        lfs::vis::SceneManager sm;
+        lfs::vis::TrainerManager trainer_manager;
+        lfs::vis::services().set(&sm);
+        lfs::vis::services().set(&trainer_manager);
+
+        auto& scene = sm.getScene();
+        const auto nodes = build_training_scene(sm);
+        sm.selectNodesById({nodes.camera});
+
+        trainer_manager.setScene(&scene);
+        ASSERT_TRUE(transition_trainer_manager_for_test(trainer_manager, lfs::vis::TrainingState::Ready));
+        ASSERT_TRUE(trainer_manager.canPerform(lfs::vis::TrainingAction::DeleteTrainingNode));
+
+        sm.removePLY("Training (1)");
+
+        EXPECT_EQ(scene.getNodeById(nodes.train_group), nullptr);
+        EXPECT_EQ(scene.getNodeById(nodes.camera), nullptr);
+        EXPECT_EQ(scene.getAllCameras().size(), 0u);
+        EXPECT_EQ(scene.getActiveCameraCount(), 0u);
+        EXPECT_TRUE(sm.getSelectedNodeNames().empty());
+        EXPECT_NE(scene.getNodeById(nodes.model), nullptr);
+        EXPECT_EQ(scene.getTrainingModelNodeName(), "Model");
+        EXPECT_EQ(trainer_manager.getState(), lfs::vis::TrainingState::Ready);
+        EXPECT_TRUE(trainer_manager.canPerform(lfs::vis::TrainingAction::DeleteTrainingNode));
+    }
+
+    TEST_F(SceneValidityTest, SceneManagerRemovesAllowedTrainingModelAndClearsTrainerState) {
+        const ScopedServicesClear services_scope;
+        lfs::vis::SceneManager sm;
+        lfs::vis::TrainerManager trainer_manager;
+        lfs::vis::services().set(&sm);
+        lfs::vis::services().set(&trainer_manager);
+
+        auto& scene = sm.getScene();
+        const auto nodes = build_training_scene(sm);
+
+        trainer_manager.setScene(&scene);
+        ASSERT_TRUE(transition_trainer_manager_for_test(trainer_manager, lfs::vis::TrainingState::Ready));
+        ASSERT_TRUE(trainer_manager.canPerform(lfs::vis::TrainingAction::DeleteTrainingNode));
+
+        sm.removePLY("Model");
+
+        EXPECT_EQ(scene.getNodeById(nodes.model), nullptr);
+        EXPECT_EQ(scene.getTrainingModelNodeName(), "");
+        EXPECT_EQ(trainer_manager.getState(), lfs::vis::TrainingState::Idle);
     }
 
 } // namespace lfs::python

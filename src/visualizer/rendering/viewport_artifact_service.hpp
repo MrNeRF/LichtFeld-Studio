@@ -47,12 +47,15 @@ namespace lfs::vis {
         // For split-view frames: the live viewport composes on the GPU and never produces
         // a single CPU/CUDA tensor. Capture/screenshot paths still need one, so the caller
         // hands us a closure that does the CPU compose on demand. The first capture
-        // request runs it, caches the result, and subsequent captures reuse the cache
-        // until the next frame's updateFromImageOutput / setLazyCapture invalidates it.
+        // request runs it, caches the result separately from the display-facing
+        // capture, and subsequent captures reuse it until the next frame invalidates it.
         using LazyCaptureFn = std::function<std::shared_ptr<lfs::core::Tensor>()>;
         void setLazyCapture(LazyCaptureFn fn,
                             const lfs::rendering::FrameMetadata& metadata,
                             const glm::ivec2& rendered_size);
+        void setLazyCaptureForCurrentOutput(LazyCaptureFn fn,
+                                            const lfs::rendering::FrameMetadata& metadata,
+                                            const glm::ivec2& rendered_size);
         [[nodiscard]] std::shared_ptr<lfs::core::Tensor> resolveLazyCapture();
         [[nodiscard]] bool hasLazyCapture() const { return static_cast<bool>(lazy_capture_); }
 
@@ -68,8 +71,10 @@ namespace lfs::vis {
         std::optional<lfs::rendering::GpuFrame> gpu_frame_;
         glm::ivec2 rendered_size_{0};
         std::shared_ptr<lfs::core::Tensor> captured_image_;
+        std::shared_ptr<lfs::core::Tensor> lazy_captured_image_;
         uint64_t artifact_generation_ = 1;
         uint64_t captured_artifact_generation_ = 0;
+        uint64_t lazy_captured_artifact_generation_ = 0;
         LazyCaptureFn lazy_capture_;
     };
 

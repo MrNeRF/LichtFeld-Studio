@@ -229,6 +229,7 @@ class RuntimeState:
     active_submode = StateSignal[str]("active_submode", "")
     transform_space = StateSignal[int]("transform_space", 0)
     pivot_mode = StateSignal[int]("pivot_mode", 0)
+    multi_transform_mode = StateSignal[int]("multi_transform_mode", 0)
     import_overlay_state = StateSignal[dict[str, object]]("import_overlay_state", {})
     video_export_overlay_state = StateSignal[dict[str, object]](
         "video_export_overlay_state",

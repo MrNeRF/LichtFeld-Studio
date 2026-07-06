@@ -280,12 +280,12 @@ namespace lfs::vis {
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::captureViewportImage() {
-        if (auto image = getViewportImageIfAvailable()) {
-            return image;
-        }
-
         if (viewport_artifact_service_.hasLazyCapture()) {
             return viewport_artifact_service_.resolveLazyCapture();
+        }
+
+        if (auto image = getViewportImageIfAvailable()) {
+            return image;
         }
 
         if (!engine_ || !viewport_artifact_service_.hasGpuFrame()) {
@@ -778,6 +778,63 @@ namespace lfs::vis {
         if (vksplat_viewport_renderer_) {
             vksplat_viewport_renderer_->releasePreviewResources();
         }
+    }
+
+    std::expected<lfs::core::Tensor, std::string> RenderingManager::renderExportImage(
+        SceneManager* const scene_manager, const ExportImageRequest& request) {
+        if (request.width <= 0 || request.height <= 0) {
+            return std::unexpected("invalid export image dimensions");
+        }
+
+        const bool needs_alpha = request.mode != ExportPostProcessMode::Opaque;
+        const auto rendered =
+            needs_alpha
+                ? renderPreviewImageRgba8(scene_manager,
+                                          request.rotation,
+                                          request.translation,
+                                          request.focal_length_mm,
+                                          request.width,
+                                          request.height,
+                                          request.orthographic_override,
+                                          request.ortho_scale_override)
+                : renderPreviewImageRgb8(scene_manager,
+                                         request.rotation,
+                                         request.translation,
+                                         request.focal_length_mm,
+                                         request.width,
+                                         request.height,
+                                         std::nullopt,
+                                         request.orthographic_override,
+                                         request.ortho_scale_override);
+        releasePreviewImageResources();
+
+        lfs::core::Tensor image;
+        if (rendered && rendered->is_valid()) {
+            image = std::move(*rendered);
+        } else if (request.mode == ExportPostProcessMode::EnvironmentComposite) {
+            // No renderable Gaussians: export the environment background alone
+            // (zero alpha composites to pure environment), matching the video
+            // export path's empty-primary-frame behavior.
+            image = lfs::core::Tensor::zeros(
+                {static_cast<size_t>(request.height), static_cast<size_t>(request.width), size_t{4}},
+                lfs::core::Device::CPU,
+                lfs::core::DataType::UInt8);
+            if (!image.is_valid()) {
+                return std::unexpected("export failed to allocate the environment-only image");
+            }
+        } else {
+            return std::unexpected("export render produced no image");
+        }
+
+        const auto settings = getSettings();
+        const ExportPostProcessView view{
+            .rotation = request.rotation,
+            .focal_length_mm = request.focal_length_mm,
+            .equirectangular_view = settings.equirectangular,
+            .controller_predict_size = frame_lifecycle_service_.lastViewportSize(),
+        };
+        return applyExportPostProcess(
+            std::move(image), scene_manager, settings, getCurrentCameraId(), request.mode, view);
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImageWithState(

@@ -4,8 +4,11 @@
 
 #include "gui/gizmo_transform.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
+#include <algorithm>
 #include <cassert>
 #include <glm/gtc/matrix_transform.hpp>
+#include <limits>
+#include <unordered_set>
 
 namespace lfs::vis::gui {
 
@@ -50,6 +53,150 @@ namespace lfs::vis::gui {
                     scene_coords::nodeLocalTransformFromVisualizerWorld(scene, node->id, visualizer_world_transform)) {
                 scene.setNodeTransform(name, *local_transform);
             }
+        }
+
+        std::vector<std::string> topLevelTransformTargets(
+            const core::Scene& scene,
+            const std::vector<std::string>& target_names) {
+            std::unordered_set<core::NodeId> selected_ids;
+            selected_ids.reserve(target_names.size());
+            for (const auto& name : target_names) {
+                if (const auto* node = scene.getNode(name)) {
+                    selected_ids.insert(node->id);
+                }
+            }
+
+            std::vector<std::string> top_level_names;
+            top_level_names.reserve(target_names.size());
+            for (const auto& name : target_names) {
+                const auto* node = scene.getNode(name);
+                if (!node)
+                    continue;
+
+                bool ancestor_selected = false;
+                for (core::NodeId check_id = node->parent_id; check_id != core::NULL_NODE;) {
+                    if (selected_ids.contains(check_id)) {
+                        ancestor_selected = true;
+                        break;
+                    }
+                    const auto* parent = scene.getNodeById(check_id);
+                    check_id = parent ? parent->parent_id : core::NULL_NODE;
+                }
+
+                if (!ancestor_selected) {
+                    top_level_names.push_back(name);
+                }
+            }
+
+            return top_level_names;
+        }
+
+        enum class TransformDeltaComposition {
+            SharedSelectionWorld,
+            IndividualLocal,
+        };
+
+        std::vector<NodeLocalTransformResult> computeNodeLocalTransforms(
+            const core::Scene& scene,
+            const std::vector<std::string>& target_names,
+            const std::vector<glm::mat4>& original_visualizer_world_transforms,
+            const glm::mat4& visualizer_delta,
+            const TransformDeltaComposition composition) {
+            std::vector<NodeLocalTransformResult> results;
+            assert(target_names.size() == original_visualizer_world_transforms.size());
+            if (target_names.size() != original_visualizer_world_transforms.size()) {
+                return results;
+            }
+            const size_t count = target_names.size();
+            results.reserve(count);
+
+            for (size_t i = 0; i < count; ++i) {
+                const glm::mat4 next_visualizer_world = composition == TransformDeltaComposition::SharedSelectionWorld
+                                                            ? visualizer_delta * original_visualizer_world_transforms[i]
+                                                            : original_visualizer_world_transforms[i] * visualizer_delta;
+                if (const auto local_transform =
+                        scene_coords::nodeLocalTransformFromVisualizerWorld(
+                            scene, target_names[i], next_visualizer_world)) {
+                    results.push_back(NodeLocalTransformResult{
+                        .name = target_names[i],
+                        .local_transform = *local_transform,
+                    });
+                }
+            }
+
+            return results;
+        }
+
+        std::vector<NodeLocalTransformResult> computeNodeSharedSelectionLocalTransforms(
+            const core::Scene& scene,
+            const std::vector<std::string>& target_names,
+            const std::vector<glm::mat4>& original_visualizer_world_transforms,
+            const glm::mat4& visualizer_world_delta) {
+            return computeNodeLocalTransforms(
+                scene,
+                target_names,
+                original_visualizer_world_transforms,
+                visualizer_world_delta,
+                TransformDeltaComposition::SharedSelectionWorld);
+        }
+
+        std::vector<NodeLocalTransformResult> computeNodeIndividualLocalTransforms(
+            const core::Scene& scene,
+            const std::vector<std::string>& target_names,
+            const std::vector<glm::mat4>& original_visualizer_world_transforms,
+            const glm::mat4& local_visualizer_delta) {
+            return computeNodeLocalTransforms(
+                scene,
+                target_names,
+                original_visualizer_world_transforms,
+                local_visualizer_delta,
+                TransformDeltaComposition::IndividualLocal);
+        }
+
+        bool computeCombinedVisualizerWorldBounds(
+            const core::Scene& scene,
+            const std::vector<std::string>& target_names,
+            glm::vec3& out_min,
+            glm::vec3& out_max) {
+            bool has_bounds = false;
+            out_min = glm::vec3(std::numeric_limits<float>::max());
+            out_max = glm::vec3(std::numeric_limits<float>::lowest());
+
+            for (const auto& name : target_names) {
+                const auto* node = scene.getNode(name);
+                if (!node)
+                    continue;
+
+                glm::vec3 local_min, local_max;
+                const bool node_has_bounds = scene.getNodeBounds(node->id, local_min, local_max);
+                const glm::mat4 visualizer_world = scene_coords::nodeVisualizerWorldTransform(scene, node->id);
+
+                if (!node_has_bounds) {
+                    const glm::vec3 origin = glm::vec3(visualizer_world[3]);
+                    out_min = glm::min(out_min, origin);
+                    out_max = glm::max(out_max, origin);
+                    has_bounds = true;
+                    continue;
+                }
+
+                for (int x = 0; x < 2; ++x) {
+                    for (int y = 0; y < 2; ++y) {
+                        for (int z = 0; z < 2; ++z) {
+                            const glm::vec3 corner(
+                                x ? local_max.x : local_min.x,
+                                y ? local_max.y : local_min.y,
+                                z ? local_max.z : local_min.z);
+                            const glm::vec3 world_corner =
+                                glm::vec3(visualizer_world * glm::vec4(corner, 1.0f));
+                            out_min = glm::min(out_min, world_corner);
+                            out_max = glm::max(out_max, world_corner);
+                        }
+                    }
+                }
+                has_bounds = true;
+            }
+
+            return has_bounds;
         }
 
         glm::mat4 computeGizmoMatrix(

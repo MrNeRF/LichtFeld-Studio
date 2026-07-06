@@ -3548,6 +3548,11 @@ namespace lfs::training {
                     LOG_VRAM_DIFF("train.controller_phase");
                     auto tile_context_guard = makeScopeGuard(cleanup_tile_context);
 
+                    // The predict() below fills shared pool buffers (and pred aliases one)
+                    // that backward() consumes; hold the transaction lock so a concurrent
+                    // viewport/export prediction cannot corrupt the pair.
+                    std::lock_guard<std::mutex> controller_lock(ppisp_controller_pool_->predict_mutex());
+
                     lfs::core::Tensor corrected_image = output.image;
                     if (bilateral_grid_ && params_.optimization.use_bilateral_grid) {
                         LFS_VRAM_SCOPE("train.bilateral_grid.forward");
@@ -4570,6 +4575,7 @@ namespace lfs::training {
             pipelined_config.prefetch_count = 8;
             pipelined_config.output_queue_size = 4;
             pipelined_config.io_threads = 2;
+            pipelined_config.use_16bit_color = params_.dataset.loading_params.use_16bit_color;
 
             // Non-JPEG images (PNG, WebP) need CPU decoding - use more threads until cache warms
             constexpr float NON_JPEG_THRESHOLD = 0.1f;
@@ -4920,6 +4926,7 @@ namespace lfs::training {
         if (use_controller && has_controller) {
             const int controller_idx =
                 (camera_idx >= 0 && camera_idx < ppisp_controller_pool_->num_cameras()) ? camera_idx : 0;
+            std::lock_guard<std::mutex> controller_lock(ppisp_controller_pool_->predict_mutex());
             const auto controller_params = ppisp_controller_pool_->predict(controller_idx, rgb_chw.unsqueeze(0), 1.0f);
             result = overrides.isIdentity()
                          ? ppisp_->apply_with_controller_params(rgb_chw, controller_params, controller_idx)

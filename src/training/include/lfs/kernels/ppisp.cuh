@@ -12,6 +12,15 @@ namespace lfs::training::kernels {
                                   float* rgb_out, int height, int width, int num_cameras, int num_frames,
                                   int camera_idx, int frame_idx, cudaStream_t stream = nullptr);
 
+    // Forward pass on a full-width row band [y_offset, y_offset + band_height) of an
+    // image with full_height rows; vignetting uses full-image coordinates so banded
+    // output is bit-identical to the full-image pass.
+    void launch_ppisp_forward_chw_region(const float* exposure_params, const float* vignetting_params,
+                                         const float* color_params, const float* crf_params, const float* rgb_in,
+                                         float* rgb_out, int band_height, int width, int y_offset, int full_height,
+                                         int num_cameras, int num_frames, int camera_idx, int frame_idx,
+                                         cudaStream_t stream = nullptr);
+
     // Backward pass (CHW layout)
     void launch_ppisp_backward_chw(const float* exposure_params, const float* vignetting_params,
                                    const float* color_params, const float* crf_params, const float* rgb_in,

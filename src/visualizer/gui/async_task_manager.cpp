@@ -411,13 +411,20 @@ namespace lfs::vis::gui {
         if (!image || !image->is_valid() || image->ndim() != 3) {
             return std::unexpected("Rendered Gaussian frame is invalid");
         }
-        if (image->size(0) <= 0 || image->size(1) <= 0 || image->size(2) != 3) {
-            return std::unexpected("Rendered Gaussian frame must have shape [H, W, 3]");
+        if (image->size(0) <= 0 || image->size(1) <= 0 ||
+            (image->size(2) != 3 && image->size(2) != 4)) {
+            return std::unexpected("Rendered Gaussian frame must have shape [H, W, 3] or [H, W, 4]");
         }
 
         auto frame = *image;
+        // Preview readbacks currently arrive as uint8 HWC and need normalization;
+        // float preview tensors are expected to already be in normalized color space.
+        const bool normalize_uint8 = frame.dtype() == lfs::core::DataType::UInt8;
         if (frame.dtype() != lfs::core::DataType::Float32) {
             frame = frame.to(lfs::core::DataType::Float32);
+        }
+        if (normalize_uint8) {
+            frame = frame / 255.0f;
         }
         frame = frame.permute({2, 0, 1}).contiguous();
         if (frame.device() != lfs::core::Device::CUDA) {
@@ -485,14 +492,24 @@ namespace lfs::vis::gui {
                 primary_frame = std::move(*render_result);
             } else {
                 auto scene_state = makeVideoExportGaussianSceneState(snapshot);
-                auto preview_image = rendering_manager.renderPreviewImage(
-                    *snapshot.combined_model,
-                    std::move(scene_state),
-                    glm::mat3_cast(cam_state.rotation),
-                    cam_state.position,
-                    cam_state.focal_length_mm,
-                    width,
-                    height);
+                const auto camera_rotation = glm::mat3_cast(cam_state.rotation);
+                auto preview_image = render_environment
+                                         ? rendering_manager.renderPreviewImageRgba8(
+                                               *snapshot.combined_model,
+                                               std::move(scene_state),
+                                               camera_rotation,
+                                               cam_state.position,
+                                               cam_state.focal_length_mm,
+                                               width,
+                                               height)
+                                         : rendering_manager.renderPreviewImage(
+                                               *snapshot.combined_model,
+                                               std::move(scene_state),
+                                               camera_rotation,
+                                               cam_state.position,
+                                               cam_state.focal_length_mm,
+                                               width,
+                                               height);
                 auto video_frame = makeGaussianPreviewVideoFrame(preview_image);
                 if (!video_frame) {
                     return std::unexpected(video_frame.error());
@@ -505,7 +522,7 @@ namespace lfs::vis::gui {
                 auto frame_image = std::make_shared<lfs::core::Tensor>(std::move(*video_frame));
                 auto materialized = engine.materializeGpuFrame(
                     frame_image,
-                    makeVideoExportFrameMetadata(frame_view, false),
+                    makeVideoExportFrameMetadata(frame_view, render_environment),
                     {width, height});
                 if (!materialized || !materialized->valid()) {
                     return std::unexpected(materialized ? "Rendered Gaussian frame is invalid"

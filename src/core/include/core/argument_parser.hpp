@@ -23,6 +23,9 @@ namespace lfs::core::args {
     struct Mesh2SplatMode {
         param::Mesh2SplatParameters params;
     };
+    struct PreprocessMode {
+        param::PreprocessParameters params;
+    };
     struct HelpMode {};
     struct VersionMode {};
     struct WarmupMode {}; // JIT compile PTX kernels and exit
@@ -34,7 +37,7 @@ namespace lfs::core::args {
         std::string name;
     };
 
-    using ParsedArgs = std::variant<TrainingMode, ConvertMode, Mesh2SplatMode, HelpMode, VersionMode, WarmupMode, PluginMode>;
+    using ParsedArgs = std::variant<TrainingMode, ConvertMode, Mesh2SplatMode, PreprocessMode, HelpMode, VersionMode, WarmupMode, PluginMode>;
 
     LFS_CORE_API std::expected<ParsedArgs, std::string> parse_args(int argc, const char* const argv[]);
 

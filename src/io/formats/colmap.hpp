@@ -10,6 +10,7 @@
 #include "io/error.hpp"
 #include "io/loader.hpp"
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <glm/glm.hpp>
 #include <memory>

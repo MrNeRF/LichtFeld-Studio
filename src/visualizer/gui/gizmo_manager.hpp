@@ -32,6 +32,19 @@ namespace lfs::vis {
             Scale
         };
 
+        // Selection mode is the shared-pivot transform for the current multi-selection;
+        // it is unrelated to scene graph GROUP nodes.
+        enum class MultiTransformMode {
+            Selection = 0,
+            Individual = 1
+        };
+
+        constexpr MultiTransformMode normalizeMultiTransformMode(const MultiTransformMode mode) {
+            return mode == MultiTransformMode::Individual
+                       ? MultiTransformMode::Individual
+                       : MultiTransformMode::Selection;
+        }
+
         class GizmoManager {
         public:
             explicit GizmoManager(VisualizerImpl* viewer);
@@ -56,6 +69,8 @@ namespace lfs::vis {
             void setTransformSpace(TransformSpace space);
             [[nodiscard]] PivotMode getPivotMode() const { return pivot_mode_; }
             void setPivotMode(PivotMode mode);
+            [[nodiscard]] MultiTransformMode getMultiTransformMode() const { return multi_transform_mode_; }
+            void setMultiTransformMode(MultiTransformMode mode);
             [[nodiscard]] GizmoOperation getCurrentOperation() const { return current_operation_; }
             void setCurrentOperation(GizmoOperation op) { current_operation_ = op; }
             [[nodiscard]] SelectionSubMode getSelectionSubMode() const { return selection_mode_; }
@@ -104,6 +119,7 @@ namespace lfs::vis {
             SelectionSubMode selection_mode_ = SelectionSubMode::Centers;
             TransformSpace transform_space_ = TransformSpace::Local;
             PivotMode pivot_mode_ = PivotMode::Origin;
+            MultiTransformMode multi_transform_mode_ = MultiTransformMode::Selection;
 
             // Node transform gizmo
             bool show_node_gizmo_ = false;
@@ -165,18 +181,26 @@ namespace lfs::vis {
             std::chrono::steady_clock::time_point crop_flash_start_;
             bool crop_flash_active_ = false;
 
-            // Bounds-mode scale gizmo state (single selection only)
+            // Bounds-mode scale gizmo state
             bool node_bounds_scale_active_ = false;
             glm::vec3 node_bounds_min_{0.0f};
             glm::vec3 node_bounds_max_{0.0f};
             glm::mat4 node_bounds_orig_visualizer_world_transform_{1.0f};
             glm::vec3 node_bounds_world_scale_{1.0f};
+            bool node_selection_bounds_scale_active_ = false;
+            glm::vec3 node_selection_bounds_min_{0.0f};
+            glm::vec3 node_selection_bounds_max_{0.0f};
 
             // Display cache to avoid per-frame compute_bounds on large splats
             bool node_bounds_cache_valid_ = false;
             core::NodeId node_bounds_cache_node_id_ = core::NULL_NODE;
             glm::vec3 node_bounds_cache_min_{0.0f};
             glm::vec3 node_bounds_cache_max_{0.0f};
+            bool node_selection_bounds_cache_valid_ = false;
+            std::vector<core::NodeId> node_selection_bounds_cache_node_ids_;
+            std::vector<glm::mat4> node_selection_bounds_cache_visualizer_world_transforms_;
+            glm::vec3 node_selection_bounds_cache_min_{0.0f};
+            glm::vec3 node_selection_bounds_cache_max_{0.0f};
 
             // Tool tracking
             SelectionSubMode previous_selection_mode_ = SelectionSubMode::Centers;

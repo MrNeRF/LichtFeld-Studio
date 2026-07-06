@@ -185,6 +185,43 @@ namespace {
         return make_test_splat(xyz);
     }
 
+    std::unique_ptr<lfs::core::SplatData> make_patterned_sh_rest_splat(const size_t count) {
+        std::vector<float> means;
+        means.reserve(count * 3);
+        std::vector<float> shN;
+        shN.reserve(count * 3 * 3);
+        for (size_t row = 0; row < count; ++row) {
+            means.push_back(static_cast<float>(row));
+            means.push_back(0.0f);
+            means.push_back(0.0f);
+            for (size_t coeff = 0; coeff < 3; ++coeff) {
+                for (size_t channel = 0; channel < 3; ++channel) {
+                    shN.push_back(static_cast<float>(100 * row + 10 * coeff + channel));
+                }
+            }
+        }
+
+        auto sh0 = Tensor::zeros({count, size_t{1}, size_t{3}}, Device::CUDA, DataType::Float32);
+        auto scaling = Tensor::zeros({count, size_t{3}}, Device::CUDA, DataType::Float32);
+        std::vector<float> rotation_data(count * 4, 0.0f);
+        for (size_t i = 0; i < count; ++i) {
+            rotation_data[i * 4] = 1.0f;
+        }
+        auto opacity = Tensor::zeros({count, size_t{1}}, Device::CUDA, DataType::Float32);
+
+        auto result = std::make_unique<lfs::core::SplatData>(
+            1,
+            Tensor::from_vector(means, {count, size_t{3}}, Device::CUDA).to(DataType::Float32),
+            std::move(sh0),
+            Tensor::from_vector(shN, {count, size_t{3}, size_t{3}}, Device::CUDA).to(DataType::Float32),
+            std::move(scaling),
+            Tensor::from_vector(rotation_data, {count, size_t{4}}, Device::CUDA).to(DataType::Float32),
+            std::move(opacity),
+            1.0f);
+        result->set_active_sh_degree(1);
+        return result;
+    }
+
     std::vector<bool> deleted_mask_values(const lfs::core::SplatData& splat) {
         if (!splat.has_deleted_mask()) {
             return {};
@@ -214,6 +251,15 @@ namespace {
             xs.push_back(means[i * 3]);
         }
         return xs;
+    }
+
+    std::vector<float> sh_rest_row_values(const lfs::core::SplatData& splat, const size_t row) {
+        const auto shN = splat.shN_canonical_cpu().contiguous();
+        const auto flat = shN.to_vector();
+        const size_t stride = static_cast<size_t>(shN.size(1) * shN.size(2));
+        return std::vector<float>(
+            flat.begin() + static_cast<ptrdiff_t>(row * stride),
+            flat.begin() + static_cast<ptrdiff_t>((row + 1) * stride));
     }
 
 } // namespace
@@ -1844,6 +1890,74 @@ TEST_F(UndoHistoryTest, DuplicateNodeCreatesUndoableSceneGraphEntry) {
 
     lfs::vis::op::undoHistory().redo();
     EXPECT_NE(scene_manager->getScene().getNode(duplicate_name), nullptr);
+}
+
+TEST_F(UndoHistoryTest, DuplicateNodeCompactsSoftDeletedSplats) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addSplat("model", make_patterned_sh_rest_splat(4));
+    auto* node = scene_manager->getScene().getNode("model");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->model, nullptr);
+    const auto expected_sh_rest_row_0 = sh_rest_row_values(*node->model, 0);
+    const auto expected_sh_rest_row_2 = sh_rest_row_values(*node->model, 2);
+    node->model->soft_delete(make_uint8_mask({0, 1, 0, 1}).to(DataType::Bool));
+    scene_manager->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+
+    const auto duplicate_name = scene_manager->duplicateNodeTree("model");
+    ASSERT_FALSE(duplicate_name.empty());
+
+    auto* duplicate = scene_manager->getScene().getNode(duplicate_name);
+    ASSERT_NE(duplicate, nullptr);
+    ASSERT_NE(duplicate->model, nullptr);
+    EXPECT_EQ(duplicate->model->size(), 2);
+    EXPECT_FALSE(duplicate->model->has_deleted_mask());
+    EXPECT_EQ(mean_x_values(*duplicate->model), (std::vector<float>{0.0f, 2.0f}));
+    EXPECT_EQ(sh_rest_row_values(*duplicate->model, 0), expected_sh_rest_row_0);
+    EXPECT_EQ(sh_rest_row_values(*duplicate->model, 1), expected_sh_rest_row_2);
+
+    lfs::vis::op::undoHistory().undo();
+    EXPECT_EQ(scene_manager->getScene().getNode(duplicate_name), nullptr);
+
+    lfs::vis::op::undoHistory().redo();
+    auto* restored_duplicate = scene_manager->getScene().getNode(duplicate_name);
+    ASSERT_NE(restored_duplicate, nullptr);
+    ASSERT_NE(restored_duplicate->model, nullptr);
+    EXPECT_EQ(restored_duplicate->model->size(), 2);
+    EXPECT_FALSE(restored_duplicate->model->has_deleted_mask());
+    EXPECT_EQ(mean_x_values(*restored_duplicate->model), (std::vector<float>{0.0f, 2.0f}));
+    EXPECT_EQ(sh_rest_row_values(*restored_duplicate->model, 0), expected_sh_rest_row_0);
+    EXPECT_EQ(sh_rest_row_values(*restored_duplicate->model, 1), expected_sh_rest_row_2);
+}
+
+TEST_F(UndoHistoryTest, DuplicateFullySoftDeletedSplatDoesNotPromoteChildren) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addSplat("model", make_linear_test_splat(2));
+    auto* node = scene_manager->getScene().getNode("model");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->model, nullptr);
+    const auto model_id = node->id;
+    const auto cropbox_id = scene_manager->getScene().addCropBox("cropbox", model_id);
+    ASSERT_NE(cropbox_id, lfs::core::NULL_NODE);
+    node->model->soft_delete(make_uint8_mask({1, 1}).to(DataType::Bool));
+    scene_manager->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+
+    const auto duplicate_name = scene_manager->duplicateNodeTree("model");
+    EXPECT_TRUE(duplicate_name.empty());
+    EXPECT_EQ(scene_manager->getScene().getNode("model_copy"), nullptr);
+    EXPECT_EQ(scene_manager->getScene().getNode("cropbox_copy"), nullptr);
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
+
+    const auto* original_child = scene_manager->getScene().getNode("cropbox");
+    ASSERT_NE(original_child, nullptr);
+    EXPECT_EQ(original_child->parent_id, model_id);
 }
 
 TEST_F(UndoHistoryTest, SelectionSnapshotRestoresSelectionGroupsAndActiveGroup) {

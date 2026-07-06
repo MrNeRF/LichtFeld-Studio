@@ -372,3 +372,124 @@ TEST(ViewportTest, OrthographicUnprojectRejectsInvalidScale) {
 
     EXPECT_FALSE(Viewport::isValidWorldPosition(invalid));
 }
+
+namespace {
+    constexpr float kDroneDt = 1.0f / 60.0f;
+
+    void expectOrthonormal(const glm::mat3& R) {
+        for (int i = 0; i < 3; ++i) {
+            EXPECT_NEAR(glm::length(R[i]), 1.0f, 1e-5f);
+            for (int j = i + 1; j < 3; ++j) {
+                EXPECT_NEAR(glm::dot(R[i], R[j]), 0.0f, 1e-5f);
+            }
+        }
+    }
+} // namespace
+
+TEST(ViewportTest, DroneBrakesToRestFromForwardFlight) {
+    Viewport viewport(100, 100);
+    viewport.camera.enterDrone();
+
+    for (int i = 0; i < 60; ++i)
+        viewport.camera.advanceDrone(kDroneDt, true, false, false, false, false, false);
+    EXPECT_TRUE(viewport.camera.hasDroneMotion());
+
+    int settle_steps = 0;
+    while (viewport.camera.hasDroneMotion() && settle_steps < 300) {
+        viewport.camera.advanceDrone(kDroneDt, false, false, false, false, false, false);
+        ++settle_steps;
+    }
+    EXPECT_FALSE(viewport.camera.hasDroneMotion());
+
+    const glm::vec3 t_at_rest = viewport.camera.t;
+    const glm::mat3 R_at_rest = viewport.camera.R;
+    viewport.camera.advanceDrone(kDroneDt, false, false, false, false, false, false);
+    EXPECT_EQ(viewport.camera.t, t_at_rest);
+    EXPECT_EQ(viewport.camera.R, R_at_rest);
+}
+
+TEST(ViewportTest, DroneHorizontalFlightIgnoresGimbalPitch) {
+    Viewport viewport(100, 100);
+    viewport.camera.t = glm::vec3(0.0f, 10.0f, 0.0f);
+    viewport.camera.R = lfs::rendering::makeVisualizerLookAtRotation(
+        viewport.camera.t, viewport.camera.t + glm::normalize(glm::vec3(0.0f, -1.0f, -1.0f)));
+    viewport.camera.enterDrone();
+
+    for (int i = 0; i < 120; ++i) {
+        viewport.camera.advanceDrone(kDroneDt, true, false, false, false, false, false);
+        EXPECT_NEAR(viewport.camera.t.y, 10.0f, 1e-4f);
+    }
+    EXPECT_LT(viewport.camera.t.z, -0.5f);
+}
+
+TEST(ViewportTest, DroneClimbIsPureVertical) {
+    Viewport viewport(100, 100);
+    viewport.camera.enterDrone();
+    const glm::vec3 t0 = viewport.camera.t;
+
+    for (int i = 0; i < 120; ++i)
+        viewport.camera.advanceDrone(kDroneDt, false, false, false, false, true, false);
+
+    EXPECT_NEAR(viewport.camera.t.x, t0.x, 1e-4f);
+    EXPECT_NEAR(viewport.camera.t.z, t0.z, 1e-4f);
+    EXPECT_GT(viewport.camera.t.y, t0.y + 0.5f);
+}
+
+TEST(ViewportTest, DroneNoRollAfterEnterExit) {
+    Viewport viewport(100, 100);
+    viewport.camera.enterDrone();
+    viewport.camera.initScreenPos(glm::vec2(0.0f));
+    viewport.camera.droneLook(glm::vec2(150.0f, -80.0f));
+
+    bool saw_bank = false;
+    for (int i = 0; i < 90; ++i) {
+        viewport.camera.advanceDrone(kDroneDt, true, false, false, true, false, false);
+        saw_bank = saw_bank || std::abs(viewport.camera.R[0].y) > 0.01f;
+    }
+    EXPECT_TRUE(saw_bank);
+
+    viewport.camera.finishDrone();
+    EXPECT_FALSE(viewport.camera.hasDroneMotion());
+    EXPECT_NEAR(viewport.camera.R[0].y, 0.0f, 1e-5f);
+    expectOrthonormal(viewport.camera.R);
+}
+
+TEST(ViewportTest, DroneResyncsAfterExternalRotation) {
+    Viewport viewport(100, 100);
+    viewport.camera.enterDrone();
+    for (int i = 0; i < 60; ++i)
+        viewport.camera.advanceDrone(kDroneDt, true, false, false, false, false, false);
+
+    viewport.camera.setAxisAlignedView(0, false);
+    EXPECT_FALSE(viewport.camera.hasDroneMotion());
+
+    const glm::vec3 t_after_view = viewport.camera.t;
+    viewport.camera.advanceDrone(kDroneDt, false, false, false, false, false, false);
+
+    EXPECT_EQ(viewport.camera.t, t_after_view);
+    const glm::vec3 forward = lfs::rendering::cameraForward(viewport.camera.R);
+    EXPECT_NEAR(forward.x, -1.0f, 1e-4f);
+    EXPECT_NEAR(forward.y, 0.0f, 1e-4f);
+    EXPECT_NEAR(forward.z, 0.0f, 1e-4f);
+    expectOrthonormal(viewport.camera.R);
+    for (int col = 0; col < 3; ++col)
+        for (int row = 0; row < 3; ++row)
+            EXPECT_TRUE(std::isfinite(viewport.camera.R[col][row]));
+}
+
+TEST(ViewportTest, DroneBanksIntoYawTurnWhileFlyingForward) {
+    Viewport viewport(100, 100);
+    viewport.camera.enterDrone();
+    for (int i = 0; i < 90; ++i)
+        viewport.camera.advanceDrone(kDroneDt, true, false, false, false, false, false);
+
+    viewport.camera.initScreenPos(glm::vec2(0.0f));
+    viewport.camera.droneLook(glm::vec2(-400.0f, 0.0f));
+
+    float max_left_bank = 0.0f;
+    for (int i = 0; i < 30; ++i) {
+        viewport.camera.advanceDrone(kDroneDt, true, false, false, false, false, false);
+        max_left_bank = std::max(max_left_bank, viewport.camera.R[0].y);
+    }
+    EXPECT_GT(max_left_bank, 0.05f);
+}

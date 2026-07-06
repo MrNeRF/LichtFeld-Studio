@@ -179,6 +179,9 @@ namespace lfs::vis {
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImage(
             VulkanContext& context,
             OutputSlot output_slot = OutputSlot::Main) const;
+        [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgba(
+            VulkanContext& context,
+            OutputSlot output_slot = OutputSlot::Main) const;
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputImageRgb8(
             VulkanContext& context,
             OutputSlot output_slot = OutputSlot::Main) const;

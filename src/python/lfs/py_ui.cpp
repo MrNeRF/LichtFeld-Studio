@@ -5168,6 +5168,10 @@ namespace lfs::python {
 
         m.def("set_transform_space", &set_transform_space, nb::arg("space"), "Set transform space (0=Local, 1=World)");
 
+        m.def("get_multi_transform_mode", &get_multi_transform_mode, "Get multi-transform mode (0=Group, 1=Individual)");
+
+        m.def("set_multi_transform_mode", &set_multi_transform_mode, nb::arg("mode"), "Set multi-transform mode (0=Group, 1=Individual)");
+
         // Thumbnail system (for Getting Started window)
         m.def("request_thumbnail", &request_thumbnail, nb::arg("video_id"),
               "Request download of a YouTube thumbnail for the given video ID");

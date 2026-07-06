@@ -2,6 +2,7 @@
   "builtin-baseline": "c3867e714dd3a51c272826eea77267876517ed99",
   "dependencies": [
     "cppzmq",
+    "curl",
     "args",
     "assimp",
     "boost-preprocessor",
@@ -37,6 +38,10 @@
       "platform": "windows | osx"
     },
     "nlohmann-json",
+    {
+      "name": "onnxruntime",
+      "features": ["cuda"]
+    },
     {
       "name": "openimageio",
       "features": [

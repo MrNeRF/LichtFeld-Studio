@@ -44,10 +44,10 @@ namespace lfs::vis {
         // is unchanged.
         void prepare(const VulkanEnvironmentParams& params);
 
-        // Records a full-screen quad draw that fills the color attachment with the
+        // Records a quad draw that fills the viewport rect with the
         // ACES-tonemapped equirect background. Caller is mid-render.
         void record(VkCommandBuffer command_buffer,
-                    VkExtent2D framebuffer_extent,
+                    VkRect2D framebuffer_rect,
                     const VulkanEnvironmentParams& params);
 
         void shutdown();

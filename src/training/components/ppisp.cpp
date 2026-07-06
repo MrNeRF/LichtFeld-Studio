@@ -159,7 +159,7 @@ namespace lfs::training {
         // clang-format on
     }
 
-    lfs::core::Tensor PPISP::apply(const lfs::core::Tensor& rgb, int camera_id, int uid) {
+    lfs::core::Tensor PPISP::apply(const lfs::core::Tensor& rgb, int camera_id, int uid, const PPISPRegion& region) {
         assert(finalized_ && "Must call finalize() before apply()");
         const int camera_idx = translate_camera(camera_id);
         const int frame_idx = translate_frame(uid);
@@ -169,20 +169,23 @@ namespace lfs::training {
 
         const int h = static_cast<int>(shape[1]);
         const int w = static_cast<int>(shape[2]);
+        const int full_h = region.full_height > 0 ? region.full_height : h;
+        assert(region.y_offset >= 0 && region.y_offset + h <= full_h && "PPISP region out of bounds");
 
         auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::CUDA);
 
-        kernels::launch_ppisp_forward_chw(exposure_params_.ptr<float>(), vignetting_params_.ptr<float>(),
-                                          color_params_.ptr<float>(), crf_params_.ptr<float>(), rgb.ptr<float>(),
-                                          output.ptr<float>(), h, w, num_cameras_, num_frames_, camera_idx, frame_idx,
-                                          nullptr);
+        kernels::launch_ppisp_forward_chw_region(exposure_params_.ptr<float>(), vignetting_params_.ptr<float>(),
+                                                 color_params_.ptr<float>(), crf_params_.ptr<float>(),
+                                                 rgb.ptr<float>(), output.ptr<float>(), h, w, region.y_offset, full_h,
+                                                 num_cameras_, num_frames_, camera_idx, frame_idx, nullptr);
 
         return output;
     }
 
     lfs::core::Tensor PPISP::apply_with_controller_params(const lfs::core::Tensor& rgb,
                                                           const lfs::core::Tensor& controller_params,
-                                                          int camera_idx) {
+                                                          int camera_idx,
+                                                          const PPISPRegion& region) {
         assert(controller_params.shape().rank() == 2 && "Expected [1,9]");
         assert(controller_params.shape()[0] == 1 && controller_params.shape()[1] == 9);
         assert(camera_idx >= 0 && camera_idx < num_cameras_ && "camera_idx out of range");
@@ -192,6 +195,8 @@ namespace lfs::training {
 
         const int h = static_cast<int>(shape[1]);
         const int w = static_cast<int>(shape[2]);
+        const int full_h = region.full_height > 0 ? region.full_height : h;
+        assert(region.y_offset >= 0 && region.y_offset + h <= full_h && "PPISP region out of bounds");
 
         // Extract exposure (index 0) and color params (indices 1-8) from controller output
         auto exposure_temp = controller_params.slice(1, 0, 1).reshape({1});
@@ -200,9 +205,10 @@ namespace lfs::training {
         auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::CUDA);
 
         // Use controller-predicted exposure and color, but existing vignetting and CRF from camera
-        kernels::launch_ppisp_forward_chw(exposure_temp.ptr<float>(), vignetting_params_.ptr<float>(),
-                                          color_temp.ptr<float>(), crf_params_.ptr<float>(), rgb.ptr<float>(),
-                                          output.ptr<float>(), h, w, num_cameras_, 1, camera_idx, 0, nullptr);
+        kernels::launch_ppisp_forward_chw_region(exposure_temp.ptr<float>(), vignetting_params_.ptr<float>(),
+                                                 color_temp.ptr<float>(), crf_params_.ptr<float>(), rgb.ptr<float>(),
+                                                 output.ptr<float>(), h, w, region.y_offset, full_h, num_cameras_, 1,
+                                                 camera_idx, 0, nullptr);
 
         return output;
     }
@@ -210,7 +216,8 @@ namespace lfs::training {
     lfs::core::Tensor PPISP::apply_with_controller_params_and_overrides(const lfs::core::Tensor& rgb,
                                                                         const lfs::core::Tensor& controller_params,
                                                                         int camera_idx,
-                                                                        const PPISPRenderOverrides& ov) {
+                                                                        const PPISPRenderOverrides& ov,
+                                                                        const PPISPRegion& region) {
         assert(controller_params.shape().rank() == 2 && "Expected [1,9]");
         assert(controller_params.shape()[0] == 1 && controller_params.shape()[1] == 9);
         assert(camera_idx >= 0 && camera_idx < num_cameras_ && "camera_idx out of range");
@@ -220,6 +227,8 @@ namespace lfs::training {
 
         const int h = static_cast<int>(shape[1]);
         const int w = static_cast<int>(shape[2]);
+        const int full_h = region.full_height > 0 ? region.full_height : h;
+        assert(region.y_offset >= 0 && region.y_offset + h <= full_h && "PPISP region out of bounds");
 
         auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::CUDA);
 
@@ -284,15 +293,16 @@ namespace lfs::training {
                        cudaMemcpyHostToDevice);
         }
 
-        kernels::launch_ppisp_forward_chw(exposure_temp.ptr<float>(), vignetting_modified.ptr<float>(),
-                                          color_temp.ptr<float>(), crf_modified.ptr<float>(), rgb.ptr<float>(),
-                                          output.ptr<float>(), h, w, num_cameras_, 1, camera_idx, 0, nullptr);
+        kernels::launch_ppisp_forward_chw_region(exposure_temp.ptr<float>(), vignetting_modified.ptr<float>(),
+                                                 color_temp.ptr<float>(), crf_modified.ptr<float>(), rgb.ptr<float>(),
+                                                 output.ptr<float>(), h, w, region.y_offset, full_h, num_cameras_, 1,
+                                                 camera_idx, 0, nullptr);
 
         return output;
     }
 
     lfs::core::Tensor PPISP::apply_with_overrides(const lfs::core::Tensor& rgb, int camera_id, int uid,
-                                                  const PPISPRenderOverrides& ov) {
+                                                  const PPISPRenderOverrides& ov, const PPISPRegion& region) {
         assert(finalized_ && "Must call finalize() before apply_with_overrides()");
         const int camera_idx = translate_camera(camera_id);
         const int frame_idx = translate_frame(uid);
@@ -302,6 +312,8 @@ namespace lfs::training {
 
         const int h = static_cast<int>(shape[1]);
         const int w = static_cast<int>(shape[2]);
+        const int full_h = region.full_height > 0 ? region.full_height : h;
+        assert(region.y_offset >= 0 && region.y_offset + h <= full_h && "PPISP region out of bounds");
 
         auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::CUDA);
 
@@ -368,10 +380,10 @@ namespace lfs::training {
                        cudaMemcpyHostToDevice);
         }
 
-        kernels::launch_ppisp_forward_chw(exposure_modified.ptr<float>(), vignetting_modified.ptr<float>(),
-                                          color_modified.ptr<float>(), crf_modified.ptr<float>(), rgb.ptr<float>(),
-                                          output.ptr<float>(), h, w, num_cameras_, num_frames_, camera_idx, frame_idx,
-                                          nullptr);
+        kernels::launch_ppisp_forward_chw_region(exposure_modified.ptr<float>(), vignetting_modified.ptr<float>(),
+                                                 color_modified.ptr<float>(), crf_modified.ptr<float>(),
+                                                 rgb.ptr<float>(), output.ptr<float>(), h, w, region.y_offset, full_h,
+                                                 num_cameras_, num_frames_, camera_idx, frame_idx, nullptr);
 
         return output;
     }

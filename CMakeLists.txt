@@ -13,6 +13,36 @@ endif()
 
 cmake_minimum_required(VERSION 3.30)
 
+# vcpkg manifest install runs during CMake configure/regeneration, outside the
+# native build tool's `cmake --build -j ...` limit. Cap vcpkg separately before
+# the toolchain is loaded by project().
+set(LFS_VCPKG_MAX_CONCURRENCY "" CACHE STRING "Maximum number of concurrent jobs vcpkg may use while building packages; empty uses environment or caps auto-detection at 16")
+set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY "${LFS_VCPKG_MAX_CONCURRENCY}")
+if(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY STREQUAL "")
+    if(DEFINED ENV{VCPKG_MAX_CONCURRENCY} AND NOT "$ENV{VCPKG_MAX_CONCURRENCY}" STREQUAL "")
+        set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY "$ENV{VCPKG_MAX_CONCURRENCY}")
+    elseif(DEFINED ENV{CMAKE_BUILD_PARALLEL_LEVEL} AND NOT "$ENV{CMAKE_BUILD_PARALLEL_LEVEL}" STREQUAL "")
+        set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY "$ENV{CMAKE_BUILD_PARALLEL_LEVEL}")
+    else()
+        include(ProcessorCount)
+        ProcessorCount(_LFS_HOST_PROCESSOR_COUNT)
+        if(_LFS_HOST_PROCESSOR_COUNT EQUAL 0)
+            set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY 16)
+        elseif(_LFS_HOST_PROCESSOR_COUNT GREATER 16)
+            set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY 16)
+        else()
+            set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY "${_LFS_HOST_PROCESSOR_COUNT}")
+        endif()
+    endif()
+endif()
+if(NOT _LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY MATCHES "^[1-9][0-9]*$")
+    message(FATAL_ERROR "LFS_VCPKG_MAX_CONCURRENCY must resolve to a positive integer, got '${_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY}'")
+endif()
+set(ENV{VCPKG_MAX_CONCURRENCY} "${_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY}")
+message(STATUS "vcpkg package build concurrency limited to ${_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY}")
+unset(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY)
+unset(_LFS_HOST_PROCESSOR_COUNT)
+
 option(LFS_ENFORCE_LINUX_GUI_BACKENDS "Fail configure when Linux SDL3 would lack X11 and Wayland support" ON)
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/LinuxGuiSanity.cmake")
@@ -394,6 +424,7 @@ add_subdirectory(src/training)   # Training module (lfs::training namespace)
 add_subdirectory(src/io)         # I/O module (lfs::io namespace)
 add_subdirectory(src/rendering)  # Rendering module (lfs::rendering namespace)
 add_subdirectory(src/sequencer)  # Sequencer module (lfs::sequencer namespace)
+add_subdirectory(src/preprocessing) # CLI preprocessing module (ONNXRuntime)
 add_subdirectory(src/visualizer) # Visualizer module (lfs::vis namespace)
 add_subdirectory(src/tcp)        # TCP event server (ZMQ responder + publisher)
 add_subdirectory(src/geometry)   # Geometry utilities
@@ -442,7 +473,7 @@ target_include_directories(${PROJECT_NAME}
 
 if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
     set(LFS_APP_INTERNAL_LINK_LIBS
-        "$<LINK_GROUP:RESCAN,lfs_visualizer,lfs_mcp,lfs_sequencer,lfs_rendering_tensor,lfs_training,lfs_geometry,lfs_core,lfs_io,lfs_video,fastlfs_backend,lfs_python_utils,lfs_tcp>"
+        "$<LINK_GROUP:RESCAN,lfs_visualizer,lfs_mcp,lfs_sequencer,lfs_rendering_tensor,lfs_training,lfs_preprocessing,lfs_geometry,lfs_core,lfs_io,lfs_video,fastlfs_backend,lfs_python_utils,lfs_tcp>"
     )
 else()
     set(LFS_APP_INTERNAL_LINK_LIBS
@@ -452,6 +483,7 @@ else()
         lfs_sequencer
         lfs_rendering_tensor
         lfs_training
+        lfs_preprocessing
         lfs_geometry
         lfs_core
         lfs_io
@@ -528,6 +560,27 @@ if(TARGET nvimgcodec)
     endif()
 
     message(STATUS "Post-build: nvImageCodec libraries will be copied to executable directory")
+endif()
+
+# ONNX Runtime dlopens its CUDA execution providers at runtime; vcpkg installs
+# those as shared libraries even on static triplets. Keep them beside the exe so
+# local and packaged preprocess runs do not silently fall back to CPU.
+file(GLOB _lfs_ort_provider_libs
+    "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib/*onnxruntime_providers_*"
+    "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/*onnxruntime_providers_*")
+list(FILTER _lfs_ort_provider_libs INCLUDE REGEX "\\.(dll|dylib|so(\\.[0-9]+)*)$")
+list(REMOVE_DUPLICATES _lfs_ort_provider_libs)
+if(_lfs_ort_provider_libs)
+    foreach(_lfs_ort_provider_lib IN LISTS _lfs_ort_provider_libs)
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_lfs_ort_provider_lib}"
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+            COMMENT "Copying ONNX Runtime provider library"
+        )
+    endforeach()
+else()
+    message(WARNING "ONNX Runtime provider libraries were not found; preprocess CUDA inference may fall back to CPU")
 endif()
 
 # Copy Python DLLs for Windows runtime (Python is embedded in the application)
@@ -671,6 +724,7 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "${RESOURCE_DIR}/assets/icon/scene"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${RESOURCE_DIR}/assets/fonts"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${RESOURCE_DIR}/assets/themes"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${RESOURCE_DIR}/assets/environments"
     COMMENT "Creating resource directory structure"
 )
 
@@ -725,6 +779,14 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/themes"
         "${RESOURCE_DIR}/assets/themes"
     COMMENT "Copying themes"
+)
+
+# Copy bundled environment maps
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+        "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/environments"
+        "${RESOURCE_DIR}/assets/environments"
+    COMMENT "Copying environment maps"
 )
 
 # Copy additional assets (logo, splash images, etc.)
@@ -945,6 +1007,7 @@ configure_build_type(fastlfs_backend)
 configure_build_type(lfs_core)
 configure_build_type(lfs_core_cuda)
 configure_build_type(lfs_training)
+configure_build_type(lfs_preprocessing)
 configure_build_type(lfs_rendering_tensor)
 configure_build_type(lfs_rendering)
 configure_build_type(lfs_visualizer)
@@ -1061,6 +1124,9 @@ install(TARGETS lfs_mcp
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
+if(_lfs_ort_provider_libs)
+    install(FILES ${_lfs_ort_provider_libs} DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
 install(FILES "${CMAKE_SOURCE_DIR}/LICENSE" DESTINATION ".")
 
 set(INSTALL_RESOURCE_DIR "${CMAKE_INSTALL_DATADIR}/LichtFeld-Studio")
@@ -1198,6 +1264,9 @@ if(BUILD_PORTABLE)
     if(TARGET nvjpeg_ext)
         bundle_runtime_deps("$<TARGET_FILE:nvjpeg_ext>" TRUE)
     endif()
+    foreach(_lfs_ort_provider_lib IN LISTS _lfs_ort_provider_libs)
+        bundle_runtime_deps("${_lfs_ort_provider_lib}" TRUE)
+    endforeach()
 
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         configure_file(

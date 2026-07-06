@@ -456,6 +456,7 @@ namespace lfs::vis::gui {
         document_sync_subscriptions_.push_back(store.active_submode.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.transform_space.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.pivot_mode.subscribe(mark_document_dirty));
+        document_sync_subscriptions_.push_back(store.multi_transform_mode.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.render_settings_generation.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.viewport_toolbar_generation.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.import_overlay_state.subscribe(mark_document_dirty));

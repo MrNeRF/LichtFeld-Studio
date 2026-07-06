@@ -715,16 +715,24 @@ namespace lfs::vis::gui {
         };
 
         if (const auto* ic = lfs::vis::InputController::instance()) {
+            using NavMode = lfs::vis::InputController::CameraNavigationMode;
+            struct NavButtonSpec {
+                NavMode mode;
+                const char* icon;
+                const char* tooltip;
+            };
+            static constexpr NavButtonSpec kNavButtons[] = {
+                {NavMode::Orbit, "camera-orbit", "Orbit Camera"},
+                {NavMode::Trackball, "world", "Free Orbit Camera"},
+                {NavMode::FPV, "camera-fpv", "Fly Camera"},
+                {NavMode::Drone, "drone", "Drone Camera"},
+            };
             const auto mode = ic->cameraNavigationMode();
-            camera_buttons.push_back(make("menu-camera-orbit", "set_camera_navigation_mode", "orbit",
-                                          "camera-orbit", "", "Orbit Camera",
-                                          mode == lfs::vis::InputController::CameraNavigationMode::Orbit));
-            camera_buttons.push_back(make("menu-camera-trackball", "set_camera_navigation_mode", "trackball",
-                                          "world", "", "Free Orbit Camera",
-                                          mode == lfs::vis::InputController::CameraNavigationMode::Trackball));
-            camera_buttons.push_back(make("menu-camera-fpv", "set_camera_navigation_mode", "fpv",
-                                          "camera-fpv", "", "Fly Camera",
-                                          mode == lfs::vis::InputController::CameraNavigationMode::FPV));
+            for (const auto& spec : kNavButtons) {
+                const std::string name = lfs::vis::InputController::cameraNavigationModeName(spec.mode);
+                camera_buttons.push_back(make("menu-camera-" + name, "set_camera_navigation_mode", name,
+                                              spec.icon, "", spec.tooltip, mode == spec.mode));
+            }
         }
 
         if (const auto* rm = lfs::vis::services().renderingOrNull()) {
@@ -803,12 +811,8 @@ namespace lfs::vis::gui {
             auto* ic = lfs::vis::InputController::instance();
             if (!ic)
                 return;
-            if (value == "orbit") {
-                ic->setCameraNavigationMode(lfs::vis::InputController::CameraNavigationMode::Orbit);
-            } else if (value == "trackball") {
-                ic->setCameraNavigationMode(lfs::vis::InputController::CameraNavigationMode::Trackball);
-            } else if (value == "fpv" || value == "fly") {
-                ic->setCameraNavigationMode(lfs::vis::InputController::CameraNavigationMode::FPV);
+            if (const auto mode = lfs::vis::InputController::cameraNavigationModeFromName(value)) {
+                ic->setCameraNavigationMode(*mode);
             }
         } else if (action == "toggle_projection") {
             if (!rm)

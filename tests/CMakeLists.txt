@@ -282,6 +282,8 @@ set(TEST_FILES
     test_ppisp_regularization.cpp
     test_ppisp_sidecar.cpp
     test_ppisp_cuda_vs_torch.cpp
+    test_ppisp_banded_region.cpp
+    test_export_env_composite.cpp
     test_controller_memory.cpp
     test_undistort.cpp
     test_viewport_region_utils.cpp
@@ -289,6 +291,7 @@ set(TEST_FILES
     test_openmesh_bridge.cpp
     test_mesh_loader.cpp
     test_colmap_image_layout.cpp
+    test_colmap_points3d_text.cpp
     test_splat_simplify.cpp
     test_rml_text_input_handler.cpp
     test_rotated_sh_correctness.cpp

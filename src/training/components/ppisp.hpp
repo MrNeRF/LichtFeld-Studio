@@ -62,6 +62,14 @@ namespace lfs::training {
         float crf_channel = 0.1f;   // Encourage similar CRF across RGB channels
     };
 
+    /// Full-width row band of a larger image: vignetting is evaluated in full-image
+    /// coordinates so banded application matches a single full-image pass exactly.
+    /// full_height == 0 means the input covers the whole image.
+    struct PPISPRegion {
+        int y_offset = 0;
+        int full_height = 0;
+    };
+
     /// Physically-Plausible Image Signal Processing for per-camera/per-frame appearance modeling
     class PPISP {
     public:
@@ -90,7 +98,8 @@ namespace lfs::training {
         /// Forward pass: apply ISP pipeline (exposure, vignetting, color correction, CRF)
         /// @param camera_id Original COLMAP camera_id (translated internally)
         /// @param uid Original frame UID (translated internally)
-        lfs::core::Tensor apply(const lfs::core::Tensor& rgb, int camera_id, int uid);
+        lfs::core::Tensor apply(const lfs::core::Tensor& rgb, int camera_id, int uid,
+                                const PPISPRegion& region = {});
 
         /// Apply ISP with controller-predicted params (for novel view synthesis)
         /// @param rgb input image [C,H,W]
@@ -98,20 +107,23 @@ namespace lfs::training {
         /// @param camera_idx camera index for vignetting/CRF (use 0 or averaged if unknown)
         lfs::core::Tensor apply_with_controller_params(const lfs::core::Tensor& rgb,
                                                        const lfs::core::Tensor& controller_params,
-                                                       int camera_idx = 0);
+                                                       int camera_idx = 0,
+                                                       const PPISPRegion& region = {});
 
         /// Apply ISP with controller-predicted params + user overrides (for novel view with adjustments)
         lfs::core::Tensor apply_with_controller_params_and_overrides(const lfs::core::Tensor& rgb,
                                                                      const lfs::core::Tensor& controller_params,
                                                                      int camera_idx,
-                                                                     const PPISPRenderOverrides& overrides);
+                                                                     const PPISPRenderOverrides& overrides,
+                                                                     const PPISPRegion& region = {});
 
         /// Apply ISP with user-controlled overrides (for viewport preview)
         /// Full control over all PPISP parameters as described in paper Section 4 and Supplementary D
         /// @param camera_id Original COLMAP camera_id (translated internally)
         /// @param uid Original frame UID (translated internally)
         lfs::core::Tensor apply_with_overrides(const lfs::core::Tensor& rgb, int camera_id, int uid,
-                                               const PPISPRenderOverrides& overrides);
+                                               const PPISPRenderOverrides& overrides,
+                                               const PPISPRegion& region = {});
 
         /// Backward pass: accumulate gradients (call optimizer_step after all backward calls)
         /// @param camera_id Original COLMAP camera_id (translated internally)

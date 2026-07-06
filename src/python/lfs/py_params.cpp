@@ -430,6 +430,11 @@ namespace lfs::python {
             [](const DatasetConfig& c) { return c.loading_params.use_fs_cache; },
             [](DatasetConfig& c, bool v) { c.loading_params.use_fs_cache = v; });
 
+        add_bool(
+            "use_16bit_color", "16-bit Color", false, "Train with 16-bit color images (HDR); caches losslessly as JPEG 2000", false,
+            [](const DatasetConfig& c) { return c.loading_params.use_16bit_color; },
+            [](DatasetConfig& c, bool v) { c.loading_params.use_16bit_color = v; });
+
         PropertyRegistry::instance().register_group(std::move(group));
     }
 
@@ -1424,6 +1429,15 @@ namespace lfs::python {
                     self.params().loading_params.use_fs_cache = v;
                 },
                 "Use filesystem cache for images")
+            .def_prop_rw(
+                "use_16bit_color",
+                [](const PyDatasetConfig& self) { return self.params().loading_params.use_16bit_color; },
+                [](PyDatasetConfig& self, bool v) {
+                    if (!self.can_edit())
+                        throw std::runtime_error("Cannot edit dataset params during training");
+                    self.params().loading_params.use_16bit_color = v;
+                },
+                "Train with 16-bit color images (HDR); caches losslessly as JPEG 2000")
             .def_prop_ro(
                 "centralize_dataset",
                 [](const PyDatasetConfig& self) { return self.params().centralize_dataset; },

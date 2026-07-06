@@ -106,6 +106,11 @@ namespace lfs::io {
             int quality = 100,
             void* cuda_stream = nullptr);
 
+        // Encode GPU tensor to JPEG2k bytes (RGB 16bits)
+        std::vector<uint8_t> encode_to_jpeg2k(
+            const lfs::core::Tensor& image,
+            void* cuda_stream = nullptr);
+
         /**
          * @brief Encode grayscale GPU tensor to JPEG bytes
          *

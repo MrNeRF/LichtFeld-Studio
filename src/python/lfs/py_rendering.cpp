@@ -24,6 +24,7 @@
 #include "visualizer/internal/viewport.hpp"
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
+#include "visualizer/rendering/viewport_appearance_correction.hpp"
 #include "visualizer/visualizer.hpp"
 
 #include <algorithm>
@@ -34,7 +35,9 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <expected>
 #include <filesystem>
+#include <functional>
 #include <future>
 #include <numbers>
 #include <variant>
@@ -52,7 +55,6 @@ namespace lfs::python {
         enum class PreviewReadback {
             FloatRgb,
             UInt8Rgb,
-            UInt8Rgba,
         };
 
         [[nodiscard]] std::optional<core::Tensor> viewportRenderImageHwc(
@@ -65,7 +67,6 @@ namespace lfs::python {
             const auto layout = rendering::detectImageLayout(image);
             if (layout == rendering::ImageLayout::Unknown)
                 return std::nullopt;
-            image = rendering::flipImageVertical(image, layout);
             if (layout == rendering::ImageLayout::CHW) {
                 image = image.permute({1, 2, 0});
             } else {
@@ -499,17 +500,7 @@ namespace lfs::python {
             }
 
             std::shared_ptr<core::Tensor> image;
-            if (readback == PreviewReadback::UInt8Rgba) {
-                image = rendering_manager->renderPreviewImageRgba8(
-                    scene_manager,
-                    rotation,
-                    translation,
-                    lfs::rendering::vFovToFocalLength(fov_degrees),
-                    width,
-                    height,
-                    orthographic_override,
-                    ortho_scale_override);
-            } else if (readback == PreviewReadback::UInt8Rgb) {
+            if (readback == PreviewReadback::UInt8Rgb) {
                 image = rendering_manager->renderPreviewImageRgb8(
                     scene_manager,
                     rotation,
@@ -1226,7 +1217,7 @@ namespace lfs::python {
                 throw std::runtime_error("viewport export expected a 3D image tensor");
             }
             if (image.shape()[0] <= 4 && image.shape()[2] > 4) {
-                image = image.permute({1, 2, 0});
+                image = image.permute({1, 2, 0}).contiguous();
             }
             image = image.to(core::Device::CPU);
             if (image.dtype() != core::DataType::UInt8) {
@@ -1260,23 +1251,108 @@ namespace lfs::python {
             return toU8Hwc(std::move(*image));
         }
 
-        [[nodiscard]] core::Tensor renderCurrentViewRgba8(const vis::ViewInfo& view_info,
-                                                          const int width,
-                                                          const int height) {
-            auto image = renderViewThreadSafe(
-                viewInfoRotationMatrix(view_info),
-                glm::vec3{view_info.translation[0], view_info.translation[1], view_info.translation[2]},
-                width,
-                height,
-                view_info.fov,
-                PreviewReadback::UInt8Rgba,
-                std::nullopt,
-                view_info.orthographic,
-                scaledViewInfoOrthoScale(view_info, height));
-            if (!image || !image->is_valid()) {
-                throw std::runtime_error("transparent viewport export render failed");
+        using ExportImageResult = std::expected<core::Tensor, std::string>;
+
+        [[nodiscard]] ExportImageResult runExportOnViewerThread(
+            std::function<ExportImageResult()> invoke_render) {
+            auto* const viewer = get_visualizer();
+            if (!viewer || viewer->isOnViewerThread()) {
+                return invoke_render();
             }
-            return toU8Hwc(std::move(*image));
+            if (!viewer->acceptsPostedWork()) {
+                return std::unexpected("viewer is not accepting export work");
+            }
+
+            auto promise = std::make_shared<std::promise<ExportImageResult>>();
+            auto future = promise->get_future();
+            auto completed = std::make_shared<std::atomic_bool>(false);
+
+            auto finish = [promise, completed](ExportImageResult result) mutable {
+                if (!completed->exchange(true)) {
+                    promise->set_value(std::move(result));
+                }
+            };
+
+            const bool posted = viewer->postWork(vis::Visualizer::WorkItem{
+                .run =
+                    [invoke_render = std::move(invoke_render), finish]() mutable {
+                        finish(invoke_render());
+                    },
+                .cancel =
+                    [finish]() mutable {
+                        finish(std::unexpected("viewport export was cancelled"));
+                    }});
+            if (!posted) {
+                return std::unexpected("failed to post export work to the viewer");
+            }
+
+            nb::gil_scoped_release release;
+            return future.get();
+        }
+
+        [[nodiscard]] core::Tensor renderCurrentViewExport(const vis::ViewInfo& view_info,
+                                                           const int width,
+                                                           const int height,
+                                                           const vis::ExportPostProcessMode mode) {
+            auto result = runExportOnViewerThread([&view_info, width, height, mode]() -> ExportImageResult {
+                auto* const viewer = get_visualizer();
+                auto* const rendering_manager = viewer ? viewer->getRenderingManager() : nullptr;
+                auto* const scene_manager = viewer ? viewer->getSceneManager() : nullptr;
+                if (!rendering_manager || !scene_manager) {
+                    return std::unexpected("no active viewer is available");
+                }
+                const vis::RenderingManager::ExportImageRequest request{
+                    .rotation = viewInfoRotationMatrix(view_info),
+                    .translation = {view_info.translation[0],
+                                    view_info.translation[1],
+                                    view_info.translation[2]},
+                    .focal_length_mm = lfs::rendering::vFovToFocalLength(view_info.fov),
+                    .width = width,
+                    .height = height,
+                    .orthographic_override = view_info.orthographic,
+                    .ortho_scale_override = scaledViewInfoOrthoScale(view_info, height),
+                    .mode = mode,
+                };
+                return rendering_manager->renderExportImage(scene_manager, request);
+            });
+            if (!result) {
+                throw std::runtime_error("viewport export failed: " + result.error());
+            }
+            return std::move(*result);
+        }
+
+        // Post-process for images assembled outside renderExportImage (the BW2A
+        // transparent fallback): applies the same PPISP correction path.
+        [[nodiscard]] core::Tensor applyExportPostProcessThreadSafe(core::Tensor image,
+                                                                    const vis::ExportPostProcessMode mode) {
+            auto result = runExportOnViewerThread(
+                [image = std::move(image), mode]() mutable -> ExportImageResult {
+                    auto* const viewer = get_visualizer();
+                    auto* const rendering_manager = viewer ? viewer->getRenderingManager() : nullptr;
+                    auto* const scene_manager = viewer ? viewer->getSceneManager() : nullptr;
+                    if (!rendering_manager || !scene_manager) {
+                        return std::unexpected("no active viewer is available");
+                    }
+                    const auto view_info = viewInfoForPanelArg("main");
+                    const vis::ExportPostProcessView view{
+                        .rotation = view_info ? viewInfoRotationMatrix(*view_info) : glm::mat3{1.0f},
+                        .focal_length_mm =
+                            view_info ? lfs::rendering::vFovToFocalLength(view_info->fov) : 0.0f,
+                        .equirectangular_view = rendering_manager->getSettings().equirectangular,
+                        .controller_predict_size =
+                            view_info ? glm::ivec2{view_info->width, view_info->height} : glm::ivec2{0, 0},
+                    };
+                    return vis::applyExportPostProcess(std::move(image),
+                                                       scene_manager,
+                                                       rendering_manager->getSettings(),
+                                                       rendering_manager->getCurrentCameraId(),
+                                                       mode,
+                                                       view);
+                });
+            if (!result) {
+                throw std::runtime_error("viewport export post-process failed: " + result.error());
+            }
+            return std::move(*result);
         }
 
         [[nodiscard]] core::Tensor recoverAlphaRgba(core::Tensor black_rgb, core::Tensor white_rgb) {
@@ -1641,7 +1717,8 @@ namespace lfs::python {
 
             if (transparent) {
                 try {
-                    image = renderCurrentViewRgba8(*view_info, target_width, target_height);
+                    image = renderCurrentViewExport(
+                        *view_info, target_width, target_height, vis::ExportPostProcessMode::Transparent);
                 } catch (const std::exception& e) {
                     LOG_DEBUG("transparent viewport export direct RGBA render failed, falling back to BW2A: {}", e.what());
                     auto black = renderCurrentViewRgb8(
@@ -1654,10 +1731,23 @@ namespace lfs::python {
                         target_width,
                         target_height,
                         std::optional<glm::vec3>{glm::vec3{1.0f}});
-                    image = recoverAlphaRgba(std::move(black), std::move(white));
+                    image = applyExportPostProcessThreadSafe(
+                        recoverAlphaRgba(std::move(black), std::move(white)),
+                        vis::ExportPostProcessMode::Transparent);
                 }
             } else {
-                image = renderCurrentViewRgb8(*view_info, target_width, target_height, std::nullopt);
+                const auto render_settings = vis::get_render_settings();
+                const bool export_hdr_environment =
+                    render_settings &&
+                    render_settings->environment_mode ==
+                        static_cast<int>(vis::EnvironmentBackgroundMode::Equirectangular) &&
+                    !render_settings->environment_map_path.empty();
+                image = renderCurrentViewExport(
+                    *view_info,
+                    target_width,
+                    target_height,
+                    export_hdr_environment ? vis::ExportPostProcessMode::EnvironmentComposite
+                                           : vis::ExportPostProcessMode::Opaque);
             }
         }
 

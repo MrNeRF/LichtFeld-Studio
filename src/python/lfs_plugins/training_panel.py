@@ -143,6 +143,7 @@ LOCALE_KEYS = {
     "max_width": "training.dataset.max_width",
     "cpu_cache": "training.dataset.cpu_cache",
     "fs_cache": "training.dataset.fs_cache",
+    "use_16bit_color": "training.dataset.use_16bit_color",
     "dataset_output": "training.dataset.output",
     "auto": "common.auto",
     "no_dataset": "training_panel.no_dataset_loaded",
@@ -241,7 +242,7 @@ PARAM_BOOL_PROPS = [
     "enable_eval",
 ]
 
-DATASET_BOOL_PROPS = ["use_cpu_cache", "use_fs_cache"]
+DATASET_BOOL_PROPS = ["use_cpu_cache", "use_fs_cache", "use_16bit_color"]
 
 # (prop, type, format, min, max)
 NUM_PROP_DEFS = [
@@ -3025,6 +3026,23 @@ class TrainingPanel(Panel):
                             layout.label(
                                 tr("training.status.enabled")
                                 if dataset.use_fs_cache
+                                else tr("training.status.disabled")
+                            )
+
+                        layout.table_next_row()
+                        layout.table_next_column()
+                        layout.label(tr("training.dataset.use_16bit_color"))
+                        layout.table_next_column()
+                        if dataset_can_edit:
+                            changed, new_val = layout.checkbox(
+                                "##py_use_16bit_color", dataset.use_16bit_color
+                            )
+                            if changed:
+                                dataset.use_16bit_color = new_val
+                        else:
+                            layout.label(
+                                tr("training.status.enabled")
+                                if dataset.use_16bit_color
                                 else tr("training.status.disabled")
                             )
 

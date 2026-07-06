@@ -144,6 +144,7 @@ def _button_record(button_id, action, value, icon_src, *,
         "action": action,
         "value": value,
         "icon_src": icon_src,
+        "tooltip_key": tooltip_key,
         "tooltip_text": _ui_label(tooltip_key, tooltip_text),
         "action_id": action_id,
         "shortcut_text": _keymap_shortcut(action_id, shortcut_text),
@@ -184,10 +185,16 @@ class _GizmoToolbarController:
         "builtin.select:sphere": "toolbar.sphere_selection",
         "builtin.translate:local": "toolbar.local_space",
         "builtin.translate:world": "toolbar.world_space",
+        "builtin.translate:selection": "toolbar.selection_transform",
+        "builtin.translate:individual": "toolbar.individual_transform",
         "builtin.rotate:local": "toolbar.local_space",
         "builtin.rotate:world": "toolbar.world_space",
+        "builtin.rotate:selection": "toolbar.selection_transform",
+        "builtin.rotate:individual": "toolbar.individual_transform",
         "builtin.scale:local": "toolbar.local_space",
         "builtin.scale:world": "toolbar.world_space",
+        "builtin.scale:selection": "toolbar.selection_transform",
+        "builtin.scale:individual": "toolbar.individual_transform",
         "builtin.mirror:x": "toolbar.mirror_x",
         "builtin.mirror:y": "toolbar.mirror_y",
         "builtin.mirror:z": "toolbar.mirror_z",
@@ -214,6 +221,7 @@ class _GizmoToolbarController:
     _CROP_TOOL_ID = "builtin.cropbox"
     _HORIZONTAL_TOOL_IDS = {"builtin.select", _MIRROR_TOOL_ID, _CROP_TOOL_ID, *_TRANSFORM_TOOL_IDS}
     _TRANSFORM_SPACE_IDS = {"local": 0, "world": 1}
+    _MULTI_TRANSFORM_MODE_IDS = {"selection": 0, "individual": 1}
     _PIVOT_IDS = {"origin": 0, "bounds": 1}
     _CROP_OBJECT_SHAPES = ("box", "ellipsoid")
     _CROP_TRANSFORM_GIZMOS = ("translate", "rotate", "scale")
@@ -277,7 +285,8 @@ class _GizmoToolbarController:
         # When the scene is empty (New Project), clear any lingering active
         # tool so the toolbar doesn't show a tool as selected that can't
         # actually be used on an empty scene.
-        if lf.ui.get_content_type() == "empty":
+        get_content_type = getattr(lf.ui, "get_content_type", None)
+        if callable(get_content_type) and get_content_type() == "empty":
             if not self._was_empty:
                 ToolRegistry.clear_active()
             self._was_empty = True
@@ -334,7 +343,8 @@ class _GizmoToolbarController:
         crop_transform_buttons = self._build_crop_transform_records(active_tool_id) if crop_tool_active else []
         crop_action_buttons = self._build_crop_action_records(active_tool_id) if crop_tool_active else []
         selection_volume_gizmo_buttons = self._build_selection_volume_gizmo_records(active_tool_id)
-        submode_buttons = self._build_submode_records(active_tool_id, tool_def)
+        multi_transform_selection = active_tool_id in self._TRANSFORM_TOOL_IDS and len(selected_nodes) > 1
+        submode_buttons = self._build_submode_records(active_tool_id, tool_def, multi_transform_selection)
         pivot_buttons = self._build_pivot_records(tool_def)
 
         return {
@@ -593,7 +603,8 @@ class _GizmoToolbarController:
         import lichtfeld as lf
 
         shape = self._active_crop_shape()
-        selected = lf.get_selected_node_names() or []
+        selected_getter = getattr(lf, "get_selected_node_names", None)
+        selected = (selected_getter() or []) if callable(selected_getter) else []
         if shape == "box" and selected:
             add_cropbox = getattr(lf.ui, "add_cropbox", None)
             if callable(add_cropbox):
@@ -605,13 +616,39 @@ class _GizmoToolbarController:
 
         lf.ui.set_active_operator(self._CROP_TOOL_ID, gizmo_type)
 
-    def _build_submode_records(self, active_tool_id, tool_def):
+    def _build_submode_records(self, active_tool_id, tool_def, multi_transform_selection=False):
         import lichtfeld as lf
 
         if tool_def is None or not tool_def.submodes:
             return []
         if active_tool_id == "builtin.select":
             return []
+
+        is_transform_tool = active_tool_id in self._TRANSFORM_TOOL_IDS
+        if is_transform_tool and multi_transform_selection:
+            current_multi_mode = _native_store_value("multi_transform_mode", _MISSING)
+            if current_multi_mode is _MISSING:
+                getter = getattr(lf.ui, "get_multi_transform_mode", None)
+                current_multi_mode = getter() if callable(getter) else 0
+
+            records = []
+            for mode_id, icon, label in (
+                ("selection", "bounds", "Selection"),
+                ("individual", "local", "Individual"),
+            ):
+                tooltip_key = self._SUBMODE_LOCALE_KEYS.get(f"{active_tool_id}:{mode_id}", "")
+                records.append(
+                    _button_record(
+                        f"sub-{mode_id}",
+                        "submode",
+                        mode_id,
+                        _icon_src(icon),
+                        tooltip_key=tooltip_key,
+                        tooltip_text=label,
+                        selected=current_multi_mode == self._MULTI_TRANSFORM_MODE_IDS[mode_id],
+                    )
+                )
+            return records
 
         current_space = _native_store_value("transform_space", _MISSING)
         if current_space is _MISSING:
@@ -620,7 +657,6 @@ class _GizmoToolbarController:
         if active_submode is _MISSING:
             active_submode = lf.ui.get_active_submode()
         active_submode = active_submode or ""
-        is_transform_tool = active_tool_id in self._TRANSFORM_TOOL_IDS
         is_mirror_tool = active_tool_id == self._MIRROR_TOOL_ID
 
         if not active_submode and not is_transform_tool and not is_mirror_tool:
@@ -749,13 +785,23 @@ class _GizmoToolbarController:
             if active_tool_id == self._MIRROR_TOOL_ID:
                 lf.ui.execute_mirror(value)
             elif active_tool_id in self._TRANSFORM_TOOL_IDS:
-                transform_space = self._TRANSFORM_SPACE_IDS.get(value, -1)
-                if transform_space >= 0:
-                    lf.ui.set_transform_space(transform_space)
+                multi_transform_mode = self._MULTI_TRANSFORM_MODE_IDS.get(value, -1)
+                if multi_transform_mode >= 0:
+                    setter = getattr(lf.ui, "set_multi_transform_mode", None)
+                    if callable(setter):
+                        setter(multi_transform_mode)
                     try:
-                        RuntimeState.transform_space.value = transform_space
+                        RuntimeState.multi_transform_mode.value = multi_transform_mode
                     except Exception:
                         pass
+                else:
+                    transform_space = self._TRANSFORM_SPACE_IDS.get(value, -1)
+                    if transform_space >= 0:
+                        lf.ui.set_transform_space(transform_space)
+                        try:
+                            RuntimeState.transform_space.value = transform_space
+                        except Exception:
+                            pass
             else:
                 lf.ui.set_selection_mode(value)
             return
@@ -795,6 +841,7 @@ class _UtilityToolbarController:
         ("camera-orbit", "orbit", "Orbit Camera"),
         ("world", "trackball", "Free Orbit Camera"),
         ("camera-fpv", "fpv", "Fly Camera"),
+        ("drone", "drone", "Drone Camera"),
     )
     _PRIMARY_ACTIONS = {
         "home": "CAMERA_RESET_HOME",
@@ -1259,6 +1306,9 @@ class _ViewportToolbarController:
         pivot_mode = _native_store_value("pivot_mode", _MISSING)
         if pivot_mode is _MISSING:
             pivot_mode = call(0, getattr(lf.ui, "get_pivot_mode", None))
+        multi_transform_mode = _native_store_value("multi_transform_mode", _MISSING)
+        if multi_transform_mode is _MISSING:
+            multi_transform_mode = call(0, getattr(lf.ui, "get_multi_transform_mode", None))
         tool_defs = ToolRegistry.get_all()
         tool_ids = tuple(
             (getattr(tool_def, "id", ""), getattr(tool_def, "group", ""))
@@ -1304,6 +1354,7 @@ class _ViewportToolbarController:
             crop_operation,
             transform_space,
             pivot_mode,
+            multi_transform_mode,
             has_scene,
             num_gaussians,
             has_selection,

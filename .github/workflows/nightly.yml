@@ -181,6 +181,17 @@ jobs:
     env:
       VCPKG_ROOT: ${{ github.workspace }}\..\vcpkg
       VCPKG_BUILD_TYPE: release
+      CUDA_PATH: "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.8"
+      CUDNN_ROOT_DIR: "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.8"
+      # CI has a CUDA toolkit but no visible GPU; pin ORT's CUDA build to the
+      # portable minimum instead of using CMAKE_CUDA_ARCHITECTURES=native.
+      LFS_ORT_CUDA_ARCHS: "75"
+      # vcpkg cleans the environment before running portfiles on Windows, so the
+      # onnxruntime overlay never sees LFS_ORT_CUDA_ARCHS unless it is kept here.
+      VCPKG_KEEP_ENV_VARS: "LFS_ORT_CUDA_ARCHS"
+      # Keep vcpkg buildtrees below Windows MAX_PATH while building ORT's
+      # pre-generated flash-attention sources.
+      BUILD_DIR: b
 
     steps:
       - name: Checkout source
@@ -197,9 +208,46 @@ jobs:
 
       - name: Set CUDA environment
         run: |
+          echo "CUDA_PATH=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           echo "CUDA_PATH_V12_8=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "CUDNN_ROOT_DIR=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           echo "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           echo "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8\libnvvp" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Ensure cuDNN is available
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $cudaPath = 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8'
+          $include = Join-Path $cudaPath 'include\cudnn.h'
+          $libs = @(Get-ChildItem (Join-Path $cudaPath 'lib\x64') -Filter 'cudnn*.lib' -ErrorAction SilentlyContinue)
+          $dlls = @(Get-ChildItem (Join-Path $cudaPath 'bin') -Filter 'cudnn64_*.dll' -ErrorAction SilentlyContinue)
+          if ((Test-Path $include) -and $libs.Count -gt 0 -and $dlls.Count -gt 0) {
+            Write-Host "Using provided cuDNN:"
+            $libs | Select-Object -First 5 | ForEach-Object { Write-Host $_.FullName }
+            $dlls | Select-Object -First 5 | ForEach-Object { Write-Host $_.FullName }
+          } else {
+            Write-Host "cuDNN was not provided by the runner image; installing cuDNN 8.9.7 for CUDA 12 from NVIDIA redist."
+            $url = 'https://developer.download.nvidia.com/compute/cudnn/redist/cudnn/windows-x86_64/cudnn-windows-x86_64-8.9.7.29_cuda12-archive.zip'
+            Invoke-WebRequest $url -OutFile cudnn.zip -Verbose
+            Expand-Archive cudnn.zip -DestinationPath cudnn
+            $root = Get-ChildItem cudnn -Directory | Select-Object -First 1
+            if (-not $root) {
+              throw "Could not find extracted cuDNN archive root."
+            }
+            Copy-Item "$($root.FullName)\bin\*" (Join-Path $cudaPath 'bin') -Recurse -Force
+            Copy-Item "$($root.FullName)\include\*" (Join-Path $cudaPath 'include') -Recurse -Force
+            Copy-Item "$($root.FullName)\lib\x64\*" (Join-Path $cudaPath 'lib\x64') -Recurse -Force
+          }
+          if (-not (Test-Path $include)) {
+            throw "cuDNN header was not found after setup: $include"
+          }
+          $libs = @(Get-ChildItem (Join-Path $cudaPath 'lib\x64') -Filter 'cudnn*.lib' -ErrorAction SilentlyContinue)
+          $dlls = @(Get-ChildItem (Join-Path $cudaPath 'bin') -Filter 'cudnn64_*.dll' -ErrorAction SilentlyContinue)
+          if ($libs.Count -eq 0 -or $dlls.Count -eq 0) {
+            throw "cuDNN library or DLL was not found after setup."
+          }
+          "CUDNN_ROOT_DIR=$cudaPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Cache vcpkg tool
         id: cache-vcpkg-tool
@@ -219,15 +267,16 @@ jobs:
       - name: Cache vcpkg_installed
         uses: actions/cache@v4
         with:
-          path: build/vcpkg_installed
-          key: vcpkg-installed-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
-          restore-keys: vcpkg-installed-${{ runner.os }}-
+          path: ${{ env.BUILD_DIR }}/vcpkg_installed
+          key: vcpkg-installed-${{ runner.os }}-ort-sm75-cudnn8-short-build-v1-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
+          restore-keys: vcpkg-installed-${{ runner.os }}-ort-sm75-cudnn8-short-build-v1-
 
       - name: Configure
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $cmakeArgs = '-B build -S . -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_PORTABLE=ON -DBUILD_PYTHON_STUBS=OFF'
+          $buildDir = $env:BUILD_DIR
+          $cmakeArgs = "-B $buildDir -S . -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_PORTABLE=ON -DBUILD_PYTHON_STUBS=OFF"
           $retryablePatterns = @(
             'status code 5\d\d',
             'timed out',
@@ -248,9 +297,10 @@ jobs:
             }
 
             $shouldRetry = $false
-            if (Test-Path 'build\vcpkg-manifest-install.log') {
+            $manifestLog = Join-Path $buildDir 'vcpkg-manifest-install.log'
+            if (Test-Path $manifestLog) {
               foreach ($pattern in $retryablePatterns) {
-                if (Select-String -Path 'build\vcpkg-manifest-install.log' -Pattern $pattern -Quiet) {
+                if (Select-String -Path $manifestLog -Pattern $pattern -Quiet) {
                   $shouldRetry = $true
                   break
                 }
@@ -262,8 +312,8 @@ jobs:
             }
 
             Write-Warning "Retryable configure failure detected, cleaning build tree before retry."
-            if (Test-Path 'build') {
-              Remove-Item -Recurse -Force 'build'
+            if (Test-Path $buildDir) {
+              Remove-Item -Recurse -Force $buildDir
             }
             Start-Sleep -Seconds (15 * $attempt)
           }
@@ -272,20 +322,21 @@ jobs:
         shell: cmd
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          cmake --build build -j %NUMBER_OF_PROCESSORS%
+          cmake --build %BUILD_DIR% -j %NUMBER_OF_PROCESSORS%
 
       - name: Dump failure diagnostics
         if: failure()
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
+          $buildDir = $env:BUILD_DIR
           $paths = @(
-            'build\vcpkg-manifest-install.log',
-            'build\vcpkg_installed\vcpkg\issue_body.md',
-            'build\CMakeFiles\CMakeConfigureLog.yaml',
-            'build\CMakeFiles\CMakeError.log',
-            'build\CMakeFiles\CMakeOutput.log',
-            'build\CMakeCache.txt'
+            "$buildDir\vcpkg-manifest-install.log",
+            "$buildDir\vcpkg_installed\vcpkg\issue_body.md",
+            "$buildDir\CMakeFiles\CMakeConfigureLog.yaml",
+            "$buildDir\CMakeFiles\CMakeError.log",
+            "$buildDir\CMakeFiles\CMakeOutput.log",
+            "$buildDir\CMakeCache.txt"
           )
 
           foreach ($path in $paths) {
@@ -306,13 +357,13 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
           path: |
-            build/CMakeCache.txt
-            build/CMakeFiles/CMakeConfigureLog.yaml
-            build/CMakeFiles/CMakeError.log
-            build/CMakeFiles/CMakeOutput.log
-            build/vcpkg-manifest-install.log
-            build/vcpkg_installed/vcpkg/issue_body.md
-            build/vcpkg_installed/vcpkg/blds/**/*.log
+            ${{ env.BUILD_DIR }}/CMakeCache.txt
+            ${{ env.BUILD_DIR }}/CMakeFiles/CMakeConfigureLog.yaml
+            ${{ env.BUILD_DIR }}/CMakeFiles/CMakeError.log
+            ${{ env.BUILD_DIR }}/CMakeFiles/CMakeOutput.log
+            ${{ env.BUILD_DIR }}/vcpkg-manifest-install.log
+            ${{ env.BUILD_DIR }}/vcpkg_installed/vcpkg/issue_body.md
+            ${{ env.BUILD_DIR }}/vcpkg_installed/vcpkg/blds/**/*.log
 
       - name: Package
         id: package
@@ -357,7 +408,7 @@ jobs:
           }
 
           $packageName = "LichtFeld-Studio-windows-v$packageVersion.zip"
-          cmake --install build --prefix dist
+          cmake --install $env:BUILD_DIR --prefix dist
           Compress-Archive -Path dist\* -DestinationPath $packageName
           "build_channel=$buildChannel" >> $env:GITHUB_OUTPUT
           "package_name=$packageName" >> $env:GITHUB_OUTPUT

@@ -4794,7 +4794,9 @@ namespace lfs::vis {
                                                     output.depth_image.image,
                                                     VK_IMAGE_ASPECT_COLOR_BIT,
                                                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-            VkClearColorValue clear{{background.r, background.g, background.b, 1.0f}};
+            VkClearColorValue clear = transparent_background
+                                          ? VkClearColorValue{{0.0f, 0.0f, 0.0f, 0.0f}}
+                                          : VkClearColorValue{{background.r, background.g, background.b, 1.0f}};
             VkClearColorValue depth_clear{{1.0e10f, 0.0f, 0.0f, 0.0f}};
             VkImageSubresourceRange range{};
             range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -5006,6 +5008,28 @@ namespace lfs::vis {
             lfs::core::DataType::Float32);
         if (!tensor.is_valid()) {
             return std::unexpected("VkSplat output readback failed to allocate CPU float RGB tensor");
+        }
+
+        auto ok = readOutputImageIntoCpuHwc(context, output_slot, tensor, 0, 0);
+        if (!ok) {
+            return std::unexpected(ok.error());
+        }
+        return std::make_shared<lfs::core::Tensor>(std::move(tensor));
+    }
+
+    std::expected<std::shared_ptr<lfs::core::Tensor>, std::string>
+    VksplatViewportRenderer::readOutputImageRgba(VulkanContext& context, const OutputSlot output_slot) const {
+        const auto size = latestOutputImageSize(output_slot);
+        if (!size) {
+            return std::unexpected(size.error());
+        }
+
+        auto tensor = lfs::core::Tensor::empty(
+            {static_cast<std::size_t>(size->y), static_cast<std::size_t>(size->x), std::size_t{4}},
+            lfs::core::Device::CPU,
+            lfs::core::DataType::Float32);
+        if (!tensor.is_valid()) {
+            return std::unexpected("VkSplat output readback failed to allocate CPU float RGBA tensor");
         }
 
         auto ok = readOutputImageIntoCpuHwc(context, output_slot, tensor, 0, 0);
@@ -5406,15 +5430,16 @@ namespace lfs::vis {
                     dst + ((static_cast<std::size_t>(destination_y + row) * dst_row_pixels +
                             static_cast<std::size_t>(destination_x)) *
                            dst_channels);
+                if (dst_channels == 4u) {
+                    std::memcpy(dst_row, src_row, src_row_pixels * 4u);
+                    continue;
+                }
                 for (int col = 0; col < output.size.x; ++col) {
                     const std::size_t src = static_cast<std::size_t>(col) * 4u;
                     const std::size_t dst_index = static_cast<std::size_t>(col) * dst_channels;
                     dst_row[dst_index] = src_row[src];
                     dst_row[dst_index + 1u] = src_row[src + 1u];
                     dst_row[dst_index + 2u] = src_row[src + 2u];
-                    if (dst_channels == 4u) {
-                        dst_row[dst_index + 3u] = src_row[src + 3u];
-                    }
                 }
             }
         }

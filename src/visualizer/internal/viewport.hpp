@@ -229,6 +229,159 @@ class Viewport {
         [[nodiscard]] bool hasWasdMomentum() const { return glm::length2(wasd_velocity) > 0.0f; }
         void clearWasdMomentum() { wasd_velocity = glm::vec3(0.0f); }
 
+        // DJI-style stabilized drone flight. Horizontal velocity lives in the
+        // world yaw plane so the gimbal pitch never bleeds into the flight
+        // direction, and tilt/bank is a bounded visual overlay recomposed from
+        // scratch every frame, so roll can never accumulate into R. Call every
+        // frame while hasDroneMotion() so braking, leveling and look smoothing
+        // settle to rest.
+        void advanceDrone(float deltaTime, bool forward, bool backward, bool left,
+                          bool right, bool up, bool down, float additional_speed = 0.0f) {
+            syncDroneIfStale();
+
+            const bool sport = additional_speed > 0.0f;
+            const float max_speed = (wasdSpeed + additional_speed) * wasdMoveScale();
+            const float max_climb = max_speed * kDroneClimbSpeedFraction;
+
+            const float look_blend = 1.0f - std::exp(-deltaTime * kDroneLookRate);
+            const float yaw_err = wrapAngle(drone_yaw_target - drone_yaw);
+            const float yaw_applied = yaw_err * look_blend;
+            drone_yaw = wrapAngle(drone_yaw + yaw_applied);
+            drone_yaw_target = drone_yaw + yaw_err - yaw_applied;
+            drone_pitch += (drone_pitch_target - drone_pitch) * look_blend;
+            if (std::abs(drone_yaw_target - drone_yaw) < kDroneLookRestRad)
+                drone_yaw_target = drone_yaw;
+            if (std::abs(drone_pitch_target - drone_pitch) < kDroneLookRestRad)
+                drone_pitch_target = drone_pitch;
+
+            const float sin_yaw = std::sin(drone_yaw);
+            const float cos_yaw = std::cos(drone_yaw);
+            const glm::vec3 fwd_h(-sin_yaw, 0.0f, -cos_yaw);
+            const glm::vec3 right_h(cos_yaw, 0.0f, -sin_yaw);
+
+            glm::vec3 dir_h(0.0f);
+            if (forward != backward)
+                dir_h += forward ? fwd_h : -fwd_h;
+            if (left != right)
+                dir_h += right ? right_h : -right_h;
+            const float dir_len2 = glm::length2(dir_h);
+            if (dir_len2 > 1.0f)
+                dir_h /= std::sqrt(dir_len2);
+            const bool has_h_input = dir_len2 > 0.0f;
+            const bool has_v_input = up != down;
+
+            const glm::vec3 target_h = dir_h * max_speed;
+            const float target_v = has_v_input ? (up ? max_climb : -max_climb) : 0.0f;
+
+            // Real drones brake noticeably harder than they spool up, so the
+            // release rate is steeper than the acceleration rate.
+            const float accel_scale = sport ? kDroneSportAccelFactor : 1.0f;
+            const float rate_h = has_h_input ? kDroneAccelRate * accel_scale : kDroneBrakeRate;
+            const float rate_v = has_v_input ? kDroneVerticalAccelRate * accel_scale : kDroneVerticalBrakeRate;
+            const glm::vec3 prev_vel_h = drone_vel_h;
+            const float prev_vel_v = drone_vel_v;
+            const float decay_h = std::exp(-deltaTime * rate_h);
+            const float decay_v = std::exp(-deltaTime * rate_v);
+            glm::vec3 movement_h = target_h * deltaTime + (prev_vel_h - target_h) * ((1.0f - decay_h) / rate_h);
+            float movement_v = target_v * deltaTime + (prev_vel_v - target_v) * ((1.0f - decay_v) / rate_v);
+            drone_vel_h = target_h + (prev_vel_h - target_h) * decay_h;
+            drone_vel_v = target_v + (prev_vel_v - target_v) * decay_v;
+
+            const float stop_speed = kDroneStopSpeedFraction * max_speed;
+            if (!has_h_input && glm::length2(drone_vel_h) < stop_speed * stop_speed) {
+                drone_vel_h = glm::vec3(0.0f);
+                movement_h = glm::vec3(0.0f);
+            }
+            if (!has_v_input && std::abs(drone_vel_v) < stop_speed) {
+                drone_vel_v = 0.0f;
+                movement_v = 0.0f;
+            }
+
+            float pivot_distance = glm::length(pivot - t);
+            if (!std::isfinite(pivot_distance) || pivot_distance < 0.1f)
+                pivot_distance = 5.0f;
+
+            const glm::vec3 movement = movement_h + glm::vec3(0.0f, movement_v, 0.0f);
+            t += movement;
+
+            // Tilt tracks the velocity error (proportional to acceleration for
+            // an exponential approach): lean into acceleration, flare back
+            // while braking, level at cruise and at hover. Yawing while
+            // carrying forward speed adds a coordinated-turn bank on top.
+            const float max_pitch_tilt = sport ? kDroneSportMaxPitchTiltRad : kDroneMaxPitchTiltRad;
+            const float max_roll_tilt = sport ? kDroneSportMaxRollTiltRad : kDroneMaxRollTiltRad;
+            const glm::vec3 accel_err = target_h - drone_vel_h;
+            const float yaw_rate = yaw_applied / std::max(deltaTime, 1e-4f);
+            const float fwd_speed_frac = glm::clamp(glm::dot(drone_vel_h, fwd_h) / max_speed, 0.0f, 1.0f);
+            const float yaw_bank = glm::clamp(yaw_rate / kDroneYawBankRefRate, -1.0f, 1.0f) * fwd_speed_frac;
+            const float tilt_pitch_target =
+                -max_pitch_tilt * glm::clamp(glm::dot(accel_err, fwd_h) / max_speed, -1.0f, 1.0f);
+            const float tilt_roll_target = glm::clamp(
+                -max_roll_tilt * glm::clamp(glm::dot(accel_err, right_h) / max_speed, -1.0f, 1.0f) +
+                    max_roll_tilt * yaw_bank,
+                -max_roll_tilt, max_roll_tilt);
+            const float tilt_blend = 1.0f - std::exp(-deltaTime * kDroneTiltRate);
+            drone_tilt_pitch += (tilt_pitch_target - drone_tilt_pitch) * tilt_blend;
+            drone_tilt_roll += (tilt_roll_target - drone_tilt_roll) * tilt_blend;
+            if (std::abs(tilt_pitch_target) < kDroneTiltRestRad && std::abs(drone_tilt_pitch) < kDroneTiltRestRad)
+                drone_tilt_pitch = 0.0f;
+            if (std::abs(tilt_roll_target) < kDroneTiltRestRad && std::abs(drone_tilt_roll) < kDroneTiltRestRad)
+                drone_tilt_roll = 0.0f;
+
+            composeDroneRotation();
+            pivot = t + lfs::rendering::cameraForward(R) * pivot_distance;
+        }
+
+        // Mouse-look for drone mode: only nudges the yaw / gimbal-pitch
+        // targets; the next advanceDrone tick eases the camera toward them.
+        void droneLook(const glm::vec2& pos) {
+            syncDroneIfStale();
+            const glm::vec2 delta = pos - prePos;
+            prePos = pos;
+            drone_yaw_target -= delta.x * rotateSpeed;
+            drone_pitch_target = glm::clamp(drone_pitch_target - delta.y * rotateSpeed,
+                                            -kDroneMaxGimbalPitchRad, kDroneMaxGimbalPitchRad);
+        }
+
+        // Snaps any pre-existing roll level on entry (precedent: FPV rebuilds
+        // an upright frame on the first look drag).
+        void enterDrone() {
+            clearWasdMomentum();
+            syncDroneFromR();
+            composeDroneRotation();
+            resetRollTarget();
+        }
+
+        // Levels the horizon (keeping the gimbal pitch) unless something else
+        // rotated the camera since the drone last wrote R.
+        void finishDrone() {
+            if (drone_synced && R == drone_last_R) {
+                drone_tilt_pitch = 0.0f;
+                drone_tilt_roll = 0.0f;
+                composeDroneRotation();
+                resetRollTarget();
+            }
+            clearDroneMotion();
+        }
+
+        // Every term below has a snap-to-rest in advanceDrone, so this provably
+        // reaches false once inputs stop.
+        [[nodiscard]] bool hasDroneMotion() const {
+            return glm::length2(drone_vel_h) > 0.0f || drone_vel_v != 0.0f ||
+                   drone_tilt_pitch != 0.0f || drone_tilt_roll != 0.0f ||
+                   drone_yaw != drone_yaw_target || drone_pitch != drone_pitch_target;
+        }
+
+        void clearDroneMotion() {
+            drone_vel_h = glm::vec3(0.0f);
+            drone_vel_v = 0.0f;
+            drone_tilt_pitch = 0.0f;
+            drone_tilt_roll = 0.0f;
+            drone_yaw_target = drone_yaw;
+            drone_pitch_target = drone_pitch;
+            drone_synced = false;
+        }
+
         void initScreenPos(const glm::vec2& pos) { prePos = pos; }
 
         void setPivot(const glm::vec3& new_pivot) {
@@ -391,6 +544,7 @@ class Viewport {
             clearWasdMomentum();
             clearOrbitMomentum();
             clearPanMomentum();
+            clearDroneMotion();
             glide_time_left = 0.0f;
         }
 
@@ -454,6 +608,76 @@ class Viewport {
         glm::vec3 wasd_velocity{0.0f};
         static constexpr float kWasdInertiaRate = 12.0f;
         static constexpr float kWasdStopFraction = 0.02f;
+
+        // Drone mode state. drone_last_R remembers the exact matrix the drone
+        // wrote so any external R mutation (gizmo drag, setViewMatrix, axis
+        // views, roll) is detected and forces a re-sync instead of fighting it.
+        glm::vec3 drone_vel_h{0.0f};
+        float drone_vel_v = 0.0f;
+        float drone_yaw = 0.0f;
+        float drone_pitch = 0.0f;
+        float drone_yaw_target = 0.0f;
+        float drone_pitch_target = 0.0f;
+        float drone_tilt_pitch = 0.0f;
+        float drone_tilt_roll = 0.0f;
+        glm::mat3 drone_last_R{1.0f};
+        bool drone_synced = false;
+        static constexpr float kDroneAccelRate = 5.5f;
+        static constexpr float kDroneBrakeRate = 7.5f;
+        static constexpr float kDroneVerticalAccelRate = 6.0f;
+        static constexpr float kDroneVerticalBrakeRate = 8.0f;
+        static constexpr float kDroneClimbSpeedFraction = 0.65f;
+        static constexpr float kDroneSportAccelFactor = 2.2f;
+        static constexpr float kDroneMaxPitchTiltRad = glm::radians(12.0f);
+        static constexpr float kDroneSportMaxPitchTiltRad = glm::radians(18.0f);
+        static constexpr float kDroneMaxRollTiltRad = glm::radians(25.0f);
+        static constexpr float kDroneSportMaxRollTiltRad = glm::radians(35.0f);
+        static constexpr float kDroneTiltRate = 10.0f;
+        static constexpr float kDroneLookRate = 30.0f;
+        static constexpr float kDroneYawBankRefRate = 2.5f;
+        static constexpr float kDroneMaxGimbalPitchRad = glm::radians(89.0f);
+        static constexpr float kDroneStopSpeedFraction = 0.02f;
+        static constexpr float kDroneTiltRestRad = 2e-3f;
+        static constexpr float kDroneLookRestRad = 1e-4f;
+
+        void syncDroneIfStale() {
+            if (!drone_synced || R != drone_last_R)
+                syncDroneFromR();
+        }
+
+        // Extracts yaw and gimbal pitch from the camera forward (discarding
+        // any roll in R) and zeroes all motion; used on mode entry and
+        // whenever another system rotated the camera behind the drone's back.
+        void syncDroneFromR() {
+            const glm::vec3 f = lfs::rendering::cameraForward(R);
+            drone_pitch = glm::clamp(std::asin(glm::clamp(f.y, -1.0f, 1.0f)),
+                                     -kDroneMaxGimbalPitchRad, kDroneMaxGimbalPitchRad);
+            drone_yaw = glm::length(glm::vec2(f.x, f.z)) > 1e-4f
+                            ? std::atan2(-f.x, -f.z)
+                            : std::atan2(-R[0].z, R[0].x);
+            drone_yaw_target = drone_yaw;
+            drone_pitch_target = drone_pitch;
+            drone_vel_h = glm::vec3(0.0f);
+            drone_vel_v = 0.0f;
+            drone_tilt_pitch = 0.0f;
+            drone_tilt_roll = 0.0f;
+            drone_synced = true;
+        }
+
+        // R = Ry(yaw) * Rx(gimbal + tilt) * Rz(bank). Rebuilt from scratch each
+        // frame, so the bank term vanishes exactly when the tilt state is zero
+        // and roll can never drift into the persistent orientation. The
+        // combined pitch is clamped so an aggressive tilt on top of a steep
+        // gimbal can never cross the pole and flip the view.
+        void composeDroneRotation() {
+            const float pitch_total = glm::clamp(drone_pitch + drone_tilt_pitch,
+                                                 -kDroneMaxGimbalPitchRad, kDroneMaxGimbalPitchRad);
+            const glm::mat3 Ry = glm::mat3(glm::rotate(glm::mat4(1.0f), drone_yaw, glm::vec3(0.0f, 1.0f, 0.0f)));
+            const glm::mat3 Rx = glm::mat3(glm::rotate(glm::mat4(1.0f), pitch_total, glm::vec3(1.0f, 0.0f, 0.0f)));
+            const glm::mat3 Rz = glm::mat3(glm::rotate(glm::mat4(1.0f), drone_tilt_roll, glm::vec3(0.0f, 0.0f, 1.0f)));
+            R = Ry * Rx * Rz;
+            drone_last_R = R;
+        }
 
         // Whole-scene radius (half the bounds diagonal), fed by the controller.
         // WASD scales by it and panning is capped by it. 0 = unknown, in

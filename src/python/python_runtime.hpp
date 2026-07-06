@@ -73,6 +73,7 @@ namespace lfs::python {
         int selection_submode = 0;
         int pivot_mode = 0;
         int transform_space = 0;
+        int multi_transform_mode = 0;
 
         // Viewport (set before UI drawing)
         float vp_x = 0, vp_y = 0, vp_w = 0, vp_h = 0;
@@ -508,6 +509,14 @@ namespace lfs::python {
                                                               SetTransformSpaceCallback set_cb);
     LFS_PYTHON_RUNTIME_API int get_transform_space();
     LFS_PYTHON_RUNTIME_API void set_transform_space(int space);
+
+    // Multi-transform mode (selection/individual for transform gizmos)
+    using GetMultiTransformModeCallback = int (*)();
+    using SetMultiTransformModeCallback = void (*)(int);
+    LFS_PYTHON_RUNTIME_API void set_multi_transform_mode_callbacks(GetMultiTransformModeCallback get_cb,
+                                                                   SetMultiTransformModeCallback set_cb);
+    LFS_PYTHON_RUNTIME_API int get_multi_transform_mode();
+    LFS_PYTHON_RUNTIME_API void set_multi_transform_mode(int mode);
 
     LFS_PYTHON_RUNTIME_API void set_scene_manager(vis::SceneManager* sm);
     LFS_PYTHON_RUNTIME_API vis::SceneManager* get_scene_manager();

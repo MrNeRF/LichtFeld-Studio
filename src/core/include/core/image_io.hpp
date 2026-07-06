@@ -27,6 +27,10 @@ namespace lfs::core {
 
     LFS_CORE_API std::tuple<unsigned char*, int, int, int>
     load_image(std::filesystem::path p, int res_div = -1, int max_width = 0);
+
+    LFS_CORE_API std::tuple<uint16_t*, int, int, int>
+    load_image_u16(std::filesystem::path p, int res_div = -1, int max_width = 0);
+
     LFS_CORE_API void save_image(const std::filesystem::path& path, Tensor image);
     LFS_CORE_API void save_image_u8(const std::filesystem::path& path, Tensor image, int jpeg_quality = 95);
     LFS_CORE_API void save_image(const std::filesystem::path& path,
@@ -36,7 +40,7 @@ namespace lfs::core {
 
     LFS_CORE_API bool save_img_data(const std::filesystem::path& p, const std::tuple<unsigned char*, int, int, int>& image_data);
 
-    LFS_CORE_API void free_image(unsigned char* image);
+    LFS_CORE_API void free_image(void* image);
 
 } // namespace lfs::core
 

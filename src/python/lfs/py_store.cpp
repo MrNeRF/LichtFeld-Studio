@@ -278,6 +278,8 @@ namespace lfs::python {
                 store.transform_space.set(nb::cast<int>(value));
             else if (field == "pivot_mode")
                 store.pivot_mode.set(nb::cast<int>(value));
+            else if (field == "multi_transform_mode")
+                store.multi_transform_mode.set(nb::cast<int>(value));
             else if (field == "import_overlay_state")
                 store.import_overlay_state.set(import_overlay_state_from_object(value));
             else if (field == "video_export_overlay_state")
@@ -336,6 +338,8 @@ namespace lfs::python {
                 return nb::cast(store.transform_space.get());
             if (field == "pivot_mode")
                 return nb::cast(store.pivot_mode.get());
+            if (field == "multi_transform_mode")
+                return nb::cast(store.multi_transform_mode.get());
             if (field == "import_overlay_state")
                 return import_overlay_state_to_dict(store.import_overlay_state.get());
             if (field == "video_export_overlay_state")
@@ -393,6 +397,8 @@ namespace lfs::python {
                 return subscribe_observable(store.transform_space, std::move(callback));
             if (field == "pivot_mode")
                 return subscribe_observable(store.pivot_mode, std::move(callback));
+            if (field == "multi_transform_mode")
+                return subscribe_observable(store.multi_transform_mode, std::move(callback));
             if (field == "import_overlay_state")
                 return subscribe_observable_as(
                     store.import_overlay_state, std::move(callback), import_overlay_state_to_dict);

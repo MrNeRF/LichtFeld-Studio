@@ -21,6 +21,7 @@
 #include "rendering_types.hpp"
 #include "spark_lod_controller.hpp"
 #include "split_view_service.hpp"
+#include "viewport_appearance_correction.hpp"
 #include "viewport_artifact_service.hpp"
 #include "viewport_frame_lifecycle_service.hpp"
 #include "viewport_interaction_context.hpp"
@@ -198,6 +199,23 @@ namespace lfs::vis {
                                                                    std::optional<bool> orthographic_override = std::nullopt,
                                                                    std::optional<float> ortho_scale_override = std::nullopt);
         void releasePreviewImageResources();
+
+        // One-shot export: (tiled) preview render followed by the streamed GPU
+        // post-process (PPISP correction and, for EnvironmentComposite, HDRI
+        // background compositing). Returns the final CPU u8 HWC image. Must run
+        // on the viewer thread.
+        struct ExportImageRequest {
+            glm::mat3 rotation{1.0f};
+            glm::vec3 translation{0.0f};
+            float focal_length_mm = 0.0f;
+            int width = 0;
+            int height = 0;
+            std::optional<bool> orthographic_override;
+            std::optional<float> ortho_scale_override;
+            ExportPostProcessMode mode = ExportPostProcessMode::Opaque;
+        };
+        [[nodiscard]] std::expected<lfs::core::Tensor, std::string> renderExportImage(
+            SceneManager* scene_manager, const ExportImageRequest& request);
 
         [[nodiscard]] lfs::io::SplatTensorAllocator makeSplatTensorAllocator() const;
 
