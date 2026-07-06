@@ -4,25 +4,12 @@
 
 find_package(CURL REQUIRED)
 find_package(OpenSSL REQUIRED)
-find_package(onnxruntime CONFIG REQUIRED)
-find_path(LFS_ONNXRUNTIME_INCLUDE_DIR
-    NAMES onnxruntime_cxx_api.h
-    PATH_SUFFIXES onnxruntime onnxruntime/core/session
-    REQUIRED
-)
 
-if(TARGET onnxruntime::onnxruntime)
-    set(LFS_ONNXRUNTIME_TARGET onnxruntime::onnxruntime)
-elseif(TARGET onnxruntime)
-    set(LFS_ONNXRUNTIME_TARGET onnxruntime)
-else()
-    find_library(LFS_ONNXRUNTIME_LIBRARY NAMES onnxruntime REQUIRED)
-    find_path(LFS_ONNXRUNTIME_INCLUDE_DIR onnxruntime_cxx_api.h REQUIRED)
-    add_library(lfs_onnxruntime_external UNKNOWN IMPORTED)
-    set_target_properties(lfs_onnxruntime_external PROPERTIES
-        IMPORTED_LOCATION "${LFS_ONNXRUNTIME_LIBRARY}"
-        INTERFACE_INCLUDE_DIRECTORIES "${LFS_ONNXRUNTIME_INCLUDE_DIR}")
-    set(LFS_ONNXRUNTIME_TARGET lfs_onnxruntime_external)
+if(NOT LFS_ONNXRUNTIME_TARGET OR NOT TARGET "${LFS_ONNXRUNTIME_TARGET}")
+    message(FATAL_ERROR "ONNX Runtime target was not configured; include cmake/SetupOnnxRuntime.cmake before src/preprocessing")
+endif()
+if(NOT LFS_ONNXRUNTIME_INCLUDE_DIR)
+    message(FATAL_ERROR "ONNX Runtime include directory was not configured")
 endif()
 
 add_library(lfs_preprocessing STATIC

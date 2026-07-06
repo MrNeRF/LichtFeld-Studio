@@ -885,7 +885,7 @@ namespace lfs::vis::gui {
             return 0.0f;
 
         if (!left_dock_visible_)
-            return icon_bar_w;
+            return 0.0f;
 
         const float max_panel_w = maxLeftDockPanelWidth(show_main_panel, ui_hidden, screen);
         if (max_panel_w <= 0.0f)

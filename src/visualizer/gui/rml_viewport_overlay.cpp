@@ -518,7 +518,6 @@ namespace lfs::vis::gui {
                 element->SetProperty("left", std::format("{:.1f}px", x));
             }
         };
-        apply_left_toolbar_offset("primary-shelf-background", -primary_toolbar_x_);
         apply_left_toolbar_offset("primary-utility-toolbar", -primary_toolbar_x_);
         applied_primary_toolbar_x_ = primary_toolbar_x_;
         applied_primary_toolbar_width_ = primary_toolbar_width_;

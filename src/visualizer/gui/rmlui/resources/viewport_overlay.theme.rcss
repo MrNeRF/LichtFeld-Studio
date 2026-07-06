@@ -5,7 +5,7 @@
     border-radius: @{num(size.window_rounding)}dp;
 }
 
-.shelf-background {
+.viewport-frame-border {
     background-color: @{menu.background};
 }
 

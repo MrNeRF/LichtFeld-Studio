@@ -189,7 +189,7 @@ namespace {
         if (EVP_DigestInit_ex(ctx.get(), EVP_sha256(), nullptr) != 1)
             throw std::runtime_error("EVP_DigestInit_ex failed");
 
-        std::array<char, 1 << 20> buffer{};
+        std::vector<char> buffer(1 << 20);
         while (input) {
             input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
             const auto count = input.gcount();
