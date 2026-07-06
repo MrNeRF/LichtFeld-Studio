@@ -139,11 +139,11 @@
               <span class="field-label">@tr:video_extractor.sharpness_coverage_label</span>
               <select id="window-candidates-select" class="compact-select">
                 <option value="auto">@tr:video_extractor.candidates_auto</option>
-                <option value="3">3 - @tr:video_extractor.candidates_fast</option>
-                <option value="5">5 - @tr:video_extractor.candidates_balanced</option>
-                <option value="10" selected="selected">10 - @tr:video_extractor.candidates_quality</option>
-                <option value="20">20 - @tr:video_extractor.candidates_high_quality</option>
-                <option value="50">50 - @tr:video_extractor.candidates_very_high</option>
+                <option value="3">@tr:video_extractor.candidates_fast</option>
+                <option value="5">@tr:video_extractor.candidates_balanced</option>
+                <option value="10" selected="selected">@tr:video_extractor.candidates_quality</option>
+                <option value="20">@tr:video_extractor.candidates_high_quality</option>
+                <option value="50">@tr:video_extractor.candidates_very_high</option>
                 <option value="0">@tr:video_extractor.candidates_all</option>
               </select>
               <span id="window-candidates-readout" class="inline-note">10 / ~25 frames</span>
