@@ -189,6 +189,9 @@ jobs:
       # vcpkg cleans the environment before running portfiles on Windows, so the
       # onnxruntime overlay never sees LFS_ORT_CUDA_ARCHS unless it is kept here.
       VCPKG_KEEP_ENV_VARS: "LFS_ORT_CUDA_ARCHS"
+      # Keep vcpkg buildtrees below Windows MAX_PATH while building ORT's
+      # pre-generated flash-attention sources.
+      BUILD_DIR: b
 
     steps:
       - name: Checkout source
@@ -264,15 +267,16 @@ jobs:
       - name: Cache vcpkg_installed
         uses: actions/cache@v4
         with:
-          path: build/vcpkg_installed
-          key: vcpkg-installed-${{ runner.os }}-ort-sm75-cudnn8-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
-          restore-keys: vcpkg-installed-${{ runner.os }}-ort-sm75-cudnn8-
+          path: ${{ env.BUILD_DIR }}/vcpkg_installed
+          key: vcpkg-installed-${{ runner.os }}-ort-sm75-cudnn8-short-build-v1-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
+          restore-keys: vcpkg-installed-${{ runner.os }}-ort-sm75-cudnn8-short-build-v1-
 
       - name: Configure
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $cmakeArgs = '-B build -S . -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_PORTABLE=ON -DBUILD_PYTHON_STUBS=OFF'
+          $buildDir = $env:BUILD_DIR
+          $cmakeArgs = "-B $buildDir -S . -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_PORTABLE=ON -DBUILD_PYTHON_STUBS=OFF"
           $retryablePatterns = @(
             'status code 5\d\d',
             'timed out',
@@ -293,9 +297,10 @@ jobs:
             }
 
             $shouldRetry = $false
-            if (Test-Path 'build\vcpkg-manifest-install.log') {
+            $manifestLog = Join-Path $buildDir 'vcpkg-manifest-install.log'
+            if (Test-Path $manifestLog) {
               foreach ($pattern in $retryablePatterns) {
-                if (Select-String -Path 'build\vcpkg-manifest-install.log' -Pattern $pattern -Quiet) {
+                if (Select-String -Path $manifestLog -Pattern $pattern -Quiet) {
                   $shouldRetry = $true
                   break
                 }
@@ -307,8 +312,8 @@ jobs:
             }
 
             Write-Warning "Retryable configure failure detected, cleaning build tree before retry."
-            if (Test-Path 'build') {
-              Remove-Item -Recurse -Force 'build'
+            if (Test-Path $buildDir) {
+              Remove-Item -Recurse -Force $buildDir
             }
             Start-Sleep -Seconds (15 * $attempt)
           }
@@ -317,20 +322,21 @@ jobs:
         shell: cmd
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          cmake --build build -j %NUMBER_OF_PROCESSORS%
+          cmake --build %BUILD_DIR% -j %NUMBER_OF_PROCESSORS%
 
       - name: Dump failure diagnostics
         if: failure()
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
+          $buildDir = $env:BUILD_DIR
           $paths = @(
-            'build\vcpkg-manifest-install.log',
-            'build\vcpkg_installed\vcpkg\issue_body.md',
-            'build\CMakeFiles\CMakeConfigureLog.yaml',
-            'build\CMakeFiles\CMakeError.log',
-            'build\CMakeFiles\CMakeOutput.log',
-            'build\CMakeCache.txt'
+            "$buildDir\vcpkg-manifest-install.log",
+            "$buildDir\vcpkg_installed\vcpkg\issue_body.md",
+            "$buildDir\CMakeFiles\CMakeConfigureLog.yaml",
+            "$buildDir\CMakeFiles\CMakeError.log",
+            "$buildDir\CMakeFiles\CMakeOutput.log",
+            "$buildDir\CMakeCache.txt"
           )
 
           foreach ($path in $paths) {
@@ -351,13 +357,13 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
           path: |
-            build/CMakeCache.txt
-            build/CMakeFiles/CMakeConfigureLog.yaml
-            build/CMakeFiles/CMakeError.log
-            build/CMakeFiles/CMakeOutput.log
-            build/vcpkg-manifest-install.log
-            build/vcpkg_installed/vcpkg/issue_body.md
-            build/vcpkg_installed/vcpkg/blds/**/*.log
+            ${{ env.BUILD_DIR }}/CMakeCache.txt
+            ${{ env.BUILD_DIR }}/CMakeFiles/CMakeConfigureLog.yaml
+            ${{ env.BUILD_DIR }}/CMakeFiles/CMakeError.log
+            ${{ env.BUILD_DIR }}/CMakeFiles/CMakeOutput.log
+            ${{ env.BUILD_DIR }}/vcpkg-manifest-install.log
+            ${{ env.BUILD_DIR }}/vcpkg_installed/vcpkg/issue_body.md
+            ${{ env.BUILD_DIR }}/vcpkg_installed/vcpkg/blds/**/*.log
 
       - name: Package
         id: package
@@ -402,7 +408,7 @@ jobs:
           }
 
           $packageName = "LichtFeld-Studio-windows-v$packageVersion.zip"
-          cmake --install build --prefix dist
+          cmake --install $env:BUILD_DIR --prefix dist
           Compress-Archive -Path dist\* -DestinationPath $packageName
           "build_channel=$buildChannel" >> $env:GITHUB_OUTPUT
           "package_name=$packageName" >> $env:GITHUB_OUTPUT
