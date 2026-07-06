@@ -183,14 +183,6 @@ jobs:
       VCPKG_BUILD_TYPE: release
       CUDA_PATH: "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.8"
       CUDNN_ROOT_DIR: "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.8"
-      # CI has a CUDA toolkit but no visible GPU; pin ORT's CUDA build to the
-      # portable minimum instead of using CMAKE_CUDA_ARCHITECTURES=native.
-      LFS_ORT_CUDA_ARCHS: "75"
-      # vcpkg cleans the environment before running portfiles on Windows, so the
-      # onnxruntime overlay never sees LFS_ORT_CUDA_ARCHS unless it is kept here.
-      VCPKG_KEEP_ENV_VARS: "LFS_ORT_CUDA_ARCHS"
-      # Keep vcpkg buildtrees below Windows MAX_PATH while building ORT's
-      # pre-generated flash-attention sources.
       BUILD_DIR: b
 
     steps:
@@ -221,14 +213,14 @@ jobs:
           $cudaPath = 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8'
           $include = Join-Path $cudaPath 'include\cudnn.h'
           $libs = @(Get-ChildItem (Join-Path $cudaPath 'lib\x64') -Filter 'cudnn*.lib' -ErrorAction SilentlyContinue)
-          $dlls = @(Get-ChildItem (Join-Path $cudaPath 'bin') -Filter 'cudnn64_*.dll' -ErrorAction SilentlyContinue)
+          $dlls = @(Get-ChildItem (Join-Path $cudaPath 'bin') -Filter 'cudnn*64_9.dll' -ErrorAction SilentlyContinue)
           if ((Test-Path $include) -and $libs.Count -gt 0 -and $dlls.Count -gt 0) {
             Write-Host "Using provided cuDNN:"
             $libs | Select-Object -First 5 | ForEach-Object { Write-Host $_.FullName }
             $dlls | Select-Object -First 5 | ForEach-Object { Write-Host $_.FullName }
           } else {
-            Write-Host "cuDNN was not provided by the runner image; installing cuDNN 8.9.7 for CUDA 12 from NVIDIA redist."
-            $url = 'https://developer.download.nvidia.com/compute/cudnn/redist/cudnn/windows-x86_64/cudnn-windows-x86_64-8.9.7.29_cuda12-archive.zip'
+            Write-Host "cuDNN 9 was not provided by the runner image; installing cuDNN 9.5.0 for CUDA 12 from NVIDIA redist."
+            $url = 'https://developer.download.nvidia.com/compute/cudnn/redist/cudnn/windows-x86_64/cudnn-windows-x86_64-9.5.0.50_cuda12-archive.zip'
             Invoke-WebRequest $url -OutFile cudnn.zip -Verbose
             Expand-Archive cudnn.zip -DestinationPath cudnn
             $root = Get-ChildItem cudnn -Directory | Select-Object -First 1
@@ -243,9 +235,9 @@ jobs:
             throw "cuDNN header was not found after setup: $include"
           }
           $libs = @(Get-ChildItem (Join-Path $cudaPath 'lib\x64') -Filter 'cudnn*.lib' -ErrorAction SilentlyContinue)
-          $dlls = @(Get-ChildItem (Join-Path $cudaPath 'bin') -Filter 'cudnn64_*.dll' -ErrorAction SilentlyContinue)
+          $dlls = @(Get-ChildItem (Join-Path $cudaPath 'bin') -Filter 'cudnn*64_9.dll' -ErrorAction SilentlyContinue)
           if ($libs.Count -eq 0 -or $dlls.Count -eq 0) {
-            throw "cuDNN library or DLL was not found after setup."
+            throw "cuDNN 9 library or DLL was not found after setup."
           }
           "CUDNN_ROOT_DIR=$cudaPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
@@ -268,8 +260,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.BUILD_DIR }}/vcpkg_installed
-          key: vcpkg-installed-${{ runner.os }}-ort-sm75-cudnn8-short-build-v1-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
-          restore-keys: vcpkg-installed-${{ runner.os }}-ort-sm75-cudnn8-short-build-v1-
+          key: vcpkg-installed-${{ runner.os }}-prebuilt-ort-v1-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
+          restore-keys: vcpkg-installed-${{ runner.os }}-prebuilt-ort-v1-
 
       - name: Configure
         shell: pwsh

@@ -368,6 +368,7 @@ find_package(LibArchive REQUIRED)
 find_package(libdeflate CONFIG REQUIRED)
 find_package(OpenImageIO REQUIRED)
 find_package(OpenSSL REQUIRED)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/SetupOnnxRuntime.cmake")
 find_package(pxr CONFIG REQUIRED)
 find_package(assimp REQUIRED)
 find_package(RmlUi CONFIG REQUIRED)
@@ -562,25 +563,28 @@ if(TARGET nvimgcodec)
     message(STATUS "Post-build: nvImageCodec libraries will be copied to executable directory")
 endif()
 
-# ONNX Runtime dlopens its CUDA execution providers at runtime; vcpkg installs
-# those as shared libraries even on static triplets. Keep them beside the exe so
-# local and packaged preprocess runs do not silently fall back to CPU.
-file(GLOB _lfs_ort_provider_libs
-    "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib/*onnxruntime_providers_*"
-    "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/*onnxruntime_providers_*")
-list(FILTER _lfs_ort_provider_libs INCLUDE REGEX "\\.(dll|dylib|so(\\.[0-9]+)*)$")
-list(REMOVE_DUPLICATES _lfs_ort_provider_libs)
-if(_lfs_ort_provider_libs)
-    foreach(_lfs_ort_provider_lib IN LISTS _lfs_ort_provider_libs)
+# ONNX Runtime dlopens its CUDA execution providers at runtime. Keep the core
+# runtime and CUDA/shared provider libraries beside the exe so local and packaged
+# preprocess runs do not silently fall back to CPU.
+set(_lfs_ort_runtime_libs ${LFS_ONNXRUNTIME_RUNTIME_LIBS})
+if(NOT _lfs_ort_runtime_libs AND DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
+    file(GLOB _lfs_ort_runtime_libs
+        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/lib/*onnxruntime*"
+        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin/*onnxruntime*")
+endif()
+list(FILTER _lfs_ort_runtime_libs INCLUDE REGEX "\\.(dll|dylib|so(\\.[0-9]+)*)$")
+list(REMOVE_DUPLICATES _lfs_ort_runtime_libs)
+if(_lfs_ort_runtime_libs)
+    foreach(_lfs_ort_runtime_lib IN LISTS _lfs_ort_runtime_libs)
         add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${_lfs_ort_provider_lib}"
+                "${_lfs_ort_runtime_lib}"
                 "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
-            COMMENT "Copying ONNX Runtime provider library"
+            COMMENT "Copying ONNX Runtime runtime library"
         )
     endforeach()
 else()
-    message(WARNING "ONNX Runtime provider libraries were not found; preprocess CUDA inference may fall back to CPU")
+    message(WARNING "ONNX Runtime runtime libraries were not found; preprocess CUDA inference may fall back to CPU or fail at startup")
 endif()
 
 # Copy Python DLLs for Windows runtime (Python is embedded in the application)
@@ -1124,8 +1128,13 @@ install(TARGETS lfs_mcp
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
-if(_lfs_ort_provider_libs)
-    install(FILES ${_lfs_ort_provider_libs} DESTINATION ${CMAKE_INSTALL_BINDIR})
+if(_lfs_ort_runtime_libs)
+    if(WIN32)
+        set(_lfs_ort_install_dest "${CMAKE_INSTALL_BINDIR}")
+    else()
+        set(_lfs_ort_install_dest "${CMAKE_INSTALL_LIBDIR}")
+    endif()
+    install(FILES ${_lfs_ort_runtime_libs} DESTINATION ${_lfs_ort_install_dest})
 endif()
 install(FILES "${CMAKE_SOURCE_DIR}/LICENSE" DESTINATION ".")
 
@@ -1264,8 +1273,8 @@ if(BUILD_PORTABLE)
     if(TARGET nvjpeg_ext)
         bundle_runtime_deps("$<TARGET_FILE:nvjpeg_ext>" TRUE)
     endif()
-    foreach(_lfs_ort_provider_lib IN LISTS _lfs_ort_provider_libs)
-        bundle_runtime_deps("${_lfs_ort_provider_lib}" TRUE)
+    foreach(_lfs_ort_runtime_lib IN LISTS _lfs_ort_runtime_libs)
+        bundle_runtime_deps("${_lfs_ort_runtime_lib}" TRUE)
     endforeach()
 
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")

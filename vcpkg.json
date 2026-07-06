@@ -39,10 +39,6 @@
     },
     "nlohmann-json",
     {
-      "name": "onnxruntime",
-      "features": ["cuda"]
-    },
-    {
       "name": "openimageio",
       "features": [
         "webp"
