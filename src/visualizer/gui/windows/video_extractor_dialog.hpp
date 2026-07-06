@@ -57,6 +57,7 @@ namespace lfs::gui {
 
         io::SharpnessAlgorithm sharpness_algorithm = io::SharpnessAlgorithm::COMBINED;
         double sharpness_threshold = 10.0;
+        int window_candidates_target = 10;
         bool sharpness_window_mode = false;
         bool sharpness_enabled = false;
         bool generate_metadata = false;
@@ -160,6 +161,7 @@ namespace lfs::gui {
 
         int format_selection_ = 0;
         int jpg_quality_ = 95;
+        int window_candidates_target_ = 10;
 
         int resolution_mode_ = 0;
         int scale_selection_ = 3;
@@ -267,8 +269,12 @@ namespace lfs::gui {
         Rml::Element* sharpness_threshold_row_el_ = nullptr;
         Rml::ElementFormControlSelect* sharpness_algorithm_select_el_ = nullptr;
         Rml::ElementFormControlSelect* sharpness_mode_select_el_ = nullptr;
+        Rml::Element* sharpness_mode_desc_el_ = nullptr;
         Rml::Element* sharpness_threshold_slider_el_ = nullptr;
         Rml::Element* sharpness_threshold_value_el_ = nullptr;
+        Rml::Element* sharpness_window_row_el_ = nullptr;
+        Rml::Element* window_candidates_select_el_ = nullptr;
+        Rml::Element* window_candidates_readout_el_ = nullptr;
         Rml::Element* generate_metadata_el_ = nullptr;
         Rml::Element* overwrite_overlay_el_ = nullptr;
         int rotation_deg_ = 0;

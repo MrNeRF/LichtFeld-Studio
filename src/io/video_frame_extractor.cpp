@@ -552,6 +552,8 @@ namespace lfs::io {
                 };
                 std::vector<CandidateFrame> window_candidates;
                 int current_window_idx = 0;
+                int window_skip_counter = 0;
+                int window_step = 1;
                 int in_window_frame_count = 0;
                 struct FrameSaveInfo {
                     std::string filename;
@@ -675,6 +677,20 @@ namespace lfs::io {
                     if (params.progress_callback)
                         params.progress_callback(saved_count, estimated_total, skipped_count);
                     window_candidates.clear();
+                    // Calculate step for the NEXT interval based on this interval's size
+                    const int target = params.sharpness.window_candidates_target;
+                    if (target < 0) {
+                        // Auto: sqrt-based formula, clamped 5-20
+                        const int auto_target = std::clamp(static_cast<int>(
+                            std::round(std::sqrt(static_cast<double>(window_skip_counter))) * 2), 5, 20);
+                        window_step = std::max(1, window_skip_counter / std::max(1, auto_target));
+                    } else if (target == 0) {
+                        // All frames: no skip
+                        window_step = 1;
+                    } else {
+                        window_step = std::max(1, window_skip_counter / std::max(1, target));
+                    }
+                    window_skip_counter = 0;
                     throw_if_cancelled();
                 };
 
@@ -1048,11 +1064,14 @@ namespace lfs::io {
                                         flush_window();
                                         current_window_idx = w_idx;
                                     }
+                                    ++in_window_frame_count;
+                                    ++window_skip_counter;
+                                    if (window_step > 1 && (window_skip_counter - 1) % window_step != 0)
+                                        continue;
                                     if (using_hw_decode)
                                         process_frame_hw(frame);
                                     else
                                         process_frame_sw(frame);
-                                    ++in_window_frame_count;
                                 } else if (should_extract_frame(frame_time)) {
                                     if (using_hw_decode) {
                                         process_frame_hw(frame);
@@ -1092,11 +1111,14 @@ namespace lfs::io {
                                 flush_window();
                                 current_window_idx = w_idx;
                             }
+                            ++in_window_frame_count;
+                            ++window_skip_counter;
+                            if (window_step > 1 && (window_skip_counter - 1) % window_step != 0)
+                                continue;
                             if (using_hw_decode)
                                 process_frame_hw(frame);
                             else
                                 process_frame_sw(frame);
-                            ++in_window_frame_count;
                         } else if (should_extract_frame(frame_time)) {
                             if (using_hw_decode) {
                                 process_frame_hw(frame);
@@ -1149,6 +1171,7 @@ namespace lfs::io {
                             root["sharpness"]["algorithm"] = algo;
                             root["sharpness"]["threshold"] = params.sharpness.threshold;
                             root["sharpness"]["window_mode"] = params.sharpness.window_mode;
+                            root["sharpness"]["window_candidates_target"] = params.sharpness.window_candidates_target;
                         }
 
                         auto& frames = root["frames"];

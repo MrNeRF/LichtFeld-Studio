@@ -910,6 +910,9 @@ namespace lichtfeld::Strings {
         inline constexpr const char* ERROR_MSG = "video_extractor.error";
         inline constexpr const char* DISMISS = "video_extractor.dismiss";
         inline constexpr const char* DISCARDED_FORMAT = "video_extractor.discarded_format";
+        inline constexpr const char* ALL = "all";
+        inline constexpr const char* SHARPNESS_MODE_DESC_THRESHOLD = "video_extractor.sharpness_mode_desc_threshold";
+        inline constexpr const char* SHARPNESS_MODE_DESC_WINDOW = "video_extractor.sharpness_mode_desc_window";
     } // namespace VideoExtractor
 
     namespace Mesh2Splat {

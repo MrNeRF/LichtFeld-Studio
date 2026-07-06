@@ -40,7 +40,8 @@ namespace lfs::io {
         bool enabled = false;
         SharpnessAlgorithm algorithm = SharpnessAlgorithm::COMBINED;
         double threshold = 0.0;        // 0 = disabled (no threshold filtering)
-        bool window_mode = false;       // true = sliding window (pick best per interval)
+        int window_candidates_target = 10;  // 0=auto, 3,5,10,20,50 = max candidates per interval
+        bool window_mode = false;
     };
 
     class VideoFrameExtractor {

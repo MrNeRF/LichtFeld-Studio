@@ -315,6 +315,7 @@ namespace lfs::gui {
             extract_params.sharpness.enabled = params.sharpness_enabled;
             extract_params.sharpness.algorithm = params.sharpness_algorithm;
             extract_params.sharpness.threshold = params.sharpness_threshold;
+            extract_params.sharpness.window_candidates_target = params.window_candidates_target;
             extract_params.sharpness.window_mode = params.sharpness_window_mode;
             extract_params.generate_metadata = params.generate_metadata;
             extract_params.rotation = params.rotation;
@@ -682,8 +683,12 @@ namespace lfs::gui {
             document_->GetElementById("sharpness-algorithm-select"));
         sharpness_mode_select_el_ = dynamic_cast<Rml::ElementFormControlSelect*>(
             document_->GetElementById("sharpness-mode-select"));
+        sharpness_mode_desc_el_ = document_->GetElementById("sharpness-mode-desc");
         sharpness_threshold_slider_el_ = document_->GetElementById("sharpness-threshold-slider");
         sharpness_threshold_value_el_ = document_->GetElementById("sharpness-threshold-value");
+        sharpness_window_row_el_ = document_->GetElementById("sharpness-window-row");
+        window_candidates_select_el_ = document_->GetElementById("window-candidates-select");
+        window_candidates_readout_el_ = document_->GetElementById("window-candidates-readout");
         generate_metadata_el_ = document_->GetElementById("generate-metadata");
         overwrite_overlay_el_ = document_->GetElementById("overwrite-overlay");
 
@@ -780,6 +785,7 @@ namespace lfs::gui {
         listen_change(sharpness_mode_select_el_);
         listen_change(sharpness_threshold_slider_el_);
         listen_input(sharpness_threshold_slider_el_);
+        listen_change(window_candidates_select_el_);
         listen_change(generate_metadata_el_);
         listen_click(rotation_cw_btn_el_);
         listen_click(rotation_ccw_btn_el_);
@@ -1008,6 +1014,38 @@ namespace lfs::gui {
             sharpness_mode_select_el_->GetSelection() == 1;
         changed |= setCachedProperty(sharpness_threshold_row_el_, "display",
                                      (sharpness_on && !window_mode) ? "flex" : "none");
+        changed |= setCachedProperty(sharpness_window_row_el_, "display",
+                                     (sharpness_on && window_mode) ? "flex" : "none");
+        if (sharpness_mode_desc_el_) {
+            changed |= setCachedText(sharpness_mode_desc_el_,
+                                     window_mode ? LOC(VideoExtractor::SHARPNESS_MODE_DESC_WINDOW)
+                                                 : LOC(VideoExtractor::SHARPNESS_MODE_DESC_THRESHOLD));
+        }
+
+        if (window_candidates_readout_el_) {
+            // Calculate estimated window frames
+            int est_window = 0;
+            if (mode_selection_ == 0 && player_ && player_->fps() > 0 && fps_ > 0)
+                est_window = static_cast<int>(std::round(player_->fps() / fps_));
+            else if (mode_selection_ == 1)
+                est_window = frame_interval_;
+
+            std::string opt = window_candidates_select_el_
+                ? window_candidates_select_el_->GetAttribute<Rml::String>("value", "10")
+                : "10";
+            int candidates = 0;
+            if (window_candidates_target_ < 0) {
+                // Auto mode: sqrt-based
+                candidates = std::clamp(static_cast<int>(std::round(std::sqrt(static_cast<double>(est_window))) * 2), 5, 20);
+            } else if (window_candidates_target_ == 0) {
+                // All frames
+                candidates = est_window;
+            } else {
+                candidates = std::min(window_candidates_target_, std::max(1, est_window));
+            }
+            changed |= setCachedText(window_candidates_readout_el_,
+                                     std::to_string(candidates) + " / ~" + std::to_string(est_window) + " frames");
+        }
 
         if (sharpness_threshold_slider_el_ && sharpness_threshold_value_el_) {
             const int val = readIntValue(sharpness_threshold_slider_el_, 10);
@@ -1273,6 +1311,15 @@ namespace lfs::gui {
         } else if (id == "quality-slider") {
             jpg_quality_ = std::clamp(readIntValue(quality_slider_el_, jpg_quality_), 50, 100);
             changed_control = quality_slider_el_;
+        } else if (id == "window-candidates-select") {
+            if (window_candidates_select_el_) {
+                const auto* select = dynamic_cast<const Rml::ElementFormControlSelect*>(window_candidates_select_el_);
+                if (select) {
+                    const int values[] = {-1, 3, 5, 10, 20, 50, 0};
+                    window_candidates_target_ = values[std::clamp(select->GetSelection(), 0, 6)];
+                }
+            }
+            changed_control = window_candidates_select_el_;
         } else if (id == "sharpness-toggle") {
             changed_control = sharpness_toggle_el_;
         } else if (id == "sharpness-algorithm-select") {
@@ -1435,6 +1482,7 @@ namespace lfs::gui {
             params.sharpness_algorithm = ALGO_MAP[std::clamp(sharpness_algorithm_select_el_->GetSelection(), 0, 2)];
         }
         params.sharpness_window_mode = sharpness_mode_select_el_ && sharpness_mode_select_el_->GetSelection() == 1;
+        params.window_candidates_target = window_candidates_target_;
         params.sharpness_threshold = static_cast<double>(readIntValue(sharpness_threshold_slider_el_, 10));
         params.generate_metadata = generate_metadata_el_ && generate_metadata_el_->HasAttribute("checked");
         params.rotation = rotation_deg_;

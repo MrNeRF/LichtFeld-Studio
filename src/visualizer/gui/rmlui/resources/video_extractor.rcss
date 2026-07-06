@@ -442,6 +442,11 @@ body {
     min-width: 72dp;
 }
 
+#window-candidates-select {
+    width: 160dp;
+    min-width: 160dp;
+}
+
 .pattern-input {
     width: 200dp;
     min-width: 200dp;

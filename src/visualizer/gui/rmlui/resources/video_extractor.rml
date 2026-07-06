@@ -128,11 +128,25 @@
                 <option value="threshold">@tr:video_extractor.sharpness_mode_threshold</option>
                 <option value="window">@tr:video_extractor.sharpness_mode_window</option>
               </select>
+              <span id="sharpness-mode-desc" class="inline-note">@tr:video_extractor.sharpness_mode_desc_threshold</span>
             </div>
             <div id="sharpness-threshold-row" class="settings-row">
               <span class="field-label">@tr:video_extractor.sharpness_threshold_label</span>
               <input id="sharpness-threshold-slider" class="value-slider" type="range" min="0" max="100" step="1" value="10" />
               <span id="sharpness-threshold-value" class="value-readout">10%</span>
+            </div>
+            <div id="sharpness-window-row" class="settings-row" style="display:none">
+              <span class="field-label">@tr:video_extractor.sharpness_coverage_label</span>
+              <select id="window-candidates-select" class="compact-select">
+                <option value="auto">@tr:video_extractor.candidates_auto</option>
+                <option value="3">3 - Fast</option>
+                <option value="5">5 - Balanced</option>
+                <option value="10" selected="selected">10 - Quality</option>
+                <option value="20">20 - High quality</option>
+                <option value="50">50 - Very high</option>
+                <option value="0">@tr:video_extractor.candidates_all</option>
+              </select>
+              <span id="window-candidates-readout" class="inline-note">10 / ~25 frames</span>
             </div>
           </div>
         </div>
