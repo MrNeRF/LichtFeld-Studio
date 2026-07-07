@@ -179,6 +179,7 @@ namespace {
                 "EXAMPLES:\n"
                 "lichtfeld-studio -d ./data -o ./output\n"
                 "lichtfeld-studio --resume checkpoint.resume\n"
+                "lichtfeld-studio --render-camera-path path.json --render-load model.ply --render-output out.mp4\n"
                 "lichtfeld-studio -v model.ply\n"
                 "lichtfeld-studio convert in.ply out.spz\n"
                 "lichtfeld-studio mesh2splat model.obj -o model_splat.ply\n"
@@ -197,6 +198,7 @@ namespace {
             ::args::Flag version(mode_group, "version", "Display version information", {'V', "version"});
             ::args::ValueFlag<std::string> view_ply(mode_group, "path", "View file(s). Supports splat (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz) and mesh (.obj, .fbx, .gltf, .glb, .stl) formats. If directory, loads all.", {'v', "view"});
             ::args::ValueFlag<std::string> resume_checkpoint(mode_group, "checkpoint", "Resume training from checkpoint file", {"resume"});
+            ::args::ValueFlag<std::string> render_camera_path(mode_group, "path", "Render a JSON camera-keyframe path to video, headless (no GUI/window). Requires --render-load and --render-output; see RENDER PATH options.", {"render-camera-path"});
             ::args::CompletionFlag completion(parser, {"complete"});
 
             // =============================================================================
@@ -214,6 +216,18 @@ namespace {
             ::args::Flag exclude_export(paths_group, "exclude_export", "Exclude frozen --add-splat rows from PLY exports", {"exclude-export"});
 
             ::args::ValueFlag<std::string> import_cameras(paths_group, "path", "Import COLMAP cameras from sparse folder (no images required)", {"import-cameras"});
+
+            // =============================================================================
+            // RENDER PATH (used with --render-camera-path)
+            // =============================================================================
+            ::args::Group render_path_sep(parser, " ");
+            ::args::Group render_path_group(parser, "RENDER PATH (used with --render-camera-path):");
+            ::args::ValueFlag<std::string> render_load(render_path_group, "path", "Trained scene to render (.ply/.sog/.spz or .resume checkpoint)", {"render-load"});
+            ::args::ValueFlag<std::string> render_output(render_path_group, "path", "Output video file (.mp4)", {"render-output"});
+            ::args::ValueFlag<int> render_width(render_path_group, "width", "Output width (default 1920)", {"render-width"});
+            ::args::ValueFlag<int> render_height(render_path_group, "height", "Output height (default 1080)", {"render-height"});
+            ::args::ValueFlag<int> render_fps(render_path_group, "fps", "Output framerate (default 30)", {"render-fps"});
+            ::args::ValueFlag<int> render_crf(render_path_group, "crf", "Video quality, lower=better (default 18)", {"render-crf"});
 
             // =============================================================================
             // TRAINING PARAMETERS
@@ -466,6 +480,47 @@ namespace {
                 if (gut) {
                     params.optimization.gut = true;
                 }
+                return std::make_tuple(ParseResult::Success, std::function<void()>{});
+            }
+
+            // Headless camera-path -> video render mode: no training, no window.
+            if (render_camera_path) {
+                const auto& camera_path_str = ::args::get(render_camera_path);
+                const auto camera_path = lfs::core::utf8_to_path(camera_path_str);
+                if (!std::filesystem::exists(camera_path)) {
+                    return std::unexpected(std::format("Camera path file does not exist: {}", camera_path_str));
+                }
+                if (!render_load || ::args::get(render_load).empty()) {
+                    return std::unexpected(std::format(
+                        "ERROR: --render-camera-path requires --render-load\n\n{}", parser.Help()));
+                }
+                if (!render_output || ::args::get(render_output).empty()) {
+                    return std::unexpected(std::format(
+                        "ERROR: --render-camera-path requires --render-output\n\n{}", parser.Help()));
+                }
+                const auto load_path = lfs::core::utf8_to_path(::args::get(render_load));
+                if (!std::filesystem::exists(load_path)) {
+                    return std::unexpected(std::format("Scene to render does not exist: {}", ::args::get(render_load)));
+                }
+
+                lfs::core::param::RenderPathConfig cfg;
+                cfg.camera_path = camera_path;
+                cfg.load_path = load_path;
+                cfg.output_path = lfs::core::utf8_to_path(::args::get(render_output));
+                if (render_width) {
+                    cfg.width = ::args::get(render_width);
+                }
+                if (render_height) {
+                    cfg.height = ::args::get(render_height);
+                }
+                if (render_fps) {
+                    cfg.fps = ::args::get(render_fps);
+                }
+                if (render_crf) {
+                    cfg.crf = ::args::get(render_crf);
+                }
+                params.render_path = cfg;
+
                 return std::make_tuple(ParseResult::Success, std::function<void()>{});
             }
 

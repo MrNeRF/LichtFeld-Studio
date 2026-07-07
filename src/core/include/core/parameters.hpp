@@ -260,6 +260,20 @@ namespace lfs::core {
             static ServerConfig from_json(const nlohmann::json& j);
         };
 
+        // Headless camera-path -> video render mode (see --render-camera-path):
+        // load a trained scene and a sequencer::Timeline JSON keyframe path,
+        // render it frame-by-frame, and encode directly to an output video file.
+        // No training, no GUI/window.
+        struct LFS_CORE_API RenderPathConfig {
+            std::filesystem::path camera_path; // sequencer::Timeline JSON (see Timeline::loadFromJson)
+            std::filesystem::path load_path;   // trained scene: .ply/.sog/.spz or .resume checkpoint
+            std::filesystem::path output_path; // destination .mp4
+            int width = 1920;
+            int height = 1080;
+            int fps = 30;
+            int crf = 18;
+        };
+
         struct LFS_CORE_API TrainingParameters {
             DatasetConfig dataset;
             OptimizationParameters optimization;
@@ -281,6 +295,9 @@ namespace lfs::core {
 
             // Checkpoint to resume training from
             std::optional<std::filesystem::path> resume_checkpoint = std::nullopt;
+
+            // Headless camera-path -> video render mode (see --render-camera-path)
+            std::optional<RenderPathConfig> render_path = std::nullopt;
 
             // Python scripts to execute for custom training callbacks
             std::vector<std::filesystem::path> python_scripts;
