@@ -489,7 +489,7 @@ namespace fast_lfs::rasterization::kernels::backward {
                     const float3 color_unclamped = primitive_color[primitive_idx];
                     color = fminf(fmaxf(color_unclamped, 0.0f), config::max_blend_color);
                     depth = primitive_depths[primitive_idx];
-                    color_grad_factor = color_grad_factor = make_float3(
+                    color_grad_factor = make_float3(
                         color_unclamped.x <= config::max_blend_color ? 1.0f : 0.0f,
                         color_unclamped.y <= config::max_blend_color ? 1.0f : 0.0f,
                         color_unclamped.z <= config::max_blend_color ? 1.0f : 0.0f);
