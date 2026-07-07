@@ -8,6 +8,17 @@
 - vcpkg (`VCPKG_ROOT` environment variable set)
 - GCC 14+ (Linux) or Visual Studio 2022 v17.10+ (Windows)
 
+On Windows, set `CUDNN_ROOT_DIR` to the cuDNN version root so the build can copy
+the CUDA-versioned cuDNN runtime DLLs next to the executable and into portable
+installs:
+
+```bat
+set CUDNN_ROOT_DIR=C:\Program Files\NVIDIA\CUDNN\v9.24
+```
+
+For unusual layouts, pass `-DLFS_CUDNN_BIN_DIR=...` directly to the cuDNN DLL
+directory, for example `...\bin\<cuda-version>\x64`.
+
 ## Linux Prerequisites
 
 On Linux, LichtFeld Studio requires SDL3 to be built with at least one windowing backend (`x11` or `wayland`).

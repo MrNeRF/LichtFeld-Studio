@@ -5522,8 +5522,7 @@ namespace lfs::vis::gui {
                 guiFocusState().want_capture_mouse = true;
 
             if (!vulkan_gui_) {
-                rml_menu_bar_.setViewportRightEdge(
-                    viewport_layout_.pos.x + viewport_layout_.size.x - menu_input.screen_x);
+                rml_menu_bar_.setViewportRightEdge(menu_toolbar_right_edge_ - menu_input.screen_x);
                 rml_menu_bar_.draw(menu_input.screen_w, menu_input.screen_h);
             }
         } else {
@@ -6068,6 +6067,12 @@ namespace lfs::vis::gui {
         python::set_viewport_bounds(viewport_layout_.pos.x, viewport_layout_.pos.y,
                                     viewport_layout_.size.x, viewport_layout_.size.y);
 
+        // The render-mode toolbar anchors to the right panel's edge, so the docked
+        // editor console must not drag it left when it shrinks the viewport.
+        const ViewportLayout toolbar_layout = panel_layout_.computeViewportLayout(
+            show_main_panel_, ui_hidden_, false, screen);
+        menu_toolbar_right_edge_ = toolbar_layout.pos.x + toolbar_layout.size.x;
+
         {
             LOG_TIMER_THRESHOLD("gui_render.gizmo_update", 0.25);
             gizmo_manager_.updateToolState(ctx, ui_hidden_);
@@ -6346,8 +6351,7 @@ namespace lfs::vis::gui {
             if (menu_bar_) {
                 LOG_TIMER_THRESHOLD("gui_render.menu_context_modal_render.menu_bar", 0.25);
                 rml_menu_bar_.setUiHidden(ui_hidden_);
-                rml_menu_bar_.setViewportRightEdge(
-                    viewport_layout_.pos.x + viewport_layout_.size.x - panel_input.screen_x);
+                rml_menu_bar_.setViewportRightEdge(menu_toolbar_right_edge_ - panel_input.screen_x);
                 rml_menu_bar_.draw(panel_input.screen_w, panel_input.screen_h);
             }
             if (global_context_menu_->hasPendingRenderWork()) {
