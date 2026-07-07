@@ -21,6 +21,8 @@ vcpkg_from_github(
         fix-cmake-cuda.patch
         skip-avx-ne-convert-asm-on-linux.patch
         skip-protobuf-in-moe-cuda-tu.patch
+        fix-semver-cstdint.patch
+        fix-linux-cxx20.patch
 )
 
 find_program(PROTOC NAMES protoc PATHS "${CURRENT_HOST_INSTALLED_DIR}/tools/protobuf" REQUIRED NO_DEFAULT_PATH NO_CMAKE_PATH)
