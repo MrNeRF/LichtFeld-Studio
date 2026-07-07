@@ -1517,7 +1517,7 @@
     "candidates_all": "Toutes les images",
     "candidates_readout_fmt": "%d / ~%d images",
     "generate_metadata": "Générer le JSON de métadonnées",
-    "overwrite_prompt": "Le dossier de sortie contient déjà des images. Tout effacer et continuer ?",
+    "overwrite_prompt": "Le dossier de sortie contient déjà des images extraites ou des métadonnées d'extraction. Supprimer uniquement les fichiers générés dans ce dossier ?",
     "overwrite_clear": "Continuer",
     "overwrite_cancel": "Annuler",
     "rotate_cw": "Pivoter dans le sens horaire",

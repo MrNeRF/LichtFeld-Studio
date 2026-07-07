@@ -1517,7 +1517,7 @@
     "candidates_all": "すべてのフレーム",
     "candidates_readout_fmt": "%d / ~%d フレーム",
     "generate_metadata": "メタデータJSONを生成",
-    "overwrite_prompt": "出力フォルダに既に抽出されたフレームがあります。すべて消去して続行しますか？",
+    "overwrite_prompt": "出力フォルダには抽出済みフレームまたは抽出メタデータが既にあります。このフォルダ内の生成ファイルのみを削除しますか？",
     "overwrite_clear": "続行",
     "overwrite_cancel": "キャンセル",
     "rotate_cw": "時計回りに回転",

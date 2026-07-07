@@ -1546,7 +1546,7 @@
     "candidates_all": "所有帧",
     "candidates_readout_fmt": "%d / ~%d 帧",
     "generate_metadata": "生成元数据JSON",
-    "overwrite_prompt": "输出文件夹已包含提取的帧。是否清除所有内容并继续？",
+    "overwrite_prompt": "输出文件夹已包含提取的帧或提取元数据。是否仅删除此文件夹中生成的文件？",
     "overwrite_clear": "继续",
     "overwrite_cancel": "取消",
     "rotate_cw": "顺时针旋转",

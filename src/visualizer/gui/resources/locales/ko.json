@@ -1517,7 +1517,7 @@
     "candidates_all": "모든 프레임",
     "candidates_readout_fmt": "%d / ~%d 프레임",
     "generate_metadata": "메타데이터 JSON 생성",
-    "overwrite_prompt": "출력 폴더에 이미 추출된 프레임이 있습니다. 모두 지우고 진행하시겠습니까?",
+    "overwrite_prompt": "출력 폴더에 이미 추출된 프레임 또는 추출 메타데이터가 있습니다. 이 폴더의 생성된 파일만 삭제하시겠습니까?",
     "overwrite_clear": "진행",
     "overwrite_cancel": "취소",
     "rotate_cw": "시계 방향으로 회전",

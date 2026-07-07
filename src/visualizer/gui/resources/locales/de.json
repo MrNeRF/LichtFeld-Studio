@@ -1517,7 +1517,7 @@
     "candidates_all": "Alle Frames",
     "candidates_readout_fmt": "%d / ~%d Bilder",
     "generate_metadata": "Metadaten-JSON erstellen",
-    "overwrite_prompt": "Der Ausgabeordner enthält bereits extrahierte Bilder. Alles löschen und fortfahren?",
+    "overwrite_prompt": "Der Ausgabeordner enthält bereits extrahierte Bilder oder Extraktionsmetadaten. Nur generierte Dateien in diesem Ordner entfernen und fortfahren?",
     "overwrite_clear": "Fortfahren",
     "overwrite_cancel": "Abbrechen",
     "rotate_cw": "Im Uhrzeigersinn drehen",

@@ -1517,7 +1517,7 @@
     "candidates_all": "Wszystkie klatki",
     "candidates_readout_fmt": "%d / ~%d klatek",
     "generate_metadata": "Generuj JSON metadanych",
-    "overwrite_prompt": "Folder wyjściowy zawiera już wyodrębnione klatki. Wyczyścić wszystko i kontynuować?",
+    "overwrite_prompt": "Folder wyjściowy zawiera już wyodrębnione klatki lub metadane ekstrakcji. Usunąć tylko wygenerowane pliki w tym folderze?",
     "overwrite_clear": "Kontynuuj",
     "overwrite_cancel": "Anuluj",
     "rotate_cw": "Obróć w prawo",

@@ -1517,7 +1517,7 @@
     "candidates_all": "Alle frames",
     "candidates_readout_fmt": "%d / ~%d frames",
     "generate_metadata": "Metadata JSON genereren",
-    "overwrite_prompt": "De uitvoermap bevat reeds geëxtraheerde frames. Alles wissen en doorgaan?",
+    "overwrite_prompt": "De uitvoermap bevat al geëxtraheerde frames of extractiemetadata. Alleen de gegenereerde bestanden in deze map verwijderen?",
     "overwrite_clear": "Doorgaan",
     "overwrite_cancel": "Annuleren",
     "rotate_cw": "Met de klok mee draaien",

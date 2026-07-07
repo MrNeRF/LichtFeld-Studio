@@ -12,6 +12,7 @@
 #include "gui/string_keys.hpp"
 #include "gui/ui_context.hpp"
 #include "gui/utils/native_file_dialog.hpp"
+#include <cctype>
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
@@ -1250,9 +1251,19 @@ namespace lfs::gui {
                 // Clear the folder
                 const auto& dir = pending_params_.output_dir;
                 if (std::filesystem::exists(dir)) {
-                    for (const auto& entry : std::filesystem::recursive_directory_iterator(dir)) {
-                        std::error_code ec;
-                        std::filesystem::remove_all(entry.path(), ec);
+                    for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+                        if (!entry.is_regular_file())
+                            continue;
+                        const auto ext = entry.path().extension().string();
+                        std::string lower;
+                        lower.reserve(ext.size());
+                        for (auto c : ext)
+                            lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+                        if (lower == ".jpg" || lower == ".jpeg" || lower == ".png" ||
+                            entry.path().filename() == "extraction_metadata.json") {
+                            std::error_code ec;
+                            std::filesystem::remove(entry.path(), ec);
+                        }
                     }
                 }
                 pending_params_set_ = false;
@@ -1487,19 +1498,24 @@ namespace lfs::gui {
         params.generate_metadata = generate_metadata_el_ && generate_metadata_el_->HasAttribute("checked");
         params.rotation = rotation_deg_;
 
-        // Check if output folder already contains files
+        // Check if output folder already contains generated extraction files
         if (std::filesystem::exists(output_dir_)) {
-            bool has_files = false;
+            bool has_generated = false;
             for (const auto& entry : std::filesystem::directory_iterator(output_dir_)) {
-                if (entry.is_regular_file()) {
-                    const auto ext = entry.path().extension().string();
-                    if (ext == ".jpg" || ext == ".jpeg" || ext == ".png") {
-                        has_files = true;
-                        break;
-                    }
+                if (!entry.is_regular_file())
+                    continue;
+                const auto ext = entry.path().extension().string();
+                std::string ext_lower;
+                ext_lower.reserve(ext.size());
+                for (auto c : ext)
+                    ext_lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+                if (ext_lower == ".jpg" || ext_lower == ".jpeg" || ext_lower == ".png" ||
+                    entry.path().filename() == "extraction_metadata.json") {
+                    has_generated = true;
+                    break;
                 }
             }
-            if (has_files) {
+            if (has_generated) {
                 pending_params_ = params;
                 pending_params_set_ = true;
                 if (overwrite_overlay_el_)

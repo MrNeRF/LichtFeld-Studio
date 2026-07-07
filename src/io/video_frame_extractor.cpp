@@ -546,6 +546,7 @@ namespace lfs::io {
                 };
                 std::vector<BatchFrameMeta> batch_meta;
                 int batch_idx = 0;
+                int batch_encode_w = 0, batch_encode_h = 0;
                 bool logged_hw_format_fallback = false;
                 bool used_full_gpu_pipeline = false;
                 struct CandidateFrame {
@@ -570,9 +571,18 @@ namespace lfs::io {
                 auto flush_jpeg_batch = [&]() {
                     if (batch_gpu_ptrs.empty())
                         return;
+                    if (batch_encode_w <= 0 || batch_encode_h <= 0) {
+                        LOG_ERROR("JPEG batch dimensions not set ({}x{}), skipping {} queued frames",
+                                  batch_encode_w, batch_encode_h, batch_gpu_ptrs.size());
+                        batch_gpu_ptrs.clear();
+                        batch_filenames.clear();
+                        batch_meta.clear();
+                        batch_idx = 0;
+                        return;
+                    }
                     throw_if_cancelled();
 
-                    auto encoded = nvcodec->encode_batch_rgb_to_jpeg(batch_gpu_ptrs, out_width, out_height,
+                    auto encoded = nvcodec->encode_batch_rgb_to_jpeg(batch_gpu_ptrs, batch_encode_w, batch_encode_h,
                                                                      params.jpg_quality);
 
                     for (size_t i = 0; i < encoded.size(); i++) {
@@ -593,6 +603,8 @@ namespace lfs::io {
                     batch_gpu_ptrs.clear();
                     batch_filenames.clear();
                     batch_meta.clear();
+                    batch_encode_w = 0;
+                    batch_encode_h = 0;
                     batch_idx = 0;
                     throw_if_cancelled();
                 };
@@ -767,6 +779,11 @@ namespace lfs::io {
                         const int batch_frame_size = batch_w * batch_h * 3;
                         // --- End rotation ---
 
+                        if (batch_encode_w == 0) {
+                            batch_encode_w = batch_w;
+                            batch_encode_h = batch_h;
+                        }
+
                         void* dst_ptr = gpu_batch_buffer + batch_idx * batch_frame_size;
                         cudaError_t cuda_err = cudaMemcpyAsync(dst_ptr, batch_src, batch_frame_size,
                                                                cudaMemcpyDeviceToDevice, nullptr);
@@ -878,6 +895,10 @@ namespace lfs::io {
                         // --- End rotation ---
 
                         if (gpu_encoding_enabled) {
+                            if (batch_encode_w == 0) {
+                                batch_encode_w = (hw_rot_w > 0) ? hw_rot_w : out_width;
+                                batch_encode_h = (hw_rot_h > 0) ? hw_rot_h : out_height;
+                            }
                             void* dst_ptr = gpu_batch_buffer + batch_idx * frame_size;
                             cudaMemcpy(dst_ptr, cpu_contiguous_buffer, frame_size,
                                        cudaMemcpyHostToDevice);
@@ -987,6 +1008,10 @@ namespace lfs::io {
                     std::filesystem::path filename = generate_filename(saved_count + 1);
 
                     if (gpu_encoding_enabled) {
+                        if (batch_encode_w == 0) {
+                            batch_encode_w = (sw_rot_w > 0) ? sw_rot_w : out_width;
+                            batch_encode_h = (sw_rot_h > 0) ? sw_rot_h : out_height;
+                        }
                         void* dst_ptr = gpu_batch_buffer + batch_idx * frame_size;
                         cudaMemcpy(dst_ptr, cpu_contiguous_buffer, frame_size,
                                    cudaMemcpyHostToDevice);
