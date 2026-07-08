@@ -88,6 +88,7 @@ set(CORE_SOURCES
         parameters.cpp
         property_registry.cpp
         provenance.cpp
+        point_cloud.cpp
         reactive_store.cpp
         scene.cpp
         session_breadcrumb.cpp

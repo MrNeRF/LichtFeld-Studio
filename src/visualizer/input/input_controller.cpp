@@ -2920,12 +2920,8 @@ namespace lfs::vis {
             return;
         }
 
-        auto& scene = scene_manager->getScene();
-        for (const auto& selected_name : selected_names) {
-            const auto* const node = scene.getNode(selected_name);
-            if (node && node->type == core::NodeType::CAMERA) {
-                scene.setCameraTrainingEnabled(node->name, enabled);
-            }
+        if (const auto result = scene_manager->setCamerasTrainingEnabledWithHistory(selected_names, enabled); !result) {
+            LOG_WARN("Failed to update selected camera training state: {}", result.error());
         }
     }
 
@@ -3054,9 +3050,17 @@ namespace lfs::vis {
                 }
 
                 if (action == "enable_train") {
-                    scene_manager->getScene().setCameraTrainingEnabled(camera_name, true);
+                    if (const auto result =
+                            scene_manager->setCamerasTrainingEnabledWithHistory({camera_name}, true);
+                        !result) {
+                        LOG_WARN("Failed to enable camera for training: {}", result.error());
+                    }
                 } else if (action == "disable_train") {
-                    scene_manager->getScene().setCameraTrainingEnabled(camera_name, false);
+                    if (const auto result =
+                            scene_manager->setCamerasTrainingEnabledWithHistory({camera_name}, false);
+                        !result) {
+                        LOG_WARN("Failed to disable camera for training: {}", result.error());
+                    }
                 }
             });
     }

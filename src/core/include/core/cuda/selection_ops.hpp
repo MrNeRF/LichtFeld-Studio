@@ -52,4 +52,17 @@ namespace lfs::core::cuda {
                                         float ref_r, float ref_g, float ref_b,
                                         float threshold, uint8_t group_id);
 
+    /// Select point-cloud colors by uint8 RGB similarity.
+    /// @param colors      [N, 3] UInt8 point colors
+    /// @param ref_r       reference red
+    /// @param ref_g       reference green
+    /// @param ref_b       reference blue
+    /// @param tolerance   per-channel absolute difference threshold (0-255)
+    /// @return [N] UInt8 mask
+    LFS_CUDA_API Tensor select_points_by_color(const Tensor& colors,
+                                               uint8_t ref_r,
+                                               uint8_t ref_g,
+                                               uint8_t ref_b,
+                                               uint8_t tolerance);
+
 } // namespace lfs::core::cuda

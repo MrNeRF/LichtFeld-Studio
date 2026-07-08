@@ -16,6 +16,7 @@
 #include "core/provenance.hpp"
 #include "core/scene.hpp"
 #include "core/user_paths.hpp"
+#include "core/selection_domain.hpp"
 #include "gui/global_context_menu.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/rml_menu_bar.hpp"
@@ -2808,6 +2809,23 @@ namespace lfs::python {
                 return lfs::python::consume_redraw_request();
             },
             "Consume and return pending redraw request flag");
+        m.def(
+            "has_active_selection",
+            []() {
+                auto* const scene = lfs::vis::services().sceneOrNull();
+                if (!scene)
+                    return false;
+                switch (lfs::vis::resolveSelectionDomain(*scene)) {
+                case lfs::vis::SelectionDomain::Gaussians:
+                    return scene->getScene().hasSelection();
+                case lfs::vis::SelectionDomain::PointCloud:
+                    return scene->getActivePointSelectionCount() > 0;
+                case lfs::vis::SelectionDomain::Cameras:
+                    return !scene->getSelectedNodeNames().empty();
+                }
+                return false;
+            },
+            "Return whether the active selection domain has a selection");
         const auto schedule_on_ui_thread = [](nb::callable callback) {
             if (!callback.is_valid())
                 throw nb::type_error("schedule_on_ui_thread requires a callable");
@@ -4013,6 +4031,32 @@ namespace lfs::python {
                 return editor && editor->canSelectGaussians();
             },
             "Return true when Gaussian selection editing is available");
+
+        m.def(
+            "get_selection_domain", []() -> std::string {
+                const auto* editor = get_editor_context();
+                if (!editor) {
+                    return "gaussians";
+                }
+
+                switch (editor->getSelectionDomain()) {
+                case vis::SelectionDomain::PointCloud:
+                    return "pointcloud";
+                case vis::SelectionDomain::Cameras:
+                    return "cameras";
+                case vis::SelectionDomain::Gaussians:
+                default:
+                    return "gaussians";
+                }
+            },
+            "Return the active selection domain");
+
+        m.def(
+            "can_edit_selection", []() -> bool {
+                const auto* editor = get_editor_context();
+                return editor && editor->canUseSelectionTool();
+            },
+            "Return true when selection editing is available for the active domain");
 
         m.def(
             "has_gaussian_selection", []() -> bool {

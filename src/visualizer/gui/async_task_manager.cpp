@@ -12,6 +12,7 @@
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
+#include "core/point_cloud.hpp"
 #include "core/scene.hpp"
 #include "core/services.hpp"
 #include "gui/error_event_bridge.hpp"
@@ -201,7 +202,12 @@ namespace lfs::vis::gui {
                 !scene.isNodeEffectivelyVisible(node->id)) {
                 continue;
             }
-            snapshot.point_cloud = node->point_cloud;
+            if (node->point_cloud->has_deleted()) {
+                snapshot.point_cloud =
+                    std::make_shared<core::PointCloud>(core::remove_deleted_points(*node->point_cloud));
+            } else {
+                snapshot.point_cloud = node->point_cloud;
+            }
             snapshot.point_cloud_transform = scene.getWorldTransform(node->id);
             break;
         }

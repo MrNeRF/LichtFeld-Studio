@@ -456,10 +456,22 @@ class _GizmoToolbarController:
             set_selection_mode = getattr(lf.ui, "set_selection_mode", None)
             if callable(set_selection_mode):
                 set_selection_mode(active_submode)
+        get_selection_domain = getattr(lf.ui, "get_selection_domain", None)
+        try:
+            selection_domain = get_selection_domain() if callable(get_selection_domain) else ""
+        except Exception:
+            selection_domain = ""
 
         mode_buttons = []
         for mode in tool_def.submodes:
             tooltip_key = self._SUBMODE_LOCALE_KEYS.get(f"builtin.select:{mode.id}", "")
+            mode_enabled = enabled
+            if selection_domain == "pointcloud" and mode.id == "rings":
+                mode_enabled = False
+                tooltip_key = "toolbar.ring_selection_pointcloud_unavailable"
+            if selection_domain == "cameras" and mode.id in {"rings", "color", "box", "sphere"}:
+                mode_enabled = False
+                tooltip_key = "toolbar.submode_camera_unavailable"
             selected = active_tool_id == "builtin.select" and active_submode == mode.id
             mode_buttons.append(
                 _button_record(
@@ -472,7 +484,7 @@ class _GizmoToolbarController:
                     action_id=self._SELECTION_MODE_ACTIONS.get(mode.id, ""),
                     shortcut_text=mode.shortcut,
                     selected=selected,
-                    enabled=enabled,
+                    enabled=mode_enabled,
                 )
             )
 

@@ -4,6 +4,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "core/selection_domain.hpp"
 #include "core/tensor.hpp"
 #include "rendering/rendering_types.hpp"
 #include <array>
@@ -156,6 +157,7 @@ namespace lfs::vis {
             bool active = false;
             SelectionShape shape = SelectionShape::Brush;
             SelectionMode mode = SelectionMode::Replace;
+            SelectionDomain domain = SelectionDomain::Gaussians;
             SelectionFilterState filters{};
             float brush_radius = 20.0f;
             glm::vec2 start_pos{0.0f};
@@ -183,6 +185,7 @@ namespace lfs::vis {
         };
         struct ScreenPositionCacheKey {
             bool valid = false;
+            SelectionDomain domain = SelectionDomain::Gaussians;
             std::size_t signature = 0;
 
             [[nodiscard]] friend bool operator==(const ScreenPositionCacheKey& a,
@@ -194,12 +197,17 @@ namespace lfs::vis {
                                                       const SelectionFilterState& filters,
                                                       const char* undo_name,
                                                       SelectionCommitOptions options = {});
+        [[nodiscard]] SelectionResult commitPointSelection(const core::Tensor& selection, SelectionMode mode,
+                                                           const SelectionFilterState& filters,
+                                                           const char* undo_name, bool push_undo);
         [[nodiscard]] core::Tensor& resetBoolScratchBuffer(core::Tensor& buffer, size_t size);
         [[nodiscard]] std::optional<ViewerViewportContext> resolveViewerViewportContext(
             std::optional<glm::vec2> screen_point = std::nullopt,
             std::optional<SplitViewPanelId> panel_override = std::nullopt) const;
         [[nodiscard]] std::optional<ViewportInfo> resolveViewportInfo() const;
         [[nodiscard]] std::shared_ptr<core::Tensor> getScreenPositionsForContext(
+            const ViewerViewportContext& context) const;
+        [[nodiscard]] std::shared_ptr<core::Tensor> getPointCloudScreenPositionsForContext(
             const ViewerViewportContext& context) const;
         [[nodiscard]] std::shared_ptr<core::Tensor> resolveCommandScreenPositions(int camera_index) const;
         [[nodiscard]] std::optional<rendering::FrameView> resolveCommandFrameView(int camera_index) const;
@@ -262,10 +270,23 @@ namespace lfs::vis {
                              const core::Tensor* ellipsoid_transform = nullptr,
                              const core::Tensor* ellipsoid_radii = nullptr,
                              bool use_scene_filters = true) const;
+        void applyCropFilterToMeans(core::Tensor& selection,
+                                    const core::Tensor& means,
+                                    const glm::mat4& means_to_visualizer,
+                                    const core::Tensor* crop_box_transform = nullptr,
+                                    const core::Tensor* crop_box_min = nullptr,
+                                    const core::Tensor* crop_box_max = nullptr,
+                                    const core::Tensor* ellipsoid_transform = nullptr,
+                                    const core::Tensor* ellipsoid_radii = nullptr,
+                                    bool use_scene_filters = true) const;
+        void applyDepthFilterToMeans(core::Tensor& selection,
+                                     const core::Tensor& means,
+                                     const glm::mat4& means_to_visualizer) const;
         void applyDepthFilter(core::Tensor& selection) const;
         void clearInteractivePreviewState();
         [[nodiscard]] std::vector<bool> effectiveNodeMask(bool restrict_to_selected_nodes) const;
         [[nodiscard]] SelectionFilterState defaultFilterState() const;
+        [[nodiscard]] size_t activeSelectionElementCount(SelectionDomain domain) const;
 
         SceneManager* scene_manager_;
         RenderingManager* rendering_manager_;
@@ -287,6 +308,8 @@ namespace lfs::vis {
         std::optional<int> testing_hovered_gaussian_id_;
         mutable std::array<std::shared_ptr<core::Tensor>, 2> viewport_screen_positions_;
         mutable std::array<ScreenPositionCacheKey, 2> viewport_screen_position_keys_{};
+        mutable core::Tensor point_cloud_means_cuda_;
+        mutable std::size_t point_cloud_means_cuda_signature_ = 0;
         mutable std::vector<float> polygon_vertex_host_buffer_;
         mutable core::Tensor polygon_vertex_device_buffer_;
 

@@ -3,8 +3,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "selection_ops.hpp"
+#include "core/selection_domain.hpp"
+#include "core/services.hpp"
 #include "input/key_codes.hpp"
 #include "operator/operator_registry.hpp"
+#include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "visualizer/core/editor_context.hpp"
 
@@ -12,6 +15,33 @@ namespace lfs::vis::op {
 
     namespace {
         constexpr int kSelectionModeColor = static_cast<int>(lfs::vis::SelectionSubMode::Color);
+
+        [[nodiscard]] bool isCameraSubmodeSupported(const int mode) {
+            switch (static_cast<lfs::vis::SelectionSubMode>(mode)) {
+            case lfs::vis::SelectionSubMode::Centers:
+            case lfs::vis::SelectionSubMode::Rectangle:
+            case lfs::vis::SelectionSubMode::Polygon:
+            case lfs::vis::SelectionSubMode::Lasso:
+                return true;
+            case lfs::vis::SelectionSubMode::Rings:
+            case lfs::vis::SelectionSubMode::Color:
+            case lfs::vis::SelectionSubMode::Box:
+            case lfs::vis::SelectionSubMode::Sphere:
+                return false;
+            }
+            return true;
+        }
+
+        [[nodiscard]] bool hasVisibleCameraNode(const SceneManager& scene_manager) {
+            const auto& scene = scene_manager.getScene();
+            for (const auto* const node : scene.getNodes()) {
+                if (node && node->type == lfs::core::NodeType::CAMERA && node->camera &&
+                    scene.isNodeEffectivelyVisible(node->id)) {
+                    return true;
+                }
+            }
+            return false;
+        }
 
         [[nodiscard]] lfs::vis::SelectionShape toSelectionShape(const int mode) {
             switch (static_cast<lfs::vis::SelectionSubMode>(mode)) {
@@ -64,8 +94,27 @@ namespace lfs::vis::op {
     };
 
     bool SelectionStrokeOperator::poll(const OperatorContext& ctx,
-                                       const OperatorProperties* /*props*/) const {
-        return ctx.scene().getScene().getTotalGaussianCount() > 0;
+                                       const OperatorProperties* props) const {
+        switch (resolveSelectionDomain(ctx.scene())) {
+        case SelectionDomain::Gaussians:
+            return ctx.scene().getScene().getTotalGaussianCount() > 0;
+        case SelectionDomain::PointCloud: {
+            const auto* const node = resolveActivePointCloudNode(ctx.scene());
+            return node && node->point_cloud && node->point_cloud->size() > 0;
+        }
+        case SelectionDomain::Cameras:
+            if (props && !isCameraSubmodeSupported(props->get_or<int>("mode", 0))) {
+                return false;
+            }
+            if (!hasVisibleCameraNode(ctx.scene())) {
+                return false;
+            }
+            if (const auto* const rendering_manager = services().renderingOrNull()) {
+                return rendering_manager->getSettings().show_camera_frustums;
+            }
+            return false;
+        }
+        return false;
     }
 
     OperatorResult SelectionStrokeOperator::invoke(OperatorContext& ctx, OperatorProperties& props) {
@@ -75,6 +124,10 @@ namespace lfs::vis::op {
         }
 
         const int mode_int = props.get_or<int>("mode", 0);
+        if (resolveSelectionDomain(ctx.scene()) == SelectionDomain::Cameras &&
+            !isCameraSubmodeSupported(mode_int)) {
+            return OperatorResult::CANCELLED;
+        }
         mode_ = toSelectionMode(props.get_or<int>("op", 0));
         brush_radius_ = props.get_or<float>("brush_radius", 20.0f);
         stroke_button_ = props.get_or<int>("button", static_cast<int>(input::AppMouseButton::LEFT));

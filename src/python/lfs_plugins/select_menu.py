@@ -19,10 +19,21 @@ def _shortcut(action, fallback):
 
 def _can_edit_selection():
     try:
+        can_edit_selection = getattr(lf.ui, "can_edit_selection", None)
+        if callable(can_edit_selection):
+            return bool(can_edit_selection())
         return bool(lf.ui.can_edit_gaussian_selection())
     except (AttributeError, RuntimeError, TypeError):
         context = lf.ui.context()
         return bool(getattr(context, "num_gaussians", 0)) and not bool(getattr(context, "is_training", False))
+
+
+def _selection_domain():
+    try:
+        get_selection_domain = getattr(lf.ui, "get_selection_domain", None)
+        return str(get_selection_domain()) if callable(get_selection_domain) else "gaussians"
+    except (AttributeError, RuntimeError, TypeError):
+        return "gaussians"
 
 
 def _has_gaussian_selection():
@@ -58,6 +69,7 @@ class SelectMenu:
     def menu_items(self):
         tr = lf.ui.tr
         can_edit = _can_edit_selection()
+        can_edit_gaussians = can_edit and _selection_domain() == "gaussians"
         has_selection = _has_gaussian_selection()
         has_clipboard = _has_gaussian_clipboard()
         selection_tool_active = _is_selection_tool_active()
@@ -68,38 +80,38 @@ class SelectMenu:
                 tr("menu.select.copy_selection"),
                 lf.ui.copy_gaussian_selection,
                 shortcut=_shortcut(action.COPY_SELECTION, "Ctrl+C"),
-                enabled=can_edit and has_selection,
+                enabled=can_edit_gaussians and has_selection,
             ),
             menu_action(
                 tr("menu.select.cut_selection"),
                 lf.ui.cut_gaussian_selection,
                 shortcut=_shortcut(action.CUT_SELECTION, "Ctrl+X"),
-                enabled=can_edit and has_selection,
+                enabled=can_edit_gaussians and has_selection,
             ),
             menu_action(
                 tr("menu.select.paste_selection"),
                 lf.ui.paste_gaussian_selection,
                 shortcut=_shortcut(action.PASTE_SELECTION, "Ctrl+V"),
-                enabled=can_edit and has_clipboard,
+                enabled=can_edit_gaussians and has_clipboard,
             ),
             menu_separator(),
             menu_action(
                 tr("menu.select.invert_selection"),
                 lf.ui.invert_gaussian_selection,
                 shortcut=_shortcut(action.INVERT_SELECTION, "Ctrl+I"),
-                enabled=can_edit,
+                enabled=can_edit_gaussians,
             ),
             menu_action(
                 tr("menu.select.select_all"),
                 lf.ui.select_all_gaussians,
                 shortcut=_shortcut(action.SELECT_ALL, "Ctrl+A"),
-                enabled=can_edit and selection_tool_active,
+                enabled=can_edit_gaussians and selection_tool_active,
             ),
             menu_action(
                 tr("menu.select.deselect_all"),
                 lf.ui.deselect_all_gaussians,
                 shortcut=_shortcut(action.DESELECT_ALL, "Ctrl+D"),
-                enabled=can_edit and has_selection,
+                enabled=can_edit_gaussians and has_selection,
             ),
         ]
 

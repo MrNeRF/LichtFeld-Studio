@@ -974,6 +974,9 @@ def request_redraw(delay: float = 0.0) -> None:
 def consume_redraw_request() -> bool:
     """Consume and return pending redraw request flag"""
 
+def has_active_selection() -> bool:
+    """Return whether the active selection domain has a selection"""
+
 def schedule_on_ui_thread(callback: Callable) -> None:
     """Schedule a Python callable on the UI thread"""
 
@@ -2143,6 +2146,12 @@ def has_active_operator() -> bool:
 
 def can_edit_gaussian_selection() -> bool:
     """Return true when Gaussian selection editing is available"""
+
+def get_selection_domain() -> str:
+    """Return the active selection domain"""
+
+def can_edit_selection() -> bool:
+    """Return true when selection editing is available for the active domain"""
 
 def has_gaussian_selection() -> bool:
     """Return true when any Gaussians are selected"""

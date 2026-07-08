@@ -27,6 +27,7 @@ namespace lfs::vis::op {
                                 const OperatorProperties& props,
                                 const std::any& input) override;
 
+        [[nodiscard]] bool poll(SceneManager& scene) const override;
         [[nodiscard]] std::string id() const override { return "select.none"; }
         [[nodiscard]] std::string label() const override { return "Select None"; }
         [[nodiscard]] ModifiesFlag modifies() const override { return ModifiesFlag::SELECTION; }

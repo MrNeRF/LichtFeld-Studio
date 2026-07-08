@@ -21,6 +21,9 @@ namespace lfs::vis {
         const lfs::core::PointCloud* point_cloud = nullptr;             // For pre-training point cloud rendering
         std::shared_ptr<const lfs::core::PointCloud> owned_point_cloud; // Keeps merged point clouds alive
         glm::mat4 point_cloud_transform{1.0f};
+        core::NodeId point_cloud_node_id = core::NULL_NODE;
+        std::shared_ptr<core::Tensor> point_cloud_selection_mask;
+        std::shared_ptr<core::Tensor> point_cloud_deleted_mask;
         std::vector<core::Scene::VisibleMesh> meshes; // Visible mesh nodes with transforms
         std::vector<glm::mat4> model_transforms;
         std::vector<glm::mat4> camera_scene_transforms;

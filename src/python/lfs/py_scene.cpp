@@ -220,6 +220,20 @@ namespace lfs::python {
         pc_->opacity = pc_->opacity.is_valid() ? pc_->opacity[mask_dev] : pc_->opacity;
         pc_->scaling = pc_->scaling.is_valid() ? pc_->scaling[mask_dev] : pc_->scaling;
         pc_->rotation = pc_->rotation.is_valid() ? pc_->rotation[mask_dev] : pc_->rotation;
+        if (pc_->has_selection()) {
+            const auto mask_for_selection = mask.device() == pc_->selection->device()
+                                                ? mask
+                                                : mask.to(pc_->selection->device());
+            core::Tensor filtered_selection = (*pc_->selection)[mask_for_selection];
+            pc_->selection = std::make_shared<core::Tensor>(filtered_selection.contiguous());
+        }
+        if (pc_->has_deleted()) {
+            const auto mask_for_deleted = mask.device() == pc_->deleted->device()
+                                              ? mask
+                                              : mask.to(pc_->deleted->device());
+            core::Tensor filtered_deleted = (*pc_->deleted)[mask_for_deleted];
+            pc_->deleted = std::make_shared<core::Tensor>(filtered_deleted.contiguous());
+        }
 
         if (scene_) {
             scene_->setPointCloudModified(true);
@@ -244,6 +258,18 @@ namespace lfs::python {
         pc_->opacity = pc_->opacity.is_valid() ? pc_->opacity[idx_dev] : pc_->opacity;
         pc_->scaling = pc_->scaling.is_valid() ? pc_->scaling[idx_dev] : pc_->scaling;
         pc_->rotation = pc_->rotation.is_valid() ? pc_->rotation[idx_dev] : pc_->rotation;
+        if (pc_->has_selection()) {
+            const auto idx_for_selection = idx.device() == pc_->selection->device()
+                                               ? idx
+                                               : idx.to(pc_->selection->device());
+            pc_->selection = std::make_shared<core::Tensor>(pc_->selection->index_select(0, idx_for_selection).contiguous());
+        }
+        if (pc_->has_deleted()) {
+            const auto idx_for_deleted = idx.device() == pc_->deleted->device()
+                                             ? idx
+                                             : idx.to(pc_->deleted->device());
+            pc_->deleted = std::make_shared<core::Tensor>(pc_->deleted->index_select(0, idx_for_deleted).contiguous());
+        }
 
         if (scene_) {
             scene_->setPointCloudModified(true);
@@ -261,6 +287,8 @@ namespace lfs::python {
 
         pc_->means = pts.to(core::Device::CUDA);
         pc_->colors = cols.to(core::Device::CUDA);
+        pc_->selection.reset();
+        pc_->deleted.reset();
 
         const int64_t n = pc_->size();
         if (node_) {
@@ -1132,6 +1160,7 @@ namespace lfs::python {
             .def_prop_ro("scaling", &PyPointCloud::scaling, "Scaling tensor [N, 3]")
             .def_prop_ro("rotation", &PyPointCloud::rotation, "Rotation quaternion tensor [N, 4]")
             .def_prop_ro("size", &PyPointCloud::size, "Number of points")
+            .def_prop_ro("deleted_count", &PyPointCloud::deleted_count, "Number of soft-deleted points")
             .def("is_gaussian", &PyPointCloud::is_gaussian, "Check if point cloud has Gaussian attributes")
             .def_prop_ro("attribute_names", &PyPointCloud::attribute_names, "List of valid attribute names")
             .def("normalize_colors", &PyPointCloud::normalize_colors, "Normalize color values to [0, 1] range")
@@ -1363,12 +1392,14 @@ Returns:
             .def("get_node_bounds", &PyScene::get_node_bounds, nb::arg("id"), "Get axis-aligned bounding box as ((min_x, min_y, min_z), (max_x, max_y, max_z))")
             .def("get_node_bounds_center", &PyScene::get_node_bounds_center, nb::arg("id"), "Get center of the node bounding box as (x, y, z)")
             // Bounds (by name)
-            .def("get_node_bounds", [](PyScene& self, const std::string& name) {
+            .def(
+                "get_node_bounds", [](PyScene& self, const std::string& name) {
                     auto node = self.get_node(name);
                     if (!node)
                         return decltype(self.get_node_bounds(0)){std::nullopt};
                     return self.get_node_bounds(node->id()); }, nb::arg("name"), "Get axis-aligned bounding box by node name")
-            .def("get_node_bounds_center", [](PyScene& self, const std::string& name) {
+            .def(
+                "get_node_bounds_center", [](PyScene& self, const std::string& name) {
                     auto node = self.get_node(name);
                     if (!node)
                         throw std::runtime_error("Node not found: " + name);

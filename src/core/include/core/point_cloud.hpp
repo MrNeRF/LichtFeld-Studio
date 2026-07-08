@@ -4,8 +4,10 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "core/tensor.hpp"
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -26,6 +28,10 @@ namespace lfs::core {
         Tensor opacity;  // [N, 1] float32
         Tensor scaling;  // [N, 3] float32
         Tensor rotation; // [N, 4] float32
+
+        // Writers must replace mask shared_ptrs, never mutate tensors in place; render snapshots may hold them.
+        std::shared_ptr<Tensor> selection; // [N] uint8, 0 = unselected, 1 = selected
+        std::shared_ptr<Tensor> deleted;   // [N] bool, true = soft-deleted
 
         // Metadata
         std::vector<std::string> attribute_names;
@@ -60,9 +66,18 @@ namespace lfs::core {
             pc.opacity = opacity.is_valid() ? opacity.to(device) : opacity;
             pc.scaling = scaling.is_valid() ? scaling.to(device) : scaling;
             pc.rotation = rotation.is_valid() ? rotation.to(device) : rotation;
+            pc.selection = (selection && selection->is_valid())
+                               ? std::make_shared<Tensor>(selection->to(device))
+                               : selection;
+            pc.deleted = (deleted && deleted->is_valid())
+                             ? std::make_shared<Tensor>(deleted->to(device))
+                             : deleted;
             pc.attribute_names = attribute_names;
             return pc;
         }
+
+        [[nodiscard]] LFS_CORE_API bool has_selection() const;
+        [[nodiscard]] LFS_CORE_API bool has_deleted() const;
 
         // Convert colors to float [0,1] if they're uint8
         void normalize_colors() {
@@ -71,4 +86,6 @@ namespace lfs::core {
             }
         }
     };
+
+    [[nodiscard]] LFS_CORE_API PointCloud remove_deleted_points(const PointCloud& pc);
 } // namespace lfs::core

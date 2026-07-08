@@ -801,7 +801,11 @@ namespace lfs::rendering {
         Result<PointCloudImageResult> renderPointCloudImage(
             const lfs::core::PointCloud& point_cloud,
             const PointCloudRenderRequest& request) override {
-            auto result = renderSoftwarePointCloud(point_cloud.means, point_cloud.colors, request, nullptr);
+            auto result = renderSoftwarePointCloud(
+                point_cloud.means,
+                point_cloud.colors,
+                request,
+                point_cloud.has_deleted() ? point_cloud.deleted.get() : nullptr);
             if (!result) {
                 return std::unexpected(result.error());
             }

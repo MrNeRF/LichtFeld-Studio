@@ -930,6 +930,8 @@
     "polygon_selection": "Zaznaczenie wielokąta",
     "lasso_selection": "Zaznaczenie lasso",
     "ring_selection": "Zaznaczenie pierścieniowe",
+    "ring_selection_pointcloud_unavailable": "Rings are only available for Gaussian selections.",
+    "submode_camera_unavailable": "This selection mode is not available for cameras.",
     "box_selection": "Zaznaczenie pudełkiem",
     "sphere_selection": "Zaznaczenie sferą",
     "color_selection": "Zaznaczanie kolorem",

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/editor_context.hpp"
+#include "core/selection_domain.hpp"
 #include "scene/scene_manager.hpp"
 #include "training/training_manager.hpp"
 #include "visualizer/app_store.hpp"
@@ -36,6 +37,16 @@ namespace lfs::vis {
             case ToolType::None:
             default: return {};
             }
+        }
+
+        [[nodiscard]] bool hasVisibleCameraNode(const SceneManager& scene_manager) {
+            const auto& scene = scene_manager.getScene();
+            for (const auto* const node : scene.getNodes()) {
+                if (node && node->type == core::NodeType::CAMERA && scene.isNodeEffectivelyVisible(node->id)) {
+                    return true;
+                }
+            }
+            return false;
         }
     } // namespace
 
@@ -71,8 +82,11 @@ namespace lfs::vis {
 
         if (!scene_manager) {
             mode_ = EditorMode::EMPTY;
+            selection_domain_ = SelectionDomain::Gaussians;
             has_selection_ = false;
             has_gaussians_ = false;
+            has_selectable_points_ = false;
+            has_selectable_cameras_ = false;
             has_editable_transform_selection_ = false;
             has_splat_selection_ = false;
             has_editable_splat_selection_ = false;
@@ -165,6 +179,11 @@ namespace lfs::vis {
                           mode_ == EditorMode::TRAINING ||
                           mode_ == EditorMode::PAUSED ||
                           mode_ == EditorMode::FINISHED);
+        selection_domain_ = resolveSelectionDomain(*scene_manager);
+        const auto* const active_point_cloud = resolveActivePointCloudNode(*scene_manager);
+        has_selectable_points_ = active_point_cloud && active_point_cloud->point_cloud &&
+                                 active_point_cloud->point_cloud->size() > 0;
+        has_selectable_cameras_ = hasVisibleCameraNode(*scene_manager);
     }
 
     bool EditorContext::canTransformSelectedNode() const {
@@ -175,9 +194,18 @@ namespace lfs::vis {
         return has_gaussians_ && !isToolsDisabled();
     }
 
+    bool EditorContext::canUseSelectionTool() const {
+        return !isToolsDisabled() &&
+               (has_gaussians_ ||
+                (selection_domain_ == SelectionDomain::PointCloud && has_selectable_points_) ||
+                (selection_domain_ == SelectionDomain::Cameras && has_selectable_cameras_));
+    }
+
     bool EditorContext::isToolAvailable(const ToolType tool) const {
         if (isToolsDisabled())
             return false;
+        if (tool == ToolType::Selection)
+            return canUseSelectionTool();
         if (!has_selection_ && tool != ToolType::None)
             return false;
 
@@ -185,7 +213,7 @@ namespace lfs::vis {
         case ToolType::None:
             return true;
         case ToolType::Selection:
-            return has_gaussians_;
+            return canUseSelectionTool();
         case ToolType::Mirror:
             return has_gaussians_ && has_editable_splat_selection_;
         case ToolType::Translate:
@@ -201,6 +229,8 @@ namespace lfs::vis {
     const char* EditorContext::getToolUnavailableReason(const ToolType tool) const {
         if (isToolsDisabled())
             return "switch to edit mode first";
+        if (tool == ToolType::Selection)
+            return canUseSelectionTool() ? nullptr : "no gaussians, points, or cameras";
         if (!has_selection_ && tool != ToolType::None)
             return "no node selected";
 
@@ -208,7 +238,7 @@ namespace lfs::vis {
         case ToolType::None:
             return nullptr;
         case ToolType::Selection:
-            return has_gaussians_ ? nullptr : "no gaussians";
+            return canUseSelectionTool() ? nullptr : "no gaussians, points, or cameras";
         case ToolType::Mirror:
             if (!has_gaussians_)
                 return "no gaussians";

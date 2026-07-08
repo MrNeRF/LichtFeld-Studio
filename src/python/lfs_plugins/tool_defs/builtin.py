@@ -133,6 +133,10 @@ def _poll_can_align(_context) -> bool:
     return _poll_builtin_tool_available("builtin.align") and not _selection_is_crop_volume()
 
 
+def _poll_can_select(_context) -> bool:
+    return _poll_builtin_tool_available("builtin.select")
+
+
 def _poll_can_cropbox(context) -> bool:
     if not _poll_has_scene(context):
         return False

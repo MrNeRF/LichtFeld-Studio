@@ -11,6 +11,7 @@
 #include "core/mesh_data.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/path_utils.hpp"
+#include "core/selection_domain.hpp"
 #include "core/services.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data_transform.hpp"
@@ -53,6 +54,7 @@
 #include <shared_mutex>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace lfs::vis {
 
@@ -303,6 +305,39 @@ namespace lfs::vis {
             }
         }
 
+        void collectCameraNodeNamesRecursive(const core::Scene& scene,
+                                             const core::SceneNode& node,
+                                             std::vector<std::string>& names,
+                                             std::unordered_set<std::string>& seen) {
+            if (node.type == core::NodeType::CAMERA && node.camera) {
+                if (seen.insert(node.name).second) {
+                    names.push_back(node.name);
+                }
+                return;
+            }
+            if (node.type != core::NodeType::CAMERA_GROUP) {
+                return;
+            }
+            for (const core::NodeId child_id : node.children) {
+                if (const auto* const child = scene.getNodeById(child_id)) {
+                    collectCameraNodeNamesRecursive(scene, *child, names, seen);
+                }
+            }
+        }
+
+        [[nodiscard]] std::vector<std::string> collectCameraNodeNames(
+            const core::Scene& scene,
+            const std::vector<std::string>& node_names) {
+            std::vector<std::string> names;
+            std::unordered_set<std::string> seen;
+            for (const auto& node_name : node_names) {
+                if (const auto* const node = scene.getNode(node_name)) {
+                    collectCameraNodeNamesRecursive(scene, *node, names, seen);
+                }
+            }
+            return names;
+        }
+
         [[nodiscard]] std::vector<const core::SceneNode*> collectVisiblePointCloudNodes(const core::Scene& scene) {
             std::vector<const core::SceneNode*> visible_nodes;
             for (const auto* node : scene.getNodes()) {
@@ -315,6 +350,40 @@ namespace lfs::vis {
                 visible_nodes.push_back(node);
             }
             return visible_nodes;
+        }
+
+        [[nodiscard]] std::vector<const core::SceneNode*> collectVisiblePointCloudNodesWithPoints(const core::Scene& scene) {
+            std::vector<const core::SceneNode*> visible_nodes;
+            for (const auto* const node : collectVisiblePointCloudNodes(scene)) {
+                if (node->point_cloud->size() > 0) {
+                    visible_nodes.push_back(node);
+                }
+            }
+            return visible_nodes;
+        }
+
+        [[nodiscard]] const core::SceneNode* pointCloudSelectionTarget(const core::Scene& scene,
+                                                                       const core::SceneNode& node) {
+            if (node.type == core::NodeType::POINTCLOUD) {
+                return &node;
+            }
+
+            if (node.type != core::NodeType::CROPBOX && node.type != core::NodeType::ELLIPSOID) {
+                return nullptr;
+            }
+
+            const auto* const parent = scene.getNodeById(node.parent_id);
+            return parent && parent->type == core::NodeType::POINTCLOUD ? parent : nullptr;
+        }
+
+        [[nodiscard]] bool hasVisibleCameraNode(const core::Scene& scene) {
+            for (const auto* const node : scene.getNodes()) {
+                if (node && node->type == core::NodeType::CAMERA && node->camera &&
+                    scene.isNodeEffectivelyVisible(node->id)) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         [[nodiscard]] size_t visiblePointCloudPointCount(const core::Scene& scene) {
@@ -335,8 +404,14 @@ namespace lfs::vis {
 
             std::vector<float> merged_means;
             std::vector<float> merged_colors;
+            std::vector<uint8_t> merged_selection;
+            std::vector<bool> merged_deleted;
+            bool any_selection_mask = false;
+            bool any_deleted_mask = false;
             merged_means.reserve(total_points * 3);
             merged_colors.reserve(total_points * 3);
+            merged_selection.reserve(total_points);
+            merged_deleted.reserve(total_points);
 
             for (const auto* node : visible_nodes) {
                 const auto& point_cloud = *node->point_cloud;
@@ -373,6 +448,24 @@ namespace lfs::vis {
                         merged_colors.push_back(colors_acc(i, 2));
                     }
                 }
+
+                if (point_cloud.has_selection()) {
+                    any_selection_mask = true;
+                    const auto selection_cpu = point_cloud.selection->cpu().to(core::DataType::UInt8).contiguous();
+                    const auto* const selection_ptr = selection_cpu.ptr<uint8_t>();
+                    merged_selection.insert(merged_selection.end(), selection_ptr, selection_ptr + point_count);
+                } else {
+                    merged_selection.insert(merged_selection.end(), point_count, uint8_t{0});
+                }
+
+                if (point_cloud.has_deleted()) {
+                    any_deleted_mask = true;
+                    const auto deleted_cpu = point_cloud.deleted->cpu().to(core::DataType::Bool).contiguous();
+                    const auto* const deleted_ptr = deleted_cpu.ptr<bool>();
+                    merged_deleted.insert(merged_deleted.end(), deleted_ptr, deleted_ptr + point_count);
+                } else {
+                    merged_deleted.insert(merged_deleted.end(), point_count, false);
+                }
             }
 
             auto merged = std::make_shared<core::PointCloud>();
@@ -395,6 +488,15 @@ namespace lfs::vis {
                     {total_points, size_t{3}},
                     core::Device::CPU);
             }
+            if (any_selection_mask) {
+                auto selection = core::Tensor::empty({total_points}, core::Device::CPU, core::DataType::UInt8);
+                std::copy(merged_selection.begin(), merged_selection.end(), selection.ptr<uint8_t>());
+                merged->selection = std::make_shared<core::Tensor>(std::move(selection));
+            }
+            if (any_deleted_mask) {
+                merged->deleted = std::make_shared<core::Tensor>(
+                    core::Tensor::from_vector(merged_deleted, {total_points}, core::Device::CPU));
+            }
             merged->attribute_names = visible_nodes.front()->point_cloud->attribute_names;
             return merged;
         }
@@ -402,6 +504,71 @@ namespace lfs::vis {
     } // namespace
 
     using namespace lfs::core::events;
+
+    const core::SceneNode* resolveActivePointCloudNode(const SceneManager& scene_manager) {
+        const auto& scene = scene_manager.getScene();
+        for (const auto& name : scene_manager.getSelectedNodeNames()) {
+            const auto* const node = scene.getNode(name);
+            if (!node) {
+                continue;
+            }
+            if (const auto* const target = pointCloudSelectionTarget(scene, *node)) {
+                return target;
+            }
+        }
+
+        if (scene.getTotalGaussianCount() != 0) {
+            return nullptr;
+        }
+
+        const auto visible_nodes = collectVisiblePointCloudNodesWithPoints(scene);
+        return visible_nodes.size() == 1 ? visible_nodes.front() : nullptr;
+    }
+
+    SelectionDomain resolveSelectionDomain(const SceneManager& scene_manager) {
+        const auto& scene = scene_manager.getScene();
+        const auto selected_node_names = scene_manager.getSelectedNodeNames();
+
+        bool all_selected_are_cameras = !selected_node_names.empty();
+        for (const auto& name : selected_node_names) {
+            const auto* const node = scene.getNode(name);
+            if (!node) {
+                all_selected_are_cameras = false;
+                continue;
+            }
+            if (pointCloudSelectionTarget(scene, *node)) {
+                return SelectionDomain::PointCloud;
+            }
+            if (node->type != core::NodeType::CAMERA && node->type != core::NodeType::CAMERA_GROUP) {
+                all_selected_are_cameras = false;
+            }
+        }
+
+        if (all_selected_are_cameras) {
+            return SelectionDomain::Cameras;
+        }
+
+        if (selected_node_names.empty()) {
+            // A camera stroke that empties the node selection (empty replace, remove of
+            // the last camera) must not flip the domain, or the next stroke would stop
+            // targeting cameras.
+            if (scene_manager.stickySelectionDomain() == SelectionDomain::Cameras &&
+                hasVisibleCameraNode(scene)) {
+                return SelectionDomain::Cameras;
+            }
+            if (scene.getTotalGaussianCount() == 0) {
+                const auto visible_nodes = collectVisiblePointCloudNodesWithPoints(scene);
+                if (visible_nodes.size() == 1) {
+                    return SelectionDomain::PointCloud;
+                }
+                if (visible_nodes.empty() && hasVisibleCameraNode(scene)) {
+                    return SelectionDomain::Cameras;
+                }
+            }
+        }
+
+        return SelectionDomain::Gaussians;
+    }
 
     SceneManager::SceneManager() {
         core::prop::set_undo_callback(
@@ -615,7 +782,23 @@ namespace lfs::vis {
         });
 
         // Gaussian-level selection operations
-        cmd::DeleteSelected::when([this](const auto&) { deleteSelectedGaussians(); });
+        cmd::DeleteSelected::when([this](const auto&) {
+            switch (resolveSelectionDomain(*this)) {
+            case SelectionDomain::PointCloud:
+                if (const auto result = deleteSelectedPointsWithHistory(); !result) {
+                    LOG_WARN("Failed to delete selected points: {}", result.error());
+                }
+                return;
+            case SelectionDomain::Cameras:
+                if (const auto result = setCamerasTrainingEnabledWithHistory(getSelectedNodeNames(), false); !result) {
+                    LOG_WARN("Failed to disable selected cameras for training: {}", result.error());
+                }
+                return;
+            case SelectionDomain::Gaussians:
+                break;
+            }
+            deleteSelectedGaussians();
+        });
         cmd::InvertSelection::when([this](const auto&) { invertSelection(); });
         cmd::DeselectAll::when([this](const auto&) { deselectAllGaussians(); });
         cmd::SelectAll::when([this](const auto&) { selectAllGaussians(); });
@@ -1332,6 +1515,7 @@ namespace lfs::vis {
 
         selection_.clearNodeSelection();
         selection_.invalidateNodeMask();
+        sticky_selection_domain_ = SelectionDomain::Gaussians;
         clearAppearanceModel();
         // Scene clear can fire from a synchronous menu callback inside the current
         // GUI render iteration; drain before scene_.clear() frees the backing memory,
@@ -1723,6 +1907,12 @@ namespace lfs::vis {
         selectNode(id);
     }
 
+    void SceneManager::refreshStickySelectionDomain() {
+        if (getSelectedNodeNames().empty())
+            return;
+        sticky_selection_domain_ = resolveSelectionDomain(*this);
+    }
+
     void SceneManager::selectNode(const core::NodeId id) {
         const auto* node = scene_.getNodeById(id);
         if (!node)
@@ -1731,6 +1921,7 @@ namespace lfs::vis {
             return;
 
         selection_.selectNode(id);
+        refreshStickySelectionDomain();
 
         syncCropToolRenderSettings(node);
         python::invalidate_poll_caches(1);
@@ -1771,6 +1962,7 @@ namespace lfs::vis {
         }
 
         selection_.selectNodes(ids);
+        refreshStickySelectionDomain();
         python::invalidate_poll_caches(1);
         if (services().renderingOrNull())
             services().renderingOrNull()->triggerSelectionFlash();
@@ -1787,6 +1979,7 @@ namespace lfs::vis {
         if (selection_.isNodeSelected(id))
             return;
         selection_.addToSelection(id);
+        refreshStickySelectionDomain();
         python::invalidate_poll_caches(1);
         if (services().renderingOrNull())
             services().renderingOrNull()->triggerSelectionFlash();
@@ -1803,6 +1996,7 @@ namespace lfs::vis {
         if (!selection_.isNodeSelected(id))
             return;
         selection_.removeFromSelection(id);
+        refreshStickySelectionDomain();
         python::invalidate_poll_caches(1);
         if (services().renderingOrNull())
             services().renderingOrNull()->triggerSelectionFlash();
@@ -3321,11 +3515,25 @@ namespace lfs::vis {
                 state.point_cloud = state.owned_point_cloud.get();
                 state.point_cloud_transform =
                     rendering::dataWorldTransformToVisualizerWorld(glm::mat4(1.0f));
+                if (state.owned_point_cloud->has_selection()) {
+                    state.point_cloud_selection_mask = state.owned_point_cloud->selection;
+                }
+                if (state.owned_point_cloud->has_deleted()) {
+                    state.point_cloud_deleted_mask = state.owned_point_cloud->deleted;
+                }
             }
             if (visible_point_cloud_nodes.size() == 1) {
-                state.point_cloud = visible_point_cloud_nodes.front()->point_cloud.get();
+                const auto* node = visible_point_cloud_nodes.front();
+                state.point_cloud = node->point_cloud.get();
+                state.point_cloud_node_id = node->id;
                 state.point_cloud_transform = rendering::dataWorldTransformToVisualizerWorld(
-                    scene_.getWorldTransform(visible_point_cloud_nodes.front()->id));
+                    scene_.getWorldTransform(node->id));
+                if (node->point_cloud->has_selection()) {
+                    state.point_cloud_selection_mask = node->point_cloud->selection;
+                }
+                if (node->point_cloud->has_deleted()) {
+                    state.point_cloud_deleted_mask = node->point_cloud->deleted;
+                }
             }
         }
 
@@ -3614,6 +3822,15 @@ namespace lfs::vis {
                         (z >= bounds_min.z) && (z <= bounds_max.z);
             if (inverse)
                 mask = mask.logical_not();
+            if (node->point_cloud->has_deleted()) {
+                auto deleted = node->point_cloud->deleted->device() == device
+                                   ? *node->point_cloud->deleted
+                                   : node->point_cloud->deleted->to(device);
+                if (deleted.dtype() != core::DataType::Bool) {
+                    deleted = deleted.to(core::DataType::Bool);
+                }
+                mask = mask.logical_and(deleted.logical_not());
+            }
 
             const auto indices = mask.nonzero().squeeze(1);
             const size_t filtered_count = indices.size(0);
@@ -3775,6 +3992,15 @@ namespace lfs::vis {
             auto mask = (x * x + y * y + z * z) <= 1.0f;
             if (inverse)
                 mask = mask.logical_not();
+            if (node->point_cloud->has_deleted()) {
+                auto deleted = node->point_cloud->deleted->device() == device
+                                   ? *node->point_cloud->deleted
+                                   : node->point_cloud->deleted->to(device);
+                if (deleted.dtype() != core::DataType::Bool) {
+                    deleted = deleted.to(core::DataType::Bool);
+                }
+                mask = mask.logical_and(deleted.logical_not());
+            }
 
             const auto indices = mask.nonzero().squeeze(1);
             const size_t filtered_count = indices.size(0);
@@ -5315,7 +5541,196 @@ namespace lfs::vis {
         LOG_INFO("Deleted selected Gaussians");
     }
 
+    std::expected<void, std::string> SceneManager::deleteSelectedPointsWithHistory() {
+        const auto* const active_node = resolveActivePointCloudNode(*this);
+        if (!active_node || !active_node->point_cloud) {
+            return std::unexpected("Nothing selected");
+        }
+
+        auto* const node = scene_.getMutableNode(active_node->name);
+        if (!node || !node->point_cloud) {
+            return std::unexpected("Nothing selected");
+        }
+
+        auto& point_cloud = *node->point_cloud;
+        if (!point_cloud.has_selection() || getActivePointSelectionCount() == 0) {
+            return std::unexpected("Nothing selected");
+        }
+
+        const size_t point_count = static_cast<size_t>(point_cloud.size());
+        auto selection_mask = point_cloud.selection->to(point_cloud.selection->device()).to(core::DataType::Bool);
+        const auto device = selection_mask.device();
+
+        core::Tensor deleted_mask = core::Tensor::zeros({point_count}, device, core::DataType::Bool);
+        if (point_cloud.has_deleted()) {
+            deleted_mask = point_cloud.deleted->device() == device ? *point_cloud.deleted : point_cloud.deleted->to(device);
+            if (deleted_mask.dtype() != core::DataType::Bool) {
+                deleted_mask = deleted_mask.to(core::DataType::Bool);
+            }
+        }
+
+        auto new_deleted = std::make_shared<core::Tensor>(
+            deleted_mask.logical_or(selection_mask).contiguous());
+
+        const auto selection_before = point_cloud.selection;
+        const auto deleted_before = point_cloud.deleted;
+
+        op::TransactionGuard transaction("edit.delete");
+        op::undoHistory().push(std::make_unique<op::PointCloudMaskUndoEntry>(
+            *this,
+            "edit.delete",
+            node->name,
+            selection_before,
+            deleted_before,
+            nullptr,
+            new_deleted));
+
+        point_cloud.selection.reset();
+        point_cloud.deleted = new_deleted;
+        setPointSelectionCountCache(node->id, point_cloud.selection, 0);
+        scene_.setPointCloudModified(true);
+        scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+        if (auto* rm = services().renderingOrNull()) {
+            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::SELECTION);
+        }
+
+        transaction.commit();
+        return {};
+    }
+
+    std::expected<size_t, std::string> SceneManager::setCamerasTrainingEnabledWithHistory(
+        const std::vector<std::string>& node_names,
+        const bool enabled) {
+        auto camera_names = collectCameraNodeNames(scene_, node_names);
+        if (camera_names.empty()) {
+            return size_t{0};
+        }
+
+        std::vector<std::string> changed_names;
+        changed_names.reserve(camera_names.size());
+        for (const auto& name : camera_names) {
+            const auto* const node = scene_.getNode(name);
+            if (node && node->type == core::NodeType::CAMERA && node->training_enabled != enabled) {
+                changed_names.push_back(name);
+            }
+        }
+        if (changed_names.empty()) {
+            return size_t{0};
+        }
+
+        op::TransactionGuard transaction("camera.training_enabled");
+        const auto before = op::SceneGraphMetadataEntry::captureNodes(*this, changed_names);
+        for (const auto& name : changed_names) {
+            scene_.setCameraTrainingEnabled(name, enabled);
+        }
+        const auto after = op::SceneGraphMetadataEntry::captureNodes(*this, changed_names);
+        pushSceneGraphMetadataHistoryEntry(
+            *this,
+            enabled ? "Enable Cameras for Training" : "Disable Cameras for Training",
+            before,
+            after);
+        transaction.commit();
+
+        if (auto* rm = services().renderingOrNull()) {
+            rm->markDirty(DirtyFlag::OVERLAY | DirtyFlag::SELECTION);
+        }
+        python::invalidate_poll_caches(1);
+        return changed_names.size();
+    }
+
+    size_t SceneManager::getActivePointSelectionCount() const {
+        const auto* const node = resolveActivePointCloudNode(*this);
+        if (!node || !node->point_cloud || !node->point_cloud->has_selection()) {
+            return 0;
+        }
+        if (point_selection_cache_node_id_ != node->id ||
+            point_selection_cache_mask_ != node->point_cloud->selection.get()) {
+            refreshPointSelectionCountCache(node->id, node->point_cloud->selection);
+        }
+        return point_selection_cache_count_;
+    }
+
+    void SceneManager::setPointSelectionCountCache(const core::NodeId node_id,
+                                                   const std::shared_ptr<lfs::core::Tensor>& selection,
+                                                   const size_t selected_count) const {
+        point_selection_cache_node_id_ = node_id;
+        point_selection_cache_mask_ = selection.get();
+        point_selection_cache_count_ = selection && selection->is_valid() ? selected_count : 0;
+    }
+
+    void SceneManager::refreshPointSelectionCountCache(const core::NodeId node_id,
+                                                       const std::shared_ptr<lfs::core::Tensor>& selection) const {
+        setPointSelectionCountCache(
+            node_id,
+            selection,
+            selection && selection->is_valid() ? selection->count_nonzero() : 0);
+    }
+
+    std::expected<void, std::string> SceneManager::selectAllPoints() {
+        if (!selection_service_) {
+            return std::unexpected("Selection service not initialized");
+        }
+        const auto result = selection_service_->selectAllFiltered();
+        if (!result.success) {
+            return std::unexpected(result.error);
+        }
+        return {};
+    }
+
+    std::expected<void, std::string> SceneManager::clearPointSelection() {
+        const auto* const active_node = resolveActivePointCloudNode(*this);
+        if (!active_node || !active_node->point_cloud) {
+            return std::unexpected("No active point cloud");
+        }
+
+        auto* const node = scene_.getMutableNode(active_node->name);
+        if (!node || !node->point_cloud) {
+            return std::unexpected("No active point cloud");
+        }
+
+        const auto selection_before = node->point_cloud->selection;
+        if (!selection_before || !selection_before->is_valid()) {
+            return {};
+        }
+        const auto deleted_before = node->point_cloud->deleted;
+        node->point_cloud->selection.reset();
+        setPointSelectionCountCache(node->id, node->point_cloud->selection, 0);
+
+        op::undoHistory().push(std::make_unique<op::PointCloudMaskUndoEntry>(
+            *this,
+            "select.none",
+            node->name,
+            selection_before,
+            deleted_before,
+            nullptr,
+            deleted_before));
+
+        scene_.notifyMutation(core::Scene::MutationType::SELECTION_CHANGED);
+        if (auto* rm = services().renderingOrNull()) {
+            rm->markDirty(DirtyFlag::SELECTION);
+        }
+        return {};
+    }
+
+    std::expected<void, std::string> SceneManager::invertPointSelection() {
+        if (!selection_service_) {
+            return std::unexpected("Selection service not initialized");
+        }
+        const auto result = selection_service_->invertFiltered();
+        if (!result.success) {
+            return std::unexpected(result.error);
+        }
+        return {};
+    }
+
     void SceneManager::invertSelection() {
+        if (resolveSelectionDomain(*this) == SelectionDomain::PointCloud) {
+            if (const auto result = invertPointSelection(); !result) {
+                LOG_WARN("Failed to invert point selection: {}", result.error());
+            }
+            return;
+        }
+
         auto* rendering_manager = services().renderingOrNull();
         if (selection_service_ &&
             rendering_manager &&
@@ -5366,6 +5781,13 @@ namespace lfs::vis {
     }
 
     void SceneManager::deselectAllGaussians() {
+        if (resolveSelectionDomain(*this) == SelectionDomain::PointCloud) {
+            if (const auto result = clearPointSelection(); !result) {
+                LOG_WARN("Failed to clear point selection: {}", result.error());
+            }
+            return;
+        }
+
         if (!scene_.hasSelection())
             return;
 
@@ -5382,6 +5804,13 @@ namespace lfs::vis {
     }
 
     void SceneManager::selectAllGaussians() {
+        if (resolveSelectionDomain(*this) == SelectionDomain::PointCloud) {
+            if (const auto result = selectAllPoints(); !result) {
+                LOG_WARN("Failed to select all points: {}", result.error());
+            }
+            return;
+        }
+
         auto* editor = services().editorOrNull();
         const auto tool = editor ? editor->getActiveTool() : ToolType::None;
         const bool is_selection_tool = (tool == ToolType::Selection);
