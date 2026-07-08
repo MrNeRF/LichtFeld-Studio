@@ -305,6 +305,180 @@ namespace lfs::vis {
             return scene_transform * glm::inverse(world_to_camera) * rendering::DATA_TO_VISUALIZER_CAMERA_AXES_4;
         }
 
+        [[nodiscard]] std::optional<glm::vec2> projectCameraSelectionPoint(
+            const Viewport& viewport,
+            const glm::ivec2 render_size,
+            const glm::vec3& world_point,
+            const RenderSettings& settings) {
+            if (settings.equirectangular) {
+                const glm::vec3 view =
+                    glm::transpose(viewport.camera.R) * (world_point - viewport.camera.t);
+                const float len = glm::length(view);
+                if (!std::isfinite(len) || len <= 1.0e-6f) {
+                    return std::nullopt;
+                }
+
+                const glm::vec3 dir = view / len;
+                const float ndc_x = std::atan2(dir.x, -dir.z) / glm::pi<float>();
+                const float ndc_y = -std::asin(std::clamp(dir.y, -1.0f, 1.0f)) /
+                                    (glm::pi<float>() * 0.5f);
+                if (!std::isfinite(ndc_x) || !std::isfinite(ndc_y)) {
+                    return std::nullopt;
+                }
+
+                return glm::vec2(
+                    (ndc_x * 0.5f + 0.5f) * static_cast<float>(render_size.x),
+                    (ndc_y * 0.5f + 0.5f) * static_cast<float>(render_size.y));
+            }
+
+            return rendering::projectWorldPoint(
+                viewport.camera.R,
+                viewport.camera.t,
+                render_size,
+                world_point,
+                settings.focal_length_mm,
+                settings.orthographic,
+                settings.ortho_scale);
+        }
+
+        [[nodiscard]] std::optional<glm::mat4> cameraFrustumModelMatrix(
+            const core::Camera& camera,
+            const glm::mat4& visualizer_camera_to_world,
+            const float scale) {
+            const int image_width = camera.image_width() > 0 ? camera.image_width() : camera.camera_width();
+            const int image_height = camera.image_height() > 0 ? camera.image_height() : camera.camera_height();
+            if (image_width <= 0 || image_height <= 0 || scale <= 0.0f) {
+                return std::nullopt;
+            }
+
+            constexpr float kEquirectangularDisplayFov = 1.0472f;
+            const bool equirectangular =
+                camera.camera_model_type() == core::CameraModelType::EQUIRECTANGULAR;
+            if (!equirectangular && camera.focal_y() <= 0.0f) {
+                return std::nullopt;
+            }
+
+            const float aspect = static_cast<float>(image_width) / static_cast<float>(image_height);
+            const float fov_y = equirectangular
+                                    ? kEquirectangularDisplayFov
+                                    : core::focal2fov(camera.focal_y(), image_height);
+            const float half_height = std::tan(fov_y * 0.5f);
+            const float half_width = half_height * aspect;
+
+            glm::mat4 frustum_scale(1.0f);
+            frustum_scale[0][0] = half_width * 2.0f * scale;
+            frustum_scale[1][1] = half_height * 2.0f * scale;
+            frustum_scale[2][2] = scale;
+            return visualizer_camera_to_world * frustum_scale;
+        }
+
+        struct ProjectedCameraFootprint {
+            std::vector<glm::vec2> points;
+            std::vector<std::pair<size_t, size_t>> edges;
+            std::vector<std::vector<glm::vec2>> filled_polygons;
+            glm::vec2 bounds_min{std::numeric_limits<float>::max()};
+            glm::vec2 bounds_max{std::numeric_limits<float>::lowest()};
+
+            void addPoint(const glm::vec2 point) {
+                points.push_back(point);
+                bounds_min = glm::min(bounds_min, point);
+                bounds_max = glm::max(bounds_max, point);
+            }
+
+            void addFilledPolygon(std::vector<glm::vec2> polygon) {
+                if (polygon.size() >= 3) {
+                    filled_polygons.push_back(std::move(polygon));
+                }
+            }
+
+            [[nodiscard]] bool empty() const { return points.empty(); }
+        };
+
+        [[nodiscard]] ProjectedCameraFootprint projectCameraFootprint(
+            const core::Camera& camera,
+            const glm::mat4& visualizer_camera_to_world,
+            const Viewport& viewport,
+            const glm::ivec2 render_size,
+            const RenderSettings& settings) {
+            ProjectedCameraFootprint footprint;
+            const auto add_projected = [&](const glm::vec3& world_point) -> int {
+                const auto projected =
+                    projectCameraSelectionPoint(viewport, render_size, world_point, settings);
+                if (!projected || !std::isfinite(projected->x) || !std::isfinite(projected->y)) {
+                    return -1;
+                }
+
+                const int index = static_cast<int>(footprint.points.size());
+                footprint.addPoint(*projected);
+                return index;
+            };
+
+            const int center_index = add_projected(glm::vec3(visualizer_camera_to_world[3]));
+
+            const auto frustum_model = cameraFrustumModelMatrix(
+                camera,
+                visualizer_camera_to_world,
+                settings.show_camera_frustums ? settings.camera_frustum_scale : 0.0f);
+            if (!frustum_model) {
+                return footprint;
+            }
+
+            const auto add_edge = [&](const int a, const int b) {
+                if (a >= 0 && b >= 0) {
+                    footprint.edges.emplace_back(static_cast<size_t>(a), static_cast<size_t>(b));
+                }
+            };
+
+            if (camera.camera_model_type() == core::CameraModelType::EQUIRECTANGULAR) {
+                std::array<int, 8> cube_indices{};
+                cube_indices.fill(-1);
+                for (int i = 0; i < 8; ++i) {
+                    const glm::vec3 local_corner(
+                        (i & 1) ? 0.5f : -0.5f,
+                        (i & 2) ? 0.5f : -0.5f,
+                        (i & 4) ? 0.5f : -0.5f);
+                    cube_indices[static_cast<size_t>(i)] =
+                        add_projected(glm::vec3((*frustum_model) * glm::vec4(local_corner, 1.0f)));
+                }
+                for (int i = 0; i < 8; ++i) {
+                    for (int bit = 0; bit < 3; ++bit) {
+                        const int j = i ^ (1 << bit);
+                        if (i < j) {
+                            add_edge(cube_indices[static_cast<size_t>(i)],
+                                     cube_indices[static_cast<size_t>(j)]);
+                        }
+                    }
+                }
+                return footprint;
+            }
+
+            constexpr std::array image_corners{
+                glm::vec3(-0.5f, -0.5f, -1.0f),
+                glm::vec3(0.5f, -0.5f, -1.0f),
+                glm::vec3(0.5f, 0.5f, -1.0f),
+                glm::vec3(-0.5f, 0.5f, -1.0f),
+            };
+            std::array<int, image_corners.size()> corner_indices{};
+            corner_indices.fill(-1);
+            std::vector<glm::vec2> image_plane_polygon;
+            image_plane_polygon.reserve(image_corners.size());
+            for (size_t i = 0; i < image_corners.size(); ++i) {
+                corner_indices[i] =
+                    add_projected(glm::vec3((*frustum_model) * glm::vec4(image_corners[i], 1.0f)));
+                if (corner_indices[i] >= 0) {
+                    image_plane_polygon.push_back(footprint.points[static_cast<size_t>(corner_indices[i])]);
+                }
+                add_edge(center_index, corner_indices[i]);
+            }
+            if (image_plane_polygon.size() == image_corners.size()) {
+                footprint.addFilledPolygon(std::move(image_plane_polygon));
+            }
+            for (size_t i = 0; i < image_corners.size(); ++i) {
+                add_edge(corner_indices[i], corner_indices[(i + 1) % image_corners.size()]);
+            }
+            return footprint;
+        }
+
         [[nodiscard]] std::vector<std::string> visibleCameraNodeNames(const SceneManager& scene_manager) {
             std::vector<std::string> names;
             const auto& scene = scene_manager.getScene();
@@ -317,12 +491,97 @@ namespace lfs::vis {
             return names;
         }
 
-        [[nodiscard]] bool cameraShapeContains(const SelectionShape shape,
-                                               const glm::vec2 projected,
-                                               const std::vector<glm::vec2>& points,
-                                               const glm::vec2 start,
-                                               const glm::vec2 cursor,
-                                               const float radius) {
+        void collectVisibleCameraNodeNamesRecursive(const core::Scene& scene,
+                                                    const core::SceneNode& node,
+                                                    std::vector<std::string>& names,
+                                                    std::unordered_set<std::string>& seen) {
+            if (node.type == core::NodeType::CAMERA) {
+                if (node.camera && scene.isNodeEffectivelyVisible(node.id) &&
+                    seen.insert(node.name).second) {
+                    names.push_back(node.name);
+                }
+                return;
+            }
+            if (node.type != core::NodeType::CAMERA_GROUP &&
+                node.type != core::NodeType::GROUP) {
+                return;
+            }
+            for (const core::NodeId child_id : node.children) {
+                if (const auto* const child = scene.getNodeById(child_id)) {
+                    collectVisibleCameraNodeNamesRecursive(scene, *child, names, seen);
+                }
+            }
+        }
+
+        [[nodiscard]] std::vector<std::string> currentCameraSelectionNodeNames(
+            const SceneManager& scene_manager) {
+            std::vector<std::string> names;
+            std::unordered_set<std::string> seen;
+            const auto& scene = scene_manager.getScene();
+            for (const auto& selected_name : scene_manager.getSelectedNodeNames()) {
+                if (const auto* const node = scene.getNode(selected_name)) {
+                    collectVisibleCameraNodeNamesRecursive(scene, *node, names, seen);
+                }
+            }
+            return names;
+        }
+
+        [[nodiscard]] std::vector<std::string> cameraSelectionAfterMode(
+            const SceneManager& scene_manager,
+            const std::vector<std::string>& hits,
+            const SelectionMode mode) {
+            if (mode == SelectionMode::Replace) {
+                return hits;
+            }
+
+            auto current = currentCameraSelectionNodeNames(scene_manager);
+            if (hits.empty() && mode != SelectionMode::Intersect) {
+                return current;
+            }
+
+            const std::unordered_set<std::string> hit_set(hits.begin(), hits.end());
+            switch (mode) {
+            case SelectionMode::Add: {
+                std::unordered_set<std::string> selected_set(current.begin(), current.end());
+                for (const auto& hit : hits) {
+                    if (selected_set.insert(hit).second) {
+                        current.push_back(hit);
+                    }
+                }
+                return current;
+            }
+            case SelectionMode::Remove: {
+                std::vector<std::string> remaining;
+                remaining.reserve(current.size());
+                for (const auto& selected : current) {
+                    if (!hit_set.contains(selected)) {
+                        remaining.push_back(selected);
+                    }
+                }
+                return remaining;
+            }
+            case SelectionMode::Intersect: {
+                std::vector<std::string> intersection;
+                intersection.reserve(std::min(current.size(), hits.size()));
+                for (const auto& selected : current) {
+                    if (hit_set.contains(selected)) {
+                        intersection.push_back(selected);
+                    }
+                }
+                return intersection;
+            }
+            case SelectionMode::Replace:
+                break;
+            }
+            return hits;
+        }
+
+        [[nodiscard]] bool cameraShapeContainsPoint(const SelectionShape shape,
+                                                    const glm::vec2 projected,
+                                                    const std::vector<glm::vec2>& points,
+                                                    const glm::vec2 start,
+                                                    const glm::vec2 cursor,
+                                                    const float radius) {
             switch (shape) {
             case SelectionShape::Brush: {
                 if (points.empty()) {
@@ -350,6 +609,200 @@ namespace lfs::vis {
             case SelectionShape::Sphere:
                 return false;
             }
+            return false;
+        }
+
+        [[nodiscard]] bool rectContainsPoint(const glm::vec2 min_point,
+                                             const glm::vec2 max_point,
+                                             const glm::vec2 point) {
+            return point.x >= min_point.x && point.x <= max_point.x &&
+                   point.y >= min_point.y && point.y <= max_point.y;
+        }
+
+        [[nodiscard]] bool rectsOverlap(const glm::vec2 a_min,
+                                        const glm::vec2 a_max,
+                                        const glm::vec2 b_min,
+                                        const glm::vec2 b_max) {
+            return !(a_max.x < b_min.x || b_max.x < a_min.x ||
+                     a_max.y < b_min.y || b_max.y < a_min.y);
+        }
+
+        [[nodiscard]] std::pair<glm::vec2, glm::vec2> boundsForPoints(
+            const std::vector<glm::vec2>& points) {
+            glm::vec2 min_point(std::numeric_limits<float>::max());
+            glm::vec2 max_point(std::numeric_limits<float>::lowest());
+            for (const auto& point : points) {
+                min_point = glm::min(min_point, point);
+                max_point = glm::max(max_point, point);
+            }
+            return {min_point, max_point};
+        }
+
+        [[nodiscard]] float cross2d(const glm::vec2 a, const glm::vec2 b) {
+            return a.x * b.y - a.y * b.x;
+        }
+
+        [[nodiscard]] bool pointOnSegment(const glm::vec2 point,
+                                          const glm::vec2 a,
+                                          const glm::vec2 b) {
+            constexpr float epsilon = 1.0e-4f;
+            if (std::abs(cross2d(point - a, b - a)) > epsilon) {
+                return false;
+            }
+            return point.x >= std::min(a.x, b.x) - epsilon &&
+                   point.x <= std::max(a.x, b.x) + epsilon &&
+                   point.y >= std::min(a.y, b.y) - epsilon &&
+                   point.y <= std::max(a.y, b.y) + epsilon;
+        }
+
+        [[nodiscard]] bool segmentsIntersect(const glm::vec2 a,
+                                             const glm::vec2 b,
+                                             const glm::vec2 c,
+                                             const glm::vec2 d) {
+            const float ab_c = cross2d(b - a, c - a);
+            const float ab_d = cross2d(b - a, d - a);
+            const float cd_a = cross2d(d - c, a - c);
+            const float cd_b = cross2d(d - c, b - c);
+
+            if (((ab_c > 0.0f && ab_d < 0.0f) || (ab_c < 0.0f && ab_d > 0.0f)) &&
+                ((cd_a > 0.0f && cd_b < 0.0f) || (cd_a < 0.0f && cd_b > 0.0f))) {
+                return true;
+            }
+
+            return pointOnSegment(c, a, b) ||
+                   pointOnSegment(d, a, b) ||
+                   pointOnSegment(a, c, d) ||
+                   pointOnSegment(b, c, d);
+        }
+
+        [[nodiscard]] bool segmentIntersectsRect(const glm::vec2 a,
+                                                 const glm::vec2 b,
+                                                 const glm::vec2 rect_min,
+                                                 const glm::vec2 rect_max) {
+            if (rectContainsPoint(rect_min, rect_max, a) ||
+                rectContainsPoint(rect_min, rect_max, b)) {
+                return true;
+            }
+
+            const glm::vec2 top_left(rect_min.x, rect_min.y);
+            const glm::vec2 top_right(rect_max.x, rect_min.y);
+            const glm::vec2 bottom_right(rect_max.x, rect_max.y);
+            const glm::vec2 bottom_left(rect_min.x, rect_max.y);
+            return segmentsIntersect(a, b, top_left, top_right) ||
+                   segmentsIntersect(a, b, top_right, bottom_right) ||
+                   segmentsIntersect(a, b, bottom_right, bottom_left) ||
+                   segmentsIntersect(a, b, bottom_left, top_left);
+        }
+
+        [[nodiscard]] bool segmentIntersectsPolygon(const glm::vec2 a,
+                                                    const glm::vec2 b,
+                                                    const std::vector<glm::vec2>& polygon) {
+            if (polygon.size() < 2) {
+                return false;
+            }
+            for (size_t i = 0; i < polygon.size(); ++i) {
+                if (segmentsIntersect(a, b, polygon[i], polygon[(i + 1) % polygon.size()])) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        [[nodiscard]] bool footprintFilledAreaContainsPoint(const ProjectedCameraFootprint& footprint,
+                                                            const glm::vec2 point) {
+            for (const auto& polygon : footprint.filled_polygons) {
+                for (size_t i = 0; i < polygon.size(); ++i) {
+                    if (pointOnSegment(point, polygon[i], polygon[(i + 1) % polygon.size()])) {
+                        return true;
+                    }
+                }
+                if (pointInPolygon(point, polygon)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        [[nodiscard]] bool cameraFootprintIntersectsShape(
+            const ProjectedCameraFootprint& footprint,
+            const SelectionShape shape,
+            const std::vector<glm::vec2>& points,
+            const glm::vec2 start,
+            const glm::vec2 cursor,
+            const float radius) {
+            if (footprint.empty()) {
+                return false;
+            }
+
+            for (const auto& projected : footprint.points) {
+                if (cameraShapeContainsPoint(shape, projected, points, start, cursor, radius)) {
+                    return true;
+                }
+            }
+
+            if (shape == SelectionShape::Brush) {
+                for (const auto& [a_index, b_index] : footprint.edges) {
+                    const glm::vec2 a = footprint.points[a_index];
+                    const glm::vec2 b = footprint.points[b_index];
+                    const float length = glm::distance(a, b);
+                    const int steps = std::max(1, static_cast<int>(std::ceil(length / 8.0f)));
+                    for (int step = 1; step < steps; ++step) {
+                        const float t = static_cast<float>(step) / static_cast<float>(steps);
+                        if (cameraShapeContainsPoint(shape, glm::mix(a, b, t), points, start, cursor, radius)) {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            }
+
+            if (shape == SelectionShape::Rectangle) {
+                const glm::vec2 rect_min(std::min(start.x, cursor.x), std::min(start.y, cursor.y));
+                const glm::vec2 rect_max(std::max(start.x, cursor.x), std::max(start.y, cursor.y));
+                if (!rectsOverlap(rect_min, rect_max, footprint.bounds_min, footprint.bounds_max)) {
+                    return false;
+                }
+                const glm::vec2 rect_center = (rect_min + rect_max) * 0.5f;
+                if (footprintFilledAreaContainsPoint(footprint, rect_center)) {
+                    return true;
+                }
+                for (const auto& [a_index, b_index] : footprint.edges) {
+                    if (segmentIntersectsRect(
+                            footprint.points[a_index], footprint.points[b_index], rect_min, rect_max)) {
+                        return true;
+                    }
+                }
+                const std::array rect_corners{
+                    rect_min,
+                    glm::vec2(rect_max.x, rect_min.y),
+                    rect_max,
+                    glm::vec2(rect_min.x, rect_max.y),
+                };
+                return std::any_of(rect_corners.begin(), rect_corners.end(), [&](const glm::vec2 point) {
+                    return footprintFilledAreaContainsPoint(footprint, point);
+                });
+            }
+
+            if (shape == SelectionShape::Polygon || shape == SelectionShape::Lasso) {
+                if (points.size() < 3) {
+                    return false;
+                }
+                const auto [shape_min, shape_max] = boundsForPoints(points);
+                if (!rectsOverlap(shape_min, shape_max, footprint.bounds_min, footprint.bounds_max)) {
+                    return false;
+                }
+                for (const auto& point : points) {
+                    if (footprintFilledAreaContainsPoint(footprint, point)) {
+                        return true;
+                    }
+                }
+                for (const auto& [a_index, b_index] : footprint.edges) {
+                    if (segmentIntersectsPolygon(footprint.points[a_index], footprint.points[b_index], points)) {
+                        return true;
+                    }
+                }
+            }
+
             return false;
         }
 
@@ -383,6 +836,10 @@ namespace lfs::vis {
             Viewport projection_viewport = viewport;
             projection_viewport.windowSize = {info.render_width, info.render_height};
             const auto settings = rendering_manager.getSettings();
+            const glm::ivec2 render_size{
+                std::max(info.render_width, 1),
+                std::max(info.render_height, 1),
+            };
 
             std::vector<std::string> hits;
             const auto& scene = scene_manager.getScene();
@@ -392,26 +849,21 @@ namespace lfs::vis {
                     continue;
                 }
 
-                const auto visualizer_camera_to_world =
-                    cameraVisualizerTransform(*node->camera, scene.getWorldTransform(node->id));
+                const auto visualizer_camera_to_world = cameraVisualizerTransform(
+                    *node->camera,
+                    rendering::dataWorldTransformToVisualizerWorld(scene.getWorldTransform(node->id)));
                 if (!visualizer_camera_to_world) {
                     continue;
                 }
 
-                const glm::vec3 center((*visualizer_camera_to_world)[3]);
-                const auto projected = rendering::projectWorldPoint(
-                    projection_viewport.camera.R,
-                    projection_viewport.camera.t,
-                    {info.render_width, info.render_height},
-                    center,
-                    settings.focal_length_mm,
-                    settings.orthographic,
-                    settings.ortho_scale);
-                if (!projected || !std::isfinite(projected->x) || !std::isfinite(projected->y)) {
-                    continue;
-                }
-
-                if (cameraShapeContains(shape, *projected, render_points, render_start, render_cursor, render_radius)) {
+                const auto footprint = projectCameraFootprint(
+                    *node->camera,
+                    *visualizer_camera_to_world,
+                    projection_viewport,
+                    render_size,
+                    settings);
+                if (cameraFootprintIntersectsShape(
+                        footprint, shape, render_points, render_start, render_cursor, render_radius)) {
                     hits.push_back(node->name);
                 }
             }
@@ -421,48 +873,24 @@ namespace lfs::vis {
         [[nodiscard]] SelectionResult applyCameraNodeSelection(SceneManager& scene_manager,
                                                                const std::vector<std::string>& hits,
                                                                const SelectionMode mode) {
-            if (mode == SelectionMode::Replace && hits.empty()) {
-                if (auto result = cap::clearNodeSelection(scene_manager); !result) {
-                    return {false, 0, result.error()};
-                }
-                return {true, 0, {}};
-            }
             if (hits.empty() && mode != SelectionMode::Intersect) {
+                if (mode == SelectionMode::Replace) {
+                    if (auto result = cap::clearNodeSelection(scene_manager); !result) {
+                        return {false, 0, result.error()};
+                    }
+                    return {true, 0, {}};
+                }
                 return {true, scene_manager.getSelectedNodeNames().size(), {}};
             }
 
-            std::vector<std::string> names = hits;
-            std::string_view cap_mode = "replace";
-            switch (mode) {
-            case SelectionMode::Replace:
-                cap_mode = "replace";
-                break;
-            case SelectionMode::Add:
-                cap_mode = "add";
-                break;
-            case SelectionMode::Remove:
-                cap_mode = "remove";
-                break;
-            case SelectionMode::Intersect: {
-                std::unordered_set<std::string> hit_set(hits.begin(), hits.end());
-                names.clear();
-                for (const auto& selected : scene_manager.getSelectedNodeNames()) {
-                    if (hit_set.contains(selected)) {
-                        names.push_back(selected);
-                    }
-                }
-                cap_mode = "replace";
-                break;
-            }
-            }
-
-            if (names.empty() && (mode == SelectionMode::Replace || mode == SelectionMode::Intersect)) {
+            const auto names = cameraSelectionAfterMode(scene_manager, hits, mode);
+            if (names.empty()) {
                 if (auto result = cap::clearNodeSelection(scene_manager); !result) {
                     return {false, 0, result.error()};
                 }
                 return {true, 0, {}};
             }
-            if (auto result = cap::selectNodes(scene_manager, names, cap_mode); !result) {
+            if (auto result = cap::selectNodes(scene_manager, names, "replace"); !result) {
                 return {false, 0, result.error()};
             }
             return {true, scene_manager.getSelectedNodeNames().size(), {}};

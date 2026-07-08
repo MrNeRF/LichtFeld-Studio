@@ -22,8 +22,9 @@ namespace lfs::vis {
     };
 
     // PointCloud: selected POINTCLOUD, or selected CROPBOX/ELLIPSOID parented to POINTCLOUD.
-    // Cameras: non-empty selection containing only CAMERA and CAMERA_GROUP nodes; sticks
-    //   across an emptied selection while cameras stay visible (SceneManager::stickySelectionDomain).
+    // Cameras: non-empty selection containing only CAMERA nodes, CAMERA_GROUP
+    //   nodes, or a camera-only GROUP container; sticks across an emptied
+    //   selection while cameras stay visible (SceneManager::stickySelectionDomain).
     // PointCloud auto-target: empty selection, no gaussians, exactly one visible POINTCLOUD with points.
     // Cameras auto-target: empty selection, no gaussians, no visible point clouds, visible CAMERA nodes.
     // Gaussians: fallback.

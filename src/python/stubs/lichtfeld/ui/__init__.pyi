@@ -2223,6 +2223,9 @@ def reveal_in_file_manager(path: str) -> bool:
 def apply_cropbox() -> None:
     """Apply the selected cropbox"""
 
+def can_cropbox() -> bool:
+    """Return true when the current selection can own a cropbox"""
+
 def set_crop_tool_shape(shape: str) -> None:
     """Set the active crop tool shape: box or ellipsoid"""
 

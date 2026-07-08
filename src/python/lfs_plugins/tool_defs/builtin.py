@@ -140,6 +140,14 @@ def _poll_can_select(_context) -> bool:
 def _poll_can_cropbox(context) -> bool:
     if not _poll_has_scene(context):
         return False
+    try:
+        import lichtfeld as lf
+
+        can_cropbox = getattr(getattr(lf, "ui", None), "can_cropbox", None)
+        if callable(can_cropbox):
+            return bool(can_cropbox())
+    except Exception:
+        pass
     if _selection_is_crop_volume():
         return True
     if _poll_can_transform(context):

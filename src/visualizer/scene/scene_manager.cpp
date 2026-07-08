@@ -315,7 +315,8 @@ namespace lfs::vis {
                 }
                 return;
             }
-            if (node.type != core::NodeType::CAMERA_GROUP) {
+            if (node.type != core::NodeType::CAMERA_GROUP &&
+                node.type != core::NodeType::GROUP) {
                 return;
             }
             for (const core::NodeId child_id : node.children) {
@@ -384,6 +385,32 @@ namespace lfs::vis {
                 }
             }
             return false;
+        }
+
+        [[nodiscard]] bool isCameraSelectionTargetNode(const core::Scene& scene,
+                                                       const core::SceneNode& node) {
+            if (node.type == core::NodeType::CAMERA) {
+                return node.camera != nullptr;
+            }
+            if (node.type == core::NodeType::CAMERA_GROUP) {
+                return true;
+            }
+            if (node.type != core::NodeType::GROUP) {
+                return false;
+            }
+
+            bool has_camera_child = false;
+            for (const core::NodeId child_id : node.children) {
+                const auto* const child = scene.getNodeById(child_id);
+                if (!child) {
+                    continue;
+                }
+                if (!isCameraSelectionTargetNode(scene, *child)) {
+                    return false;
+                }
+                has_camera_child = true;
+            }
+            return has_camera_child;
         }
 
         [[nodiscard]] size_t visiblePointCloudPointCount(const core::Scene& scene) {
@@ -539,7 +566,7 @@ namespace lfs::vis {
             if (pointCloudSelectionTarget(scene, *node)) {
                 return SelectionDomain::PointCloud;
             }
-            if (node->type != core::NodeType::CAMERA && node->type != core::NodeType::CAMERA_GROUP) {
+            if (!isCameraSelectionTargetNode(scene, *node)) {
                 all_selected_are_cameras = false;
             }
         }
@@ -3618,6 +3645,8 @@ namespace lfs::vis {
                     if (first->type == core::NodeType::CROPBOX) {
                         cropbox_id = first->id;
                     } else if (first->type == core::NodeType::SPLAT || first->type == core::NodeType::POINTCLOUD) {
+                    } else if (first->type == core::NodeType::SPLAT ||
+                               first->type == core::NodeType::POINTCLOUD) {
                         cropbox_id = scene_.getCropBoxForSplat(first->id);
                     }
                     if (cropbox_id != core::NULL_NODE) {

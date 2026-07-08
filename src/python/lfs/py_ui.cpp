@@ -46,6 +46,7 @@
 #include "rendering/screen_overlay_renderer.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/core/editor_context.hpp"
+#include "visualizer/gui_capabilities.hpp"
 #include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/panel_registry.hpp"
 #include "visualizer/ipc/view_context.hpp"
@@ -4292,6 +4293,14 @@ namespace lfs::python {
             "apply_cropbox",
             []() { lfs::core::events::cmd::ApplyCropBox{}.emit(); },
             "Apply the selected cropbox");
+
+        m.def(
+            "can_cropbox",
+            []() -> bool {
+                const auto* const sm = lfs::python::get_scene_manager();
+                return sm && static_cast<bool>(lfs::vis::cap::resolveCropBoxParentId(*sm, std::nullopt));
+            },
+            "Return true when the current selection can own a cropbox");
 
         m.def(
             "set_crop_tool_shape",
