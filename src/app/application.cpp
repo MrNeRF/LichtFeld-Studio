@@ -320,12 +320,7 @@ namespace lfs::app {
             return 0;
         }
 
-        // Loads a trained scene (no Trainer/optimizer loop) and a
-        // sequencer::Timeline JSON camera-keyframe path, renders it
-        // frame-by-frame with the same GUI-free CUDA rasterizer the training
-        // loop's --timelapse-images feature already uses headlessly, and
-        // encodes straight to the requested output file. No window, no
-        // Vulkan, no native save dialog.
+        // Renders a sequencer camera path against a trained scene to a video file, headless.
         int runHeadlessRender(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
             const auto& cfg = *params->render_path;
 
@@ -360,8 +355,6 @@ namespace lfs::app {
                 return 1;
             }
 
-            // Load the camera-keyframe path (same JSON format the GUI sequencer
-            // reads/writes via Timeline::loadFromJson/saveToJson).
             lfs::sequencer::Timeline timeline;
             if (!timeline.loadFromJson(core::path_to_utf8(cfg.camera_path)) || timeline.empty()) {
                 LOG_ERROR("Failed to load camera path (or it has no keyframes): {}", core::path_to_utf8(cfg.camera_path));
@@ -398,14 +391,7 @@ namespace lfs::app {
                 const float t = std::min(static_cast<float>(frame) / static_cast<float>(cfg.fps), duration);
                 const auto cam_state = timeline.evaluate(t);
 
-                // CameraState.rotation is the camera's orientation in world space
-                // (camera-to-world), matching how the GUI viewport consumes it
-                // (see async_task_manager.cpp's makeVideoExportViewport, which
-                // uses glm::mat3_cast(cam_state.rotation) directly as a
-                // camera-to-world orientation). lfs::core::Camera's R/T
-                // constructor args are world-to-camera (COLMAP convention:
-                // p_cam = R*p_world + T, see io/formats/colmap.cpp's
-                // qvec2rotmat()/R,T construction) - invert accordingly.
+                // CameraState is camera-to-world; Camera's R/T are world-to-camera, so invert.
                 const glm::mat3 r_c2w = glm::mat3_cast(cam_state.rotation);
                 const glm::mat3 r_w2c = glm::transpose(r_c2w);
                 const glm::vec3 t_w2c = -(r_w2c * cam_state.position);
