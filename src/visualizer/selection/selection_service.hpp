@@ -143,6 +143,7 @@ namespace lfs::vis {
         void setTestingScreenPositionsForCamera(int camera_index, std::shared_ptr<core::Tensor> screen_positions);
         void setTestingViewport(ViewportInfo viewport);
         void setTestingHoveredGaussianId(std::optional<int> hovered_gaussian_id);
+        void clearTestingOverrides();
 
     private:
         struct ViewerViewportContext {

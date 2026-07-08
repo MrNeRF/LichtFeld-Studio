@@ -5,6 +5,8 @@
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
 #include "core/property_registry.hpp"
+#include "core/events.hpp"
+#include "core/point_cloud.hpp"
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
@@ -76,6 +78,20 @@ namespace {
         auto tensor = Tensor::empty({values.size()}, Device::CPU, DataType::UInt8);
         std::copy(values.begin(), values.end(), tensor.ptr<uint8_t>());
         return tensor.cuda();
+    }
+
+    std::shared_ptr<lfs::core::PointCloud> make_test_point_cloud() {
+        auto means = Tensor::from_vector(
+            {0.0f, 0.0f, 0.0f,
+             1.0f, 0.0f, 0.0f},
+            {size_t{2}, size_t{3}},
+            Device::CPU);
+        auto colors = Tensor::from_vector(
+            {1.0f, 1.0f, 1.0f,
+             1.0f, 1.0f, 1.0f},
+            {size_t{2}, size_t{3}},
+            Device::CPU);
+        return std::make_shared<lfs::core::PointCloud>(std::move(means), std::move(colors));
     }
 
     void expect_matrix_near(const glm::mat4& actual, const glm::mat4& expected, const float epsilon = 1e-4f) {
@@ -775,6 +791,46 @@ TEST_F(OperatorRegistryPropsTest, ResolveCropBoxIdFindsAttachedChildForParentNod
     auto selected_result = lfs::vis::cap::resolveCropBoxId(*scene_manager_, std::nullopt);
     ASSERT_TRUE(selected_result.has_value());
     EXPECT_EQ(*selected_result, cropbox_id);
+}
+
+TEST_F(OperatorRegistryPropsTest, ResolveCropBoxForSelectedContainerUsesNestedModelChild) {
+    auto& scene = scene_manager_->getScene();
+    const auto dataset_id = scene.addDataset("dataset");
+    ASSERT_NE(dataset_id, lfs::core::NULL_NODE);
+    const auto pointcloud_id = scene.addPointCloud("points", make_test_point_cloud(), dataset_id);
+    ASSERT_NE(pointcloud_id, lfs::core::NULL_NODE);
+    const auto cropbox_id = scene.addCropBox("points_cropbox", pointcloud_id);
+    ASSERT_NE(cropbox_id, lfs::core::NULL_NODE);
+
+    scene_manager_->selectNode("dataset");
+
+    auto parent_result = lfs::vis::cap::resolveCropBoxParentId(*scene_manager_, std::nullopt);
+    ASSERT_TRUE(parent_result.has_value()) << parent_result.error();
+    EXPECT_EQ(*parent_result, pointcloud_id);
+
+    auto cropbox_result = lfs::vis::cap::resolveCropBoxId(*scene_manager_, std::nullopt);
+    ASSERT_TRUE(cropbox_result.has_value()) << cropbox_result.error();
+    EXPECT_EQ(*cropbox_result, cropbox_id);
+
+    lfs::core::CropBoxData oversized;
+    oversized.min = glm::vec3(-10.0f);
+    oversized.max = glm::vec3(10.0f);
+    scene.setCropBoxData(cropbox_id, oversized);
+
+    lfs::core::events::cmd::FitCropBoxToScene{.use_percentile = true}.emit();
+
+    const auto* fitted = scene.getCropBoxData(cropbox_id);
+    ASSERT_NE(fitted, nullptr);
+    EXPECT_FLOAT_EQ(fitted->min.x, -0.5f);
+    EXPECT_FLOAT_EQ(fitted->max.x, 0.5f);
+    EXPECT_FLOAT_EQ(fitted->min.y, 0.0f);
+    EXPECT_FLOAT_EQ(fitted->max.y, 0.0f);
+    EXPECT_FLOAT_EQ(fitted->min.z, 0.0f);
+    EXPECT_FLOAT_EQ(fitted->max.z, 0.0f);
+    const auto transform = scene.getNodeTransform("points_cropbox");
+    EXPECT_FLOAT_EQ(transform[3].x, 0.5f);
+    EXPECT_FLOAT_EQ(transform[3].y, 0.0f);
+    EXPECT_FLOAT_EQ(transform[3].z, 0.0f);
 }
 
 TEST_F(OperatorRegistryPropsTest, SetTransformMatrixCreatesUndoableEntry) {

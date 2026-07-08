@@ -155,15 +155,25 @@ protected:
     lfs::core::NodeId camera_group_id_ = lfs::core::NULL_NODE;
 };
 
+TEST_F(CameraSelectionTest, BrushSelectionIsDisabledForCameraDomain) {
+    auto selected_before = scene_manager_->getSelectedNodeNames();
+
+    auto brush = service_->selectBrush(50.0f, 50.0f, 10.0f, lfs::vis::SelectionMode::Replace, -1);
+
+    EXPECT_FALSE(brush.success);
+    EXPECT_EQ(scene_manager_->getSelectedNodeNames(), selected_before);
+}
+
 TEST_F(CameraSelectionTest, HitTestCamerasInShapeSelectsProjectedCameraNodes) {
     if (!hasCudaDevice()) {
         GTEST_SKIP() << "CUDA device required to construct projected camera fixtures";
     }
 
-    auto brush = service_->selectBrush(50.0f, 50.0f, 10.0f, lfs::vis::SelectionMode::Replace, -1);
-    ASSERT_TRUE(brush.success) << brush.error;
+    auto rect = service_->selectRect(0.0f, 0.0f, 100.0f, 100.0f, lfs::vis::SelectionMode::Replace, -1);
+    ASSERT_TRUE(rect.success) << rect.error;
     auto selected = scene_manager_->getSelectedNodeNames();
     EXPECT_TRUE(contains_name(selected, "cam_center"));
+    EXPECT_TRUE(contains_name(selected, "cam_right"));
     EXPECT_FALSE(contains_name(selected, "cam_behind"));
 
     scene_manager_->selectNode("cameras");

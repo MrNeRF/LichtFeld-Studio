@@ -4678,20 +4678,23 @@ namespace lfs::vis {
         const auto* target = scene_.getNodeById(node_id);
         if (!target)
             return;
-        const core::NodeId parent_id =
-            (target->type == core::NodeType::CROPBOX || target->type == core::NodeType::ELLIPSOID) ? target->parent_id : node_id;
+        auto parent_id = cap::resolveCropBoxParentId(*this, target->name);
+        if (!parent_id) {
+            LOG_WARN("Failed to resolve cropbox parent for '{}': {}", target->name, parent_id.error());
+            return;
+        }
 
-        auto cropbox_id = cap::ensureCropBox(*this, services().renderingOrNull(), parent_id);
+        auto cropbox_id = cap::ensureCropBox(*this, services().renderingOrNull(), *parent_id);
         if (!cropbox_id) {
-            const auto* parent = scene_.getNodeById(parent_id);
+            const auto* parent = scene_.getNodeById(*parent_id);
             LOG_WARN("Failed to add cropbox for '{}': {}",
-                     parent ? parent->name : std::format("id {}", parent_id),
+                     parent ? parent->name : std::format("id {}", *parent_id),
                      cropbox_id.error());
             return;
         }
 
         const auto* cropbox = scene_.getNodeById(*cropbox_id);
-        const auto* parent = scene_.getNodeById(parent_id);
+        const auto* parent = scene_.getNodeById(*parent_id);
         if (!cropbox || !parent)
             return;
 

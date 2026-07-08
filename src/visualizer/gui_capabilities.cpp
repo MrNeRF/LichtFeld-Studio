@@ -620,6 +620,24 @@ namespace lfs::vis::cap {
             return core::NULL_NODE;
         }
 
+        core::NodeId find_cropbox_target_child(const core::Scene& scene, const core::SceneNode& parent) {
+            for (const core::NodeId child_id : parent.children) {
+                const auto* const child = scene.getNodeById(child_id);
+                if (!child) {
+                    continue;
+                }
+                if (child->type == core::NodeType::SPLAT ||
+                    child->type == core::NodeType::POINTCLOUD) {
+                    return child->id;
+                }
+                if (const core::NodeId nested = find_cropbox_target_child(scene, *child);
+                    nested != core::NULL_NODE) {
+                    return nested;
+                }
+            }
+            return core::NULL_NODE;
+        }
+
     } // namespace
 
     lfs::Result<void> bakeSplatTransformPreservingStorage(
@@ -1179,37 +1197,22 @@ namespace lfs::vis::cap {
     std::expected<core::NodeId, std::string> resolveCropBoxParentId(const SceneManager& scene_manager,
                                                                     const std::optional<std::string>& requested_node) {
         const auto& scene = scene_manager.getScene();
-        const auto find_child_target = [&scene](const core::SceneNode& node,
-                                                const auto& self) -> core::NodeId {
-            for (const core::NodeId child_id : node.children) {
-                const auto* child = scene.getNodeById(child_id);
-                if (!child) {
-                    continue;
-                }
-                if (child->type == core::NodeType::SPLAT || child->type == core::NodeType::POINTCLOUD) {
-                    return child->id;
-                }
-                if (const core::NodeId nested = self(*child, self); nested != core::NULL_NODE) {
-                    return nested;
-                }
-            }
-            return core::NULL_NODE;
-        };
 
-        const auto resolve = [&scene, &find_child_target](const core::SceneNode* node) -> std::expected<core::NodeId, std::string> {
+        const auto resolve = [&scene](const core::SceneNode* node) -> std::expected<core::NodeId, std::string> {
             if (!node)
                 return std::unexpected("Node not found");
             if (node->type == core::NodeType::CROPBOX || node->type == core::NodeType::ELLIPSOID)
                 return node->parent_id;
             if (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD)
                 return node->id;
-            if (node->type == core::NodeType::DATASET) {
-                if (const core::NodeId child_target = find_child_target(*node, find_child_target);
+            if (node->type == core::NodeType::DATASET ||
+                node->type == core::NodeType::GROUP) {
+                if (const core::NodeId child_target = find_cropbox_target_child(scene, *node);
                     child_target != core::NULL_NODE) {
                     return child_target;
                 }
             }
-            return std::unexpected("Crop boxes can only target splat, pointcloud, or dataset nodes with a model");
+            return std::unexpected("Crop boxes can only target splat, pointcloud, or container nodes with a model");
         };
 
         if (requested_node)
@@ -1224,10 +1227,9 @@ namespace lfs::vis::cap {
     std::expected<core::NodeId, std::string> resolveCropBoxId(const SceneManager& scene_manager,
                                                               const std::optional<std::string>& requested_node) {
         const auto& scene = scene_manager.getScene();
-        if (requested_node) {
-            const auto* const node = scene.getNode(*requested_node);
+        const auto resolve = [&scene](const core::SceneNode* const node) -> std::expected<core::NodeId, std::string> {
             if (!node)
-                return std::unexpected("Node not found: " + *requested_node);
+                return std::unexpected("Node not found");
 
             if (node->type == core::NodeType::CROPBOX && node->cropbox)
                 return node->id;
@@ -1239,17 +1241,34 @@ namespace lfs::vis::cap {
             if (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD) {
                 const core::NodeId cropbox_id = scene.getCropBoxForSplat(node->id);
                 if (cropbox_id == core::NULL_NODE)
-                    return std::unexpected("Node has no crop box: " + *requested_node);
+                    return std::unexpected("Node has no crop box: " + node->name);
                 return cropbox_id;
             }
 
-            return std::unexpected("Node does not reference a crop box: " + *requested_node);
+            if (node->type == core::NodeType::DATASET || node->type == core::NodeType::GROUP) {
+                if (const core::NodeId child_target = find_cropbox_target_child(scene, *node);
+                    child_target != core::NULL_NODE) {
+                    const core::NodeId cropbox_id = scene.getCropBoxForSplat(child_target);
+                    if (cropbox_id != core::NULL_NODE) {
+                        return cropbox_id;
+                    }
+                }
+            }
+
+            return std::unexpected("Node does not reference a crop box: " + node->name);
+        };
+
+        if (requested_node) {
+            const auto result = resolve(scene.getNode(*requested_node));
+            if (!result && result.error() == "Node not found")
+                return std::unexpected("Node not found: " + *requested_node);
+            return result;
         }
 
-        const core::NodeId cropbox_id = scene_manager.getSelectedNodeCropBoxId();
-        if (cropbox_id == core::NULL_NODE)
+        const auto selected_name = scene_manager.getSelectedNodeName();
+        if (selected_name.empty())
             return std::unexpected("No crop box specified and no crop box selected");
-        return cropbox_id;
+        return resolve(scene.getNode(selected_name));
     }
 
     std::expected<core::NodeId, std::string> ensureCropBox(SceneManager& scene_manager,

@@ -18,18 +18,18 @@ namespace lfs::vis::op {
 
         [[nodiscard]] bool isCameraSubmodeSupported(const int mode) {
             switch (static_cast<lfs::vis::SelectionSubMode>(mode)) {
-            case lfs::vis::SelectionSubMode::Centers:
             case lfs::vis::SelectionSubMode::Rectangle:
             case lfs::vis::SelectionSubMode::Polygon:
             case lfs::vis::SelectionSubMode::Lasso:
                 return true;
+            case lfs::vis::SelectionSubMode::Centers:
             case lfs::vis::SelectionSubMode::Rings:
             case lfs::vis::SelectionSubMode::Color:
             case lfs::vis::SelectionSubMode::Box:
             case lfs::vis::SelectionSubMode::Sphere:
                 return false;
             }
-            return true;
+            return false;
         }
 
         [[nodiscard]] bool hasVisibleCameraNode(const SceneManager& scene_manager) {

@@ -242,8 +242,7 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] bool isCameraSelectionShape(const SelectionShape shape) {
-            return shape == SelectionShape::Brush ||
-                   shape == SelectionShape::Rectangle ||
+            return shape == SelectionShape::Rectangle ||
                    shape == SelectionShape::Polygon ||
                    shape == SelectionShape::Lasso;
         }
@@ -1595,15 +1594,7 @@ namespace lfs::vis {
         }
         const auto domain = resolveSelectionDomain(*scene_manager_);
         if (domain == SelectionDomain::Cameras) {
-            const auto context = resolveViewerViewportContext({glm::vec2{x, y}});
-            if (!context || !context->valid()) {
-                return {false, 0, "No viewport"};
-            }
-            const std::vector<glm::vec2> points{{x, y}};
-            const auto hits = hitTestCamerasInShape(
-                *scene_manager_, *rendering_manager_, context->info, *context->viewport,
-                SelectionShape::Brush, points, {x, y}, {x, y}, radius);
-            return applyCameraNodeSelection(*scene_manager_, hits, mode);
+            return {false, 0, "Brush selection is not supported for cameras"};
         }
         const auto filters = defaultFilterState();
         if (domain == SelectionDomain::Gaussians) {
