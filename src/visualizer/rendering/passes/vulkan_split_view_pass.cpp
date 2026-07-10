@@ -533,6 +533,27 @@ namespace lfs::vis {
             return vkCreateFence(device, &fi, nullptr, &p.fence) == VK_SUCCESS;
         }
 
+        bool replacePanelFenceSignaled(PanelImage& panel,
+                                       const char* const failed_operation,
+                                       const VkResult failed_result) {
+            LOG_ERROR("VulkanSplitViewPass: {} failed: {}",
+                      failed_operation,
+                      static_cast<int>(failed_result));
+            VkFenceCreateInfo info{};
+            info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+            info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+            VkFence replacement = VK_NULL_HANDLE;
+            if (vkCreateFence(device, &info, nullptr, &replacement) != VK_SUCCESS) {
+                LOG_ERROR("VulkanSplitViewPass: failed to replace poisoned panel transfer fence");
+                return false;
+            }
+            if (panel.fence != VK_NULL_HANDLE) {
+                vkDestroyFence(device, panel.fence, nullptr);
+            }
+            panel.fence = replacement;
+            return false;
+        }
+
         bool ensurePanelImage(PanelImage& p, std::uint32_t w, std::uint32_t h) {
             if (p.image != VK_NULL_HANDLE && p.width == w && p.height == h) {
                 return true;
@@ -618,19 +639,29 @@ namespace lfs::vis {
             std::memcpy(panel.staging_mapped, panel.pack_bytes.data(), static_cast<std::size_t>(bytes));
             vmaFlushAllocation(allocator, panel.staging_alloc, 0, bytes);
 
-            // Wait for any prior submit on this command buffer before re-recording.
-            // First-frame the fence is in unsignaled state and vkWaitForFences with
-            // timeout=0 returns VK_TIMEOUT; the reset below makes the next submit valid.
-            vkWaitForFences(device, 1, &panel.fence, VK_TRUE, std::numeric_limits<std::uint64_t>::max());
-            vkResetFences(device, 1, &panel.fence);
-            if (vkResetCommandBuffer(panel.cmd, 0) != VK_SUCCESS) {
+            // Wait for any prior submit on this command buffer before re-recording. The fence is
+            // created signaled, so the first upload does not block.
+            VkResult result = vkWaitForFences(device, 1, &panel.fence, VK_TRUE,
+                                              std::numeric_limits<std::uint64_t>::max());
+            if (result != VK_SUCCESS) {
+                LOG_ERROR("VulkanSplitViewPass: prior panel transfer wait failed: {}",
+                          static_cast<int>(result));
                 return false;
+            }
+            result = vkResetFences(device, 1, &panel.fence);
+            if (result != VK_SUCCESS) {
+                return replacePanelFenceSignaled(panel, "vkResetFences", result);
+            }
+            result = vkResetCommandBuffer(panel.cmd, 0);
+            if (result != VK_SUCCESS) {
+                return replacePanelFenceSignaled(panel, "vkResetCommandBuffer", result);
             }
             VkCommandBufferBeginInfo bi{};
             bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
             bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-            if (vkBeginCommandBuffer(panel.cmd, &bi) != VK_SUCCESS) {
-                return false;
+            result = vkBeginCommandBuffer(panel.cmd, &bi);
+            if (result != VK_SUCCESS) {
+                return replacePanelFenceSignaled(panel, "vkBeginCommandBuffer", result);
             }
 
             // After the first upload the panel image already sits in
@@ -658,15 +689,17 @@ namespace lfs::vis {
                              VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                              VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
 
-            if (vkEndCommandBuffer(panel.cmd) != VK_SUCCESS) {
-                return false;
+            result = vkEndCommandBuffer(panel.cmd);
+            if (result != VK_SUCCESS) {
+                return replacePanelFenceSignaled(panel, "vkEndCommandBuffer", result);
             }
             VkSubmitInfo si{};
             si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
             si.commandBufferCount = 1;
             si.pCommandBuffers = &panel.cmd;
-            if (vkQueueSubmit(graphics_queue, 1, &si, panel.fence) != VK_SUCCESS) {
-                return false;
+            result = vkQueueSubmit(graphics_queue, 1, &si, panel.fence);
+            if (result != VK_SUCCESS) {
+                return replacePanelFenceSignaled(panel, "vkQueueSubmit", result);
             }
             // The viewport pass that consumes this image runs on the same queue right
             // after, so submission order alone makes the upload visible — no fence wait

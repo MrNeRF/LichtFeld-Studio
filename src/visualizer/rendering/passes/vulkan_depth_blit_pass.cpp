@@ -205,6 +205,26 @@ namespace lfs::vis {
             return vkCreateFence(device, &fi, nullptr, &transfer_fence) == VK_SUCCESS;
         }
 
+        bool replaceTransferFenceSignaled(const char* const failed_operation,
+                                          const VkResult failed_result) {
+            LOG_ERROR("VulkanDepthBlitPass: {} failed: {}",
+                      failed_operation,
+                      static_cast<int>(failed_result));
+            VkFenceCreateInfo info{};
+            info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+            info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+            VkFence replacement = VK_NULL_HANDLE;
+            if (vkCreateFence(device, &info, nullptr, &replacement) != VK_SUCCESS) {
+                LOG_ERROR("VulkanDepthBlitPass: failed to replace poisoned transfer fence");
+                return false;
+            }
+            if (transfer_fence != VK_NULL_HANDLE) {
+                vkDestroyFence(device, transfer_fence, nullptr);
+            }
+            transfer_fence = replacement;
+            return false;
+        }
+
         bool createSampler() {
             VkSamplerCreateInfo s{};
             s.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -517,17 +537,27 @@ namespace lfs::vis {
 
             // Wait for any prior submit on this transfer CB before re-recording.
             // Fence is created signaled, so first frame is a no-op.
-            vkWaitForFences(device, 1, &transfer_fence, VK_TRUE,
-                            std::numeric_limits<std::uint64_t>::max());
-            vkResetFences(device, 1, &transfer_fence);
-            if (vkResetCommandBuffer(transfer_cmd, 0) != VK_SUCCESS) {
+            VkResult result = vkWaitForFences(device, 1, &transfer_fence, VK_TRUE,
+                                              std::numeric_limits<std::uint64_t>::max());
+            if (result != VK_SUCCESS) {
+                LOG_ERROR("VulkanDepthBlitPass: prior transfer wait failed: {}",
+                          static_cast<int>(result));
                 return false;
+            }
+            result = vkResetFences(device, 1, &transfer_fence);
+            if (result != VK_SUCCESS) {
+                return replaceTransferFenceSignaled("vkResetFences", result);
+            }
+            result = vkResetCommandBuffer(transfer_cmd, 0);
+            if (result != VK_SUCCESS) {
+                return replaceTransferFenceSignaled("vkResetCommandBuffer", result);
             }
             VkCommandBufferBeginInfo bi{};
             bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
             bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-            if (vkBeginCommandBuffer(transfer_cmd, &bi) != VK_SUCCESS) {
-                return false;
+            result = vkBeginCommandBuffer(transfer_cmd, &bi);
+            if (result != VK_SUCCESS) {
+                return replaceTransferFenceSignaled("vkBeginCommandBuffer", result);
             }
 
             const VkImageLayout old_layout = (uploaded_tensor != nullptr)
@@ -553,8 +583,9 @@ namespace lfs::vis {
                              VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                              VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
 
-            if (vkEndCommandBuffer(transfer_cmd) != VK_SUCCESS) {
-                return false;
+            result = vkEndCommandBuffer(transfer_cmd);
+            if (result != VK_SUCCESS) {
+                return replaceTransferFenceSignaled("vkEndCommandBuffer", result);
             }
             VkSubmitInfo si{};
             si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -562,8 +593,9 @@ namespace lfs::vis {
             si.pCommandBuffers = &transfer_cmd;
             // Async submit: in-order queue execution makes the upload visible to the
             // viewport pass that samples this image right after on the same queue.
-            if (vkQueueSubmit(graphics_queue, 1, &si, transfer_fence) != VK_SUCCESS) {
-                return false;
+            result = vkQueueSubmit(graphics_queue, 1, &si, transfer_fence);
+            if (result != VK_SUCCESS) {
+                return replaceTransferFenceSignaled("vkQueueSubmit", result);
             }
             uploaded_tensor = &depth;
             return true;

@@ -41,7 +41,12 @@ namespace lfs::vis {
                     VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
                 };
             case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
+                // Intentionally empty. Swapchain acquire is an external dependency: endFrame's
+                // submit waits the acquire semaphore at COLOR_ATTACHMENT_OUTPUT, which matches
+                // the first-use transition's destination stage in that same submit. Inventing a
+                // source access here would not represent work performed by this queue.
             case VK_IMAGE_LAYOUT_UNDEFINED:
+                // Contents are discarded, so there is no prior access to make available.
             default:
                 return {};
             }

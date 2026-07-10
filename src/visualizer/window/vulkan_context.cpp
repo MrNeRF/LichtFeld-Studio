@@ -448,12 +448,6 @@ namespace lfs::vis {
             vkDeviceWaitIdle(device_);
         }
 
-        for (VkSemaphore& semaphore : render_finished_) {
-            if (semaphore != VK_NULL_HANDLE) {
-                vkDestroySemaphore(device_, semaphore, nullptr);
-                semaphore = VK_NULL_HANDLE;
-            }
-        }
         for (VkFence& fence : in_flight_) {
             if (fence != VK_NULL_HANDLE) {
                 vkDestroyFence(device_, fence, nullptr);
@@ -833,6 +827,7 @@ namespace lfs::vis {
             return fail(std::format("vkAcquireNextImageKHR failed: {}", vkResultToString(result)));
         }
         if (image_index >= swapchain_images_in_flight_.size()) {
+            framebuffer_resized_ = true;
             return fail(std::format("vkAcquireNextImageKHR returned invalid image index {}", image_index));
         }
         if (swapchain_images_in_flight_[image_index] != VK_NULL_HANDLE) {
@@ -842,6 +837,7 @@ namespace lfs::vis {
                 const auto wait_start = std::chrono::steady_clock::now();
                 result = vkWaitForFences(device_, 1, &image_fence, VK_TRUE, kWaitForeverNs);
                 if (result != VK_SUCCESS) {
+                    framebuffer_resized_ = true;
                     return fail(std::format("vkWaitForFences(swapchain image {}) failed after {:.1f} ms: {} (frame_slot={}, acquire_index={}, framebuffer={}x{}, swapchain_extent={}x{})",
                                             image_index,
                                             elapsedMs(wait_start),
@@ -864,6 +860,7 @@ namespace lfs::vis {
 
         result = vkResetCommandPool(device_, command_pools_[current_frame], 0);
         if (result != VK_SUCCESS) {
+            framebuffer_resized_ = true;
             return fail(std::format("vkResetCommandPool failed: {}", vkResultToString(result)));
         }
 
@@ -872,6 +869,7 @@ namespace lfs::vis {
         begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         result = vkBeginCommandBuffer(command_buffers_[current_frame], &begin_info);
         if (result != VK_SUCCESS) {
+            framebuffer_resized_ = true;
             return fail(std::format("vkBeginCommandBuffer failed: {}", vkResultToString(result)));
         }
 
@@ -885,6 +883,7 @@ namespace lfs::vis {
         if (current_frame >= depth_stencil_resources_.size() ||
             depth_stencil_resources_[current_frame].image == VK_NULL_HANDLE ||
             depth_stencil_resources_[current_frame].view == VK_NULL_HANDLE) {
+            framebuffer_resized_ = true;
             return fail(std::format("Missing depth/stencil resource for frame slot {}", current_frame));
         }
         const DepthStencilResource& depth_stencil = depth_stencil_resources_[current_frame];
@@ -960,6 +959,7 @@ namespace lfs::vis {
         VkCommandBuffer command_buffer = command_buffers_[current_frame];
         if (!finishActiveRendering(command_buffer)) {
             frame_active_ = false;
+            framebuffer_resized_ = true;
             return false;
         }
         image_barriers_.transitionImage(command_buffer,
@@ -970,6 +970,7 @@ namespace lfs::vis {
         VkResult result = vkEndCommandBuffer(command_buffer);
         if (result != VK_SUCCESS) {
             frame_active_ = false;
+            framebuffer_resized_ = true;
             return fail(std::format("vkEndCommandBuffer failed: {}", vkResultToString(result)));
         }
 
@@ -1013,17 +1014,28 @@ namespace lfs::vis {
         submit_info.commandBufferCount = 1;
         submit_info.pCommandBuffers = &command_buffer;
         submit_info.signalSemaphoreCount = 1;
-        submit_info.pSignalSemaphores = &render_finished_[current_frame];
+        if (active_image_index_ >= render_finished_.size()) {
+            frame_active_ = false;
+            framebuffer_resized_ = true;
+            return fail(std::format("Missing render-finished semaphore for swapchain image {}",
+                                    active_image_index_));
+        }
+        const VkSemaphore render_finished = render_finished_[active_image_index_];
+        submit_info.pSignalSemaphores = &render_finished;
 
         VkFence frame_fence = in_flight_[current_frame];
         const std::uint64_t submit_id = ++frame_submit_serial_;
         result = vkResetFences(device_, 1, &frame_fence);
         if (result != VK_SUCCESS) {
             frame_active_ = false;
+            framebuffer_resized_ = true;
+            const bool fence_recovered = replaceFrameFenceSignaled(current_frame);
             return fail(std::format("vkResetFences(frame slot {}, submit_id {}) failed: {}",
                                     current_frame,
                                     submit_id,
-                                    vkResultToString(result)));
+                                    vkResultToString(result)) +
+                        (fence_recovered ? "; frame fence replaced and swapchain retirement scheduled"
+                                         : "; frame fence recovery failed"));
         }
         LOG_DEBUG("Vulkan endFrame submit: submit_id={}, frame_slot={}, image={}, acquire_index={}, waits={}, timeline_waits={}, framebuffer={}x{}, extent={}x{}",
                   submit_id,
@@ -1040,11 +1052,18 @@ namespace lfs::vis {
         frame_timeline_waits_.clear();
         if (result != VK_SUCCESS) {
             frame_active_ = false;
+            // The acquire semaphore was signaled but never consumed, and the acquired image cannot
+            // be returned directly. Retire the swapchain before another acquire; replace the reset
+            // frame fence now so recreation cannot block forever waiting on an unsignaled fence.
+            framebuffer_resized_ = true;
+            const bool fence_recovered = replaceFrameFenceSignaled(current_frame);
             return fail(std::format("vkQueueSubmit(frame slot {}, submit_id {}, image {}) failed: {}",
                                     current_frame,
                                     submit_id,
                                     active_image_index_,
-                                    vkResultToString(result)));
+                                    vkResultToString(result)) +
+                        (fence_recovered ? "; frame fence replaced and swapchain retirement scheduled"
+                                         : "; frame fence recovery failed"));
         }
         frame_submit_serials_[current_frame] = submit_id;
         if (active_image_index_ < swapchain_images_in_flight_.size()) {
@@ -1054,7 +1073,7 @@ namespace lfs::vis {
         VkPresentInfoKHR present_info{};
         present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
         present_info.waitSemaphoreCount = 1;
-        present_info.pWaitSemaphores = &render_finished_[current_frame];
+        present_info.pWaitSemaphores = &render_finished;
         present_info.swapchainCount = 1;
         present_info.pSwapchains = &swapchain_;
         present_info.pImageIndices = &active_image_index_;
@@ -3106,6 +3125,22 @@ namespace lfs::vis {
                                image_available_[i],
                                std::format("Image-available semaphore {}", i));
         }
+        // vkQueuePresentKHR consumes the render-finished wait per swapchain image, not per frame
+        // slot. Pairing this semaphore with the acquired image prevents binary re-signal while a
+        // compositor still owns the prior wait on a >2-image swapchain.
+        render_finished_.assign(image_count, VK_NULL_HANDLE);
+        for (std::uint32_t i = 0; i < image_count; ++i) {
+            const VkResult sem_result =
+                vkCreateSemaphore(device_, &image_avail_info, nullptr, &render_finished_[i]);
+            if (sem_result != VK_SUCCESS) {
+                return fail(std::format("vkCreateSemaphore(render_finished image {}) failed: {}",
+                                        i,
+                                        vkResultToString(sem_result)));
+            }
+            setDebugObjectName(VK_OBJECT_TYPE_SEMAPHORE,
+                               render_finished_[i],
+                               std::format("Swapchain image {} render-finished semaphore", i));
+        }
         next_acquire_index_ = 0;
         active_acquire_index_ = 0;
         swapchain_extent_ = extent;
@@ -3296,23 +3331,12 @@ namespace lfs::vis {
     }
 
     bool VulkanContext::createSyncObjects() {
-        VkSemaphoreCreateInfo semaphore_info{};
-        semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-
         VkFenceCreateInfo fence_info{};
         fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
         fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
         for (std::size_t i = 0; i < kFramesInFlight; ++i) {
-            VkResult result = vkCreateSemaphore(device_, &semaphore_info, nullptr, &render_finished_[i]);
-            if (result != VK_SUCCESS) {
-                return fail(std::format("vkCreateSemaphore(render_finished {}) failed: {}", i, vkResultToString(result)));
-            }
-            setDebugObjectName(VK_OBJECT_TYPE_SEMAPHORE,
-                               render_finished_[i],
-                               std::format("Frame {} render finished semaphore", i));
-
-            result = vkCreateFence(device_, &fence_info, nullptr, &in_flight_[i]);
+            const VkResult result = vkCreateFence(device_, &fence_info, nullptr, &in_flight_[i]);
             if (result != VK_SUCCESS) {
                 return fail(std::format("vkCreateFence(frame {}) failed: {}", i, vkResultToString(result)));
             }
@@ -3320,6 +3344,40 @@ namespace lfs::vis {
                                in_flight_[i],
                                std::format("Frame {} in-flight fence", i));
         }
+        return true;
+    }
+
+    bool VulkanContext::replaceFrameFenceSignaled(const std::size_t frame_slot) {
+        if (frame_slot >= in_flight_.size() || device_ == VK_NULL_HANDLE) {
+            return false;
+        }
+
+        VkFenceCreateInfo fence_info{};
+        fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+        VkFence replacement = VK_NULL_HANDLE;
+        const VkResult result = vkCreateFence(device_, &fence_info, nullptr, &replacement);
+        if (result != VK_SUCCESS) {
+            LOG_ERROR("Vulkan: could not replace frame {} fence after submit failure: {}",
+                      frame_slot,
+                      vkResultToString(result));
+            return false;
+        }
+
+        const VkFence retired = in_flight_[frame_slot];
+        in_flight_[frame_slot] = replacement;
+        frame_submit_serials_[frame_slot] = 0;
+        for (VkFence& image_fence : swapchain_images_in_flight_) {
+            if (image_fence == retired) {
+                image_fence = VK_NULL_HANDLE;
+            }
+        }
+        if (retired != VK_NULL_HANDLE) {
+            vkDestroyFence(device_, retired, nullptr);
+        }
+        setDebugObjectName(VK_OBJECT_TYPE_FENCE,
+                           replacement,
+                           std::format("Frame {} recovered in-flight fence", frame_slot));
         return true;
     }
 
@@ -3501,6 +3559,13 @@ namespace lfs::vis {
             }
         }
         image_available_.clear();
+        for (VkSemaphore& semaphore : render_finished_) {
+            if (semaphore != VK_NULL_HANDLE) {
+                vkDestroySemaphore(device_, semaphore, nullptr);
+                semaphore = VK_NULL_HANDLE;
+            }
+        }
+        render_finished_.clear();
         next_acquire_index_ = 0;
         active_acquire_index_ = 0;
         image_barriers_.clearSwapchainOnly();

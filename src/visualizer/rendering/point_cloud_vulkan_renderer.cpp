@@ -379,6 +379,26 @@ namespace lfs::vis {
             return std::format("{} failed (VkResult={})", what, static_cast<int>(r));
         }
 
+        bool replaceFenceSignaled(const char* const failed_operation,
+                                  const VkResult failed_result) {
+            LOG_ERROR("PointCloudVulkanRenderer: {} failed: {}",
+                      failed_operation,
+                      static_cast<int>(failed_result));
+            VkFenceCreateInfo info{};
+            info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+            info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+            VkFence replacement = VK_NULL_HANDLE;
+            if (vkCreateFence(device, &info, nullptr, &replacement) != VK_SUCCESS) {
+                LOG_ERROR("PointCloudVulkanRenderer: failed to replace poisoned fence");
+                return false;
+            }
+            if (fence != VK_NULL_HANDLE) {
+                vkDestroyFence(device, fence, nullptr);
+            }
+            fence = replacement;
+            return true;
+        }
+
         // Allocate a fresh device-local buffer and stage `bytes` from `src` into
         // it. The transient host staging buffer is parked in pending_stagings
         // and released after the next fence-wait.
@@ -1175,7 +1195,10 @@ namespace lfs::vis {
             // touching slot resources — the cb is shared across slots and a
             // size change would otherwise destroy images the in-flight submit
             // is still sampling.
-            vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
+            VkResult r = vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
+            if (r != VK_SUCCESS) {
+                return std::unexpected<std::string>(vkError("vkWaitForFences(render prewait)", r));
+            }
 
             auto& slot = slots[slot_idx];
             const bool will_recreate = slot.color_image == VK_NULL_HANDLE ||
@@ -1197,12 +1220,15 @@ namespace lfs::vis {
                 destroyBuffer(allocator, s);
             }
             pending_stagings.clear();
-            vkResetCommandBuffer(command_buffer, 0);
+            r = vkResetCommandBuffer(command_buffer, 0);
+            if (r != VK_SUCCESS) {
+                return std::unexpected<std::string>(vkError("vkResetCommandBuffer", r));
+            }
 
             VkCommandBufferBeginInfo bi{};
             bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
             bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-            VkResult r = vkBeginCommandBuffer(command_buffer, &bi);
+            r = vkBeginCommandBuffer(command_buffer, &bi);
             if (r != VK_SUCCESS) {
                 return std::unexpected<std::string>(vkError("vkBeginCommandBuffer", r));
             }
@@ -1323,8 +1349,20 @@ namespace lfs::vis {
                                                      VK_IMAGE_ASPECT_DEPTH_BIT,
                                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
+            const VkImageLayout previous_color_layout = slot.color_layout;
+            const VkImageLayout previous_depth_layout = slot.depth_layout;
+            const auto restore_tracked_layouts = [&]() {
+                context->imageBarriers().registerImage(slot.color_image,
+                                                       VK_IMAGE_ASPECT_COLOR_BIT,
+                                                       previous_color_layout);
+                context->imageBarriers().registerImage(slot.depth_image,
+                                                       VK_IMAGE_ASPECT_DEPTH_BIT,
+                                                       previous_depth_layout);
+            };
+
             r = vkEndCommandBuffer(command_buffer);
             if (r != VK_SUCCESS) {
+                restore_tracked_layouts();
                 return std::unexpected<std::string>(vkError("vkEndCommandBuffer", r));
             }
 
@@ -1334,10 +1372,14 @@ namespace lfs::vis {
             si.pCommandBuffers = &command_buffer;
             r = vkResetFences(device, 1, &fence);
             if (r != VK_SUCCESS) {
+                restore_tracked_layouts();
+                (void)replaceFenceSignaled("vkResetFences", r);
                 return std::unexpected<std::string>(vkError("vkResetFences", r));
             }
             r = vkQueueSubmit(context->graphicsQueue(), 1, &si, fence);
             if (r != VK_SUCCESS) {
+                restore_tracked_layouts();
+                (void)replaceFenceSignaled("vkQueueSubmit", r);
                 return std::unexpected<std::string>(vkError("vkQueueSubmit", r));
             }
 
@@ -1480,6 +1522,7 @@ namespace lfs::vis {
 
             r = vkResetFences(device, 1, &fence);
             if (r != VK_SUCCESS) {
+                (void)replaceFenceSignaled("vkResetFences(point-cloud readback)", r);
                 return std::unexpected<std::string>(vkError("vkResetFences(point-cloud readback)", r));
             }
             VkSubmitInfo submit_info{};
@@ -1488,6 +1531,7 @@ namespace lfs::vis {
             submit_info.pCommandBuffers = &command_buffer;
             r = vkQueueSubmit(ctx.graphicsQueue(), 1, &submit_info, fence);
             if (r != VK_SUCCESS) {
+                (void)replaceFenceSignaled("vkQueueSubmit(point-cloud readback)", r);
                 return std::unexpected<std::string>(vkError("vkQueueSubmit(point-cloud readback)", r));
             }
             r = vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);

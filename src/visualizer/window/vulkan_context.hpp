@@ -255,6 +255,7 @@ namespace lfs::vis {
         bool createCommandPool();
         bool createCommandBuffers();
         bool createSyncObjects();
+        bool replaceFrameFenceSignaled(std::size_t frame_slot);
         bool createDebugMessenger();
         bool createPipelineCache();
         bool recreateSwapchain();
@@ -358,7 +359,10 @@ namespace lfs::vis {
         std::vector<VkSemaphore> image_available_;
         std::size_t next_acquire_index_ = 0;
         std::size_t active_acquire_index_ = 0;
-        std::array<VkSemaphore, kFramesInFlight> render_finished_{};
+        // Presentation waits are owned per swapchain image. Frame-slot indexing can re-signal a
+        // binary semaphore while an earlier vkQueuePresentKHR wait is still pending whenever the
+        // swapchain has more images than frames in flight.
+        std::vector<VkSemaphore> render_finished_;
         std::array<VkFence, kFramesInFlight> in_flight_{};
         std::array<std::uint64_t, kFramesInFlight> frame_submit_serials_{};
         std::uint64_t frame_submit_serial_ = 0;
