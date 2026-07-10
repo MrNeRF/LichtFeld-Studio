@@ -19,15 +19,13 @@ layout (std430, binding = 1) restrict buffer PartitionHistogram {
   uint32_t data[];  // (P, R)
 } partitionHistogram;
 
-#ifdef RADIX_SORT_COUNT_BUFFER
 layout (std430, binding = 2) readonly buffer SortCount {
   uint32_t elementCount;
 } sortCount;
-#endif
 
 layout (push_constant) uniform PushConstant {
   uint32_t pass;
-  uint32_t elementCount;
+  uint32_t pad0;
 } uniforms;
 
 shared uint32_t reduction;
@@ -39,12 +37,7 @@ void main() {
   uint index = subgroupIndex * gl_SubgroupSize + threadIndex;
   uint radix = gl_WorkGroupID.x;
 
-  uint elementCount =
-#ifdef RADIX_SORT_COUNT_BUFFER
-      sortCount.elementCount;
-#else
-      uniforms.elementCount;
-#endif
+  uint elementCount = sortCount.elementCount;
   int pass = int(uniforms.pass);
 
   uint partitionCount = (elementCount + PARTITION_SIZE - 1) / PARTITION_SIZE;

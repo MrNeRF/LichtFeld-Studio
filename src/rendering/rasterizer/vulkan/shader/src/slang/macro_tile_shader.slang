@@ -151,7 +151,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uniform Uniforms uniform
     int offset = depth_rank == 0u ? 0 : index_buffer_offset[depth_rank - 1u];
     int offset_max = index_buffer_offset[depth_rank];
     const int sort_capacity = int(uniforms.sort_capacity);
-    if (sort_capacity <= 0 || offset >= sort_capacity || offset >= offset_max)
+    if (sort_capacity <= 0 || offset < 0 || offset_max < 0 ||
+        offset >= sort_capacity || offset >= offset_max)
         return;
     offset_max = min(offset_max, sort_capacity);
 
@@ -208,8 +209,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uniform Uniforms uniform
 
 layout(binding=0) StructuredBuffer<sortingKey_t> sorted_keys;
 layout(binding=1) RWStructuredBuffer<int32_t> out_macro_ranges;
-layout(binding=2) StructuredBuffer<int32_t> index_buffer_offset_in;
-layout(binding=3) StructuredBuffer<uint32_t> visible_count;
+layout(binding=2) StructuredBuffer<uint32_t> tile_instance_count;
 
 [shader("compute")]
 [numthreads(256, 1, 1)]
@@ -218,9 +218,7 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uniform Uniforms uniform
     const uint32_t num_macro =
         higs_macro_grid_width(uniforms.grid_width) * higs_macro_grid_height(uniforms.grid_height);
 
-    const uint32_t tail = min(visible_count[0], uint32_t(uniforms.num_splats));
-    uint32_t num_isects = tail == 0u ? 0u : (uint32_t)index_buffer_offset_in[tail - 1u];
-    num_isects = min(num_isects, uniforms.sort_capacity);
+    const uint32_t num_isects = min(tile_instance_count[0], uniforms.sort_capacity);
     if (globalIdx > num_isects)
         return;
 

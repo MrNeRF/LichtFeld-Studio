@@ -48,9 +48,6 @@ public:
     _VulkanBuffer& clearDeviceBuffer(Buffer<T>& buffer, size_t new_size);
     template <typename T>
     _VulkanBuffer& resizeAndCopyDeviceBuffer(Buffer<T>& buffer, size_t new_size, bool clear);
-    template <typename T>
-    T readElement(const _VulkanBuffer& buffer, size_t index);
-
     void beginCommandBatch();
     void endCommandBatch(bool use_fence = true,
                          VkSemaphore signal_semaphore = VK_NULL_HANDLE,

@@ -210,12 +210,9 @@ _vulkan_add_slang_shader(macro_compose          macro_compose.slang EXPORT_MODE=
 _vulkan_add_slang_shader(macro_compose_overlays macro_compose.slang EXPORT_MODE=0 LFS_RASTER_OVERLAYS=1)
 
 # Radix sort GLSL .comp
-_vulkan_add_glsl_shader(upsweep    upsweep.comp)
-_vulkan_add_glsl_shader(spine      spine.comp)
-_vulkan_add_glsl_shader(downsweep  downsweep.comp)
-_vulkan_add_glsl_shader(upsweep_indirect    upsweep.comp   RADIX_SORT_COUNT_BUFFER=1)
-_vulkan_add_glsl_shader(spine_indirect      spine.comp     RADIX_SORT_COUNT_BUFFER=1)
-_vulkan_add_glsl_shader(downsweep_indirect  downsweep.comp RADIX_SORT_COUNT_BUFFER=1)
+_vulkan_add_glsl_shader(upsweep_indirect    upsweep.comp)
+_vulkan_add_glsl_shader(spine_indirect      spine.comp)
+_vulkan_add_glsl_shader(downsweep_indirect  downsweep.comp)
 
 add_custom_target(lfs_vulkan_rasterizer_shaders DEPENDS ${VULKAN_RASTERIZER_SHADER_OUTPUTS})
 add_dependencies(lfs_vulkan_rasterizer lfs_vulkan_rasterizer_shaders)

@@ -374,53 +374,6 @@ _VulkanBuffer& VulkanGSPipeline::resizeAndCopyDeviceBuffer(
 }
 
 template <typename T>
-T VulkanGSPipeline::readElement(const _VulkanBuffer& buffer, size_t index) {
-
-    const size_t elementSize = sizeof(T);
-    const size_t offset = index * elementSize;
-
-    // Validate bounds
-    if (offset + elementSize > buffer.size)
-        _THROW_ERROR("Index out of bound while reading buffer element");
-
-    T outValue{};
-
-    // Only need elementSize bytes; sizing the staging buffer to the full source buffer
-    // (num_splats * 4 in the hot readback path) wasted a one-time MB-scale allocation.
-    allocStagingBuffer(elementSize);
-    {
-        {
-            DEVICE_GUARD;
-
-            // Copy only the specific element from device buffer to staging buffer.
-            VkBufferCopy copyRegion = {};
-            copyRegion.srcOffset = buffer.offset + offset;
-            copyRegion.dstOffset = 0;
-            copyRegion.size = elementSize;
-
-            vkCmdCopyBuffer(command_buffer, buffer.buffer, stager.buffer, 1, &copyRegion);
-        }
-        HOST_GUARD; // will apply fence
-
-        // Map the staging buffer and read the specific element
-        void* base;
-        if (vmaMapMemory(allocator, stager.allocation, &base) != VK_SUCCESS) {
-            _THROW_ERROR("Failed to map memory while reading buffer element");
-        }
-        if (vmaInvalidateAllocation(allocator, stager.allocation, 0, elementSize) != VK_SUCCESS) {
-            vmaUnmapMemory(allocator, stager.allocation);
-            _THROW_ERROR("Failed to invalidate memory while reading buffer element");
-        }
-
-        memcpy(&outValue, base, elementSize);
-
-        vmaUnmapMemory(allocator, stager.allocation);
-    }
-
-    return outValue;
-}
-
-template <typename T>
 void VulkanGSPipelineBuffers::reorderSH(Buffer<T>& coeffs) {
     if (SH_REORDER_SIZE <= 1)
         return;
@@ -499,7 +452,6 @@ void VulkanGSPipelineBuffers::assignScalesOpacs(
     template _VulkanBuffer& VulkanGSPipeline::resizeDeviceBuffer(Buffer<dtype>& buffer, size_t new_size, bool no_shrink);    \
     template _VulkanBuffer& VulkanGSPipeline::clearDeviceBuffer(Buffer<dtype>& buffer, size_t new_size);                     \
     template _VulkanBuffer& VulkanGSPipeline::resizeAndCopyDeviceBuffer(Buffer<dtype>& buffer, size_t new_size, bool clear); \
-    template dtype VulkanGSPipeline::readElement(const _VulkanBuffer& buffer, size_t index);                                 \
     template void VulkanGSPipelineBuffers::reorderSH(Buffer<dtype>& coeffs);                                                 \
     template void VulkanGSPipelineBuffers::undoReorderSH(Buffer<dtype>& coeffs, size_t num_splats);
 

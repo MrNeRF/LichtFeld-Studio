@@ -153,8 +153,8 @@ struct VulkanGSPipelineBuffers {
     Buffer<sortingKey_t> sorting_keys_2;       // NInt [no_shrink]
     Buffer<int32_t> sorting_gauss_idx_1;       // NInt [no_shrink]
     Buffer<int32_t> sorting_gauss_idx_2;       // NInt [no_shrink]
-    Buffer<uint32_t> tile_sort_count;          // (1,) actual tile instance count
-    Buffer<uint32_t> tile_sort_dispatch_args;  // VkDispatchIndirectCommand for tile-instance radix sort
+    Buffer<uint32_t> tile_sort_count;          // [0]=clamped, [1]=raw count/overflow sentinel
+    Buffer<uint32_t> tile_sort_dispatch_args;  // radix and range VkDispatchIndirectCommand values
     Buffer<int32_t> tile_ranges;               // (Gh*Gw, 2)
     Buffer<int32_t> tile_batch_counts;         // (Gh*Gw,) bounded raster chunks per tile
     Buffer<int32_t> tile_batch_offsets;        // (Gh*Gw,) inclusive prefix sum of tile_batch_counts

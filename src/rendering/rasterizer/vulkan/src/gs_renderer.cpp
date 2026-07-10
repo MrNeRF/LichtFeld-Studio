@@ -22,6 +22,7 @@ namespace {
     constexpr size_t kRasterDenseTileThreshold = RASTER_DENSE_TILE_THRESHOLD;
     constexpr size_t kMinLoadBalancedRasterInstances = 4 * kRasterBatchSize;
     constexpr size_t kMinLoadBalancedAverageTileInstances = kRasterBatchSize / 16;
+    constexpr uint32_t kInstanceCountOverflowSentinel = std::numeric_limits<uint32_t>::max();
 
     [[nodiscard]] size_t denseTileBatchCapacity(const size_t tile_instances,
                                                 const size_t num_tiles) {
@@ -162,8 +163,8 @@ void VulkanGSRenderer::recordInstanceCountReadback(VulkanGSPipelineBuffers& buff
     instance_count_readback_value_ = 0;
 }
 
-std::optional<VulkanGSRenderer::MacroInstanceStats>
-VulkanGSRenderer::pollDeferredMacroInstanceStats() {
+std::optional<VulkanGSRenderer::TileInstanceStats>
+VulkanGSRenderer::pollDeferredTileInstanceStats() {
     if (!instance_count_readback_pending_ || !instance_count_readback_mapped_)
         return std::nullopt;
     if (instance_count_readback_signal_ == VK_NULL_HANDLE || instance_count_readback_value_ == 0)
@@ -173,9 +174,10 @@ VulkanGSRenderer::pollDeferredMacroInstanceStats() {
     if (!invalidateReadbackBuffer(instance_count_readback_buffer_, 2 * sizeof(uint32_t)))
         return std::nullopt;
 
-    MacroInstanceStats stats{};
+    TileInstanceStats stats{};
     stats.instance_count = instance_count_readback_mapped_[0];
-    stats.raw_count = instance_count_readback_mapped_[1];
+    stats.count_overflow = instance_count_readback_mapped_[1] == kInstanceCountOverflowSentinel;
+    stats.raw_count = stats.count_overflow ? 0u : instance_count_readback_mapped_[1];
     instance_count_readback_pending_ = false;
     instance_count_readback_signal_ = VK_NULL_HANDLE;
     instance_count_readback_value_ = 0;
@@ -536,12 +538,6 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
     createComputePipeline(pipeline_cumsum.block_scan, spirv_paths.at("cumsum_block_scan"));
     createComputePipeline(pipeline_cumsum.scan_block_sums, spirv_paths.at("cumsum_scan_block_sums"));
     createComputePipeline(pipeline_cumsum.add_block_offsets, spirv_paths.at("cumsum_add_block_offsets"));
-    createComputePipeline(pipeline_sorting_1.upsweep, spirv_paths.at("radix_sort/upsweep"));
-    createComputePipeline(pipeline_sorting_1.spine, spirv_paths.at("radix_sort/spine"));
-    createComputePipeline(pipeline_sorting_1.downsweep, spirv_paths.at("radix_sort/downsweep"));
-    createComputePipeline(pipeline_sorting_2.upsweep, spirv_paths.at("radix_sort/upsweep"));
-    createComputePipeline(pipeline_sorting_2.spine, spirv_paths.at("radix_sort/spine"));
-    createComputePipeline(pipeline_sorting_2.downsweep, spirv_paths.at("radix_sort/downsweep"));
     createComputePipeline(pipeline_sorting_indirect_1.upsweep, spirv_paths.at("radix_sort/upsweep_indirect"));
     createComputePipeline(pipeline_sorting_indirect_1.spine, spirv_paths.at("radix_sort/spine_indirect"));
     createComputePipeline(pipeline_sorting_indirect_1.downsweep, spirv_paths.at("radix_sort/downsweep_indirect"));
@@ -889,17 +885,17 @@ void VulkanGSRenderer::executeProjectionForward(
 
 void VulkanGSRenderer::executeGenerateKeys(
     const VulkanGSRendererUniforms& uniforms,
-    VulkanGSPipelineBuffers& buffers) {
+    VulkanGSPipelineBuffers& buffers,
+    const size_t instance_capacity) {
     PerfTimer::Timer<PerfTimer::GenerateKeys> timer(this);
     DEVICE_GUARD;
 
     const size_t num_elements = static_cast<size_t>(uniforms.num_splats);
-    // executeCalculateIndexBufferOffset has synchronously read the cumsum tail,
-    // so num_indices is the exact tile-instance count for this frame.
-    const size_t capacity = buffers.num_indices;
+    if (instance_capacity == 0 || instance_capacity != uniforms.sort_capacity)
+        _THROW_ERROR("generate_keys received an invalid sort capacity");
 
-    auto& unsorted_keys = resizeDeviceBuffer(buffers.unsorted_keys(), capacity);
-    auto& unsorted_idx = resizeDeviceBuffer(buffers.unsorted_gauss_idx(), capacity);
+    auto& unsorted_keys = resizeDeviceBuffer(buffers.unsorted_keys(), instance_capacity);
+    auto& unsorted_idx = resizeDeviceBuffer(buffers.unsorted_gauss_idx(), instance_capacity);
 
     // Pre-fill with the max sentinel; this keeps any untouched entries harmless
     // if a shader path emits fewer keys than the exact cumsum count.
@@ -929,9 +925,13 @@ void VulkanGSRenderer::executeGenerateKeys(
 
 void VulkanGSRenderer::executeComputeTileRanges(
     const VulkanGSRendererUniforms& uniforms,
-    VulkanGSPipelineBuffers& buffers) {
+    VulkanGSPipelineBuffers& buffers,
+    const size_t instance_capacity) {
     PerfTimer::Timer<PerfTimer::ComputeTileRanges> timer(this);
     DEVICE_GUARD;
+
+    if (instance_capacity == 0 || instance_capacity != uniforms.sort_capacity)
+        _THROW_ERROR("compute_tile_ranges received an invalid sort capacity");
 
     const size_t num_tiles = (size_t)(uniforms.grid_height * uniforms.grid_width);
 
@@ -940,16 +940,17 @@ void VulkanGSRenderer::executeComputeTileRanges(
                         },
                         COMPUTE_SHADER_READ);
 
-    // Dispatch over the exact CPU-known tile-instance count. The shader still
-    // clamps to uniforms.sort_capacity as a defensive bounds check.
-    executeCompute(
-        {{buffers.num_indices + 1, 256}},
+    bufferMemoryBarrier({{buffers.tile_sort_dispatch_args.deviceBuffer, COMPUTE_SHADER_WRITE}},
+                        INDIRECT_DISPATCH_READ);
+    executeComputeIndirect(
+        buffers.tile_sort_dispatch_args.deviceBuffer,
+        3 * sizeof(uint32_t),
         &uniforms, sizeof(uniforms),
         pipeline_compute_tile_ranges[buffers.is_unsorted_1],
         {
             buffers.sorted_keys().deviceBuffer,
             resizeDeviceBuffer(buffers.tile_ranges, num_tiles + 1),
-            buffers.index_buffer_offset.deviceBuffer,
+            buffers.tile_sort_count.deviceBuffer,
         });
 }
 
@@ -964,7 +965,7 @@ void VulkanGSRenderer::executeBatchedRasterizeForward(
     const bool overlays_active) {
     const size_t num_tiles = static_cast<size_t>(uniforms.grid_height) * uniforms.grid_width;
     const size_t num_pixels = static_cast<size_t>(uniforms.image_height) * uniforms.image_width;
-    const size_t batch_capacity = denseTileBatchCapacity(buffers.num_indices, num_tiles);
+    const size_t batch_capacity = denseTileBatchCapacity(uniforms.sort_capacity, num_tiles);
     if (num_tiles == 0 || num_pixels == 0)
         return;
 
@@ -1122,7 +1123,7 @@ void VulkanGSRenderer::executeRasterizeForward(
     const _VulkanBuffer& model_transforms,
     bool use_gut_rasterization,
     bool overlays_active) {
-    if (buffers.num_indices == 0)
+    if (uniforms.sort_capacity == 0)
         return;
 
     PerfTimer::Timer<PerfTimer::RasterizeForward> timer(this);
@@ -1470,7 +1471,8 @@ void VulkanGSRenderer::executeCumsum(
 
 void VulkanGSRenderer::executeCalculateIndexBufferOffset(
     const VulkanGSRendererUniforms& uniforms,
-    VulkanGSPipelineBuffers& buffers) {
+    VulkanGSPipelineBuffers& buffers,
+    const size_t instance_capacity) {
     PerfTimer::Timer<PerfTimer::CalculateIndexBufferOffset> timer(this);
 
     const size_t num_elements = static_cast<size_t>(uniforms.num_splats);
@@ -1488,32 +1490,24 @@ void VulkanGSRenderer::executeCalculateIndexBufferOffset(
         buffers.tiles_touched_depth_ordered,
         buffers.index_buffer_offset);
 
-    DEVICE_GUARD;
-
-    bufferMemoryBarrier({
-                            {buffers.index_buffer_offset.deviceBuffer, COMPUTE_SHADER_READ_WRITE},
-                        },
-                        TRANSFER_COMPUTE_SHADER_READ);
-
-    const int32_t num_indices =
-        readElement<int32_t>(buffers.index_buffer_offset.deviceBuffer, num_elements - 1);
-    buffers.num_indices = num_indices < 0 ? 0u : static_cast<size_t>(num_indices);
-    buffers.num_indices_high_water =
-        std::max(buffers.num_indices_high_water, buffers.num_indices);
-
-    executePrepareTileSort(uniforms, buffers);
+    executePrepareTileSort(uniforms, buffers, instance_capacity);
 }
 
 void VulkanGSRenderer::executePrepareTileSort(
     const VulkanGSRendererUniforms& uniforms,
-    VulkanGSPipelineBuffers& buffers) {
+    VulkanGSPipelineBuffers& buffers,
+    const size_t instance_capacity) {
     PerfTimer::Timer<PerfTimer::PrepareTileSort> timer(this);
     [[maybe_unused]] auto cpu_timer =
         timeCpuStage("vksplat.render.record.executePrepareTileSort");
     DEVICE_GUARD;
 
-    resizeDeviceBuffer(buffers.tile_sort_count, 1);
-    resizeDeviceBuffer(buffers.tile_sort_dispatch_args, 3);
+    if (instance_capacity == 0 || instance_capacity != uniforms.sort_capacity ||
+        instance_capacity > static_cast<size_t>(std::numeric_limits<int32_t>::max()))
+        _THROW_ERROR("prepare_tile_sort received an invalid sort capacity");
+
+    resizeDeviceBuffer(buffers.tile_sort_count, 2);
+    resizeDeviceBuffer(buffers.tile_sort_dispatch_args, 6);
 
     struct PrepareTileSortUniforms {
         uint32_t num_splats;
@@ -1522,14 +1516,12 @@ void VulkanGSRenderer::executePrepareTileSort(
         uint32_t pad0;
     } prepare_uniforms{
         uniforms.num_splats,
-        static_cast<uint32_t>(
-            std::min<std::size_t>(buffers.num_indices,
-                                  static_cast<std::size_t>(std::numeric_limits<uint32_t>::max()))),
+        static_cast<uint32_t>(instance_capacity),
         512u * 8u,
         0u};
 
     bufferMemoryBarrier({
-                            {buffers.index_buffer_offset.deviceBuffer, TRANSFER_COMPUTE_SHADER_READ_WRITE},
+                            {buffers.index_buffer_offset.deviceBuffer, COMPUTE_SHADER_WRITE},
                         },
                         COMPUTE_SHADER_READ);
     executeCompute(
@@ -1541,114 +1533,11 @@ void VulkanGSRenderer::executePrepareTileSort(
             buffers.tile_sort_count.deviceBuffer,
             buffers.tile_sort_dispatch_args.deviceBuffer,
         });
-}
-
-void VulkanGSRenderer::executeSort(
-    const VulkanGSRendererUniforms& uniforms,
-    VulkanGSPipelineBuffers& buffers,
-    int num_bits,
-    int64_t num_elements_override) {
-    PerfTimer::Timer<PerfTimer::SortRTS> timer(this);
-
-    size_t buffer_capacity = buffers.unsorted_keys().deviceSize();
-    if (buffer_capacity != buffers.unsorted_gauss_idx().deviceSize())
-        _THROW_ERROR("number of elements don't match in executeSort");
-    size_t num_elements = num_elements_override < 0
-                              ? buffer_capacity
-                              : std::min<size_t>(buffer_capacity,
-                                                 static_cast<size_t>(num_elements_override));
-
-    const int RADIX = 256;
-    const int WORKGROUP_SIZE = 512;
-    const int PARTITION_DIVISION = 8;
-    const int PARTITION_SIZE = PARTITION_DIVISION * WORKGROUP_SIZE;
-
-    auto& globalHistogram = buffers._sorting_histogram;
-    auto& partitionHistogram = buffers._sorting_histogram_cumsum;
-
-    const size_t num_parts = _CEIL_DIV(num_elements, PARTITION_SIZE);
-
-    int max_nonzero_bit = 8 * sizeof(sortingKey_t);
-    if (num_bits == -1 && sizeof(sortingKey_t) == 8) {
-        int32_t num_tiles = (int32_t)(uniforms.grid_height * uniforms.grid_width);
-        max_nonzero_bit = 23; // float fraction bits
-        int32_t temp = num_tiles;
-        while (temp)
-            temp >>= 1, max_nonzero_bit++;
-    } else if (num_bits >= 0)
-        max_nonzero_bit = num_bits;
-    int num_passes = _CEIL_DIV(max_nonzero_bit, 8);
-
-    resizeDeviceBuffer(partitionHistogram, num_parts * RADIX);
-    resizeDeviceBuffer(buffers.sorted_keys(), num_elements);
-    resizeDeviceBuffer(buffers.sorted_gauss_idx(), num_elements);
-
-    DEVICE_GUARD;
-    clearDeviceBuffer(globalHistogram, num_passes * RADIX);
-    bufferMemoryBarrier({
-                            {globalHistogram.deviceBuffer, TRANSFER_WRITE},
-                        },
-                        COMPUTE_SHADER_READ_WRITE);
-
-    for (int pass = 0; 8 * pass < max_nonzero_bit; pass++) {
-
-        auto& pipeline_sorting = buffers.is_unsorted_1 ? pipeline_sorting_1 : pipeline_sorting_2;
-
-        uint32_t uniforms[2];
-        uniforms[0] = (uint32_t)pass;
-        uniforms[1] = (uint32_t)num_elements;
-
-        if (pass)
-            bufferMemoryBarrier({
-                                    {buffers.unsorted_keys().deviceBuffer, COMPUTE_SHADER_WRITE},
-                                    {buffers.unsorted_gauss_idx().deviceBuffer, COMPUTE_SHADER_WRITE},
-                                },
-                                COMPUTE_SHADER_READ_WRITE);
-        executeCompute(
-            {{num_parts, 1}},
-            uniforms, 2 * sizeof(int32_t),
-            pipeline_sorting.upsweep,
-            {
-                buffers.unsorted_keys().deviceBuffer,
-                globalHistogram.deviceBuffer,
-                partitionHistogram.deviceBuffer,
-            });
-
-        bufferMemoryBarrier({
-                                {globalHistogram.deviceBuffer, COMPUTE_SHADER_READ_WRITE},
-                                {partitionHistogram.deviceBuffer, COMPUTE_SHADER_WRITE},
-                            },
-                            COMPUTE_SHADER_READ_WRITE);
-        executeCompute(
-            {{RADIX, 1}},
-            uniforms, 2 * sizeof(int32_t),
-            pipeline_sorting.spine,
-            {
-                globalHistogram.deviceBuffer,
-                partitionHistogram.deviceBuffer,
-            });
-
-        bufferMemoryBarrier({
-                                {globalHistogram.deviceBuffer, COMPUTE_SHADER_READ_WRITE},
-                                {partitionHistogram.deviceBuffer, COMPUTE_SHADER_READ_WRITE},
-                            },
-                            COMPUTE_SHADER_READ);
-        executeCompute(
-            {{num_parts, 1}},
-            uniforms, 2 * sizeof(int32_t),
-            pipeline_sorting.downsweep,
-            {
-                globalHistogram.deviceBuffer,
-                partitionHistogram.deviceBuffer,
-                buffers.unsorted_keys().deviceBuffer,
-                buffers.unsorted_gauss_idx().deviceBuffer,
-                buffers.sorted_keys().deviceBuffer,
-                buffers.sorted_gauss_idx().deviceBuffer,
-            });
-
-        buffers.is_unsorted_1 = !buffers.is_unsorted_1;
-    }
-    buffers.is_unsorted_1 = !buffers.is_unsorted_1;
+    bufferMemoryBarrier({{buffers.tile_sort_count.deviceBuffer, COMPUTE_SHADER_WRITE}},
+                        TRANSFER_COMPUTE_SHADER_READ);
+    bufferMemoryBarrier({{buffers.tile_sort_dispatch_args.deviceBuffer, COMPUTE_SHADER_WRITE}},
+                        INDIRECT_DISPATCH_READ);
+    recordInstanceCountReadback(buffers);
 }
 
 void VulkanGSRenderer::executeSortIndirectCount(
@@ -2348,6 +2237,8 @@ void VulkanGSRenderer::executeGenerateMacroKeys(
     const size_t capacity = instance_capacity;
     if (capacity == 0 || visible_capacity == 0)
         return;
+    if (capacity != uniforms.sort_capacity)
+        _THROW_ERROR("generate_macro_keys received an invalid sort capacity");
 
     auto& unsorted_keys = resizeDeviceBuffer(buffers.unsorted_keys(), capacity);
     auto& unsorted_idx = resizeDeviceBuffer(buffers.unsorted_gauss_idx(), capacity);
@@ -2383,6 +2274,9 @@ void VulkanGSRenderer::executeComputeMacroRanges(
     PerfTimer::Timer<PerfTimer::ComputeTileRanges> timer(this);
     DEVICE_GUARD;
 
+    if (instance_capacity == 0 || instance_capacity != uniforms.sort_capacity)
+        _THROW_ERROR("compute_macro_ranges received an invalid sort capacity");
+
     const size_t num_macro =
         _CEIL_DIV(static_cast<size_t>(uniforms.grid_width), size_t{HIGS_MACRO_T16_W}) *
         _CEIL_DIV(static_cast<size_t>(uniforms.grid_height), size_t{HIGS_MACRO_T16_H});
@@ -2392,15 +2286,17 @@ void VulkanGSRenderer::executeComputeMacroRanges(
                         },
                         COMPUTE_SHADER_READ);
 
-    executeCompute(
-        {{instance_capacity + 1, 256}},
+    bufferMemoryBarrier({{buffers.tile_sort_dispatch_args.deviceBuffer, COMPUTE_SHADER_WRITE}},
+                        INDIRECT_DISPATCH_READ);
+    executeComputeIndirect(
+        buffers.tile_sort_dispatch_args.deviceBuffer,
+        3 * sizeof(uint32_t),
         &uniforms, sizeof(uniforms),
         pipeline_compute_macro_ranges[buffers.is_unsorted_1],
         {
             buffers.sorted_keys().deviceBuffer,
             resizeDeviceBuffer(buffers.tile_ranges, num_macro + 1),
-            buffers.index_buffer_offset.deviceBuffer,
-            buffers.visible_count.deviceBuffer,
+            buffers.tile_sort_count.deviceBuffer,
         });
 }
 
@@ -2602,6 +2498,9 @@ void VulkanGSRenderer::executeCalculateIndexBufferOffsetVisible(
         buffers.num_indices = 0;
         return;
     }
+    if (instance_capacity > static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
+        instance_capacity != uniforms.sort_capacity)
+        _THROW_ERROR("visible cumsum received an invalid sort capacity");
 
     const size_t block = 1024;
     const size_t c1_capacity = _CEIL_DIV(visible_capacity, block);
@@ -2672,7 +2571,7 @@ void VulkanGSRenderer::executeCalculateIndexBufferOffsetVisible(
     {
         PerfTimer::Timer<PerfTimer::PrepareTileSort> gpu_timer(this);
         resizeDeviceBuffer(buffers.tile_sort_count, 2);
-        resizeDeviceBuffer(buffers.tile_sort_dispatch_args, 3);
+        resizeDeviceBuffer(buffers.tile_sort_dispatch_args, 6);
 
         struct PrepareTileSortUniforms {
             uint32_t num_splats;
@@ -2683,9 +2582,7 @@ void VulkanGSRenderer::executeCalculateIndexBufferOffsetVisible(
             static_cast<uint32_t>(
                 std::min<size_t>(visible_capacity,
                                  static_cast<size_t>(std::numeric_limits<uint32_t>::max()))),
-            static_cast<uint32_t>(
-                std::min<size_t>(instance_capacity,
-                                 static_cast<size_t>(std::numeric_limits<uint32_t>::max()))),
+            static_cast<uint32_t>(instance_capacity),
             512u * 8u,
             0u};
 
