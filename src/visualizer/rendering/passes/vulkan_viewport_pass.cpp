@@ -1456,6 +1456,8 @@ namespace lfs::vis {
                 .view_projection = params.mesh_view_projection,
                 .camera_position = params.mesh_camera_position,
                 .items = params.mesh_items,
+                .frame_slot = params.frame_slot,
+                .draw_group_count = std::max<std::size_t>(1, params.mesh_panels.size()),
             };
             mesh_pass.prepare(*context, mesh_params);
             environment_pass.prepare(params.environment);
@@ -1649,11 +1651,16 @@ namespace lfs::vis {
             assert(!params.mesh_items.empty());
             const bool split_active = sceneSplitActive(params);
             const bool split_mesh_panels_active = split_active && !params.mesh_panels.empty();
-            VulkanMeshPassParams mesh_params{.items = params.mesh_items};
+            VulkanMeshPassParams mesh_params{
+                .items = params.mesh_items,
+                .frame_slot = params.frame_slot,
+                .draw_group_count = std::max<std::size_t>(1, params.mesh_panels.size()),
+            };
             if (split_mesh_panels_active) {
                 const int rect_min_x = rect.x;
                 const int rect_max_x = rect.x + static_cast<int>(rect.width);
-                for (const auto& panel : params.mesh_panels) {
+                for (std::size_t panel_index = 0; panel_index < params.mesh_panels.size(); ++panel_index) {
+                    const auto& panel = params.mesh_panels[panel_index];
                     const int x0 = std::clamp(
                         rect.x + static_cast<int>(std::lround(panel.start_position * static_cast<float>(rect.width))),
                         rect_min_x,
@@ -1667,6 +1674,7 @@ namespace lfs::vis {
                     }
                     mesh_params.view_projection = panel.view_projection;
                     mesh_params.camera_position = panel.camera_position;
+                    mesh_params.draw_group = panel_index;
                     const VkRect2D mesh_rect{
                         .offset = {x0, rect.y},
                         .extent = {static_cast<std::uint32_t>(x1 - x0),

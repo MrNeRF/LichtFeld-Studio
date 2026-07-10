@@ -9,10 +9,11 @@ layout(location = 0) out vec4 outColor;
 
 // Set 0 = per-frame light/camera state + shadow map.
 layout(set = 0, binding = 0) uniform LightUbo {
-    vec4 camera_pos;          // xyz = camera position, w unused
-    vec4 light_dir;           // xyz = world-space light direction (normalized)
-    vec4 params;              // x = intensity, y = ambient, z = shadow_enabled, w unused
-    mat4 light_vp;            // light view-projection (for sampling shadow map)
+    vec4 camera_pos; // xyz = camera position, w unused
+    vec4 light_dir;  // xyz = world-space light direction (normalized)
+    vec4 params;     // x = intensity, y = ambient, z = shadow_enabled, w unused
+    vec4 selection;  // x = emphasized, y = dim others, z = flash intensity
+    mat4 light_vp;   // light view-projection (for sampling shadow map)
 } u_light;
 layout(set = 0, binding = 1) uniform sampler2DShadow u_shadow_map;
 
@@ -21,7 +22,7 @@ layout(set = 1, binding = 0) uniform MaterialUbo {
     vec4 base_color;
     vec4 emissive_metallic;     // xyz = emissive, w = metallic
     vec4 roughness_flags;       // x roughness, y has_albedo, z has_normal, w has_metallic_roughness
-    vec4 vertex_color_emphasis; // x has_vertex_colors, y is_emphasized, z dim_non_emphasized, w flash_intensity
+    vec4 vertex_color_flags; // x = has_vertex_colors, yzw reserved
 } u_material;
 
 layout(set = 1, binding = 1) uniform sampler2D u_albedo;
@@ -81,7 +82,7 @@ void main() {
     if (u_material.roughness_flags.y > 0.5) {
         albedo *= texture(u_albedo, inTexcoord);
     }
-    if (u_material.vertex_color_emphasis.x > 0.5) {
+    if (u_material.vertex_color_flags.x > 0.5) {
         albedo *= inColor;
     }
 
@@ -133,9 +134,9 @@ void main() {
     color = color / (color + vec3(1.0));
     color = pow(color, vec3(1.0 / 2.2));
 
-    bool is_emphasized = u_material.vertex_color_emphasis.y > 0.5;
-    bool dim_non_emphasized = u_material.vertex_color_emphasis.z > 0.5;
-    float flash_intensity = u_material.vertex_color_emphasis.w;
+    bool is_emphasized = u_light.selection.x > 0.5;
+    bool dim_non_emphasized = u_light.selection.y > 0.5;
+    float flash_intensity = u_light.selection.z;
 
     if (dim_non_emphasized && !is_emphasized) {
         float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));

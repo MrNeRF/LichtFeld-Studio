@@ -51,15 +51,16 @@ namespace lfs::vis {
             float camera_pos[4];
             float light_dir[4]; // xyz, w unused
             float params[4];    // x = intensity, y = ambient, z = shadow_enabled
+            float selection[4]; // x = emphasized, y = dim others, z = flash intensity
             float light_vp[16]; // light view-projection (column-major) for shadow sampling
         };
-        static_assert(sizeof(LightUbo) == 112, "LightUbo layout");
+        static_assert(sizeof(LightUbo) == 128, "LightUbo layout");
 
         struct MaterialUbo {
             float base_color[4];
-            float emissive_metallic[4];     // xyz emissive, w metallic
-            float roughness_flags[4];       // x roughness, y has_albedo, z has_normal, w has_metallic_roughness
-            float vertex_color_emphasis[4]; // x has_vertex_colors, y is_emphasized, z dim_non_emphasized, w flash_intensity
+            float emissive_metallic[4];  // xyz emissive, w metallic
+            float roughness_flags[4];    // x roughness, y has_albedo, z has_normal, w has_metallic_roughness
+            float vertex_color_flags[4]; // x has_vertex_colors, yzw reserved
         };
         static_assert(sizeof(MaterialUbo) == 64, "MaterialUbo layout");
 
@@ -111,14 +112,23 @@ namespace lfs::vis {
 
         VkSampler sampler = VK_NULL_HANDLE;
         VkSampler shadow_sampler = VK_NULL_HANDLE; // sampler2DShadow with comparison
-        VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
+        std::vector<VkDescriptorPool> material_descriptor_pools;
         VkCommandPool transfer_pool = VK_NULL_HANDLE;
         VkQueue graphics_queue = VK_NULL_HANDLE;
 
-        // Per-frame light UBO (pushed once per record()).
-        VkBuffer light_buffer = VK_NULL_HANDLE;
-        VmaAllocation light_alloc = VK_NULL_HANDLE;
-        VkDescriptorSet light_descriptor = VK_NULL_HANDLE;
+        struct LightDrawResources {
+            VkBuffer buffer = VK_NULL_HANDLE;
+            VmaAllocation allocation = VK_NULL_HANDLE;
+            VkDescriptorSet descriptor = VK_NULL_HANDLE;
+        };
+
+        struct FrameLightResources {
+            VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
+            std::vector<LightDrawResources> draws;
+            std::size_t descriptor_capacity = 0;
+        };
+
+        std::vector<FrameLightResources> frame_light_resources;
 
         // 1x1 white fallback texture for materials missing a given texture.
         struct GpuTexture {
@@ -133,6 +143,7 @@ namespace lfs::vis {
             VkBuffer ubo = VK_NULL_HANDLE;
             VmaAllocation ubo_alloc = VK_NULL_HANDLE;
             VkDescriptorSet descriptor = VK_NULL_HANDLE;
+            VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
             GpuTexture albedo{};
             GpuTexture normal{};
             GpuTexture metallic_roughness{};
@@ -214,8 +225,8 @@ namespace lfs::vis {
 
             return createSamplers() &&
                    createDescriptorLayouts() &&
-                   createDescriptorPool() &&
-                   createLightUbo() &&
+                   createInitialMaterialDescriptorPool() &&
+                   createFrameLightResources() &&
                    createWhitePixel() &&
                    createDummyShadow() &&
                    createMainPipelines(color_format, depth_format) &&
@@ -277,16 +288,21 @@ namespace lfs::vis {
             mesh_cache.clear();
             destroyTexture(white_pixel);
             destroyShadow(shadow_dummy);
-            if (light_buffer != VK_NULL_HANDLE) {
-                vmaDestroyBuffer(allocator, light_buffer, light_alloc);
-                light_buffer = VK_NULL_HANDLE;
-                light_alloc = VK_NULL_HANDLE;
+            for (auto& frame : frame_light_resources) {
+                for (auto& draw : frame.draws) {
+                    if (draw.buffer != VK_NULL_HANDLE) {
+                        vmaDestroyBuffer(allocator, draw.buffer, draw.allocation);
+                    }
+                }
+                if (frame.descriptor_pool != VK_NULL_HANDLE) {
+                    vkDestroyDescriptorPool(device, frame.descriptor_pool, nullptr);
+                }
             }
-            if (descriptor_pool != VK_NULL_HANDLE) {
-                vkDestroyDescriptorPool(device, descriptor_pool, nullptr);
-                descriptor_pool = VK_NULL_HANDLE;
-                light_descriptor = VK_NULL_HANDLE;
+            frame_light_resources.clear();
+            for (const VkDescriptorPool pool : material_descriptor_pools) {
+                vkDestroyDescriptorPool(device, pool, nullptr);
             }
+            material_descriptor_pools.clear();
             for (VkPipeline* p : {&pipeline_cull, &pipeline_no_cull, &shadow_pipeline, &wireframe_pipeline}) {
                 if (*p != VK_NULL_HANDLE) {
                     vkDestroyPipeline(device, *p, nullptr);
@@ -391,61 +407,44 @@ namespace lfs::vis {
             return vkCreateDescriptorSetLayout(device, &mat_info, nullptr, &material_layout) == VK_SUCCESS;
         }
 
-        bool createDescriptorPool() {
-            // 256 materials should cover practical scenes; recreate the pool if we ever
-            // blow past that (rare).
+        [[nodiscard]] VkDescriptorPool createMaterialDescriptorPool() const {
             constexpr std::uint32_t kMaxMaterials = 256;
             std::array<VkDescriptorPoolSize, 2> sizes{};
             sizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            sizes[0].descriptorCount = kMaxMaterials + 1;
+            sizes[0].descriptorCount = kMaxMaterials;
             sizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            // Material textures (3 per material) + 1 shadow map sampler on light set.
-            sizes[1].descriptorCount = kMaxMaterials * 3 + 1;
+            sizes[1].descriptorCount = kMaxMaterials * 3;
             VkDescriptorPoolCreateInfo info{};
             info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-            info.maxSets = kMaxMaterials + 1;
+            info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+            info.maxSets = kMaxMaterials;
             info.poolSizeCount = static_cast<std::uint32_t>(sizes.size());
             info.pPoolSizes = sizes.data();
-            return vkCreateDescriptorPool(device, &info, nullptr, &descriptor_pool) == VK_SUCCESS;
+            VkDescriptorPool pool = VK_NULL_HANDLE;
+            return vkCreateDescriptorPool(device, &info, nullptr, &pool) == VK_SUCCESS
+                       ? pool
+                       : VK_NULL_HANDLE;
         }
 
-        bool createLightUbo() {
-            VkBufferCreateInfo b{};
-            b.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-            b.size = sizeof(LightUbo);
-            b.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-            b.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-            VmaAllocationCreateInfo a{};
-            a.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
-            a.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-            if (vmaCreateBuffer(allocator, &b, &a, &light_buffer, &light_alloc, nullptr) != VK_SUCCESS) {
+        bool createInitialMaterialDescriptorPool() {
+            const VkDescriptorPool pool = createMaterialDescriptorPool();
+            if (pool == VK_NULL_HANDLE) {
                 return false;
             }
-
-            VkDescriptorSetAllocateInfo alloc{};
-            alloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            alloc.descriptorPool = descriptor_pool;
-            alloc.descriptorSetCount = 1;
-            alloc.pSetLayouts = &light_layout;
-            if (vkAllocateDescriptorSets(device, &alloc, &light_descriptor) != VK_SUCCESS) {
-                return false;
-            }
-
-            // UBO write happens here; shadow-map descriptor (binding 1) is updated each
-            // frame in record() so it can swap between the per-mesh shadow image and the
-            // dummy fallback.
-            VkDescriptorBufferInfo bi{};
-            bi.buffer = light_buffer;
-            bi.range = sizeof(LightUbo);
-            VkWriteDescriptorSet w{};
-            w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            w.dstSet = light_descriptor;
-            w.dstBinding = 0;
-            w.descriptorCount = 1;
-            w.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            w.pBufferInfo = &bi;
-            vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
+            material_descriptor_pools.push_back(pool);
             return true;
+        }
+
+        bool createFrameLightResources() {
+            if (context == nullptr) {
+                return false;
+            }
+            frame_light_resources.resize(std::max<std::size_t>(1, context->framesInFlight()));
+            return true;
+        }
+
+        [[nodiscard]] FrameLightResources& lightResourcesForFrame(const std::size_t frame_slot) {
+            return frame_light_resources[frame_slot % frame_light_resources.size()];
         }
 
         bool createDummyShadow() {
@@ -495,12 +494,17 @@ namespace lfs::vis {
             // Initial transition UNDEFINED → SHADER_READ_ONLY so binding it without a
             // shadow render is valid (e.g. when shadows are disabled).
             VkCommandBuffer cb = beginSingleTimeCommands();
-            if (cb != VK_NULL_HANDLE) {
-                cmdImageBarrier2(cb, out.image, VK_IMAGE_ASPECT_DEPTH_BIT,
-                                 VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-                                 VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_ACCESS_2_NONE,
-                                 VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-                endSingleTimeCommands(cb);
+            if (cb == VK_NULL_HANDLE) {
+                destroyShadow(out);
+                return false;
+            }
+            cmdImageBarrier2(cb, out.image, VK_IMAGE_ASPECT_DEPTH_BIT,
+                             VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+                             VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_ACCESS_2_NONE,
+                             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+            if (!endSingleTimeCommands(cb)) {
+                destroyShadow(out);
+                return false;
             }
             return true;
         }
@@ -529,6 +533,131 @@ namespace lfs::vis {
             std::memcpy(mapped, src, bytes);
             vmaFlushAllocation(allocator, alloc, 0, bytes);
             vmaUnmapMemory(allocator, alloc);
+            return true;
+        }
+
+        bool allocateMaterialDescriptor(GpuMaterial& material) {
+            VkDescriptorSetAllocateInfo alloc{};
+            alloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            alloc.descriptorSetCount = 1;
+            alloc.pSetLayouts = &material_layout;
+            for (const VkDescriptorPool pool : material_descriptor_pools) {
+                alloc.descriptorPool = pool;
+                if (vkAllocateDescriptorSets(device, &alloc, &material.descriptor) == VK_SUCCESS) {
+                    material.descriptor_pool = pool;
+                    return true;
+                }
+            }
+
+            const VkDescriptorPool pool = createMaterialDescriptorPool();
+            if (pool == VK_NULL_HANDLE) {
+                return false;
+            }
+            material_descriptor_pools.push_back(pool);
+            alloc.descriptorPool = pool;
+            if (vkAllocateDescriptorSets(device, &alloc, &material.descriptor) != VK_SUCCESS) {
+                vkDestroyDescriptorPool(device, pool, nullptr);
+                material_descriptor_pools.pop_back();
+                return false;
+            }
+            material.descriptor_pool = pool;
+            return true;
+        }
+
+        bool ensureLightDrawCapacity(const std::size_t frame_slot, const std::size_t required) {
+            if (required == 0) {
+                return true;
+            }
+            if (required > std::numeric_limits<std::uint32_t>::max()) {
+                return false;
+            }
+            auto& frame = lightResourcesForFrame(frame_slot);
+            if (frame.descriptor_pool != VK_NULL_HANDLE &&
+                frame.descriptor_capacity >= required) {
+                return true;
+            }
+
+            std::size_t capacity = std::max<std::size_t>(16, frame.descriptor_capacity);
+            while (capacity < required) {
+                capacity = std::min<std::size_t>(capacity * 2,
+                                                 std::numeric_limits<std::uint32_t>::max());
+            }
+
+            VkDescriptorPoolSize pool_sizes[] = {
+                {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, static_cast<std::uint32_t>(capacity)},
+                {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, static_cast<std::uint32_t>(capacity)},
+            };
+            VkDescriptorPoolCreateInfo pool_info{};
+            pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+            pool_info.maxSets = static_cast<std::uint32_t>(capacity);
+            pool_info.poolSizeCount = static_cast<std::uint32_t>(std::size(pool_sizes));
+            pool_info.pPoolSizes = pool_sizes;
+            VkDescriptorPool new_pool = VK_NULL_HANDLE;
+            if (vkCreateDescriptorPool(device, &pool_info, nullptr, &new_pool) != VK_SUCCESS) {
+                return false;
+            }
+
+            frame.draws.resize(capacity);
+            for (auto& draw : frame.draws) {
+                if (draw.buffer != VK_NULL_HANDLE) {
+                    continue;
+                }
+                VkBufferCreateInfo buffer_info{};
+                buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+                buffer_info.size = sizeof(LightUbo);
+                buffer_info.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+                buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+                VmaAllocationCreateInfo allocation_info{};
+                allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+                allocation_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
+                if (vmaCreateBuffer(allocator,
+                                    &buffer_info,
+                                    &allocation_info,
+                                    &draw.buffer,
+                                    &draw.allocation,
+                                    nullptr) != VK_SUCCESS) {
+                    vkDestroyDescriptorPool(device, new_pool, nullptr);
+                    return false;
+                }
+            }
+
+            std::vector<VkDescriptorSetLayout> layouts(capacity, light_layout);
+            std::vector<VkDescriptorSet> descriptors(capacity, VK_NULL_HANDLE);
+            VkDescriptorSetAllocateInfo alloc_info{};
+            alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            alloc_info.descriptorPool = new_pool;
+            alloc_info.descriptorSetCount = static_cast<std::uint32_t>(capacity);
+            alloc_info.pSetLayouts = layouts.data();
+            if (vkAllocateDescriptorSets(device, &alloc_info, descriptors.data()) != VK_SUCCESS) {
+                vkDestroyDescriptorPool(device, new_pool, nullptr);
+                return false;
+            }
+
+            std::vector<VkDescriptorBufferInfo> buffer_infos(capacity);
+            std::vector<VkWriteDescriptorSet> writes(capacity);
+            for (std::size_t i = 0; i < capacity; ++i) {
+                auto& draw = frame.draws[i];
+                draw.descriptor = descriptors[i];
+                buffer_infos[i].buffer = draw.buffer;
+                buffer_infos[i].range = sizeof(LightUbo);
+                writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                writes[i].dstSet = draw.descriptor;
+                writes[i].dstBinding = 0;
+                writes[i].descriptorCount = 1;
+                writes[i].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                writes[i].pBufferInfo = &buffer_infos[i];
+            }
+            vkUpdateDescriptorSets(device,
+                                   static_cast<std::uint32_t>(writes.size()),
+                                   writes.data(),
+                                   0,
+                                   nullptr);
+
+            if (frame.descriptor_pool != VK_NULL_HANDLE) {
+                vkDestroyDescriptorPool(device, frame.descriptor_pool, nullptr);
+            }
+            frame.descriptor_pool = new_pool;
+            frame.descriptor_capacity = capacity;
             return true;
         }
 
@@ -656,15 +785,15 @@ namespace lfs::vis {
         }
 
         void destroyMaterial(GpuMaterial& m) const {
+            if (m.descriptor != VK_NULL_HANDLE && m.descriptor_pool != VK_NULL_HANDLE) {
+                vkFreeDescriptorSets(device, m.descriptor_pool, 1, &m.descriptor);
+            }
             if (m.ubo != VK_NULL_HANDLE) {
                 vmaDestroyBuffer(allocator, m.ubo, m.ubo_alloc);
             }
             destroyTexture(m.albedo);
             destroyTexture(m.normal);
             destroyTexture(m.metallic_roughness);
-            // descriptor set is freed when its pool is destroyed; we use a single shared
-            // pool (reset on shutdown only) so per-mesh teardown leaves dangling sets,
-            // which is fine because we never reuse them.
             m = {};
         }
 
@@ -1146,22 +1275,16 @@ namespace lfs::vis {
             ubo.roughness_flags[1] = has_albedo ? 1.0f : 0.0f;
             ubo.roughness_flags[2] = has_normal ? 1.0f : 0.0f;
             ubo.roughness_flags[3] = has_mr ? 1.0f : 0.0f;
-            // Emphasis (y/z/w) is rewritten per frame in updateEmphasis() to track the
-            // current selection state without re-uploading the full UBO.
-            ubo.vertex_color_emphasis[0] = has_vc ? 1.0f : 0.0f;
-            ubo.vertex_color_emphasis[1] = 0.0f;
-            ubo.vertex_color_emphasis[2] = 0.0f;
-            ubo.vertex_color_emphasis[3] = 0.0f;
-            writeBuffer(out.ubo_alloc, &ubo, sizeof(ubo));
+            ubo.vertex_color_flags[0] = has_vc ? 1.0f : 0.0f;
+            if (!writeBuffer(out.ubo_alloc, &ubo, sizeof(ubo))) {
+                destroyMaterial(out);
+                return false;
+            }
 
             // Allocate descriptor set
-            VkDescriptorSetAllocateInfo alloc{};
-            alloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-            alloc.descriptorPool = descriptor_pool;
-            alloc.descriptorSetCount = 1;
-            alloc.pSetLayouts = &material_layout;
-            if (vkAllocateDescriptorSets(device, &alloc, &out.descriptor) != VK_SUCCESS) {
+            if (!allocateMaterialDescriptor(out)) {
                 LOG_WARN("VulkanMeshPass: descriptor pool exhausted");
+                destroyMaterial(out);
                 return false;
             }
 
@@ -1202,20 +1325,45 @@ namespace lfs::vis {
             return true;
         }
 
-        bool createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
-                          VkBuffer& buffer, VmaAllocation& alloc) const {
+        bool createDeviceLocalBuffer(VkDeviceSize size,
+                                     VkBufferUsageFlags usage,
+                                     VkBuffer& buffer,
+                                     VmaAllocation& alloc) const {
             VkBufferCreateInfo info{};
             info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
             info.size = size;
-            info.usage = usage;
+            info.usage = usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+            info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            VmaAllocationCreateInfo ai{};
+            ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+            return vmaCreateBuffer(allocator, &info, &ai, &buffer, &alloc, nullptr) == VK_SUCCESS;
+        }
+
+        bool createStagingBuffer(VkDeviceSize size,
+                                 const void* data,
+                                 VkBuffer& buffer,
+                                 VmaAllocation& alloc) const {
+            VkBufferCreateInfo info{};
+            info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            info.size = size;
+            info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
             info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
             VmaAllocationCreateInfo ai{};
             ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
             ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-            return vmaCreateBuffer(allocator, &info, &ai, &buffer, &alloc, nullptr) == VK_SUCCESS;
+            if (vmaCreateBuffer(allocator, &info, &ai, &buffer, &alloc, nullptr) != VK_SUCCESS) {
+                return false;
+            }
+            if (!writeBuffer(alloc, data, static_cast<std::size_t>(size))) {
+                vmaDestroyBuffer(allocator, buffer, alloc);
+                buffer = VK_NULL_HANDLE;
+                alloc = VK_NULL_HANDLE;
+                return false;
+            }
+            return true;
         }
 
-        bool uploadMesh(const lfs::core::MeshData& mesh, GpuMesh& gpu) {
+        bool uploadMesh(const lfs::core::MeshData& mesh, GpuMesh& destination) {
             const std::int64_t vcount = mesh.vertex_count();
             const std::int64_t fcount = mesh.face_count();
             if (vcount <= 0 || fcount <= 0) {
@@ -1309,17 +1457,79 @@ namespace lfs::vis {
                 indices[i] = static_cast<std::uint32_t>(idx[i]);
             }
 
-            destroyMesh(gpu);
+            GpuMesh gpu{};
 
             const std::size_t vbytes = vertices.size() * sizeof(MeshVertex);
             const std::size_t ibytes = indices.size() * sizeof(std::uint32_t);
-            if (!createBuffer(vbytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, gpu.vertex_buffer, gpu.vertex_alloc) ||
-                !createBuffer(ibytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, gpu.index_buffer, gpu.index_alloc)) {
+            VkBuffer vertex_staging = VK_NULL_HANDLE;
+            VmaAllocation vertex_staging_alloc = VK_NULL_HANDLE;
+            VkBuffer index_staging = VK_NULL_HANDLE;
+            VmaAllocation index_staging_alloc = VK_NULL_HANDLE;
+            if (!createDeviceLocalBuffer(vbytes,
+                                         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                                         gpu.vertex_buffer,
+                                         gpu.vertex_alloc) ||
+                !createDeviceLocalBuffer(ibytes,
+                                         VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                                         gpu.index_buffer,
+                                         gpu.index_alloc) ||
+                !createStagingBuffer(vbytes,
+                                     vertices.data(),
+                                     vertex_staging,
+                                     vertex_staging_alloc) ||
+                !createStagingBuffer(ibytes,
+                                     indices.data(),
+                                     index_staging,
+                                     index_staging_alloc)) {
+                if (vertex_staging != VK_NULL_HANDLE) {
+                    vmaDestroyBuffer(allocator, vertex_staging, vertex_staging_alloc);
+                }
+                if (index_staging != VK_NULL_HANDLE) {
+                    vmaDestroyBuffer(allocator, index_staging, index_staging_alloc);
+                }
                 destroyMesh(gpu);
                 return false;
             }
-            if (!writeBuffer(gpu.vertex_alloc, vertices.data(), vbytes) ||
-                !writeBuffer(gpu.index_alloc, indices.data(), ibytes)) {
+
+            VkCommandBuffer upload_commands = beginSingleTimeCommands();
+            if (upload_commands == VK_NULL_HANDLE) {
+                vmaDestroyBuffer(allocator, vertex_staging, vertex_staging_alloc);
+                vmaDestroyBuffer(allocator, index_staging, index_staging_alloc);
+                destroyMesh(gpu);
+                return false;
+            }
+            VkBufferCopy vertex_copy{};
+            vertex_copy.size = static_cast<VkDeviceSize>(vbytes);
+            VkBufferCopy index_copy{};
+            index_copy.size = static_cast<VkDeviceSize>(ibytes);
+            vkCmdCopyBuffer(upload_commands, vertex_staging, gpu.vertex_buffer, 1, &vertex_copy);
+            vkCmdCopyBuffer(upload_commands, index_staging, gpu.index_buffer, 1, &index_copy);
+
+            std::array<VkBufferMemoryBarrier2, 2> barriers{};
+            for (auto& barrier : barriers) {
+                barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+                barrier.srcStageMask = VK_PIPELINE_STAGE_2_COPY_BIT;
+                barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
+                barrier.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT;
+                barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                barrier.offset = 0;
+                barrier.size = VK_WHOLE_SIZE;
+            }
+            barriers[0].dstAccessMask = VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT;
+            barriers[0].buffer = gpu.vertex_buffer;
+            barriers[1].dstAccessMask = VK_ACCESS_2_INDEX_READ_BIT;
+            barriers[1].buffer = gpu.index_buffer;
+            VkDependencyInfo dependency{};
+            dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            dependency.bufferMemoryBarrierCount = static_cast<std::uint32_t>(barriers.size());
+            dependency.pBufferMemoryBarriers = barriers.data();
+            vkCmdPipelineBarrier2(upload_commands, &dependency);
+
+            const bool upload_ok = endSingleTimeCommands(upload_commands);
+            vmaDestroyBuffer(allocator, vertex_staging, vertex_staging_alloc);
+            vmaDestroyBuffer(allocator, index_staging, index_staging_alloc);
+            if (!upload_ok) {
                 destroyMesh(gpu);
                 return false;
             }
@@ -1330,7 +1540,9 @@ namespace lfs::vis {
             gpu.materials.resize(mat_count);
             for (std::size_t i = 0; i < mat_count; ++i) {
                 if (!uploadMaterial(mesh, i, gpu.materials[i])) {
-                    LOG_WARN("VulkanMeshPass: failed to upload material {} for mesh", i);
+                    LOG_ERROR("VulkanMeshPass: failed to upload material {} for mesh", i);
+                    destroyMesh(gpu);
+                    return false;
                 }
             }
 
@@ -1349,11 +1561,16 @@ namespace lfs::vis {
             gpu.aabb_min = aabb_min;
             gpu.aabb_max = aabb_max;
             gpu.generation = mesh.generation();
+            destroyMesh(destination);
+            destination = std::move(gpu);
             return true;
         }
 
-        void writeLightUbo(const VulkanMeshPassParams& params, const VulkanMeshDrawItem& item,
-                           const glm::mat4& light_vp, bool shadow_enabled) {
+        bool writeLightUbo(LightDrawResources& resources,
+                           const VulkanMeshPassParams& params,
+                           const VulkanMeshDrawItem& item,
+                           const glm::mat4& light_vp,
+                           bool shadow_enabled) const {
             LightUbo ubo{};
             ubo.camera_pos[0] = params.camera_position.x;
             ubo.camera_pos[1] = params.camera_position.y;
@@ -1367,48 +1584,27 @@ namespace lfs::vis {
             ubo.params[1] = item.ambient;
             ubo.params[2] = shadow_enabled ? 1.0f : 0.0f;
             ubo.params[3] = 0.0f;
+            ubo.selection[0] = item.is_emphasized ? 1.0f : 0.0f;
+            ubo.selection[1] = item.dim_non_emphasized ? 1.0f : 0.0f;
+            ubo.selection[2] = item.flash_intensity;
+            ubo.selection[3] = 0.0f;
             std::memcpy(ubo.light_vp, &light_vp[0][0], sizeof(ubo.light_vp));
-            writeBuffer(light_alloc, &ubo, sizeof(ubo));
+            return writeBuffer(resources.allocation, &ubo, sizeof(ubo));
         }
 
-        void bindShadowMap(const ShadowTarget& target) {
+        void bindShadowMap(const LightDrawResources& resources, const ShadowTarget& target) const {
             VkDescriptorImageInfo info{};
             info.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
             info.imageView = target.view != VK_NULL_HANDLE ? target.view : shadow_dummy.view;
             info.sampler = shadow_sampler;
             VkWriteDescriptorSet w{};
             w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            w.dstSet = light_descriptor;
+            w.dstSet = resources.descriptor;
             w.dstBinding = 1;
             w.descriptorCount = 1;
             w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             w.pImageInfo = &info;
             vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
-        }
-
-        void updateMaterialEmphasis(GpuMaterial& mat, const VulkanMeshDrawItem& item) const {
-            // Patch only the emphasis word (offset 48) of MaterialUbo to track per-frame
-            // selection state without re-uploading the rest of the material.
-            float emphasis[4] = {
-                0.0f, // x = has_vertex_colors — preserved by ORing? we just rewrite full vec4
-                item.is_emphasized ? 1.0f : 0.0f,
-                item.dim_non_emphasized ? 1.0f : 0.0f,
-                item.flash_intensity,
-            };
-            // To preserve the has_vertex_colors flag set at upload time we can't rewrite
-            // the whole vec4. Map and rewrite only y/z/w (offsets +52, +56, +60).
-            void* mapped = nullptr;
-            if (vmaMapMemory(allocator, mat.ubo_alloc, &mapped) != VK_SUCCESS || !mapped) {
-                return;
-            }
-            auto* dst = static_cast<float*>(mapped);
-            // vertex_color_emphasis sits at the start of the 4th vec4 (offset 48 floats / 4 = 12).
-            constexpr std::size_t kVcEmphasisFloatOffset = 12;
-            dst[kVcEmphasisFloatOffset + 1] = emphasis[1];
-            dst[kVcEmphasisFloatOffset + 2] = emphasis[2];
-            dst[kVcEmphasisFloatOffset + 3] = emphasis[3];
-            vmaFlushAllocation(allocator, mat.ubo_alloc, 0, sizeof(MaterialUbo));
-            vmaUnmapMemory(allocator, mat.ubo_alloc);
         }
 
         glm::mat4 computeLightVp(const GpuMesh& gpu, const glm::mat4& model,
@@ -1450,7 +1646,16 @@ namespace lfs::vis {
             if (gpu.shadow.image != VK_NULL_HANDLE && gpu.shadow.resolution == resolution) {
                 return true;
             }
-            return createShadowTarget(resolution, gpu.shadow);
+            ShadowTarget replacement{};
+            if (!createShadowTarget(resolution, replacement)) {
+                return false;
+            }
+            // The initialization submit above is ordered after all prior graphics work
+            // and waited to completion, so the old target is no longer referenced.
+            destroyShadow(gpu.shadow);
+            gpu.shadow = std::move(replacement);
+            gpu.cached_light_vp_valid = false;
+            return true;
         }
 
         bool recordShadowPass(GpuMesh& gpu, const glm::mat4& light_mvp) {
@@ -1526,6 +1731,17 @@ namespace lfs::vis {
 
         void prepare(const VulkanMeshPassParams& params) {
             ++frame_counter;
+            if (!params.items.empty() &&
+                params.draw_group_count > std::numeric_limits<std::size_t>::max() / params.items.size()) {
+                LOG_ERROR("VulkanMeshPass: draw resource count overflow");
+                return;
+            }
+            const std::size_t required_draw_resources = params.items.size() * params.draw_group_count;
+            if (!ensureLightDrawCapacity(params.frame_slot, required_draw_resources)) {
+                LOG_ERROR("VulkanMeshPass: failed to allocate {} frame-local draw resources",
+                          required_draw_resources);
+                return;
+            }
             for (const auto& item : params.items) {
                 if (!item.mesh)
                     continue;
@@ -1583,6 +1799,17 @@ namespace lfs::vis {
             }
 
             constexpr std::uint64_t kEvictAfter = 120;
+            bool has_stale_mesh = false;
+            for (const auto& [_, gpu] : mesh_cache) {
+                if (frame_counter - gpu.last_used_frame > kEvictAfter) {
+                    has_stale_mesh = true;
+                    break;
+                }
+            }
+            if (has_stale_mesh && context != nullptr && !context->waitForSubmittedFrames()) {
+                LOG_WARN("VulkanMeshPass: deferred stale mesh eviction because submitted frames did not retire");
+                return;
+            }
             for (auto it = mesh_cache.begin(); it != mesh_cache.end();) {
                 if (frame_counter - it->second.last_used_frame > kEvictAfter) {
                     destroyMesh(it->second);
@@ -1615,7 +1842,17 @@ namespace lfs::vis {
             clip_y_flip[1][1] = -1.0f;
             const glm::mat4 view_projection = clip_y_flip * params.view_projection;
 
-            for (const auto& item : params.items) {
+            if (params.draw_group >= params.draw_group_count ||
+                params.draw_group > std::numeric_limits<std::size_t>::max() / params.items.size()) {
+                LOG_ERROR("VulkanMeshPass: invalid draw group {} of {}",
+                          params.draw_group,
+                          params.draw_group_count);
+                return;
+            }
+            const std::size_t draw_base = params.draw_group * params.items.size();
+            auto& frame = lightResourcesForFrame(params.frame_slot);
+            for (std::size_t item_index = 0; item_index < params.items.size(); ++item_index) {
+                const auto& item = params.items[item_index];
                 if (!item.mesh)
                     continue;
                 auto it = mesh_cache.find(item.mesh);
@@ -1627,22 +1864,27 @@ namespace lfs::vis {
                 const bool shadow_active = item.shadow_enabled &&
                                            gpu.shadow.image != VK_NULL_HANDLE &&
                                            gpu.cached_light_vp_valid;
-                writeLightUbo(params, item,
-                              shadow_active ? gpu.cached_light_vp : glm::mat4(1.0f),
-                              shadow_active);
-                bindShadowMap(shadow_active ? gpu.shadow : shadow_dummy);
-
-                // Patch per-frame emphasis state into the material UBOs for this mesh.
-                for (auto& mat : gpu.materials) {
-                    if (mat.ubo_alloc != VK_NULL_HANDLE) {
-                        updateMaterialEmphasis(mat, item);
-                    }
+                const std::size_t draw_index = draw_base + item_index;
+                if (draw_index >= frame.draws.size()) {
+                    LOG_ERROR("VulkanMeshPass: missing frame-local resource for draw {}", draw_index);
+                    continue;
                 }
+                auto& draw = frame.draws[draw_index];
+                if (draw.descriptor == VK_NULL_HANDLE ||
+                    !writeLightUbo(draw,
+                                   params,
+                                   item,
+                                   shadow_active ? gpu.cached_light_vp : glm::mat4(1.0f),
+                                   shadow_active)) {
+                    LOG_ERROR("VulkanMeshPass: failed to prepare light state for draw {}", draw_index);
+                    continue;
+                }
+                bindShadowMap(draw, shadow_active ? gpu.shadow : shadow_dummy);
 
                 VkPipeline main_pipeline = item.backface_culling ? pipeline_cull : pipeline_no_cull;
                 vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, main_pipeline);
                 vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout,
-                                        0, 1, &light_descriptor, 0, nullptr);
+                                        0, 1, &draw.descriptor, 0, nullptr);
 
                 MeshPushConstants pc{};
                 const glm::mat4 mvp = view_projection * item.model;
@@ -1661,10 +1903,11 @@ namespace lfs::vis {
                         continue;
                     const std::size_t mat_idx = std::min(sm.material_index, gpu.materials.size() - 1);
                     const auto& mat = gpu.materials[mat_idx];
-                    if (mat.descriptor != VK_NULL_HANDLE) {
-                        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout,
-                                                1, 1, &mat.descriptor, 0, nullptr);
+                    if (mat.descriptor == VK_NULL_HANDLE) {
+                        continue;
                     }
+                    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout,
+                                            1, 1, &mat.descriptor, 0, nullptr);
                     vkCmdDrawIndexed(cb, sm.index_count, 1, sm.start_index, 0, 0);
                 }
 
