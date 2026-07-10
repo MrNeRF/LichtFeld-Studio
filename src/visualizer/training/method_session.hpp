@@ -8,11 +8,14 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cuda_runtime_api.h>
 #include <expected>
 #include <filesystem>
 #include <functional>
+#include <glm/glm.hpp>
 #include <initializer_list>
 #include <map>
+#include <memory>
 #include <optional>
 #include <stop_token>
 #include <string>
@@ -22,6 +25,7 @@
 
 namespace lfs::core {
     class Scene;
+    class Tensor;
 
     namespace param {
         struct TrainingParameters;
@@ -99,6 +103,46 @@ namespace lfs::vis {
         std::string phase;
     };
 
+    // Camera pose follows rendering::FrameView: visualizer-space camera-to-world,
+    // with the rotation columns representing camera right, up, and backward and
+    // translation representing the camera position. The camera looks along local -Z.
+    struct LFS_VIS_API CameraRenderRequest {
+        glm::mat3 camera_to_world_rotation{1.0F};
+        glm::vec3 camera_to_world_translation{0.0F};
+        int width = 0;
+        int height = 0;
+        float focal_x = 0.0F;
+        float focal_y = 0.0F;
+        float principal_x = 0.0F;
+        float principal_y = 0.0F;
+        float near_plane = 0.01F;
+        float far_plane = 100000.0F;
+        bool orthographic = false;
+        // Full vertical world-space extent. Ignored for perspective cameras.
+        float ortho_size = 0.0F;
+        glm::vec3 background_color{0.0F};
+        // The method must enqueue all render work on this host-owned stream and
+        // return tensors homed to it without synchronizing the stream.
+        cudaStream_t stream = nullptr;
+        // Monotonic for this consumer; changes whenever camera or output geometry changes.
+        std::uint64_t view_generation = 0;
+        bool allow_cached = false;
+    };
+
+    struct LFS_VIS_API CameraOutputs {
+        // Required CUDA image. HWC or CHW, UInt8 or Float32; dimensions must
+        // agree with width/height. Optional outputs use the same pixel size.
+        std::shared_ptr<const lfs::core::Tensor> rgb;
+        std::shared_ptr<const lfs::core::Tensor> depth;
+        std::shared_ptr<const lfs::core::Tensor> alpha;
+        int width = 0;
+        int height = 0;
+        bool flip_y = false;
+        // Change only when fresh image content is returned. Cached responses
+        // retain their previous generation so downstream uploads can be skipped.
+        std::uint64_t content_generation = 0;
+    };
+
     struct LFS_VIS_API MethodCreateContext {
         lfs::core::Scene* scene = nullptr;
         const lfs::core::param::TrainingParameters* params = nullptr;
@@ -118,6 +162,12 @@ namespace lfs::vis {
         [[nodiscard]] virtual bool is_paused() const = 0;
         // The GUI calls status concurrently with run(); implementations must return a thread-safe snapshot.
         [[nodiscard]] virtual MethodStatus status() const = 0;
+        // Called from the render thread concurrently with run(). Sessions that
+        // advertise FramePreview must implement this method and make it thread-safe.
+        [[nodiscard]] virtual std::optional<CameraOutputs> render_camera(
+            const CameraRenderRequest&) {
+            return std::nullopt;
+        }
         // May be called more than once across explicit clearing and host teardown;
         // implementations must make this idempotent.
         virtual void shutdown() = 0;

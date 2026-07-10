@@ -181,6 +181,20 @@ BG_COLOR_TEXT_KEYS = tuple(key for key, _index in BG_COLOR_CHANNELS) + (
 )
 
 
+def _query_trainer_method_info():
+    try:
+        info = lf.trainer_method_info()
+    except (AttributeError, RuntimeError):
+        return None
+    return info if isinstance(info, dict) else None
+
+
+def _format_method_option(value):
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
 class TrainingPanel(Panel):
     id = "lfs.training"
     label = "Training"
@@ -237,6 +251,8 @@ class TrainingPanel(Panel):
         self._psnr_tick_min = ""
         self._last_panel_label = ""
         self._last_language_generation = -1
+        self._active_method_info = _query_trainer_method_info()
+        self._last_method_signature = None
         self._reactive_binding = PanelStateBinding()
         self._deferred_update_pending = False
         self._deferred_update_deadline = None
@@ -312,6 +328,7 @@ class TrainingPanel(Panel):
         self._handle = model.get_handle()
         for binding in self._pv_bindings:
             binding.attach_handle(self._handle)
+        self._refresh_method_info_model(force=True)
         self._sync_panel_label()
 
         params = lf.optimization_params()
@@ -572,12 +589,28 @@ class TrainingPanel(Panel):
         )
         model.bind_func("show_project_save", lambda: _state() in ("running", "paused"))
         model.bind_func(
+            "show_checkpoint",
+            lambda: _state() in ("running", "paused")
+            and self._method_has_capability("host_checkpoint_io"),
+        )
+        model.bind_func(
             "show_project_saved",
             lambda: (
                 _state() in ("running", "paused")
                 and time.time() - self._project_saved_time < 2.0
             ),
         )
+        model.bind_func(
+            "show_checkpoint_saved",
+            lambda: (
+                _state() in ("running", "paused")
+                and self._method_has_capability("host_checkpoint_io")
+                and time.time() - self._checkpoint_saved_time < 2.0
+            ),
+        )
+        model.bind_func("show_3dgs_parameters", self._is_builtin_3dgs)
+        model.bind_func("show_method_parameters", lambda: not self._is_builtin_3dgs())
+        model.bind_string_list("method_option_lines")
 
         model.bind_func(
             "dep_mask_mode",
@@ -682,7 +715,11 @@ class TrainingPanel(Panel):
             "dep_random", lambda: p() is not None and p().has_params() and p().random
         )
         model.bind_func(
-            "dep_eval", lambda: p() is not None and p().has_params() and p().enable_eval
+            "dep_eval",
+            lambda: p() is not None
+            and p().has_params()
+            and p().enable_eval
+            and self._method_has_capability("host_evaluation"),
         )
         model.bind_func(
             "show_training_telemetry",
@@ -1117,6 +1154,9 @@ class TrainingPanel(Panel):
             return f"{tr('status.iteration')} {it:,} ({rate:.1f} {tr('training_panel.iters_per_sec')})"
 
         def _status_gaussians():
+            if not self._is_builtin_3dgs():
+                noun = self._active_method_info.get("primitive_noun") or "primitives"
+                return f"{noun}: {RuntimeState.num_gaussians.value:,}"
             return tr("progress.num_splats") % f"{RuntimeState.num_gaussians.value:,}"
 
         def _progress_text():
@@ -1157,6 +1197,14 @@ class TrainingPanel(Panel):
         )
 
     def _bind_display(self, model, p, d):
+        model.bind_func(
+            "method_display_name",
+            lambda: (
+                self._active_method_info.get("display_name", "")
+                if self._active_method_info
+                else ""
+            ),
+        )
         model.bind_func(
             "opt_strategy_display",
             lambda: (
@@ -1391,7 +1439,8 @@ class TrainingPanel(Panel):
         self._sync_panel_label()
         self._sync_auto_scale_markers()
 
-        dirty = self._flush_pv_publish()
+        dirty = self._refresh_method_info_model()
+        dirty |= self._flush_pv_publish()
         language_generation = RuntimeState.language_generation.value
         if language_generation != self._last_language_generation:
             self._last_language_generation = language_generation
@@ -1474,6 +1523,39 @@ class TrainingPanel(Panel):
         dirty |= self._update_psnr_graph()
         dirty |= self._scrub_fields.sync_all()
         return dirty
+
+    def _is_builtin_3dgs(self):
+        return not self._active_method_info or self._active_method_info.get("id") == "3dgs"
+
+    def _method_has_capability(self, capability):
+        if self._is_builtin_3dgs():
+            return True
+        capabilities = self._active_method_info.get("capabilities", {})
+        return bool(capabilities.get(capability, False))
+
+    def _refresh_method_info_model(self, force=False):
+        info = _query_trainer_method_info()
+        options = info.get("options", {}) if info else {}
+        signature = (
+            info.get("id") if info else None,
+            info.get("display_name") if info else None,
+            info.get("primitive_noun") if info else None,
+            info.get("capability_mask") if info else None,
+            tuple((str(key), repr(value)) for key, value in sorted(options.items())),
+        )
+        if not force and signature == self._last_method_signature:
+            return False
+
+        self._active_method_info = info
+        self._last_method_signature = signature
+        if self._handle:
+            option_lines = [
+                f"{key} = {_format_method_option(value)}"
+                for key, value in sorted(options.items())
+            ]
+            self._handle.update_string_list("method_option_lines", option_lines)
+            self._handle.dirty_all()
+        return True
 
     def _update_progress(self):
         it = RuntimeState.iteration.value

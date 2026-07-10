@@ -236,6 +236,11 @@ def trainer_state() -> str:
 def trainer_saving_model() -> bool:
     """Whether the terminal stop/completion model save is in progress"""
 
+def trainer_method_info() -> dict | None:
+    """
+    Get the active training method descriptor, capabilities, and resolved options
+    """
+
 def finish_reason() -> str | None:
     """Get finish reason if training finished"""
 

@@ -12,6 +12,7 @@
 #include "framerate_controller.hpp"
 #include "internal/viewport.hpp"
 #include "io/loader.hpp"
+#include "method_preview_cache.hpp"
 #include "passes/vulkan_depth_blit_pass.hpp"
 #include "passes/vulkan_environment_pass.hpp"
 #include "passes/vulkan_mesh_pass.hpp"
@@ -785,6 +786,12 @@ namespace lfs::vis {
         std::shared_ptr<const lfs::core::Tensor> vulkan_viewport_image_;
         std::uint64_t vulkan_viewport_image_generation_ = 0;
         std::string last_logged_vksplat_render_error_;
+        MethodPreviewCache method_preview_cache_;
+        std::optional<CameraRenderRequest> method_preview_last_request_;
+        std::string method_preview_active_method_id_;
+        std::uint64_t method_preview_view_generation_ = 0;
+        cudaStream_t method_preview_stream_ = nullptr;
+        bool method_preview_stream_creation_failed_ = false;
         std::uint64_t viewport_projection_generation_ = 1;
         std::unique_ptr<VksplatViewportRenderer> vksplat_viewport_renderer_;
         std::unique_ptr<PointCloudVulkanRenderer> point_cloud_vulkan_renderer_;

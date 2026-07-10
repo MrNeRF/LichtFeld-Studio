@@ -64,12 +64,24 @@ namespace lfs::vis {
         [[nodiscard]] bool clearTrainer();
         void setMethodSession(
             std::unique_ptr<IMethodSession> session,
-            std::string method_id = {});
+            std::string method_id = {},
+            MethodOptions resolved_options = {},
+        std::optional<lfs::core::param::TrainingParameters> method_params = std::nullopt);
         bool hasTrainer() const;
+
+        struct ActiveMethodInfo {
+            MethodDescriptor descriptor;
+            MethodOptions resolved_options;
+        };
 
         [[nodiscard]] MethodRegistry& methodRegistry() { return method_registry_; }
         [[nodiscard]] const MethodRegistry& methodRegistry() const { return method_registry_; }
         [[nodiscard]] const std::string& activeMethodId() const { return active_method_id_; }
+        [[nodiscard]] std::optional<ActiveMethodInfo> activeMethodInfo() const;
+        [[nodiscard]] std::optional<MethodDescriptor> activeMethodPreviewDescriptor() const;
+        // Narrow render-thread bridge: the session itself never escapes TrainerManager.
+        [[nodiscard]] std::optional<CameraOutputs> renderActiveMethodCamera(
+            const CameraRenderRequest& request);
 
         // Link to viewer for notifications
         void setViewer(VisualizerImpl* viewer) { viewer_ = viewer; }
@@ -241,6 +253,7 @@ namespace lfs::vis {
         void completionReaperLoop(std::stop_token stop_token);
         void finishTrainingThreadJoin();
         void dispatchTrainingCompleted(TrainingCompletionData completion);
+        void runFinalMethodEvaluation();
 
         // State management
         void handleTrainingComplete(bool success, const std::string& error = "",
@@ -270,6 +283,12 @@ namespace lfs::vis {
         MethodRegistry method_registry_;
         std::shared_ptr<IMethodSession> method_session_;
         std::string active_method_id_ = "3dgs";
+        std::optional<MethodDescriptor> active_method_descriptor_;
+        MethodOptions active_method_options_;
+        std::optional<lfs::core::param::TrainingParameters> active_method_params_;
+        // Kept alive for the session lifetime because a method may retain cached
+        // tensors homed to the host evaluation stream after render_camera returns.
+        cudaStream_t method_evaluation_stream_ = nullptr;
         std::unique_ptr<std::jthread> training_thread_;
         std::optional<std::stop_source> training_stop_source_;
         std::mutex training_thread_mutex_;

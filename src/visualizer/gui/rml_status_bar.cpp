@@ -1237,6 +1237,12 @@ namespace lfs::vis::gui {
         auto* sm = viewer ? viewer->getSceneManager() : nullptr;
         auto* rm = viewer ? viewer->getRenderingManager() : nullptr;
         auto* tm = viewer ? viewer->getTrainerManager() : nullptr;
+        const auto method_info = tm ? tm->activeMethodInfo() : std::nullopt;
+        const bool built_in_3dgs = !method_info || method_info->descriptor.id == "3dgs";
+        const bool host_checkpoint_io =
+            !method_info || method_info->descriptor.capabilities.has(MethodCapability::HostCheckpointIO);
+        const bool host_evaluation =
+            !method_info || method_info->descriptor.capabilities.has(MethodCapability::HostEvaluation);
 
         // Mode text
         auto content_type = sm ? sm->getContentType() : SceneManager::ContentType::Empty;
@@ -1261,25 +1267,31 @@ namespace lfs::vis::gui {
             mode_rml = LOC("mode.viewer");
             mode_color = colorToRml(p.info);
         } else {
-            const char* strategy_raw = !stored_strategy.empty()
-                                           ? stored_strategy.c_str()
-                                       : tm ? tm->getStrategyType()
-                                            : "default";
-            bool gut = tm && tm->isGutEnabled();
-            std::string method = gut ? "GUT" : "3DGS";
-            std::string strat_name;
-            const std::string_view strategy = strategy_raw ? std::string_view(strategy_raw) : std::string_view{};
-            if (strategy == "mcmc") {
-                strat_name = LOC("training.options.strategy.mcmc");
-            } else if (lfs::core::param::is_mrnf_strategy(strategy)) {
-                strat_name = LOC("training.options.strategy.mrnf");
-            } else if (strategy == "igs+") {
-                strat_name = LOC("training.options.strategy.igs_plus");
+            std::string suffix;
+            if (built_in_3dgs) {
+                const char* strategy_raw = !stored_strategy.empty()
+                                               ? stored_strategy.c_str()
+                                           : tm ? tm->getStrategyType()
+                                                : "default";
+                std::string strat_name;
+                const std::string_view strategy =
+                    strategy_raw ? std::string_view(strategy_raw) : std::string_view{};
+                if (strategy == "mcmc") {
+                    strat_name = LOC("training.options.strategy.mcmc");
+                } else if (lfs::core::param::is_mrnf_strategy(strategy)) {
+                    strat_name = LOC("training.options.strategy.mrnf");
+                } else if (strategy == "igs+") {
+                    strat_name = LOC("training.options.strategy.igs_plus");
+                } else {
+                    strat_name = LOC("status_bar.strategy_default");
+                }
+                const std::string method_name = method_info
+                                                    ? method_info->descriptor.display_name
+                                                    : (tm && tm->isGutEnabled() ? "GUT" : "3DGS");
+                suffix = std::format(" ({}/{})", strat_name, method_name);
             } else {
-                strat_name = LOC("status_bar.strategy_default");
+                suffix = std::format(" ({})", method_info->descriptor.display_name);
             }
-
-            auto suffix = std::format(" ({}/{})", strat_name, method);
 
             switch (training_state) {
             case TrainingState::Running:
@@ -1343,8 +1355,14 @@ namespace lfs::vis::gui {
                      miner_running && !strike_phase && walk_phase == 2);
         setModelString("step_label", model_.step_label, LOC(lichtfeld::Strings::Status::STEP));
         setModelString("loss_label", model_.loss_label, LOC(lichtfeld::Strings::Status::LOSS));
-        setModelString("gaussians_label", model_.gaussians_label,
-                       stripColon(LOC(lichtfeld::Strings::Status::GAUSSIANS)));
+        setModelString(
+            "gaussians_label",
+            model_.gaussians_label,
+            built_in_3dgs
+                ? stripColon(LOC(lichtfeld::Strings::Status::GAUSSIANS))
+                : (method_info->descriptor.primitive_noun.empty()
+                       ? std::string("primitives")
+                       : method_info->descriptor.primitive_noun));
         setModelString("eta_label", model_.eta_label, LOC(lichtfeld::Strings::Status::ETA));
 
         if (show_training && tm) {
@@ -1358,9 +1376,10 @@ namespace lfs::vis::gui {
             float progress = total > 0 ? static_cast<float>(cur) / static_cast<float>(total) : 0.0f;
             auto progress_pct = std::format("{:.0f}%", progress * 100.0f);
             auto progress_text = progress_pct;
-            if (save_step_interaction_.dragging && save_step_interaction_.preview_step > 0) {
+            if (host_checkpoint_io &&
+                save_step_interaction_.dragging && save_step_interaction_.preview_step > 0) {
                 progress_text = formatStepLabel(save_step_interaction_.preview_step);
-            } else if (save_step_interaction_.hover_step > 0) {
+            } else if (host_checkpoint_io && save_step_interaction_.hover_step > 0) {
                 progress_text = formatStepLabel(save_step_interaction_.hover_step);
             }
 
@@ -1402,18 +1421,29 @@ namespace lfs::vis::gui {
                 .preview_step = save_step_interaction_.preview_step,
                 .hover_step = save_step_interaction_.hover_step,
             };
-            setProgressMarkersRml(buildProgressMarkersRml(tm->getSaveSteps(), total, cur, marker_state,
-                                                          progress_miner_pref_));
+            if (host_checkpoint_io) {
+                setProgressMarkersRml(
+                    buildProgressMarkersRml(tm->getSaveSteps(), total, cur, marker_state,
+                                            progress_miner_pref_));
+            } else {
+                resetSaveStepInteraction();
+                setProgressMarkersRml("");
+            }
             setModelString("step_value", model_.step_value, std::format("{}/{}", cur, total));
             setModelString("loss_value", model_.loss_value, std::format("{:.4f}", loss));
-            setModelString("gaussians_value", model_.gaussians_value,
-                           std::format("{}/{}", fmtCount(num_splats), fmtCount(max_g)));
+            setModelString(
+                "gaussians_value",
+                model_.gaussians_value,
+                built_in_3dgs
+                    ? std::format("{}/{}", fmtCount(num_splats), fmtCount(max_g))
+                    : fmtCount(num_splats));
             setModelString("time_value", model_.time_value, fmtTime(elapsed));
             setModelString("eta_value", model_.eta_value, fmtTime(eta));
 
             const auto eval_metrics = tm->getLastEvaluationMetrics();
-            setModelBool("show_eval_metrics", model_.show_eval_metrics, eval_metrics.has_value());
-            if (eval_metrics) {
+            setModelBool("show_eval_metrics", model_.show_eval_metrics,
+                         host_evaluation && eval_metrics.has_value());
+            if (host_evaluation && eval_metrics) {
                 setModelString("eval_metrics_value", model_.eval_metrics_value,
                                std::format("{} {:.2f} / {} {:.4f}",
                                            LOC(lichtfeld::Strings::Status::PSNR),

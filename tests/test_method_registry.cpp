@@ -2,10 +2,14 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/tensor.hpp"
+#include "visualizer/rendering/method_preview_cache.hpp"
 #include "visualizer/training/method_registry.hpp"
+#include "visualizer/training/training_manager.hpp"
 
 #include <atomic>
 #include <chrono>
+#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <mutex>
 #include <thread>
@@ -83,6 +87,57 @@ namespace {
         std::atomic<bool> pause_requested{false};
         std::atomic<bool> paused{false};
         std::atomic<int> iteration{0};
+    };
+
+    class PreviewSession final : public lfs::vis::IMethodSession {
+    public:
+        std::expected<void, std::string> initialize(
+            const lfs::vis::MethodCreateContext&) override {
+            return {};
+        }
+        void run(std::stop_token) override {}
+        void request_pause() override {}
+        void request_resume() override {}
+        bool is_paused() const override { return false; }
+        lfs::vis::MethodStatus status() const override {
+            return {.iteration = 1, .total_iterations = 1, .loss = 0.0F, .primitive_count = 4};
+        }
+        std::optional<lfs::vis::CameraOutputs> render_camera(
+            const lfs::vis::CameraRenderRequest& request) override {
+            std::lock_guard lock(mutex_);
+            if (request.allow_cached && cached_ && cached_view_generation_ == request.view_generation) {
+                return cached_;
+            }
+
+            const lfs::core::CUDAStreamGuard stream_guard(request.stream);
+            auto image = std::make_shared<lfs::core::Tensor>(lfs::core::Tensor::full(
+                {std::size_t{3},
+                 static_cast<std::size_t>(request.height),
+                 static_cast<std::size_t>(request.width)},
+                static_cast<float>(request.view_generation),
+                lfs::core::Device::CUDA,
+                lfs::core::DataType::Float32));
+            ++content_generation_;
+            cached_ = lfs::vis::CameraOutputs{
+                .rgb = std::move(image),
+                .width = request.width,
+                .height = request.height,
+                .flip_y = false,
+                .content_generation = content_generation_,
+            };
+            cached_view_generation_ = request.view_generation;
+            return cached_;
+        }
+        void shutdown() override {
+            std::lock_guard lock(mutex_);
+            cached_.reset();
+        }
+
+    private:
+        mutable std::mutex mutex_;
+        std::optional<lfs::vis::CameraOutputs> cached_;
+        std::uint64_t cached_view_generation_ = 0;
+        std::uint64_t content_generation_ = 0;
     };
 
     lfs::vis::MethodDescriptor dummy_descriptor(const std::string& id = "dummy") {
@@ -182,6 +237,78 @@ TEST(MethodRegistry, DummySessionHonorsControlAndStop) {
     EXPECT_EQ(session.run_calls.load(), 1);
     EXPECT_EQ(session.pause_calls.load(), 1);
     EXPECT_EQ(session.resume_calls.load(), 1);
+}
+
+TEST(MethodPreview, DefaultRenderCameraReturnsNullopt) {
+    DummySession session;
+    EXPECT_FALSE(session.render_camera({}).has_value());
+}
+
+TEST(MethodPreview, TrainerManagerAccessorPreservesCachedGeneration) {
+    // TrainerManager's process-wide event subscriptions intentionally have app lifetime.
+    // Keep this test manager alive until process teardown so later event-emitting tests
+    // do not call a dead subscriber.
+    static auto manager_storage = std::make_unique<lfs::vis::TrainerManager>();
+    auto* const manager = manager_storage.get();
+    auto descriptor = dummy_descriptor("preview");
+    descriptor.capabilities = lfs::vis::MethodCapabilities{
+        lfs::vis::MethodCapability::FramePreview};
+    ASSERT_TRUE(manager->methodRegistry().register_method(
+        descriptor, [] { return std::make_unique<PreviewSession>(); }));
+
+    auto session = manager->methodRegistry().create("preview");
+    ASSERT_TRUE(session.has_value()) << session.error();
+    manager->setMethodSession(
+        std::move(*session),
+        "preview",
+        {{"quality", std::string{"test"}}});
+
+    const auto info = manager->activeMethodInfo();
+    ASSERT_TRUE(info.has_value());
+    EXPECT_TRUE(info->descriptor.capabilities.has(lfs::vis::MethodCapability::FramePreview));
+    EXPECT_EQ(std::get<std::string>(info->resolved_options.at("quality")), "test");
+
+    cudaStream_t stream = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), cudaSuccess);
+    lfs::vis::CameraRenderRequest request{
+        .width = 4,
+        .height = 2,
+        .stream = stream,
+        .view_generation = 7,
+        .allow_cached = false,
+    };
+    lfs::vis::MethodPreviewCache cache;
+
+    auto first = manager->renderActiveMethodCamera(request);
+    ASSERT_TRUE(first.has_value());
+    const auto first_generation = first->content_generation;
+    const auto first_tensor = first->rgb;
+    const auto first_store = cache.store(std::move(*first));
+    ASSERT_TRUE(first_store.has_value()) << first_store.error();
+    EXPECT_EQ(*first_store, lfs::vis::MethodPreviewCache::StoreResult::Fresh);
+
+    request.allow_cached = true;
+    auto second = manager->renderActiveMethodCamera(request);
+    ASSERT_TRUE(second.has_value());
+    EXPECT_EQ(second->content_generation, first_generation);
+    const auto second_store = cache.store(std::move(*second));
+    ASSERT_TRUE(second_store.has_value()) << second_store.error();
+    EXPECT_EQ(*second_store, lfs::vis::MethodPreviewCache::StoreResult::CacheHit);
+    EXPECT_EQ(cache.output()->rgb, first_tensor);
+
+    request.allow_cached = false;
+    auto third = manager->renderActiveMethodCamera(request);
+    ASSERT_TRUE(third.has_value());
+    EXPECT_GT(third->content_generation, first_generation);
+    const auto third_store = cache.store(std::move(*third));
+    ASSERT_TRUE(third_store.has_value()) << third_store.error();
+    EXPECT_EQ(*third_store, lfs::vis::MethodPreviewCache::StoreResult::Fresh);
+
+    cache.clear();
+    manager->clearTrainer();
+    ASSERT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
+    lfs::core::Tensor::trim_memory_pool();
+    EXPECT_EQ(cudaStreamDestroy(stream), cudaSuccess);
 }
 
 TEST(MethodOptions, AppliesDefaults) {

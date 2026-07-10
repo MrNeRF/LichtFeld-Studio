@@ -918,4 +918,145 @@ namespace lfs::training {
 
         return result;
     }
+
+    EvalMetrics MetricsEvaluator::evaluate(const int iteration,
+                                           std::shared_ptr<CameraDataset> val_dataset,
+                                           const std::optional<std::size_t> primitive_count,
+                                           const RenderCallback& render_camera) {
+        if (!_params.optimization.enable_eval) {
+            throw std::runtime_error("Evaluation is not enabled");
+        }
+        if (!val_dataset) {
+            throw std::runtime_error("Evaluation requires a validation dataset");
+        }
+        if (!render_camera) {
+            throw std::runtime_error("Evaluation requires a render callback");
+        }
+
+        EvalMetrics result;
+        constexpr auto max_int = static_cast<std::size_t>(std::numeric_limits<int>::max());
+        result.num_gaussians = primitive_count
+                                   ? (*primitive_count > max_int
+                                          ? std::numeric_limits<int>::max()
+                                          : static_cast<int>(*primitive_count))
+                                   : 0;
+        result.iteration = iteration;
+
+        std::vector<float> psnr_values, ssim_values;
+        const auto start_time = std::chrono::steady_clock::now();
+        const std::filesystem::path eval_dir = _params.dataset.output_path /
+                                               ("eval_step_" + std::to_string(iteration));
+        if (_params.optimization.enable_save_eval_images) {
+            std::filesystem::create_directories(eval_dir);
+        }
+
+        const size_t val_dataset_size = val_dataset->size();
+        size_t skipped_images = 0;
+        size_t evaluated_images = 0;
+        size_t saved_images = 0;
+        const auto mask_mode = _params.optimization.mask_mode;
+        const bool use_masking =
+            mask_mode == lfs::core::param::MaskMode::Segment ||
+            mask_mode == lfs::core::param::MaskMode::Ignore ||
+            mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore;
+
+        for (size_t image_idx = 0; image_idx < val_dataset_size; ++image_idx) {
+            lfs::core::Camera* cam = val_dataset->get_camera(image_idx);
+            lfs::core::Tensor gt_image;
+            try {
+                gt_image = load_eval_gt_image_cpu(*cam, _params.dataset.resize_factor, _params.dataset.max_width);
+            } catch (const std::exception& e) {
+                LOG_WARN("Eval: skipping camera '{}' (failed to load GT image: {})", cam->image_name(), e.what());
+                ++skipped_images;
+                continue;
+            }
+
+            lfs::core::Tensor mask;
+            if (use_masking) {
+                try {
+                    mask = load_eval_mask(cam, gt_image,
+                                          _params.optimization.use_alpha_as_mask && cam->has_alpha());
+                } catch (const std::exception& e) {
+                    LOG_WARN("Eval: skipping camera '{}' (failed to load mask: {})", cam->image_name(), e.what());
+                    ++skipped_images;
+                    continue;
+                }
+            }
+
+            auto rendered = render_camera(*cam);
+            if (!rendered || !rendered->is_valid()) {
+                LOG_WARN("Eval: skipping camera '{}' (render callback failed: {})",
+                         cam->image_name(), rendered ? "no image" : rendered.error());
+                ++skipped_images;
+                continue;
+            }
+            auto rendered_image = std::move(*rendered).clamp(0.0F, 1.0F);
+            try {
+                const float psnr = _psnr_metric->compute(rendered_image, gt_image, mask);
+                const float ssim = _ssim_metric->compute(rendered_image, gt_image, mask);
+                if (!std::isfinite(psnr) || !std::isfinite(ssim)) {
+                    throw std::runtime_error("non-finite metric values");
+                }
+                psnr_values.push_back(psnr);
+                ssim_values.push_back(ssim);
+                ++evaluated_images;
+            } catch (const std::exception& e) {
+                LOG_WARN("Eval: skipping camera '{}' (metric computation failed: {})", cam->image_name(), e.what());
+                ++skipped_images;
+                continue;
+            }
+
+            if (_params.optimization.enable_save_eval_images) {
+                auto gt_vis = image_as_float01(gt_image);
+                auto render_vis = rendered_image;
+                if (mask.is_valid()) {
+                    const auto mask_f = mask_as_float01(mask);
+                    const int channels = static_cast<int>(gt_image.shape()[0]);
+                    const int height = static_cast<int>(mask_f.shape()[0]);
+                    const int width = static_cast<int>(mask_f.shape()[1]);
+                    const auto mask_3d = mask_f.unsqueeze(0).expand({channels, height, width});
+                    gt_vis = gt_vis * mask_3d;
+                    render_vis = render_vis * mask_3d;
+                }
+                lfs::core::image_io::save_images_async(
+                    eval_dir / (std::to_string(image_idx) + ".png"),
+                    {gt_vis, render_vis}, true, 4);
+                ++saved_images;
+            }
+        }
+
+        if (_params.optimization.enable_save_eval_images) {
+            lfs::core::image_io::wait_for_pending_saves();
+        }
+        const auto elapsed = std::chrono::duration<float>(
+            std::chrono::steady_clock::now() - start_time).count();
+        if (!psnr_values.empty()) {
+            result.psnr = std::accumulate(psnr_values.begin(), psnr_values.end(), 0.0F) / psnr_values.size();
+            result.ssim = std::accumulate(ssim_values.begin(), ssim_values.end(), 0.0F) / ssim_values.size();
+        }
+        result.elapsed_time = elapsed / static_cast<float>(evaluated_images > 0
+                                                               ? evaluated_images
+                                                               : std::max<size_t>(val_dataset_size, 1));
+        if (skipped_images > 0) {
+            LOG_WARN("Eval: skipped {} / {} images due to mask/metric failures", skipped_images, val_dataset_size);
+        }
+        if (evaluated_images == 0) {
+            LOG_WARN("Eval: no images were successfully evaluated at iteration {}", iteration);
+            return result;
+        }
+        result.valid = true;
+        lfs::core::events::state::EvaluationCompleted{
+            .iteration = result.iteration,
+            .psnr = result.psnr,
+            .ssim = result.ssim,
+            .lpips = 0.0F,
+            .elapsed_time = result.elapsed_time,
+            .num_gaussians = result.num_gaussians}.emit();
+        _reporter->add_metrics(result);
+        if (_params.optimization.enable_save_eval_images) {
+            std::cout << "Saved " << saved_images << " evaluation images to: "
+                      << lfs::core::path_to_utf8(eval_dir) << std::endl;
+        }
+        return result;
+    }
 } // namespace lfs::training

@@ -49,6 +49,23 @@
     </div>
     <button class="btn btn--primary btn--full" data-tooltip="training.tooltip.btn_save_project" data-if="show_project_save" data-event-click="action('save_project')">{{label_save_project}}</button>
     <span class="status-text status-success" data-if="show_project_saved">{{label_project_saved}}</span>
+    <button class="btn btn--primary btn--full" data-tooltip="training.tooltip.btn_save_checkpoint" data-if="show_checkpoint" data-event-click="action('save_checkpoint')">{{label_save_checkpoint}}</button>
+    <span class="status-text status-success" data-if="show_checkpoint_saved">{{label_checkpoint_saved}}</span>
+  </div>
+
+  <!-- ── External method summary ── -->
+  <div data-if="show_method_parameters">
+    <div class="training-panel-title">
+      <img class="training-panel-title-icon" src="../icon/settings.png" />
+      <span>{{method_display_name}}</span>
+    </div>
+    <div class="training-panel-block">
+      <div data-for="option : method_option_lines">
+        <div class="setting-row">
+          <span class="text-disabled">{{option}}</span>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- ── Training Parameters ── -->
@@ -94,6 +111,7 @@
     </div>
   </div>
 
+  <div data-if="show_3dgs_parameters">
   <div class="training-scroll-region">
   <div class="training-panel-title" data-if="pv_section_basic_params_visible">
     <img class="training-panel-title-icon" src="../icon/settings.png" />
@@ -713,6 +731,7 @@
   </div>
 
   </div><!-- /training-scroll-region -->
+  </div>
 
   <div id="color-picker-popup" class="color-picker-popup">
     <color-picker id="color-picker-el"

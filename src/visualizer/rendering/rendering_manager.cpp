@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cuda_runtime.h>
 #include <stdexcept>
 
 namespace lfs::vis {
@@ -138,6 +139,15 @@ namespace lfs::vis {
         }
         camera_metrics_worker_.request_stop();
         camera_metrics_cv_.notify_all();
+        viewport_artifact_service_.clearViewportOutput();
+        vulkan_viewport_image_.reset();
+        method_preview_cache_.clear();
+        if (method_preview_stream_) {
+            (void)cudaStreamSynchronize(method_preview_stream_);
+            lfs::core::Tensor::trim_memory_pool();
+            (void)cudaStreamDestroy(method_preview_stream_);
+            method_preview_stream_ = nullptr;
+        }
         lfs::rendering::releaseEnvironmentMapCaches();
     }
 
@@ -402,6 +412,11 @@ namespace lfs::vis {
         last_logged_vksplat_render_error_.clear();
         vulkan_viewport_image_generation_ = 0;
         split_view_image_generation_ = 0;
+        vulkan_viewport_image_size_ = {0, 0};
+        vulkan_viewport_image_flip_y_ = false;
+        method_preview_cache_.clear();
+        method_preview_last_request_.reset();
+        method_preview_active_method_id_.clear();
 
         clearVulkanMeshFrame();
 

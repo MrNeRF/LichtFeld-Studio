@@ -581,6 +581,29 @@ namespace lfs::vis {
             return std::make_shared<lfs::core::Tensor>(std::move(tensor));
         }
 
+        [[nodiscard]] bool sameMethodCameraView(const CameraRenderRequest& lhs,
+                                                const CameraRenderRequest& rhs) {
+            for (int column = 0; column < 3; ++column) {
+                for (int row = 0; row < 3; ++row) {
+                    if (lhs.camera_to_world_rotation[column][row] !=
+                        rhs.camera_to_world_rotation[column][row]) {
+                        return false;
+                    }
+                }
+            }
+            return lhs.camera_to_world_translation.x == rhs.camera_to_world_translation.x &&
+                   lhs.camera_to_world_translation.y == rhs.camera_to_world_translation.y &&
+                   lhs.camera_to_world_translation.z == rhs.camera_to_world_translation.z &&
+                   lhs.width == rhs.width && lhs.height == rhs.height &&
+                   lhs.focal_x == rhs.focal_x && lhs.focal_y == rhs.focal_y &&
+                   lhs.principal_x == rhs.principal_x && lhs.principal_y == rhs.principal_y &&
+                   lhs.near_plane == rhs.near_plane && lhs.far_plane == rhs.far_plane &&
+                   lhs.orthographic == rhs.orthographic && lhs.ortho_size == rhs.ortho_size &&
+                   lhs.background_color.r == rhs.background_color.r &&
+                   lhs.background_color.g == rhs.background_color.g &&
+                   lhs.background_color.b == rhs.background_color.b;
+        }
+
         [[nodiscard]] std::optional<std::pair<size_t, size_t>>
         plyComparisonPairForOffset(const size_t node_count, const size_t offset) {
             if (node_count < 2) {
@@ -1872,16 +1895,146 @@ namespace lfs::vis {
             return cached_frame_result();
         }
 
-        // Window resize/minimize must never alter the training schedule. Viewer
-        // work quiesces itself (cached frames while deferring; output-ring
-        // recreate waits ring watermarks only). pauseTrainingTemporary is not
-        // used on this path — other interactive wait sites keep it.
+        const auto active_method =
+            trainer_manager ? trainer_manager->activeMethodPreviewDescriptor() : std::nullopt;
+        if (active_method) {
+            const std::string& method_id = active_method->id;
+            if (method_preview_active_method_id_ != method_id) {
+                method_preview_cache_.clear();
+                method_preview_last_request_.reset();
+                method_preview_active_method_id_ = method_id;
+                clearVulkanMeshFrame();
+            }
 
-        // Training previews never wait for a step-boundary read, including
-        // discrete layout resizes. On contention, retain the previous matching
-        // frame and retry on the next cadence tick; the GUI commits a staged
-        // layout only after matches_viewport_extent reports a fresh output.
-        // First frame / no cache still falls back to one blocking acquire below.
+            if (!method_preview_stream_ && !method_preview_stream_creation_failed_) {
+                const cudaError_t status =
+                    cudaStreamCreateWithFlags(&method_preview_stream_, cudaStreamNonBlocking);
+                if (status != cudaSuccess) {
+                    method_preview_stream_creation_failed_ = true;
+                    method_preview_stream_ = nullptr;
+                    LOG_ERROR("Failed to create method preview CUDA stream: {}",
+                              cudaGetErrorString(status));
+                }
+            }
+
+            if (!method_preview_stream_) {
+                return cached_frame_result();
+            }
+
+            const auto [focal_x, focal_y] =
+                lfs::rendering::computePixelFocalLengths(render_size, settings_.focal_length_mm);
+            const float ortho_scale =
+                context.viewport.ortho_scale_override.value_or(settings_.ortho_scale);
+            CameraRenderRequest request{
+                .camera_to_world_rotation = context.viewport.getRotationMatrix(),
+                .camera_to_world_translation = context.viewport.getTranslation(),
+                .width = render_size.x,
+                .height = render_size.y,
+                .focal_x = focal_x,
+                .focal_y = focal_y,
+                .principal_x = static_cast<float>(render_size.x) * 0.5F,
+                .principal_y = static_cast<float>(render_size.y) * 0.5F,
+                .near_plane = lfs::rendering::DEFAULT_NEAR_PLANE,
+                .far_plane = settings_.depth_clip_enabled
+                                 ? settings_.depth_clip_far
+                                 : lfs::rendering::DEFAULT_FAR_PLANE,
+                .orthographic = settings_.orthographic,
+                .ortho_size = settings_.orthographic && ortho_scale > 0.0F
+                                  ? static_cast<float>(render_size.y) / ortho_scale
+                                  : 0.0F,
+                .background_color = settings_.background_color,
+                .stream = method_preview_stream_,
+            };
+
+            const bool view_changed = !method_preview_last_request_ ||
+                                      !sameMethodCameraView(request, *method_preview_last_request_);
+            if (view_changed) {
+                ++method_preview_view_generation_;
+                if (method_preview_view_generation_ == 0) {
+                    ++method_preview_view_generation_;
+                }
+            }
+            request.view_generation = method_preview_view_generation_;
+            request.allow_cached = !view_changed && method_preview_cache_.hasOutput();
+            method_preview_last_request_ = request;
+
+            // Consume the dirtiness that scheduled this method frame before invoking
+            // the method; a redraw requested while it renders remains pending.
+            (void)dirty_mask_.exchange(0, std::memory_order_acq_rel);
+
+            if (auto output = trainer_manager->renderActiveMethodCamera(request)) {
+                auto stored = method_preview_cache_.store(std::move(*output));
+                if (!stored) {
+                    LOG_WARN("Method '{}' preview rejected: {}", method_id, stored.error());
+                } else if (*stored == MethodPreviewCache::StoreResult::Fresh) {
+                    const CameraOutputs& cached = *method_preview_cache_.output();
+                    vulkan_viewport_image_ = cached.rgb;
+                    ++vulkan_viewport_image_generation_;
+                    if (vulkan_viewport_image_generation_ == 0) {
+                        ++vulkan_viewport_image_generation_;
+                    }
+                    vulkan_external_viewport_image_ = VK_NULL_HANDLE;
+                    vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
+                    vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+                    vulkan_external_viewport_image_generation_ = 0;
+                    vulkan_viewport_image_size_ = {cached.width, cached.height};
+                    vulkan_viewport_image_flip_y_ = cached.flip_y;
+                    vulkan_gt_comparison_content_size_ = {0, 0};
+
+                    lfs::rendering::FrameMetadata metadata{
+                        .valid = true,
+                        .flip_y = cached.flip_y,
+                        .near_plane = request.near_plane,
+                        .far_plane = request.far_plane,
+                        .orthographic = request.orthographic,
+                    };
+                    auto artifact_image =
+                        std::const_pointer_cast<lfs::core::Tensor>(cached.rgb);
+                    if (cached.flip_y) {
+                        viewport_artifact_service_.setLazyCapture(
+                            [artifact_image] {
+                                const auto layout =
+                                    lfs::rendering::detectImageLayout(*artifact_image);
+                                if (layout == lfs::rendering::ImageLayout::Unknown) {
+                                    return std::shared_ptr<lfs::core::Tensor>{};
+                                }
+                                auto flipped =
+                                    lfs::rendering::flipImageVertical(*artifact_image, layout);
+                                return std::make_shared<lfs::core::Tensor>(std::move(flipped));
+                            },
+                            metadata,
+                            vulkan_viewport_image_size_);
+                    } else {
+                        viewport_artifact_service_.updateFromImageOutput(
+                            std::move(artifact_image),
+                            metadata,
+                            vulkan_viewport_image_size_,
+                            true);
+                    }
+                    LOG_PERF("Method preview '{}' fresh content={} publication={} size={}x{} view={}",
+                             method_id,
+                             cached.content_generation,
+                             vulkan_viewport_image_generation_,
+                             cached.width,
+                             cached.height,
+                             request.view_generation);
+                }
+            }
+
+            // A null/not-ready result deliberately retains the last published image,
+            // including across resize, so presentation stretches instead of flickering.
+            return cached_frame_result();
+        }
+
+        if (!method_preview_active_method_id_.empty()) {
+            method_preview_cache_.clear();
+            method_preview_last_request_.reset();
+            method_preview_active_method_id_.clear();
+            dirty_mask_.fetch_or(DirtyFlag::ALL, std::memory_order_relaxed);
+        }
+        // Window resize/minimize must never alter the training schedule. Viewer
+        // work quiesces itself while deferring; on contention, retain the previous
+        // matching frame and retry on the next cadence tick.
         const bool training_try_lock = is_training;
         auto render_lock = acquireLiveModelRenderLock(scene_manager, training_try_lock);
         bool render_lock_contended = training_try_lock && !render_lock.has_value() &&

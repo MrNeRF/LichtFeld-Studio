@@ -19,11 +19,14 @@
 #include "core/tensor/internal/tensor_ops.hpp"
 #include "python/gil.hpp"
 #include "python/python_runtime.hpp"
+#include "rendering/coordinate_conventions.hpp"
+#include "rendering/image_layout.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
 #include "training/control/command_api.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 #include "training/rasterization/gsplat/Ops.h"
 #include "training/rasterization/gsplat_rasterizer.hpp"
+#include "training/metrics/metrics.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/visualizer_impl.hpp"
@@ -174,6 +177,109 @@ namespace lfs::vis {
             // sort workspaces — explicit release before thread join so
             // high-water VRAM is not held until TLS dtor races CUDA teardown.
             lfs::training::release_fastgs_sort_workspace_buffers();
+        }
+        [[nodiscard]] std::expected<CameraRenderRequest, std::string> makeMethodEvaluationRequest(
+            lfs::core::Camera& camera,
+            const lfs::core::Scene& scene,
+            const lfs::core::param::TrainingParameters& params,
+            const cudaStream_t stream,
+            const std::uint64_t generation) {
+            if (camera.camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR) {
+                return std::unexpected("equirectangular cameras are not represented by CameraRenderRequest");
+            }
+            if (camera.image_width() <= 0 || camera.image_height() <= 0) {
+                return std::unexpected("camera image dimensions are unavailable");
+            }
+
+            auto rotation_tensor = camera.R().cpu();
+            auto translation_tensor = camera.T().cpu();
+            const float* const rotation = rotation_tensor.ptr<float>();
+            const float* const translation = translation_tensor.ptr<float>();
+            if (!rotation || !translation) {
+                return std::unexpected("camera pose tensors are unavailable");
+            }
+
+            const glm::mat4 data_scene_transform =
+                scene.getCameraSceneTransformByUid(camera.uid()).value_or(glm::mat4(1.0F));
+            const auto pose = lfs::rendering::visualizerCameraPoseFromDataWorldToCamera(
+                lfs::rendering::mat3FromRowMajor3x3(rotation),
+                glm::vec3(translation[0], translation[1], translation[2]),
+                lfs::rendering::dataWorldTransformToVisualizerWorld(data_scene_transform));
+            const auto [focal_x, focal_y, principal_x, principal_y] = camera.get_intrinsics();
+
+            return CameraRenderRequest{
+                .camera_to_world_rotation = pose.rotation,
+                .camera_to_world_translation = pose.translation,
+                .width = camera.image_width(),
+                .height = camera.image_height(),
+                .focal_x = focal_x,
+                .focal_y = focal_y,
+                .principal_x = principal_x,
+                .principal_y = principal_y,
+                .near_plane = lfs::rendering::DEFAULT_NEAR_PLANE,
+                .far_plane = lfs::rendering::DEFAULT_FAR_PLANE,
+                .orthographic = false,
+                .ortho_size = 0.0F,
+                .background_color = glm::vec3(
+                    params.optimization.bg_color[0],
+                    params.optimization.bg_color[1],
+                    params.optimization.bg_color[2]),
+                .stream = stream,
+                .view_generation = generation,
+                .allow_cached = false,
+            };
+        }
+
+        [[nodiscard]] std::expected<lfs::core::Tensor, std::string> normalizeMethodEvaluationRgb(
+            const CameraOutputs& output,
+            const CameraRenderRequest& request) {
+            if (!output.rgb || !output.rgb->is_valid()) {
+                return std::unexpected("method returned no RGB image");
+            }
+            if (output.width != request.width || output.height != request.height) {
+                return std::unexpected(std::format(
+                    "method returned {}x{} for an exact evaluation request of {}x{}",
+                    output.width,
+                    output.height,
+                    request.width,
+                    request.height));
+            }
+            if (output.rgb->device() != lfs::core::Device::CUDA || output.rgb->ndim() != 3) {
+                return std::unexpected("method evaluation RGB must be a three-dimensional CUDA tensor");
+            }
+            if (output.rgb->dtype() != lfs::core::DataType::UInt8 &&
+                output.rgb->dtype() != lfs::core::DataType::Float32) {
+                return std::unexpected("method evaluation RGB must be UInt8 or Float32");
+            }
+
+            const auto source_layout = lfs::rendering::detectImageLayout(*output.rgb);
+            if (source_layout == lfs::rendering::ImageLayout::Unknown ||
+                lfs::rendering::imageWidth(*output.rgb, source_layout) != request.width ||
+                lfs::rendering::imageHeight(*output.rgb, source_layout) != request.height) {
+                return std::unexpected("method evaluation RGB tensor dimensions do not match CameraOutputs");
+            }
+
+            const int channels = lfs::rendering::imageChannels(*output.rgb, source_layout);
+            if (channels != 3 && channels != 4) {
+                return std::unexpected(std::format(
+                    "method evaluation RGB requires 3 or 4 channels, got {}", channels));
+            }
+
+            lfs::core::Tensor image = *output.rgb;
+            if (source_layout == lfs::rendering::ImageLayout::HWC) {
+                image = image.permute({2, 0, 1}).contiguous();
+            }
+            if (channels == 4) {
+                image = image.slice(0, 0, 3).contiguous();
+            }
+            if (output.flip_y) {
+                image = lfs::rendering::flipImageVertical(
+                    image, lfs::rendering::ImageLayout::CHW);
+            }
+            if (image.dtype() == lfs::core::DataType::UInt8) {
+                image = image.to(lfs::core::DataType::Float32) / 255.0F;
+            }
+            return image.contiguous();
         }
 
         [[nodiscard]] lfs::core::SplatTensorAllocator makeVulkanTrainingTensorAllocator(VisualizerImpl* viewer) {
@@ -530,8 +636,22 @@ namespace lfs::vis {
         if (trainer_) {
             lfs::training::CommandCenter::instance().reset_snapshot();
         }
-        if (method_session_) {
-            method_session_->shutdown();
+
+        cudaStream_t evaluation_stream = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
+            if (method_evaluation_stream_) {
+                (void)cudaStreamSynchronize(method_evaluation_stream_);
+            }
+            if (method_session_) {
+                method_session_->shutdown();
+                method_session_.reset();
+            }
+            evaluation_stream = std::exchange(method_evaluation_stream_, nullptr);
+        }
+        if (evaluation_stream) {
+            lfs::core::Tensor::trim_memory_pool();
+            (void)cudaStreamDestroy(evaluation_stream);
         }
     }
 
@@ -562,6 +682,9 @@ namespace lfs::vis {
                 scene_->setLiveModelMutex(&trainer_->getRenderMutex());
             }
             active_method_id_ = "3dgs";
+            active_method_descriptor_.reset();
+            active_method_options_.clear();
+            active_method_params_.reset();
             if (!state_machine_.transitionTo(TrainingState::Ready)) {
                 LOG_WARN("Failed to transition to Ready");
             }
@@ -602,6 +725,9 @@ namespace lfs::vis {
                 }
             }
             active_method_id_ = "3dgs";
+            active_method_descriptor_.reset();
+            active_method_options_.clear();
+            active_method_params_.reset();
             internal::TrainerReady{}.emit();
 
             const FinishReason finish_reason =
@@ -627,7 +753,9 @@ namespace lfs::vis {
 
     void TrainerManager::setMethodSession(
         std::unique_ptr<IMethodSession> session,
-        std::string method_id) {
+        std::string method_id,
+        MethodOptions resolved_options,
+        std::optional<lfs::core::param::TrainingParameters> method_params) {
         LOG_TIMER_TRACE("TrainerManager::setMethodSession");
 
         (void)clearTrainer();
@@ -636,7 +764,9 @@ namespace lfs::vis {
             std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
             method_session_ = std::move(session);
             active_method_id_ = method_id.empty() ? "unknown" : std::move(method_id);
-
+            active_method_descriptor_ = method_registry_.descriptor(active_method_id_);
+            active_method_options_ = std::move(resolved_options);
+            active_method_params_ = std::move(method_params);
             if (!state_machine_.transitionTo(TrainingState::Ready)) {
                 LOG_WARN("Failed to transition to Ready");
             }
@@ -788,6 +918,82 @@ namespace lfs::vis {
         g_last_stored_session_publish = desired;
     }
 
+    std::optional<TrainerManager::ActiveMethodInfo> TrainerManager::activeMethodInfo() const {
+        std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
+        if (method_session_) {
+            if (!active_method_descriptor_) {
+                return std::nullopt;
+            }
+            return ActiveMethodInfo{
+                .descriptor = *active_method_descriptor_,
+                .resolved_options = active_method_options_,
+            };
+        }
+        if (!trainer_) {
+            return std::nullopt;
+        }
+
+        MethodDescriptor descriptor{
+            .id = "3dgs",
+            .display_name = trainer_->getParams().optimization.gut ? "GUT" : "3DGS",
+            .primitive_noun = "Gaussians",
+            .capabilities = {
+                MethodCapability::FramePreview,
+                MethodCapability::HostCheckpointIO,
+                MethodCapability::HostEvaluation,
+                MethodCapability::GaussianSceneModel,
+                MethodCapability::GaussianParameterUI,
+                MethodCapability::GaussianEditing,
+                MethodCapability::LiveModelVkSplat,
+                MethodCapability::AppearanceCorrection,
+            },
+            .options = {},
+            .version = {},
+        };
+        return ActiveMethodInfo{
+            .descriptor = std::move(descriptor),
+            .resolved_options = {},
+        };
+    }
+
+    std::optional<MethodDescriptor> TrainerManager::activeMethodPreviewDescriptor() const {
+        std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
+        if (!method_session_ || !active_method_descriptor_ ||
+            !active_method_descriptor_->capabilities.has(MethodCapability::FramePreview)) {
+            return std::nullopt;
+        }
+        return active_method_descriptor_;
+    }
+
+    std::optional<CameraOutputs> TrainerManager::renderActiveMethodCamera(
+        const CameraRenderRequest& request) {
+        std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
+        if (!method_session_ || !active_method_descriptor_ ||
+            !active_method_descriptor_->capabilities.has(MethodCapability::FramePreview)) {
+            return std::nullopt;
+        }
+
+        try {
+            auto output = method_session_->render_camera(request);
+            if (output) {
+                const auto wrong_stream = [&request](const auto& tensor) {
+                    return tensor && tensor->is_valid() && tensor->stream() != request.stream;
+                };
+                if (wrong_stream(output->rgb) || wrong_stream(output->depth) || wrong_stream(output->alpha)) {
+                    LOG_WARN("Method '{}' returned camera output homed to a stream other than the requested host stream",
+                             active_method_id_);
+                    return std::nullopt;
+                }
+            }
+            return output;
+        } catch (const std::exception& error) {
+            LOG_ERROR("Method '{}' camera render failed: {}", active_method_id_, error.what());
+        } catch (...) {
+            LOG_ERROR("Method '{}' camera render failed with an unknown exception", active_method_id_);
+        }
+        return std::nullopt;
+    }
+
     bool TrainerManager::clearTrainer() {
         LOG_DEBUG("Clearing trainer");
 
@@ -820,6 +1026,7 @@ namespace lfs::vis {
         // Pause events and no-thread stops do not run TrainingEnd's clear_snapshot.
         lfs::training::CommandCenter::instance().reset_snapshot();
 
+        cudaStream_t evaluation_stream = nullptr;
         {
             std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
             if (scene_) {
@@ -832,11 +1039,24 @@ namespace lfs::vis {
             splat_interop_allocator_ = {};
             splat_interop_parent_.reset();
             splat_storage_.reset();
+            if (method_evaluation_stream_) {
+                (void)cudaStreamSynchronize(method_evaluation_stream_);
+            }
             if (method_session_) {
                 method_session_->shutdown();
                 method_session_.reset();
             }
+            evaluation_stream = std::exchange(method_evaluation_stream_, nullptr);
             active_method_id_ = "3dgs";
+            active_method_descriptor_.reset();
+            active_method_options_.clear();
+            active_method_params_.reset();
+        }
+        if (evaluation_stream) {
+            // Cached session tensors are gone; release any pool blocks still
+            // associated with their stream before destroying the stream handle.
+            lfs::core::Tensor::trim_memory_pool();
+            (void)cudaStreamDestroy(evaluation_stream);
         }
         checkpoint_baseline_iteration_.reset();
         // Trainer::shutdown() trims before Tensor-valued members are destroyed.
@@ -2048,6 +2268,111 @@ namespace lfs::vis {
             lfs::training::TrainingPhase::Idle);
     }
 
+    void TrainerManager::runFinalMethodEvaluation() {
+        std::optional<MethodDescriptor> descriptor;
+        std::optional<lfs::core::param::TrainingParameters> params;
+        std::optional<std::size_t> primitive_count;
+        int iteration = 0;
+        lfs::core::Scene* evaluation_scene = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
+            if (!method_session_ || !active_method_descriptor_ || !active_method_params_) {
+                return;
+            }
+            descriptor = active_method_descriptor_;
+            params = active_method_params_;
+            evaluation_scene = scene_;
+            const MethodStatus status = method_session_->status();
+            primitive_count = status.primitive_count;
+            iteration = status.iteration;
+        }
+
+        if (!descriptor->capabilities.has(MethodCapability::FramePreview) ||
+            !descriptor->capabilities.has(MethodCapability::HostEvaluation) ||
+            !params->optimization.enable_eval) {
+            return;
+        }
+        if (!evaluation_scene) {
+            LOG_WARN("Method '{}' final evaluation skipped: no scene is available", descriptor->id);
+            return;
+        }
+
+        std::vector<std::shared_ptr<lfs::core::Camera>> validation_cameras;
+        for (auto& camera : evaluation_scene->getActiveCameras()) {
+            if (camera && camera->split() == lfs::core::CameraSplit::Eval) {
+                validation_cameras.push_back(camera);
+            }
+        }
+        if (validation_cameras.empty()) {
+            LOG_WARN("Method '{}' final evaluation skipped: validation split is empty", descriptor->id);
+            return;
+        }
+
+        lfs::training::DatasetConfig dataset_config{
+            .resize_factor = params->dataset.resize_factor,
+            .max_width = params->dataset.max_width,
+            .test_every = params->dataset.test_every,
+        };
+        auto validation_dataset = std::make_shared<lfs::training::CameraDataset>(
+            std::move(validation_cameras), dataset_config, lfs::training::CameraDataset::Split::ALL);
+
+        cudaStream_t evaluation_stream = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
+            if (!method_evaluation_stream_) {
+                const cudaError_t status = cudaStreamCreateWithFlags(
+                    &method_evaluation_stream_, cudaStreamNonBlocking);
+                if (status != cudaSuccess) {
+                    method_evaluation_stream_ = nullptr;
+                    LOG_WARN("Method '{}' final evaluation skipped: failed to create CUDA stream: {}",
+                             descriptor->id,
+                             cudaGetErrorString(status));
+                    return;
+                }
+            }
+            evaluation_stream = method_evaluation_stream_;
+        }
+
+        try {
+            lfs::training::MetricsEvaluator evaluator(*params);
+            std::uint64_t view_generation = 0;
+            const lfs::training::MetricsEvaluator::RenderCallback render_camera =
+                [this,
+                 evaluation_scene,
+                 params = &*params,
+                 evaluation_stream,
+                 &view_generation](lfs::core::Camera& camera)
+                -> std::expected<lfs::core::Tensor, std::string> {
+                ++view_generation;
+                if (view_generation == 0) {
+                    ++view_generation;
+                }
+                auto request = makeMethodEvaluationRequest(
+                    camera, *evaluation_scene, *params, evaluation_stream, view_generation);
+                if (!request) {
+                    return std::unexpected(request.error());
+                }
+
+                const lfs::core::CUDAStreamGuard stream_guard(evaluation_stream);
+                auto output = renderActiveMethodCamera(*request);
+                if (!output) {
+                    return std::unexpected("method returned no evaluation frame");
+                }
+                return normalizeMethodEvaluationRgb(*output, *request);
+            };
+
+            evaluator.print_evaluation_header(iteration);
+            const auto metrics = evaluator.evaluate(
+                iteration, validation_dataset, primitive_count, render_camera);
+            LOG_INFO("Method '{}' final evaluation: {}", descriptor->id, metrics.to_string());
+            evaluator.save_report();
+        } catch (const std::exception& error) {
+            LOG_WARN("Method '{}' final evaluation failed: {}", descriptor->id, error.what());
+        } catch (...) {
+            LOG_WARN("Method '{}' final evaluation failed with an unknown exception", descriptor->id);
+        }
+    }
+
     void TrainerManager::trainingThreadFunc(
         const std::stop_token stop_token,
         std::shared_ptr<IMethodSession> method_session) {
@@ -2059,6 +2384,9 @@ namespace lfs::vis {
                 LOG_DEBUG("Starting method '{}' session with stop token", active_method_id_);
                 method_session->run(stop_token);
                 updateLoss(method_session->status().loss);
+                if (!stop_token.stop_requested()) {
+                    runFinalMethodEvaluation();
+                }
                 const bool user_stopped = getState() == TrainingState::Stopping;
                 LOG_INFO("Method '{}' {}", active_method_id_,
                          user_stopped ? "stopped by user" : "completed successfully");

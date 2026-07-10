@@ -108,6 +108,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 #define GLM_ENABLE_EXPERIMENTAL
@@ -810,6 +811,23 @@ namespace {
         return 0;
     }
 
+    nb::object method_option_to_python(const lfs::vis::MethodOptionValue& value) {
+        return std::visit([](const auto& typed_value) { return nb::cast(typed_value); }, value);
+    }
+
+    nb::dict method_capabilities_to_python(const lfs::vis::MethodCapabilities capabilities) {
+        nb::dict result;
+        result["frame_preview"] = capabilities.has(lfs::vis::MethodCapability::FramePreview);
+        result["host_checkpoint_io"] = capabilities.has(lfs::vis::MethodCapability::HostCheckpointIO);
+        result["host_evaluation"] = capabilities.has(lfs::vis::MethodCapability::HostEvaluation);
+        result["gaussian_scene_model"] = capabilities.has(lfs::vis::MethodCapability::GaussianSceneModel);
+        result["gaussian_parameter_ui"] = capabilities.has(lfs::vis::MethodCapability::GaussianParameterUI);
+        result["gaussian_editing"] = capabilities.has(lfs::vis::MethodCapability::GaussianEditing);
+        result["live_model_vksplat"] = capabilities.has(lfs::vis::MethodCapability::LiveModelVkSplat);
+        result["appearance_correction"] = capabilities.has(lfs::vis::MethodCapability::AppearanceCorrection);
+        return result;
+    }
+
 } // namespace
 
 NB_MODULE(lichtfeld, m) {
@@ -973,6 +991,33 @@ NB_MODULE(lichtfeld, m) {
             return tm && tm->getTrainer() && tm->getTrainer()->is_saving_model();
         },
         "Whether the terminal stop/completion model save is in progress");
+    m.def(
+        "trainer_method_info",
+        []() -> std::optional<nb::dict> {
+            const auto* const trainer_manager = lfs::python::get_trainer_manager();
+            if (!trainer_manager) {
+                return std::nullopt;
+            }
+            const auto info = trainer_manager->activeMethodInfo();
+            if (!info) {
+                return std::nullopt;
+            }
+
+            nb::dict options;
+            for (const auto& [key, value] : info->resolved_options) {
+                options[key.c_str()] = method_option_to_python(value);
+            }
+
+            nb::dict result;
+            result["id"] = info->descriptor.id;
+            result["display_name"] = info->descriptor.display_name;
+            result["primitive_noun"] = info->descriptor.primitive_noun;
+            result["capability_mask"] = info->descriptor.capabilities.mask;
+            result["capabilities"] = method_capabilities_to_python(info->descriptor.capabilities);
+            result["options"] = std::move(options);
+            return result;
+        },
+        "Get the active training method descriptor, capabilities, and resolved options");
 
     m.def(
         "finish_reason",

@@ -639,7 +639,8 @@ namespace lfs::app {
             }
 
             manager->setScene(&scene);
-            manager->setMethodSession(std::move(*session), params.method);
+            manager->setMethodSession(
+                std::move(*session), params.method, params.resolved_method_opts, params);
             return manager;
         }
 
