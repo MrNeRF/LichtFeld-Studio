@@ -383,7 +383,7 @@ T VulkanGSPipeline::readElement(const _VulkanBuffer& buffer, size_t index) {
     if (offset + elementSize > buffer.size)
         _THROW_ERROR("Index out of bound while reading buffer element");
 
-    T outValue;
+    T outValue{};
 
     // Only need elementSize bytes; sizing the staging buffer to the full source buffer
     // (num_splats * 4 in the hot readback path) wasted a one-time MB-scale allocation.
@@ -406,6 +406,10 @@ T VulkanGSPipeline::readElement(const _VulkanBuffer& buffer, size_t index) {
         void* base;
         if (vmaMapMemory(allocator, stager.allocation, &base) != VK_SUCCESS) {
             _THROW_ERROR("Failed to map memory while reading buffer element");
+        }
+        if (vmaInvalidateAllocation(allocator, stager.allocation, 0, elementSize) != VK_SUCCESS) {
+            vmaUnmapMemory(allocator, stager.allocation);
+            _THROW_ERROR("Failed to invalidate memory while reading buffer element");
         }
 
         memcpy(&outValue, base, elementSize);

@@ -1,8 +1,7 @@
 #pragma once
 
 #include <cstdint>
-
-#define ENABLE_ASSERTION 0
+#include <string>
 
 #ifndef SUBGROUP_SIZE
 #define SUBGROUP_SIZE 32
@@ -53,18 +52,10 @@ typedef int32_t sortingKey_t;
         throw std::runtime_error(msg);                                                        \
     } while (0)
 
-#if ENABLE_ASSERTION
 #define _THROW_ERROR(...) _THROW_ERROR_ALWAYS(__VA_ARGS__)
-#else
-#define _THROW_ERROR(...) \
-    do {                  \
-    } while (0)
-#endif
 
-// Always-on guard, NOT compiled out in release. Use only for conditions that would
-// otherwise feed undefined behavior into the Vulkan driver (e.g. a VK_NULL_HANDLE
-// buffer reaching vkCmdDispatch). Logic-only invariants stay on _THROW_ERROR.
-#define _CHECK_FATAL(...) _THROW_ERROR_ALWAYS(__VA_ARGS__)
+// Retained as a semantic alias at call sites that guard driver-facing handles.
+#define _CHECK_FATAL(...) _THROW_ERROR(__VA_ARGS__)
 
-#define _CEIL_DIV(x, m)   (((x) + (m) - 1) / (m))
+#define _CEIL_DIV(x, m)   (((x) + (m)-1) / (m))
 #define _CEIL_ROUND(x, m) (_CEIL_DIV(x, m) * (m))

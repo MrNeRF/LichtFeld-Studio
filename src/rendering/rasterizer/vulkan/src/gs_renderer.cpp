@@ -35,13 +35,16 @@ VulkanGSRenderer::VulkanGSRenderer()
     : VulkanGSPipeline() {
 }
 
-VulkanGSRenderer::~VulkanGSRenderer() {
-    if (commandBatchInProgress)
-        endCommandBatch(false);
-    destroyVisibleCountReadback();
-    destroyLodSelectionReadback();
-    destroyInstanceCountReadback();
-    cleanup();
+VulkanGSRenderer::~VulkanGSRenderer() noexcept {
+    cancelCommandBatch();
+    try {
+        waitForPendingBatch();
+        cleanup();
+    } catch (const std::exception& error) {
+        fprintf(stderr, "VulkanGSRenderer cleanup failed: %s\n", error.what());
+    } catch (...) {
+        fprintf(stderr, "VulkanGSRenderer cleanup failed with an unknown error\n");
+    }
 }
 
 void VulkanGSRenderer::cleanup() {

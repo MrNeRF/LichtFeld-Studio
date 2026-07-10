@@ -117,6 +117,11 @@ namespace PerfTimer {
         return result;
     }
 
+    void discardMarkers() noexcept {
+        marks.clear();
+        pushedMarks.clear();
+    }
+
     std::vector<std::pair<size_t, double>> update(std::vector<double> times,
                                                   const std::vector<Marker>& batch_marks) {
         if (times.size() != batch_marks.size())

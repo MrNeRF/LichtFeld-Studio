@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstring> // memcpy
+#include <exception>
 #include <functional>
 #include <map>
 #include <string>
@@ -25,7 +26,7 @@ public:
     using CpuTimerCallback = std::function<void(std::string_view, double)>;
 
     VulkanGSPipeline();
-    ~VulkanGSPipeline();
+    ~VulkanGSPipeline() noexcept;
 
     void initializeExternal(VkInstance external_instance,
                             VkPhysicalDevice external_physical_device,
@@ -54,6 +55,7 @@ public:
     void endCommandBatch(bool use_fence = true,
                          VkSemaphore signal_semaphore = VK_NULL_HANDLE,
                          std::uint64_t signal_value = 0);
+    void cancelCommandBatch() noexcept;
     void waitForPendingBatch();
     [[nodiscard]] bool timelineValueComplete(VkSemaphore semaphore, std::uint64_t value) const;
     void addTimelineWait(VkSemaphore semaphore, std::uint64_t value, VkPipelineStageFlags stage_mask);
@@ -266,10 +268,12 @@ class [[nodiscard]] DeviceGuard {
     std::uint64_t signal_value = 0;
     const char* debugInfo1 = nullptr;
     int debugInfo2 = -1;
+    int uncaught_exceptions = 0;
 
 public:
     DeviceGuard(VulkanGSPipeline* pipeline, const char* debugInfo1 = nullptr, const int debugInfo2 = -1) {
         this->pipeline = pipeline;
+        uncaught_exceptions = std::uncaught_exceptions();
         cbip = pipeline->isCommandBatchInProgress();
         if (!cbip) {
             pipeline->beginCommandBatch();
@@ -292,14 +296,17 @@ public:
         this->signal_value = signal_value;
     }
     ~DeviceGuard() noexcept(false) {
+        if (std::uncaught_exceptions() > uncaught_exceptions) {
+            pipeline->cancelCommandBatch();
+            return;
+        }
         if (!cbip) {
             pipeline->endCommandBatch(use_fence, signal_semaphore, signal_value);
             if (debugInfo1) {
                 printf("DeviceGuard freed: %s:%d\n", debugInfo1, debugInfo2);
             }
         } else if (cbip != pipeline->isCommandBatchInProgress()) {
-            fprintf(stderr, "commandBatchInProgress changed during DeviceGuard (originally %d)\n", (int)cbip);
-            std::terminate();
+            _THROW_ERROR("commandBatchInProgress changed during DeviceGuard");
         }
     }
 };
@@ -309,10 +316,12 @@ class [[nodiscard]] HostGuard {
     bool cbip;
     const char* debugInfo1 = nullptr;
     int debugInfo2 = -1;
+    int uncaught_exceptions = 0;
 
 public:
     HostGuard(VulkanGSPipeline* pipeline, const char* debugInfo1 = nullptr, const int debugInfo2 = -1) {
         this->pipeline = pipeline;
+        uncaught_exceptions = std::uncaught_exceptions();
         cbip = pipeline->isCommandBatchInProgress();
         if (cbip) {
             pipeline->endCommandBatch();
@@ -324,14 +333,18 @@ public:
         }
     }
     ~HostGuard() noexcept(false) {
+        if (std::uncaught_exceptions() > uncaught_exceptions) {
+            pipeline->cancelCommandBatch();
+            return;
+        }
         if (cbip) {
             pipeline->beginCommandBatch();
             if (debugInfo1) {
                 printf("HostGuard freed: %s:%d\n", debugInfo1, debugInfo2);
             }
         } else if (cbip != pipeline->isCommandBatchInProgress()) {
-            fprintf(stderr, "commandBatchInProgress changed during HostGuard (originally %d)\n", (int)cbip);
-            std::terminate();
+            pipeline->cancelCommandBatch();
+            _THROW_ERROR("commandBatchInProgress changed during HostGuard");
         }
     }
 };

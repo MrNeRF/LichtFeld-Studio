@@ -159,7 +159,7 @@ public:
     };
 
     VulkanGSRenderer();
-    ~VulkanGSRenderer();
+    ~VulkanGSRenderer() noexcept;
 
     void initializeExternal(const std::map<std::string, std::string>& spirv_paths,
                             VkInstance external_instance,

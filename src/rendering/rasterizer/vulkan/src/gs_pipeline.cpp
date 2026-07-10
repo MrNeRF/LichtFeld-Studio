@@ -69,16 +69,6 @@ namespace {
     }
 } // namespace
 
-#if defined(__SSE2__) || defined(_MSC_VER)
-#define SSE2_AVAILABLE 1
-#include <immintrin.h>
-#ifdef _MSC_VER
-#include <intrin.h>
-#else
-#include <x86intrin.h>
-#endif
-#endif
-
 std::vector<uint32_t> loadSpirv(std::string spirv_path) {
 // Load the SPIR-V file
 #ifdef WIN32
@@ -115,10 +105,15 @@ VulkanGSPipeline::VulkanGSPipeline() : instance(VK_NULL_HANDLE),
                                        queue_family_index(UINT32_MAX) {
 }
 
-VulkanGSPipeline::~VulkanGSPipeline() {
-    if (commandBatchInProgress)
-        endCommandBatch(false);
-    cleanup();
+VulkanGSPipeline::~VulkanGSPipeline() noexcept {
+    cancelCommandBatch();
+    try {
+        cleanup();
+    } catch (const std::exception& error) {
+        fprintf(stderr, "VulkanGSPipeline cleanup failed: %s\n", error.what());
+    } catch (...) {
+        fprintf(stderr, "VulkanGSPipeline cleanup failed with an unknown error\n");
+    }
 }
 
 void VulkanGSPipeline::initializeExternal(VkInstance external_instance,
@@ -441,10 +436,6 @@ void VulkanGSPipeline::beginCommandBatch() {
     timestamp_query_pool = slot.timestamp_query_pool;
     timestampNumWritten = 0;
     timestampStackDepth = 0;
-    commandBatchInProgress = true;
-
-    PerfTimer::hostToc();
-
     VkCommandBufferBeginInfo begin_info = {};
     begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -452,8 +443,41 @@ void VulkanGSPipeline::beginCommandBatch() {
     if (vkBeginCommandBuffer(command_buffer, &begin_info) != VK_SUCCESS)
         _THROW_ERROR("Failed to begin command buffer for batch");
 
-    vkCmdResetQueryPool(command_buffer, timestamp_query_pool, 0, MAX_TIMESTAMP_QUERY_COUNT);
-    PerfTimer::popMarkers(this);
+    commandBatchInProgress = true;
+    try {
+        PerfTimer::hostToc();
+        vkCmdResetQueryPool(command_buffer, timestamp_query_pool, 0, MAX_TIMESTAMP_QUERY_COUNT);
+        PerfTimer::popMarkers(this);
+    } catch (...) {
+        cancelCommandBatch();
+        throw;
+    }
+}
+
+void VulkanGSPipeline::cancelCommandBatch() noexcept {
+    const bool was_recording = commandBatchInProgress;
+    commandBatchInProgress = false;
+    pending_timeline_waits_.clear();
+    timestampNumWritten = 0;
+    timestampStackDepth = 0;
+    PerfTimer::discardMarkers();
+
+    if (!was_recording)
+        return;
+
+    if (device != VK_NULL_HANDLE && command_buffer != VK_NULL_HANDLE) {
+        const VkResult result = vkResetCommandBuffer(command_buffer, 0);
+        if (result != VK_SUCCESS) {
+            fprintf(stderr, "Failed to reset cancelled Vulkan command buffer: %d\n", static_cast<int>(result));
+        }
+    }
+    try {
+        PerfTimer::hostTic();
+    } catch (const std::exception& error) {
+        fprintf(stderr, "Failed to restore Vulkan host timer after batch cancellation: %s\n", error.what());
+    } catch (...) {
+        fprintf(stderr, "Failed to restore Vulkan host timer after batch cancellation\n");
+    }
 }
 
 void VulkanGSPipeline::waitForPendingBatch() {
@@ -508,12 +532,14 @@ void VulkanGSPipeline::collectTimestampResults(CommandBatchSlot& slot,
     double timestampPeriod = deviceProperties.limits.timestampPeriod;
 
     std::vector<uint64_t> timestamps(timestamp_count);
-    vkGetQueryPoolResults(
+    const VkResult result = vkGetQueryPoolResults(
         device, slot.timestamp_query_pool,
         0, timestamp_count,
         sizeof(uint64_t) * timestamp_count,
         timestamps.data(), sizeof(uint64_t),
         VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+    if (result != VK_SUCCESS)
+        _THROW_ERROR("Failed to collect timestamp query results");
     std::vector<double> times(timestamp_count);
     for (uint32_t i = 0; i < timestamp_count; i++)
         times[i] = 1e-9 * double(timestamps[i] - timestamps[0]) * timestampPeriod;
@@ -552,6 +578,7 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence,
     {
         [[maybe_unused]] auto cpu_timer = timeCpuStage("vksplat.command_batch.vkEndCommandBuffer");
         if (vkEndCommandBuffer(command_buffer) != VK_SUCCESS) {
+            cancelCommandBatch();
             _THROW_ERROR("Failed to end command buffer for batch");
         }
     }
@@ -604,6 +631,7 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence,
         [[maybe_unused]] auto cpu_timer = timeCpuStage("vksplat.command_batch.vkQueueSubmit");
         if (vkQueueSubmit(command_queue, 1, &submit_info,
                           use_fence ? fence : VK_NULL_HANDLE) != VK_SUCCESS) {
+            cancelCommandBatch();
             _THROW_ERROR("Failed to submit batch");
         }
     }
@@ -613,29 +641,27 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence,
 
     if (use_fence) {
         [[maybe_unused]] auto cpu_timer = timeCpuStage("vksplat.command_batch.wait_fence");
-#if SSE2_AVAILABLE
-#if ENABLE_ASSERTION
-        constexpr unsigned long long kTimeout = 0x100000000ull;
-        auto time0 = __rdtsc();
-#endif
-        while (vkGetFenceStatus(device, fence) != VK_SUCCESS) {
-            _mm_pause();
-#if ENABLE_ASSERTION
-            if (__rdtsc() - time0 >= kTimeout) {
-                // _THROW_ERROR("Fence timed out");
-                printf("\033[91m%s\033[m\n", "Timed out.");
-                std::terminate(); // note that this is often in destructor
-            }
-#endif
+        const VkResult wait_result = vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
+        if (wait_result != VK_SUCCESS) {
+            PerfTimer::discardMarkers();
+            timestampNumWritten = 0;
+            PerfTimer::hostTic();
+            _THROW_ERROR("Failed to wait for command batch fence");
         }
-#else
-        vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
-#endif
-        if (vkResetFences(device, 1, &fence) != VK_SUCCESS)
+        if (vkResetFences(device, 1, &fence) != VK_SUCCESS) {
+            PerfTimer::discardMarkers();
+            timestampNumWritten = 0;
+            PerfTimer::hostTic();
             _THROW_ERROR("Failed to reset fence");
+        }
     } else if (signal_semaphore == VK_NULL_HANDLE || signal_value == 0) {
         [[maybe_unused]] auto cpu_timer = timeCpuStage("vksplat.command_batch.wait_idle");
-        vkQueueWaitIdle(command_queue);
+        if (vkQueueWaitIdle(command_queue) != VK_SUCCESS) {
+            PerfTimer::discardMarkers();
+            timestampNumWritten = 0;
+            PerfTimer::hostTic();
+            _THROW_ERROR("Failed to wait for command queue idle");
+        }
     }
 
     PerfTimer::hostTic();
@@ -651,9 +677,15 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence,
 
     if (timestampNumWritten > 0) {
         slot.pending_timestamp_marks = PerfTimer::takeMarkers();
-        collectTimestampResults(slot, timestampNumWritten);
-        slot.pending_timestamp_marks.clear();
-        timestampNumWritten = 0;
+        try {
+            collectTimestampResults(slot, timestampNumWritten);
+            slot.pending_timestamp_marks.clear();
+            timestampNumWritten = 0;
+        } catch (...) {
+            slot.pending_timestamp_marks.clear();
+            timestampNumWritten = 0;
+            throw;
+        }
     }
 }
 
