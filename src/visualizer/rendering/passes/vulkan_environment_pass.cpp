@@ -12,6 +12,7 @@
 #include "window/vulkan_context.hpp"
 
 #include <OpenImageIO/imageio.h>
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <format>
@@ -81,7 +82,11 @@ namespace lfs::vis {
         VkSampler sampler = VK_NULL_HANDLE;
         VkDescriptorSetLayout desc_layout = VK_NULL_HANDLE;
         VkDescriptorPool desc_pool = VK_NULL_HANDLE;
-        VkDescriptorSet desc_set = VK_NULL_HANDLE;
+        struct FrameDescriptor {
+            VkDescriptorSet set = VK_NULL_HANDLE;
+            VkImageView bound_view = VK_NULL_HANDLE;
+        };
+        std::vector<FrameDescriptor> frame_descriptors;
         VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
         VkCommandPool transfer_pool = VK_NULL_HANDLE;
@@ -131,8 +136,8 @@ namespace lfs::vis {
             if (desc_pool != VK_NULL_HANDLE) {
                 vkDestroyDescriptorPool(device, desc_pool, nullptr);
                 desc_pool = VK_NULL_HANDLE;
-                desc_set = VK_NULL_HANDLE;
             }
+            frame_descriptors.clear();
             if (desc_layout != VK_NULL_HANDLE) {
                 vkDestroyDescriptorSetLayout(device, desc_layout, nullptr);
                 desc_layout = VK_NULL_HANDLE;
@@ -167,6 +172,23 @@ namespace lfs::vis {
             }
             image_vram_label.clear();
             loaded_path.clear();
+            for (auto& descriptor : frame_descriptors) {
+                descriptor.bound_view = VK_NULL_HANDLE;
+            }
+        }
+
+        bool retireAndDestroyImage(const char* const reason) {
+            if (image == VK_NULL_HANDLE) {
+                return true;
+            }
+            if (context != nullptr && !context->waitForSubmittedFrames()) {
+                LOG_ERROR("VulkanEnvironmentPass: could not retire frames before {}: {}",
+                          reason,
+                          context->lastError());
+                return false;
+            }
+            destroyImage();
+            return true;
         }
 
         bool createSampler() {
@@ -197,21 +219,59 @@ namespace lfs::vis {
             }
             VkDescriptorPoolSize ps{};
             ps.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            ps.descriptorCount = 1;
+            const std::uint32_t frame_count = static_cast<std::uint32_t>(
+                std::max<std::size_t>(1, context->framesInFlight()));
+            ps.descriptorCount = frame_count;
             VkDescriptorPoolCreateInfo pci{};
             pci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-            pci.maxSets = 1;
+            pci.maxSets = frame_count;
             pci.poolSizeCount = 1;
             pci.pPoolSizes = &ps;
             if (vkCreateDescriptorPool(device, &pci, nullptr, &desc_pool) != VK_SUCCESS) {
                 return false;
             }
+            std::vector<VkDescriptorSetLayout> layouts(frame_count, desc_layout);
+            std::vector<VkDescriptorSet> sets(frame_count, VK_NULL_HANDLE);
             VkDescriptorSetAllocateInfo ai{};
             ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
             ai.descriptorPool = desc_pool;
-            ai.descriptorSetCount = 1;
-            ai.pSetLayouts = &desc_layout;
-            return vkAllocateDescriptorSets(device, &ai, &desc_set) == VK_SUCCESS;
+            ai.descriptorSetCount = frame_count;
+            ai.pSetLayouts = layouts.data();
+            if (vkAllocateDescriptorSets(device, &ai, sets.data()) != VK_SUCCESS) {
+                return false;
+            }
+            frame_descriptors.resize(frame_count);
+            for (std::size_t i = 0; i < sets.size(); ++i) {
+                frame_descriptors[i].set = sets[i];
+            }
+            return true;
+        }
+
+        [[nodiscard]] FrameDescriptor& descriptorForFrame(const std::size_t frame_slot) {
+            return frame_descriptors[frame_slot % frame_descriptors.size()];
+        }
+
+        [[nodiscard]] const FrameDescriptor& descriptorForFrame(const std::size_t frame_slot) const {
+            return frame_descriptors[frame_slot % frame_descriptors.size()];
+        }
+
+        void rebindDescriptor(FrameDescriptor& descriptor) const {
+            if (image_view == VK_NULL_HANDLE || descriptor.bound_view == image_view) {
+                return;
+            }
+            VkDescriptorImageInfo image_info{};
+            image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            image_info.imageView = image_view;
+            image_info.sampler = sampler;
+            VkWriteDescriptorSet write{};
+            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write.dstSet = descriptor.set;
+            write.dstBinding = 0;
+            write.descriptorCount = 1;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write.pImageInfo = &image_info;
+            vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+            descriptor.bound_view = image_view;
         }
 
         bool createPipeline(VkFormat color_format, VkFormat depth_format) {
@@ -380,7 +440,9 @@ namespace lfs::vis {
         }
 
         bool loadFromPath(const std::filesystem::path& path) {
-            destroyImage();
+            if (!retireAndDestroyImage("environment texture reload")) {
+                return false;
+            }
             if (path.empty()) {
                 return false;
             }
@@ -523,36 +585,23 @@ namespace lfs::vis {
                 return false;
             }
 
-            VkDescriptorImageInfo dii{};
-            dii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            dii.imageView = image_view;
-            dii.sampler = sampler;
-            VkWriteDescriptorSet write{};
-            write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            write.dstSet = desc_set;
-            write.dstBinding = 0;
-            write.descriptorCount = 1;
-            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            write.pImageInfo = &dii;
-            vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
-
             loaded_path = path;
             return true;
         }
 
-        void prepare(const VulkanEnvironmentParams& params) {
+        void prepare(const VulkanEnvironmentParams& params, const std::size_t frame_slot) {
+            auto& descriptor = descriptorForFrame(frame_slot);
             if (!params.enabled) {
-                if (image != VK_NULL_HANDLE)
-                    destroyImage();
+                retireAndDestroyImage("environment texture release");
                 load_failed_for_path = false;
                 return;
             }
             if (params.map_path == loaded_path && image != VK_NULL_HANDLE) {
+                rebindDescriptor(descriptor);
                 return;
             }
             if (params.map_path.empty()) {
-                if (image != VK_NULL_HANDLE)
-                    destroyImage();
+                retireAndDestroyImage("empty environment path");
                 return;
             }
             // Skip retry of a path we've already failed once for, until it changes.
@@ -562,10 +611,15 @@ namespace lfs::vis {
             const bool ok = loadFromPath(params.map_path);
             load_failed_for_path = !ok;
             loaded_path = params.map_path;
+            if (ok) {
+                rebindDescriptor(descriptor);
+            }
         }
 
-        void record(VkCommandBuffer cb, VkRect2D rect, const VulkanEnvironmentParams& params) {
-            if (!params.enabled || pipeline == VK_NULL_HANDLE || image_view == VK_NULL_HANDLE ||
+        void record(VkCommandBuffer cb, VkRect2D rect, const VulkanEnvironmentParams& params,
+                    const std::size_t frame_slot) {
+            const auto& descriptor = descriptorForFrame(frame_slot);
+            if (!params.enabled || pipeline == VK_NULL_HANDLE || descriptor.bound_view == VK_NULL_HANDLE ||
                 screen_quad_buffer == VK_NULL_HANDLE) {
                 return;
             }
@@ -581,7 +635,7 @@ namespace lfs::vis {
 
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout,
-                                    0, 1, &desc_set, 0, nullptr);
+                                    0, 1, &descriptor.set, 0, nullptr);
             VkDeviceSize offset = 0;
             vkCmdBindVertexBuffers(cb, 0, 1, &screen_quad_buffer, &offset);
 
@@ -621,15 +675,17 @@ namespace lfs::vis {
         return impl_->init(context, color_format, depth_format, screen_quad);
     }
 
-    void VulkanEnvironmentPass::prepare(const VulkanEnvironmentParams& params) {
+    void VulkanEnvironmentPass::prepare(const VulkanEnvironmentParams& params,
+                                        const std::size_t frame_slot) {
         if (impl_)
-            impl_->prepare(params);
+            impl_->prepare(params, frame_slot);
     }
 
     void VulkanEnvironmentPass::record(VkCommandBuffer cb, VkRect2D rect,
-                                       const VulkanEnvironmentParams& params) {
+                                       const VulkanEnvironmentParams& params,
+                                       const std::size_t frame_slot) {
         if (impl_)
-            impl_->record(cb, rect, params);
+            impl_->record(cb, rect, params, frame_slot);
     }
 
     void VulkanEnvironmentPass::shutdown() {
@@ -639,8 +695,8 @@ namespace lfs::vis {
         }
     }
 
-    bool VulkanEnvironmentPass::hasTexture() const {
-        return impl_ && impl_->image != VK_NULL_HANDLE;
+    bool VulkanEnvironmentPass::hasTexture(const std::size_t frame_slot) const {
+        return impl_ && impl_->descriptorForFrame(frame_slot).bound_view != VK_NULL_HANDLE;
     }
 
 } // namespace lfs::vis

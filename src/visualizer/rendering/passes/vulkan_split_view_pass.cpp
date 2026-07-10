@@ -126,7 +126,15 @@ namespace lfs::vis {
         VkSampler sampler = VK_NULL_HANDLE;
         VkDescriptorSetLayout desc_layout = VK_NULL_HANDLE;
         VkDescriptorPool desc_pool = VK_NULL_HANDLE;
-        VkDescriptorSet desc_set = VK_NULL_HANDLE;
+        struct FrameDescriptor {
+            VkDescriptorSet set = VK_NULL_HANDLE;
+            VkImageView left_view = VK_NULL_HANDLE;
+            VkImageView right_view = VK_NULL_HANDLE;
+            std::uint64_t left_generation = 0;
+            std::uint64_t right_generation = 0;
+            bool ready = false;
+        };
+        std::vector<FrameDescriptor> frame_descriptors;
         VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
         VkBuffer screen_quad_buffer = VK_NULL_HANDLE;
@@ -138,11 +146,6 @@ namespace lfs::vis {
             std::uint32_t width = 0;
             std::uint32_t height = 0;
             const lfs::core::Tensor* uploaded_tensor = nullptr;
-            // Last bound view (either our staging-uploaded view or an external interop
-            // view supplied via params). Used to detect descriptor-rebind needs.
-            VkImageView bound_view = VK_NULL_HANDLE;
-            std::uint64_t bound_generation = 0;
-
             // Persistent staging: kept alive between frames so identical-size uploads
             // don't repeatedly allocate / map / unmap an 8 MB buffer at 1080p.
             VkBuffer staging_buffer = VK_NULL_HANDLE;
@@ -160,8 +163,6 @@ namespace lfs::vis {
         };
         PanelImage left{};
         PanelImage right{};
-        bool descriptors_dirty = true;
-        bool frame_ready = false;
 
         ~Impl() { destroy(); }
 
@@ -201,8 +202,8 @@ namespace lfs::vis {
             if (desc_pool != VK_NULL_HANDLE) {
                 vkDestroyDescriptorPool(device, desc_pool, nullptr);
                 desc_pool = VK_NULL_HANDLE;
-                desc_set = VK_NULL_HANDLE;
             }
+            frame_descriptors.clear();
             if (desc_layout != VK_NULL_HANDLE) {
                 vkDestroyDescriptorSetLayout(device, desc_layout, nullptr);
                 desc_layout = VK_NULL_HANDLE;
@@ -246,21 +247,40 @@ namespace lfs::vis {
             }
             VkDescriptorPoolSize ps{};
             ps.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            ps.descriptorCount = 2;
+            const std::uint32_t frame_count = static_cast<std::uint32_t>(
+                std::max<std::size_t>(1, context->framesInFlight()));
+            ps.descriptorCount = frame_count * 2;
             VkDescriptorPoolCreateInfo pi{};
             pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-            pi.maxSets = 1;
+            pi.maxSets = frame_count;
             pi.poolSizeCount = 1;
             pi.pPoolSizes = &ps;
             if (vkCreateDescriptorPool(device, &pi, nullptr, &desc_pool) != VK_SUCCESS) {
                 return false;
             }
+            std::vector<VkDescriptorSetLayout> layouts(frame_count, desc_layout);
+            std::vector<VkDescriptorSet> sets(frame_count, VK_NULL_HANDLE);
             VkDescriptorSetAllocateInfo ai{};
             ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
             ai.descriptorPool = desc_pool;
-            ai.descriptorSetCount = 1;
-            ai.pSetLayouts = &desc_layout;
-            return vkAllocateDescriptorSets(device, &ai, &desc_set) == VK_SUCCESS;
+            ai.descriptorSetCount = frame_count;
+            ai.pSetLayouts = layouts.data();
+            if (vkAllocateDescriptorSets(device, &ai, sets.data()) != VK_SUCCESS) {
+                return false;
+            }
+            frame_descriptors.resize(frame_count);
+            for (std::size_t i = 0; i < sets.size(); ++i) {
+                frame_descriptors[i].set = sets[i];
+            }
+            return true;
+        }
+
+        [[nodiscard]] FrameDescriptor& descriptorForFrame(const std::size_t frame_slot) {
+            return frame_descriptors[frame_slot % frame_descriptors.size()];
+        }
+
+        [[nodiscard]] const FrameDescriptor& descriptorForFrame(const std::size_t frame_slot) const {
+            return frame_descriptors[frame_slot % frame_descriptors.size()];
         }
 
         bool createPipeline(VkFormat color_format, VkFormat depth_format) {
@@ -390,50 +410,6 @@ namespace lfs::vis {
             return r == VK_SUCCESS;
         }
 
-        VkCommandBuffer beginSingleTimeCommands() const {
-            VkCommandBufferAllocateInfo a{};
-            a.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-            a.commandPool = transfer_pool;
-            a.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-            a.commandBufferCount = 1;
-            VkCommandBuffer cb = VK_NULL_HANDLE;
-            if (vkAllocateCommandBuffers(device, &a, &cb) != VK_SUCCESS) {
-                return VK_NULL_HANDLE;
-            }
-            VkCommandBufferBeginInfo b{};
-            b.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-            b.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-            if (vkBeginCommandBuffer(cb, &b) != VK_SUCCESS) {
-                vkFreeCommandBuffers(device, transfer_pool, 1, &cb);
-                return VK_NULL_HANDLE;
-            }
-            return cb;
-        }
-
-        bool endSingleTimeCommands(VkCommandBuffer cb) const {
-            if (vkEndCommandBuffer(cb) != VK_SUCCESS) {
-                vkFreeCommandBuffers(device, transfer_pool, 1, &cb);
-                return false;
-            }
-            VkSubmitInfo si{};
-            si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-            si.commandBufferCount = 1;
-            si.pCommandBuffers = &cb;
-            VkFenceCreateInfo fi{};
-            fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-            VkFence fence = VK_NULL_HANDLE;
-            VkResult r = vkCreateFence(device, &fi, nullptr, &fence);
-            if (r == VK_SUCCESS)
-                r = vkQueueSubmit(graphics_queue, 1, &si, fence);
-            if (r == VK_SUCCESS)
-                r = vkWaitForFences(device, 1, &fence, VK_TRUE,
-                                    std::numeric_limits<std::uint64_t>::max());
-            if (fence != VK_NULL_HANDLE)
-                vkDestroyFence(device, fence, nullptr);
-            vkFreeCommandBuffers(device, transfer_pool, 1, &cb);
-            return r == VK_SUCCESS;
-        }
-
         void destroyPanel(PanelImage& p) {
             // Drain any pending transfer submit so we never destroy device memory
             // that the GPU is still reading from.
@@ -481,6 +457,16 @@ namespace lfs::vis {
             p.height = 0;
             p.image_vram_label.clear();
             p.uploaded_tensor = nullptr;
+            for (auto& descriptor : frame_descriptors) {
+                if (&p == &left) {
+                    descriptor.left_view = VK_NULL_HANDLE;
+                    descriptor.left_generation = 0;
+                } else {
+                    descriptor.right_view = VK_NULL_HANDLE;
+                    descriptor.right_generation = 0;
+                }
+                descriptor.ready = false;
+            }
         }
 
         bool ensureStaging(PanelImage& p, VkDeviceSize bytes) {
@@ -558,6 +544,11 @@ namespace lfs::vis {
             if (p.image != VK_NULL_HANDLE && p.width == w && p.height == h) {
                 return true;
             }
+            if (p.image != VK_NULL_HANDLE && context != nullptr && !context->waitForSubmittedFrames()) {
+                LOG_ERROR("VulkanSplitViewPass: could not retire frames before panel resize: {}",
+                          context->lastError());
+                return false;
+            }
             destroyPanel(p);
             VkImageCreateInfo img{};
             img.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -597,7 +588,6 @@ namespace lfs::vis {
             }
             p.width = w;
             p.height = h;
-            descriptors_dirty = true;
             return true;
         }
 
@@ -708,12 +698,13 @@ namespace lfs::vis {
             return true;
         }
 
-        bool rebindDescriptorsIfDirty(const VulkanSplitViewPanel& left_spec,
+        bool rebindDescriptorsIfDirty(FrameDescriptor& descriptor,
+                                      const VulkanSplitViewPanel& left_spec,
                                       VkImageView left_view,
                                       const VulkanSplitViewPanel& right_spec,
                                       VkImageView right_view) {
             if (left_view == VK_NULL_HANDLE || right_view == VK_NULL_HANDLE) {
-                descriptors_dirty = true;
+                descriptor.ready = false;
                 return false;
             }
             const std::uint64_t left_generation =
@@ -721,11 +712,12 @@ namespace lfs::vis {
             const std::uint64_t right_generation =
                 right_spec.external_image_view != VK_NULL_HANDLE ? right_spec.external_image_generation : 0;
             const bool changed =
-                left_view != left.bound_view ||
-                right_view != right.bound_view ||
-                left_generation != left.bound_generation ||
-                right_generation != right.bound_generation;
-            if (!descriptors_dirty && !changed) {
+                left_view != descriptor.left_view ||
+                right_view != descriptor.right_view ||
+                left_generation != descriptor.left_generation ||
+                right_generation != descriptor.right_generation;
+            if (!changed) {
+                descriptor.ready = true;
                 return true;
             }
             std::array<VkDescriptorImageInfo, 2> infos{};
@@ -738,7 +730,7 @@ namespace lfs::vis {
             std::array<VkWriteDescriptorSet, 2> writes{};
             for (std::uint32_t i = 0; i < 2; ++i) {
                 writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                writes[i].dstSet = desc_set;
+                writes[i].dstSet = descriptor.set;
                 writes[i].dstBinding = i;
                 writes[i].descriptorCount = 1;
                 writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -746,11 +738,11 @@ namespace lfs::vis {
             }
             vkUpdateDescriptorSets(device, static_cast<std::uint32_t>(writes.size()),
                                    writes.data(), 0, nullptr);
-            descriptors_dirty = false;
-            left.bound_view = left_view;
-            left.bound_generation = left_generation;
-            right.bound_view = right_view;
-            right.bound_generation = right_generation;
+            descriptor.left_view = left_view;
+            descriptor.left_generation = left_generation;
+            descriptor.right_view = right_view;
+            descriptor.right_generation = right_generation;
+            descriptor.ready = true;
             return true;
         }
 
@@ -764,23 +756,29 @@ namespace lfs::vis {
                 if (!uploadPanel(panel, *spec.image)) {
                     return VK_NULL_HANDLE;
                 }
-                descriptors_dirty = true;
             }
             return panel.view;
         }
 
-        void prepare(const VulkanSplitViewParams& params) {
-            frame_ready = false;
+        void prepare(const VulkanSplitViewParams& params, const std::size_t frame_slot) {
+            auto& descriptor = descriptorForFrame(frame_slot);
+            descriptor.ready = false;
             if (!params.enabled) {
                 return;
             }
             const VkImageView left_view = resolvePanelView(left, params.left);
             const VkImageView right_view = resolvePanelView(right, params.right);
-            frame_ready = rebindDescriptorsIfDirty(params.left, left_view, params.right, right_view);
+            rebindDescriptorsIfDirty(descriptor,
+                                     params.left,
+                                     left_view,
+                                     params.right,
+                                     right_view);
         }
 
-        void record(VkCommandBuffer cb, const VkRect2D& panel_rect, const VulkanSplitViewParams& params) {
-            if (!ready() || !params.enabled || screen_quad_buffer == VK_NULL_HANDLE) {
+        void record(VkCommandBuffer cb, const VkRect2D& panel_rect,
+                    const VulkanSplitViewParams& params, const std::size_t frame_slot) {
+            const auto& descriptor = descriptorForFrame(frame_slot);
+            if (!ready(frame_slot) || !params.enabled || screen_quad_buffer == VK_NULL_HANDLE) {
                 return;
             }
 
@@ -796,7 +794,7 @@ namespace lfs::vis {
 
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout,
-                                    0, 1, &desc_set, 0, nullptr);
+                                    0, 1, &descriptor.set, 0, nullptr);
             VkDeviceSize off = 0;
             vkCmdBindVertexBuffers(cb, 0, 1, &screen_quad_buffer, &off);
 
@@ -844,9 +842,11 @@ namespace lfs::vis {
             vkCmdDraw(cb, 6, 1, 0, 0);
         }
 
-        bool ready() const {
-            return frame_ready && pipeline != VK_NULL_HANDLE && left.bound_view != VK_NULL_HANDLE &&
-                   right.bound_view != VK_NULL_HANDLE;
+        bool ready(const std::size_t frame_slot) const {
+            const auto& descriptor = descriptorForFrame(frame_slot);
+            return descriptor.ready && pipeline != VK_NULL_HANDLE &&
+                   descriptor.left_view != VK_NULL_HANDLE &&
+                   descriptor.right_view != VK_NULL_HANDLE;
         }
     };
 
@@ -862,15 +862,17 @@ namespace lfs::vis {
         return impl_->init(context, color_format, depth_format, screen_quad_buffer);
     }
 
-    void VulkanSplitViewPass::prepare(const VulkanSplitViewParams& params) {
+    void VulkanSplitViewPass::prepare(const VulkanSplitViewParams& params,
+                                      const std::size_t frame_slot) {
         if (impl_)
-            impl_->prepare(params);
+            impl_->prepare(params, frame_slot);
     }
 
     void VulkanSplitViewPass::record(VkCommandBuffer cb, const VkRect2D& panel_rect,
-                                     const VulkanSplitViewParams& params) {
+                                     const VulkanSplitViewParams& params,
+                                     const std::size_t frame_slot) {
         if (impl_)
-            impl_->record(cb, panel_rect, params);
+            impl_->record(cb, panel_rect, params, frame_slot);
     }
 
     void VulkanSplitViewPass::shutdown() {
@@ -880,8 +882,8 @@ namespace lfs::vis {
         }
     }
 
-    bool VulkanSplitViewPass::ready() const {
-        return impl_ && impl_->ready();
+    bool VulkanSplitViewPass::ready(const std::size_t frame_slot) const {
+        return impl_ && impl_->ready(frame_slot);
     }
 
 } // namespace lfs::vis

@@ -6,6 +6,7 @@
 
 #include "core/tensor.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <vulkan/vulkan.h>
@@ -40,15 +41,16 @@ namespace lfs::vis {
 
         [[nodiscard]] bool init(VulkanContext& context, VkFormat color_format,
                                 VkFormat depth_format, VkBuffer screen_quad_buffer);
-        void prepare(const VulkanDepthBlitParams& params);
-        void record(VkCommandBuffer cb, VkRect2D rect, const VulkanDepthBlitParams& params);
+        void prepare(const VulkanDepthBlitParams& params, std::size_t frame_slot);
+        void record(VkCommandBuffer cb, VkRect2D rect, const VulkanDepthBlitParams& params,
+                    std::size_t frame_slot);
         void shutdown();
 
-        [[nodiscard]] bool hasDepth() const;
+        [[nodiscard]] bool hasDepth(std::size_t frame_slot) const;
 
         // Bound after prepare(). Lets other passes sample the splat depth
         // surface without re-uploading it.
-        [[nodiscard]] VkImageView depthView() const;
+        [[nodiscard]] VkImageView depthView(std::size_t frame_slot) const;
 
     private:
         struct Impl;

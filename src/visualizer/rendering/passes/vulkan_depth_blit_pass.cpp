@@ -9,11 +9,13 @@
 #include "window/vulkan_barrier2.hpp"
 #include "window/vulkan_context.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <format>
 #include <limits>
 #include <string>
+#include <vector>
 #include <vk_mem_alloc.h>
 
 #include "viewport/depth_blit.frag.spv.h"
@@ -52,7 +54,12 @@ namespace lfs::vis {
 
         VkDescriptorSetLayout desc_layout = VK_NULL_HANDLE;
         VkDescriptorPool desc_pool = VK_NULL_HANDLE;
-        VkDescriptorSet desc_set = VK_NULL_HANDLE;
+        struct FrameDescriptor {
+            VkDescriptorSet set = VK_NULL_HANDLE;
+            VkImageView bound_view = VK_NULL_HANDLE;
+            std::uint64_t bound_generation = 0;
+        };
+        std::vector<FrameDescriptor> frame_descriptors;
         VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
         VkSampler sampler = VK_NULL_HANDLE;
@@ -66,11 +73,6 @@ namespace lfs::vis {
         std::string image_vram_label;
 
         const lfs::core::Tensor* uploaded_tensor = nullptr;
-        std::uint64_t uploaded_generation = 0;
-        // Last view bound to the descriptor (either our staging-uploaded view or an
-        // external interop view). Tracked so we know when to rewrite the descriptor.
-        VkImageView bound_view = VK_NULL_HANDLE;
-        std::uint64_t bound_generation = 0;
 
         // Persistent staging path: keep the upload buffer + transfer cmd between
         // frames so per-frame depth uploads don't allocate / map / submit-and-wait.
@@ -119,8 +121,8 @@ namespace lfs::vis {
             if (desc_pool != VK_NULL_HANDLE) {
                 vkDestroyDescriptorPool(device, desc_pool, nullptr);
                 desc_pool = VK_NULL_HANDLE;
-                desc_set = VK_NULL_HANDLE;
             }
+            frame_descriptors.clear();
             if (desc_layout != VK_NULL_HANDLE) {
                 vkDestroyDescriptorSetLayout(device, desc_layout, nullptr);
                 desc_layout = VK_NULL_HANDLE;
@@ -252,21 +254,40 @@ namespace lfs::vis {
             }
             VkDescriptorPoolSize ps{};
             ps.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            ps.descriptorCount = 1;
+            const std::uint32_t frame_count = static_cast<std::uint32_t>(
+                std::max<std::size_t>(1, context->framesInFlight()));
+            ps.descriptorCount = frame_count;
             VkDescriptorPoolCreateInfo pi{};
             pi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-            pi.maxSets = 1;
+            pi.maxSets = frame_count;
             pi.poolSizeCount = 1;
             pi.pPoolSizes = &ps;
             if (vkCreateDescriptorPool(device, &pi, nullptr, &desc_pool) != VK_SUCCESS) {
                 return false;
             }
+            std::vector<VkDescriptorSetLayout> layouts(frame_count, desc_layout);
+            std::vector<VkDescriptorSet> sets(frame_count, VK_NULL_HANDLE);
             VkDescriptorSetAllocateInfo ai{};
             ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
             ai.descriptorPool = desc_pool;
-            ai.descriptorSetCount = 1;
-            ai.pSetLayouts = &desc_layout;
-            return vkAllocateDescriptorSets(device, &ai, &desc_set) == VK_SUCCESS;
+            ai.descriptorSetCount = frame_count;
+            ai.pSetLayouts = layouts.data();
+            if (vkAllocateDescriptorSets(device, &ai, sets.data()) != VK_SUCCESS) {
+                return false;
+            }
+            frame_descriptors.resize(frame_count);
+            for (std::size_t i = 0; i < sets.size(); ++i) {
+                frame_descriptors[i].set = sets[i];
+            }
+            return true;
+        }
+
+        [[nodiscard]] FrameDescriptor& descriptorForFrame(const std::size_t frame_slot) {
+            return frame_descriptors[frame_slot % frame_descriptors.size()];
+        }
+
+        [[nodiscard]] const FrameDescriptor& descriptorForFrame(const std::size_t frame_slot) const {
+            return frame_descriptors[frame_slot % frame_descriptors.size()];
         }
 
         bool createPipeline(VkFormat color_format, VkFormat depth_format) {
@@ -395,50 +416,6 @@ namespace lfs::vis {
             return r == VK_SUCCESS;
         }
 
-        VkCommandBuffer beginSingleTimeCommands() const {
-            VkCommandBufferAllocateInfo a{};
-            a.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-            a.commandPool = transfer_pool;
-            a.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-            a.commandBufferCount = 1;
-            VkCommandBuffer cb = VK_NULL_HANDLE;
-            if (vkAllocateCommandBuffers(device, &a, &cb) != VK_SUCCESS) {
-                return VK_NULL_HANDLE;
-            }
-            VkCommandBufferBeginInfo b{};
-            b.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-            b.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-            if (vkBeginCommandBuffer(cb, &b) != VK_SUCCESS) {
-                vkFreeCommandBuffers(device, transfer_pool, 1, &cb);
-                return VK_NULL_HANDLE;
-            }
-            return cb;
-        }
-
-        bool endSingleTimeCommands(VkCommandBuffer cb) const {
-            if (vkEndCommandBuffer(cb) != VK_SUCCESS) {
-                vkFreeCommandBuffers(device, transfer_pool, 1, &cb);
-                return false;
-            }
-            VkSubmitInfo si{};
-            si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-            si.commandBufferCount = 1;
-            si.pCommandBuffers = &cb;
-            VkFenceCreateInfo fi{};
-            fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-            VkFence fence = VK_NULL_HANDLE;
-            VkResult r = vkCreateFence(device, &fi, nullptr, &fence);
-            if (r == VK_SUCCESS)
-                r = vkQueueSubmit(graphics_queue, 1, &si, fence);
-            if (r == VK_SUCCESS)
-                r = vkWaitForFences(device, 1, &fence, VK_TRUE,
-                                    std::numeric_limits<std::uint64_t>::max());
-            if (fence != VK_NULL_HANDLE)
-                vkDestroyFence(device, fence, nullptr);
-            vkFreeCommandBuffers(device, transfer_pool, 1, &cb);
-            return r == VK_SUCCESS;
-        }
-
         void destroyImage() {
             // A pending transfer submit may still reference this image. Drain it
             // before destruction so we don't free in-use device memory.
@@ -464,14 +441,33 @@ namespace lfs::vis {
             image_width = 0;
             image_height = 0;
             uploaded_tensor = nullptr;
-            uploaded_generation = 0;
+            for (auto& descriptor : frame_descriptors) {
+                descriptor.bound_view = VK_NULL_HANDLE;
+                descriptor.bound_generation = 0;
+            }
+        }
+
+        bool retireAndDestroyImage(const char* const reason) {
+            if (image == VK_NULL_HANDLE) {
+                return true;
+            }
+            if (context != nullptr && !context->waitForSubmittedFrames()) {
+                LOG_ERROR("VulkanDepthBlitPass: could not retire frames before {}: {}",
+                          reason,
+                          context->lastError());
+                return false;
+            }
+            destroyImage();
+            return true;
         }
 
         bool ensureImage(std::uint32_t w, std::uint32_t h) {
             if (image != VK_NULL_HANDLE && image_width == w && image_height == h) {
                 return true;
             }
-            destroyImage();
+            if (!retireAndDestroyImage("depth image resize")) {
+                return false;
+            }
             VkImageCreateInfo img{};
             img.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
             img.imageType = VK_IMAGE_TYPE_2D;
@@ -509,8 +505,6 @@ namespace lfs::vis {
             }
             image_width = w;
             image_height = h;
-            // Force a rebind: the previous bound view now points at destroyed memory.
-            bound_view = VK_NULL_HANDLE;
             return true;
         }
 
@@ -601,8 +595,11 @@ namespace lfs::vis {
             return true;
         }
 
-        void rebindDescriptor(VkImageView view, const std::uint64_t generation = 0) {
-            if (view == VK_NULL_HANDLE || (view == bound_view && generation == bound_generation)) {
+        void rebindDescriptor(FrameDescriptor& descriptor,
+                              VkImageView view,
+                              const std::uint64_t generation = 0) {
+            if (view == VK_NULL_HANDLE ||
+                (view == descriptor.bound_view && generation == descriptor.bound_generation)) {
                 return;
             }
             VkDescriptorImageInfo di{};
@@ -611,42 +608,46 @@ namespace lfs::vis {
             di.sampler = sampler;
             VkWriteDescriptorSet w{};
             w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            w.dstSet = desc_set;
+            w.dstSet = descriptor.set;
             w.dstBinding = 0;
             w.descriptorCount = 1;
             w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             w.pImageInfo = &di;
             vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
-            bound_view = view;
-            bound_generation = generation;
+            descriptor.bound_view = view;
+            descriptor.bound_generation = generation;
         }
 
-        void prepare(const VulkanDepthBlitParams& params) {
+        void prepare(const VulkanDepthBlitParams& params, const std::size_t frame_slot) {
+            auto& descriptor = descriptorForFrame(frame_slot);
             // Interop fast-path: gui_manager already CUDA-copied the depth tensor into
             // an external Vulkan image and transitioned it to SHADER_READ_ONLY. Just
             // bind that view directly.
             if (params.external_image_view != VK_NULL_HANDLE) {
-                rebindDescriptor(params.external_image_view, params.external_image_generation);
+                rebindDescriptor(descriptor,
+                                 params.external_image_view,
+                                 params.external_image_generation);
                 return;
             }
             if (!params.depth || !params.depth->is_valid()) {
-                if (image != VK_NULL_HANDLE)
-                    destroyImage();
-                bound_view = VK_NULL_HANDLE;
-                bound_generation = 0;
+                descriptor.bound_view = VK_NULL_HANDLE;
+                descriptor.bound_generation = 0;
+                retireAndDestroyImage("depth image release");
                 return;
             }
             if (params.depth.get() == uploaded_tensor && image != VK_NULL_HANDLE) {
-                rebindDescriptor(image_view);
+                rebindDescriptor(descriptor, image_view);
                 return;
             }
             if (uploadDepth(*params.depth)) {
-                rebindDescriptor(image_view);
+                rebindDescriptor(descriptor, image_view);
             }
         }
 
-        void record(VkCommandBuffer cb, VkRect2D rect, const VulkanDepthBlitParams& params) {
-            if (pipeline == VK_NULL_HANDLE || bound_view == VK_NULL_HANDLE ||
+        void record(VkCommandBuffer cb, VkRect2D rect, const VulkanDepthBlitParams& params,
+                    const std::size_t frame_slot) {
+            const auto& descriptor = descriptorForFrame(frame_slot);
+            if (pipeline == VK_NULL_HANDLE || descriptor.bound_view == VK_NULL_HANDLE ||
                 screen_quad_buffer == VK_NULL_HANDLE ||
                 rect.extent.width == 0 || rect.extent.height == 0) {
                 return;
@@ -664,7 +665,7 @@ namespace lfs::vis {
 
             vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
             vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_layout,
-                                    0, 1, &desc_set, 0, nullptr);
+                                    0, 1, &descriptor.set, 0, nullptr);
             VkDeviceSize off = 0;
             vkCmdBindVertexBuffers(cb, 0, 1, &screen_quad_buffer, &off);
 
@@ -691,15 +692,17 @@ namespace lfs::vis {
         return impl_->init(context, color_format, depth_format, screen_quad_buffer);
     }
 
-    void VulkanDepthBlitPass::prepare(const VulkanDepthBlitParams& params) {
+    void VulkanDepthBlitPass::prepare(const VulkanDepthBlitParams& params,
+                                      const std::size_t frame_slot) {
         if (impl_)
-            impl_->prepare(params);
+            impl_->prepare(params, frame_slot);
     }
 
     void VulkanDepthBlitPass::record(VkCommandBuffer cb, VkRect2D rect,
-                                     const VulkanDepthBlitParams& params) {
+                                     const VulkanDepthBlitParams& params,
+                                     const std::size_t frame_slot) {
         if (impl_)
-            impl_->record(cb, rect, params);
+            impl_->record(cb, rect, params, frame_slot);
     }
 
     void VulkanDepthBlitPass::shutdown() {
@@ -709,12 +712,12 @@ namespace lfs::vis {
         }
     }
 
-    bool VulkanDepthBlitPass::hasDepth() const {
-        return impl_ && impl_->bound_view != VK_NULL_HANDLE;
+    bool VulkanDepthBlitPass::hasDepth(const std::size_t frame_slot) const {
+        return impl_ && impl_->descriptorForFrame(frame_slot).bound_view != VK_NULL_HANDLE;
     }
 
-    VkImageView VulkanDepthBlitPass::depthView() const {
-        return impl_ ? impl_->bound_view : VK_NULL_HANDLE;
+    VkImageView VulkanDepthBlitPass::depthView(const std::size_t frame_slot) const {
+        return impl_ ? impl_->descriptorForFrame(frame_slot).bound_view : VK_NULL_HANDLE;
     }
 
 } // namespace lfs::vis

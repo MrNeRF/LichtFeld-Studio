@@ -6,6 +6,7 @@
 
 #include "core/tensor.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <memory>
@@ -52,12 +53,13 @@ namespace lfs::vis {
 
         [[nodiscard]] bool init(VulkanContext& context, VkFormat color_format,
                                 VkFormat depth_format, VkBuffer screen_quad_buffer);
-        void prepare(const VulkanSplitViewParams& params);
+        void prepare(const VulkanSplitViewParams& params, std::size_t frame_slot);
         // panel_rect and params.content_rect are both in framebuffer-space coords.
-        void record(VkCommandBuffer cb, const VkRect2D& panel_rect, const VulkanSplitViewParams& params);
+        void record(VkCommandBuffer cb, const VkRect2D& panel_rect,
+                    const VulkanSplitViewParams& params, std::size_t frame_slot);
         void shutdown();
 
-        [[nodiscard]] bool ready() const;
+        [[nodiscard]] bool ready(std::size_t frame_slot) const;
 
     private:
         struct Impl;
