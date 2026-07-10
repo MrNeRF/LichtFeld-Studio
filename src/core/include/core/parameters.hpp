@@ -14,8 +14,11 @@
 #include <expected>
 #include <filesystem>
 #include <optional>
+#include <map>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <variant>
 #include <vector>
 
 #include <nlohmann/json_fwd.hpp>
@@ -402,6 +405,16 @@ namespace lfs::core {
             const ExplicitTrainingOverrides& overrides);
 
         struct LFS_CORE_API TrainingParameters {
+            using ResolvedMethodOptionValue =
+                std::variant<bool, std::int64_t, double, std::string>;
+            using ResolvedMethodOptions =
+                std::map<std::string, ResolvedMethodOptionValue>;
+
+            std::string method = "3dgs";
+            std::vector<std::pair<std::string, std::string>> method_opts;
+            std::string method_help;
+            ResolvedMethodOptions resolved_method_opts;
+
             DatasetConfig dataset;
             OptimizationParameters optimization;
             ServerConfig server;

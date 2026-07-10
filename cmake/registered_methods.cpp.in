@@ -1,0 +1,16 @@
+/* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+#include "training/method_registry.hpp"
+
+@LFS_METHOD_REGISTRAR_DECLARATIONS@
+
+namespace lfs::vis {
+
+    void registerConfiguredMethods(MethodRegistry& registry) {
+        (void)registry;
+@LFS_METHOD_REGISTRAR_CALLS@
+    }
+
+} // namespace lfs::vis

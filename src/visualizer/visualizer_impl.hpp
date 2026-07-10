@@ -89,6 +89,8 @@ namespace lfs::vis {
         }
         void setShutdownRequestedCallback(std::function<void()> callback) override;
         std::expected<void, std::string> startTraining() override;
+        std::expected<std::filesystem::path, std::string> saveCheckpoint(
+            const std::optional<std::filesystem::path>& path = std::nullopt);
         [[nodiscard]] ProjectTrainingSessionState
         projectTrainingSessionState() const override;
         lfs::Result<void>

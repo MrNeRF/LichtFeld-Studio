@@ -3776,6 +3776,42 @@ namespace lfs::vis {
         return project_lifecycle_
             ->trainingStartOverwriteConflict();
     }
+    std::expected<std::filesystem::path, std::string> VisualizerImpl::saveCheckpoint(
+        const std::optional<std::filesystem::path>& path) {
+        if (trainer_manager_ && trainer_manager_->hasTrainer() &&
+            !trainer_manager_->getTrainer()) {
+            const auto error = std::format(
+                "Method '{}' does not support host checkpoints",
+                trainer_manager_->activeMethodId());
+            LOG_WARN("{}", error);
+            return std::unexpected(error);
+        }
+        if (!trainer_manager_ || !trainer_manager_->getTrainer())
+            return std::unexpected("No active training session");
+
+        auto* const trainer = trainer_manager_->getTrainer();
+        if (trainer_manager_->isTrainingActive()) {
+            if (path) {
+                return std::unexpected(
+                    "Custom checkpoint output paths are not supported while training is active");
+            }
+            return std::unexpected(
+                "Cannot report checkpoint save success while training is active; "
+                "use the async training checkpoint action or stop training first");
+        }
+
+        const int iteration = trainer->get_current_iteration();
+        if (path) {
+            if (auto result = trainer->save_project_to(*path, iteration); !result)
+                return std::unexpected(result.error());
+            return *path;
+        }
+
+        if (!trainer->bound_project_path())
+            return std::unexpected("No project destination is bound");
+        (void)trainer->request_project_save();
+        return *trainer->bound_project_path();
+    }
 
     lfs::Result<void>
     VisualizerImpl::projectSave(

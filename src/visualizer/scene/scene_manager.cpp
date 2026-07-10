@@ -70,6 +70,52 @@ namespace lfs::vis {
 
         void clearMeshCpuCache();
 
+        [[nodiscard]] std::expected<void, std::string> configureMethodSession(
+            core::Scene& scene,
+            lfs::core::param::TrainingParameters& params) {
+            auto* const manager = services().trainerOrNull();
+            if (!manager) {
+                return std::unexpected("No trainer manager");
+            }
+
+            const auto descriptor = manager->methodRegistry().descriptor(params.method);
+            if (!descriptor) {
+                const auto unavailable = manager->methodRegistry().create(params.method);
+                return std::unexpected(unavailable.error());
+            }
+
+            auto options = resolve_method_options(*descriptor, params.method_opts);
+            if (!options) {
+                return std::unexpected(options.error());
+            }
+            params.resolved_method_opts = *options;
+
+            auto session = manager->methodRegistry().create(params.method);
+            if (!session) {
+                return std::unexpected(session.error());
+            }
+
+            MethodCreateContext context{
+                .scene = &scene,
+                .params = &params,
+                .options = std::move(*options),
+                .output_path = params.dataset.output_path,
+                .request_redraw = [] {
+                    if (auto* const rendering = services().renderingOrNull()) {
+                        rendering->markDirty();
+                    }
+                },
+            };
+            if (auto initialized = (*session)->initialize(context); !initialized) {
+                (*session)->shutdown();
+                return std::unexpected(std::format(
+                    "Failed to initialize method '{}': {}", params.method, initialized.error()));
+            }
+
+            manager->setScene(&scene);
+            manager->setMethodSession(std::move(*session), params.method);
+            return {};
+        }
         template <typename TRenderable>
         [[nodiscard]] bool containsRenderableNode(const std::vector<TRenderable>& renderables, const core::NodeId node_id) {
             return std::ranges::any_of(renderables, [node_id](const auto& item) { return item.node_id == node_id; });
@@ -2772,14 +2818,19 @@ namespace lfs::vis {
             }
 
             if (scene_.hasTrainingData()) {
-                auto trainer = std::make_unique<lfs::training::Trainer>(scene_);
-                trainer->setParams(dataset_params);
+                if (dataset_params.method == "3dgs") {
+                    auto trainer = std::make_unique<lfs::training::Trainer>(scene_);
+                    trainer->setParams(dataset_params);
 
-                if (!services().trainerOrNull()) {
-                    return std::unexpected("No trainer manager");
+                    if (!services().trainerOrNull()) {
+                        return std::unexpected("No trainer manager");
+                    }
+                    services().trainerOrNull()->setScene(&scene_);
+                    services().trainerOrNull()->setTrainer(std::move(trainer));
+                } else if (auto configured = configureMethodSession(scene_, *cached_params_);
+                           !configured) {
+                    return configured;
                 }
-                services().trainerOrNull()->setScene(&scene_);
-                services().trainerOrNull()->setTrainer(std::move(trainer));
             }
 
             const size_t num_gaussians = scene_.getTrainingModelGaussianCount();
@@ -2854,18 +2905,25 @@ namespace lfs::vis {
                 return std::unexpected(load_result.error());
             }
 
-            // Create Trainer from Scene
-            auto trainer = std::make_unique<lfs::training::Trainer>(scene_);
-            trainer->setParams(dataset_params);
+            if (dataset_params.method == "3dgs") {
+                // Create Trainer from Scene
+                auto trainer = std::make_unique<lfs::training::Trainer>(scene_);
+                trainer->setParams(dataset_params);
 
-            // Pass trainer to manager
-            if (services().trainerOrNull()) {
-                LOG_DEBUG("Setting trainer in manager");
-                services().trainerOrNull()->setScene(&scene_);
-                services().trainerOrNull()->setTrainer(std::move(trainer));
+                // Pass trainer to manager
+                if (services().trainerOrNull()) {
+                    LOG_DEBUG("Setting trainer in manager");
+                    services().trainerOrNull()->setScene(&scene_);
+                    services().trainerOrNull()->setTrainer(std::move(trainer));
+                } else {
+                    LOG_ERROR("No trainer manager available");
+                    throw std::runtime_error("No trainer manager available");
+                }
             } else {
-                LOG_ERROR("No trainer manager available");
-                throw std::runtime_error("No trainer manager available");
+                if (auto configured = configureMethodSession(scene_, *cached_params_);
+                    !configured) {
+                    return configured;
+                }
             }
 
             // Get info from scene
@@ -3016,6 +3074,11 @@ namespace lfs::vis {
         LOG_TIMER("SceneManager::loadCheckpointForTraining");
 
         try {
+            if (params.method != "3dgs") {
+                throw std::runtime_error(std::format(
+                    "Method '{}' does not support host checkpoints", params.method));
+            }
+
             // === Phase 1: Validate checkpoint BEFORE clearing scene ===
             const auto header_result = lfs::core::load_checkpoint_header(path);
             if (!header_result) {

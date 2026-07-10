@@ -19,6 +19,7 @@
 #include "preprocessing/preprocess.hpp"
 #include "python/plugin_runner.hpp"
 #include "python/runner.hpp"
+#include "visualizer/training/method_registry.hpp"
 
 #include <cstdlib>
 #include <cuda_runtime.h>
@@ -156,6 +157,41 @@ namespace {
             } else if constexpr (std::is_same_v<T, lfs::core::args::PluginMode>) {
                 return lfs::python::run_plugin_command(mode);
             } else if constexpr (std::is_same_v<T, lfs::core::args::TrainingMode>) {
+                if (!mode.params->method_help.empty()) {
+                    lfs::app::Application app;
+                    return app.run(std::move(mode.params));
+                }
+
+                lfs::vis::MethodRegistry method_registry;
+                lfs::vis::registerConfiguredMethods(method_registry);
+                if (mode.params->method == "3dgs") {
+                    if (!mode.params->method_opts.empty()) {
+                        std::println(stderr,
+                                     "Error: Method '3dgs' does not accept --method-opt; configure it via standard flags");
+                        return 1;
+                    }
+                } else {
+                    const auto descriptor = method_registry.descriptor(mode.params->method);
+                    if (!descriptor) {
+                        const auto unavailable = method_registry.create(mode.params->method);
+                        std::println(stderr, "Error: {}", unavailable.error());
+                        return 1;
+                    }
+                    if (mode.params->resume_checkpoint || mode.params->resume_project) {
+                        std::println(stderr,
+                                     "Error: Method '{}' does not support host checkpoints or --resume",
+                                     mode.params->method);
+                        return 1;
+                    }
+                    auto options = lfs::vis::resolve_method_options(
+                        *descriptor, mode.params->method_opts);
+                    if (!options) {
+                        std::println(stderr, "Error: {}", options.error());
+                        return 1;
+                    }
+                    mode.params->resolved_method_opts = *options;
+                }
+
                 LOG_INFO("LichtFeld Studio");
                 LOG_INFO("version {} | tag {}", GIT_TAGGED_VERSION, GIT_COMMIT_HASH_SHORT);
 

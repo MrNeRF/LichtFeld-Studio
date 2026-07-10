@@ -6,6 +6,26 @@
 include(${CMAKE_SOURCE_DIR}/cmake/FetchLibvterm.cmake)
 include(${CMAKE_SOURCE_DIR}/cmake/CompileShaders.cmake)
 
+get_property(LFS_CONFIGURED_METHOD_TARGETS GLOBAL PROPERTY LFS_SOURCE_METHOD_TARGETS)
+get_property(LFS_CONFIGURED_METHOD_REGISTRARS GLOBAL PROPERTY LFS_SOURCE_METHOD_REGISTRARS)
+
+set(LFS_METHOD_REGISTRAR_DECLARATIONS)
+set(LFS_METHOD_REGISTRAR_CALLS)
+foreach(LFS_METHOD_REGISTRAR IN LISTS LFS_CONFIGURED_METHOD_REGISTRARS)
+    string(APPEND LFS_METHOD_REGISTRAR_DECLARATIONS
+        "extern \"C\" void ${LFS_METHOD_REGISTRAR}(lfs::vis::MethodRegistry& registry);\n")
+    string(APPEND LFS_METHOD_REGISTRAR_CALLS
+        "        ::${LFS_METHOD_REGISTRAR}(registry);\n")
+endforeach()
+
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set(LFS_REGISTERED_METHODS_CPP
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/registered_methods.cpp")
+configure_file(
+    "${CMAKE_SOURCE_DIR}/cmake/registered_methods.cpp.in"
+    "${LFS_REGISTERED_METHODS_CPP}"
+    @ONLY)
+
 # SHARED on Windows to avoid singleton duplication across .exe/.pyd boundary
 if(WIN32)
     set(LFS_VIS_LIB_TYPE SHARED)
@@ -137,8 +157,11 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         input/sdl_key_mapping.cpp
 
         # Training integration
+        training/method_session.cpp
+        training/method_registry.cpp
         training/training_state.cpp
         training/training_manager.cpp
+        ${LFS_REGISTERED_METHODS_CPP}
 
         # Tools
         tools/selection_tool.cpp
@@ -260,6 +283,10 @@ set_property(SOURCE
     gui/gui_manager.cpp
     rendering/passes/vulkan_environment_pass.cpp
     APPEND PROPERTY COMPILE_DEFINITIONS FMT_HEADER_ONLY=1)
+
+if(LFS_CONFIGURED_METHOD_TARGETS)
+    target_link_libraries(lfs_visualizer PRIVATE ${LFS_CONFIGURED_METHOD_TARGETS})
+endif()
 
 # Linux folder pickers bypass NFD and call GTK directly so they can return
 # the currently-open folder rather than the highlighted child. Set up by

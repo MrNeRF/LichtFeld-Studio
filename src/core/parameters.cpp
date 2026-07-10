@@ -800,6 +800,18 @@ namespace lfs::core {
                 json["dataset"] = params.dataset.to_json();
                 json["server"] = params.server.to_json();
                 json["optimization"] = opt_copy.to_json();
+                if (params.method != "3dgs") {
+                    json["method"] = params.method;
+                    auto& method_options = json["method_options"];
+                    method_options = nlohmann::json::object();
+                    for (const auto& [key, value] : params.resolved_method_opts) {
+                        std::visit(
+                            [&method_options, &key](const auto& resolved_value) {
+                                method_options[key] = resolved_value;
+                            },
+                            value);
+                    }
+                }
 
                 const auto now = std::chrono::system_clock::now();
                 const auto time_t_val = std::chrono::system_clock::to_time_t(now);

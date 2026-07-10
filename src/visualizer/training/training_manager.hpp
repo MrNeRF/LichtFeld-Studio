@@ -10,6 +10,8 @@
 #include "core/parameters.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "io/session_chapters.hpp"
+#include "method_registry.hpp"
+#include "method_session.hpp"
 #include "training/trainer.hpp"
 #include "training_state.hpp"
 #include <atomic>
@@ -60,7 +62,14 @@ namespace lfs::vis {
         void setTrainer(std::unique_ptr<lfs::training::Trainer> trainer);
         void setTrainerFromCheckpoint(std::unique_ptr<lfs::training::Trainer> trainer, int checkpoint_iteration);
         [[nodiscard]] bool clearTrainer();
+        void setMethodSession(
+            std::unique_ptr<IMethodSession> session,
+            std::string method_id = {});
         bool hasTrainer() const;
+
+        [[nodiscard]] MethodRegistry& methodRegistry() { return method_registry_; }
+        [[nodiscard]] const MethodRegistry& methodRegistry() const { return method_registry_; }
+        [[nodiscard]] const std::string& activeMethodId() const { return active_method_id_; }
 
         // Link to viewer for notifications
         void setViewer(VisualizerImpl* viewer) { viewer_ = viewer; }
@@ -75,6 +84,7 @@ namespace lfs::vis {
         void resumeTraining();
         void stopTraining();
         bool requestSaveProject();
+        void requestSaveCheckpoint();
         // Suppress the completion notification modal for the next TrainingCompleted
         // dispatch (stop initiated by New Project / app close / reset, issue #1604).
         void suppressCompletionNotification() { suppress_completion_notification_.store(true, std::memory_order_relaxed); }
@@ -86,6 +96,7 @@ namespace lfs::vis {
         };
 
         void pauseTrainingTemporary();
+        [[nodiscard]] bool pauseTrainingTemporaryIfActive();
         [[nodiscard]] TemporaryPauseResult pauseTrainingTemporaryAndWait(std::chrono::milliseconds timeout);
         void resumeTrainingTemporary();
 
@@ -131,7 +142,8 @@ namespace lfs::vis {
         int getNumSplats() const;
         int getMaxGaussians() const;
         std::vector<size_t> getSaveSteps() const;
-        void setSaveSteps(std::vector<size_t> save_steps);
+        bool setSaveSteps(std::vector<size_t> save_steps);
+        bool canEditSaveSteps() const;
         const char* getStrategyType() const;
         bool isGutEnabled() const;
 
@@ -253,6 +265,9 @@ namespace lfs::vis {
 
         // Member variables
         std::unique_ptr<lfs::training::Trainer> trainer_;
+        MethodRegistry method_registry_;
+        std::unique_ptr<IMethodSession> method_session_;
+        std::string active_method_id_ = "3dgs";
         std::unique_ptr<std::jthread> training_thread_;
         std::optional<std::stop_source> training_stop_source_;
         std::mutex training_thread_mutex_;

@@ -32,6 +32,7 @@
 #include "tcp/include/tcp_responder.hpp"
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
+#include "visualizer/training/method_registry.hpp"
 #include "visualizer/training/training_manager.hpp"
 #include "visualizer/visualizer.hpp"
 
@@ -51,6 +52,9 @@
 #include "visualizer/gui/windows/video_extractor_dialog.hpp"
 #include "visualizer/input/input_bindings.hpp"
 #include "visualizer/preferences.hpp"
+#include <algorithm>
+#include <array>
+#include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <cuda_runtime.h>
@@ -62,6 +66,9 @@
 #include <rasterization_api.h>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <type_traits>
+#include <variant>
 
 #ifdef WIN32
 #include <windows.h>
@@ -114,6 +121,174 @@ namespace lfs::app {
                 .detail = std::move(detail),
                 .detection = source,
             });
+        }
+
+        [[nodiscard]] std::string_view methodOptionTypeName(
+            const vis::MethodOptionSpec::Type type) {
+            using Type = vis::MethodOptionSpec::Type;
+            switch (type) {
+            case Type::Bool: return "bool";
+            case Type::Int: return "int";
+            case Type::Float: return "float";
+            case Type::String: return "string";
+            case Type::Path: return "path";
+            case Type::Enum: return "enum";
+            }
+            return "unknown";
+        }
+
+        [[nodiscard]] std::string methodOptionValueString(
+            const vis::MethodOptionValue& value) {
+            return std::visit(
+                [](const auto& typed_value) -> std::string {
+                    using Value = std::decay_t<decltype(typed_value)>;
+                    if constexpr (std::is_same_v<Value, bool>) {
+                        return typed_value ? "true" : "false";
+                    } else if constexpr (std::is_same_v<Value, std::string>) {
+                        return typed_value;
+                    } else {
+                        return std::format("{}", typed_value);
+                    }
+                },
+                value);
+        }
+
+        [[nodiscard]] std::string methodCapabilitiesString(
+            const vis::MethodCapabilities capabilities) {
+            static constexpr std::array capability_names{
+                std::pair{vis::MethodCapability::FramePreview, "frame-preview"},
+                std::pair{vis::MethodCapability::HostCheckpointIO, "host-checkpoint-io"},
+                std::pair{vis::MethodCapability::HostEvaluation, "host-evaluation"},
+                std::pair{vis::MethodCapability::GaussianSceneModel, "gaussian-scene-model"},
+                std::pair{vis::MethodCapability::GaussianParameterUI, "gaussian-parameter-ui"},
+                std::pair{vis::MethodCapability::GaussianEditing, "gaussian-editing"},
+                std::pair{vis::MethodCapability::LiveModelVkSplat, "live-model-vksplat"},
+                std::pair{vis::MethodCapability::AppearanceCorrection, "appearance-correction"},
+            };
+
+            std::string result;
+            for (const auto& [capability, name] : capability_names) {
+                if (!capabilities.has(capability)) {
+                    continue;
+                }
+                if (!result.empty()) {
+                    result += ", ";
+                }
+                result += name;
+            }
+            return result.empty() ? "(none)" : result;
+        }
+
+        void printMethodDescriptor(const vis::MethodDescriptor& descriptor) {
+            std::println("Method: {}", descriptor.id);
+            std::println("Display name: {}", descriptor.display_name);
+            std::println("Version: {}", descriptor.version.empty() ? "unspecified" : descriptor.version);
+            std::println("Primitive noun: {}", descriptor.primitive_noun);
+            std::println("Capabilities: {}", methodCapabilitiesString(descriptor.capabilities));
+            std::println("Options:");
+            if (descriptor.options.empty()) {
+                std::println("  (none)");
+                return;
+            }
+
+            for (const auto& option : descriptor.options) {
+                std::string constraints;
+                if (option.min_value || option.max_value) {
+                    constraints = std::format(
+                        ", range={}..{}",
+                        option.min_value ? std::format("{}", *option.min_value) : "-inf",
+                        option.max_value ? std::format("{}", *option.max_value) : "+inf");
+                }
+                if (!option.choices.empty()) {
+                    std::string choices;
+                    for (const auto& choice : option.choices) {
+                        if (!choices.empty()) {
+                            choices += ", ";
+                        }
+                        choices += choice;
+                    }
+                    constraints += std::format(", choices=[{}]", choices);
+                }
+                if (option.restart_required) {
+                    constraints += ", restart-required";
+                }
+
+                std::println(
+                    "  {} ({}) - {} [default={}{}]",
+                    option.key,
+                    methodOptionTypeName(option.type),
+                    option.display_name,
+                    methodOptionValueString(option.default_value),
+                    constraints);
+                if (!option.doc.empty()) {
+                    std::println("    {}", option.doc);
+                }
+            }
+        }
+
+        [[nodiscard]] std::expected<void, std::string> validateMethodConfiguration(
+            core::param::TrainingParameters& params,
+            const vis::MethodRegistry& registry) {
+            if (params.method == "3dgs") {
+                params.resolved_method_opts.clear();
+                if (!params.method_opts.empty()) {
+                    return std::unexpected(
+                        "Method '3dgs' does not accept --method-opt; configure it via standard flags");
+                }
+                return {};
+            }
+            if (params.resume_checkpoint) {
+                return std::unexpected(std::format(
+                    "Method '{}' does not support host checkpoints or --resume", params.method));
+            }
+
+            const auto descriptor = registry.descriptor(params.method);
+            if (!descriptor) {
+                const auto unavailable = registry.create(params.method);
+                return std::unexpected(unavailable.error());
+            }
+            auto options = vis::resolve_method_options(*descriptor, params.method_opts);
+            if (!options) {
+                return std::unexpected(options.error());
+            }
+            params.resolved_method_opts = *options;
+            return {};
+        }
+
+        [[nodiscard]] int printMethodHelp(
+            const std::string& method_id,
+            const vis::MethodRegistry& registry) {
+            if (method_id == "3dgs") {
+                const vis::MethodDescriptor descriptor{
+                    .id = "3dgs",
+                    .display_name = "3D Gaussian Splatting",
+                    .primitive_noun = "gaussians",
+                    .capabilities = {
+                        vis::MethodCapability::FramePreview,
+                        vis::MethodCapability::HostCheckpointIO,
+                        vis::MethodCapability::HostEvaluation,
+                        vis::MethodCapability::GaussianSceneModel,
+                        vis::MethodCapability::GaussianParameterUI,
+                        vis::MethodCapability::GaussianEditing,
+                        vis::MethodCapability::LiveModelVkSplat,
+                        vis::MethodCapability::AppearanceCorrection,
+                    },
+                    .options = {},
+                    .version = "built-in",
+                };
+                printMethodDescriptor(descriptor);
+                std::println("Note: built-in; configure via standard flags.");
+                return 0;
+            }
+
+            const auto descriptor = registry.descriptor(method_id);
+            if (!descriptor) {
+                const auto unavailable = registry.create(method_id);
+                std::println(stderr, "Error: {}", unavailable.error());
+                return 1;
+            }
+            printMethodDescriptor(*descriptor);
+            return 0;
         }
 
         std::expected<core::param::TrainingParameters, std::string> loadCheckpointParams(const core::param::TrainingParameters& params, core::Scene& scene) {
@@ -421,7 +596,162 @@ namespace lfs::app {
             };
         }
 
+        [[nodiscard]] std::expected<std::shared_ptr<vis::TrainerManager>, std::string>
+        prepareHeadlessMethod(
+            core::param::TrainingParameters& params,
+            core::Scene& scene) {
+            auto manager = std::make_shared<vis::TrainerManager>();
+            const auto descriptor = manager->methodRegistry().descriptor(params.method);
+            if (!descriptor) {
+                const auto unavailable = manager->methodRegistry().create(params.method);
+                return std::unexpected(unavailable.error());
+            }
+
+            auto options = vis::resolve_method_options(*descriptor, params.method_opts);
+            if (!options) {
+                return std::unexpected(options.error());
+            }
+            params.resolved_method_opts = *options;
+
+            auto session = manager->methodRegistry().create(params.method);
+            if (!session) {
+                return std::unexpected(session.error());
+            }
+
+            const vis::MethodCreateContext context{
+                .scene = &scene,
+                .params = &params,
+                .options = std::move(*options),
+                .output_path = params.dataset.output_path,
+                .request_redraw = {},
+            };
+            if (auto initialized = (*session)->initialize(context); !initialized) {
+                (*session)->shutdown();
+                return std::unexpected(std::format(
+                    "Failed to initialize method '{}': {}", params.method, initialized.error()));
+            }
+
+            if (const auto saved = core::param::save_training_parameters_to_json(
+                    params, params.dataset.output_path);
+                !saved) {
+                (*session)->shutdown();
+                return std::unexpected(saved.error());
+            }
+
+            manager->setScene(&scene);
+            manager->setMethodSession(std::move(*session), params.method);
+            return manager;
+        }
+
+        [[nodiscard]] std::expected<void, std::string> runHeadlessMethodToCompletion(
+            const std::shared_ptr<vis::TrainerManager>& manager) {
+            if (!manager->startTraining()) {
+                return std::unexpected(
+                    manager->getLastError().empty()
+                        ? "Failed to start method session"
+                        : manager->getLastError());
+            }
+
+            int last_reported_iteration = -1;
+            while (manager->getState() == vis::TrainingState::Running ||
+                   manager->getState() == vis::TrainingState::Paused ||
+                   manager->getState() == vis::TrainingState::Stopping) {
+                const int iteration = manager->getCurrentIteration();
+                const int total_iterations = manager->getTotalIterations();
+                const int report_interval = std::max(1, total_iterations / 10);
+                if (last_reported_iteration < 0 ||
+                    iteration >= last_reported_iteration + report_interval ||
+                    (total_iterations > 0 && iteration >= total_iterations)) {
+                    LOG_INFO(
+                        "Method '{}' progress: iteration {}/{}, loss={:.6f}",
+                        manager->activeMethodId(),
+                        iteration,
+                        total_iterations,
+                        manager->getCurrentLoss());
+                    last_reported_iteration = iteration;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(25));
+            }
+
+            if (!manager->waitForCompletion()) {
+                return std::unexpected("Timed out waiting for method session completion");
+            }
+            if (manager->getStateMachine().getFinishReason() == vis::FinishReason::Error) {
+                return std::unexpected(manager->getLastError());
+            }
+            LOG_INFO(
+                "Method '{}' finished at iteration {}/{} with loss {:.6f}",
+                manager->activeMethodId(),
+                manager->getCurrentIteration(),
+                manager->getTotalIterations(),
+                manager->getCurrentLoss());
+            return {};
+        }
+
+        int runHeadlessMethod(
+            std::unique_ptr<core::param::TrainingParameters> params,
+            const bool with_tcp) {
+            if (params->dataset.data_path.empty()) {
+                LOG_ERROR("Headless method mode requires --data-path");
+                return 1;
+            }
+
+            if (!preflightGpu(false)) {
+                return 1;
+            }
+            lfs::event::CommandCenterBridge::instance().set(&lfs::training::CommandCenter::instance());
+
+            int result_code = 0;
+            {
+                core::Scene scene;
+                if (const auto loaded = training::loadTrainingDataIntoScene(*params, scene); !loaded) {
+                    LOG_ERROR("Failed to load training data: {}", loaded.error());
+                    return 1;
+                }
+
+                auto prepared = prepareHeadlessMethod(*params, scene);
+                if (!prepared) {
+                    LOG_ERROR("{}", prepared.error());
+                    return 1;
+                }
+                auto manager = std::move(*prepared);
+                core::Tensor::trim_memory_pool();
+
+                std::expected<void, std::string> completed;
+                if (with_tcp) {
+                    tcp::ResponderServer responder(params->server.tcp_server_connection_port, manager);
+                    tcp::PublisherServer publisher(params->server.tcp_broadcast_connection_port, manager);
+                    responder.start();
+                    publisher.start();
+                    LOG_INFO("Responder server listening on {}", responder.getEndpoint());
+                    LOG_INFO("Publisher server listening on {}", publisher.getEndpoint());
+
+                    completed = runHeadlessMethodToCompletion(manager);
+
+                    publisher.stop();
+                    responder.stop();
+                    responder.join();
+                } else {
+                    completed = runHeadlessMethodToCompletion(manager);
+                }
+
+                if (!completed) {
+                    LOG_ERROR("Method training error: {}", completed.error());
+                    result_code = 1;
+                } else {
+                    LOG_INFO("Headless method training completed");
+                }
+            }
+
+            core::Tensor::shutdown_memory_pool();
+            core::PinnedMemoryAllocator::instance().shutdown();
+            return result_code;
+        }
+
         int runHeadlessWithTCP(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
+            if (params->method != "3dgs") {
+                return runHeadlessMethod(std::move(params), true);
+            }
             if (params->dataset.data_path.empty() &&
                 !params->resume_checkpoint &&
                 !params->resume_project) {
@@ -660,6 +990,10 @@ namespace lfs::app {
         }
 
         int runHeadless(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
+            if (params->method != "3dgs") {
+                return runHeadlessMethod(std::move(params), false);
+            }
+
             if (params->dataset.data_path.empty() &&
                 !params->resume_checkpoint &&
                 !params->resume_project) {
@@ -1405,6 +1739,17 @@ namespace lfs::app {
     } // namespace
 
     int Application::run(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
+        vis::MethodRegistry method_registry;
+        vis::registerConfiguredMethods(method_registry);
+        if (!params->method_help.empty()) {
+            return printMethodHelp(params->method_help, method_registry);
+        }
+        if (auto valid_method = validateMethodConfiguration(*params, method_registry);
+            !valid_method) {
+            LOG_ERROR("{}", valid_method.error());
+            return 1;
+        }
+
         // Pre-initialize CacheLoader for the exe module.
         // On Windows, lfs_io (static lib) is linked into both the exe and
         // lfs_visualizer.dll, giving each its own CacheLoader singleton.

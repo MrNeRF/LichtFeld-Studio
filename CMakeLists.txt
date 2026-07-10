@@ -196,6 +196,9 @@ option(BUILD_FORMAT_TESTS "Build only the CPU-only .licht format tests (no CUDA)
 option(BUILD_UNICODE_TEST_ONLY "Build only Unicode path test (no CUDA)" OFF)
 option(BUILD_LOCALIZATION_TESTS "Register headless localization contract tests without LibTorch" OFF)
 option(LFS_FAST_COMPILE "Optimize measured slow C++ components for build speed instead of runtime speed (WIN32 only)" OFF)
+set(LFS_METHOD_PATHS "" CACHE STRING
+    "Semicolon-separated source directories containing LichtFeld training methods")
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/LfsSourceMethods.cmake")
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/DeveloperOptions.cmake")
@@ -568,6 +571,30 @@ add_subdirectory(src/io)         # I/O module (lfs::io namespace)
 add_subdirectory(src/rendering)  # Rendering module (lfs::rendering namespace)
 add_subdirectory(src/sequencer)  # Sequencer module (lfs::sequencer namespace)
 add_subdirectory(src/preprocessing) # CLI preprocessing module (ONNXRuntime)
+
+set(_lfs_method_build_names)
+foreach(_lfs_method_path IN LISTS LFS_METHOD_PATHS)
+    get_filename_component(_lfs_method_path_abs
+        "${_lfs_method_path}" ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
+    if(NOT IS_DIRECTORY "${_lfs_method_path_abs}" OR
+       NOT EXISTS "${_lfs_method_path_abs}/CMakeLists.txt")
+        message(FATAL_ERROR
+            "LFS_METHOD_PATHS entry '${_lfs_method_path}' must be a directory containing CMakeLists.txt")
+    endif()
+
+    get_filename_component(_lfs_method_build_name "${_lfs_method_path_abs}" NAME)
+    if(_lfs_method_build_name IN_LIST _lfs_method_build_names)
+        message(FATAL_ERROR
+            "LFS_METHOD_PATHS entries must have unique directory names; duplicate '${_lfs_method_build_name}'")
+    endif()
+    list(APPEND _lfs_method_build_names "${_lfs_method_build_name}")
+
+    message(STATUS "Adding LichtFeld source method directory: ${_lfs_method_path_abs}")
+    add_subdirectory(
+        "${_lfs_method_path_abs}"
+        "${CMAKE_BINARY_DIR}/methods/${_lfs_method_build_name}")
+endforeach()
+
 add_subdirectory(src/visualizer) # Visualizer module (lfs::vis namespace)
 add_subdirectory(src/tcp)        # TCP event server (ZMQ responder + publisher)
 add_subdirectory(src/geometry)   # Geometry utilities

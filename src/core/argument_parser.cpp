@@ -548,6 +548,9 @@ namespace {
             ::args::ValueFlag<int> fill_pacing_iter(training_group, "fill_pacing_iter", lfs::core::args::optimization_cli_help("--fill-pacing-iter"), {"fill-pacing-iter"});
             ::args::ValueFlag<int> far_seed_dose(training_group, "far_seed_dose", lfs::core::args::optimization_cli_help("--far-seed-dose"), {"far-seed-dose"});
             ::args::ValueFlag<std::string> bg_mode(training_group, "mode", lfs::core::args::optimization_cli_help("--bg-mode"), {"bg-mode"});
+            ::args::ValueFlag<std::string> method(training_group, "id", "Training method (default: 3dgs)", {"method"});
+            ::args::ValueFlagList<std::string> method_options(training_group, "key=value", "Method option; may be repeated", {"method-opt"});
+            ::args::ValueFlag<std::string> method_help(training_group, "id", "Show help for a training method and exit", {"method-help"});
             ::args::ValueFlag<std::string> bg_color(training_group, "color", "solidcolor background color as #RRGGBB or (R,G,B) with 0-255 channels (default: #000000)", {"bg-color"});
             ::args::ValueFlag<std::string> bg_image_path(training_group, "path", "Background image path (required when --bg-mode image)", {"bg-image-path"});
 
@@ -802,6 +805,24 @@ namespace {
             }
 
             params.include_provenance = !no_provenance;
+
+            if (method) {
+                params.method = ::args::get(method);
+            }
+            if (method_help) {
+                params.method_help = ::args::get(method_help);
+            }
+            if (method_options) {
+                for (const auto& option : ::args::get(method_options)) {
+                    const auto separator = option.find('=');
+                    if (separator == std::string::npos || separator == 0) {
+                        return std::unexpected(std::format(
+                            "Parse error: --method-opt expects key=value, got '{}'", option));
+                    }
+                    params.method_opts.emplace_back(
+                        option.substr(0, separator), option.substr(separator + 1));
+                }
+            }
 
             // NO ARGUMENTS = VIEWER MODE (empty)
             if (args.size() == 1) {

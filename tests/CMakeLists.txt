@@ -357,6 +357,7 @@ set(TEST_FILES
     test_window_state.cpp
     test_crash_handler.cpp
     test_gpu_teardown_order.cpp
+    test_method_registry.cpp
     test_logger.cpp
     test_exif.cpp
     test_system_info.cpp
