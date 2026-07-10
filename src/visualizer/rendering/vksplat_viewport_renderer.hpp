@@ -272,7 +272,6 @@ namespace lfs::vis {
     private:
         struct ComposePipeline;
         struct InputBindingResult {
-            bool uses_temporary_upload_slot = false;
             bool model_snapshot_changed = false;
         };
 
@@ -285,8 +284,7 @@ namespace lfs::vis {
             const lfs::core::SplatData& splat_data,
             std::size_t ring_slot,
             bool force_upload,
-            int upload_sh_degree,
-            bool synchronize_upload = false);
+            int upload_sh_degree);
         [[nodiscard]] std::expected<void, std::string> ensureLodPageInputStorage(
             VulkanContext& context,
             const lfs::core::SplatData& splat_data,
@@ -298,6 +296,7 @@ namespace lfs::vis {
             std::span<const LodPageCache::PendingUpload> uploads,
             std::size_t ring_slot);
         void configureLodUploadEngine(const lfs::core::SplatData& splat_data);
+        void stopLodStreaming(std::string_view reason);
         void discardLodEngineResults(std::vector<LodPageCache::PendingUpload>&& results,
                                      std::string_view reason);
         void logLodUploadProgress(std::size_t published_pages);
@@ -316,8 +315,6 @@ namespace lfs::vis {
             const lfs::rendering::ViewportRenderRequest& request,
             std::size_t num_splats,
             std::size_t ring_slot);
-        [[nodiscard]] bool inputsResident(const lfs::core::SplatData& splat_data,
-                                          std::size_t ring_slot) const;
         [[nodiscard]] std::expected<void, std::string> ensureOutputImages(
             VulkanContext& context,
             glm::ivec2 size,
@@ -349,12 +346,6 @@ namespace lfs::vis {
         static constexpr std::size_t kOverlayRegionCount = 7;
         static constexpr std::size_t kSelectionQueryRegionCount = 8;
         static constexpr std::size_t kRegionAlignment = 256; // VK minStorageBufferOffsetAlignment upper bound on common HW
-        struct CudaInputSlot {
-            VulkanContext::ExternalBuffer buffer{};
-            lfs::rendering::CudaVulkanBufferInterop interop{};
-            std::array<std::size_t, kInputRegionCount> region_offset{};
-            std::array<std::size_t, kInputRegionCount> region_bytes{};
-        };
         struct CudaOpacityCopySlot {
             VulkanContext::ExternalBuffer buffer{};
             lfs::rendering::CudaVulkanBufferInterop interop{};
@@ -415,9 +406,6 @@ namespace lfs::vis {
         };
 
         void detachManagedBuffers();
-        void plugRingInputs(std::size_t ring_slot, std::size_t num_splats, bool reset_cached_raster_state);
-        void aliasSortScratchToInputSlot(std::size_t ring_slot);
-        void releaseInputSlot(VulkanContext& context, std::size_t ring_slot);
         void releaseOpacityCopySlot(VulkanContext& context, std::size_t ring_slot);
         void logVramBreakdownIfChanged(std::string_view reason);
         [[nodiscard]] std::expected<void, std::string> ensureSharedScratchArena(
@@ -618,11 +606,7 @@ namespace lfs::vis {
         // one-frame clamp transient.
         bool last_preview_capture_settled_ = false;
 
-        // Fallback CUDA-backed input buffers for models that are not already
-        // backed by Vulkan-external tensor storage. Direct Vulkan-external
-        // training tensors bypass this ring and bind their VkBuffers directly.
         static constexpr std::size_t kInputRingSize = kFrameRingSize;
-        std::array<CudaInputSlot, kInputRingSize> cuda_inputs_{};
         std::array<CudaOpacityCopySlot, kInputRingSize> cuda_opacity_copies_{};
         std::array<CudaOverlaySlot, kInputRingSize> cuda_overlays_{};
         CudaSelectionQuerySlot cuda_selection_query_{};

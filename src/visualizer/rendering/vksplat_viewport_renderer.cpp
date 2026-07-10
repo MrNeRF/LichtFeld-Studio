@@ -599,28 +599,6 @@ namespace lfs::vis {
             }
         };
 
-        struct ScopedCommandPool {
-            VkDevice device = VK_NULL_HANDLE;
-            VkCommandPool pool = VK_NULL_HANDLE;
-
-            ~ScopedCommandPool() {
-                if (device != VK_NULL_HANDLE && pool != VK_NULL_HANDLE) {
-                    vkDestroyCommandPool(device, pool, nullptr);
-                }
-            }
-        };
-
-        struct ScopedFence {
-            VkDevice device = VK_NULL_HANDLE;
-            VkFence fence = VK_NULL_HANDLE;
-
-            ~ScopedFence() {
-                if (device != VK_NULL_HANDLE && fence != VK_NULL_HANDLE) {
-                    vkDestroyFence(device, fence, nullptr);
-                }
-            }
-        };
-
         template <std::size_t RegionCount>
         [[nodiscard]] std::size_t layoutRegions(const std::array<std::size_t, RegionCount>& region_bytes,
                                                 std::array<std::size_t, RegionCount>& region_offset,
@@ -1304,28 +1282,6 @@ namespace lfs::vis {
             return {};
         }
 
-        [[nodiscard]] std::expected<void, std::string> copyCudaBytes(
-            const void* src,
-            void* dst,
-            const std::size_t bytes,
-            const cudaStream_t stream,
-            const std::string_view label) {
-            if (bytes == 0) {
-                return {};
-            }
-            if (src == nullptr || dst == nullptr) {
-                return std::unexpected(std::format("VkSplat LOD page {} copy received a null pointer", label));
-            }
-            const cudaError_t status = cudaMemcpyAsync(dst, src, bytes, cudaMemcpyDeviceToDevice, stream);
-            if (status != cudaSuccess) {
-                return std::unexpected(std::format("VkSplat LOD page {} copy failed: {} ({})",
-                                                   label,
-                                                   cudaGetErrorName(status),
-                                                   cudaGetErrorString(status)));
-            }
-            return {};
-        }
-
         void populateVksplatCameraUniforms(
             VulkanGSRendererUniforms& uniforms,
             const lfs::rendering::FrameView& frame_view,
@@ -1595,9 +1551,9 @@ namespace lfs::vis {
             return;
         }
 
+        stopLodStreaming("LOD scene released before upload completed");
         detachManagedBuffers();
         for (std::size_t ring_slot = 0; ring_slot < kInputRingSize; ++ring_slot) {
-            releaseInputSlot(*context_, ring_slot);
             releaseOpacityCopySlot(*context_, ring_slot);
             auto& overlay = cuda_overlays_[ring_slot];
             overlay.interop.reset();
@@ -1630,9 +1586,6 @@ namespace lfs::vis {
         gpu_lod_frozen_frames_ = 0;
         gpu_lod_last_candidate_count_ = 0;
         gpu_lod_last_overflow_count_ = 0;
-        lod_page_cache_model_ = nullptr;
-        (void)lod_upload_engine_.drainAndSync();
-        lod_page_cache_.reset();
         lod_page_inputs_.interop.reset();
         context_->destroyExternalBuffer(lod_page_inputs_.buffer);
         lod_page_inputs_ = {};
@@ -1660,6 +1613,7 @@ namespace lfs::vis {
                 readback_cmd_ = VK_NULL_HANDLE;
             }
         }
+        stopLodStreaming("VkSplat renderer reset before LOD upload completed");
         releaseSharedScratchArena();
         drainRetiredScratchBuffers(true);
         if (render_stream_) {
@@ -1678,13 +1632,6 @@ namespace lfs::vis {
             releaseGpuLodTreeStorage();
             renderer_.cleanupBuffers(buffers_);
             renderer_.cleanup();
-        }
-        for (auto& slot : cuda_inputs_) {
-            slot.interop.reset();
-            if (context_) {
-                context_->destroyExternalBuffer(slot.buffer);
-            }
-            slot = {};
         }
         for (auto& slot : cuda_opacity_copies_) {
             slot.interop.reset();
@@ -1705,7 +1652,6 @@ namespace lfs::vis {
             context_->destroyExternalBuffer(cuda_selection_query_.buffer);
         }
         cuda_selection_query_ = {};
-        (void)lod_upload_engine_.drainAndSync();
         lod_page_inputs_.interop.reset();
         if (context_) {
             context_->destroyExternalBuffer(lod_page_inputs_.buffer);
@@ -1893,7 +1839,10 @@ namespace lfs::vis {
             !rad_page_inputs &&
             lod_page_inputs_.buffer.buffer != VK_NULL_HANDLE &&
             context_ != nullptr) {
-            (void)lod_upload_engine_.drainAndSync();
+            discardLodEngineResults(lod_upload_engine_.configure({}, nullptr),
+                                    "LOD page input storage retired before upload completed");
+            lod_engine_layout_ = {};
+            lod_sink_model_ = nullptr;
             lod_page_inputs_.interop.reset();
             context_->destroyExternalBuffer(lod_page_inputs_.buffer);
             lod_page_inputs_ = {};
@@ -1970,6 +1919,17 @@ namespace lfs::vis {
                 lod_upload_engine_.submitPackedPage(slot, *desc, page, generation);
                 return {};
             });
+    }
+
+    void VksplatViewportRenderer::stopLodStreaming(const std::string_view reason) {
+        // Decode workers own the page sink and can acquire a staging slot at any time. Join them
+        // before draining/unconfiguring the upload engine; draining first leaves a window where a
+        // worker submits a new kernel after the drain and into storage the caller is about to free.
+        lod_page_cache_.reset();
+        lod_page_cache_model_ = nullptr;
+        discardLodEngineResults(lod_upload_engine_.configure({}, nullptr), reason);
+        lod_engine_layout_ = {};
+        lod_sink_model_ = nullptr;
     }
 
     void VksplatViewportRenderer::discardLodEngineResults(
@@ -2780,104 +2740,6 @@ namespace lfs::vis {
         detach(buffers_.shN.deviceBuffer);
         detach(buffers_.scaling_raw.deviceBuffer);
         detach(buffers_.opacity_raw.deviceBuffer);
-    }
-
-    void VksplatViewportRenderer::plugRingInputs(
-        const std::size_t ring_slot,
-        const std::size_t num_splats,
-        const bool reset_cached_raster_state) {
-        assert(ring_slot < cuda_inputs_.size());
-        auto& slot = cuda_inputs_[ring_slot];
-        // All raw input region views share one VkBuffer / one device allocation; only
-        // (offset, size) differs per binding. allocation is left null because the
-        // CudaInputSlot owns it.
-        const auto plug = [&](_VulkanBuffer& dev, std::size_t region) {
-            dev = makeRegionView(slot.buffer, slot.region_offset[region], slot.region_bytes[region]);
-        };
-        plug(buffers_.xyz_ws.deviceBuffer, InputXyzWs);
-        plug(buffers_.sh0.deviceBuffer, InputSh0);
-        plug(buffers_.shN.deviceBuffer, InputShN);
-        plug(buffers_.rotations.deviceBuffer, InputRotations);
-        plug(buffers_.scaling_raw.deviceBuffer, InputScalingRaw);
-        plug(buffers_.opacity_raw.deviceBuffer, InputOpacityRaw);
-        buffers_.scales_opacs.deviceBuffer = {};
-        buffers_.sh_coeffs.deviceBuffer = {};
-
-        releaseInputHostStorage(buffers_);
-
-        buffers_.num_splats = num_splats;
-        if (reset_cached_raster_state) {
-            buffers_.num_indices = 0;
-            buffers_.is_unsorted_1 = true;
-        }
-    }
-
-    void VksplatViewportRenderer::aliasSortScratchToInputSlot(const std::size_t ring_slot) {
-        assert(ring_slot < cuda_inputs_.size());
-        auto& slot = cuda_inputs_[ring_slot];
-        if (slot.buffer.buffer == VK_NULL_HANDLE || slot.buffer.allocation_size == 0) {
-            return;
-        }
-
-        // Regular 2D splat rasterization no longer reads the packed input regions
-        // after projection has written projected splat state. Reuse the same
-        // imported allocation for the four equally-sized sort arrays in that path;
-        // callers must not use this alias for 3DGUT, whose raster pass reloads raw
-        // means/rotations/scales/opacities analytically per pixel.
-        const std::size_t array_capacity =
-            (static_cast<std::size_t>(slot.buffer.allocation_size) / 4u) & ~std::size_t{3u};
-        if (array_capacity == 0) {
-            return;
-        }
-
-        const auto attach = [&](auto& buffer, const std::size_t index) {
-            renderer_.destroyBuffer(buffer.deviceBuffer);
-            buffer.deviceBuffer = makeResizableRegionView(slot.buffer, index * array_capacity, array_capacity);
-        };
-
-        attach(buffers_.sorting_keys_1, 0);
-        attach(buffers_.sorting_keys_2, 1);
-        attach(buffers_.sorting_gauss_idx_1, 2);
-        attach(buffers_.sorting_gauss_idx_2, 3);
-
-        // Sort compute will overwrite the input regions with keys/indices, so the
-        // snapshot no longer reflects what's resident in slot.buffer. Invalidate
-        // it so the next prepareInputs() falls into the upload path (cheap, ~20us)
-        // — but keep the buffer + CUDA import alive so ensureCudaInteropBuffer
-        // early-outs instead of doing a full destroy+create+import (~3.7ms).
-        ring_uploaded_[ring_slot] = {};
-    }
-
-    void VksplatViewportRenderer::releaseInputSlot(VulkanContext& context, const std::size_t ring_slot) {
-        assert(ring_slot < cuda_inputs_.size());
-        auto& slot = cuda_inputs_[ring_slot];
-        const VkBuffer released_buffer = slot.buffer.buffer;
-
-        if (released_buffer != VK_NULL_HANDLE) {
-            const auto detach_view = [released_buffer](_VulkanBuffer& dev) {
-                if (dev.buffer == released_buffer && dev.allocation == VK_NULL_HANDLE) {
-                    dev = {};
-                }
-            };
-            detach_view(buffers_.xyz_ws.deviceBuffer);
-            detach_view(buffers_.sh0.deviceBuffer);
-            detach_view(buffers_.shN.deviceBuffer);
-            detach_view(buffers_.rotations.deviceBuffer);
-            detach_view(buffers_.scaling_raw.deviceBuffer);
-            detach_view(buffers_.opacity_raw.deviceBuffer);
-            detach_view(buffers_.scales_opacs.deviceBuffer);
-            detach_view(buffers_.sh_coeffs.deviceBuffer);
-            detach_view(buffers_.sorting_keys_1.deviceBuffer);
-            detach_view(buffers_.sorting_keys_2.deviceBuffer);
-            detach_view(buffers_.sorting_gauss_idx_1.deviceBuffer);
-            detach_view(buffers_.sorting_gauss_idx_2.deviceBuffer);
-        }
-
-        slot.interop.reset();
-        context.destroyExternalBuffer(slot.buffer);
-        slot.region_offset = {};
-        slot.region_bytes = {};
-        ring_uploaded_[ring_slot] = {};
     }
 
     void VksplatViewportRenderer::releaseOpacityCopySlot(VulkanContext& context, const std::size_t ring_slot) {
@@ -3945,9 +3807,33 @@ namespace lfs::vis {
         if (initialized_) {
             return {};
         }
+        // Mark provisional ownership so reset() tears down the renderer as well as every timeline
+        // created before a later initialization step fails. Without this rollback, retry overwrote
+        // live CUDA imports/Vulkan handles while initialized_ remained false.
+        initialized_ = true;
+        bool initialization_committed = false;
+        auto rollback = ScopeExit([&]() {
+            if (initialization_committed) {
+                return;
+            }
+            try {
+                reset();
+            } catch (const std::exception& error) {
+                LOG_ERROR("VkSplat initialization rollback failed: {}", error.what());
+            } catch (...) {
+                LOG_ERROR("VkSplat initialization rollback failed with an unknown error");
+            }
+        });
         try {
             if (!render_stream_) {
-                cudaStreamCreateWithFlags(&render_stream_, cudaStreamNonBlocking);
+                const cudaError_t status =
+                    cudaStreamCreateWithFlags(&render_stream_, cudaStreamNonBlocking);
+                if (status != cudaSuccess) {
+                    return std::unexpected(std::format(
+                        "VkSplat render stream creation failed: {} ({})",
+                        cudaGetErrorName(status),
+                        cudaGetErrorString(status)));
+                }
             }
             // Submit the splat dispatch chain on the dedicated async-compute queue
             // when the device exposes one (NVIDIA family 2, AMD family 1, etc.). The
@@ -4114,7 +4000,7 @@ namespace lfs::vis {
             timeline.value = 0;
         }
 
-        initialized_ = true;
+        initialization_committed = true;
         return {};
     }
 
@@ -4209,21 +4095,12 @@ namespace lfs::vis {
         return false;
     }
 
-    bool VksplatViewportRenderer::inputsResident(const lfs::core::SplatData& splat_data,
-                                                 const std::size_t ring_slot) const {
-        if (ring_slot >= ring_uploaded_.size())
-            return false;
-        const auto current = makeModelInputSnapshot(splat_data);
-        return ring_uploaded_[ring_slot].valid() && ring_uploaded_[ring_slot] == current;
-    }
-
     std::expected<VksplatViewportRenderer::InputBindingResult, std::string> VksplatViewportRenderer::prepareInputs(
         VulkanContext& context,
         const lfs::core::SplatData& splat_data,
         const std::size_t ring_slot,
         const bool force_upload,
-        const int upload_sh_degree,
-        const bool synchronize_upload) {
+        const int upload_sh_degree) {
         const std::size_t n = static_cast<std::size_t>(splat_data.size());
         if (n == 0) {
             return std::unexpected("VkSplat cannot render an empty model");
@@ -4232,8 +4109,7 @@ namespace lfs::vis {
         if (!context.externalMemoryInteropEnabled()) {
             return std::unexpected("VkSplat input binding requires CUDA/Vulkan external-memory interop");
         }
-        assert(ring_slot < cuda_inputs_.size());
-        auto& slot = cuda_inputs_[ring_slot];
+        assert(ring_slot < ring_uploaded_.size());
 
         const int effective_upload_sh_degree =
             upload_sh_degree < 0
@@ -4321,12 +4197,6 @@ namespace lfs::vis {
         };
 
         if (can_bind_external) {
-            if (slot.buffer.buffer != VK_NULL_HANDLE) {
-                LOG_PERF("vksplat.memory.release_input_copy ring={} bytes={} reason=zero_copy_external_tensors",
-                         ring_slot,
-                         static_cast<std::size_t>(slot.buffer.allocation_size));
-                releaseInputSlot(context, ring_slot);
-            }
             const auto require_capacity =
                 [](const std::shared_ptr<VulkanExternalTensorStorage>& storage,
                    const std::size_t bytes,
@@ -4500,17 +4370,10 @@ namespace lfs::vis {
             current_input_sh_degree_ = shN_storage ? splat_data.get_max_sh_degree()
                                                    : effective_upload_sh_degree;
             return InputBindingResult{
-                .uses_temporary_upload_slot = false,
                 .model_snapshot_changed = input_snapshot_changed && !deleted_mask_only_change,
             };
         }
 
-        if (slot.buffer.buffer != VK_NULL_HANDLE) {
-            LOG_PERF("vksplat.memory.release_input_copy ring={} bytes={} reason=missing_external_storage",
-                     ring_slot,
-                     static_cast<std::size_t>(slot.buffer.allocation_size));
-            releaseInputSlot(context, ring_slot);
-        }
         if (cuda_opacity_copies_[ring_slot].buffer.buffer != VK_NULL_HANDLE) {
             LOG_PERF("vksplat.memory.release_opacity_copy ring={} bytes={} reason=missing_external_storage",
                      ring_slot,
@@ -4540,10 +4403,6 @@ namespace lfs::vis {
             buffers_.sorting_gauss_idx_1.deviceBuffer.allocSize +
             buffers_.sorting_gauss_idx_2.deviceBuffer.allocSize;
 
-        std::size_t fallback_input_bytes = 0;
-        for (const auto& slot : cuda_inputs_) {
-            fallback_input_bytes += static_cast<std::size_t>(slot.buffer.allocation_size);
-        }
         std::size_t opacity_copy_bytes = 0;
         for (const auto& slot : cuda_opacity_copies_) {
             opacity_copy_bytes += static_cast<std::size_t>(slot.buffer.allocation_size);
@@ -4571,7 +4430,6 @@ namespace lfs::vis {
         signature = mix(signature, pipeline_current);
         signature = mix(signature, pipeline_peak);
         signature = mix(signature, input_view_bytes);
-        signature = mix(signature, fallback_input_bytes);
         signature = mix(signature, opacity_copy_bytes);
         signature = mix(signature, overlay_bytes);
         signature = mix(signature, output_image_bytes);
@@ -4601,13 +4459,12 @@ namespace lfs::vis {
             top += std::format("{}={:.2f}GiB", entries[i].first, gib(entries[i].second));
         }
 
-        LOG_PERF("vksplat.memory reason={} renderer_owned={:.2f}GiB pipeline_current={:.2f}GiB pipeline_peak={:.2f}GiB input_views={:.2f}GiB fallback_inputs={:.2f}GiB opacity_copies={:.2f}GiB overlays={:.2f}GiB outputs={:.2f}GiB sort_buffers={:.2f}GiB shared_scratch={:.2f}GiB sort_capacity={} top=[{}]",
+        LOG_PERF("vksplat.memory reason={} renderer_owned={:.2f}GiB pipeline_current={:.2f}GiB pipeline_peak={:.2f}GiB input_views={:.2f}GiB opacity_copies={:.2f}GiB overlays={:.2f}GiB outputs={:.2f}GiB sort_buffers={:.2f}GiB shared_scratch={:.2f}GiB sort_capacity={} top=[{}]",
                  reason,
                  gib(owned_total),
                  gib(pipeline_current),
                  gib(pipeline_peak),
                  gib(input_view_bytes),
-                 gib(fallback_input_bytes),
                  gib(opacity_copy_bytes),
                  gib(overlay_bytes),
                  gib(output_image_bytes),
@@ -5842,19 +5699,14 @@ namespace lfs::vis {
 
         auto input_binding = [&] {
             LOG_TIMER("VksplatViewportRenderer::buildSelectionMask.prepareInputs");
-            return prepareInputs(context, splat_data, ring_slot, force_input_upload,
-                                 0,
-                                 request.synchronize_input_upload);
+            return prepareInputs(context, splat_data, ring_slot, force_input_upload, 0);
         }();
         if (!input_binding) {
             return std::unexpected(input_binding.error());
         }
-        // Intentionally do NOT release ring_slot here. The slot's CUDA-imported
-        // Vulkan buffer + uploaded splat data stay resident across selection
-        // calls, so the next prepareInputs() hits the inputsResident() fast
-        // path (plug_only) instead of re-running destroy+create+import+upload
-        // (~3.7 ms). Stale data is detected via the makeModelInputSnapshot
-        // comparison and re-uploaded automatically.
+        // The borrowed Vulkan-external model storage stays resident across selection calls.
+        // Stale data is detected via the model snapshot and its CUDA producer stream is ordered
+        // into the Vulkan batch by the per-ring upload timeline.
         (void)input_binding;
 
         auto& slot = cuda_selection_query_;
@@ -6860,8 +6712,7 @@ namespace lfs::vis {
             }
         }
 
-        std::expected<InputBindingResult, std::string> input_binding =
-            InputBindingResult{.uses_temporary_upload_slot = false};
+        std::expected<InputBindingResult, std::string> input_binding = InputBindingResult{};
         if (lod_page_inputs_active) {
             if (auto ok = ensureLodPageInputStorage(context,
                                                     splat_data,
@@ -6906,8 +6757,7 @@ namespace lfs::vis {
                                           splat_data,
                                           ring_slot,
                                           force_input_upload,
-                                          active_sh_degree,
-                                          synchronize_input_upload);
+                                          active_sh_degree);
         }
         if (!input_binding) {
             return std::unexpected(input_binding.error());
@@ -6955,10 +6805,7 @@ namespace lfs::vis {
         const bool gpu_lod_render_active = gpu_lod_render_capacity > 0;
         gpu_lod_selection_active_ = gpu_lod_render_active;
         gpu_lod_render_capacity_last_ = gpu_lod_render_capacity;
-        // Keep the ring slot's buffer + CUDA import alive across frames so
-        // prepareInputs() can hit the resident fast path. Input-slot sort
-        // aliasing is disabled in the async path because overwriting the upload
-        // buffer would couple render throughput to selection-overlay correctness.
+        // Keep the per-ring snapshot alive so unchanged Vulkan-external inputs remain a fast path.
         (void)input_binding;
 
         const std::size_t active_splat_count =
@@ -7348,21 +7195,8 @@ namespace lfs::vis {
             }
         }
 
-        if (input_binding->uses_temporary_upload_slot && !request.gut) {
-            const VkBuffer input_buffer = cuda_inputs_[ring_slot].buffer.buffer;
-            const auto detach_alias = [input_buffer](auto& buffer) {
-                auto& device_buffer = buffer.deviceBuffer;
-                if (device_buffer.buffer == input_buffer && device_buffer.allocation == VK_NULL_HANDLE) {
-                    device_buffer = {};
-                }
-            };
-            detach_alias(buffers_.sorting_keys_1);
-            detach_alias(buffers_.sorting_keys_2);
-            detach_alias(buffers_.sorting_gauss_idx_1);
-            detach_alias(buffers_.sorting_gauss_idx_2);
-        }
-
         std::expected<void, std::string> compose_status;
+        std::optional<std::string> submitted_error;
         const std::uint64_t completion_value = ++render_complete_value_;
         try {
             // Timer/guard ordering trick: the LOG_TIMER for batch_total is
@@ -7556,13 +7390,13 @@ namespace lfs::vis {
                     }
                 }
                 if (!higs_active && shared_scratch_bound && buffers_.num_indices > shared_sort_capacity) {
-                    return std::unexpected(std::format(
+                    submitted_error = std::format(
                         "VkSplat shared scratch sort capacity insufficient: {}; have {}, need {}",
                         shared_scratch_context(),
                         shared_sort_capacity,
-                        buffers_.num_indices));
+                        buffers_.num_indices);
                 }
-                if (active_splat_count > 0) {
+                if (!submitted_error && active_splat_count > 0) {
                     const double instances_per_splat =
                         static_cast<double>(buffers_.num_indices) /
                         static_cast<double>(active_splat_count);
@@ -7586,10 +7420,12 @@ namespace lfs::vis {
                 // HiGS records against the capacity (the GPU-resident count
                 // bounds every pass); the legacy chain keeps the exact count
                 // from its synchronous readback.
-                uniforms.sort_capacity = static_cast<uint32_t>(
-                    std::min<std::size_t>(higs_active ? shared_sort_capacity : buffers_.num_indices,
-                                          static_cast<std::size_t>(std::numeric_limits<uint32_t>::max())));
-                if (higs_active || buffers_.num_indices > 0) {
+                if (!submitted_error) {
+                    uniforms.sort_capacity = static_cast<uint32_t>(
+                        std::min<std::size_t>(higs_active ? shared_sort_capacity : buffers_.num_indices,
+                                              static_cast<std::size_t>(std::numeric_limits<uint32_t>::max())));
+                }
+                if (!submitted_error && (higs_active || buffers_.num_indices > 0)) {
                     {
                         LOG_TIMER("vksplat.render.record.executeGenerateKeys");
                         if (higs_active) {
@@ -7662,8 +7498,8 @@ namespace lfs::vis {
                         }
                     }
                 }
-                last_render_used_macro_chain_ = higs_active;
-                {
+                if (!submitted_error) {
+                    last_render_used_macro_chain_ = higs_active;
                     LOG_TIMER("vksplat.render.record.composePixelState");
                     // Record compose into the rasterizer's batch so the entire frame
                     // submits and waits exactly once instead of fence-blocking twice.
@@ -7682,8 +7518,8 @@ namespace lfs::vis {
                 }
             }
             // record/composePixelState timer scope ends here.
-            // On try-block exit: `batch` destructs (endCommandBatch fence wait),
-            // then batch_total timer logs.
+            // On try-block exit, `batch` submits and publishes its timeline signal before the
+            // outer batch_total timer logs.
         } catch (const std::exception& e) {
             // Only hand the release to the arena if the timeline signal actually
             // landed; a failed submit never signals completion_value, and waiting
@@ -7692,6 +7528,9 @@ namespace lfs::vis {
                 last_signaled_render_value_ = completion_value;
                 if (shared_arena_guard) {
                     shared_arena_guard->noteVulkanRelease(render_complete_cuda_.handle(), completion_value);
+                }
+                if (live_submit_callback_) {
+                    live_submit_callback_(completion_value);
                 }
             }
             return std::unexpected(std::format("VkSplat forward pass failed: {}", e.what()));
@@ -7707,6 +7546,9 @@ namespace lfs::vis {
             live_submit_callback_(completion_value);
         }
         logVramBreakdownIfChanged("render");
+        if (submitted_error) {
+            return std::unexpected(std::move(*submitted_error));
+        }
         if (!compose_status) {
             return std::unexpected(compose_status.error());
         }
