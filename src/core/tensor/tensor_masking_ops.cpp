@@ -44,7 +44,6 @@ namespace lfs::core {
                 }
             }
         }
-
         template <typename T>
         void masked_select_cpu(const T* input, const unsigned char* mask, T* output, size_t n) {
             size_t write_idx = 0;
