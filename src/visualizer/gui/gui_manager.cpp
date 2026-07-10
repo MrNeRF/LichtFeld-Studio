@@ -3219,6 +3219,10 @@ namespace lfs::vis::gui {
             throw std::runtime_error("Failed to initialize ImGui SDL3 platform backend");
         }
         setVulkanUiTextureContext(vulkan_context);
+        if (!vulkan_interop_upload_stream_.init()) {
+            LOG_ERROR("Could not create the non-blocking CUDA/Vulkan GUI upload stream: {}",
+                      vulkan_interop_upload_stream_.lastError());
+        }
 
         // Initialize localization system
         auto& loc = lfs::event::LocalizationManager::getInstance();
@@ -3798,7 +3802,14 @@ namespace lfs::vis::gui {
         lfs::rendering::ScreenOverlayRenderer::setTextMeasureFn({});
         g_overlay_atlas = {};
         setVulkanUiTextureContext(nullptr);
+        if (!vulkan_interop_upload_stream_.synchronize()) {
+            LOG_WARN("CUDA/Vulkan GUI upload stream synchronization failed during shutdown: {}",
+                     vulkan_interop_upload_stream_.lastError());
+        }
         resetVulkanSceneInterop();
+        resetVulkanSplitRightInterop();
+        resetVulkanDepthBlitInterop();
+        vulkan_interop_upload_stream_.reset();
         vulkan_scene_image_.reset();
         vulkan_viewport_pass_.reset();
 
@@ -4030,11 +4041,12 @@ namespace lfs::vis::gui {
 
         const auto fail_required_interop = [this](std::string message) -> void {
             vulkan_scene_interop_disabled_ = true;
+            if (!vulkan_interop_upload_stream_.synchronize()) {
+                message += std::format("; CUDA upload drain failed: {}",
+                                       vulkan_interop_upload_stream_.lastError());
+            }
             resetVulkanSceneInterop();
             LOG_ERROR("Required Vulkan/CUDA viewport interop failed: {}", message);
-#ifndef NDEBUG
-            assert(false && "Required Vulkan/CUDA viewport interop failed");
-#endif
             throw std::runtime_error(std::move(message));
         };
 
@@ -4047,6 +4059,9 @@ namespace lfs::vis::gui {
                 resetVulkanSceneInterop();
             }
             return;
+        }
+        if (!vulkan_interop_upload_stream_.valid()) {
+            fail_required_interop("non-blocking CUDA upload stream is unavailable");
         }
 
         const std::size_t frame_slot = context.currentFrameSlot();
@@ -4194,14 +4209,15 @@ namespace lfs::vis::gui {
             LOG_TIMER("interop.copyTensorToSurface");
             assert(target.layout == VK_IMAGE_LAYOUT_GENERAL &&
                    "CUDA surf2Dwrite requires VK_IMAGE_LAYOUT_GENERAL");
-            if (!target.interop.copyTensorToSurface(*vulkan_scene_image_)) {
+            if (!target.interop.copyTensorToSurface(*vulkan_scene_image_,
+                                                    vulkan_interop_upload_stream_.stream())) {
                 fail_required_interop(std::format("CUDA copy failed: {}", target.interop.lastError()));
             }
         }
         const std::uint64_t signal_value = ++target.timeline_value;
         {
             LOG_TIMER("interop.cuda_signal");
-            if (!target.interop.signal(signal_value)) {
+            if (!target.interop.signal(signal_value, vulkan_interop_upload_stream_.stream())) {
                 fail_required_interop(std::format("CUDA signal failed: {}", target.interop.lastError()));
             }
         }
@@ -4255,11 +4271,12 @@ namespace lfs::vis::gui {
 
         const auto fail_required_interop = [this](std::string message) -> void {
             vulkan_split_right_interop_disabled_ = true;
+            if (!vulkan_interop_upload_stream_.synchronize()) {
+                message += std::format("; CUDA upload drain failed: {}",
+                                       vulkan_interop_upload_stream_.lastError());
+            }
             resetVulkanSplitRightInterop();
             LOG_ERROR("Required Vulkan/CUDA split-view interop failed: {}", message);
-#ifndef NDEBUG
-            assert(false && "Required Vulkan/CUDA split-view interop failed");
-#endif
             throw std::runtime_error(std::move(message));
         };
 
@@ -4276,6 +4293,9 @@ namespace lfs::vis::gui {
             vulkan_split_right_external_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
             vulkan_split_right_external_image_generation_ = 0;
             return;
+        }
+        if (!vulkan_interop_upload_stream_.valid()) {
+            fail_required_interop("non-blocking CUDA upload stream is unavailable");
         }
 
         const std::size_t frame_slot = context.currentFrameSlot();
@@ -4413,11 +4433,12 @@ namespace lfs::vis::gui {
 
         assert(target.layout == VK_IMAGE_LAYOUT_GENERAL &&
                "CUDA surf2Dwrite requires VK_IMAGE_LAYOUT_GENERAL");
-        if (!target.interop.copyTensorToSurface(*vulkan_split_right_image_)) {
+        if (!target.interop.copyTensorToSurface(*vulkan_split_right_image_,
+                                                vulkan_interop_upload_stream_.stream())) {
             fail_required_interop(std::format("CUDA copy failed: {}", target.interop.lastError()));
         }
         const std::uint64_t signal_value = ++target.timeline_value;
-        if (!target.interop.signal(signal_value)) {
+        if (!target.interop.signal(signal_value, vulkan_interop_upload_stream_.stream())) {
             fail_required_interop(std::format("CUDA signal failed: {}", target.interop.lastError()));
         }
         if (!context.transitionImageLayoutImmediate(target.image.image,
@@ -4471,11 +4492,12 @@ namespace lfs::vis::gui {
 
         const auto fail_required_interop = [this](std::string message) -> void {
             vulkan_depth_blit_interop_disabled_ = true;
+            if (!vulkan_interop_upload_stream_.synchronize()) {
+                message += std::format("; CUDA upload drain failed: {}",
+                                       vulkan_interop_upload_stream_.lastError());
+            }
             resetVulkanDepthBlitInterop();
             LOG_ERROR("Required Vulkan/CUDA depth-blit interop failed: {}", message);
-#ifndef NDEBUG
-            assert(false && "Required Vulkan/CUDA depth-blit interop failed");
-#endif
             throw std::runtime_error(std::move(message));
         };
 
@@ -4492,6 +4514,9 @@ namespace lfs::vis::gui {
             vulkan_depth_blit_external_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
             vulkan_depth_blit_external_image_generation_ = 0;
             return;
+        }
+        if (!vulkan_interop_upload_stream_.valid()) {
+            fail_required_interop("non-blocking CUDA upload stream is unavailable");
         }
 
         const std::size_t frame_slot = context.currentFrameSlot();
@@ -4629,11 +4654,12 @@ namespace lfs::vis::gui {
 
         assert(target.layout == VK_IMAGE_LAYOUT_GENERAL &&
                "CUDA surf2Dwrite requires VK_IMAGE_LAYOUT_GENERAL");
-        if (!target.interop.copyTensorToSurface(*vulkan_depth_blit_image_)) {
+        if (!target.interop.copyTensorToSurface(*vulkan_depth_blit_image_,
+                                                vulkan_interop_upload_stream_.stream())) {
             fail_required_interop(std::format("CUDA copy failed: {}", target.interop.lastError()));
         }
         const std::uint64_t signal_value = ++target.timeline_value;
-        if (!target.interop.signal(signal_value)) {
+        if (!target.interop.signal(signal_value, vulkan_interop_upload_stream_.stream())) {
             fail_required_interop(std::format("CUDA signal failed: {}", target.interop.lastError()));
         }
         if (!context.transitionImageLayoutImmediate(target.image.image,
@@ -6388,11 +6414,21 @@ namespace lfs::vis::gui {
             VkClearValue clear_value{};
             clear_value.color = VkClearColorValue{{bg.x, bg.y, bg.z, 1.0f}};
 
+            bool interop_prepare_ok = true;
             if (vulkan_context && !isViewportExportLocked()) {
                 LOG_TIMER_THRESHOLD("gui_render.prepareVulkanSceneInterop", 0.25);
-                prepareVulkanSceneInterop(*vulkan_context);
-                prepareVulkanSplitRightInterop(*vulkan_context);
-                prepareVulkanDepthBlitInterop(*vulkan_context);
+                try {
+                    prepareVulkanSceneInterop(*vulkan_context);
+                    prepareVulkanSplitRightInterop(*vulkan_context);
+                    prepareVulkanDepthBlitInterop(*vulkan_context);
+                } catch (const std::exception& error) {
+                    interop_prepare_ok = false;
+                    LOG_ERROR("Skipping Vulkan GUI frame after CUDA/Vulkan interop failure: {}",
+                              error.what());
+                } catch (...) {
+                    interop_prepare_ok = false;
+                    LOG_ERROR("Skipping Vulkan GUI frame after unknown CUDA/Vulkan interop failure");
+                }
             }
 
             VulkanContext::Frame frame{};
@@ -6400,7 +6436,8 @@ namespace lfs::vis::gui {
             {
                 cpu_ui_before_vulkan_timer.reset();
                 LOG_TIMER("frame_pacing.vulkan_beginFrame");
-                begin_ok = vulkan_context && vulkan_context->beginFrame(clear_value, frame);
+                begin_ok = interop_prepare_ok && vulkan_context &&
+                           vulkan_context->beginFrame(clear_value, frame);
             }
             if (begin_ok) {
                 if (vulkan_frame_completion_semaphore_ != VK_NULL_HANDLE &&

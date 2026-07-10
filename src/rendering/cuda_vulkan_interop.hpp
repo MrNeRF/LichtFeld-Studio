@@ -64,6 +64,34 @@ namespace lfs::rendering {
     // error message on mismatch / missing setup. Result is cached.
     [[nodiscard]] std::optional<std::string> verifyCudaMatchesVulkanDevice();
 
+    // One explicitly non-blocking CUDA lane for image copies that are ordered into Vulkan by an
+    // external timeline semaphore. Never silently substitute the legacy NULL stream: that stream
+    // synchronizes with the trainer's blocking CUDA stream and directly stalls training.
+    class CudaVulkanUploadStream {
+    public:
+        CudaVulkanUploadStream() = default;
+        ~CudaVulkanUploadStream();
+
+        CudaVulkanUploadStream(const CudaVulkanUploadStream&) = delete;
+        CudaVulkanUploadStream& operator=(const CudaVulkanUploadStream&) = delete;
+        CudaVulkanUploadStream(CudaVulkanUploadStream&& other) noexcept;
+        CudaVulkanUploadStream& operator=(CudaVulkanUploadStream&& other) noexcept;
+
+        [[nodiscard]] bool init();
+        [[nodiscard]] bool synchronize();
+        void reset() noexcept;
+
+        [[nodiscard]] bool valid() const { return stream_ != nullptr; }
+        [[nodiscard]] cudaStream_t stream() const { return stream_; }
+        [[nodiscard]] const std::string& lastError() const { return last_error_; }
+
+    private:
+        [[nodiscard]] bool failCuda(const char* operation, cudaError_t status);
+
+        cudaStream_t stream_ = nullptr;
+        std::string last_error_;
+    };
+
     namespace detail {
         enum class CudaVulkanTensorLayout : std::uint8_t {
             Hwc,

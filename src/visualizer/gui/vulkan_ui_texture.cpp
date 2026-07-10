@@ -31,6 +31,7 @@ namespace lfs::vis::gui {
 
     namespace {
         VulkanContext* g_texture_context = nullptr;
+        lfs::rendering::CudaVulkanUploadStream g_texture_upload_stream;
 
         [[nodiscard]] std::vector<std::uint8_t> toRgba(const std::uint8_t* pixels,
                                                        const int width,
@@ -112,6 +113,16 @@ namespace lfs::vis::gui {
     } // namespace
 
     void setVulkanUiTextureContext(VulkanContext* const context) {
+        if (context == nullptr) {
+            if (!g_texture_upload_stream.synchronize()) {
+                LOG_WARN("CUDA/Vulkan UI texture stream synchronization failed during shutdown: {}",
+                         g_texture_upload_stream.lastError());
+            }
+            g_texture_upload_stream.reset();
+        } else if (!g_texture_upload_stream.valid() && !g_texture_upload_stream.init()) {
+            LOG_ERROR("Could not create the non-blocking CUDA/Vulkan UI texture stream: {}",
+                      g_texture_upload_stream.lastError());
+        }
         g_texture_context = context;
     }
 
@@ -589,7 +600,7 @@ namespace lfs::vis::gui {
                 return false;
             }
             VulkanContext* const ctx = getVulkanUiTextureContext();
-            if (!ctx || !init(*ctx)) {
+            if (!ctx || !g_texture_upload_stream.valid() || !init(*ctx)) {
                 return false;
             }
             if (!ensureInteropImage(expected_width, expected_height)) {
@@ -606,13 +617,14 @@ namespace lfs::vis::gui {
                 image_layout = VK_IMAGE_LAYOUT_GENERAL;
             }
 
-            if (!interop.copyTensorToSurface(tensor, /*stream=*/nullptr, flip_y)) {
+            const cudaStream_t upload_stream = g_texture_upload_stream.stream();
+            if (!interop.copyTensorToSurface(tensor, upload_stream, flip_y)) {
                 LOG_ERROR("Vulkan UI texture CUDA copy failed: {}", interop.lastError());
                 return false;
             }
 
             const std::uint64_t signal_value = ++interop_timeline_value;
-            if (!interop.signal(signal_value)) {
+            if (!interop.signal(signal_value, upload_stream)) {
                 LOG_ERROR("Vulkan UI texture CUDA signal failed: {}", interop.lastError());
                 return false;
             }

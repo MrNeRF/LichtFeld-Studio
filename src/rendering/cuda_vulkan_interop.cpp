@@ -8,7 +8,6 @@
 #include "image_layout.hpp"
 
 #include <algorithm>
-#include <cassert>
 #include <cstring>
 #include <format>
 #include <mutex>
@@ -98,6 +97,71 @@ namespace lfs::rendering {
         }
         g_device_match_ok = true;
         return std::nullopt;
+    }
+
+    CudaVulkanUploadStream::~CudaVulkanUploadStream() {
+        reset();
+    }
+
+    CudaVulkanUploadStream::CudaVulkanUploadStream(CudaVulkanUploadStream&& other) noexcept {
+        *this = std::move(other);
+    }
+
+    CudaVulkanUploadStream& CudaVulkanUploadStream::operator=(CudaVulkanUploadStream&& other) noexcept {
+        if (this == &other) {
+            return *this;
+        }
+        reset();
+        stream_ = std::exchange(other.stream_, nullptr);
+        last_error_ = std::move(other.last_error_);
+        return *this;
+    }
+
+    bool CudaVulkanUploadStream::init() {
+        reset();
+        last_error_.clear();
+        if (auto error = verifyCudaMatchesVulkanDevice(); error) {
+            last_error_ = std::move(*error);
+            return false;
+        }
+        cudaStream_t created_stream = nullptr;
+        const cudaError_t status =
+            cudaStreamCreateWithFlags(&created_stream, cudaStreamNonBlocking);
+        if (!failCuda("cudaStreamCreateWithFlags(cudaStreamNonBlocking)", status)) {
+            return false;
+        }
+        stream_ = created_stream;
+        return true;
+    }
+
+    bool CudaVulkanUploadStream::synchronize() {
+        last_error_.clear();
+        if (stream_ == nullptr) {
+            return true;
+        }
+        return failCuda("cudaStreamSynchronize(CUDA/Vulkan upload)",
+                        cudaStreamSynchronize(stream_));
+    }
+
+    void CudaVulkanUploadStream::reset() noexcept {
+        if (stream_ != nullptr) {
+            (void)cudaStreamSynchronize(stream_);
+            (void)cudaStreamDestroy(stream_);
+            stream_ = nullptr;
+        }
+        last_error_.clear();
+    }
+
+    bool CudaVulkanUploadStream::failCuda(const char* const operation,
+                                          const cudaError_t status) {
+        if (status == cudaSuccess) {
+            return true;
+        }
+        last_error_ = std::format("{} failed: {} ({})",
+                                  operation,
+                                  cudaGetErrorName(status),
+                                  cudaGetErrorString(status));
+        return false;
     }
 
     namespace {
@@ -395,11 +459,12 @@ namespace lfs::rendering {
             return failCuda("cudaCreateSurfaceObject", status);
         }
 
-        // cudaExternalSemaphoreHandleDesc has no initialValue field; the imported timeline starts at
-        // whatever value Vulkan created it with. Our signal contract is monotonic from 1, which only
-        // holds when the Vulkan-side initial value is 0.
-        assert(semaphore.initial_value == 0 &&
-               "CUDA timeline import assumes Vulkan initialValue==0; first signal is value 1");
+        // cudaExternalSemaphoreHandleDesc has no initialValue field, so CUDA cannot validate or
+        // communicate a non-zero Vulkan initial value during import.
+        if (semaphore.initial_value != 0) {
+            reset();
+            return fail("CUDA/Vulkan timeline import requires Vulkan initialValue == 0");
+        }
 
         cudaExternalSemaphoreHandleDesc semaphore_desc{};
         semaphore_desc.type = kCudaExternalSemaphoreHandleType;
@@ -512,13 +577,20 @@ namespace lfs::rendering {
             return fail("CUDA/Vulkan timeline semaphore is not initialized");
         }
 
-        assert(value > last_signaled_ && "Vulkan timeline signal values must strictly increase");
-        last_signaled_ = value;
+        if (value <= last_signaled_) {
+            return fail(std::format("CUDA/Vulkan timeline signal value {} must be greater than {}",
+                                    value,
+                                    last_signaled_));
+        }
 
         cudaExternalSemaphoreSignalParams params{};
         params.params.fence.value = value;
         const cudaError_t status = cudaSignalExternalSemaphoresAsync(&cuda_timeline_, &params, 1, stream);
-        return failCuda("cudaSignalExternalSemaphoresAsync", status);
+        if (!failCuda("cudaSignalExternalSemaphoresAsync", status)) {
+            return false;
+        }
+        last_signaled_ = value;
+        return true;
     }
 
     bool CudaVulkanInterop::fail(std::string message) const {
@@ -569,12 +641,12 @@ namespace lfs::rendering {
             return fail("CUDA timeline semaphore import requires a valid handle");
         }
 
-        // cudaExternalSemaphoreHandleDesc has no initialValue field; our signal contract is monotonic
-        // from 1, which only holds when the Vulkan-side initial value is 0.
-        assert(semaphore.initial_value == 0 &&
-               "CUDA timeline import assumes Vulkan initialValue==0; first signal is value 1");
-
         NativeHandleOwner semaphore_handle(semaphore.semaphore_handle);
+        // cudaExternalSemaphoreHandleDesc has no initialValue field, so CUDA cannot validate or
+        // communicate a non-zero Vulkan initial value during import.
+        if (semaphore.initial_value != 0) {
+            return fail("CUDA timeline semaphore import requires Vulkan initialValue == 0");
+        }
 
         cudaExternalSemaphoreHandleDesc semaphore_desc{};
         semaphore_desc.type = kCudaExternalSemaphoreHandleType;
@@ -608,13 +680,21 @@ namespace lfs::rendering {
         if (cuda_timeline_ == nullptr) {
             return fail("CUDA timeline semaphore is not initialized");
         }
-        assert(value > last_signaled_ && "Vulkan timeline signal values must strictly increase");
-        last_signaled_ = value;
+        if (value <= last_signaled_) {
+            return fail(std::format("CUDA timeline signal value {} must be greater than {}",
+                                    value,
+                                    last_signaled_));
+        }
 
         cudaExternalSemaphoreSignalParams params{};
         params.params.fence.value = value;
-        return failCuda("cudaSignalExternalSemaphoresAsync",
-                        cudaSignalExternalSemaphoresAsync(&cuda_timeline_, &params, 1, stream));
+        const cudaError_t status =
+            cudaSignalExternalSemaphoresAsync(&cuda_timeline_, &params, 1, stream);
+        if (!failCuda("cudaSignalExternalSemaphoresAsync", status)) {
+            return false;
+        }
+        last_signaled_ = value;
+        return true;
     }
 
     bool CudaTimelineSemaphore::cudaWait(const std::uint64_t value, const cudaStream_t stream) const {

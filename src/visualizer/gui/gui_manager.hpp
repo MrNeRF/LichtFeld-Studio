@@ -27,6 +27,7 @@
 #include "gui/startup_overlay.hpp"
 #include "gui/ui_context.hpp"
 #include "gui/utils/drag_drop_native.hpp"
+#include "rendering/cuda_vulkan_interop.hpp"
 #include "rendering/passes/vulkan_viewport_pass.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
@@ -353,6 +354,7 @@ namespace lfs::vis {
             std::uint64_t cached_imgui_resize_frame_count_ = 0;
             bool used_cached_imgui_resize_frame_ = false;
             std::unique_ptr<lfs::vis::VulkanViewportPass> vulkan_viewport_pass_;
+            lfs::rendering::CudaVulkanUploadStream vulkan_interop_upload_stream_;
             std::vector<std::unique_ptr<VulkanSceneInteropTarget>> vulkan_scene_interop_;
             std::shared_ptr<const lfs::core::Tensor> vulkan_scene_image_;
             std::uint64_t vulkan_scene_image_generation_ = 0;
