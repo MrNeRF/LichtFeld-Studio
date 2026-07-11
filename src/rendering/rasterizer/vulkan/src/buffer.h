@@ -23,15 +23,17 @@
 struct _VulkanBuffer {
     VkBuffer buffer;
     VmaAllocation allocation;
-    size_t allocSize;    // allocated size in bytes
-    size_t size;         // actual size in bytes (within the [offset, offset+size) view)
-    VkDeviceSize offset; // descriptor binding offset (0 for owned buffers; non-zero for views into a coalesced parent allocation)
+    size_t allocSize;    // total VkBuffer size in bytes (not the VMA memory-allocation size)
+    size_t capacity;     // accessible bytes in this view, beginning at offset
+    size_t size;         // active bytes in this view; must not exceed capacity
+    VkDeviceSize offset; // absolute VkBuffer binding offset (0 for owned buffers)
     const char* label;   // diagnostics label; nullptr = untracked
 
     _VulkanBuffer()
         : buffer(VK_NULL_HANDLE),
           allocation(VK_NULL_HANDLE),
           allocSize(0),
+          capacity(0),
           size(0),
           offset(0),
           label(nullptr) {}
@@ -40,6 +42,7 @@ struct _VulkanBuffer {
         : buffer(other.buffer),
           allocation(other.allocation),
           allocSize(other.allocSize),
+          capacity(other.capacity),
           size(other.size),
           offset(other.offset),
           label(other.label) {}
@@ -48,6 +51,7 @@ struct _VulkanBuffer {
         buffer = other.buffer;
         allocation = other.allocation;
         allocSize = other.allocSize;
+        capacity = other.capacity;
         size = other.size;
         offset = other.offset;
         label = other.label;
@@ -57,7 +61,31 @@ struct _VulkanBuffer {
     // used to test if descriptor needs to be updated
     bool operator==(const _VulkanBuffer& other) const {
         return buffer == other.buffer && allocation == other.allocation &&
-               allocSize == other.allocSize && offset == other.offset;
+               allocSize == other.allocSize && capacity == other.capacity &&
+               offset == other.offset;
+    }
+
+    // A view is described in two coordinate systems: offset is absolute in the
+    // VkBuffer, while capacity and all operation offsets are relative to that
+    // view. Keeping this check here prevents callers from accidentally treating
+    // a region capacity as the size of the whole backing buffer.
+    [[nodiscard]] bool hasValidViewBounds() const noexcept {
+        if (buffer == VK_NULL_HANDLE || allocSize == 0 || capacity == 0) {
+            return false;
+        }
+        const auto backing_size = static_cast<VkDeviceSize>(allocSize);
+        const auto view_capacity = static_cast<VkDeviceSize>(capacity);
+        return offset <= backing_size && view_capacity <= backing_size - offset;
+    }
+
+    [[nodiscard]] bool containsRange(const VkDeviceSize relative_offset,
+                                     const VkDeviceSize byte_size) const noexcept {
+        if (!hasValidViewBounds() || byte_size == 0) {
+            return false;
+        }
+        const auto view_capacity = static_cast<VkDeviceSize>(capacity);
+        return relative_offset <= view_capacity &&
+               byte_size <= view_capacity - relative_offset;
     }
 };
 

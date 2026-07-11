@@ -225,6 +225,7 @@ void VulkanGSPipeline::createBuffer(size_t size, _VulkanBuffer& buffer) {
             buffer.label ? buffer.label : "<unlabeled>"));
     }
     buffer.allocSize = size;
+    buffer.capacity = size;
     buffer.size = size;
     buffer.offset = 0;
 
@@ -245,6 +246,10 @@ void VulkanGSPipeline::createBuffer(size_t size, _VulkanBuffer& buffer) {
     if (result != VK_SUCCESS) {
         buffer.buffer = VK_NULL_HANDLE;
         buffer.allocation = VK_NULL_HANDLE;
+        buffer.allocSize = 0;
+        buffer.capacity = 0;
+        buffer.size = 0;
+        buffer.offset = 0;
         _THROW_ERROR(std::format(
             "VkSplat device-buffer allocation failed (requested_bytes={}, allocator={:#x}, usage={:#x}, label='{}', result={}({}))",
             size,
@@ -303,13 +308,14 @@ void VulkanGSPipeline::destroyBuffer(_VulkanBuffer& buffer) {
     buffer.buffer = VK_NULL_HANDLE;
     buffer.allocation = VK_NULL_HANDLE;
     buffer.allocSize = 0;
+    buffer.capacity = 0;
     buffer.size = 0;
     buffer.offset = 0;
     // Keep buffer.label intact so a subsequent resize re-establishes the recording.
 }
 
 void VulkanGSPipeline::resizeDeviceBuffer(_VulkanBuffer& deviceBuffer, size_t new_byte_size, bool no_shrink) {
-    if (deviceBuffer.allocSize < new_byte_size || (!no_shrink && deviceBuffer.allocSize > new_byte_size)) {
+    if (deviceBuffer.capacity < new_byte_size || (!no_shrink && deviceBuffer.capacity > new_byte_size)) {
         HOST_GUARD;
         destroyBuffer(deviceBuffer);
         try {
@@ -343,7 +349,7 @@ _VulkanBuffer& VulkanGSPipeline::clearDeviceBuffer(Buffer<T>& buffer, size_t new
     const size_t new_byte_size = new_size * sizeof(T);
     // Clearing is a GPU operation; changing the active view size must not force a
     // host-side submit/wait when the existing allocation is already large enough.
-    if (deviceBuffer.allocSize < new_byte_size) {
+    if (deviceBuffer.capacity < new_byte_size) {
         resizeDeviceBuffer(buffer, new_size, true);
     } else {
         deviceBuffer.size = new_byte_size;
@@ -379,7 +385,7 @@ _VulkanBuffer& VulkanGSPipeline::resizeAndCopyDeviceBuffer(
     size_t new_byte_size = new_size * sizeof(T);
     size_t old_byte_size = deviceBuffer.size;
 
-    if (new_size <= deviceBuffer.allocSize / sizeof(T)) {
+    if (new_size <= deviceBuffer.capacity / sizeof(T)) {
         deviceBuffer.size = new_byte_size;
 
         if (clear && new_byte_size > old_byte_size) {

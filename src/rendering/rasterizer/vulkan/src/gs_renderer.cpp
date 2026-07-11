@@ -37,9 +37,9 @@ namespace {
                                       const indirect::Layout layout,
                                       const std::string_view operation) {
         const std::size_t required_bytes = indirect::byteSize(layout);
-        if (buffer.buffer == VK_NULL_HANDLE || buffer.size < required_bytes) {
+        if (buffer.size < required_bytes || !buffer.containsRange(0, required_bytes)) {
             _THROW_ERROR(std::format(
-                "{} requires a non-null indirect buffer satisfying {} (buffer={:#x}, layout_constant='{}', required_words={}, required_bytes={}, active_bytes={}, allocation_bytes={}, base_offset={}, label='{}')",
+                "{} requires a live indirect-buffer view satisfying {} (buffer={:#x}, layout_constant='{}', required_words={}, required_bytes={}, active_bytes={}, view_capacity={}, backing_bytes={}, base_offset={}, label='{}')",
                 operation,
                 layout.word_count_constant,
                 lfsVkHandleValue(buffer.buffer),
@@ -47,6 +47,7 @@ namespace {
                 layout.word_count,
                 required_bytes,
                 buffer.size,
+                buffer.capacity,
                 buffer.allocSize,
                 buffer.offset,
                 buffer.label ? buffer.label : "<unlabeled>"));
@@ -165,6 +166,7 @@ void VulkanGSRenderer::ensureInstanceCountReadback() {
             static_cast<int>(create_result)));
     }
     instance_count_readback_buffer_.allocSize = 2 * sizeof(uint32_t);
+    instance_count_readback_buffer_.capacity = 2 * sizeof(uint32_t);
     instance_count_readback_buffer_.size = 2 * sizeof(uint32_t);
     instance_count_readback_mapped_ = static_cast<uint32_t*>(alloc_info.pMappedData);
     if (instance_count_readback_mapped_ == nullptr) {
@@ -294,7 +296,7 @@ bool VulkanGSRenderer::shrinkSortBuffersForCapacity(VulkanGSPipelineBuffers& buf
         if (buffer.deviceBuffer.allocation == VK_NULL_HANDLE)
             return;
         const size_t target_bytes = count * sizeof(Value);
-        if (buffer.deviceBuffer.allocSize > target_bytes * 2) {
+        if (buffer.deviceBuffer.capacity > target_bytes * 2) {
             resizeDeviceBuffer(buffer, count, false);
             changed = true;
         }
@@ -354,6 +356,7 @@ void VulkanGSRenderer::ensureVisibleCountReadback() {
             static_cast<int>(create_result)));
     }
     visible_count_readback_buffer_.allocSize = 2 * sizeof(uint32_t);
+    visible_count_readback_buffer_.capacity = 2 * sizeof(uint32_t);
     visible_count_readback_buffer_.size = 2 * sizeof(uint32_t);
     visible_count_readback_mapped_ = static_cast<uint32_t*>(alloc_info.pMappedData);
     if (visible_count_readback_mapped_ == nullptr) {
@@ -437,6 +440,7 @@ void VulkanGSRenderer::ensureLodSelectionReadback(const size_t chunk_capacity) {
             static_cast<int>(create_result)));
     }
     lod_selection_readback_buffer_.allocSize = byte_size;
+    lod_selection_readback_buffer_.capacity = byte_size;
     lod_selection_readback_buffer_.size = byte_size;
     lod_selection_readback_mapped_ = static_cast<uint32_t*>(alloc_info.pMappedData);
     if (lod_selection_readback_mapped_ == nullptr) {

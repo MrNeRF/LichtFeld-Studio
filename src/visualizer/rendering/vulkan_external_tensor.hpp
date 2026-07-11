@@ -41,6 +41,7 @@ namespace lfs::vis {
         VulkanExternalTensorStorage& operator=(VulkanExternalTensorStorage&&) = delete;
 
         [[nodiscard]] VkBuffer vkBuffer() const;
+        [[nodiscard]] VkDeviceSize vkBufferSize() const;
         [[nodiscard]] VkDeviceSize vkOffset() const;
         [[nodiscard]] std::size_t bytes() const { return bytes_; }
 

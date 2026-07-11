@@ -479,18 +479,16 @@ void VulkanGSPipeline::validateBufferRange(const _VulkanBuffer& buffer,
                                            const VkDeviceSize relative_offset,
                                            const VkDeviceSize size,
                                            const std::string_view operation) const {
-    if (buffer.buffer == VK_NULL_HANDLE || buffer.allocSize == 0 || size == 0 ||
-        buffer.offset > buffer.allocSize ||
-        relative_offset > buffer.allocSize - buffer.offset ||
-        size > buffer.allocSize - buffer.offset - relative_offset) {
+    if (!buffer.containsRange(relative_offset, size)) {
         _THROW_ERROR(std::format(
-            "{} requires a non-null buffer and an in-allocation byte range (buffer={:#x}, allocation={:#x}, base_offset={}, relative_offset={}, size={}, allocation_size={}, label='{}')",
+            "{} requires a non-null buffer and a byte range within both its view and backing buffer (buffer={:#x}, allocation={:#x}, base_offset={}, relative_offset={}, size={}, view_capacity={}, backing_size={}, label='{}')",
             operation,
             lfsVkHandleValue(buffer.buffer),
             lfsVkHandleValue(buffer.allocation),
             buffer.offset,
             relative_offset,
             size,
+            buffer.capacity,
             buffer.allocSize,
             buffer.label ? buffer.label : "<unlabeled>"));
     }
@@ -1420,16 +1418,14 @@ void VulkanGSPipeline::executeCompute(
         }
         const VkDeviceSize range = buffers[binding].size != 0
                                        ? buffers[binding].size
-                                       : (buffers[binding].offset <= buffers[binding].allocSize
-                                              ? buffers[binding].allocSize - buffers[binding].offset
-                                              : 0);
+                                       : buffers[binding].capacity;
         validateBufferRange(buffers[binding], 0, range, "executeCompute descriptor binding");
         buffer_infos[idx].buffer = buffers[binding].buffer;
         buffer_infos[idx].offset = buffers[binding].offset;
         // Bind the in-use [offset, offset+size) range. For owned buffers size
         // is set by resizeDeviceBuffer / createBuffer to match the requested
         // allocation; for coalesced views into a parent allocation it's the
-        // sub-region's payload byte count. Falling back to allocSize when size
+        // sub-region's payload byte count. Falling back to the view capacity when size
         // is zero keeps any (rare) legacy callers working without surprises.
         buffer_infos[idx].range = range;
 
@@ -1556,16 +1552,14 @@ void VulkanGSPipeline::executeComputeIndirect(
         }
         const VkDeviceSize range = buffers[binding].size != 0
                                        ? buffers[binding].size
-                                       : (buffers[binding].offset <= buffers[binding].allocSize
-                                              ? buffers[binding].allocSize - buffers[binding].offset
-                                              : 0);
+                                       : buffers[binding].capacity;
         validateBufferRange(buffers[binding], 0, range, "executeComputeIndirect descriptor binding");
         buffer_infos[idx].buffer = buffers[binding].buffer;
         buffer_infos[idx].offset = buffers[binding].offset;
         // Bind the in-use [offset, offset+size) range. For owned buffers size
         // is set by resizeDeviceBuffer / createBuffer to match the requested
         // allocation; for coalesced views into a parent allocation it's the
-        // sub-region's payload byte count. Falling back to allocSize when size
+        // sub-region's payload byte count. Falling back to the view capacity when size
         // is zero keeps any (rare) legacy callers working without surprises.
         buffer_infos[idx].range = range;
 

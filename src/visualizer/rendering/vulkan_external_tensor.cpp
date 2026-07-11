@@ -70,6 +70,10 @@ namespace lfs::vis {
         return parent_ ? parent_->vkBuffer() : buffer_.buffer;
     }
 
+    VkDeviceSize VulkanExternalTensorStorage::vkBufferSize() const {
+        return parent_ ? parent_->vkBufferSize() : buffer_.size;
+    }
+
     VkDeviceSize VulkanExternalTensorStorage::vkOffset() const {
         if (parent_) {
             return parent_->vkOffset() + static_cast<VkDeviceSize>(offset_);

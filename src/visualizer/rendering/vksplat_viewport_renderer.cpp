@@ -342,17 +342,17 @@ namespace lfs::vis {
             const std::size_t byte_size,
             const std::size_t dst_byte_offset = 0) {
             if (command_buffer == VK_NULL_HANDLE || dst.buffer == VK_NULL_HANDLE ||
-                src_data == nullptr || byte_size == 0 || dst.offset > dst.allocSize ||
+                src_data == nullptr || byte_size == 0 ||
                 dst_byte_offset > dst.size || byte_size > dst.size - dst_byte_offset ||
-                dst_byte_offset > dst.allocSize - dst.offset ||
-                byte_size > dst.allocSize - dst.offset - dst_byte_offset) {
+                !dst.containsRange(dst_byte_offset, byte_size)) {
                 throw std::logic_error(std::format(
-                    "VkSplat buffer update requires live handles and a range within both the view and allocation (command_buffer={:#x}, destination_buffer={:#x}, source={:#x}, allocation_size={}, view_offset={}, view_size={}, destination_byte_offset={}, update_size={}, label='{}') ({}:{})",
+                    "VkSplat buffer update requires live handles and a range within both the view and backing buffer (command_buffer={:#x}, destination_buffer={:#x}, source={:#x}, backing_size={}, view_offset={}, view_capacity={}, view_size={}, destination_byte_offset={}, update_size={}, label='{}') ({}:{})",
                     vkHandleValue(command_buffer),
                     vkHandleValue(dst.buffer),
                     reinterpret_cast<std::uintptr_t>(src_data),
                     dst.allocSize,
                     dst.offset,
+                    dst.capacity,
                     dst.size,
                     dst_byte_offset,
                     byte_size,
@@ -396,13 +396,14 @@ namespace lfs::vis {
             const _VulkanBuffer& dst,
             const std::uint32_t value) {
             if (command_buffer == VK_NULL_HANDLE || dst.buffer == VK_NULL_HANDLE || dst.size == 0 ||
-                dst.offset > dst.allocSize || dst.size > dst.allocSize - dst.offset ||
+                !dst.containsRange(0, dst.size) ||
                 dst.offset % 4 != 0 || dst.size % 4 != 0) {
                 throw std::logic_error(std::format(
-                    "VkSplat buffer fill requires live handles and a 4-byte-aligned range within the allocation (command_buffer={:#x}, destination_buffer={:#x}, allocation_size={}, fill_offset={}, fill_size={}, fill_value={:#x}, label='{}') ({}:{})",
+                    "VkSplat buffer fill requires live handles and a 4-byte-aligned range within the view and backing buffer (command_buffer={:#x}, destination_buffer={:#x}, backing_size={}, view_capacity={}, fill_offset={}, fill_size={}, fill_value={:#x}, label='{}') ({}:{})",
                     vkHandleValue(command_buffer),
                     vkHandleValue(dst.buffer),
                     dst.allocSize,
+                    dst.capacity,
                     dst.offset,
                     dst.size,
                     value,
@@ -735,41 +736,62 @@ namespace lfs::vis {
             return alignUp(target + slack, 4);
         }
 
-        [[nodiscard]] _VulkanBuffer makeRegionView(const VulkanContext::ExternalBuffer& buffer,
-                                                   const std::size_t offset,
-                                                   const std::size_t bytes) {
-            _VulkanBuffer view{};
-            view.buffer = buffer.buffer;
-            view.allocation = VK_NULL_HANDLE;
-            view.allocSize = static_cast<std::size_t>(buffer.allocation_size);
-            view.offset = offset;
-            view.size = bytes;
-            return view;
-        }
-
-        [[nodiscard]] _VulkanBuffer makeBorrowedBufferView(const VkBuffer buffer,
-                                                           const std::size_t allocation_size,
-                                                           const std::size_t bytes,
-                                                           const VkDeviceSize offset = 0) {
+        [[nodiscard]] _VulkanBuffer makeBufferView(const VkBuffer buffer,
+                                                   const std::size_t backing_bytes,
+                                                   const VkDeviceSize offset,
+                                                   const std::size_t capacity_bytes,
+                                                   const std::size_t active_bytes) {
             _VulkanBuffer view{};
             view.buffer = buffer;
             view.allocation = VK_NULL_HANDLE;
-            view.allocSize = allocation_size;
+            view.allocSize = backing_bytes;
+            view.capacity = capacity_bytes;
             view.offset = offset;
-            view.size = bytes;
+            view.size = active_bytes;
+            if (!view.hasValidViewBounds() || active_bytes > capacity_bytes) {
+                throw std::logic_error(std::format(
+                    "VkSplat buffer view must fit inside its backing VkBuffer (buffer={:#x}, backing_size={}, view_offset={}, view_capacity={}, active_size={}) ({}:{})",
+                    vkHandleValue(buffer),
+                    backing_bytes,
+                    offset,
+                    capacity_bytes,
+                    active_bytes,
+                    __FILE__,
+                    __LINE__));
+            }
             return view;
+        }
+
+        [[nodiscard]] _VulkanBuffer makeRegionView(const VulkanContext::ExternalBuffer& buffer,
+                                                   const std::size_t offset,
+                                                   const std::size_t bytes) {
+            return makeBufferView(buffer.buffer,
+                                  static_cast<std::size_t>(buffer.size),
+                                  offset,
+                                  bytes,
+                                  bytes);
+        }
+
+        [[nodiscard]] _VulkanBuffer makeBorrowedBufferView(const VkBuffer buffer,
+                                                           const std::size_t backing_bytes,
+                                                           const std::size_t capacity_bytes,
+                                                           const std::size_t active_bytes,
+                                                           const VkDeviceSize offset = 0) {
+            return makeBufferView(buffer,
+                                  backing_bytes,
+                                  offset,
+                                  capacity_bytes,
+                                  active_bytes);
         }
 
         [[nodiscard]] _VulkanBuffer makeResizableRegionView(const VulkanContext::ExternalBuffer& buffer,
                                                             const std::size_t offset,
                                                             const std::size_t capacity_bytes) {
-            _VulkanBuffer view{};
-            view.buffer = buffer.buffer;
-            view.allocation = VK_NULL_HANDLE;
-            view.allocSize = capacity_bytes;
-            view.offset = offset;
-            view.size = 0;
-            return view;
+            return makeBufferView(buffer.buffer,
+                                  static_cast<std::size_t>(buffer.size),
+                                  offset,
+                                  capacity_bytes,
+                                  0);
         }
 
         [[nodiscard]] std::expected<void, std::string> ensureCudaInteropBuffer(
@@ -2905,6 +2927,7 @@ namespace lfs::vis {
             dev.buffer = VK_NULL_HANDLE;
             dev.allocation = VK_NULL_HANDLE;
             dev.allocSize = 0;
+            dev.capacity = 0;
             dev.size = 0;
             dev.offset = 0;
         };
@@ -4510,7 +4533,11 @@ namespace lfs::vis {
                 buffers_.opacity_raw.deviceBuffer = makeRegionView(opacity_slot.buffer, 0, layout->opacity_bytes);
             } else {
                 buffers_.opacity_raw.deviceBuffer = makeBorrowedBufferView(
-                    opacity_storage->vkBuffer(), opacity_storage->bytes(), layout->opacity_bytes, opacity_storage->vkOffset());
+                    opacity_storage->vkBuffer(),
+                    opacity_storage->vkBufferSize(),
+                    opacity_storage->bytes(),
+                    layout->opacity_bytes,
+                    opacity_storage->vkOffset());
             }
 
             if (has_deleted_mask) {
@@ -4523,24 +4550,42 @@ namespace lfs::vis {
             {
                 LOG_TIMER("prepareInputs.borrow_views");
                 buffers_.xyz_ws.deviceBuffer = makeBorrowedBufferView(
-                    means_storage->vkBuffer(), means_storage->bytes(), layout->xyz_bytes, means_storage->vkOffset());
+                    means_storage->vkBuffer(),
+                    means_storage->vkBufferSize(),
+                    means_storage->bytes(),
+                    layout->xyz_bytes,
+                    means_storage->vkOffset());
                 buffers_.sh0.deviceBuffer = makeBorrowedBufferView(
-                    sh0_storage->vkBuffer(), sh0_storage->bytes(), layout->sh0_bytes, sh0_storage->vkOffset());
+                    sh0_storage->vkBuffer(),
+                    sh0_storage->vkBufferSize(),
+                    sh0_storage->bytes(),
+                    layout->sh0_bytes,
+                    sh0_storage->vkOffset());
                 buffers_.shN.deviceBuffer = layout->omits_shN
                                                 ? makeBorrowedBufferView(
                                                       rotations_storage->vkBuffer(),
+                                                      rotations_storage->vkBufferSize(),
                                                       rotations_storage->bytes(),
                                                       layout->shN_bytes,
                                                       rotations_storage->vkOffset())
                                                 : makeBorrowedBufferView(
                                                       shN_storage->vkBuffer(),
+                                                      shN_storage->vkBufferSize(),
                                                       shN_storage->bytes(),
                                                       layout->shN_bytes,
                                                       shN_storage->vkOffset());
                 buffers_.rotations.deviceBuffer = makeBorrowedBufferView(
-                    rotations_storage->vkBuffer(), rotations_storage->bytes(), layout->rotations_bytes, rotations_storage->vkOffset());
+                    rotations_storage->vkBuffer(),
+                    rotations_storage->vkBufferSize(),
+                    rotations_storage->bytes(),
+                    layout->rotations_bytes,
+                    rotations_storage->vkOffset());
                 buffers_.scaling_raw.deviceBuffer = makeBorrowedBufferView(
-                    scaling_storage->vkBuffer(), scaling_storage->bytes(), layout->scaling_bytes, scaling_storage->vkOffset());
+                    scaling_storage->vkBuffer(),
+                    scaling_storage->vkBufferSize(),
+                    scaling_storage->bytes(),
+                    layout->scaling_bytes,
+                    scaling_storage->vkOffset());
                 buffers_.scales_opacs.deviceBuffer = {};
                 buffers_.sh_coeffs.deviceBuffer = {};
                 buffers_.page_frames.deviceBuffer = {};
@@ -4632,10 +4677,10 @@ namespace lfs::vis {
             viewBytes(buffers_.scaling_raw) +
             viewBytes(buffers_.opacity_raw);
         const std::size_t sort_buffer_bytes =
-            buffers_.sorting_keys_1.deviceBuffer.allocSize +
-            buffers_.sorting_keys_2.deviceBuffer.allocSize +
-            buffers_.sorting_gauss_idx_1.deviceBuffer.allocSize +
-            buffers_.sorting_gauss_idx_2.deviceBuffer.allocSize;
+            buffers_.sorting_keys_1.deviceBuffer.capacity +
+            buffers_.sorting_keys_2.deviceBuffer.capacity +
+            buffers_.sorting_gauss_idx_1.deviceBuffer.capacity +
+            buffers_.sorting_gauss_idx_2.deviceBuffer.capacity;
 
         std::size_t opacity_copy_bytes = 0;
         for (const auto& slot : cuda_opacity_copies_) {
@@ -5052,9 +5097,7 @@ namespace lfs::vis {
 
         VkDescriptorBufferInfo pixel_info{};
         const auto valid_buffer_range = [](const _VulkanBuffer& buffer) {
-            return buffer.buffer != VK_NULL_HANDLE && buffer.size > 0 &&
-                   buffer.offset <= buffer.allocSize &&
-                   buffer.size <= buffer.allocSize - buffer.offset;
+            return buffer.size > 0 && buffer.containsRange(0, buffer.size);
         };
         if (!valid_buffer_range(buffers_.pixel_state.deviceBuffer) ||
             !valid_buffer_range(buffers_.pixel_depth.deviceBuffer)) {
@@ -5490,14 +5533,13 @@ namespace lfs::vis {
         const std::size_t pixel_count =
             static_cast<std::size_t>(size->x) * static_cast<std::size_t>(size->y);
         const VkDeviceSize byte_count = static_cast<VkDeviceSize>(pixel_count) * sizeof(float);
-        if (byte_count == 0 || depth_buffer.buffer == VK_NULL_HANDLE ||
-            depth_buffer.offset > depth_buffer.allocSize || depth_buffer.size < byte_count ||
-            byte_count > depth_buffer.allocSize - depth_buffer.offset) {
+        if (depth_buffer.size < byte_count || !depth_buffer.containsRange(0, byte_count)) {
             return std::unexpected(std::format(
-                "VkSplat depth readback requires a live pixel-depth buffer with a copy range inside its view and allocation (buffer={:#x}, allocation_size={}, view_offset={}, view_size={}, required_bytes={}, image_size={}x{}, label='{}') ({}:{})",
+                "VkSplat depth readback requires a live pixel-depth buffer with a copy range inside its view and backing buffer (buffer={:#x}, backing_size={}, view_offset={}, view_capacity={}, view_size={}, required_bytes={}, image_size={}x{}, label='{}') ({}:{})",
                 vkHandleValue(depth_buffer.buffer),
                 depth_buffer.allocSize,
                 depth_buffer.offset,
+                depth_buffer.capacity,
                 depth_buffer.size,
                 byte_count,
                 size->x,
@@ -6338,6 +6380,7 @@ namespace lfs::vis {
             return std::unexpected("VkSplat selection output tensor is not Vulkan external storage");
         }
         const auto output_view = makeBorrowedBufferView(output_storage->vkBuffer(),
+                                                        output_storage->vkBufferSize(),
                                                         output_storage->bytes(),
                                                         output_tensor_region_bytes,
                                                         output_storage->vkOffset());

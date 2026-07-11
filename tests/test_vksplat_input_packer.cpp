@@ -25,6 +25,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <random>
+#include <type_traits>
 #include <vector>
 
 using lfs::core::DataType;
@@ -40,6 +41,15 @@ using lfs::vis::vksplat::packHostInputs;
 using lfs::vis::vksplat::rawDeviceInputLayout;
 
 namespace {
+
+    template <typename Handle>
+    [[nodiscard]] Handle fakeVkHandle(const std::uintptr_t value) {
+        if constexpr (std::is_pointer_v<Handle>) {
+            return reinterpret_cast<Handle>(value);
+        } else {
+            return static_cast<Handle>(value);
+        }
+    }
 
     [[nodiscard]] float sigmoidf(float x) {
         return 1.0f / (1.0f + std::exp(-x));
@@ -252,6 +262,25 @@ TEST(VkSplatIndirectLayoutTest, SharedWordCountsAndOffsetsMatchEveryProducerCont
     EXPECT_EQ(indirect::MacroWaveDispatch::kComposeBaseWordOffset, 48u);
     EXPECT_EQ(indirect::MacroWaveDispatch::rasterWordOffset(HIGS_RASTER_MAX_WAVES - 1u), 45u);
     EXPECT_EQ(indirect::MacroWaveDispatch::composeWordOffset(HIGS_RASTER_MAX_WAVES - 1u), 93u);
+}
+
+TEST(VulkanBufferViewTest, SharedScratchViewSeparatesBackingSizeFromRegionCapacity) {
+    _VulkanBuffer view{};
+    view.buffer = fakeVkHandle<VkBuffer>(1);
+    view.allocSize = 384u << 20u;
+    view.offset = 66'000'384u;
+    view.capacity = 18'000'000u;
+    view.size = 651'300u;
+
+    ASSERT_TRUE(view.hasValidViewBounds());
+    EXPECT_TRUE(view.containsRange(0, view.size));
+    EXPECT_TRUE(view.containsRange(view.capacity - 1, 1));
+    EXPECT_FALSE(view.containsRange(view.capacity, 1));
+    EXPECT_FALSE(view.containsRange(0, view.capacity + 1));
+
+    view.offset = view.allocSize - view.capacity + 1;
+    EXPECT_FALSE(view.hasValidViewBounds());
+    EXPECT_FALSE(view.containsRange(0, view.size));
 }
 
 class VksplatInputPackerTest : public ::testing::TestWithParam<std::tuple<std::size_t, int>> {};
