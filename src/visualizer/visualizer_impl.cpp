@@ -1209,7 +1209,10 @@ namespace lfs::vis {
         }
 
         const bool preload_running_at_end = python::is_plugin_preload_running();
-        if (preload_running_at_start || preload_running_at_end) {
+        // The transition update can also consume pending startup assets (for example,
+        // a --view PLY) after it starts the worker. Sample only steady-state preload
+        // updates so unrelated startup I/O is not attributed to plugin loading.
+        if (preload_running_at_start) {
             plugin_preload_timing_active_ = true;
             plugin_preload_max_update_stall_ = std::max(
                 plugin_preload_max_update_stall_,
