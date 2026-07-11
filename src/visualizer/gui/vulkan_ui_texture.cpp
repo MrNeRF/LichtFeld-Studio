@@ -165,15 +165,6 @@ namespace lfs::vis::gui {
         static constexpr std::size_t kMaxPendingUploads = 3;
         std::vector<PendingUpload> pending_uploads;
 
-        // Deferred destruction queue: when the image is resized the old handles are kept alive
-        // here until the next destroyImage() so that in-flight RmlUI descriptor set references
-        // remain valid and do not cause GPU corruption.
-        struct RetiredImage {
-            VkImage image = VK_NULL_HANDLE;
-            VkImageView image_view = VK_NULL_HANDLE;
-            VmaAllocation allocation = VK_NULL_HANDLE;
-        };
-        std::vector<RetiredImage> retired_images_;
         int width = 0;
         int height = 0;
 
@@ -428,14 +419,32 @@ namespace lfs::vis::gui {
                 return true;
             }
 
-            // Save old image to deferred queue so in-flight RmlUI descriptor set references
-            // remain valid while we create the new one. The queue is drained in destroyImage().
             if (image != VK_NULL_HANDLE) {
                 waitAndReleasePendingUpload();
-                retired_images_.push_back({image, image_view, image_allocation});
+                // Descriptor updates and image destruction are only legal once
+                // every submitted RmlUI draw that can reference the old view has
+                // retired. Resize is already a cold path; pay the bounded fence
+                // wait here instead of retaining every historical image forever.
+                if (context != nullptr && !context->waitForSubmittedFrames()) {
+                    LOG_ERROR("Vulkan UI texture resize could not drain submitted frames: {}",
+                              context->lastError());
+                    return false;
+                }
+                if (!image_vram_label.empty()) {
+                    lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                        "vulkan.ui_texture.image",
+                        image_vram_label,
+                        0);
+                }
+                image_barriers.forgetImage(image);
+                if (image_view != VK_NULL_HANDLE) {
+                    vkDestroyImageView(device, image_view, nullptr);
+                }
+                vmaDestroyImage(allocator, image, image_allocation);
                 image = VK_NULL_HANDLE;
                 image_view = VK_NULL_HANDLE;
                 image_allocation = VK_NULL_HANDLE;
+                image_vram_label.clear();
             }
             width = new_width;
             height = new_height;
@@ -805,21 +814,8 @@ namespace lfs::vis::gui {
             return uploadRgba(toRgba(pixels, new_width, new_height, channels), new_width, new_height);
         }
 
-        void destroyRetiredImages() {
-            for (auto& r : retired_images_) {
-                if (r.image_view != VK_NULL_HANDLE)
-                    vkDestroyImageView(device, r.image_view, nullptr);
-                if (r.image != VK_NULL_HANDLE) {
-                    image_barriers.forgetImage(r.image);
-                    vmaDestroyImage(allocator, r.image, r.allocation);
-                }
-            }
-            retired_images_.clear();
-        }
-
         void destroyImage() {
             waitAndReleasePendingUpload();
-            destroyRetiredImages();
             const bool has_interop_resources =
                 mode == Mode::CudaInterop || interop.valid() ||
                 interop_image.image != VK_NULL_HANDLE ||
