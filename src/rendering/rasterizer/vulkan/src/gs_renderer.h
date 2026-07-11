@@ -466,7 +466,6 @@ protected:
     std::uint64_t lod_selection_readback_value_ = 0;
     size_t lod_selection_readback_capacity_ = 0;
     size_t lod_selection_readback_chunk_capacity_ = 0;
-    size_t lod_selection_readback_chunk_count_ = 0;
 
     void ensureVisibleCountReadback();
     void destroyVisibleCountReadback();

@@ -112,12 +112,22 @@ namespace lfs::vis {
                 &model._densification_info,
             };
 
+            std::array<cudaStream_t, tensors.size()> unique_streams{};
+            std::size_t unique_stream_count = 0;
             for (const lfs::core::Tensor* tensor : tensors) {
                 if (!tensor->is_valid() || tensor->device() != lfs::core::Device::CUDA) {
                     continue;
                 }
                 const cudaStream_t stream = tensor->stream();
-                const cudaError_t sync_status = stream ? cudaStreamSynchronize(stream) : cudaSuccess;
+                if (stream != nullptr &&
+                    std::find(unique_streams.begin(),
+                              unique_streams.begin() + unique_stream_count,
+                              stream) == unique_streams.begin() + unique_stream_count) {
+                    unique_streams[unique_stream_count++] = stream;
+                }
+            }
+            for (std::size_t i = 0; i < unique_stream_count; ++i) {
+                const cudaError_t sync_status = cudaStreamSynchronize(unique_streams[i]);
                 if (sync_status != cudaSuccess) {
                     LOG_WARN("CUDA stream sync before edit-mode trainer clear failed: {}",
                              cudaGetErrorString(sync_status));

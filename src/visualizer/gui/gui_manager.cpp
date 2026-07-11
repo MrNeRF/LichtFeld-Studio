@@ -1300,8 +1300,7 @@ namespace lfs::vis::gui {
             }
         }
 
-        void addProjectedOverlayLine(std::vector<VulkanViewportOverlayVertex>& out,
-                                     VulkanViewportPassParams& params,
+        void addProjectedOverlayLine(VulkanViewportPassParams& params,
                                      const VulkanGuidePanelTarget& panel,
                                      const RenderSettings& settings,
                                      const glm::vec3& a,
@@ -1309,7 +1308,6 @@ namespace lfs::vis::gui {
                                      const glm::vec4& color,
                                      const float thickness,
                                      const bool depth_aware = false) {
-            (void)out;
             if (const auto projected = projectSegmentToScreenClipped(panel, settings, a, b)) {
                 appendShapeOverlayLine(params.shape_overlay_triangles,
                                        params,
@@ -1342,8 +1340,7 @@ namespace lfs::vis::gui {
             return world;
         }
 
-        void appendProjectedBox(std::vector<VulkanViewportOverlayVertex>& out,
-                                VulkanViewportPassParams& params,
+        void appendProjectedBox(VulkanViewportPassParams& params,
                                 const VulkanGuidePanelTarget& panel,
                                 const RenderSettings& settings,
                                 const glm::vec3& min,
@@ -1368,7 +1365,7 @@ namespace lfs::vis::gui {
 
             const auto corners = boxCorners(min, max, box_to_world);
             for (const auto& [a, b] : edges) {
-                addProjectedOverlayLine(out, params, panel, settings,
+                addProjectedOverlayLine(params, panel, settings,
                                         corners[static_cast<size_t>(a)],
                                         corners[static_cast<size_t>(b)],
                                         color, thickness);
@@ -1432,8 +1429,6 @@ namespace lfs::vis::gui {
                         entry = Entry{};
                         entry.path_key = path_key;
                     }
-                    entry.last_touched_frame = frame_counter_;
-
                     const bool waiting = entry.state == State::Queued ||
                                          entry.state == State::Loading ||
                                          entry.state == State::UploadReady;
@@ -1621,7 +1616,6 @@ namespace lfs::vis::gui {
                 State state = State::Empty;
                 uint64_t generation = 0;
                 uint64_t retry_frame = 0;
-                uint64_t last_touched_frame = 0;
                 int page_index = -1;
                 int slot = -1;
             };
@@ -2055,7 +2049,7 @@ namespace lfs::vis::gui {
                 glm::vec3 previous = point(lat, 0);
                 for (int lon = 1; lon <= kLonSegments; ++lon) {
                     const glm::vec3 current = point(lat, lon);
-                    addProjectedOverlayLine(params.overlay_triangles, params, panel, settings,
+                    addProjectedOverlayLine(params, panel, settings,
                                             previous, current, color, 1.5f, true);
                     previous = current;
                 }
@@ -2064,7 +2058,7 @@ namespace lfs::vis::gui {
                 glm::vec3 previous = point(0, lon);
                 for (int lat = 1; lat <= kLatSegments; ++lat) {
                     const glm::vec3 current = point(lat, lon);
-                    addProjectedOverlayLine(params.overlay_triangles, params, panel, settings,
+                    addProjectedOverlayLine(params, panel, settings,
                                             previous, current, color, 1.5f, true);
                     previous = current;
                 }
@@ -2072,8 +2066,7 @@ namespace lfs::vis::gui {
 
             const glm::vec3 apex = glm::vec3(model * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
             for (int lon = 0; lon < kLonSegments; lon += kLonSegments / 4) {
-                addProjectedOverlayLine(params.overlay_triangles,
-                                        params,
+                addProjectedOverlayLine(params,
                                         panel,
                                         settings,
                                         apex,
@@ -2309,8 +2302,7 @@ namespace lfs::vis::gui {
             }
         }
 
-        void appendProjectedEllipsoid(std::vector<VulkanViewportOverlayVertex>& out,
-                                      VulkanViewportPassParams& params,
+        void appendProjectedEllipsoid(VulkanViewportPassParams& params,
                                       const VulkanGuidePanelTarget& panel,
                                       const RenderSettings& settings,
                                       const glm::vec3& radii,
@@ -2337,7 +2329,7 @@ namespace lfs::vis::gui {
                 glm::vec3 previous = point(lat, 0);
                 for (int lon = 1; lon <= lon_segments; ++lon) {
                     const glm::vec3 current = point(lat, lon % lon_segments);
-                    addProjectedOverlayLine(out, params, panel, settings, previous, current, color, thickness);
+                    addProjectedOverlayLine(params, panel, settings, previous, current, color, thickness);
                     previous = current;
                 }
             }
@@ -2345,7 +2337,7 @@ namespace lfs::vis::gui {
                 glm::vec3 previous = point(0, lon);
                 for (int lat = 1; lat <= lat_segments; ++lat) {
                     const glm::vec3 current = point(lat, lon);
-                    addProjectedOverlayLine(out, params, panel, settings, previous, current, color, thickness);
+                    addProjectedOverlayLine(params, panel, settings, previous, current, color, thickness);
                     previous = current;
                 }
             }
@@ -2359,19 +2351,19 @@ namespace lfs::vis::gui {
                                          const GizmoState& gizmo) {
             if (settings.depth_filter_enabled) {
                 const glm::mat4 filter_to_world = settings.depth_filter_transform.toMat4();
-                appendProjectedBox(params.overlay_triangles, params, panel, settings,
+                appendProjectedBox(params, panel, settings,
                                    settings.depth_filter_min,
                                    settings.depth_filter_max,
                                    filter_to_world,
                                    glm::vec4(0.0f, 0.0f, 0.0f, 0.85f),
                                    9.0f);
-                appendProjectedBox(params.overlay_triangles, params, panel, settings,
+                appendProjectedBox(params, panel, settings,
                                    settings.depth_filter_min,
                                    settings.depth_filter_max,
                                    filter_to_world,
                                    glm::vec4(1.0f, 1.0f, 1.0f, 0.90f),
                                    6.0f);
-                appendProjectedBox(params.overlay_triangles, params, panel, settings,
+                appendProjectedBox(params, panel, settings,
                                    settings.depth_filter_min,
                                    settings.depth_filter_max,
                                    filter_to_world,
@@ -2380,7 +2372,7 @@ namespace lfs::vis::gui {
             }
 
             if (gizmo.cropbox_active) {
-                appendProjectedBox(params.overlay_triangles, params, panel, settings,
+                appendProjectedBox(params, panel, settings,
                                    gizmo.cropbox_min,
                                    gizmo.cropbox_max,
                                    gizmo.cropbox_transform,
@@ -2389,7 +2381,7 @@ namespace lfs::vis::gui {
             }
 
             if (gizmo.ellipsoid_active) {
-                appendProjectedEllipsoid(params.overlay_triangles, params, panel, settings,
+                appendProjectedEllipsoid(params, panel, settings,
                                          gizmo.ellipsoid_radii,
                                          gizmo.ellipsoid_transform,
                                          cropGuideColor(glm::vec3(0.5f, 0.85f, 1.0f), false, 0.0f),
@@ -2412,7 +2404,7 @@ namespace lfs::vis::gui {
                     const glm::vec3 box_max = use_pending ? gizmo.cropbox_max : cb.data->max;
                     const glm::mat4 world_transform = use_pending ? gizmo.cropbox_transform : cb.world_transform;
                     const float flash = selected ? std::clamp(cb.data->flash_intensity, 0.0f, 1.0f) : 0.0f;
-                    appendProjectedBox(params.overlay_triangles, params, panel, settings,
+                    appendProjectedBox(params, panel, settings,
                                        box_min,
                                        box_max,
                                        world_transform,
@@ -2432,7 +2424,7 @@ namespace lfs::vis::gui {
                     const glm::vec3 radii = use_pending ? gizmo.ellipsoid_radii : el.data->radii;
                     const glm::mat4 world_transform = use_pending ? gizmo.ellipsoid_transform : el.world_transform;
                     const float flash = selected ? std::clamp(el.data->flash_intensity, 0.0f, 1.0f) : 0.0f;
-                    appendProjectedEllipsoid(params.overlay_triangles, params, panel, settings,
+                    appendProjectedEllipsoid(params, panel, settings,
                                              radii,
                                              world_transform,
                                              cropGuideColor(el.data->color, el.data->inverse, flash),
@@ -2527,7 +2519,7 @@ namespace lfs::vis::gui {
                 if (settings.show_coord_axes) {
                     for (size_t axis = 0; axis < axes.size(); ++axis) {
                         if (settings.axes_visibility[axis]) {
-                            addProjectedOverlayLine(params.overlay_triangles, params, panel, settings,
+                            addProjectedOverlayLine(params, panel, settings,
                                                     glm::vec3(0.0f),
                                                     axes[axis] * settings.axes_size,
                                                     axis_colors[axis], 3.0f);

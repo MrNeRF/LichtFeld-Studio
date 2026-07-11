@@ -219,7 +219,6 @@ bool VulkanGSRenderer::shrinkSortBuffersForCapacity(VulkanGSPipelineBuffers& buf
         buffers.num_indices_high_water = std::min(buffers.num_indices_high_water, target_capacity);
 
     if (visible_capacity > 0) {
-        const bool sort_changed = changed;
         shrink_to(buffers.rect_tile_space, visible_capacity);
         shrink_to(buffers.xy_vs, 2 * visible_capacity);
         shrink_to(buffers.depths, visible_capacity);
@@ -230,7 +229,6 @@ bool VulkanGSRenderer::shrinkSortBuffersForCapacity(VulkanGSPipelineBuffers& buf
         shrink_to(buffers.primitive_sort_indices, visible_capacity);
         shrink_to(buffers.tiles_touched_depth_ordered, visible_capacity);
         shrink_to(buffers.index_buffer_offset, visible_capacity);
-        (void)sort_changed;
     }
     return changed;
 }
@@ -333,7 +331,6 @@ void VulkanGSRenderer::ensureLodSelectionReadback(const size_t chunk_capacity) {
     lod_selection_readback_value_ = 0;
     lod_selection_readback_capacity_ = 0;
     lod_selection_readback_chunk_capacity_ = chunk_capacity;
-    lod_selection_readback_chunk_count_ = 0;
 }
 
 void VulkanGSRenderer::destroyLodSelectionReadback() {
@@ -352,7 +349,6 @@ void VulkanGSRenderer::destroyLodSelectionReadback() {
     lod_selection_readback_value_ = 0;
     lod_selection_readback_capacity_ = 0;
     lod_selection_readback_chunk_capacity_ = 0;
-    lod_selection_readback_chunk_count_ = 0;
 }
 
 std::optional<VulkanGSRenderer::PrimitiveVisibilityStats>
@@ -411,7 +407,6 @@ VulkanGSRenderer::pollDeferredLodSelectionStats() {
     lod_selection_readback_signal_ = VK_NULL_HANDLE;
     lod_selection_readback_value_ = 0;
     lod_selection_readback_capacity_ = 0;
-    lod_selection_readback_chunk_count_ = 0;
     return stats;
 }
 

@@ -1266,7 +1266,6 @@ namespace lfs::vis {
         void populateVksplatCameraUniforms(
             VulkanGSRendererUniforms& uniforms,
             const lfs::rendering::FrameView& frame_view,
-            const lfs::rendering::GaussianSceneState& scene,
             const int active_sh_degree,
             const std::uint32_t shN_layout_slots,
             const std::size_t num_splats,
@@ -1274,7 +1273,6 @@ namespace lfs::vis {
             const bool equirectangular,
             const bool gut,
             const bool mip_filter) {
-            (void)scene;
             uniforms = {};
             uniforms.image_width = static_cast<std::uint32_t>(frame_view.size.x);
             uniforms.image_height = static_cast<std::uint32_t>(frame_view.size.y);
@@ -6056,7 +6054,6 @@ namespace lfs::vis {
         VulkanGSRendererUniforms camera_uniforms{};
         populateVksplatCameraUniforms(camera_uniforms,
                                       request.frame_view,
-                                      request.scene,
                                       0,
                                       0,
                                       num_splats,
@@ -6335,7 +6332,6 @@ namespace lfs::vis {
                     : active_sh_degree;
             populateVksplatCameraUniforms(uniforms,
                                           request.frame_view,
-                                          request.scene,
                                           resident_sh_degree,
                                           renderShNLayoutSlots(resident_sh_degree, current_input_sh_degree_),
                                           buffers_.num_splats,
@@ -7031,7 +7027,6 @@ namespace lfs::vis {
             LOG_TIMER("vksplat.render.populateUniforms");
             populateVksplatCameraUniforms(uniforms,
                                           request.frame_view,
-                                          request.scene,
                                           active_sh_degree,
                                           renderShNLayoutSlots(active_sh_degree, current_input_sh_degree_),
                                           active_splat_count,
@@ -7602,12 +7597,6 @@ namespace lfs::vis {
             macro_chain_warmup_pending_ = false;
         }
         ring_completion_values_[ring_slot] = completion_value;
-        // The pre-render submit already requested this frame's chunks and
-        // refreshed protection stamps; a second submit here would only burn
-        // another request budget on identical data.
-        (void)queue_lod_prefetch_after_render;
-        (void)protected_lod_chunks;
-
         const auto& output = output_slots_[outputSlotIndex(output_slot)][ring_slot];
         const std::uint64_t lod_page_generation =
             lod_request_active && lod_page_cache_.configured()
