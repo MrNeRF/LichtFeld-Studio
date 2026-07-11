@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <format>
+#include <limits>
 #include <optional>
 #include <semaphore>
 #include <stb_image.h>
@@ -1180,42 +1181,36 @@ void RenderInterface_VK::ProcessAsyncPreviewUploads() {
 }
 
 Rml::TextureHandle RenderInterface_VK::GenerateTexture(Rml::Span<const Rml::byte> source_data, Rml::Vector2i source_dimensions) {
-    RMLUI_ASSERT(source_data.data() && source_data.size() == size_t(source_dimensions.x * source_dimensions.y * 4));
     Rml::String source_name = "generated-texture";
     return CreateTexture(source_data, source_dimensions, source_name, m_p_sampler_nearest);
 }
 
-/*
-    How vulkan works with textures efficiently?
-
-    You need to create buffer that has CPU memory accessibility it means it uses your RAM memory for storing data and it has only CPU visibility (RAM)
-    After you create buffer that has GPU memory accessibility it means it uses by your video hardware and it has only VRAM (Video RAM) visibility
-
-    So you copy data to CPU_buffer and after you copy that thing to GPU_buffer, but delete CPU_buffer
-
-    So it means you "uploaded" data to GPU
-
-    Again, you need to "write" data into CPU buffer after you need to copy that data from buffer to GPU buffer and after that buffer go to GPU.
-
-    RAW_POINTER_DATA_BYTES_LITERALLY->COPY_TO->CPU->COPY_TO->GPU->Releasing_CPU <= that's how works uploading textures in Vulkan if you want to have
-    efficient handling otherwise it is cpu_to_gpu visibility and it means you create only ONE buffer that is accessible for CPU and for GPU, but it
-    will cause the worst performance...
-*/
 Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> source, Rml::Vector2i dimensions, const Rml::String& name,
                                                      VkSampler sampler) {
     RMLUI_ZoneScopedN("Vulkan - GenerateTexture");
 
-    RMLUI_VK_ASSERTMSG(!source.empty(), "you pushed not valid data for copying to buffer");
-    RMLUI_VK_ASSERTMSG(m_p_allocator, "you have to initialize Vma Allocator for this method");
+    const int width = dimensions.x;
+    const int height = dimensions.y;
+    const VkSampler texture_sampler = sampler != VK_NULL_HANDLE ? sampler : m_p_sampler_linear;
+    const bool size_overflows =
+        width > 0 && height > 0 &&
+        static_cast<std::size_t>(width) >
+            std::numeric_limits<std::size_t>::max() / static_cast<std::size_t>(height) / 4u;
+    const std::size_t expected_size =
+        width > 0 && height > 0 && !size_overflows
+            ? static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4u
+            : 0u;
+    if (m_p_device == VK_NULL_HANDLE || m_p_allocator == VK_NULL_HANDLE ||
+        texture_sampler == VK_NULL_HANDLE || source.data() == nullptr || source.empty() ||
+        width <= 0 || height <= 0 || size_overflows || source.size() != expected_size) {
+        Rml::Log::Message(Rml::Log::LT_ERROR,
+                          "[Vulkan] Refusing invalid RmlUi texture '%s' (%dx%d, %zu bytes).",
+                          name.c_str(), width, height, source.size());
+        return {};
+    }
 
-    int width = dimensions.x;
-    int height = dimensions.y;
-
-    RMLUI_VK_ASSERTMSG(width, "invalid width");
-    RMLUI_VK_ASSERTMSG(height, "invalid height");
-
-    VkDeviceSize image_size = source.size();
-    VkFormat format = VkFormat::VK_FORMAT_R8G8B8A8_UNORM;
+    const VkDeviceSize image_size = source.size();
+    const VkFormat format = VkFormat::VK_FORMAT_R8G8B8A8_UNORM;
 
     const bool use_host_image_copy =
         m_pfn_copy_memory_to_image != nullptr && m_pfn_transition_image_layout != nullptr;
@@ -1225,7 +1220,7 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
     extent_image.height = static_cast<uint32_t>(height);
     extent_image.depth = 1;
 
-    auto* p_texture = new texture_data_t{};
+    auto p_texture = std::make_unique<texture_data_t>();
 
     VkImageCreateInfo info = {};
     info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -1244,12 +1239,17 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
     VmaAllocationCreateInfo info_allocation = {};
     info_allocation.usage = VMA_MEMORY_USAGE_GPU_ONLY;
 
-    VkImage p_image = nullptr;
-    VmaAllocation p_allocation = nullptr;
+    VkImage p_image = VK_NULL_HANDLE;
+    VmaAllocation p_allocation = VK_NULL_HANDLE;
 
     VmaAllocationInfo info_stats = {};
     VkResult status = vmaCreateImage(m_p_allocator, &info, &info_allocation, &p_image, &p_allocation, &info_stats);
-    RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vmaCreateImage");
+    if (status != VK_SUCCESS || p_image == VK_NULL_HANDLE || p_allocation == VK_NULL_HANDLE) {
+        Rml::Log::Message(Rml::Log::LT_ERROR,
+                          "[Vulkan] Failed to allocate RmlUi texture '%s' (%d).",
+                          name.c_str(), static_cast<int>(status));
+        return {};
+    }
 
 #ifdef RMLUI_VK_DEBUG
     Rml::Log::Message(Rml::Log::LT_DEBUG, "Created texture '%s' [%dx%d, %s]", name.c_str(), dimensions.x, dimensions.y,
@@ -1259,9 +1259,31 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
     p_texture->m_p_vk_image = p_image;
     p_texture->m_p_vma_allocation = p_allocation;
     p_texture->m_vram_scope = "vulkan.rmlui.texture";
-    p_texture->m_vram_label = TextureVramLabel("texture", name, width, height, p_texture);
+    p_texture->m_vram_label = TextureVramLabel("texture", name, width, height, p_texture.get());
     p_texture->m_vram_allocation_size = info_stats.size;
     RecordRmlUiVram(p_texture->m_vram_scope, p_texture->m_vram_label, p_texture->m_vram_allocation_size);
+
+    const auto fail_texture = [&](const char* operation, const VkResult result) -> Rml::TextureHandle {
+        Rml::Log::Message(Rml::Log::LT_ERROR,
+                          "[Vulkan] Failed to %s for RmlUi texture '%s' (%d).",
+                          operation, name.c_str(), static_cast<int>(result));
+        if (p_texture->m_p_vk_image_view != VK_NULL_HANDLE) {
+            vkDestroyImageView(m_p_device, p_texture->m_p_vk_image_view, nullptr);
+            p_texture->m_p_vk_image_view = VK_NULL_HANDLE;
+        }
+        if (!p_texture->m_vram_scope.empty() && !p_texture->m_vram_label.empty()) {
+            RecordRmlUiVram(p_texture->m_vram_scope, p_texture->m_vram_label, 0);
+        }
+        if (p_texture->m_p_vk_image != VK_NULL_HANDLE &&
+            p_texture->m_p_vma_allocation != VK_NULL_HANDLE) {
+            vmaDestroyImage(m_p_allocator,
+                            p_texture->m_p_vk_image,
+                            p_texture->m_p_vma_allocation);
+            p_texture->m_p_vk_image = VK_NULL_HANDLE;
+            p_texture->m_p_vma_allocation = VK_NULL_HANDLE;
+        }
+        return {};
+    };
 
 #ifdef RMLUI_VK_DEBUG
     vmaSetAllocationName(m_p_allocator, p_allocation, name.c_str());
@@ -1278,7 +1300,9 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
         to_dst.subresourceRange.levelCount = 1;
         to_dst.subresourceRange.baseArrayLayer = 0;
         to_dst.subresourceRange.layerCount = 1;
-        m_pfn_transition_image_layout(m_p_device, 1, &to_dst);
+        status = m_pfn_transition_image_layout(m_p_device, 1, &to_dst);
+        if (status != VK_SUCCESS)
+            return fail_texture("transition host image to transfer destination", status);
 
         VkMemoryToImageCopyEXT region{};
         region.sType = VK_STRUCTURE_TYPE_MEMORY_TO_IMAGE_COPY_EXT;
@@ -1295,7 +1319,9 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
         copy_info.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         copy_info.regionCount = 1;
         copy_info.pRegions = &region;
-        m_pfn_copy_memory_to_image(m_p_device, &copy_info);
+        status = m_pfn_copy_memory_to_image(m_p_device, &copy_info);
+        if (status != VK_SUCCESS)
+            return fail_texture("copy host memory to image", status);
 
         VkHostImageLayoutTransitionInfoEXT to_read{};
         to_read.sType = VK_STRUCTURE_TYPE_HOST_IMAGE_LAYOUT_TRANSITION_INFO_EXT;
@@ -1307,15 +1333,33 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
         to_read.subresourceRange.levelCount = 1;
         to_read.subresourceRange.baseArrayLayer = 0;
         to_read.subresourceRange.layerCount = 1;
-        m_pfn_transition_image_layout(m_p_device, 1, &to_read);
+        status = m_pfn_transition_image_layout(m_p_device, 1, &to_read);
+        if (status != VK_SUCCESS)
+            return fail_texture("transition host image for shader reads", status);
     } else {
         buffer_data_t cpu_buffer = CreateResource_StagingBuffer(image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-        void* data;
-        vmaMapMemory(m_p_allocator, cpu_buffer.m_p_vma_allocation, &data);
+        if (cpu_buffer.m_p_vk_buffer == VK_NULL_HANDLE ||
+            cpu_buffer.m_p_vma_allocation == VK_NULL_HANDLE) {
+            return fail_texture("allocate texture staging buffer", VK_ERROR_OUT_OF_HOST_MEMORY);
+        }
+        void* data = nullptr;
+        status = vmaMapMemory(m_p_allocator, cpu_buffer.m_p_vma_allocation, &data);
+        if (status != VK_SUCCESS || data == nullptr) {
+            DestroyResource_StagingBuffer(cpu_buffer);
+            return fail_texture("map texture staging buffer", status);
+        }
         memcpy(data, source.data(), static_cast<size_t>(image_size));
+        status = vmaFlushAllocation(m_p_allocator,
+                                    cpu_buffer.m_p_vma_allocation,
+                                    0,
+                                    image_size);
         vmaUnmapMemory(m_p_allocator, cpu_buffer.m_p_vma_allocation);
+        if (status != VK_SUCCESS) {
+            DestroyResource_StagingBuffer(cpu_buffer);
+            return fail_texture("flush texture staging buffer", status);
+        }
 
-        m_upload_manager.UploadToGPU([p_image, extent_image, cpu_buffer](VkCommandBuffer p_cmd) {
+        const bool uploaded = m_upload_manager.UploadToGPU([p_image, extent_image, cpu_buffer](VkCommandBuffer p_cmd) {
             lfs::vis::VulkanImageBarrierTracker upload_barriers;
             upload_barriers.registerImage(p_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
             upload_barriers.transitionImage(p_cmd, p_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
@@ -1337,6 +1381,8 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
         });
 
         DestroyResource_StagingBuffer(cpu_buffer);
+        if (!uploaded)
+            return fail_texture("submit texture staging upload", VK_ERROR_UNKNOWN);
     }
 
     VkImageViewCreateInfo info_image_view = {};
@@ -1351,14 +1397,15 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
     info_image_view.subresourceRange.layerCount = 1;
     info_image_view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
 
-    VkImageView p_image_view = nullptr;
+    VkImageView p_image_view = VK_NULL_HANDLE;
     status = vkCreateImageView(m_p_device, &info_image_view, nullptr, &p_image_view);
-    RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkCreateImageView");
+    if (status != VK_SUCCESS || p_image_view == VK_NULL_HANDLE)
+        return fail_texture("create image view", status);
 
     p_texture->m_p_vk_image_view = p_image_view;
-    p_texture->m_p_vk_sampler = sampler != VK_NULL_HANDLE ? sampler : m_p_sampler_linear;
+    p_texture->m_p_vk_sampler = texture_sampler;
 
-    return reinterpret_cast<Rml::TextureHandle>(p_texture);
+    return reinterpret_cast<Rml::TextureHandle>(p_texture.release());
 }
 
 void RenderInterface_VK::ReleaseTexture(Rml::TextureHandle texture_handle) {
@@ -1664,6 +1711,11 @@ bool RenderInterface_VK::InitializeExternal(const ExternalContext& context) {
     vkGetPhysicalDeviceProperties(m_p_physical_device, &physical_device_properties);
 
     Initialize_Allocator();
+    if (m_p_allocator == VK_NULL_HANDLE) {
+        Rml::Log::Message(Rml::Log::LT_ERROR,
+                          "[Vulkan] Failed to initialize the external RmlUi VMA allocator.");
+        return false;
+    }
     Initialize_Resources(physical_device_properties);
     UpdateViewportState(context.extent);
     Create_Pipelines();
@@ -2091,9 +2143,11 @@ void RenderInterface_VK::Initialize_Resources(const VkPhysicalDeviceProperties& 
 }
 
 void RenderInterface_VK::Initialize_Allocator() noexcept {
-    RMLUI_VK_ASSERTMSG(m_p_device, "you must have a valid VkDevice here");
-    RMLUI_VK_ASSERTMSG(m_p_physical_device, "you must have a valid VkPhysicalDevice here");
-    RMLUI_VK_ASSERTMSG(m_p_instance, "you must have a valid VkInstance here");
+    m_p_allocator = VK_NULL_HANDLE;
+    if (m_p_device == VK_NULL_HANDLE || m_p_physical_device == VK_NULL_HANDLE ||
+        m_p_instance == VK_NULL_HANDLE) {
+        return;
+    }
 
     VmaVulkanFunctions vulkanFunctions = {};
     vulkanFunctions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
@@ -2107,9 +2161,8 @@ void RenderInterface_VK::Initialize_Allocator() noexcept {
     info.physicalDevice = m_p_physical_device;
     info.pVulkanFunctions = &vulkanFunctions;
 
-    auto status = vmaCreateAllocator(&info, &m_p_allocator);
-
-    RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vmaCreateAllocator");
+    if (vmaCreateAllocator(&info, &m_p_allocator) != VK_SUCCESS)
+        m_p_allocator = VK_NULL_HANDLE;
 }
 
 void RenderInterface_VK::Destroy_Instance() noexcept {
@@ -2169,11 +2222,9 @@ void RenderInterface_VK::Destroy_Resources() noexcept {
 }
 
 void RenderInterface_VK::Destroy_Allocator() noexcept {
-    RMLUI_VK_ASSERTMSG(m_p_allocator, "you must have an initialized allocator for deleting");
-
-    vmaDestroyAllocator(m_p_allocator);
-
-    m_p_allocator = nullptr;
+    if (m_p_allocator != VK_NULL_HANDLE)
+        vmaDestroyAllocator(m_p_allocator);
+    m_p_allocator = VK_NULL_HANDLE;
 }
 
 void RenderInterface_VK::QueryInstanceLayers(LayerPropertiesList& result) noexcept {

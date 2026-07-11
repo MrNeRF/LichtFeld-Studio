@@ -61,13 +61,6 @@ namespace lfs::vis {
         // happens automatically when this destructor returns.
     }
 
-    void* VulkanExternalTensorStorage::cudaPtr() const {
-        if (parent_) {
-            return static_cast<char*>(parent_->cudaPtr()) + offset_;
-        }
-        return interop_.devicePointer();
-    }
-
     VkBuffer VulkanExternalTensorStorage::vkBuffer() const {
         return parent_ ? parent_->vkBuffer() : buffer_.buffer;
     }
@@ -198,24 +191,10 @@ namespace lfs::vis {
                 context.lastError()));
         }
 
-        // The CUDA-side block is already mapped; we don't need a fresh CUDA import.
-        // Wrap an empty CudaVulkanBufferInterop and feed it the existing block ptr
-        // via a tiny adapter — but VulkanExternalTensorStorage holds the interop by
-        // value, and the renderer only ever reads cudaPtr(). For the parent storage
-        // we synthesize a "device pointer" from the ExportableBlock directly.
-        //
-        // Trick: build the parent with a no-op interop and override cudaPtr() via the
-        // sub-view code path. Simpler: store the block as extra_owner and use a
-        // factory-local cuda_ptr override. We achieve that by passing the cuda_ptr
-        // as the data_ argument to from_external_owner per-tensor below; the parent
-        // storage's cudaPtr() is never called because sub-views shortcut on parent_.
-        // The parent's own cudaPtr() would return interop_.devicePointer() == nullptr
-        // for sub-views above; ensure we never call parent->cudaPtr() directly here.
-        //
-        // To keep cudaPtr() consistent for any consumer that calls it on the parent,
-        // we install a CudaVulkanBufferInterop that already carries the cuda_ptr.
-        // The interop has a setter for this purpose; if absent we leave nullptr —
-        // safe because the six sub-views always provide their own data pointer.
+        // The CUDA-side block is already mapped, so the Vulkan ownership object
+        // needs no second CUDA import. Tensor::from_external_owner below receives
+        // the existing CUDA region pointer; this parent owns only the imported
+        // Vulkan buffer and anchors the ExportableBlock lifetime.
         lfs::rendering::CudaVulkanBufferInterop noop_interop;
 
         // Wrap the imported buffer; extra_owner keeps the CUDA-side ExportableBlock
