@@ -252,6 +252,13 @@ namespace lfs::vis::gui {
         return plugin_load_complete_;
     }
 
+    bool StartupOverlay::blocksUnderlayInput() const {
+        if (!visible_)
+            return false;
+        std::lock_guard lock(plugin_load_mutex_);
+        return !plugin_load_state_.active;
+    }
+
     static std::string escapeRmlText(const std::string& input) {
         std::string out;
         out.reserve(input.size());
@@ -639,9 +646,11 @@ namespace lfs::vis::gui {
         if (!rml_context_ || !document_)
             return;
 
-        auto& focus = guiFocusState();
-        focus.want_capture_mouse = true;
-        focus.want_capture_keyboard = true;
+        if (blocksUnderlayInput()) {
+            auto& focus = guiFocusState();
+            focus.want_capture_mouse = true;
+            focus.want_capture_keyboard = true;
+        }
 
         if (!rml_manager_ || !rml_manager_->getVulkanRenderInterface())
             return;

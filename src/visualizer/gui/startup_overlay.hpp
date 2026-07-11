@@ -36,6 +36,7 @@ namespace lfs::vis::gui {
         void dismiss();
         void setPluginLoadState(bool active, float progress, std::string stage);
         [[nodiscard]] bool isVisible() const { return visible_; }
+        [[nodiscard]] bool blocksUnderlayInput() const;
         [[nodiscard]] bool isPluginLoadComplete() const;
         [[nodiscard]] bool needsAnimationFrame() const;
 

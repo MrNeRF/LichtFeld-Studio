@@ -282,6 +282,9 @@ namespace lfs::vis {
         int pending_training_completion_refresh_frames_ = 0;
         bool gui_frame_rendered_ = false;
         bool startup_plugin_preload_started_ = false;
+        std::uint64_t startup_plugin_load_status_revision_ = 0;
+        bool plugin_preload_timing_active_ = false;
+        std::chrono::nanoseconds plugin_preload_max_update_stall_{};
         bool update_work_processed_ = false;
         std::chrono::high_resolution_clock::time_point last_frame_time_ = std::chrono::high_resolution_clock::now();
         bool sequencer_ui_initialized_ = false;

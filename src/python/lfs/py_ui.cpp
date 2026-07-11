@@ -164,6 +164,7 @@ namespace lfs::python {
             PyDynamicTexture& operator=(PyDynamicTexture&&) = delete;
 
             void update(const PyTensor& py_tensor) {
+                lfs::python::require_ui_texture_creation_thread();
                 auto t = py_tensor.tensor();
                 if (t.ndim() != 3)
                     throw std::invalid_argument("DynamicTexture requires 3D tensor [H, W, C]");
@@ -372,6 +373,7 @@ namespace lfs::python {
                     return it->second;
                 }
             }
+            lfs::python::require_ui_texture_creation_thread();
             try {
                 return load_icon_from_path(lfs::vis::getAssetPath("icon/" + std::string(DEFAULT_ICON)), DEFAULT_ICON);
             } catch (const std::exception& e) {
@@ -388,6 +390,8 @@ namespace lfs::python {
                     return it->second;
                 }
             }
+
+            lfs::python::require_ui_texture_creation_thread();
 
             try {
                 return load_icon_from_path(lfs::vis::getAssetPath("icon/" + icon_name), icon_name);
@@ -406,6 +410,8 @@ namespace lfs::python {
                     return it->second;
                 }
             }
+
+            lfs::python::require_ui_texture_creation_thread();
 
             try {
                 return load_icon_from_path(lfs::vis::getAssetPath("icon/scene/" + icon_name + ".png"), cache_key);
@@ -427,6 +433,8 @@ namespace lfs::python {
                     return it->second;
                 }
             }
+
+            lfs::python::require_ui_texture_creation_thread();
 
             std::filesystem::path icon_path = lfs::core::utf8_to_path(plugin_path) / "icons" / (icon_name + ".png");
 
@@ -577,6 +585,7 @@ namespace lfs::python {
             if (!data || width <= 0 || height <= 0)
                 return {0, 0, 0};
 
+            lfs::python::require_ui_texture_creation_thread();
             ensure_max_texture_size();
 
             const auto result = lfs::python::create_ui_texture(data, width, height, channels);
@@ -3744,7 +3753,8 @@ namespace lfs::python {
                                  {0, 0}, {u1, v1}, t, {0, 0, 0, 0});
                 },
                 nb::arg("texture"), nb::arg("size"), nb::arg("tint") = nb::none(), "Draw a DynamicTexture with automatic UV scaling")
-            .def("image_tensor", [](PyUILayout& /*self*/, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
+            .def(
+                "image_tensor", [](PyUILayout& /*self*/, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
                     PyDynamicTexture* tex_ptr = nullptr;
                     {
                         std::lock_guard lock(g_dynamic_textures_mutex);

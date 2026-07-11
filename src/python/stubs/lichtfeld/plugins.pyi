@@ -40,6 +40,9 @@ def get_error(name: str) -> object:
 def get_traceback(name: str) -> object:
     """Get plugin error traceback"""
 
+def startup_load_status() -> dict:
+    """Return a thread-safe snapshot of startup plugin loading"""
+
 def install(url: str, auto_load: bool = True, transport: str = 'archive') -> str:
     """Install from GitHub URL"""
 

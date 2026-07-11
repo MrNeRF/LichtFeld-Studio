@@ -1477,6 +1477,7 @@ NB_MODULE(lichtfeld, m) {
             auto it = cache.find(name);
             if (it != cache.end())
                 return it->second;
+            lfs::python::require_ui_texture_creation_thread();
             try {
                 const auto path = lfs::vis::getAssetPath("icon/" + name + ".png");
                 const auto [data, width, height, channels] = lfs::core::load_image_with_alpha(path);

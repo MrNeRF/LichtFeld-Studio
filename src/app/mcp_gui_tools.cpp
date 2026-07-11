@@ -4261,6 +4261,8 @@ namespace lfs::app {
 
                 const std::string args_json = args.contains("args") ? args["args"].dump() : "{}";
 
+                if (!python::ensure_plugins_loaded())
+                    return json{{"success", false}, {"error", "Plugins are still loading"}};
                 return post_and_wait(viewer, [viewer, capability, args_json]() -> json {
                     python::SceneContextGuard ctx(&viewer->getScene());
                     auto result = python::invoke_capability(capability, args_json);

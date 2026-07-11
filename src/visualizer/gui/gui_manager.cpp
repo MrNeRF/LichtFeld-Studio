@@ -5482,7 +5482,7 @@ namespace lfs::vis::gui {
         bool modal_overlay_open = false;
         bool modal_overlay_pending = false;
         bool context_menu_open = false;
-        bool startup_overlay_blocking = startup_overlay_.isVisible() && !startup_overlay_.isPluginLoadComplete();
+        bool startup_overlay_blocking = startup_overlay_.blocksUnderlayInput();
         bool block_underlay_input = startup_overlay_blocking;
         {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.frame_state", 0.25);
@@ -6279,10 +6279,14 @@ namespace lfs::vis::gui {
             }
         };
         if (startup_overlay_.isVisible()) {
-            startup_overlay_.setInput(&panel_input);
-            auto& focus = guiFocusState();
-            focus.want_capture_mouse = true;
-            focus.want_capture_keyboard = true;
+            if (startup_overlay_.blocksUnderlayInput()) {
+                startup_overlay_.setInput(&panel_input);
+                auto& focus = guiFocusState();
+                focus.want_capture_mouse = true;
+                focus.want_capture_keyboard = true;
+            } else {
+                startup_overlay_.setInput(nullptr);
+            }
         } else {
             startup_overlay_.setInput(nullptr);
         }
@@ -7048,7 +7052,7 @@ namespace lfs::vis::gui {
     }
 
     GuiHitTestResult GuiManager::hitTestPointer(const double x, const double y) const {
-        if (isCapturingInput() || isModalWindowOpen() || startup_overlay_.isVisible() ||
+        if (isCapturingInput() || isModalWindowOpen() || startup_overlay_.blocksUnderlayInput() ||
             (global_context_menu_ && global_context_menu_->isOpen())) {
             return {.blocks_pointer = true, .takes_keyboard_focus = true};
         }
@@ -7086,7 +7090,7 @@ namespace lfs::vis::gui {
         const bool modal_open =
             isCapturingInput() ||
             isModalWindowOpen() ||
-            startup_overlay_.isVisible() ||
+            startup_overlay_.blocksUnderlayInput() ||
             (global_context_menu_ && global_context_menu_->isOpen()) ||
             isViewportExportLocked() ||
             sequencer_ui_.blocksKeyboard();
@@ -7312,7 +7316,7 @@ namespace lfs::vis::gui {
 
         const bool imgui_popup_open =
             ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
-        if (isCapturingInput() || imgui_popup_open || startup_overlay_.isVisible() || drag_drop_hovering_) {
+        if (isCapturingInput() || imgui_popup_open || startup_overlay_.blocksUnderlayInput() || drag_drop_hovering_) {
             return true;
         }
 

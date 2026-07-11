@@ -229,12 +229,6 @@ namespace lfs::vis {
         callback_cleanup_.add([] { python::set_operator_callbacks(nullptr); });
         python::set_gui_manager(gui_manager_.get());
         callback_cleanup_.add([] { python::set_gui_manager(nullptr); });
-        python::set_startup_plugin_load_state_callback([](bool active, float progress, const char* stage) {
-            if (auto* const gui = python::get_gui_manager()) {
-                gui->setStartupPluginLoadState(active, progress, stage ? stage : "");
-            }
-        });
-        callback_cleanup_.add([] { python::set_startup_plugin_load_state_callback(nullptr); });
         python::set_main_loop_wake_callback(&wakeEventLoopViaServices);
         callback_cleanup_.add([] { python::set_main_loop_wake_callback(nullptr); });
         core::reactive::Store::set_wake_callback(&wakeEventLoopViaServices);
@@ -783,6 +777,8 @@ namespace lfs::vis {
             pending_render_work.swap(render_work_queue_);
         }
 
+        python::request_plugin_preload_stop();
+
         for (auto& work : pending_work) {
             if (work.cancel)
                 work.cancel();
@@ -1090,6 +1086,8 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::update() {
+        const auto update_started_at = std::chrono::steady_clock::now();
+        const bool preload_running_at_start = python::is_plugin_preload_running();
         update_work_processed_ = false;
         window_manager_->updateWindowSize();
 
@@ -1098,8 +1096,15 @@ namespace lfs::vis {
             LOG_TIMER("startup.python.preload_plugins_async");
             python::preload_user_plugins_async();
         }
-        if (startup_plugin_preload_started_) {
-            python::process_plugin_preload_step();
+
+        const auto plugin_load_status = python::get_startup_plugin_load_status();
+        if (gui_manager_ &&
+            plugin_load_status.revision != startup_plugin_load_status_revision_) {
+            gui_manager_->setStartupPluginLoadState(
+                plugin_load_status.active,
+                plugin_load_status.progress,
+                plugin_load_status.detail);
+            startup_plugin_load_status_revision_ = plugin_load_status.revision;
         }
 
         // Process MCP work queue
@@ -1201,6 +1206,24 @@ namespace lfs::vis {
             pending_auto_train_ = false;
             LOG_INFO("Auto-starting training (--train flag)");
             cmd::StartTraining{}.emit();
+        }
+
+        const bool preload_running_at_end = python::is_plugin_preload_running();
+        if (preload_running_at_start || preload_running_at_end) {
+            plugin_preload_timing_active_ = true;
+            plugin_preload_max_update_stall_ = std::max(
+                plugin_preload_max_update_stall_,
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - update_started_at));
+        }
+        if (plugin_preload_timing_active_ && !preload_running_at_end) {
+            const double max_stall_ms =
+                std::chrono::duration<double, std::milli>(
+                    plugin_preload_max_update_stall_)
+                    .count();
+            LOG_DEBUG("Plugin preload frame budget: max VisualizerImpl::update stall {:.3f} ms",
+                      max_stall_ms);
+            plugin_preload_timing_active_ = false;
         }
     }
 
@@ -1383,8 +1406,9 @@ namespace lfs::vis {
         }
 
         if (input_controller_) {
-            const bool startup_overlay_visible = gui_manager_ && gui_manager_->isStartupVisible();
-            if (!viewport_export_locked && !startup_overlay_visible) {
+            const bool startup_overlay_blocking =
+                gui_manager_ && gui_manager_->isStartupBlockingInput();
+            if (!viewport_export_locked && !startup_overlay_blocking) {
                 input_controller_->update(delta_time);
             }
         }

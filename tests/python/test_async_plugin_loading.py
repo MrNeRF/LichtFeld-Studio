@@ -3,6 +3,7 @@
 """Deterministic coverage for cancellable and transactional plugin loading."""
 
 import builtins
+import concurrent.futures
 from pathlib import Path
 import sys
 import threading
@@ -256,6 +257,51 @@ def test_process_group_configuration_is_platform_specific(monkeypatch):
     assert kwargs["creationflags"] == getattr(
         installer.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200
     )
+
+
+def test_startup_coordinator_status_is_python_visible():
+    import lichtfeld as lf
+
+    status = lf.plugins.startup_load_status()
+
+    assert set(status) == {
+        "state",
+        "phase",
+        "plugin",
+        "detail",
+        "attempted",
+        "total",
+        "failed",
+        "progress",
+        "active",
+    }
+    assert status["state"] in {
+        "not_started",
+        "discovering",
+        "loading",
+        "completed",
+        "cancelled",
+    }
+    assert status["phase"] in {
+        "idle",
+        "environment",
+        "dependencies",
+        "import",
+        "activation",
+    }
+    assert 0.0 <= status["progress"] <= 1.0
+    assert status["attempted"] <= status["total"]
+
+
+def test_icon_texture_creation_rejects_worker_thread():
+    import lichtfeld as lf
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            lf.ui.load_icon, "__async_plugin_affinity_guard__.png"
+        )
+        with pytest.raises(RuntimeError, match="graphics thread"):
+            future.result(timeout=5)
 
 
 def test_cancelled_dependency_sync_never_writes_stamp(tmp_path, monkeypatch):
