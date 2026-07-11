@@ -684,6 +684,10 @@ namespace lfs::vis {
 
         std::shared_ptr<const lfs::core::Tensor> vulkan_viewport_image_;
         std::uint64_t vulkan_viewport_image_generation_ = 0;
+        // Degraded-mode gate: a persistent VkSplat failure keeps the last good
+        // image and logs only when the diagnostic text changes. Cleared after a
+        // successful forward pass or scene-resource release.
+        std::string last_vksplat_render_error_;
         std::uint64_t viewport_projection_generation_ = 1;
         std::unique_ptr<VksplatViewportRenderer> vksplat_viewport_renderer_;
         std::unique_ptr<PointCloudVulkanRenderer> point_cloud_vulkan_renderer_;

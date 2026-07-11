@@ -12,6 +12,7 @@
 //   5 batch_prepare wave-chunked raster/compose indirect args
 
 #include "config.slang"
+#include "indirect_layout.inc"
 
 import utils;
 
@@ -256,7 +257,8 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID, uniform Uniforms uniform
 #elif MACRO_ENTRY == _MACRO_ENTRY_batch_prepare
 
 layout(binding=0) StructuredBuffer<int32_t> macro_batch_offsets;
-// [0 .. MAX_WAVES*3): per-wave raster args; [MAX_WAVES*3 ..): per-wave compose args.
+// Per-wave raster/compose bases and stride are defined by
+// LFS_VK_MACRO_WAVE_DISPATCH_* in indirect_layout.inc.
 layout(binding=1) RWStructuredBuffer<uint32_t> out_wave_args;
 
 [shader("compute")]
@@ -273,18 +275,21 @@ void main(uniform Uniforms uniforms) {
         const uint wave_batches = total_batches > wave_begin
             ? min(total_batches - wave_begin, HIGS_RASTER_WAVE_BATCHES)
             : 0u;
-        out_wave_args[w * 3u + 0u] = wave_batches;
-        out_wave_args[w * 3u + 1u] = wave_batches > 0u ? 1u : 0u;
-        out_wave_args[w * 3u + 2u] = wave_batches > 0u ? 1u : 0u;
+        const uint raster = LFS_VK_MACRO_WAVE_DISPATCH_RASTER_BASE_WORD_OFFSET +
+                            w * LFS_VK_MACRO_WAVE_DISPATCH_WAVE_STRIDE_WORDS;
+        out_wave_args[raster + LFS_VK_DISPATCH_X_WORD_OFFSET] = wave_batches;
+        out_wave_args[raster + LFS_VK_DISPATCH_Y_WORD_OFFSET] = wave_batches > 0u ? 1u : 0u;
+        out_wave_args[raster + LFS_VK_DISPATCH_Z_WORD_OFFSET] = wave_batches > 0u ? 1u : 0u;
         // Wave 0's compose always runs so an empty frame still initializes
         // the pixel state instead of presenting stale content.
         const bool compose_runs = wave_batches > 0u || w == 0u;
         const uint higs_grid_w = (uniforms.image_width + HIGS_TILE_WIDTH - 1u) / HIGS_TILE_WIDTH;
         const uint higs_grid_h = (uniforms.image_height + HIGS_TILE_HEIGHT - 1u) / HIGS_TILE_HEIGHT;
-        const uint c = (HIGS_RASTER_MAX_WAVES + w) * 3u;
-        out_wave_args[c + 0u] = compose_runs ? higs_grid_w : 0u;
-        out_wave_args[c + 1u] = compose_runs ? higs_grid_h : 0u;
-        out_wave_args[c + 2u] = compose_runs ? 1u : 0u;
+        const uint compose = LFS_VK_MACRO_WAVE_DISPATCH_COMPOSE_BASE_WORD_OFFSET +
+                             w * LFS_VK_MACRO_WAVE_DISPATCH_WAVE_STRIDE_WORDS;
+        out_wave_args[compose + LFS_VK_DISPATCH_X_WORD_OFFSET] = compose_runs ? higs_grid_w : 0u;
+        out_wave_args[compose + LFS_VK_DISPATCH_Y_WORD_OFFSET] = compose_runs ? higs_grid_h : 0u;
+        out_wave_args[compose + LFS_VK_DISPATCH_Z_WORD_OFFSET] = compose_runs ? 1u : 0u;
     }
 }
 

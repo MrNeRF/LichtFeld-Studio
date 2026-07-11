@@ -56,6 +56,10 @@ public:
     void cancelCommandBatch() noexcept;
     void waitForPendingBatch();
     [[nodiscard]] bool timelineValueComplete(VkSemaphore semaphore, std::uint64_t value) const;
+    // Pure host-side submission evidence. Updated immediately after
+    // vkQueueSubmit succeeds, before any post-submit bookkeeping can throw.
+    [[nodiscard]] bool wasTimelineSignalSubmitted(VkSemaphore semaphore,
+                                                  std::uint64_t value) const noexcept;
     void addTimelineWait(VkSemaphore semaphore, std::uint64_t value, VkPipelineStageFlags stage_mask);
     bool isCommandBatchInProgress() const {
         return commandBatchInProgress;

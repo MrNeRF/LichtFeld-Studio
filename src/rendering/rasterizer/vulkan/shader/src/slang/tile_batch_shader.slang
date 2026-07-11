@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "config.slang"
+#include "indirect_layout.inc"
 
 import utils;
 
@@ -82,9 +83,10 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID,
         uint total_batches = num_tiles > 0u
             ? uint(max(tile_batch_offsets[num_tiles - 1u], 0))
             : 0u;
-        out_dispatch_args[0] = total_batches;
-        out_dispatch_args[1] = 1u;
-        out_dispatch_args[2] = 1u;
+        const uint raster = LFS_VK_TILE_BATCH_DISPATCH_RASTER_WORD_OFFSET;
+        out_dispatch_args[raster + LFS_VK_DISPATCH_X_WORD_OFFSET] = total_batches;
+        out_dispatch_args[raster + LFS_VK_DISPATCH_Y_WORD_OFFSET] = 1u;
+        out_dispatch_args[raster + LFS_VK_DISPATCH_Z_WORD_OFFSET] = 1u;
     }
 
     if (tile_idx >= num_tiles)

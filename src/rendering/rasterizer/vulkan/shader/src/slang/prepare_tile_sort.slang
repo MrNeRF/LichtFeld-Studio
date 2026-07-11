@@ -1,4 +1,5 @@
 #include "config.slang"
+#include "indirect_layout.inc"
 
 // LFS_VISIBLE_BOUNDED=1 (HiGS chain): the cumsum tail lives at
 // [visible_count - 1] instead of [num_splats - 1].
@@ -54,12 +55,14 @@ void main(uniform Uniforms uniforms) {
 
     uint32_t partition_size = max(uniforms.sort_partition_size, 1u);
     uint32_t groups_x = (tile_instance_count + partition_size - 1u) / partition_size;
-    out_sort_dispatch_args[0] = max(groups_x, 1u);
-    out_sort_dispatch_args[1] = 1u;
-    out_sort_dispatch_args[2] = 1u;
+    const uint32_t radix = LFS_VK_TILE_SORT_DISPATCH_RADIX_WORD_OFFSET;
+    out_sort_dispatch_args[radix + LFS_VK_DISPATCH_X_WORD_OFFSET] = max(groups_x, 1u);
+    out_sort_dispatch_args[radix + LFS_VK_DISPATCH_Y_WORD_OFFSET] = 1u;
+    out_sort_dispatch_args[radix + LFS_VK_DISPATCH_Z_WORD_OFFSET] = 1u;
 
     const uint32_t range_groups = (tile_instance_count + 1u + 255u) / 256u;
-    out_sort_dispatch_args[3] = max(range_groups, 1u);
-    out_sort_dispatch_args[4] = 1u;
-    out_sort_dispatch_args[5] = 1u;
+    const uint32_t range = LFS_VK_TILE_SORT_DISPATCH_RANGE_WORD_OFFSET;
+    out_sort_dispatch_args[range + LFS_VK_DISPATCH_X_WORD_OFFSET] = max(range_groups, 1u);
+    out_sort_dispatch_args[range + LFS_VK_DISPATCH_Y_WORD_OFFSET] = 1u;
+    out_sort_dispatch_args[range + LFS_VK_DISPATCH_Z_WORD_OFFSET] = 1u;
 }

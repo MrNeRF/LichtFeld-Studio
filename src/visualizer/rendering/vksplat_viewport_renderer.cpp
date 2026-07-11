@@ -17,6 +17,7 @@
 #include "diagnostics/vram_profiler.hpp"
 #include "io/formats/rad.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "rendering/rasterizer/vulkan/src/indirect_layout.h"
 #include "viewport/vksplat_compose.comp.spv.h"
 #include "vksplat_input_packer.hpp"
 #include "vulkan_external_tensor.hpp"
@@ -44,6 +45,8 @@
 
 namespace lfs::vis {
     namespace {
+        namespace indirect = lfs::rendering::vulkan::indirect_layout;
+
         using lfs::core::DataType;
         using lfs::core::Device;
         using lfs::core::Tensor;
@@ -2975,18 +2978,18 @@ namespace lfs::vis {
             add_count(num_splats, sizeof(std::int32_t)); // visible_prefix
         }
         add_count(2, sizeof(std::uint32_t));                                                                      // visible_count
-        add_count(3, sizeof(std::uint32_t));                                                                      // visible_sort_dispatch_args
+        add_count(indirect::VisibleSortDispatch::kLayout.word_count, sizeof(std::uint32_t));                      // visible_sort_dispatch_args
         add_count(per_visible, sizeof(std::int32_t));                                                             // index_buffer_offset
         add_count(sort_capacity, sizeof(sortingKey_t));                                                           // sorting_keys_1
         add_count(sort_capacity, sizeof(sortingKey_t));                                                           // sorting_keys_2
         add_count(sort_capacity, sizeof(std::int32_t));                                                           // sorting_gauss_idx_1
         add_count(sort_capacity, sizeof(std::int32_t));                                                           // sorting_gauss_idx_2
         add_count(2, sizeof(std::uint32_t));                                                                      // tile_sort_count
-        add_count(6, sizeof(std::uint32_t));                                                                      // tile_sort_dispatch_args
+        add_count(indirect::TileSortDispatch::kLayout.word_count, sizeof(std::uint32_t));                         // tile_sort_dispatch_args
         add_count(num_tiles + 1, sizeof(std::int32_t));                                                           // tile_ranges
         add_count(num_tiles, sizeof(std::int32_t));                                                               // tile_batch_counts
         add_count(num_tiles, sizeof(std::int32_t));                                                               // tile_batch_offsets
-        add_count(3, sizeof(std::uint32_t));                                                                      // tile_batch_dispatch_args
+        add_count(indirect::TileBatchDispatch::kLayout.word_count, sizeof(std::uint32_t));                        // tile_batch_dispatch_args
         add_count(4 * dense_batch_capacity, sizeof(std::uint32_t));                                               // tile_batch_descriptors
         add_count(4 * dense_batch_capacity * TILE_WIDTH * TILE_HEIGHT, sizeof(float));                            // tile_batch_pixel_state
         add_count(dense_batch_capacity * TILE_WIDTH * TILE_HEIGHT, sizeof(std::int32_t));                         // tile_batch_n_contributors
@@ -3308,7 +3311,8 @@ namespace lfs::vis {
             bind_count(buffers_.visible_prefix, num_splats);
         }
         bind_count(buffers_.visible_count, 2);
-        bind_count(buffers_.visible_sort_dispatch_args, 3);
+        bind_count(buffers_.visible_sort_dispatch_args,
+                   indirect::VisibleSortDispatch::kLayout.word_count);
         bind_count(buffers_.index_buffer_offset, per_visible);
         const std::size_t per_splat_end = cursor;
         bind_count(buffers_.sorting_keys_1, sort_capacity);
@@ -3317,12 +3321,14 @@ namespace lfs::vis {
         bind_count(buffers_.sorting_gauss_idx_2, sort_capacity);
         const std::size_t sort_end = cursor;
         bind_count(buffers_.tile_sort_count, 2);
-        bind_count(buffers_.tile_sort_dispatch_args, 6);
+        bind_count(buffers_.tile_sort_dispatch_args,
+                   indirect::TileSortDispatch::kLayout.word_count);
         bind_count(buffers_.tile_ranges, num_tiles + 1);
         const std::size_t dense_batch_capacity = denseTileBatchCapacity(sort_capacity, num_tiles);
         bind_count(buffers_.tile_batch_counts, num_tiles);
         bind_count(buffers_.tile_batch_offsets, num_tiles);
-        bind_count(buffers_.tile_batch_dispatch_args, 3);
+        bind_count(buffers_.tile_batch_dispatch_args,
+                   indirect::TileBatchDispatch::kLayout.word_count);
         bind_count(buffers_.tile_batch_descriptors, 4 * dense_batch_capacity);
         bind_count(buffers_.tile_batch_pixel_state, 4 * dense_batch_capacity * TILE_WIDTH * TILE_HEIGHT);
         bind_count(buffers_.tile_batch_n_contributors, dense_batch_capacity * TILE_WIDTH * TILE_HEIGHT);
@@ -4203,36 +4209,33 @@ namespace lfs::vis {
         return {};
     }
 
-    // Exception-path safety: the batch may or may not have submitted/signaled.
-    // Publishing an unsignaled value would hang the trainer's borrow wait, and
-    // not waiting would let the trainer reuse arena scratch a partially
-    // submitted batch still reads — so block (bounded) until the value lands
-    // or the timeout proves the submit never happened.
-    bool VksplatViewportRenderer::waitCompletionValueBounded(const std::uint64_t value) noexcept {
-        if (context_ == nullptr || render_complete_timeline_ == VK_NULL_HANDLE || value == 0) {
-            return false;
+    std::expected<std::uint64_t, std::string>
+    VksplatViewportRenderer::nextRenderCompletionValue(const std::string_view pass) const {
+        if (render_complete_timeline_ == VK_NULL_HANDLE) {
+            return std::unexpected(std::format(
+                "VkSplat {} cannot choose a completion value without a render timeline "
+                "(timeline={:#x}, last_submitted_value={})",
+                pass,
+                vkHandleValue(render_complete_timeline_),
+                render_complete_value_));
         }
-        VkSemaphoreWaitInfo wait_info{};
-        wait_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
-        wait_info.semaphoreCount = 1;
-        wait_info.pSemaphores = &render_complete_timeline_;
-        wait_info.pValues = &value;
-        constexpr std::uint64_t kTimeoutNs = 2'000'000'000ull;
-        const VkResult result = vkWaitSemaphores(context_->device(), &wait_info, kTimeoutNs);
-        if (result != VK_SUCCESS) {
-            LOG_WARN("Vulkan: {}",
-                     vkError(
-                         "vkWaitSemaphores(context_->device(), &wait_info, kTimeoutNs)",
-                         result,
-                         std::format("VkSplat failed-pass completion wait did not reach the reserved value (device={:#x}, semaphore={:#x}, requested_value={}, semaphore_count={}, timeout_ns={})",
-                                     vkHandleValue(context_->device()),
-                                     vkHandleValue(render_complete_timeline_),
-                                     value,
-                                     wait_info.semaphoreCount,
-                                     kTimeoutNs)));
-            return false;
+        if (render_complete_value_ == std::numeric_limits<std::uint64_t>::max()) {
+            return std::unexpected(std::format(
+                "VkSplat {} completion timeline exhausted uint64 values "
+                "(timeline={:#x}, last_submitted_value={}, uint64_max={})",
+                pass,
+                vkHandleValue(render_complete_timeline_),
+                render_complete_value_,
+                std::numeric_limits<std::uint64_t>::max()));
         }
-        return true;
+
+        // This is a candidate, not a reservation. Failed recording is cancelled
+        // without changing render_complete_value_. We deliberately do not host-
+        // signal cancelled values: Vulkan forbids a host signal from overtaking
+        // outstanding queue signal operations on the same timeline. The caller
+        // commits this value only after wasTimelineSignalSubmitted() proves that
+        // vkQueueSubmit accepted the signal operation.
+        return render_complete_value_ + 1;
     }
 
     std::expected<void, std::string> VksplatViewportRenderer::waitForRingSlot(
@@ -4548,8 +4551,13 @@ namespace lfs::vis {
                 // Keep the borrowed storages alive until the frame that binds
                 // them retires: a trainer topology reallocation may drop its
                 // references while this frame's batch is still in flight.
+                const auto retirement_value =
+                    nextRenderCompletionValue("input-storage retirement");
+                if (!retirement_value) {
+                    return std::unexpected(retirement_value.error());
+                }
                 retired_input_storages_.emplace_back(
-                    render_complete_value_ + 1,
+                    *retirement_value,
                     std::vector<std::shared_ptr<void>>{
                         means_storage, sh0_storage, shN_storage,
                         rotations_storage, scaling_storage, opacity_storage});
@@ -6804,7 +6812,11 @@ namespace lfs::vis {
         }
 
         std::expected<void, std::string> compose_status;
-        const std::uint64_t completion_value = ++render_complete_value_;
+        const auto completion_candidate = nextRenderCompletionValue("selection overlay pass");
+        if (!completion_candidate) {
+            return std::unexpected(completion_candidate.error());
+        }
+        const std::uint64_t completion_value = *completion_candidate;
         // This pass re-reads the storages bound by the previous prepareInputs;
         // extend their retirement to cover this submit.
         if (!retired_input_storages_.empty()) {
@@ -6863,10 +6875,12 @@ namespace lfs::vis {
                 }
             }
         } catch (const std::exception& e) {
-            // Only hand the release to the arena if the timeline signal actually
-            // landed; a failed submit never signals completion_value, and waiting
-            // it later would hang the arena/trainer.
-            if (waitCompletionValueBounded(completion_value)) {
+            // Recording failures cancel without reserving a timeline value.
+            // If post-submit bookkeeping threw, the pipeline's host-side record
+            // proves that vkQueueSubmit accepted the signal; no completion wait
+            // is needed on either path.
+            if (renderer_.wasTimelineSignalSubmitted(render_complete_timeline_, completion_value)) {
+                render_complete_value_ = completion_value;
                 last_signaled_render_value_ = completion_value;
                 if (overlay_arena_guard) {
                     overlay_arena_guard->noteVulkanRelease(render_complete_cuda_.handle(), completion_value);
@@ -6874,6 +6888,15 @@ namespace lfs::vis {
             }
             return std::unexpected(std::format("VkSplat selection overlay pass failed: {}", e.what()));
         }
+        if (!renderer_.wasTimelineSignalSubmitted(render_complete_timeline_, completion_value)) {
+            return std::unexpected(std::format(
+                "VkSplat selection overlay completed recording without submitting its timeline signal "
+                "(timeline={:#x}, candidate_value={}, last_submitted_value={})",
+                vkHandleValue(render_complete_timeline_),
+                completion_value,
+                render_complete_value_));
+        }
+        render_complete_value_ = completion_value;
         last_signaled_render_value_ = completion_value;
         if (overlay_arena_guard) {
             overlay_arena_guard->noteVulkanRelease(render_complete_cuda_.handle(), completion_value);
@@ -6932,6 +6955,11 @@ namespace lfs::vis {
         if (auto ok = ensureInitialized(context); !ok) {
             return std::unexpected(ok.error());
         }
+        const auto completion_candidate = nextRenderCompletionValue("forward pass");
+        if (!completion_candidate) {
+            return std::unexpected(completion_candidate.error());
+        }
+        const std::uint64_t completion_value = *completion_candidate;
         const lfs::core::CUDAStreamGuard stream_guard(render_stream_);
 
         drainRetiredScratchBuffers(false);
@@ -7613,7 +7641,7 @@ namespace lfs::vis {
                 static_cast<std::uint32_t>(uniforms.grid_width),
                 static_cast<std::uint32_t>(uniforms.grid_height),
                 ring_slot,
-                render_complete_value_ + 1);
+                completion_value);
         };
 
         if (synchronize_input_upload && !kDisableSharedScratch) {
@@ -7690,7 +7718,6 @@ namespace lfs::vis {
         }
 
         std::expected<void, std::string> compose_status;
-        const std::uint64_t completion_value = ++render_complete_value_;
         try {
             // Timer/guard ordering trick: the LOG_TIMER for batch_total is
             // declared FIRST so it destructs LAST. The DeviceGuard `batch`
@@ -8001,10 +8028,11 @@ namespace lfs::vis {
             // On try-block exit, `batch` submits and publishes its timeline signal before the
             // outer batch_total timer logs.
         } catch (const std::exception& e) {
-            // Only hand the release to the arena if the timeline signal actually
-            // landed; a failed submit never signals completion_value, and waiting
-            // it later would hang the arena/trainer after this frame.
-            if (waitCompletionValueBounded(completion_value)) {
+            // Recording failures cancel without reserving a value. A rare
+            // post-submit bookkeeping failure is distinguished by the pipeline's
+            // host-side submission record, so neither path waits on the GPU.
+            if (renderer_.wasTimelineSignalSubmitted(render_complete_timeline_, completion_value)) {
+                render_complete_value_ = completion_value;
                 last_signaled_render_value_ = completion_value;
                 if (shared_arena_guard) {
                     shared_arena_guard->noteVulkanRelease(render_complete_cuda_.handle(), completion_value);
@@ -8015,9 +8043,18 @@ namespace lfs::vis {
             }
             return std::unexpected(std::format("VkSplat forward pass failed: {}", e.what()));
         }
+        if (!renderer_.wasTimelineSignalSubmitted(render_complete_timeline_, completion_value)) {
+            return std::unexpected(std::format(
+                "VkSplat forward pass completed recording without submitting its timeline signal "
+                "(timeline={:#x}, candidate_value={}, last_submitted_value={})",
+                vkHandleValue(render_complete_timeline_),
+                completion_value,
+                render_complete_value_));
+        }
         // The batch (and its timeline signal) is submitted; hand the release to
         // the arena and the trainer before the guard/locks let them reuse the
         // scratch this batch still reads.
+        render_complete_value_ = completion_value;
         last_signaled_render_value_ = completion_value;
         last_render_used_macro_chain_ = higs_active;
         resident_sort_capacity_ = shared_sort_capacity;

@@ -18,6 +18,8 @@
 #endif
 
 namespace {
+    namespace indirect = lfs::rendering::vulkan::indirect_layout;
+
     constexpr size_t kRasterBatchSize = RASTER_BATCH_SIZE;
     constexpr size_t kRasterDenseTileThreshold = RASTER_DENSE_TILE_THRESHOLD;
     constexpr size_t kMinLoadBalancedRasterInstances = 4 * kRasterBatchSize;
@@ -29,6 +31,26 @@ namespace {
         const size_t max_dense_tiles =
             std::min(num_tiles, tile_instances / (kRasterDenseTileThreshold + 1u));
         return std::max<size_t>(1, _CEIL_DIV(tile_instances, kRasterBatchSize) + max_dense_tiles);
+    }
+
+    void validateIndirectLayoutBuffer(const _VulkanBuffer& buffer,
+                                      const indirect::Layout layout,
+                                      const std::string_view operation) {
+        const std::size_t required_bytes = indirect::byteSize(layout);
+        if (buffer.buffer == VK_NULL_HANDLE || buffer.size < required_bytes) {
+            _THROW_ERROR(std::format(
+                "{} requires a non-null indirect buffer satisfying {} (buffer={:#x}, layout_constant='{}', required_words={}, required_bytes={}, active_bytes={}, allocation_bytes={}, base_offset={}, label='{}')",
+                operation,
+                layout.word_count_constant,
+                lfsVkHandleValue(buffer.buffer),
+                layout.word_count_constant,
+                layout.word_count,
+                required_bytes,
+                buffer.size,
+                buffer.allocSize,
+                buffer.offset,
+                buffer.label ? buffer.label : "<unlabeled>"));
+        }
     }
 } // namespace
 
@@ -1098,7 +1120,7 @@ void VulkanGSRenderer::executeComputeTileRanges(
                         INDIRECT_DISPATCH_READ);
     executeComputeIndirect(
         buffers.tile_sort_dispatch_args.deviceBuffer,
-        3 * sizeof(uint32_t),
+        indirect::byteOffset(indirect::TileSortDispatch::kRangeWordOffset),
         &uniforms, sizeof(uniforms),
         pipeline_compute_tile_ranges[buffers.is_unsorted_1],
         {
@@ -1137,7 +1159,12 @@ void VulkanGSRenderer::executeBatchedRasterizeForward(
     auto& tile_batch_offsets = buffers.tile_batch_offsets.deviceBuffer;
     auto& tile_batch_descriptors = resizeDeviceBuffer(buffers.tile_batch_descriptors,
                                                       4 * batch_capacity);
-    auto& tile_batch_dispatch_args = resizeDeviceBuffer(buffers.tile_batch_dispatch_args, 3);
+    auto& tile_batch_dispatch_args = resizeDeviceBuffer(
+        buffers.tile_batch_dispatch_args,
+        indirect::TileBatchDispatch::kLayout.word_count);
+    validateIndirectLayoutBuffer(tile_batch_dispatch_args,
+                                 indirect::TileBatchDispatch::kLayout,
+                                 "tile_batch descriptors producer");
 
     bufferMemoryBarrier({
                             {tile_batch_offsets, COMPUTE_SHADER_WRITE},
@@ -1224,7 +1251,7 @@ void VulkanGSRenderer::executeBatchedRasterizeForward(
                                : pipeline_rasterize_forward_batches_plain;
     executeComputeIndirect(
         tile_batch_dispatch_args,
-        0,
+        indirect::byteOffset(indirect::TileBatchDispatch::kRasterWordOffset),
         &uniforms, sizeof(uniforms),
         batch_pipeline[buffers.is_unsorted_1],
         batch_bindings);
@@ -1673,7 +1700,8 @@ void VulkanGSRenderer::executePrepareTileSort(
     }
 
     resizeDeviceBuffer(buffers.tile_sort_count, 2);
-    resizeDeviceBuffer(buffers.tile_sort_dispatch_args, 6);
+    resizeDeviceBuffer(buffers.tile_sort_dispatch_args,
+                       indirect::TileSortDispatch::kLayout.word_count);
     if (buffers.tile_sort_count.deviceBuffer.size != 2 * sizeof(uint32_t)) {
         _THROW_ERROR(std::format(
             "prepare_tile_sort count buffer must contain exactly two uint32 words (buffer={:#x}, active_bytes={}, allocation_bytes={}, required_bytes={})",
@@ -1682,6 +1710,9 @@ void VulkanGSRenderer::executePrepareTileSort(
             buffers.tile_sort_count.deviceBuffer.allocSize,
             2 * sizeof(uint32_t)));
     }
+    validateIndirectLayoutBuffer(buffers.tile_sort_dispatch_args.deviceBuffer,
+                                 indirect::TileSortDispatch::kLayout,
+                                 "prepare_tile_sort producer");
 
     struct PrepareTileSortUniforms {
         uint32_t num_splats;
@@ -1720,7 +1751,9 @@ void VulkanGSRenderer::executeSortIndirectCount(
     int num_bits,
     const _VulkanBuffer& count_buffer,
     const _VulkanBuffer& dispatch_args_buffer,
-    size_t capacity) {
+    size_t capacity,
+    const indirect::Layout& dispatch_layout,
+    const size_t radix_word_offset) {
     PerfTimer::Timer<PerfTimer::SortVisiblePrimitives> timer(this);
     executeSortIndirectCountImpl(uniforms,
                                  buffers,
@@ -1728,6 +1761,8 @@ void VulkanGSRenderer::executeSortIndirectCount(
                                  count_buffer,
                                  dispatch_args_buffer,
                                  capacity,
+                                 dispatch_layout,
+                                 radix_word_offset,
                                  "vksplat.render.record.sort_primitive_indirect");
 }
 
@@ -1743,6 +1778,8 @@ void VulkanGSRenderer::executeSortTileInstances(
                                  buffers.tile_sort_count.deviceBuffer,
                                  buffers.tile_sort_dispatch_args.deviceBuffer,
                                  capacity,
+                                 indirect::TileSortDispatch::kLayout,
+                                 indirect::TileSortDispatch::kRadixWordOffset,
                                  "vksplat.render.record.sort_tile_indirect");
 }
 
@@ -1753,20 +1790,37 @@ void VulkanGSRenderer::executeSortIndirectCountImpl(
     const _VulkanBuffer& count_buffer,
     const _VulkanBuffer& dispatch_args_buffer,
     size_t capacity,
+    const indirect::Layout& dispatch_layout,
+    const size_t radix_word_offset,
     const char* cpu_timer_prefix) {
     if (capacity == 0)
         return;
+    if (radix_word_offset > dispatch_layout.word_count ||
+        dispatch_layout.word_count - radix_word_offset < indirect::kCommandWordCount) {
+        _THROW_ERROR(std::format(
+            "Indirect radix-sort layout must contain a complete VkDispatchIndirectCommand at its named radix offset (layout_constant='{}', layout_words={}, radix_word_offset={}, command_words={})",
+            dispatch_layout.word_count_constant,
+            dispatch_layout.word_count,
+            radix_word_offset,
+            indirect::kCommandWordCount));
+    }
+    validateIndirectLayoutBuffer(dispatch_args_buffer,
+                                 dispatch_layout,
+                                 "indirect radix sort consumer");
     if (capacity > static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
         count_buffer.size != 2 * sizeof(uint32_t) ||
-        dispatch_args_buffer.size < 6 * sizeof(uint32_t) || num_bits <= 0 || num_bits > 32) {
+        num_bits <= 0 || num_bits > 32) {
         _THROW_ERROR(std::format(
-            "Indirect radix sort requires a two-word count, six-word dispatch buffer, valid bit count, and INT32-bounded capacity (capacity={}, int32_max={}, count_buffer={:#x}, count_bytes={}, dispatch_buffer={:#x}, dispatch_bytes={}, num_bits={})",
+            "Indirect radix sort requires a two-word count, bit count in [1, 32], and INT32-bounded capacity (capacity={}, int32_max={}, count_buffer={:#x}, count_bytes={}, dispatch_buffer={:#x}, dispatch_bytes={}, dispatch_layout='{}', dispatch_words={}, radix_word_offset={}, num_bits={})",
             capacity,
             std::numeric_limits<int32_t>::max(),
             lfsVkHandleValue(count_buffer.buffer),
             count_buffer.size,
             lfsVkHandleValue(dispatch_args_buffer.buffer),
             dispatch_args_buffer.size,
+            dispatch_layout.word_count_constant,
+            dispatch_layout.word_count,
+            radix_word_offset,
             num_bits));
     }
     if (capacity != buffers.unsorted_keys().deviceSize() ||
@@ -1853,7 +1907,7 @@ void VulkanGSRenderer::executeSortIndirectCountImpl(
             [[maybe_unused]] auto cpu_timer = timeCpuStage(timer_name(".pass_upsweep"));
             executeComputeIndirect(
                 dispatch_args_buffer,
-                0,
+                indirect::byteOffset(radix_word_offset),
                 sort_uniforms, 2 * sizeof(int32_t),
                 pipeline_sorting.upsweep,
                 {
@@ -1897,7 +1951,7 @@ void VulkanGSRenderer::executeSortIndirectCountImpl(
             [[maybe_unused]] auto cpu_timer = timeCpuStage(timer_name(".pass_downsweep"));
             executeComputeIndirect(
                 dispatch_args_buffer,
-                0,
+                indirect::byteOffset(radix_word_offset),
                 sort_uniforms, 2 * sizeof(int32_t),
                 pipeline_sorting.downsweep,
                 {
@@ -1940,7 +1994,11 @@ void VulkanGSRenderer::executeSortPrimitivesByDepth(
         unsorted_idx = &resizeDeviceBuffer(buffers.unsorted_gauss_idx(), num_splats);
         resizeDeviceBuffer(buffers.visible_flags, num_splats);
         resizeDeviceBuffer(buffers.visible_count, 2);
-        resizeDeviceBuffer(buffers.visible_sort_dispatch_args, 3);
+        resizeDeviceBuffer(buffers.visible_sort_dispatch_args,
+                           indirect::VisibleSortDispatch::kLayout.word_count);
+        validateIndirectLayoutBuffer(buffers.visible_sort_dispatch_args.deviceBuffer,
+                                     indirect::VisibleSortDispatch::kLayout,
+                                     "prepare_visible_sort producer");
     }
 
     struct VisibleUniforms {
@@ -2034,14 +2092,18 @@ void VulkanGSRenderer::executeSortPrimitivesByDepth(
                             },
                             COMPUTE_SHADER_READ_WRITE);
 
-        // Stage 1 sort: full 32-bit depth keys, but only for compact visible
-        // primitives. The dispatch group count and element count are GPU-resident.
+        // Stage 1 sort: num_bits=32 is intentional. Projection writes the full
+        // float-as-uint bit pattern of a non-negative radial-distance key, whose
+        // unsigned ordering is monotonic. This visible layout contains only the
+        // radix command; range construction belongs to the later tile layout.
         executeSortIndirectCount(uniforms,
                                  buffers,
                                  32,
                                  buffers.visible_count.deviceBuffer,
                                  buffers.visible_sort_dispatch_args.deviceBuffer,
-                                 num_splats);
+                                 num_splats,
+                                 indirect::VisibleSortDispatch::kLayout,
+                                 indirect::VisibleSortDispatch::kRadixWordOffset);
     }
 
     // Snapshot depth-ranked primitive indices into a stable buffer so stage 2
@@ -2138,7 +2200,12 @@ void VulkanGSRenderer::executeCullSplats(
                         COMPUTE_SHADER_READ);
 
     auto& survivors = resizeDeviceBuffer(buffers.survivors, num_splats);
-    auto& survivor_state = clearDeviceBuffer(buffers.survivor_state, 4);
+    auto& survivor_state = clearDeviceBuffer(
+        buffers.survivor_state,
+        indirect::SurvivorState::kLayout.word_count);
+    validateIndirectLayoutBuffer(survivor_state,
+                                 indirect::SurvivorState::kLayout,
+                                 "cull_prepare survivor-state producer");
     auto& emit_count = resizeDeviceBuffer(buffers.visible_emit_count, 1);
     bufferMemoryBarrier({{survivor_state, TRANSFER_WRITE}}, COMPUTE_SHADER_READ_WRITE);
 
@@ -2296,7 +2363,7 @@ void VulkanGSRenderer::executeProjectionForwardSurvivors(
     }
     executeComputeIndirect(
         buffers.survivor_state.deviceBuffer,
-        sizeof(uint32_t),
+        indirect::byteOffset(indirect::SurvivorState::kProjectionWordOffset),
         &survivor_uniforms, sizeof(survivor_uniforms),
         buffers.quant_pool ? pipeline_projection_forward_quant_survivors
                            : pipeline_projection_forward_survivors,
@@ -2314,7 +2381,12 @@ void VulkanGSRenderer::executeSortPrimitivesByDepthVisible(
         return;
 
     resizeDeviceBuffer(buffers.visible_count, 2);
-    auto& visible_dispatch = resizeDeviceBuffer(buffers.visible_dispatch, 12);
+    auto& visible_dispatch = resizeDeviceBuffer(
+        buffers.visible_dispatch,
+        indirect::VisibleChainDispatch::kLayout.word_count);
+    validateIndirectLayoutBuffer(visible_dispatch,
+                                 indirect::VisibleChainDispatch::kLayout,
+                                 "prepare_visible_chain producer");
     auto& cumsum_counts = resizeDeviceBuffer(buffers.cumsum_counts, 4);
 
     struct PrepareUniforms {
@@ -2367,7 +2439,9 @@ void VulkanGSRenderer::executeSortPrimitivesByDepthVisible(
                                  32,
                                  buffers.visible_count.deviceBuffer,
                                  visible_dispatch,
-                                 visible_capacity);
+                                 visible_capacity,
+                                 indirect::VisibleChainDispatch::kLayout,
+                                 indirect::VisibleChainDispatch::kRadixWordOffset);
     }
 
     {
@@ -2381,7 +2455,7 @@ void VulkanGSRenderer::executeSortPrimitivesByDepthVisible(
                             COMPUTE_SHADER_READ);
         executeComputeIndirect(
             visible_dispatch,
-            3 * sizeof(uint32_t),
+            indirect::byteOffset(indirect::VisibleChainDispatch::kPerElementWordOffset),
             &copy_uniforms, sizeof(copy_uniforms),
             pipeline_copy_visible_indices,
             {
@@ -2415,7 +2489,7 @@ void VulkanGSRenderer::executeMacroCoverage(
 
     executeComputeIndirect(
         buffers.visible_dispatch.deviceBuffer,
-        3 * sizeof(uint32_t),
+        indirect::byteOffset(indirect::VisibleChainDispatch::kPerElementWordOffset),
         &uniforms, sizeof(uniforms),
         pipeline_macro_coverage,
         {
@@ -2462,7 +2536,7 @@ void VulkanGSRenderer::executeGenerateMacroKeys(
 
     executeComputeIndirect(
         buffers.visible_dispatch.deviceBuffer,
-        3 * sizeof(uint32_t),
+        indirect::byteOffset(indirect::VisibleChainDispatch::kPerElementWordOffset),
         &uniforms, sizeof(uniforms),
         pipeline_generate_macro_keys,
         {
@@ -2508,7 +2582,7 @@ void VulkanGSRenderer::executeComputeMacroRanges(
                         INDIRECT_DISPATCH_READ);
     executeComputeIndirect(
         buffers.tile_sort_dispatch_args.deviceBuffer,
-        3 * sizeof(uint32_t),
+        indirect::byteOffset(indirect::TileSortDispatch::kRangeWordOffset),
         &uniforms, sizeof(uniforms),
         pipeline_compute_macro_ranges[buffers.is_unsorted_1],
         {
@@ -2543,8 +2617,12 @@ void VulkanGSRenderer::executeMacroBatches(
 
     executeCumsum(buffers, buffers.tile_batch_counts, buffers.tile_batch_offsets);
 
-    auto& wave_args = resizeDeviceBuffer(buffers.macro_wave_args,
-                                         2 * HIGS_RASTER_MAX_WAVES * 3);
+    auto& wave_args = resizeDeviceBuffer(
+        buffers.macro_wave_args,
+        indirect::MacroWaveDispatch::kLayout.word_count);
+    validateIndirectLayoutBuffer(wave_args,
+                                 indirect::MacroWaveDispatch::kLayout,
+                                 "macro_batch_prepare producer");
     bufferMemoryBarrier({{buffers.tile_batch_offsets.deviceBuffer, COMPUTE_SHADER_WRITE}},
                         COMPUTE_SHADER_READ);
     executeCompute(
@@ -2684,7 +2762,7 @@ void VulkanGSRenderer::executeMacroRasterCompose(
 
         executeComputeIndirect(
             wave_args,
-            w * 3 * sizeof(uint32_t),
+            indirect::byteOffset(indirect::MacroWaveDispatch::rasterWordOffset(w)),
             &wave_uniforms, sizeof(wave_uniforms),
             raster_pipeline[buffers.is_unsorted_1],
             raster_bindings);
@@ -2697,7 +2775,7 @@ void VulkanGSRenderer::executeMacroRasterCompose(
 
         executeComputeIndirect(
             wave_args,
-            (HIGS_RASTER_MAX_WAVES + w) * 3 * sizeof(uint32_t),
+            indirect::byteOffset(indirect::MacroWaveDispatch::composeWordOffset(w)),
             &wave_uniforms, sizeof(wave_uniforms),
             compose_pipeline[buffers.is_unsorted_1],
             compose_bindings);
@@ -2756,14 +2834,16 @@ void VulkanGSRenderer::executeCalculateIndexBufferOffsetVisible(
         // Always-recorded 3-level indirect scan. Degenerate levels dispatch a
         // single group over 1 element, so no host-side branching on the count.
         uint32_t level = level_uniform(0);
-        executeComputeIndirect(dispatch, 6 * sizeof(uint32_t),
+        executeComputeIndirect(dispatch,
+                               indirect::byteOffset(indirect::VisibleChainDispatch::kCumsumLevel0WordOffset),
                                &level, sizeof(level),
                                pipeline_cumsum_indirect.block_scan,
                                {input, output, block_sums, counts});
 
         bufferMemoryBarrier({{block_sums, COMPUTE_SHADER_WRITE}}, COMPUTE_SHADER_READ_WRITE);
         level = level_uniform(1);
-        executeComputeIndirect(dispatch, 9 * sizeof(uint32_t),
+        executeComputeIndirect(dispatch,
+                               indirect::byteOffset(indirect::VisibleChainDispatch::kCumsumLevel1WordOffset),
                                &level, sizeof(level),
                                pipeline_cumsum_indirect.block_scan,
                                {block_sums, block_sums, block_sums2, counts});
@@ -2782,7 +2862,8 @@ void VulkanGSRenderer::executeCalculateIndexBufferOffsetVisible(
         bufferMemoryBarrier({{block_sums2, COMPUTE_SHADER_READ_WRITE}},
                             COMPUTE_SHADER_READ_WRITE);
         level = level_uniform(1);
-        executeComputeIndirect(dispatch, 9 * sizeof(uint32_t),
+        executeComputeIndirect(dispatch,
+                               indirect::byteOffset(indirect::VisibleChainDispatch::kCumsumLevel1WordOffset),
                                &level, sizeof(level),
                                pipeline_cumsum_indirect.add_block_offsets,
                                {block_sums, block_sums, block_sums2, counts});
@@ -2793,7 +2874,8 @@ void VulkanGSRenderer::executeCalculateIndexBufferOffsetVisible(
                             },
                             COMPUTE_SHADER_READ_WRITE);
         level = level_uniform(0);
-        executeComputeIndirect(dispatch, 6 * sizeof(uint32_t),
+        executeComputeIndirect(dispatch,
+                               indirect::byteOffset(indirect::VisibleChainDispatch::kCumsumLevel0WordOffset),
                                &level, sizeof(level),
                                pipeline_cumsum_indirect.add_block_offsets,
                                {input, output, block_sums, counts});
@@ -2802,7 +2884,8 @@ void VulkanGSRenderer::executeCalculateIndexBufferOffsetVisible(
     {
         PerfTimer::Timer<PerfTimer::PrepareTileSort> gpu_timer(this);
         resizeDeviceBuffer(buffers.tile_sort_count, 2);
-        resizeDeviceBuffer(buffers.tile_sort_dispatch_args, 6);
+        resizeDeviceBuffer(buffers.tile_sort_dispatch_args,
+                           indirect::TileSortDispatch::kLayout.word_count);
         if (buffers.tile_sort_count.deviceBuffer.size != 2 * sizeof(uint32_t)) {
             _THROW_ERROR(std::format(
                 "Visible-chain prepare_tile_sort count buffer must contain exactly two uint32 words (buffer={:#x}, active_bytes={}, allocation_bytes={}, required_bytes={})",
@@ -2811,6 +2894,9 @@ void VulkanGSRenderer::executeCalculateIndexBufferOffsetVisible(
                 buffers.tile_sort_count.deviceBuffer.allocSize,
                 2 * sizeof(uint32_t)));
         }
+        validateIndirectLayoutBuffer(buffers.tile_sort_dispatch_args.deviceBuffer,
+                                     indirect::TileSortDispatch::kLayout,
+                                     "visible-chain prepare_tile_sort producer");
 
         struct PrepareTileSortUniforms {
             uint32_t num_splats;

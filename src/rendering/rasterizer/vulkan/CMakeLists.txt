@@ -73,7 +73,10 @@ set(_VULKAN_RADIX_OUT ${LFS_VULKAN_RASTERIZER_SPV_DIR}/radix_sort)
 file(MAKE_DIRECTORY ${_VULKAN_GENERATED_OUT})
 file(MAKE_DIRECTORY ${_VULKAN_RADIX_OUT})
 
-file(GLOB _VULKAN_SLANG_ALL ${_VULKAN_SHADER_SRC}/slang/*.slang)
+file(GLOB _VULKAN_SLANG_ALL
+        ${_VULKAN_SHADER_SRC}/slang/*.slang
+        ${_VULKAN_SHADER_SRC}/slang/*.inc
+)
 set(_VULKAN_RADIX_DEPS
         ${_VULKAN_SHADER_SRC}/radix_sort/config.glsl
 )

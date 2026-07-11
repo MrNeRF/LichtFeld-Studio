@@ -2,6 +2,7 @@
 
 #include "gs_pipeline.h"
 
+#include "indirect_layout.h"
 #include "perf_timer.h"
 
 #include <cstdint>
@@ -339,13 +340,17 @@ protected:
                                   int num_bits,
                                   const _VulkanBuffer& count_buffer,
                                   const _VulkanBuffer& dispatch_args_buffer,
-                                  size_t capacity);
+                                  size_t capacity,
+                                  const lfs::rendering::vulkan::indirect_layout::Layout& dispatch_layout,
+                                  size_t radix_word_offset);
     void executeSortIndirectCountImpl(const VulkanGSRendererUniforms& uniforms,
                                       VulkanGSPipelineBuffers& buffers,
                                       int num_bits,
                                       const _VulkanBuffer& count_buffer,
                                       const _VulkanBuffer& dispatch_args_buffer,
                                       size_t capacity,
+                                      const lfs::rendering::vulkan::indirect_layout::Layout& dispatch_layout,
+                                      size_t radix_word_offset,
                                       const char* cpu_timer_prefix);
     void executePrepareTileSort(const VulkanGSRendererUniforms& uniforms,
                                 VulkanGSPipelineBuffers& buffers,

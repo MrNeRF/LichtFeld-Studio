@@ -277,9 +277,11 @@ namespace lfs::vis {
         };
 
         [[nodiscard]] std::expected<void, std::string> ensureInitialized(VulkanContext& context);
-        // Returns true iff the timeline reached `value` within the bound (i.e. the
-        // submit that would signal it actually completed); false on timeout.
-        [[nodiscard]] bool waitCompletionValueBounded(std::uint64_t value) noexcept;
+        // Returns the next candidate without mutating timeline state. The value
+        // is committed only after VulkanGSPipeline confirms vkQueueSubmit
+        // accepted its signal operation.
+        [[nodiscard]] std::expected<std::uint64_t, std::string> nextRenderCompletionValue(
+            std::string_view pass) const;
         [[nodiscard]] std::expected<InputBindingResult, std::string> prepareInputs(
             VulkanContext& context,
             const lfs::core::SplatData& splat_data,
@@ -578,10 +580,13 @@ namespace lfs::vis {
         std::array<std::size_t, kOutputSlotCount> latest_output_ring_slot_{};
         std::array<std::uint64_t, kOutputSlotCount> output_generations_{};
         VkSemaphore render_complete_timeline_ = VK_NULL_HANDLE;
+        // Last value whose signal operation was accepted by vkQueueSubmit.
+        // Failed recording/cancel paths leave it unchanged, so the next attempt
+        // safely reuses the same candidate instead of creating an unsignaled gap.
         std::uint64_t render_complete_value_ = 0;
         // The latest completion value a submit actually signaled (or is guaranteed
-        // to signal). renderCompleteValue() returns this — never the reserved
-        // counter — so the trainer/arena never wait a value a failed frame left
+        // to signal). renderCompleteValue() returns this — never an uncommitted
+        // candidate — so the trainer/arena never wait a value a failed frame left
         // unsignaled.
         std::uint64_t last_signaled_render_value_ = 0;
         // When set, render() takes the legacy per-pixel chain so the depth

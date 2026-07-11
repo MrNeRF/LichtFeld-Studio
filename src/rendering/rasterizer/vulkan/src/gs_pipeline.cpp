@@ -747,6 +747,15 @@ bool VulkanGSPipeline::timelineValueComplete(const VkSemaphore semaphore,
     return completed_value >= value;
 }
 
+bool VulkanGSPipeline::wasTimelineSignalSubmitted(const VkSemaphore semaphore,
+                                                  const std::uint64_t value) const noexcept {
+    if (semaphore == VK_NULL_HANDLE || value == 0) {
+        return false;
+    }
+    const auto it = last_timeline_signal_values_.find(semaphore);
+    return it != last_timeline_signal_values_.end() && it->second >= value;
+}
+
 void VulkanGSPipeline::waitForPendingBatchSlot(CommandBatchSlot& slot) {
     if (slot.pending_signal == VK_NULL_HANDLE || slot.pending_signal_value == 0)
         return;
