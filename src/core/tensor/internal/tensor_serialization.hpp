@@ -44,7 +44,7 @@ namespace lfs::core {
         if (!src.is_contiguous()) {
             src = src.contiguous();
         }
-        os.write(reinterpret_cast<const char*>(src.ptr<uint8_t>()), src.bytes());
+        os.write(reinterpret_cast<const char*>(src.data_ptr()), src.bytes());
 
         if (!os) {
             throw std::runtime_error("Failed to write tensor");

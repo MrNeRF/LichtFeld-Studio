@@ -39,6 +39,32 @@
 
 namespace lfs::core {
 
+    namespace detail {
+        template <typename T>
+        consteval std::string_view tensor_cpp_type_name() {
+            using Value = std::remove_cv_t<T>;
+            if constexpr (std::is_void_v<Value>)
+                return "void";
+            else if constexpr (std::is_same_v<Value, float>)
+                return "float";
+            else if constexpr (std::is_same_v<Value, __half>)
+                return "__half";
+            else if constexpr (std::is_same_v<Value, int> || std::is_same_v<Value, int32_t>)
+                return "int32";
+            else if constexpr (std::is_same_v<Value, uint32_t>)
+                return "uint32";
+            else if constexpr (std::is_same_v<Value, int64_t>)
+                return "int64";
+            else if constexpr (std::is_same_v<Value, bool>)
+                return "bool";
+            else if constexpr (std::is_same_v<Value, unsigned char> ||
+                               std::is_same_v<Value, uint8_t>)
+                return "uint8";
+            else
+                return "unsupported";
+        }
+    } // namespace detail
+
     class TensorError;
     class TensorIndexer;
     class MaskedTensorProxy;
@@ -1040,7 +1066,11 @@ namespace lfs::core {
                     (std::is_same_v<Value, int64_t> && dtype_ == DataType::Int64) ||
                     ((std::is_same_v<Value, bool> || std::is_same_v<Value, unsigned char> ||
                       std::is_same_v<Value, uint8_t>)&&(dtype_ == DataType::Bool || dtype_ == DataType::UInt8));
-                LFS_ASSERT_MSG(dtype_matches, "ptr<T>() type does not match tensor dtype");
+                LFS_ASSERT_MSG(dtype_matches,
+                               std::format("ptr<T>() element type must match tensor dtype "
+                                           "(requested_cpp_type={}, tensor_dtype={}({}), shape={}, device={})",
+                                           detail::tensor_cpp_type_name<Value>(), dtype_name(dtype_),
+                                           static_cast<int>(dtype_), shape_.str(), device_name(device_)));
             }
             assert_view_not_stale();
             LFS_ASSERT_MSG(data_ != nullptr || numel() == 0,
@@ -1063,7 +1093,11 @@ namespace lfs::core {
                     (std::is_same_v<Value, int64_t> && dtype_ == DataType::Int64) ||
                     ((std::is_same_v<Value, bool> || std::is_same_v<Value, unsigned char> ||
                       std::is_same_v<Value, uint8_t>)&&(dtype_ == DataType::Bool || dtype_ == DataType::UInt8));
-                LFS_ASSERT_MSG(dtype_matches, "ptr<T>() type does not match tensor dtype");
+                LFS_ASSERT_MSG(dtype_matches,
+                               std::format("ptr<T>() element type must match tensor dtype "
+                                           "(requested_cpp_type={}, tensor_dtype={}({}), shape={}, device={})",
+                                           detail::tensor_cpp_type_name<Value>(), dtype_name(dtype_),
+                                           static_cast<int>(dtype_), shape_.str(), device_name(device_)));
             }
             assert_view_not_stale();
             LFS_ASSERT_MSG(data_ != nullptr || numel() == 0,

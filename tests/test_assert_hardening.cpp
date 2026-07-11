@@ -15,6 +15,7 @@
 #include <fstream>
 #include <gtest/gtest.h>
 #include <limits>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -246,6 +247,19 @@ namespace {
 
         EXPECT_EQ(sum.dtype(), DataType::Int64);
         EXPECT_EQ(sum.item<int64_t>(), 2);
+    }
+
+    TEST(AssertHardeningRegression, TensorSerializationUsesUntypedByteAccess) {
+        const auto source = Tensor::from_vector({1.0f, -2.5f, 3.25f}, {3}, Device::CPU);
+        std::stringstream stream;
+
+        stream << source;
+        Tensor loaded;
+        stream >> loaded;
+
+        EXPECT_EQ(loaded.dtype(), DataType::Float32);
+        EXPECT_EQ(loaded.shape(), source.shape());
+        EXPECT_EQ(loaded.to_vector(), source.to_vector());
     }
 
 } // namespace
