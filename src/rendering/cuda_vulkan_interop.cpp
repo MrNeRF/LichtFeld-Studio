@@ -541,7 +541,7 @@ namespace lfs::rendering {
             return fail("CUDA/Vulkan interop copy received a tensor with null data");
         }
 
-        lfs::core::waitForCUDAStream(stream, upload_source_.stream());
+        upload_source_.sync_to_stream(stream);
         cudaError_t status = cudaSuccess;
         if (format_ == CudaVulkanImageFormat::R32Sfloat) {
             if (prepared.element_type != detail::CudaVulkanTensorElementType::Float32) {
@@ -859,7 +859,7 @@ namespace lfs::rendering {
                                     upload_source_.bytes()));
         }
 
-        lfs::core::waitForCUDAStream(stream, upload_source_.stream());
+        upload_source_.sync_to_stream(stream);
         auto* const dst = static_cast<std::uint8_t*>(device_ptr_) + dst_offset;
         const cudaError_t status = cudaMemcpyAsync(
             dst, upload_source_.data_ptr(), byte_count, cudaMemcpyDeviceToDevice, stream);
