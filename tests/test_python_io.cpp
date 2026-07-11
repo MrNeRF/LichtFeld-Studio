@@ -2,9 +2,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <gtest/gtest.h>
 #include <iterator>
 #include <limits>
@@ -17,6 +20,7 @@
 #include "io/exporter.hpp"
 #include "io/formats/ply.hpp"
 #include "io/loader.hpp"
+#include "io/pipelined_image_loader.hpp"
 #include "tinyply.hpp"
 
 namespace fs = std::filesystem;
@@ -1318,4 +1322,42 @@ TEST_F(PythonIOTest, PlySaveRejectsEmptyExtraAttributesWhenDeletedMaskPresent) {
     const auto result = save_ply(splat, options);
     ASSERT_FALSE(result.has_value());
     EXPECT_NE(result.error().format().find("must not be empty"), std::string::npos);
+}
+
+TEST_F(PythonIOTest, PipelinedLoaderStatsRemainResponsiveDuringCompletions) {
+    const auto image_path = temp_dir / "stats_source.png";
+    write_png(image_path);
+
+    PipelinedLoaderConfig config;
+    config.jpeg_batch_size = 4;
+    config.decoder_pool_size = 4;
+    config.prefetch_count = 64;
+    config.output_queue_size = 64;
+    config.io_threads = 2;
+    config.cold_process_threads = 2;
+    config.use_filesystem_cache = false;
+
+    PipelinedImageLoader loader(config);
+    LoadParams params{.resize_factor = 1, .max_width = 0};
+    constexpr size_t request_count = 256;
+    for (size_t i = 0; i < request_count; ++i) {
+        loader.prefetch(i, image_path, params);
+    }
+
+    std::atomic<bool> stop_polling{false};
+    auto poller = std::async(std::launch::async, [&] {
+        while (!stop_polling.load(std::memory_order_acquire)) {
+            (void)loader.get_stats();
+        }
+    });
+
+    for (size_t i = 0; i < request_count; ++i) {
+        const auto ready = loader.get();
+        EXPECT_TRUE(ready.tensor.is_valid());
+    }
+    stop_polling.store(true, std::memory_order_release);
+
+    ASSERT_EQ(poller.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    poller.get();
+    EXPECT_EQ(loader.get_stats().total_images_loaded, request_count);
 }
