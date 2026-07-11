@@ -136,7 +136,8 @@ namespace lfs::vis {
                 return startup_overlay_.blocksUnderlayInput();
             }
             void dismissStartupOverlay();
-            void setStartupPluginLoadState(bool active, float progress, const std::string& stage);
+            void setStartupPluginLoadState(bool started, bool active, float progress,
+                                           const std::string& stage);
             void captureKey(int physical_key, int logical_key, int mods);
             void captureMouseButton(int button, int mods, double x, double y, std::optional<int> chord_key = std::nullopt);
             void captureMouseButtonRelease(int button);

@@ -1100,10 +1100,13 @@ namespace lfs::vis {
         const auto plugin_load_status = python::get_startup_plugin_load_status();
         if (gui_manager_ &&
             plugin_load_status.revision != startup_plugin_load_status_revision_) {
+            const bool plugin_load_started = plugin_load_status.state != "not_started";
             gui_manager_->setStartupPluginLoadState(
+                plugin_load_started,
                 plugin_load_status.active,
                 plugin_load_status.progress,
                 plugin_load_status.detail);
+            assert(!plugin_load_started || !gui_manager_->isStartupBlockingInput());
             startup_plugin_load_status_revision_ = plugin_load_status.revision;
         }
 

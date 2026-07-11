@@ -5610,9 +5610,11 @@ namespace lfs::vis::gui {
         }
 
         PanelInputState frame_input;
+        PanelInputState startup_overlay_input;
         {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.frame_input", 0.25);
             frame_input = buildPanelInputFromSDL(sdl_input);
+            startup_overlay_input = frame_input;
             if (startup_overlay_blocking)
                 frame_input = maskInputForBlockedUi(std::move(frame_input));
             updateInputOverrides(frame_input, mouse_in_viewport);
@@ -6279,13 +6281,11 @@ namespace lfs::vis::gui {
             }
         };
         if (startup_overlay_.isVisible()) {
+            startup_overlay_.setInput(&startup_overlay_input);
             if (startup_overlay_.blocksUnderlayInput()) {
-                startup_overlay_.setInput(&panel_input);
                 auto& focus = guiFocusState();
                 focus.want_capture_mouse = true;
                 focus.want_capture_keyboard = true;
-            } else {
-                startup_overlay_.setInput(nullptr);
             }
         } else {
             startup_overlay_.setInput(nullptr);
@@ -7562,8 +7562,11 @@ namespace lfs::vis::gui {
             startup_overlay_.dismiss();
     }
 
-    void GuiManager::setStartupPluginLoadState(bool active, float progress, const std::string& stage) {
-        startup_overlay_.setPluginLoadState(active, progress, stage);
+    void GuiManager::setStartupPluginLoadState(const bool started,
+                                               const bool active,
+                                               const float progress,
+                                               const std::string& stage) {
+        startup_overlay_.setPluginLoadState(started, active, progress, stage);
     }
 
     void GuiManager::requestExitConfirmation() {

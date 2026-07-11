@@ -256,6 +256,11 @@ namespace lfs::python {
         status.active = active;
         status.progress = progress;
         status.detail = stage ? stage : "";
+        if (active) {
+            status.state = "loading";
+        } else if (status.state != "not_started") {
+            status.state = "completed";
+        }
         set_startup_plugin_load_status(status);
     }
 
