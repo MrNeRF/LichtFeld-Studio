@@ -694,3 +694,79 @@ Marker: `VULKAN-BONUS-REVIEW-2026-07-11`.
 - Before and after each of the nine source commits, `cmake --build build -j8` passed. No build used more than eight jobs.
 - The exact section 7 focused filter currently discovers 55 tests in this checkout, not 60: every post-commit run finished **52/55**, with only the three documented `ViewportFrameLifecycleServiceTest` failures (`ResizeActiveDefersFullRefreshUntilDebounceCompletes`, `PassiveWindowResizeDefersFullRefreshUntilDebounceCompletes`, and `ExplicitRefreshDeferralCompletesAfterStableFrames`) and the same baseline signatures. No new failure appeared.
 - Branch-wide `git diff --check master..HEAD` passed. No GUI or GPU-heavy runtime was launched; validation-layer interaction, image parity, overlay clipping, and Mesh2Splat lighting remain explicit interactive follow-ups.
+
+## Bonus round 2
+
+Marker: `VULKAN-BONUS2-STREAMS-MEMORY-2026-07-11`.
+
+### Review basis and disposition
+
+- Re-audited every direct CUDA runtime call and kernel launch under `src/rendering/**` and `src/visualizer/**`, the CUDA/Vulkan bridge, external-image handoffs, renderer-owned stream creation/destruction, Vulkan queue/device idle sites, and the principal retained-image/staging/cache structures. Section 3, section 10, and the first bonus round were treated as hard prior art. In particular, the first bonus round's CUDA-to-Vulkan signal-direction result was not counted again; BR2-01 is the distinct missing Vulkan-to-CUDA edge before a shared image write.
+- Disposition: **22 confirmed findings**, of which **17 were fixed** and **5 were deferred**; **5 hypotheses were refuted**. The fixes landed in **7 source commits**. No GUI, push, PR, long GPU run, or test-file change was made.
+
+### Confirmed findings fixed
+
+| ID | Evidence and outcome |
+|---|---|
+| BR2-01 | GUI scene, split-right, depth-blit, and `VulkanUiTexture` transitioned a sampled image to `GENERAL` with a fire-and-forget Vulkan submit and immediately launched CUDA on a different nonblocking stream. The existing CUDA signal/Vulkan wait ordered only the later read direction. Vulkan transition submits now signal the shared timeline and CUDA waits that value before writing (`gui_manager.cpp:4148-4227`, `4396-4470`, `4636-4710`; `vulkan_ui_texture.cpp:562-647`; `cuda_vulkan_interop.cpp:582-590`; `a0a3a52ba`). |
+| BR2-02 | `pending_immediate_submits_` grew by one command buffer and fence per transition and had no backlog limit under a delayed GPU. Completed submits are still reaped opportunistically, but 64 live submits now trigger a bounded drain (`vulkan_context.cpp:1279-1315`, `2784-2795`; `a0a3a52ba`). |
+| BR2-03 | Interop image/semaphore destruction waited frame fences but not the separate immediate-transition fences; UI texture destruction also could race its CUDA upload lane. Target and UI teardown now drain upload work, submitted frames, and immediate submits before destroying imported memory/semaphores (`gui_manager.cpp:117-129`; `vulkan_ui_texture.cpp:819-850`; `a0a3a52ba`). |
+| BR2-04 | A partially initialized `VulkanUiTexture` external image or semaphore was not destroyed because `mode` became `CudaInterop` only after CUDA import succeeded. Destruction now recognizes actual interop handles/import state, including setup failures (`vulkan_ui_texture.cpp:819-858`; `a0a3a52ba`). |
+| BR2-05 | `CudaVulkanUploadStream::reset()` destroyed a stream still recorded in the tensor allocator by `sync_to_stream`/`record_stream`. A later training-tensor free could bridge through a dead handle. Reset now calls `CudaMemoryPool::release_stream` before `cudaStreamDestroy` (`cuda_vulkan_interop.cpp:147-157`; `eb8a84bf8`). |
+| BR2-06 | Image/buffer copy and timeline APIs retained default `cudaStream_t = nullptr` arguments and accepted runtime NULL even though every active caller should be isolated from training. Streams are now mandatory in the type surface and NULL is rejected (`cuda_vulkan_interop.hpp:131-139`, `183-184`, `213-222`; `cuda_vulkan_interop.cpp:536-540`, `585-604`, `707-736`, `870-874`; `a0a3a52ba`). |
+| BR2-07 | Selection-group count readback launched its count kernel on the selection/tensor stream, then used synchronous `cudaMemcpy` on the legacy default stream. Both count APIs now enqueue D2H on the producing stream and synchronize only that stream at the CPU result boundary (`selection_ops.cu:47-60`, `1133`, `1151`; `b4cbeb76d`). |
+| BR2-08 | One-pixel viewport depth sampling used synchronous default-stream `cudaMemcpy`, needlessly coupling an interactive read to training. It now copies and synchronizes on the depth tensor's stream (`viewport_artifact_service.cpp:247-258`; `b4cbeb76d`). |
+| BR2-09 | The empty-polygon VkSplat early return ran before normal renderer initialization and cleared/synchronized an output tensor whose home stream could be NULL. It now creates/uses the renderer's nonblocking stream explicitly (`vksplat_viewport_renderer.cpp:5538-5567`; `b4cbeb76d`). |
+| BR2-10 | After an LOD slot H2D copy succeeded, kernel/event/timeline failures released the staging slot without recording `last_use`; even the success-path slot event result was ignored. Slot reuse is now event-guarded before later failure points, with a dedicated-stream drain only if guard recording fails (`lod_upload_engine.cpp:225-250`, `270-337`; `cb0c0cf66`). |
+| BR2-11 | CPU-backed `VulkanUiTexture` resize appended every prior RGBA image to `retired_images_` and drained that vector only at final destruction. Resize now waits submitted RmlUi users and destroys the old image immediately (`vulkan_ui_texture.cpp:413-448`; `875a911d3`). |
+| BR2-12 | The process-wide environment cache stored an `EnvironmentImage` by value and `loadEnvironmentImage` returned it by value, so both CPU compositing and CUDA-map lookup copied the entire float RGB image on cache hits. Hot paths now hold `shared_ptr<const EnvironmentImage>`; the value API remains only for independent-ownership callers (`raster_rendering_engine.cpp:82-160`, `233-248`; `export_post_process.cpp:65-76`; `3d8adeb3e`). |
+| BR2-13 | Environment decode read every source channel and then allocated/copied a second RGB image. It now asks OIIO for only RGB (or one grayscale channel), moves the three-channel buffer directly, and expands only grayscale (`raster_rendering_engine.cpp:106-144`; `3d8adeb3e`). |
+| BR2-14 | Decoded host and CUDA environment caches had no application-lifetime retirement call. `RenderingManager` teardown now releases both single-entry caches while active shared users retain their own lifetime (`export_post_process.cpp:136-146`; `rendering_manager.cpp:117-125`; `3d8adeb3e`). |
+| BR2-15 | CUDA environment upload used `Tensor::from_vector(..., CUDA)`, which performs a synchronous legacy-default-stream copy. Upload now uses a temporary nonblocking lane, synchronizes only that lane, removes it from the tensor pool, and destroys it safely; compositing records immutable-map use and bridges band inputs to its execution stream (`export_post_process.cpp:78-133`, `274-286`; `3d8adeb3e`). |
+| BR2-16 | Edit-mode handoff synchronized the same trainer stream once per model tensor, up to eight identical waits. It now deduplicates non-NULL streams and synchronizes each unique lane once before re-homing tensors (`scene_manager.cpp:103-141`; `2ad690a87`). |
+| BR2-17 | The second dead-code sweep confirmed and removed: `sort_changed`; write-only LOD readback chunk count; thumbnail `last_touched_frame`; obsolete projected-overlay output parameters; unused camera-uniform scene and camera-intrinsics fields; and stale post-prefetch void casts. Current reduced surfaces are at `gs_renderer.cpp:221-233`, `gs_renderer.h:462-469`, `gui_manager.cpp:1303-1372`, `1614-1621`, `input_controller.cpp:2404-2410`, and `vksplat_viewport_renderer.cpp:1266-1278` (`2ad690a87`). |
+
+### Confirmed findings deferred
+
+| ID | Evidence and reason for deferral |
+|---|---|
+| BR2-18 | The wider selection API still falls back to the legacy default stream when neither TLS nor a tensor home stream is available; raw-pointer brush/rect/polygon/set kernels have no tensor from which to recover ownership (`selection_ops.cu:33-38`, `704-745`; `selection_group_mask.hpp:37-69`). Moving the family to a new nonblocking stream without a trainer model-read handshake and complete source/output lifetime registration can trade serialization for races. This needs an attended selection-stream design rather than a partial mechanical change. |
+| BR2-19 | Export unpack/pack/composite resolves explicit stream, then TLS, then NULL (`export_post_process.cpp:20-25`, `185`, `218`, `274`). A persistent export lane must be owned above the shared PPISP controller/band tensors and retired through the tensor pool; a temporary per-call lane would leave cached/controller allocations referencing a destroyed stream. |
+| BR2-20 | Export PPISP prediction intentionally brackets shared controller-buffer resize/predict/clone with two `cudaDeviceSynchronize` calls while holding `predict_mutex` (`viewport_appearance_correction.cpp:370-385`). Removing the global drains requires the controller pool to expose its producer stream/event and a live-trainer transaction contract. This is an export path, not a per-frame viewport drain, so it remains for that owning design. |
+| BR2-21 | Async RmlUi preview loading spawns one detached thread per request; the four-slot semaphore is acquired inside each new thread, so request bursts can retain an unbounded number of blocked thread stacks (`rmlui_vk_backend.cpp:1034-1076`). A bounded worker queue needs shutdown/cancellation ownership and GUI replacement validation; no unattended rewrite was attempted. |
+| BR2-22 | `ViewportArtifactService::sampleLinearDepthAt` retains an unused `RenderingEngine*` compatibility parameter (`viewport_artifact_service.hpp:62-67`; `viewport_artifact_service.cpp:156-162`, `266`). Removing it changes an existing test-facing signature, and this round intentionally made no test-file edits. |
+
+### Refuted hypotheses
+
+| ID | Verdict and evidence |
+|---|---|
+| RR2-01 | `VulkanGSPipelineBuffers::num_indices_high_water` is not write-only. It drives clamp growth, first-frame estimates, allocation diagnostics, and capacity selection (`vksplat_viewport_renderer.cpp:6395-6397`, `6978-7010`). It was retained. |
+| RR2-02 | The LOD staging ring is bounded and intentionally has two slots beyond the decode-worker cap: on this 32-core host there are 8 workers and 10 slots (`lod_page_cache.cpp:35-39`, `68-71`; `lod_upload_engine.cpp:24-39`, `91`). Worst case with metadata is 516,256 bytes per slot, or 5,162,560 bytes each of pinned host and device scratch (10,325,120 bytes total), not an unbounded pool. |
+| RR2-03 | Camera-thumbnail decoded retention is bounded: the ready queue is capped at 32 (about 1.5 MiB for 128x128 RGB payloads), entries are pruned to active camera UIDs, and empty trailing atlas pages are released (`gui_manager.cpp:1586-1601`, `1647-1659`, `1828-1837`). |
+| RR2-04 | No new reachable per-frame `vkQueueWaitIdle`/`vkDeviceWaitIdle` was found. The GS queue-idle branch is only the no-fence/no-timeline fallback (`gs_pipeline.cpp:640-666`); default guards use a fence and all false-fence visualizer call sites supply a timeline signal (`vksplat_viewport_renderer.cpp:2200`, `5959-5963`, `6213`, `7103-7107`). Device waits remain teardown or the already-documented swapchain-recreate path. |
+| RR2-05 | The two-argument `upload_locked_group_mask` overload is not dead. A tentative deletion made the full build fail at `src/mcp/mcp_training_context.cpp:210`; the overload was restored, the build returned green, and no commit contains the deletion. |
+
+### Quantified memory effect
+
+- UI resize retirement recovers one old RGBA8 allocation per size change: **8,294,400 bytes (7.91 MiB) at 1920x1080** or **33,177,600 bytes (31.64 MiB) at 3840x2160**. Previous retention was unbounded over the texture object's lifetime.
+- Shared environment cache access avoids a full float-RGB allocation/copy per hot call: **100,663,296 bytes (96 MiB) for 4096x2048** and **402,653,184 bytes (384 MiB) for 8192x4096**.
+- Direct RGB decode removes the extra RGBA source allocation at peak. For an 8192x4096 RGBA source, transient decode storage falls from **939,524,096 bytes (896 MiB)** to **402,653,184 bytes (384 MiB)**, a **536,870,912-byte (512 MiB)** peak reduction. At renderer teardown, the same 384 MiB host image and, if loaded for export, 384 MiB CUDA map are now eligible for retirement rather than process-lifetime retention.
+- The immediate-transition queue is now bounded at 64 command-buffer/fence pairs. Driver-side object sizes are implementation-defined, so no byte claim is attached.
+
+### Fix commits
+
+- `b4cbeb76d` — `fix(cuda): honor visualizer stream ownership`
+- `cb0c0cf66` — `fix(vulkan): guard LOD staging slots on upload errors`
+- `a0a3a52ba` — `fix(vulkan): order bidirectional CUDA image handoffs`
+- `875a911d3` — `perf(vulkan): retire resized UI textures promptly`
+- `3d8adeb3e` — `perf(rendering): share and retire environment maps`
+- `2ad690a87` — `refactor(rendering): remove stale render bookkeeping`
+- `eb8a84bf8` — `fix(cuda): release upload streams from tensor pool`
+
+### Gates
+
+- `clang-format -i` was run on every changed C++/CUDA/header file before its source commit.
+- Before and after each of the seven source commits, `cmake --build build -j8` passed; no build used more than eight jobs. The tentative dead-overload deletion failed before commit, was restored immediately, and the full build then passed.
+- Every post-commit section 7 focused-filter run remained **52/55**, with only the three baseline `ViewportFrameLifecycleServiceTest` failures and their unchanged dirty `16` versus `9`/incomplete-deferral signatures.
+- The additional environment-composite gate passed **4/4** (`ExportEnvCompositeTest.*`) from the build working directory.
+- No tests were added or modified. No GUI or long GPU run was launched. Bidirectional image handoff, resize churn, validation layers, live-training overlap, PPISP/export stream behavior, and async-preview burst behavior remain explicit attended runtime gates.
