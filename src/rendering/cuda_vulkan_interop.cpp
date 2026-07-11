@@ -5,6 +5,7 @@
 #include "cuda_vulkan_interop.hpp"
 
 #include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/internal/memory_pool.hpp"
 #include "image_layout.hpp"
 
 #include <algorithm>
@@ -145,7 +146,11 @@ namespace lfs::rendering {
 
     void CudaVulkanUploadStream::reset() noexcept {
         if (stream_ != nullptr) {
-            (void)cudaStreamSynchronize(stream_);
+            // Image uploads record this lane against every tensor they read.
+            // Remove those allocator references while the stream is still
+            // valid; otherwise a later tensor free can bridge through a
+            // destroyed cudaStream_t.
+            lfs::core::CudaMemoryPool::instance().release_stream(stream_);
             (void)cudaStreamDestroy(stream_);
             stream_ = nullptr;
         }
