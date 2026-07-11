@@ -5698,17 +5698,27 @@ namespace lfs::vis {
                                              ? computePolygonAabbClipped(request.polygon_vertices, size)
                                              : PolygonAabb{};
         if (polygon_mode && (polygon_aabb.w == 0 || polygon_aabb.h == 0)) {
+            if (!render_stream_) {
+                const cudaError_t status =
+                    cudaStreamCreateWithFlags(&render_stream_, cudaStreamNonBlocking);
+                if (status != cudaSuccess) {
+                    return std::unexpected(std::format(
+                        "VkSplat render stream creation failed: {} ({})",
+                        cudaGetErrorName(status),
+                        cudaGetErrorString(status)));
+                }
+            }
             auto empty_output = Tensor::empty({num_splats}, Device::CUDA, DataType::Bool);
             if (const cudaError_t status = cudaMemsetAsync(empty_output.ptr<bool>(),
                                                            0,
                                                            num_splats * sizeof(bool),
-                                                           empty_output.stream());
+                                                           render_stream_);
                 status != cudaSuccess) {
                 return std::unexpected(std::format("VkSplat polygon empty-output clear failed: {} ({})",
                                                    cudaGetErrorName(status),
                                                    cudaGetErrorString(status)));
             }
-            if (const cudaError_t status = cudaStreamSynchronize(empty_output.stream());
+            if (const cudaError_t status = cudaStreamSynchronize(render_stream_);
                 status != cudaSuccess) {
                 return std::unexpected(std::format("VkSplat polygon empty-output sync failed: {} ({})",
                                                    cudaGetErrorName(status),

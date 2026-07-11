@@ -247,7 +247,13 @@ namespace lfs::vis {
                 if (scaled_x >= 0 && scaled_x < depth_width && scaled_y >= 0 && scaled_y < depth_height) {
                     float d;
                     const float* gpu_ptr = depth_ptr->ptr<float>() + scaled_y * depth_width + scaled_x;
-                    CHECK_CUDA(cudaMemcpy(&d, gpu_ptr, sizeof(float), cudaMemcpyDeviceToHost));
+                    const cudaStream_t stream = depth_ptr->stream();
+                    CHECK_CUDA(cudaMemcpyAsync(&d,
+                                               gpu_ptr,
+                                               sizeof(float),
+                                               cudaMemcpyDeviceToHost,
+                                               stream));
+                    CHECK_CUDA(cudaStreamSynchronize(stream));
                     splat_depth = linearizeDepthSample(
                         d, active_near_plane, active_far_plane, active_orthographic, metadata_.depth_is_ndc);
                 }
