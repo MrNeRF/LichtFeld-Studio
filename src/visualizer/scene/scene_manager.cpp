@@ -42,6 +42,9 @@
 #include <cuda_runtime.h>
 #include <format>
 #include <glm/gtc/quaternion.hpp>
+#include <limits>
+#include <memory>
+#include <mutex>
 #include <shared_mutex>
 #include <stdexcept>
 #include <unordered_map>
@@ -50,6 +53,8 @@ namespace lfs::vis {
 
     namespace {
         constexpr float DEFAULT_VOXEL_SIZE = 0.01f;
+
+        void clearMeshCpuCache();
 
         template <typename TRenderable>
         [[nodiscard]] bool containsRenderableNode(const std::vector<TRenderable>& renderables, const core::NodeId node_id) {
@@ -397,7 +402,9 @@ namespace lfs::vis {
         python::set_application_scene(&scene_);
         LOG_DEBUG("SceneManager initialized");
     }
-    SceneManager::~SceneManager() = default;
+    SceneManager::~SceneManager() {
+        clearMeshCpuCache();
+    }
 
     void SceneManager::setupEventHandlers() {
 
@@ -1140,6 +1147,7 @@ namespace lfs::vis {
         // otherwise this same iteration's prepareVulkanSceneInterop dispatches a CUDA
         // copy from freed memory and the device faults asynchronously.
         drainGpuForTensorRelease();
+        clearMeshCpuCache();
         scene_.clear();
         python::set_application_scene(&scene_);
 
@@ -1547,17 +1555,47 @@ namespace lfs::vis {
     }
 
     namespace {
-        constexpr size_t MAX_MESH_CPU_CACHE_ENTRIES = 64;
+        constexpr size_t MESH_CPU_CACHE_BUDGET_BYTES = size_t{256} * 1024 * 1024;
 
         struct CachedMeshCpu {
+            std::weak_ptr<const core::MeshData> source;
             uint32_t generation = 0;
             core::Tensor verts_cpu;
             core::Tensor idx_cpu;
             glm::vec3 aabb_min{0.0f};
             glm::vec3 aabb_max{0.0f};
+            size_t bytes = 0;
+            uint64_t last_used = 0;
         };
 
-        std::unordered_map<const core::MeshData*, CachedMeshCpu> g_mesh_cpu_cache;
+        struct MeshCpuCache {
+            std::mutex mutex;
+            std::unordered_map<core::NodeId, CachedMeshCpu> entries;
+            size_t cached_bytes = 0;
+            uint64_t clock = 0;
+        };
+
+        MeshCpuCache& meshCpuCache() {
+            static MeshCpuCache cache;
+            return cache;
+        }
+
+        void eraseMeshCpuCacheEntry(MeshCpuCache& cache,
+                                    const std::unordered_map<core::NodeId, CachedMeshCpu>::iterator it) {
+            cache.cached_bytes -= std::min(cache.cached_bytes, it->second.bytes);
+            cache.entries.erase(it);
+        }
+
+        void clearMeshCpuCache() {
+            std::unordered_map<core::NodeId, CachedMeshCpu> retired;
+            auto& cache = meshCpuCache();
+            {
+                std::lock_guard lock(cache.mutex);
+                retired.swap(cache.entries);
+                cache.cached_bytes = 0;
+                cache.clock = 0;
+            }
+        }
 
         // Möller-Trumbore ray-triangle intersection, returns distance or -1
         float rayTriangleIntersect(const glm::vec3& origin, const glm::vec3& dir,
@@ -1607,27 +1645,37 @@ namespace lfs::vis {
             glm::vec3 aabb_min{0.0f};
             glm::vec3 aabb_max{0.0f};
 
-            static std::optional<CpuMeshAccessor> from(const core::MeshData& mesh) {
-                if (!mesh.vertices.is_valid() || mesh.vertex_count() == 0)
+            static std::optional<CpuMeshAccessor> from(
+                const core::NodeId node_id,
+                const std::shared_ptr<const core::MeshData>& mesh) {
+                if (!mesh || !mesh->vertices.is_valid() || mesh->vertex_count() == 0)
                     return std::nullopt;
 
-                auto it = g_mesh_cpu_cache.find(&mesh);
-                if (it != g_mesh_cpu_cache.end() && it->second.generation == mesh.generation()) {
-                    CpuMeshAccessor a;
-                    a.verts_cpu = it->second.verts_cpu;
-                    a.idx_cpu = it->second.idx_cpu;
-                    a.aabb_min = it->second.aabb_min;
-                    a.aabb_max = it->second.aabb_max;
-                    return a;
+                const uint32_t source_generation = mesh->generation();
+                auto& cache = meshCpuCache();
+                {
+                    std::lock_guard lock(cache.mutex);
+                    const auto it = cache.entries.find(node_id);
+                    if (it != cache.entries.end()) {
+                        const auto cached_source = it->second.source.lock();
+                        if (cached_source.get() == mesh.get() &&
+                            it->second.generation == source_generation) {
+                            it->second.last_used = ++cache.clock;
+                            CpuMeshAccessor accessor;
+                            accessor.verts_cpu = it->second.verts_cpu;
+                            accessor.idx_cpu = it->second.idx_cpu;
+                            accessor.aabb_min = it->second.aabb_min;
+                            accessor.aabb_max = it->second.aabb_max;
+                            return accessor;
+                        }
+                        eraseMeshCpuCacheEntry(cache, it);
+                    }
                 }
 
-                if (g_mesh_cpu_cache.size() >= MAX_MESH_CPU_CACHE_ENTRIES)
-                    g_mesh_cpu_cache.clear();
-
                 CpuMeshAccessor a;
-                a.verts_cpu = mesh.vertices.to(core::Device::CPU).contiguous();
-                if (mesh.indices.is_valid() && mesh.face_count() > 0)
-                    a.idx_cpu = mesh.indices.to(core::Device::CPU).contiguous();
+                a.verts_cpu = mesh->vertices.to(core::Device::CPU).contiguous();
+                if (mesh->indices.is_valid() && mesh->face_count() > 0)
+                    a.idx_cpu = mesh->indices.to(core::Device::CPU).contiguous();
 
                 const int64_t nv = a.verts_cpu.size(0);
                 a.aabb_min = a.aabb_max = a.vertex(0);
@@ -1637,12 +1685,51 @@ namespace lfs::vis {
                     a.aabb_max = glm::max(a.aabb_max, v);
                 }
 
-                auto& entry = g_mesh_cpu_cache[&mesh];
-                entry.generation = mesh.generation();
-                entry.verts_cpu = a.verts_cpu;
-                entry.idx_cpu = a.idx_cpu;
-                entry.aabb_min = a.aabb_min;
-                entry.aabb_max = a.aabb_max;
+                const size_t vertex_bytes = a.verts_cpu.bytes();
+                const size_t index_bytes = a.idx_cpu.is_valid() ? a.idx_cpu.bytes() : 0;
+                const size_t logical_bytes = index_bytes > std::numeric_limits<size_t>::max() - vertex_bytes
+                                                 ? std::numeric_limits<size_t>::max()
+                                                 : vertex_bytes + index_bytes;
+                // Pinned size classes round each request to less than twice its
+                // logical size. Budget that conservative physical upper bound so
+                // allocator rounding cannot exceed the advertised cache ceiling.
+                const size_t cache_bytes = logical_bytes > std::numeric_limits<size_t>::max() / 2
+                                               ? std::numeric_limits<size_t>::max()
+                                               : logical_bytes * 2;
+
+                // A generation change during the download means this is only a
+                // one-shot snapshot; do not retain it as the current geometry.
+                if (cache_bytes <= MESH_CPU_CACHE_BUDGET_BYTES &&
+                    mesh->generation() == source_generation) {
+                    std::lock_guard lock(cache.mutex);
+                    if (mesh->generation() != source_generation) {
+                        return a;
+                    }
+                    if (const auto existing = cache.entries.find(node_id);
+                        existing != cache.entries.end()) {
+                        eraseMeshCpuCacheEntry(cache, existing);
+                    }
+                    while (!cache.entries.empty() &&
+                           cache_bytes > MESH_CPU_CACHE_BUDGET_BYTES - cache.cached_bytes) {
+                        const auto lru = std::min_element(
+                            cache.entries.begin(), cache.entries.end(), [](const auto& left, const auto& right) {
+                                return left.second.last_used < right.second.last_used;
+                            });
+                        eraseMeshCpuCacheEntry(cache, lru);
+                    }
+
+                    CachedMeshCpu entry;
+                    entry.source = mesh;
+                    entry.generation = source_generation;
+                    entry.verts_cpu = a.verts_cpu;
+                    entry.idx_cpu = a.idx_cpu;
+                    entry.aabb_min = a.aabb_min;
+                    entry.aabb_max = a.aabb_max;
+                    entry.bytes = cache_bytes;
+                    entry.last_used = ++cache.clock;
+                    cache.cached_bytes += cache_bytes;
+                    cache.entries.emplace(node_id, std::move(entry));
+                }
                 return a;
             }
 
@@ -1699,7 +1786,7 @@ namespace lfs::vis {
             };
 
             if (node->type == core::NodeType::MESH && node->mesh) {
-                auto accessor = CpuMeshAccessor::from(*node->mesh);
+                auto accessor = CpuMeshAccessor::from(node->id, node->mesh);
                 if (!accessor)
                     continue;
 
@@ -1781,7 +1868,7 @@ namespace lfs::vis {
             const glm::mat4 world_transform = scene_coords::nodeVisualizerWorldTransform(scene_, node->id);
 
             if (node->type == core::NodeType::MESH && node->mesh) {
-                auto accessor = CpuMeshAccessor::from(*node->mesh);
+                auto accessor = CpuMeshAccessor::from(node->id, node->mesh);
                 if (!accessor)
                     continue;
 

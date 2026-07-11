@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstddef>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 #include <memory>
@@ -117,6 +118,27 @@ namespace lfs::python {
             return std::make_shared<core::PointCloud>(
                 core::Tensor::from_vector(means, {count, size_t{3}}, core::Device::CPU),
                 core::Tensor::from_vector(colors, {count, size_t{3}}, core::Device::CPU));
+        }
+
+        core::MeshData make_test_mesh_data(const float x_offset = 0.0f) {
+            return core::MeshData(
+                core::Tensor::from_vector(
+                    std::vector<float>{x_offset - 1.0f, -1.0f, 0.0f,
+                                       x_offset + 1.0f, -1.0f, 0.0f,
+                                       x_offset, 1.0f, 0.0f},
+                    {size_t{3}, size_t{3}}, core::Device::CPU),
+                core::Tensor::from_vector(
+                    std::vector<int32_t>{0, 1, 2},
+                    {size_t{1}, size_t{3}}, core::Device::CPU));
+        }
+
+        std::shared_ptr<core::MeshData> make_test_mesh(const core::Device device = core::Device::CPU) {
+            auto mesh = std::make_shared<core::MeshData>(make_test_mesh_data());
+            if (device == core::Device::CUDA) {
+                mesh->vertices = mesh->vertices.to(device);
+                mesh->indices = mesh->indices.to(device);
+            }
+            return mesh;
         }
 
         struct TrainingSceneNodes {
@@ -678,6 +700,52 @@ namespace lfs::python {
         EXPECT_EQ(get_application_scene(), &scene_manager.getScene());
         EXPECT_EQ(scene_manager.getContentType(), lfs::vis::SceneManager::ContentType::Empty);
         EXPECT_EQ(scene_manager.getScene().getNodeCount(), 0u);
+    }
+
+    TEST_F(SceneValidityTest, SceneManagerClearReleasesMeshRayPickCpuCache) {
+        lfs::vis::SceneManager scene_manager;
+        auto mesh = make_test_mesh(core::Device::CUDA);
+        ASSERT_NE(scene_manager.getScene().addMesh("Triangle", mesh), core::NULL_NODE);
+        const auto before_pick = core::PinnedMemoryAllocator::instance().get_stats();
+
+        EXPECT_EQ(scene_manager.pickNodeByRay({0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, -1.0f}),
+                  "Triangle");
+        const auto after_pick = core::PinnedMemoryAllocator::instance().get_stats();
+        ASSERT_GT(after_pick.allocated_bytes, before_pick.allocated_bytes);
+
+        ASSERT_TRUE(scene_manager.clear());
+
+        const auto after_clear = core::PinnedMemoryAllocator::instance().get_stats();
+        EXPECT_EQ(after_clear.allocated_bytes, before_pick.allocated_bytes);
+    }
+
+    TEST_F(SceneValidityTest, MeshRayPickCacheRejectsReusedObjectAddressAndNodeId) {
+        alignas(core::MeshData) std::byte storage[sizeof(core::MeshData)];
+        lfs::vis::SceneManager scene_manager;
+        const auto construct_mesh = [&](const float x_offset) {
+            auto* mesh = std::construct_at(
+                reinterpret_cast<core::MeshData*>(storage),
+                make_test_mesh_data(x_offset));
+            return std::shared_ptr<core::MeshData>(mesh, [](core::MeshData* value) {
+                std::destroy_at(value);
+            });
+        };
+
+        auto original = construct_mesh(0.0f);
+        const core::NodeId original_id = scene_manager.getScene().addMesh("Original", original);
+        ASSERT_NE(original_id, core::NULL_NODE);
+        ASSERT_EQ(scene_manager.pickNodeByRay({0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, -1.0f}),
+                  "Original");
+
+        // Bypass the manager cache clear to exercise the identity guard directly.
+        scene_manager.getScene().clear();
+        original.reset();
+        auto replacement = construct_mesh(10.0f);
+        const core::NodeId replacement_id =
+            scene_manager.getScene().addMesh("Replacement", replacement);
+        ASSERT_EQ(replacement_id, original_id);
+
+        EXPECT_TRUE(scene_manager.pickNodeByRay({0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, -1.0f}).empty());
     }
 
     TEST_F(SceneValidityTest, MoveNodeIntoGroupAppendsAsChild) {
