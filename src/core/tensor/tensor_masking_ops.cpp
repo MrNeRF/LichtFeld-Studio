@@ -60,28 +60,41 @@ namespace lfs::core {
                 return;
             case DataType::Float16:
                 LFS_ASSERT_MSG(std::abs(value) <= 65504.0f,
-                               "masked_fill_ value is outside the Float16 finite range");
+                               std::format("masked_fill_ value is outside the Float16 finite range "
+                                           "(value={}, allowed=[-65504,65504])",
+                                           value));
                 return;
             case DataType::Int32:
                 LFS_ASSERT_MSG(value >= -std::ldexp(1.0f, 31) &&
                                    value < std::ldexp(1.0f, 31),
-                               "masked_fill_ value is outside the Int32 range");
+                               std::format("masked_fill_ value is outside the Int32 range "
+                                           "(value={}, allowed=[-2147483648,2147483648))",
+                                           value));
                 return;
             case DataType::Int64:
                 LFS_ASSERT_MSG(value >= -std::ldexp(1.0f, 63) &&
                                    value < std::ldexp(1.0f, 63),
-                               "masked_fill_ value is outside the Int64 range");
+                               std::format("masked_fill_ value is outside the Int64 range "
+                                           "(value={}, allowed=[-2^63,2^63))",
+                                           value));
                 return;
             case DataType::UInt8:
                 LFS_ASSERT_MSG(value >= 0.0f && value <= 255.0f,
-                               "masked_fill_ value is outside the UInt8 range");
+                               std::format("masked_fill_ value is outside the UInt8 range "
+                                           "(value={}, allowed=[0,255])",
+                                           value));
                 return;
             case DataType::Bool:
                 LFS_ASSERT_MSG(value == 0.0f || value == 1.0f,
-                               "masked_fill_ Bool value must be zero or one");
+                               std::format("masked_fill_ Bool value must be zero or one "
+                                           "(value={})",
+                                           value));
                 return;
             }
-            LFS_ASSERT_MSG(false, "masked_fill_ encountered an unsupported dtype");
+            LFS_ASSERT_MSG(false,
+                           std::format("masked_fill_ encountered an unsupported dtype "
+                                       "(dtype={}({}))",
+                                       dtype_name(dtype), static_cast<int>(dtype)));
         }
 
         [[nodiscard]] bool is_integer_index_dtype(const DataType dtype) {
@@ -93,16 +106,27 @@ namespace lfs::core {
                                  const std::string_view operation,
                                  const bool check_bounds,
                                  const bool allow_negative = false) {
-            LFS_ASSERT_MSG(indices.is_valid(), std::string(operation) + ": invalid index tensor");
+            LFS_ASSERT_MSG(indices.is_valid(),
+                           std::format("{} received an invalid index tensor "
+                                       "(valid=false, upper_bound={}, check_bounds={})",
+                                       operation, upper_bound, check_bounds));
             LFS_ASSERT_MSG(is_integer_index_dtype(indices.dtype()),
-                           std::string(operation) + ": indices must be Int32 or Int64");
+                           std::format("{} indices must be Int32 or Int64 "
+                                       "(dtype={}({}), shape={}, device={})",
+                                       operation, dtype_name(indices.dtype()),
+                                       static_cast<int>(indices.dtype()), indices.shape().str(),
+                                       device_name(indices.device())));
             if (indices.numel() == 0) {
                 return;
             }
             LFS_ASSERT_MSG(upper_bound > 0,
-                           std::string(operation) + ": cannot index an empty dimension");
+                           std::format("{} cannot index an empty dimension "
+                                       "(upper_bound=0, index_count={})",
+                                       operation, indices.numel()));
             LFS_ASSERT_MSG(upper_bound <= static_cast<size_t>(std::numeric_limits<int>::max()),
-                           std::string(operation) + ": indexed dimension exceeds Int32 kernel range");
+                           std::format("{} indexed dimension exceeds the Int32 kernel range "
+                                       "(upper_bound={}, max={})",
+                                       operation, upper_bound, std::numeric_limits<int>::max()));
 
             const Tensor cpu_indices = indices.device() == Device::CPU
                                            ? indices.contiguous()
@@ -137,10 +161,22 @@ namespace lfs::core {
 
     // ============= Masking Operations =============
     Tensor Tensor::masked_select(const Tensor& mask) const {
-        LFS_ASSERT_MSG(is_valid() && mask.is_valid(), "masked_select requires valid tensors");
-        LFS_ASSERT_MSG(is_bool_like(mask.dtype()), "masked_select mask must be Bool or UInt8");
-        LFS_ASSERT_MSG(mask.shape() == shape_, "masked_select mask shape must match the input");
-        LFS_ASSERT_MSG(mask.device() == device_, "masked_select mask must be on the input device");
+        LFS_ASSERT_MSG(is_valid() && mask.is_valid(),
+                       std::format("masked_select requires valid input and mask tensors "
+                                   "(input_valid={}, mask_valid={})",
+                                   is_valid(), mask.is_valid()));
+        LFS_ASSERT_MSG(is_bool_like(mask.dtype()),
+                       std::format("masked_select mask must be Bool or UInt8 "
+                                   "(mask_dtype={}({}))",
+                                   dtype_name(mask.dtype()), static_cast<int>(mask.dtype())));
+        LFS_ASSERT_MSG(mask.shape() == shape_,
+                       std::format("masked_select mask shape must match the input "
+                                   "(input_shape={}, mask_shape={})",
+                                   shape_.str(), mask.shape().str()));
+        LFS_ASSERT_MSG(mask.device() == device_,
+                       std::format("masked_select mask must be on the input device "
+                                   "(input_device={}, mask_device={})",
+                                   device_name(device_), device_name(mask.device())));
 
         // Count TRUE values in mask
         size_t output_size = mask.count_nonzero();
@@ -155,10 +191,6 @@ namespace lfs::core {
         auto result = empty({output_size}, device_, dtype_);
 
         if (device_ == Device::CUDA) {
-            const cudaError_t pending_error = cudaGetLastError();
-            LFS_ASSERT_MSG(pending_error == cudaSuccess,
-                           std::string("masked_select encountered a prior CUDA error: ") +
-                               cudaGetErrorString(pending_error));
             result.set_stream(stream());
             switch (dtype_) {
             case DataType::Float32:
@@ -213,11 +245,24 @@ namespace lfs::core {
     }
 
     Tensor& Tensor::masked_fill_(const Tensor& mask, float value) {
-        LFS_ASSERT_MSG(is_valid() && mask.is_valid(), "masked_fill_ requires valid tensors");
-        LFS_ASSERT_MSG(is_bool_like(mask.dtype()), "masked_fill_ mask must be Bool or UInt8");
-        LFS_ASSERT_MSG(mask.shape() == shape_, "masked_fill_ mask shape must match the input");
-        LFS_ASSERT_MSG(mask.device() == device_, "masked_fill_ mask must be on the input device");
-        LFS_ASSERT_MSG(std::isfinite(value), "masked_fill_ value must be finite");
+        LFS_ASSERT_MSG(is_valid() && mask.is_valid(),
+                       std::format("masked_fill_ requires valid destination and mask tensors "
+                                   "(destination_valid={}, mask_valid={})",
+                                   is_valid(), mask.is_valid()));
+        LFS_ASSERT_MSG(is_bool_like(mask.dtype()),
+                       std::format("masked_fill_ mask must be Bool or UInt8 "
+                                   "(mask_dtype={}({}))",
+                                   dtype_name(mask.dtype()), static_cast<int>(mask.dtype())));
+        LFS_ASSERT_MSG(mask.shape() == shape_,
+                       std::format("masked_fill_ mask shape must match the destination "
+                                   "(destination_shape={}, mask_shape={})",
+                                   shape_.str(), mask.shape().str()));
+        LFS_ASSERT_MSG(mask.device() == device_,
+                       std::format("masked_fill_ mask must be on the destination device "
+                                   "(destination_device={}, mask_device={})",
+                                   device_name(device_), device_name(mask.device())));
+        LFS_ASSERT_MSG(std::isfinite(value),
+                       std::format("masked_fill_ value must be finite (value={})", value));
         assert_masked_fill_value_representable(dtype_, value);
 
         if (device_ == Device::CUDA) {
@@ -345,10 +390,6 @@ namespace lfs::core {
         }
 
         if (device_ == Device::CUDA) {
-            const cudaError_t pending_error = cudaGetLastError();
-            LFS_ASSERT_MSG(pending_error == cudaSuccess,
-                           std::string("index_select encountered a prior CUDA error: ") +
-                               cudaGetErrorString(pending_error));
             const int* idx_ptr = is_int64 ? indices_int32.ptr<int>() : indices_same_device.ptr<int>();
 
             // Dispatch based on source tensor dtype
@@ -442,7 +483,10 @@ namespace lfs::core {
         LFS_ASSERT_MSG(is_valid() && indices.is_valid(), "gather requires valid tensors");
         LFS_ASSERT_MSG(indices.device() == device_, "gather indices must be on the input device");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int64,
-                       "gather currently supports only Float32 and Int64 inputs");
+                       std::format("gather currently supports only Float32 and Int64 inputs "
+                                   "(input_dtype={}({}), shape={}, device={})",
+                                   dtype_name(dtype_), static_cast<int>(dtype_), shape_.str(),
+                                   device_name(device_)));
 
         // Ensure we have contiguous data for correct memory access
         if (!is_contiguous()) {
@@ -469,10 +513,6 @@ namespace lfs::core {
             }
 
             if (device_ == Device::CUDA) {
-                const cudaError_t pending_error = cudaGetLastError();
-                LFS_ASSERT_MSG(pending_error == cudaSuccess,
-                               std::string("gather encountered a prior CUDA error: ") +
-                                   cudaGetErrorString(pending_error));
                 const int* idx_ptr = is_int64 ? indices_int32.ptr<int>() : indices_same_device.ptr<int>();
 
                 // Dispatch based on source tensor dtype
@@ -567,10 +607,6 @@ namespace lfs::core {
         const int* idx_ptr = is_int64 ? indices_int32.ptr<int>() : indices_same_device.ptr<int>();
 
         if (device_ == Device::CUDA) {
-            const cudaError_t pending_error = cudaGetLastError();
-            LFS_ASSERT_MSG(pending_error == cudaSuccess,
-                           std::string("gather encountered a prior CUDA error: ") +
-                               cudaGetErrorString(pending_error));
             result.set_stream(stream());
             if (dtype_ == DataType::Float32) {
                 tensor_ops::launch_gather(ptr<float>(), idx_ptr,
@@ -1787,9 +1823,14 @@ namespace lfs::core {
     }
 
     TensorIndexer Tensor::operator[](const std::vector<Tensor>& idx) {
-        LFS_ASSERT_MSG(is_valid(), "tensor indexing requires a valid tensor");
+        LFS_ASSERT_MSG(is_valid(),
+                       std::format("tensor indexing requires a valid source tensor "
+                                   "(source_valid=false, index_tensor_count={})",
+                                   idx.size()));
         LFS_ASSERT_MSG(idx.size() == 1,
-                       "multi-tensor indexing currently supports exactly one index tensor");
+                       std::format("multi-tensor indexing currently supports exactly one index tensor "
+                                   "(index_tensor_count={})",
+                                   idx.size()));
         LFS_ASSERT_MSG(idx.front().is_valid(),
                        "tensor indexing requires a valid index tensor");
         LFS_ASSERT_MSG(idx.front().device() == device_,

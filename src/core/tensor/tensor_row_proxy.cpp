@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstring>
 #include <cuda_runtime.h>
+#include <format>
 #include <string_view>
 #include <vector>
 
@@ -227,9 +228,14 @@ namespace lfs::core {
     TensorRowProxy& TensorRowProxy::operator=(const Tensor& other) {
         assert_proxy_tensor(tensor_, row_index_, "TensorRowProxy tensor assignment");
         LFS_ASSERT_MSG(other.is_valid(),
-                       "TensorRowProxy assignment requires a valid source tensor");
+                       std::format("TensorRowProxy assignment requires a valid source tensor "
+                                   "(source_valid=false, destination_row={}, destination_shape={})",
+                                   row_index_, tensor_->shape().str()));
         LFS_ASSERT_MSG(other.dtype() == tensor_->dtype(),
-                       "TensorRowProxy assignment requires matching dtypes");
+                       std::format("TensorRowProxy assignment requires matching dtypes "
+                                   "(destination_dtype={}({}), source_dtype={}({}), row={})",
+                                   dtype_name(tensor_->dtype()), static_cast<int>(tensor_->dtype()),
+                                   dtype_name(other.dtype()), static_cast<int>(other.dtype()), row_index_));
         flush_cuda_staging();
 
         if (tensor_->shape().rank() > 1) {
@@ -248,7 +254,10 @@ namespace lfs::core {
 
             LFS_ASSERT_MSG(other.shape() == expected_shape ||
                                other.shape() == row_slice.shape(),
-                           "TensorRowProxy assignment source shape does not match the row");
+                           std::format("TensorRowProxy assignment source shape does not match the row "
+                                       "(source_shape={}, expected_shape={} or {}, row={})",
+                                       other.shape().str(), expected_shape.str(), row_slice.shape().str(),
+                                       row_index_));
 
             auto other_copy = (other.device() == tensor_->device())
                                   ? other.clone()

@@ -417,7 +417,10 @@ namespace lfs::io {
     parse_header(const char* data, size_t file_size) {
         LOG_TIMER_TRACE("PLY header parsing");
 
-        LFS_ASSERT_MSG(data != nullptr, "PLY parser received a null buffer");
+        LFS_ASSERT_MSG(data != nullptr,
+                       std::format("PLY parser received a null buffer "
+                                   "(data={}, file_size={})",
+                                   static_cast<const void*>(data), file_size));
 
         // Check for PLY magic with both Unix and Windows line endings
         if (file_size < ply_constants::PLY_MIN_SIZE) {
@@ -479,16 +482,26 @@ namespace lfs::io {
             // Line parsing
             const std::string_view line(line_start, line_len);
             if (line.starts_with("format ")) {
-                LFS_ASSERT_MSG(!has_format, "PLY header must contain exactly one format line");
+                LFS_ASSERT_MSG(!has_format,
+                               std::format("PLY header must contain exactly one format line "
+                                           "(duplicate_line={}, text='{}')",
+                                           lines_parsed, line));
                 LFS_ASSERT_MSG(line == "format binary_little_endian 1.0",
-                               "Only PLY format binary_little_endian 1.0 is supported");
+                               std::format("only PLY format binary_little_endian 1.0 is supported "
+                                           "(observed='{}', line={})",
+                                           line, lines_parsed));
                 is_binary = true;
                 has_format = true;
             } else if (line_len >= 8 && std::strncmp(line_start, "element ", 8) == 0) {
-                LFS_ASSERT_MSG(has_format, "PLY format line must precede element declarations");
+                LFS_ASSERT_MSG(has_format,
+                               std::format("PLY format line must precede element declarations "
+                                           "(format_seen=false, element_line={}, text='{}')",
+                                           lines_parsed, line));
                 if (line_len >= 15 && std::strncmp(line_start, "element vertex ", 15) == 0) {
                     LFS_ASSERT_MSG(!has_vertex_element,
-                                   "PLY header must not declare the vertex element more than once");
+                                   std::format("PLY header must not declare the vertex element more than once "
+                                               "(duplicate_line={}, text='{}')",
+                                               lines_parsed, line));
                     const std::string_view count_token(line_start + 15, line_len - 15);
                     if (!parse_size_token(count_token, layout.vertex_count)) {
                         throw std::runtime_error("Invalid PLY vertex count");
@@ -661,24 +674,34 @@ namespace lfs::io {
         }
         for (int i = 0; i < layout.dc_count; ++i) {
             LFS_ASSERT_MSG(layout.dc_offsets[i] != SIZE_MAX,
-                           "PLY f_dc coefficient indices must be contiguous from zero");
+                           std::format("PLY f_dc coefficient indices must be contiguous from zero "
+                                       "(missing_index={}, dc_count={})",
+                                       i, layout.dc_count));
         }
         for (int i = 0; i < layout.rest_count; ++i) {
             LFS_ASSERT_MSG(layout.rest_offsets[i] != SIZE_MAX,
-                           "PLY f_rest coefficient indices must be contiguous from zero");
+                           std::format("PLY f_rest coefficient indices must be contiguous from zero "
+                                       "(missing_index={}, rest_count={})",
+                                       i, layout.rest_count));
         }
         LFS_ASSERT_MSG(layout.dc_count == 0 ||
                            layout.dc_count % ply_constants::COLOR_CHANNELS == 0,
-                       "PLY f_dc coefficient count must be divisible by three color channels");
+                       std::format("PLY f_dc coefficient count must be divisible by three color channels "
+                                   "(dc_count={}, color_channels={})",
+                                   layout.dc_count, ply_constants::COLOR_CHANNELS));
         LFS_ASSERT_MSG(layout.rest_count == 0 ||
                            layout.rest_count % ply_constants::COLOR_CHANNELS == 0,
-                       "PLY f_rest coefficient count must be divisible by three color channels");
+                       std::format("PLY f_rest coefficient count must be divisible by three color channels "
+                                   "(rest_count={}, color_channels={})",
+                                   layout.rest_count, ply_constants::COLOR_CHANNELS));
         if (layout.rest_count > 0) {
             const int coefficients_per_channel =
                 layout.rest_count / ply_constants::COLOR_CHANNELS;
             const int root = static_cast<int>(std::sqrt(coefficients_per_channel + 1));
             LFS_ASSERT_MSG(root * root == coefficients_per_channel + 1,
-                           "PLY f_rest coefficient count does not describe a complete SH degree");
+                           std::format("PLY f_rest coefficient count does not describe a complete SH degree "
+                                       "(rest_count={}, coefficients_per_channel={}, candidate_root={})",
+                                       layout.rest_count, coefficients_per_channel, root));
         }
 
         const auto assert_offset = [&](const size_t offset, const std::string_view property) {
@@ -710,8 +733,11 @@ namespace lfs::io {
         PlyImportValidation validation;
 
         const auto read_field = [&](const char* row, const size_t offset, bool& invalid) {
-            LFS_DEBUG_ASSERT(offset <= layout.vertex_stride &&
-                             sizeof(float) <= layout.vertex_stride - offset);
+            LFS_DEBUG_ASSERT_MSG(offset <= layout.vertex_stride &&
+                                     sizeof(float) <= layout.vertex_stride - offset,
+                                 std::format("PLY payload field must fit inside its vertex row "
+                                             "(offset={}, field_size={}, vertex_stride={})",
+                                             offset, sizeof(float), layout.vertex_stride));
             const float value = read_unaligned_float32(row + offset);
             if (!std::isfinite(value)) {
                 invalid = true;
@@ -1402,17 +1428,28 @@ namespace lfs::io {
         std::vector<std::future<void>> g_save_futures;
         using TensorWithNames = std::pair<Tensor, std::vector<std::string>>;
 
-        [[nodiscard]] bool float_tensor_values_are_finite(const Tensor& values) {
-            LFS_ASSERT(values.is_valid());
-            LFS_ASSERT(values.dtype() == DataType::Float32);
+        struct NonFiniteFloatValue {
+            size_t index = 0;
+            float value = 0.0f;
+        };
+
+        [[nodiscard]] std::optional<NonFiniteFloatValue> find_non_finite_float_value(
+            const Tensor& values) {
+            LFS_ASSERT_MSG(values.is_valid(),
+                           "PLY finite-value scan requires a valid tensor (valid=false)");
+            LFS_ASSERT_MSG(values.dtype() == DataType::Float32,
+                           std::format("PLY finite-value scan requires Float32 "
+                                       "(dtype={}({}), shape={})",
+                                       dtype_name(values.dtype()), static_cast<int>(values.dtype()),
+                                       values.shape().str()));
             const Tensor cpu = values.cpu().contiguous();
             const float* const data = cpu.ptr<float>();
             for (size_t i = 0; i < cpu.numel(); ++i) {
                 if (!std::isfinite(data[i])) {
-                    return false;
+                    return NonFiniteFloatValue{.index = i, .value = data[i]};
                 }
             }
-            return true;
+            return std::nullopt;
         }
 
         Result<void> validate_float_export_tensor(const Tensor& values,
@@ -1422,9 +1459,16 @@ namespace lfs::io {
                                                   const std::optional<size_t> expected_columns,
                                                   const bool allow_empty_payload,
                                                   const std::filesystem::path& output_path) {
-            if (!values.is_valid() || values.dtype() != DataType::Float32) {
+            if (!values.is_valid()) {
                 return make_error(ErrorCode::INTERNAL_ERROR,
-                                  std::format("{} must be a valid float32 tensor", label),
+                                  std::format("{} must be a valid Float32 tensor (valid=false)", label),
+                                  output_path);
+            }
+            if (values.dtype() != DataType::Float32) {
+                return make_error(ErrorCode::INTERNAL_ERROR,
+                                  std::format("{} must be Float32 (dtype={}({}), shape={})",
+                                              label, dtype_name(values.dtype()),
+                                              static_cast<int>(values.dtype()), values.shape().str()),
                                   output_path);
             }
             if (std::ranges::find(allowed_ranks, values.ndim()) == allowed_ranks.end()) {
@@ -1441,19 +1485,25 @@ namespace lfs::io {
             if (expected_columns &&
                 (values.ndim() != 2 || static_cast<size_t>(values.size(1)) != *expected_columns)) {
                 return make_error(ErrorCode::INTERNAL_ERROR,
-                                  std::format("{} must be shaped [N,{}]", label, *expected_columns),
+                                  std::format("{} must be shaped [N,{}] (shape={})",
+                                              label, *expected_columns, values.shape().str()),
                                   output_path);
             }
             for (size_t dim = 1; dim < values.ndim(); ++dim) {
                 if (values.size(dim) == 0 && !allow_empty_payload) {
                     return make_error(ErrorCode::INTERNAL_ERROR,
-                                      std::format("{} dimensions must be non-empty", label),
+                                      std::format("{} dimensions must be non-empty "
+                                                  "(shape={}, empty_dimension={})",
+                                                  label, values.shape().str(), dim),
                                       output_path);
                 }
             }
-            if (!float_tensor_values_are_finite(values)) {
+            if (const auto invalid = find_non_finite_float_value(values)) {
                 return make_error(ErrorCode::INTERNAL_ERROR,
-                                  std::format("{} contains NaN or infinity", label),
+                                  std::format("{} contains a non-finite value "
+                                              "(flat_index={}, value={}, shape={})",
+                                              label, invalid->index, invalid->value,
+                                              values.shape().str()),
                                   output_path);
             }
             return {};
@@ -1461,10 +1511,18 @@ namespace lfs::io {
 
         Result<void> validate_point_cloud_for_ply_write(const PointCloud& pc,
                                                         const std::filesystem::path& output_path) {
-            if (!pc.means.is_valid() || pc.means.ndim() != 2 || pc.means.size(1) != 3 ||
-                pc.means.size(0) <= 0) {
+            if (!pc.means.is_valid()) {
                 return make_error(ErrorCode::INTERNAL_ERROR,
-                                  "PointCloud.means must be a non-empty [N,3] tensor",
+                                  "PointCloud.means must be a valid non-empty [N,3] tensor "
+                                  "(valid=false)",
+                                  output_path);
+            }
+            if (pc.means.ndim() != 2 || pc.means.size(1) != 3 || pc.means.size(0) <= 0) {
+                return make_error(ErrorCode::INTERNAL_ERROR,
+                                  std::format("PointCloud.means must be non-empty [N,3] "
+                                              "(shape={}, dtype={}, device={})",
+                                              pc.means.shape().str(), dtype_name(pc.means.dtype()),
+                                              device_name(pc.means.device())),
                                   output_path);
             }
 
@@ -1522,26 +1580,25 @@ namespace lfs::io {
             }
 
             if (pc.colors.is_valid()) {
-                if (pc.colors.ndim() != 2 || pc.colors.size(0) != rows ||
+                if (pc.colors.ndim() != 2 || static_cast<size_t>(pc.colors.size(0)) != rows ||
                     pc.colors.size(1) != 3 ||
                     (pc.colors.dtype() != DataType::UInt8 && pc.colors.dtype() != DataType::Float32)) {
                     return make_error(ErrorCode::INTERNAL_ERROR,
-                                      "PointCloud.colors must be [N,3] uint8 or float32",
-                                      output_path);
-                }
-                if (pc.colors.dtype() == DataType::Float32 &&
-                    !float_tensor_values_are_finite(pc.colors)) {
-                    return make_error(ErrorCode::INTERNAL_ERROR,
-                                      "PointCloud.colors contains NaN or infinity",
+                                      std::format("PointCloud.colors must be [N,3] UInt8 or Float32 "
+                                                  "(shape={}, dtype={}({}), expected_rows={})",
+                                                  pc.colors.shape().str(), dtype_name(pc.colors.dtype()),
+                                                  static_cast<int>(pc.colors.dtype()), rows),
                                       output_path);
                 }
                 if (pc.colors.dtype() == DataType::Float32) {
                     const Tensor colors = pc.colors.cpu().contiguous();
                     const float* const data = colors.ptr<float>();
                     for (size_t i = 0; i < colors.numel(); ++i) {
-                        if (data[i] < 0.0f || data[i] > 1.0f) {
+                        if (!std::isfinite(data[i]) || data[i] < 0.0f || data[i] > 1.0f) {
                             return make_error(ErrorCode::INTERNAL_ERROR,
-                                              "PointCloud float colors must be in [0,1]",
+                                              std::format("PointCloud Float32 colors must be finite and in [0,1] "
+                                                          "(flat_index={}, value={}, shape={})",
+                                                          i, data[i], colors.shape().str()),
                                               output_path);
                         }
                     }
@@ -1572,9 +1629,16 @@ namespace lfs::io {
 
         Result<void> validate_extra_attribute_tensor(const Tensor& values,
                                                      const std::filesystem::path& output_path) {
-            if (!values.is_valid() || values.numel() == 0) {
+            if (!values.is_valid()) {
                 return make_error(ErrorCode::INTERNAL_ERROR,
-                                  "Extra PLY attribute tensors must not be empty",
+                                  "Extra PLY attribute tensor must be valid (valid=false)",
+                                  output_path);
+            }
+            if (values.numel() == 0) {
+                return make_error(ErrorCode::INTERNAL_ERROR,
+                                  std::format("Extra PLY attribute tensor must not be empty "
+                                              "(shape={}, dtype={})",
+                                              values.shape().str(), dtype_name(values.dtype())),
                                   output_path);
             }
 
@@ -1678,10 +1742,12 @@ namespace lfs::io {
             }
 
             prepared = prepared.to(DataType::Float32).cpu().contiguous();
-            if (!float_tensor_values_are_finite(prepared)) {
+            if (const auto invalid = find_non_finite_float_value(prepared)) {
                 return make_error(
                     ErrorCode::INTERNAL_ERROR,
-                    "Extra PLY attribute tensor contains NaN or infinity",
+                    std::format("Extra PLY attribute tensor contains a non-finite value "
+                                "(flat_index={}, value={}, shape={})",
+                                invalid->index, invalid->value, prepared.shape().str()),
                     output_path);
             }
             return TensorWithNames{std::move(prepared), block.names};
@@ -1866,6 +1932,7 @@ namespace lfs::io {
             return {};
         }
 
+#ifndef NDEBUG
         Result<void> validate_written_ply_file(const std::filesystem::path& path,
                                                const bool binary,
                                                const size_t expected_vertices,
@@ -1965,15 +2032,12 @@ namespace lfs::io {
                                   path);
             }
         }
+#endif
 
         Result<void> write_ply_binary(const PointCloud& pc, const std::filesystem::path& output_path,
                                       bool binary = true,
                                       std::span<const PlyAttributeBlock> extra_attributes = {},
                                       ExportProgressCallback progress_callback = nullptr) {
-            if (auto result = validate_point_cloud_for_ply_write(pc, output_path); !result) {
-                return result;
-            }
-
             // Write using tinyply
             tinyply::PlyFile ply;
             const size_t N = pc.means.size(0);
@@ -2083,6 +2147,7 @@ namespace lfs::io {
                     tinyply::Type::INVALID, 0);
             }
 
+#ifndef NDEBUG
             const size_t expected_properties =
                 (colors_u8.is_valid() ? 3 : 0) +
                 std::accumulate(float_blocks.begin(), float_blocks.end(), size_t{0},
@@ -2092,6 +2157,7 @@ namespace lfs::io {
             const size_t expected_binary_stride =
                 (colors_u8.is_valid() ? 3 : 0) +
                 (expected_properties - (colors_u8.is_valid() ? 3 : 0)) * sizeof(float);
+#endif
 
             const auto temp_path = make_temp_output_path(output_path);
             ScopedTempOutputFile temp_file{temp_path};
@@ -2133,11 +2199,13 @@ namespace lfs::io {
                 }
             }
 
+#ifndef NDEBUG
             if (auto result = validate_written_ply_file(
                     temp_path, binary, N, expected_properties, expected_binary_stride);
                 !result) {
                 return result;
             }
+#endif
 
             if (auto result = replace_output_file(temp_path, output_path); !result) {
                 return std::unexpected(result.error());
@@ -2533,7 +2601,10 @@ namespace lfs::io {
             throw_if_load_cancel_requested(options, "PLY read cancelled");
 
             const size_t N = vertices->count;
-            LFS_ASSERT_MSG(N > 0, "PLY point cloud contains no vertices");
+            LFS_ASSERT_MSG(N > 0,
+                           std::format("PLY point cloud must contain at least one vertex "
+                                       "(vertex_count={})",
+                                       N));
             LOG_DEBUG("Point cloud: {} points", N);
 
             using namespace lfs::core;
@@ -2542,11 +2613,15 @@ namespace lfs::io {
 
             if (vertices->t == tinyply::Type::FLOAT32) {
                 LFS_ASSERT_MSG(vertices->buffer.size_bytes() == N * 3 * sizeof(float),
-                               "PLY vertex buffer size is inconsistent with its count");
+                               std::format("PLY Float32 vertex buffer size must match its count "
+                                           "(buffer_bytes={}, vertex_count={}, expected_bytes={})",
+                                           vertices->buffer.size_bytes(), N, N * 3 * sizeof(float)));
                 std::memcpy(pos_ptr, vertices->buffer.get(), N * 3 * sizeof(float));
             } else if (vertices->t == tinyply::Type::FLOAT64) {
                 LFS_ASSERT_MSG(vertices->buffer.size_bytes() == N * 3 * sizeof(double),
-                               "PLY vertex buffer size is inconsistent with its count");
+                               std::format("PLY Float64 vertex buffer size must match its count "
+                                           "(buffer_bytes={}, vertex_count={}, expected_bytes={})",
+                                           vertices->buffer.size_bytes(), N, N * 3 * sizeof(double)));
                 const auto* src = reinterpret_cast<const double*>(vertices->buffer.get());
                 for (size_t i = 0; i < N * 3; ++i) {
                     if ((i % 4096) == 0) {
@@ -2557,25 +2632,40 @@ namespace lfs::io {
             } else {
                 return std::unexpected("Unsupported vertex type");
             }
-            LFS_ASSERT_MSG(float_tensor_values_are_finite(positions),
-                           "PLY point positions must be finite");
+            if (const auto invalid = find_non_finite_float_value(positions)) {
+                LFS_ASSERT_MSG(false,
+                               std::format("PLY point positions must be finite "
+                                           "(flat_index={}, value={}, shape={})",
+                                           invalid->index, invalid->value, positions.shape().str()));
+            }
 
             Tensor color_tensor;
             if (has_colors && colors) {
                 LFS_ASSERT_MSG(colors->count == N,
-                               "PLY color count must match the vertex count");
+                               std::format("PLY color count must match the vertex count "
+                                           "(color_count={}, vertex_count={})",
+                                           colors->count, N));
                 if (colors->t == tinyply::Type::UINT8) {
                     LFS_ASSERT_MSG(colors->buffer.size_bytes() == N * 3,
-                                   "PLY color buffer size is inconsistent with its count");
+                                   std::format("PLY UInt8 color buffer size must match its count "
+                                               "(buffer_bytes={}, color_count={}, expected_bytes={})",
+                                               colors->buffer.size_bytes(), N, N * 3));
                     color_tensor = Tensor::zeros({N, 3}, Device::CPU, DataType::UInt8);
                     std::memcpy(color_tensor.ptr<uint8_t>(), colors->buffer.get(), N * 3);
                 } else if (colors->t == tinyply::Type::FLOAT32) {
                     LFS_ASSERT_MSG(colors->buffer.size_bytes() == N * 3 * sizeof(float),
-                                   "PLY color buffer size is inconsistent with its count");
+                                   std::format("PLY Float32 color buffer size must match its count "
+                                               "(buffer_bytes={}, color_count={}, expected_bytes={})",
+                                               colors->buffer.size_bytes(), N, N * 3 * sizeof(float)));
                     Tensor float_colors = Tensor::zeros({N, 3}, Device::CPU, DataType::Float32);
                     std::memcpy(float_colors.ptr<float>(), colors->buffer.get(), N * 3 * sizeof(float));
-                    LFS_ASSERT_MSG(float_tensor_values_are_finite(float_colors),
-                                   "PLY float colors must be finite");
+                    if (const auto invalid = find_non_finite_float_value(float_colors)) {
+                        LFS_ASSERT_MSG(false,
+                                       std::format("PLY Float32 colors must be finite "
+                                                   "(flat_index={}, value={}, shape={})",
+                                                   invalid->index, invalid->value,
+                                                   float_colors.shape().str()));
+                    }
                     color_tensor = (float_colors * 255.0f).clamp(0, 255).to(DataType::UInt8);
                 } else {
                     color_tensor = Tensor::full({N, 3}, DEFAULT_COLOR, Device::CPU, DataType::UInt8);

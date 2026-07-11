@@ -2585,12 +2585,20 @@ namespace lfs::core {
     }
 
     bool Tensor::all_close(const Tensor& other, float rtol, float atol) const {
-        LFS_ASSERT_MSG(is_valid() && other.is_valid(), "all_close requires valid tensors");
+        LFS_ASSERT_MSG(is_valid() && other.is_valid(),
+                       std::format("all_close requires valid tensors "
+                                   "(lhs_valid={}, rhs_valid={})",
+                                   is_valid(), other.is_valid()));
         LFS_ASSERT_MSG(dtype_ == DataType::Float32 && other.dtype_ == DataType::Float32,
-                       "all_close currently supports only Float32 tensors");
+                       std::format("all_close currently supports only Float32 tensors "
+                                   "(lhs_dtype={}({}), rhs_dtype={}({}))",
+                                   dtype_name(dtype_), static_cast<int>(dtype_),
+                                   dtype_name(other.dtype_), static_cast<int>(other.dtype_)));
         LFS_ASSERT_MSG(std::isfinite(rtol) && std::isfinite(atol) &&
                            rtol >= 0.0f && atol >= 0.0f,
-                       "all_close tolerances must be finite and non-negative");
+                       std::format("all_close tolerances must be finite and non-negative "
+                                   "(rtol={}, atol={})",
+                                   rtol, atol));
 
         if (shape_ != other.shape_ || dtype_ != other.dtype_) {
             return false;
@@ -2772,11 +2780,17 @@ namespace lfs::core {
 
     Tensor Tensor::zeros_direct(TensorShape shape, size_t capacity, Device device, DataType dtype) {
         LFS_ASSERT_MSG(device == Device::CUDA,
-                       "zeros_direct currently supports only CUDA tensors");
+                       std::format("zeros_direct currently supports only CUDA tensors "
+                                   "(device={}({}), shape={}, capacity={})",
+                                   device_name(device), static_cast<int>(device), shape.str(), capacity));
         LFS_ASSERT_MSG(is_supported_dtype(dtype),
-                       "zeros_direct received an invalid dtype");
+                       std::format("zeros_direct received an invalid dtype "
+                                   "(dtype={}({}), shape={}, capacity={})",
+                                   dtype_name(dtype), static_cast<int>(dtype), shape.str(), capacity));
         LFS_ASSERT_MSG(shape.rank() > 0,
-                       "zeros_direct requires at least one dimension");
+                       std::format("zeros_direct requires at least one dimension "
+                                   "(shape={}, rank={}, capacity={})",
+                                   shape.str(), shape.rank(), capacity));
 
         const size_t current_size = shape[0];
         LFS_ASSERT_MSG(capacity >= current_size,

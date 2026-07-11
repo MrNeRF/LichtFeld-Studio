@@ -815,13 +815,19 @@ namespace lfs::core {
         const int op_value = static_cast<int>(op);
         LFS_ASSERT_MSG(op_value >= static_cast<int>(ReduceOp::Sum) &&
                            op_value <= static_cast<int>(ReduceOp::Norm),
-                       "reduce received an unknown operation");
+                       std::format("reduce received an unknown operation "
+                                   "(op={}, valid_range=[{},{}])",
+                                   op_value, static_cast<int>(ReduceOp::Sum),
+                                   static_cast<int>(ReduceOp::Norm)));
         const char* op_name = op_names[static_cast<size_t>(op_value)];
         debug::OpTraceGuard trace(op_name, *this);
 
         validate_unary_op();
         LFS_ASSERT_MSG(op != ReduceOp::Argmax && op != ReduceOp::Argmin,
-                       "argmax and argmin are not implemented by the reduction backend");
+                       std::format("argmax and argmin are not implemented by the reduction backend "
+                                   "(op={}({}), input_shape={}, input_dtype={}, input_device={})",
+                                   op_name, op_value, shape_.str(), dtype_name(dtype_),
+                                   device_name(device_)));
         LFS_ASSERT_MSG(op != ReduceOp::CountNonzero && op != ReduceOp::Norm,
                        "count_nonzero and norm must use their dedicated tensor operations");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32 ||

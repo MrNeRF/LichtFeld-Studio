@@ -55,7 +55,11 @@ namespace lfs::core {
     }
 
     inline const char* device_name(Device device) {
-        return device == Device::CPU ? "cpu" : "cuda";
+        switch (device) {
+        case Device::CPU: return "cpu";
+        case Device::CUDA: return "cuda";
+        default: return "unknown";
+        }
     }
 
 } // namespace lfs::core
