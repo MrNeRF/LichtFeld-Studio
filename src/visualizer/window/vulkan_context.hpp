@@ -139,11 +139,7 @@ namespace lfs::vis {
         [[nodiscard]] VulkanImageBarrierTracker& imageBarriers() { return image_barriers_; }
         [[nodiscard]] bool hasPushDescriptor() const { return has_push_descriptor_; }
         [[nodiscard]] PFN_vkCmdPushDescriptorSetKHR vkCmdPushDescriptorSet() const { return vk_cmd_push_descriptor_set_; }
-        [[nodiscard]] bool hasShaderObject() const { return has_shader_object_; }
-        [[nodiscard]] bool hasExtendedDynamicState3() const { return has_extended_dynamic_state3_; }
-        [[nodiscard]] bool hasCooperativeMatrix() const { return has_cooperative_matrix_; }
         [[nodiscard]] bool hasHostImageCopy() const { return has_host_image_copy_; }
-        [[nodiscard]] bool hasDescriptorIndexing() const { return has_descriptor_indexing_; }
         [[nodiscard]] bool hasFloat16Storage() const { return has_float16_storage_; }
         // Optional dedicated async-compute queue. When hasDedicatedComputeQueue() is
         // true, computeQueue() / computeQueueFamily() are distinct from graphicsQueue();
@@ -390,12 +386,8 @@ namespace lfs::vis {
         bool swapchain_maintenance1_enabled_ = false;
         bool swapchain_present_scaling_enabled_ = false;
         bool has_push_descriptor_ = false;
-        bool has_shader_object_ = false;
         bool has_float16_storage_ = false;
-        bool has_extended_dynamic_state3_ = false;
-        bool has_cooperative_matrix_ = false;
         bool has_host_image_copy_ = false;
-        bool has_descriptor_indexing_ = false;
         PFN_vkSetDebugUtilsObjectNameEXT vk_set_debug_utils_object_name_ = nullptr;
         PFN_vkCmdPushDescriptorSetKHR vk_cmd_push_descriptor_set_ = nullptr;
         uint32_t active_image_index_ = 0;

@@ -164,7 +164,6 @@ namespace lfs::vis {
             bool synchronization2 = false;
             bool dynamic_rendering = false;
             bool timeline_semaphore = false;
-            bool buffer_device_address = false;
         };
 
         [[nodiscard]] RequiredFeatureSupport queryRequiredFeatureSupport(const VkPhysicalDevice device) {
@@ -184,15 +183,13 @@ namespace lfs::vis {
             support.synchronization2 = features13.synchronization2 == VK_TRUE;
             support.dynamic_rendering = features13.dynamicRendering == VK_TRUE;
             support.timeline_semaphore = features12.timelineSemaphore == VK_TRUE;
-            support.buffer_device_address = features12.bufferDeviceAddress == VK_TRUE;
             return support;
         }
 
         [[nodiscard]] bool hasRequiredFeatures(const RequiredFeatureSupport& support) {
             return support.synchronization2 &&
                    support.dynamic_rendering &&
-                   support.timeline_semaphore &&
-                   support.buffer_device_address;
+                   support.timeline_semaphore;
         }
 
         void appendMissingFeature(std::string& missing, const bool present, std::string_view feature_name) {
@@ -210,7 +207,6 @@ namespace lfs::vis {
             appendMissingFeature(missing, support.synchronization2, "synchronization2");
             appendMissingFeature(missing, support.dynamic_rendering, "dynamicRendering");
             appendMissingFeature(missing, support.timeline_semaphore, "timelineSemaphore");
-            appendMissingFeature(missing, support.buffer_device_address, "bufferDeviceAddress");
             return missing;
         }
 
@@ -1668,28 +1664,11 @@ namespace lfs::vis {
             appendUniqueExtension(extensions, VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
         }
 
-        // Phase 2/3 modernization extensions. Each is opportunistic — enabled
-        // when present, and code paths that need them gate on the runtime flag
-        // exposed via VulkanContext::has*() accessors.
+        // Optional extensions with active consumers.
         const bool enable_push_descriptor =
             extensionAvailable(available_extensions, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
         if (enable_push_descriptor) {
             appendUniqueExtension(extensions, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
-        }
-        const bool enable_shader_object =
-            extensionAvailable(available_extensions, VK_EXT_SHADER_OBJECT_EXTENSION_NAME);
-        if (enable_shader_object) {
-            appendUniqueExtension(extensions, VK_EXT_SHADER_OBJECT_EXTENSION_NAME);
-        }
-        const bool enable_extended_dynamic_state3 =
-            extensionAvailable(available_extensions, VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME);
-        if (enable_extended_dynamic_state3) {
-            appendUniqueExtension(extensions, VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME);
-        }
-        const bool enable_cooperative_matrix =
-            extensionAvailable(available_extensions, VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
-        if (enable_cooperative_matrix) {
-            appendUniqueExtension(extensions, VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME);
         }
         const bool enable_host_image_copy =
             extensionAvailable(available_extensions, VK_EXT_HOST_IMAGE_COPY_EXTENSION_NAME);
@@ -1715,14 +1694,8 @@ namespace lfs::vis {
                                          ? static_cast<void*>(&supported_atomic_float_features)
                                          : nullptr;
 
-        // Optional Phase 3/4 modernization features. Each is queried in a
-        // throwaway chain so the main supported-features12 chain stays clean.
-        VkPhysicalDeviceShaderObjectFeaturesEXT supported_shader_object{};
-        supported_shader_object.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_OBJECT_FEATURES_EXT;
-        VkPhysicalDeviceExtendedDynamicState3FeaturesEXT supported_eds3{};
-        supported_eds3.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_3_FEATURES_EXT;
-        VkPhysicalDeviceCooperativeMatrixFeaturesKHR supported_coop_matrix{};
-        supported_coop_matrix.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR;
+        // Query extension feature structs separately so the main Vulkan 1.2
+        // supported-feature chain remains stable.
         VkPhysicalDeviceHostImageCopyFeaturesEXT supported_host_image_copy{};
         supported_host_image_copy.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_FEATURES_EXT;
         VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT supported_swapchain_maintenance1{};
@@ -1733,18 +1706,6 @@ namespace lfs::vis {
         if (swapchain_maintenance1_available) {
             supported_swapchain_maintenance1.pNext = opt_supported_head;
             opt_supported_head = &supported_swapchain_maintenance1;
-        }
-        if (enable_shader_object) {
-            supported_shader_object.pNext = opt_supported_head;
-            opt_supported_head = &supported_shader_object;
-        }
-        if (enable_extended_dynamic_state3) {
-            supported_eds3.pNext = opt_supported_head;
-            opt_supported_head = &supported_eds3;
-        }
-        if (enable_cooperative_matrix) {
-            supported_coop_matrix.pNext = opt_supported_head;
-            opt_supported_head = &supported_coop_matrix;
         }
         if (enable_host_image_copy) {
             supported_host_image_copy.pNext = opt_supported_head;
@@ -1802,74 +1763,10 @@ namespace lfs::vis {
                                ? static_cast<void*>(&atomic_float_features)
                                : static_cast<void*>(&features13);
         features12.timelineSemaphore = VK_TRUE;
-        features12.bufferDeviceAddress = VK_TRUE;
         features12.shaderFloat16 = supported_features12.shaderFloat16;
-        // Descriptor indexing (bindless). Required for the descriptor-indexing
-        // path used by RmlUi + viewport scene/grid bindings (Phase 3 P8).
-        // All four are widely supported on NVIDIA and AMD desktop drivers; we
-        // mirror device-reported support and let pickPhysicalDevice gate the
-        // mandatory subset via hasRequiredFeatures.
-        features12.descriptorIndexing = supported_features12.descriptorIndexing;
-        features12.shaderSampledImageArrayNonUniformIndexing =
-            supported_features12.shaderSampledImageArrayNonUniformIndexing;
-        features12.shaderStorageBufferArrayNonUniformIndexing =
-            supported_features12.shaderStorageBufferArrayNonUniformIndexing;
-        features12.descriptorBindingPartiallyBound =
-            supported_features12.descriptorBindingPartiallyBound;
-        features12.descriptorBindingSampledImageUpdateAfterBind =
-            supported_features12.descriptorBindingSampledImageUpdateAfterBind;
-        features12.descriptorBindingUpdateUnusedWhilePending =
-            supported_features12.descriptorBindingUpdateUnusedWhilePending;
-        features12.descriptorBindingVariableDescriptorCount =
-            supported_features12.descriptorBindingVariableDescriptorCount;
-        features12.runtimeDescriptorArray = supported_features12.runtimeDescriptorArray;
 
-        // Optional modernization features. Each is enabled only when both the
-        // extension was loaded AND the device reported the feature supported.
-        // Each struct is prepended to the features12 pNext chain so the existing
-        // chain order (subgroup_size_control / atomic_float / features13) stays
-        // unchanged.
+        // Optional feature structs are prepended to the Vulkan 1.2 chain.
         void* enabled_chain_head = features12.pNext;
-
-        VkPhysicalDeviceShaderObjectFeaturesEXT shader_object_features{};
-        shader_object_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_OBJECT_FEATURES_EXT;
-        const bool enable_shader_object_feature =
-            enable_shader_object && supported_shader_object.shaderObject == VK_TRUE;
-        if (enable_shader_object_feature) {
-            shader_object_features.shaderObject = VK_TRUE;
-            shader_object_features.pNext = enabled_chain_head;
-            enabled_chain_head = &shader_object_features;
-        }
-
-        VkPhysicalDeviceExtendedDynamicState3FeaturesEXT eds3_features{};
-        eds3_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_3_FEATURES_EXT;
-        const bool enable_eds3_feature =
-            enable_extended_dynamic_state3 &&
-            (supported_eds3.extendedDynamicState3ColorBlendEnable == VK_TRUE ||
-             supported_eds3.extendedDynamicState3ColorBlendEquation == VK_TRUE ||
-             supported_eds3.extendedDynamicState3ColorWriteMask == VK_TRUE);
-        if (enable_eds3_feature) {
-            eds3_features.extendedDynamicState3ColorBlendEnable =
-                supported_eds3.extendedDynamicState3ColorBlendEnable;
-            eds3_features.extendedDynamicState3ColorBlendEquation =
-                supported_eds3.extendedDynamicState3ColorBlendEquation;
-            eds3_features.extendedDynamicState3ColorWriteMask =
-                supported_eds3.extendedDynamicState3ColorWriteMask;
-            eds3_features.pNext = enabled_chain_head;
-            enabled_chain_head = &eds3_features;
-        }
-
-        VkPhysicalDeviceCooperativeMatrixFeaturesKHR coop_matrix_features{};
-        coop_matrix_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR;
-        const bool enable_coop_matrix_feature =
-            enable_cooperative_matrix && supported_coop_matrix.cooperativeMatrix == VK_TRUE;
-        if (enable_coop_matrix_feature) {
-            coop_matrix_features.cooperativeMatrix = VK_TRUE;
-            coop_matrix_features.cooperativeMatrixRobustBufferAccess =
-                supported_coop_matrix.cooperativeMatrixRobustBufferAccess;
-            coop_matrix_features.pNext = enabled_chain_head;
-            enabled_chain_head = &coop_matrix_features;
-        }
 
         VkPhysicalDeviceHostImageCopyFeaturesEXT host_image_copy_features{};
         host_image_copy_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_FEATURES_EXT;
@@ -1963,13 +1860,9 @@ namespace lfs::vis {
         external_memory_dedicated_allocation_enabled_ = enable_dedicated_allocation;
         swapchain_maintenance1_enabled_ = enable_swapchain_maintenance1;
         has_push_descriptor_ = enable_push_descriptor;
-        has_shader_object_ = enable_shader_object_feature;
         has_float16_storage_ = features12.shaderFloat16 == VK_TRUE &&
                                features11.storageBuffer16BitAccess == VK_TRUE;
-        has_extended_dynamic_state3_ = enable_eds3_feature;
-        has_cooperative_matrix_ = enable_coop_matrix_feature;
         has_host_image_copy_ = enable_host_image_copy_feature;
-        has_descriptor_indexing_ = supported_features12.descriptorIndexing == VK_TRUE;
         if (!external_memory_interop_enabled_) {
             return fail("Vulkan external memory interop is required (KHR_external_memory + platform variant); device is missing the extension(s)");
         }
@@ -1979,12 +1872,8 @@ namespace lfs::vis {
         LOG_INFO("Vulkan external memory interop enabled{}",
                  external_memory_dedicated_allocation_enabled_ ? " with dedicated allocations" : "");
         LOG_INFO("Vulkan external timeline semaphore interop enabled");
-        LOG_INFO("Vulkan optional features: descriptor_indexing={} push_descriptor={} shader_object={} extended_dynamic_state3={} cooperative_matrix={} host_image_copy={} swapchain_maintenance1={}",
-                 has_descriptor_indexing_,
+        LOG_INFO("Vulkan optional features: push_descriptor={} host_image_copy={} swapchain_maintenance1={}",
                  has_push_descriptor_,
-                 has_shader_object_,
-                 has_extended_dynamic_state3_,
-                 has_cooperative_matrix_,
                  has_host_image_copy_,
                  swapchain_maintenance1_enabled_);
         return true;
@@ -1996,8 +1885,7 @@ namespace lfs::vis {
         }
 
         VmaAllocatorCreateInfo create_info{};
-        create_info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT |
-                            VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
+        create_info.flags = VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
         create_info.physicalDevice = physical_device_;
         create_info.device = device_;
         create_info.instance = instance_;
