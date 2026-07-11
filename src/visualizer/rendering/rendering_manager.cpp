@@ -338,17 +338,24 @@ namespace lfs::vis {
         frame_lifecycle_service_.resetModelTracking();
     }
 
-    void RenderingManager::releaseSceneRenderResources() {
-        viewport_artifact_service_.clearViewportOutput();
+    void RenderingManager::clearVulkanViewportImageState(const glm::ivec2 size,
+                                                         const bool flip_y) {
         vulkan_viewport_image_.reset();
-        vulkan_viewport_image_generation_ = 0;
         vulkan_external_viewport_image_ = VK_NULL_HANDLE;
         vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
         vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
         vulkan_external_viewport_image_generation_ = 0;
+        vulkan_viewport_image_size_ = size;
+        vulkan_viewport_image_flip_y_ = flip_y;
+        vulkan_gt_comparison_content_size_ = {0, 0};
+    }
+
+    void RenderingManager::releaseSceneRenderResources() {
+        viewport_artifact_service_.clearViewportOutput();
+        gt_comparison_image_cache_ = {};
+        clearVulkanViewportImageState();
+        vulkan_viewport_image_generation_ = 0;
         split_view_image_generation_ = 0;
-        vulkan_viewport_image_size_ = {0, 0};
-        vulkan_viewport_image_flip_y_ = false;
 
         clearVulkanMeshFrame();
 

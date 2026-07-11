@@ -224,6 +224,7 @@ namespace lfs::vis {
             bool force_input_upload);
 
         void releasePreviewResources();
+        void releaseSplitOutputResources();
         void releaseSceneResources();
         void reset();
         [[nodiscard]] std::optional<LodPageCache::Snapshot> ensureLodPageCacheSnapshot(
@@ -452,6 +453,9 @@ namespace lfs::vis {
         // readOutputImage / sampleDepthAtPixel instead of allocating a fresh pool/fence
         // per call. Torn down in reset() while the device is still valid.
         [[nodiscard]] std::expected<void, std::string> ensureReadbackContext() const;
+        [[nodiscard]] std::expected<void, std::string> ensureReadbackStagingBuffer(
+            VulkanContext& context,
+            VkDeviceSize required_bytes) const;
         [[nodiscard]] std::expected<glm::ivec2, std::string> latestOutputImageSize(OutputSlot output_slot) const;
 
         VulkanContext* context_ = nullptr;
@@ -462,6 +466,10 @@ namespace lfs::vis {
         mutable VkCommandPool readback_pool_ = VK_NULL_HANDLE;
         mutable VkCommandBuffer readback_cmd_ = VK_NULL_HANDLE;
         mutable VkFence readback_fence_ = VK_NULL_HANDLE;
+        mutable VkBuffer readback_staging_buffer_ = VK_NULL_HANDLE;
+        mutable VmaAllocation readback_staging_allocation_ = VK_NULL_HANDLE;
+        mutable VmaAllocationInfo readback_staging_info_{};
+        mutable VkDeviceSize readback_staging_capacity_ = 0;
         VulkanGSRenderer renderer_;
         VulkanGSPipelineBuffers buffers_;
         struct LodUploadSignature {

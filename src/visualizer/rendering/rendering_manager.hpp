@@ -569,6 +569,7 @@ namespace lfs::vis {
         [[nodiscard]] static PreviewImageReadbackConfig previewImageReadbackConfig(
             PreviewImageReadback readback,
             bool has_background_color_override);
+        void clearVulkanViewportImageState(glm::ivec2 size = {0, 0}, bool flip_y = false);
 
         std::shared_ptr<lfs::core::Tensor> renderPreviewImageWithState(
             SceneManager* scene_manager,
@@ -710,6 +711,14 @@ namespace lfs::vis {
         glm::ivec2 vulkan_viewport_image_size_{0, 0};
         bool vulkan_viewport_image_flip_y_ = false;
         glm::ivec2 vulkan_gt_comparison_content_size_{0, 0};
+        struct GTComparisonImageCache {
+            int camera_uid = -1;
+            int render_width = 0;
+            bool undistort_requested = false;
+            std::filesystem::path image_path;
+            std::shared_ptr<lfs::core::Tensor> image;
+            glm::ivec2 image_size{0, 0};
+        } gt_comparison_image_cache_;
         TrainerManager* resize_training_pause_trainer_ = nullptr;
         bool resize_training_pause_active_ = false;
 
