@@ -36,7 +36,7 @@ namespace lfs::vis::gui {
                 return i;
         }
 
-        int lru = 0;
+        int lru = -1;
         uint32_t oldest = std::numeric_limits<uint32_t>::max();
         for (int i = 0; i < MAX_SLOTS; ++i) {
             if (claimed_slots[i])
@@ -45,6 +45,9 @@ namespace lfs::vis::gui {
                 oldest = slots_[i].frame_used;
                 lru = i;
             }
+        }
+        if (lru < 0) {
+            return -1;
         }
         slots_[lru].valid = false;
         return lru;
@@ -98,7 +101,9 @@ namespace lfs::vis::gui {
 
         const float thumb_display_h = STRIP_HEIGHT - THUMB_PADDING * 2.0f;
         const float base_thumb_w = thumb_display_h * (static_cast<float>(THUMB_WIDTH) / static_cast<float>(THUMB_HEIGHT));
-        const int num_thumbs = sequencer_ui::thumbnailCount(timeline_width, base_thumb_w, zoom_level);
+        const int num_thumbs = std::min(
+            MAX_SLOTS,
+            sequencer_ui::thumbnailCount(timeline_width, base_thumb_w, zoom_level));
         const float groove_min_y = strip_y + THUMB_PADDING;
         const float groove_max_y = strip_y + STRIP_HEIGHT - THUMB_PADDING;
 
@@ -264,6 +269,9 @@ namespace lfs::vis::gui {
                 }
                 if (slot < 0) {
                     slot = allocateSlot(claimed_slots);
+                    if (slot < 0) {
+                        continue;
+                    }
                     if (request.visible_index >= 0 &&
                         static_cast<size_t>(request.visible_index) < visible_slot_assignments_.size()) {
                         visible_slot_assignments_[static_cast<size_t>(request.visible_index)] = slot;
