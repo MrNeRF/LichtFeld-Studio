@@ -504,6 +504,14 @@ namespace lfs::vis {
             if (p.cmd != VK_NULL_HANDLE && p.fence != VK_NULL_HANDLE) {
                 return true;
             }
+            if (p.cmd != VK_NULL_HANDLE) {
+                vkFreeCommandBuffers(device, transfer_pool, 1, &p.cmd);
+                p.cmd = VK_NULL_HANDLE;
+            }
+            if (p.fence != VK_NULL_HANDLE) {
+                vkDestroyFence(device, p.fence, nullptr);
+                p.fence = VK_NULL_HANDLE;
+            }
             VkCommandBufferAllocateInfo a{};
             a.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
             a.commandPool = transfer_pool;
@@ -516,7 +524,12 @@ namespace lfs::vis {
             fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
             // Created signaled so the first vkWaitForFences before recording is a no-op.
             fi.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-            return vkCreateFence(device, &fi, nullptr, &p.fence) == VK_SUCCESS;
+            if (vkCreateFence(device, &fi, nullptr, &p.fence) != VK_SUCCESS) {
+                vkFreeCommandBuffers(device, transfer_pool, 1, &p.cmd);
+                p.cmd = VK_NULL_HANDLE;
+                return false;
+            }
+            return true;
         }
 
         bool replacePanelFenceSignaled(PanelImage& panel,
@@ -627,12 +640,16 @@ namespace lfs::vis {
                 return false;
             }
             std::memcpy(panel.staging_mapped, panel.pack_bytes.data(), static_cast<std::size_t>(bytes));
-            vmaFlushAllocation(allocator, panel.staging_alloc, 0, bytes);
+            VkResult result = vmaFlushAllocation(allocator, panel.staging_alloc, 0, bytes);
+            if (result != VK_SUCCESS) {
+                LOG_ERROR("VulkanSplitViewPass: panel staging flush failed: {}", static_cast<int>(result));
+                return false;
+            }
 
             // Wait for any prior submit on this command buffer before re-recording. The fence is
             // created signaled, so the first upload does not block.
-            VkResult result = vkWaitForFences(device, 1, &panel.fence, VK_TRUE,
-                                              std::numeric_limits<std::uint64_t>::max());
+            result = vkWaitForFences(device, 1, &panel.fence, VK_TRUE,
+                                     std::numeric_limits<std::uint64_t>::max());
             if (result != VK_SUCCESS) {
                 LOG_ERROR("VulkanSplitViewPass: prior panel transfer wait failed: {}",
                           static_cast<int>(result));

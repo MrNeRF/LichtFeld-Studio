@@ -349,9 +349,9 @@ namespace lfs::vis::gui {
                 return false;
             }
             std::memcpy(mapped, source, static_cast<std::size_t>(size));
-            vmaFlushAllocation(allocator, allocation, 0, size);
+            const VkResult flush_result = vmaFlushAllocation(allocator, allocation, 0, size);
             vmaUnmapMemory(allocator, allocation);
-            return true;
+            return flush_result == VK_SUCCESS;
         }
 
         [[nodiscard]] VkCommandBuffer beginSingleTimeCommands() const {

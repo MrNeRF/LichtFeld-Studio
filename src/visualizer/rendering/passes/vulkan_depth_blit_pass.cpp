@@ -193,6 +193,14 @@ namespace lfs::vis {
             if (transfer_cmd != VK_NULL_HANDLE && transfer_fence != VK_NULL_HANDLE) {
                 return true;
             }
+            if (transfer_cmd != VK_NULL_HANDLE) {
+                vkFreeCommandBuffers(device, transfer_pool, 1, &transfer_cmd);
+                transfer_cmd = VK_NULL_HANDLE;
+            }
+            if (transfer_fence != VK_NULL_HANDLE) {
+                vkDestroyFence(device, transfer_fence, nullptr);
+                transfer_fence = VK_NULL_HANDLE;
+            }
             VkCommandBufferAllocateInfo a{};
             a.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
             a.commandPool = transfer_pool;
@@ -204,7 +212,12 @@ namespace lfs::vis {
             VkFenceCreateInfo fi{};
             fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
             fi.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-            return vkCreateFence(device, &fi, nullptr, &transfer_fence) == VK_SUCCESS;
+            if (vkCreateFence(device, &fi, nullptr, &transfer_fence) != VK_SUCCESS) {
+                vkFreeCommandBuffers(device, transfer_pool, 1, &transfer_cmd);
+                transfer_cmd = VK_NULL_HANDLE;
+                return false;
+            }
+            return true;
         }
 
         bool replaceTransferFenceSignaled(const char* const failed_operation,
@@ -527,12 +540,16 @@ namespace lfs::vis {
 
             const auto host = depth.to(lfs::core::Device::CPU).contiguous();
             std::memcpy(staging_mapped, host.ptr<float>(), static_cast<std::size_t>(bytes));
-            vmaFlushAllocation(allocator, staging_alloc, 0, bytes);
+            VkResult result = vmaFlushAllocation(allocator, staging_alloc, 0, bytes);
+            if (result != VK_SUCCESS) {
+                LOG_ERROR("VulkanDepthBlitPass: staging flush failed: {}", static_cast<int>(result));
+                return false;
+            }
 
             // Wait for any prior submit on this transfer CB before re-recording.
             // Fence is created signaled, so first frame is a no-op.
-            VkResult result = vkWaitForFences(device, 1, &transfer_fence, VK_TRUE,
-                                              std::numeric_limits<std::uint64_t>::max());
+            result = vkWaitForFences(device, 1, &transfer_fence, VK_TRUE,
+                                     std::numeric_limits<std::uint64_t>::max());
             if (result != VK_SUCCESS) {
                 LOG_ERROR("VulkanDepthBlitPass: prior transfer wait failed: {}",
                           static_cast<int>(result));

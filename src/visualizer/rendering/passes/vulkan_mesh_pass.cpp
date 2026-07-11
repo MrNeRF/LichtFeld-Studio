@@ -531,9 +531,9 @@ namespace lfs::vis {
                 return false;
             }
             std::memcpy(mapped, src, bytes);
-            vmaFlushAllocation(allocator, alloc, 0, bytes);
+            const VkResult flush_result = vmaFlushAllocation(allocator, alloc, 0, bytes);
             vmaUnmapMemory(allocator, alloc);
-            return true;
+            return flush_result == VK_SUCCESS;
         }
 
         bool allocateMaterialDescriptor(GpuMaterial& material) {
@@ -713,8 +713,13 @@ namespace lfs::vis {
                 return false;
             }
             std::memcpy(mapped, rgba, static_cast<std::size_t>(bytes));
-            vmaFlushAllocation(allocator, staging_alloc, 0, bytes);
+            const VkResult flush_result = vmaFlushAllocation(allocator, staging_alloc, 0, bytes);
             vmaUnmapMemory(allocator, staging_alloc);
+            if (flush_result != VK_SUCCESS) {
+                vmaDestroyBuffer(allocator, staging, staging_alloc);
+                destroyTexture(out);
+                return false;
+            }
 
             VkCommandBuffer cb = beginSingleTimeCommands();
             if (cb == VK_NULL_HANDLE) {

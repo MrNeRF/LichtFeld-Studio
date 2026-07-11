@@ -539,8 +539,13 @@ namespace lfs::vis {
                 return false;
             }
             std::memcpy(mapped, rgba.data(), static_cast<std::size_t>(bytes));
-            vmaFlushAllocation(allocator, staging_alloc, 0, bytes);
+            const VkResult flush_result = vmaFlushAllocation(allocator, staging_alloc, 0, bytes);
             vmaUnmapMemory(allocator, staging_alloc);
+            if (flush_result != VK_SUCCESS) {
+                vmaDestroyBuffer(allocator, staging, staging_alloc);
+                destroyImage();
+                return false;
+            }
 
             VkCommandBuffer cb = beginCmds();
             if (cb == VK_NULL_HANDLE) {

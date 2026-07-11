@@ -163,7 +163,10 @@ namespace lfs::vis {
             staging_scratch.size = bytes;
             staging_scratch.usage = bi.usage;
             std::memcpy(info.pMappedData, src, bytes);
-            vmaFlushAllocation(allocator, staging_scratch.allocation, 0, bytes);
+            if (vmaFlushAllocation(allocator, staging_scratch.allocation, 0, bytes) != VK_SUCCESS) {
+                destroyBuffer(allocator, staging_scratch);
+                return false;
+            }
 
             VkBufferCopy region{};
             region.size = bytes;
