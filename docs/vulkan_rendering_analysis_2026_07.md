@@ -770,3 +770,54 @@ Marker: `VULKAN-BONUS2-STREAMS-MEMORY-2026-07-11`.
 - Every post-commit section 7 focused-filter run remained **52/55**, with only the three baseline `ViewportFrameLifecycleServiceTest` failures and their unchanged dirty `16` versus `9`/incomplete-deferral signatures.
 - The additional environment-composite gate passed **4/4** (`ExportEnvCompositeTest.*`) from the build working directory.
 - No tests were added or modified. No GUI or long GPU run was launched. Bidirectional image handoff, resize churn, validation layers, live-training overlap, PPISP/export stream behavior, and async-preview burst behavior remain explicit attended runtime gates.
+
+## Assert hardening round
+
+Marker: `VULKAN-ASSERT-HARDENING-2026-07-11`.
+
+### Vocabulary and enforced contracts
+
+- Rasterizer `_THROW_ERROR`, `_THROW_ERROR_ALWAYS`, and `_CHECK_FATAL` remain always-on. `LFS_VK_DEBUG_ASSERT(condition, fmt, ...)` now protects per-element and other hot invariants only in non-`NDEBUG` builds; release preprocessing removes both the condition and all formatting arguments.
+- Visualizer `LFS_VK_CHECK(expr)` and `LFS_VK_CHECK_MSG(expr, fmt, ...)` evaluate a `VkResult` exactly once, report the expression, symbolic and numeric result, observed context, and source location, then use the caller's existing bool/`lastError()` failure route. The remaining direct-result paths use the same formatter. The scoped raw C/C++ `assert(...)` count is now zero.
+- Always-on contracts cover frame begin/end/present order, command-batch begin/record/submit/cancel order, every frame-slot and swapchain-image array boundary, retirement before destruction, descriptor-ring consistency, submit array/count agreement, command-buffer/fence validity, buffer ranges and alignments, dispatch limits, the two-word indirect-count allocation and `INT32_MAX` capacity bound, CUDA/Vulkan UUID and allocation-size agreement, external handles, required streams, and strictly increasing timeline values on Vulkan and CUDA wait/signal edges.
+- Debug-only contracts cover barrier-tracker ownership, timestamp/query bounds, mapped-buffer ranges, mesh/VkSplat retirement, packing layouts, pass-graph state, pass preconditions, and ring-slot access. No per-splat or per-pixel release check was added.
+- `LFS_VK_VALIDATION_FATAL=1` makes a validation-layer ERROR log the driver message at critical severity and abort. It is off by default and has no effect when validation is inactive. Vulkan startup now logs `validation_layers`, `debug_utils`, and `validation_errors_fatal` as active or inactive.
+
+### Static coverage counts
+
+These are final scoped source call sites, not line counts. Formatter-helper definitions are excluded; indexed naming sites count once even though they name every runtime ring member.
+
+| Area | Always-on check/failure sites | Debug-only asserts |
+|---|---:|---:|
+| Rasterizer Vulkan | 98 `_THROW_ERROR`/`_CHECK_FATAL` sites | 4 |
+| `VulkanContext` / window | 123 source-located `fail` exits, including 13 standardized `VkResult` formatter sites | 1 |
+| Visualizer Vulkan rendering | 187 standardized `VkResult` sites: 49 macro, 77 direct formatter, 61 renderer-helper | 26 |
+| CUDA/Vulkan bridge | 36 source-located interop `fail` exits; interop boundary checks are deliberately always-on | 0 |
+| **Debug total** | — | **31** |
+
+Additional bool/`std::expected` boundary guards in the rendering passes and external-tensor allocator are not folded into the `VkResult` number because they do not share one syntactic failure helper. A direct-call audit found no ignored `VkResult` return in scope.
+
+### Debug-utils object names
+
+There are **181 concrete naming call sites**. Coverage by Vulkan object type is: 30 buffers; 16 images; 16 image views; 14 fences; 12 descriptor sets; 12 descriptor-set layouts; 11 pipelines; 10 pipeline layouts; 10 descriptor pools; 10 command pools; 10 command buffers; 8 semaphores; 7 samplers; 6 device-memory allocations; 3 queues; 2 shader modules; and one each for the device, swapchain, query pool, and pipeline cache. Indexed names cover every swapchain image/view, frame command pool/buffer/fence, descriptor ring member, output image, readback resource, and interop timeline. Examples include `vksplat.output[2].color`, `mesh.shadow.depth[...]`, and `interop.timeline.render`. Formatting is skipped entirely when debug-utils naming is unavailable.
+
+### Real bugs exposed
+
+- **Silent frame-state violation:** `VulkanContext::endFrame()` returned success when no frame was active. It now fails at the boundary with the active/rendering state and frame/image indices, so an omitted or failed `beginFrame()` cannot be hidden (`54dae2936`).
+- **Lost buffer identity during growth:** `resizeAndCopyDeviceBuffer()` failed to transfer `_VulkanBuffer::label` to the replacement allocation. Buffer growth therefore silently dropped stable debug names and VRAM-profiler identity. The label is now copied before allocation (`c08091557`).
+- The final happy-path smoke triggered no invariant, assertion, or validation error. No runtime-only Vulkan defect was exposed by that path.
+
+### Source commits
+
+- `c08091557` — `fix(vulkan): enforce raster and interop invariants`
+- `54dae2936` — `fix(vulkan): enforce visualizer state contracts`
+- `533c4afd8` — `fix(vulkan): make diagnostics self-describing`
+- `c74255b71` — `fix(vulkan): describe remaining debug invariants`
+
+### Gates
+
+- `clang-format -i` was run on every changed C++/header file before its source commit. No test was added or modified.
+- `cmake --build build -j8` passed after every source commit; no build used more than eight jobs. The additional `cmake-build-debug` `lfs_visualizer` target also passed, compiling all debug-only conditions and format arguments.
+- Every post-commit section 7 focused-filter run remained **52/55**. The only failures were the three baseline `ViewportFrameLifecycleServiceTest` resize-deferral cases, with the same dirty `16` versus expected `9` and incomplete-deferral signatures. The pre-existing CUDA-unload teardown diagnostics were unchanged.
+- The exact 1,000-iteration bicycle headless smoke completed successfully in **11.773 s** at **84.9 iter/s**, saved iteration 1,000 with **69,267 splats**, and emitted no assertion, invariant, or validation noise.
+- Static sweeps found zero legacy `assert(...)` calls and no ignored `VkResult` return in the requested scope. `git diff --check` passed. Nothing was pushed and no PR was opened.
