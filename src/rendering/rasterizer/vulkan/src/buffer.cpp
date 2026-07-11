@@ -1,5 +1,6 @@
 #include "diagnostics/vram_profiler.hpp"
 #include "gs_renderer.h"
+#include <limits>
 #include <string>
 
 size_t VulkanGSPipelineBuffers::getTotalOwnedAllocSize() const {
@@ -18,6 +19,7 @@ size_t VulkanGSPipelineBuffers::getTotalOwnedAllocSize() const {
     ADD_OWNED(shN);
     ADD_OWNED(scaling_raw);
     ADD_OWNED(opacity_raw);
+    ADD_OWNED(page_frames);
     ADD_OWNED(tiles_touched);
     ADD_OWNED(rect_tile_space);
     ADD_OWNED(radii);
@@ -36,6 +38,9 @@ size_t VulkanGSPipelineBuffers::getTotalOwnedAllocSize() const {
     ADD_OWNED(lod_gpu_weights);
     ADD_OWNED(lod_gpu_counts);
     ADD_OWNED(lod_chunk_touch);
+    ADD_OWNED(lod_compact_counts);
+    ADD_OWNED(lod_compact_protected);
+    ADD_OWNED(lod_compact_misses);
     ADD_OWNED(lod_gpu_levels);
     ADD_OWNED(primitive_sort_indices);
     ADD_OWNED(tiles_touched_depth_ordered);
@@ -94,6 +99,7 @@ std::map<std::string, size_t> VulkanGSPipelineBuffers::getOwnedVramBreakdown() c
     ADD_OWNED(shN);
     ADD_OWNED(scaling_raw);
     ADD_OWNED(opacity_raw);
+    ADD_OWNED(page_frames);
     ADD_OWNED(tiles_touched);
     ADD_OWNED(rect_tile_space);
     ADD_OWNED(radii);
@@ -112,6 +118,9 @@ std::map<std::string, size_t> VulkanGSPipelineBuffers::getOwnedVramBreakdown() c
     ADD_OWNED(lod_gpu_weights);
     ADD_OWNED(lod_gpu_counts);
     ADD_OWNED(lod_chunk_touch);
+    ADD_OWNED(lod_compact_counts);
+    ADD_OWNED(lod_compact_protected);
+    ADD_OWNED(lod_compact_misses);
     ADD_OWNED(lod_gpu_levels);
     ADD_OWNED(primitive_sort_indices);
     ADD_OWNED(tiles_touched_depth_ordered);
@@ -155,6 +164,13 @@ std::map<std::string, size_t> VulkanGSPipelineBuffers::getOwnedVramBreakdown() c
 }
 
 void VulkanGSPipeline::allocStagingBuffer(size_t size) {
+    if (size == 0) {
+        _THROW_ERROR(std::format(
+            "allocStagingBuffer requires a non-zero allocation (requested_bytes={}, existing_buffer={:#x}, existing_bytes={})",
+            size,
+            lfsVkHandleValue(stager.buffer),
+            stager.allocSize));
+    }
     if (stager.buffer != VK_NULL_HANDLE && stager.allocSize >= size)
         return;
 
@@ -181,16 +197,33 @@ void VulkanGSPipeline::allocStagingBuffer(size_t size) {
     aci.usage = VMA_MEMORY_USAGE_AUTO;
     aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
 
-    if (vmaCreateBuffer(allocator, &staging_info, &aci, &stager.buffer, &stager.allocation, nullptr) != VK_SUCCESS) {
+    const VkResult result = vmaCreateBuffer(
+        allocator, &staging_info, &aci, &stager.buffer, &stager.allocation, nullptr);
+    if (result != VK_SUCCESS) {
         stager.buffer = VK_NULL_HANDLE;
         stager.allocation = VK_NULL_HANDLE;
-        throw std::runtime_error("Failed to allocate staging buffer memory. You are likely running out of RAM.");
+        _THROW_ERROR(std::format(
+            "VkSplat staging-buffer allocation failed (requested_bytes={}, allocator={:#x}, usage={:#x}, result={}({}))",
+            size,
+            lfsVkHandleValue(allocator),
+            static_cast<std::uint32_t>(staging_info.usage),
+            lfsVkResultToString(result),
+            static_cast<int>(result)));
     }
 
     stager.allocSize = size;
+    setDebugObjectName(VK_OBJECT_TYPE_BUFFER, stager.buffer, "vksplat.staging");
 }
 
 void VulkanGSPipeline::createBuffer(size_t size, _VulkanBuffer& buffer) {
+    if (size == 0 || buffer.buffer != VK_NULL_HANDLE || buffer.allocation != VK_NULL_HANDLE) {
+        _THROW_ERROR(std::format(
+            "createBuffer requires a non-zero size and an empty destination (requested_bytes={}, existing_buffer={:#x}, existing_allocation={:#x}, label='{}')",
+            size,
+            lfsVkHandleValue(buffer.buffer),
+            lfsVkHandleValue(buffer.allocation),
+            buffer.label ? buffer.label : "<unlabeled>"));
+    }
     buffer.allocSize = size;
     buffer.size = size;
     buffer.offset = 0;
@@ -207,8 +240,25 @@ void VulkanGSPipeline::createBuffer(size_t size, _VulkanBuffer& buffer) {
     VmaAllocationCreateInfo aci = {};
     aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
 
-    if (vmaCreateBuffer(allocator, &buffer_info, &aci, &buffer.buffer, &buffer.allocation, nullptr) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to allocate buffer memory. You are likely running out of VRAM.");
+    const VkResult result =
+        vmaCreateBuffer(allocator, &buffer_info, &aci, &buffer.buffer, &buffer.allocation, nullptr);
+    if (result != VK_SUCCESS) {
+        buffer.buffer = VK_NULL_HANDLE;
+        buffer.allocation = VK_NULL_HANDLE;
+        _THROW_ERROR(std::format(
+            "VkSplat device-buffer allocation failed (requested_bytes={}, allocator={:#x}, usage={:#x}, label='{}', result={}({}))",
+            size,
+            lfsVkHandleValue(allocator),
+            static_cast<std::uint32_t>(buffer_info.usage),
+            buffer.label ? buffer.label : "<unlabeled>",
+            lfsVkResultToString(result),
+            static_cast<int>(result)));
+    }
+
+    if (buffer.label && vk_set_debug_utils_object_name_ != nullptr) {
+        setDebugObjectName(VK_OBJECT_TYPE_BUFFER,
+                           buffer.buffer,
+                           std::format("vksplat.buffer.{}", buffer.label));
     }
 
     current_vram += size;
@@ -224,13 +274,26 @@ void VulkanGSPipeline::createBuffer(size_t size, _VulkanBuffer& buffer) {
 }
 
 void VulkanGSPipeline::destroyBuffer(_VulkanBuffer& buffer) {
-    if (commandBatchInProgress)
-        _THROW_ERROR("destroyBuffer called when command batch in progress");
+    if (commandBatchInProgress) {
+        _THROW_ERROR(std::format(
+            "destroyBuffer cannot destroy an allocation referenced by an active command batch (batch_active={}, buffer={:#x}, allocation={:#x}, bytes={}, label='{}')",
+            commandBatchInProgress,
+            lfsVkHandleValue(buffer.buffer),
+            lfsVkHandleValue(buffer.allocation),
+            buffer.allocSize,
+            buffer.label ? buffer.label : "<unlabeled>"));
+    }
     if (buffer.buffer != VK_NULL_HANDLE && buffer.allocation != VK_NULL_HANDLE) {
         waitForPendingBatch();
         vmaDestroyBuffer(allocator, buffer.buffer, buffer.allocation);
-        if (current_vram < buffer.allocSize)
-            _THROW_ERROR("Negative VRAM");
+        if (current_vram < buffer.allocSize) {
+            _THROW_ERROR(std::format(
+                "VkSplat VRAM accounting underflowed while destroying a buffer (tracked_bytes={}, buffer_bytes={}, buffer={:#x}, label='{}')",
+                current_vram,
+                buffer.allocSize,
+                lfsVkHandleValue(buffer.buffer),
+                buffer.label ? buffer.label : "<unlabeled>"));
+        }
         current_vram -= buffer.allocSize;
         if (buffer.label) {
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
@@ -261,6 +324,14 @@ void VulkanGSPipeline::resizeDeviceBuffer(_VulkanBuffer& deviceBuffer, size_t ne
 template <typename T>
 _VulkanBuffer& VulkanGSPipeline::resizeDeviceBuffer(Buffer<T>& buffer, size_t new_size, bool no_shrink) {
     auto& deviceBuffer = buffer.deviceBuffer;
+    if (new_size > std::numeric_limits<size_t>::max() / sizeof(T)) {
+        _THROW_ERROR(std::format(
+            "resizeDeviceBuffer element count overflows byte sizing (elements={}, element_bytes={}, max_elements={}, label='{}')",
+            new_size,
+            sizeof(T),
+            std::numeric_limits<size_t>::max() / sizeof(T),
+            deviceBuffer.label ? deviceBuffer.label : "<unlabeled>"));
+    }
     size_t new_byte_size = new_size * sizeof(T);
     resizeDeviceBuffer(deviceBuffer, new_byte_size, no_shrink);
     return deviceBuffer;
@@ -283,6 +354,7 @@ _VulkanBuffer& VulkanGSPipeline::clearDeviceBuffer(Buffer<T>& buffer, size_t new
 
     {
         DEVICE_GUARD;
+        validateFillRange(deviceBuffer, 0, deviceBuffer.size, "clearDeviceBuffer");
         vkCmdFillBuffer(command_buffer, deviceBuffer.buffer, deviceBuffer.offset, deviceBuffer.size, 0);
     }
 
@@ -296,6 +368,14 @@ _VulkanBuffer& VulkanGSPipeline::resizeAndCopyDeviceBuffer(
     bool clear) {
     auto& deviceBuffer = buffer.deviceBuffer;
 
+    if (new_size > std::numeric_limits<size_t>::max() / sizeof(T)) {
+        _THROW_ERROR(std::format(
+            "resizeAndCopyDeviceBuffer element count overflows byte sizing (elements={}, element_bytes={}, max_elements={}, label='{}')",
+            new_size,
+            sizeof(T),
+            std::numeric_limits<size_t>::max() / sizeof(T),
+            deviceBuffer.label ? deviceBuffer.label : "<unlabeled>"));
+    }
     size_t new_byte_size = new_size * sizeof(T);
     size_t old_byte_size = deviceBuffer.size;
 
@@ -312,6 +392,7 @@ _VulkanBuffer& VulkanGSPipeline::resizeAndCopyDeviceBuffer(
                 offset = alignedOffset;
                 size -= prefix;
                 DEVICE_GUARD;
+                validateFillRange(deviceBuffer, offset, size, "resizeAndCopyDeviceBuffer tail clear");
                 vkCmdFillBuffer(command_buffer, deviceBuffer.buffer, deviceBuffer.offset + offset, size, 0u);
                 HOST_GUARD; // will apply fence
             }
@@ -321,6 +402,7 @@ _VulkanBuffer& VulkanGSPipeline::resizeAndCopyDeviceBuffer(
     }
 
     _VulkanBuffer newBuffer;
+    newBuffer.label = deviceBuffer.label;
     try {
         createBuffer(new_byte_size, newBuffer);
     } catch (const std::runtime_error& err) {
@@ -332,6 +414,8 @@ _VulkanBuffer& VulkanGSPipeline::resizeAndCopyDeviceBuffer(
         DEVICE_GUARD;
 
         if (deviceBuffer.buffer != VK_NULL_HANDLE && old_byte_size > 0) {
+            validateBufferRange(deviceBuffer, 0, old_byte_size, "resizeAndCopyDeviceBuffer source copy");
+            validateBufferRange(newBuffer, 0, old_byte_size, "resizeAndCopyDeviceBuffer destination copy");
             VkBufferCopy copyRegion{};
             copyRegion.srcOffset = deviceBuffer.offset;
             copyRegion.dstOffset = 0;
@@ -355,6 +439,7 @@ _VulkanBuffer& VulkanGSPipeline::resizeAndCopyDeviceBuffer(
                 offset = alignedOffset;
                 size -= prefix;
 
+                validateFillRange(newBuffer, offset, size, "resizeAndCopyDeviceBuffer new tail clear");
                 vkCmdFillBuffer(
                     command_buffer,
                     newBuffer.buffer,
@@ -399,6 +484,14 @@ void VulkanGSPipelineBuffers::reorderSH(Buffer<T>& coeffs) {
     // TODO: do this in O(1) additional memory
     std::vector<__m128> sh_copy(sh, sh + n);
     for (size_t i = 0; i < n; i++) {
+        LFS_VK_DEBUG_ASSERT(
+            forwardIndex(i) < n,
+            "SH reorder index must stay inside the packed coefficient array (source_index={}, destination_index={}, packed_count={}, sh_dimension={}, reorder_width={})",
+            i,
+            forwardIndex(i),
+            n,
+            SH_DIM,
+            SH_REORDER_SIZE);
         sh[forwardIndex(i)] = sh_copy[i];
     }
 }
@@ -429,6 +522,14 @@ void VulkanGSPipelineBuffers::undoReorderSH(Buffer<T>& coeffs, size_t num_splats
     // TODO: do this in O(1) additional memory
     std::vector<__m128> sh_copy(sh, sh + n);
     for (size_t i = 0; i < n; i++) {
+        LFS_VK_DEBUG_ASSERT(
+            forwardIndex(i) < n,
+            "SH inverse-reorder index must stay inside the packed coefficient array (destination_index={}, source_index={}, packed_count={}, sh_dimension={}, reorder_width={})",
+            i,
+            forwardIndex(i),
+            n,
+            SH_DIM,
+            SH_REORDER_SIZE);
         sh[i] = sh_copy[forwardIndex(i)];
     }
 

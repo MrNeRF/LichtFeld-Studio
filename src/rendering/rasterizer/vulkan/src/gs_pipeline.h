@@ -10,6 +10,7 @@
 #include <map>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -137,6 +138,8 @@ protected:
         VkPipelineStageFlags stage_mask = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
     };
     std::vector<PendingTimelineWait> pending_timeline_waits_;
+    std::unordered_map<VkSemaphore, std::uint64_t> last_timeline_wait_values_;
+    std::unordered_map<VkSemaphore, std::uint64_t> last_timeline_signal_values_;
 
     static constexpr std::uint32_t kCommandBatchSlotCount = 3;
     struct CommandBatchSlot {
@@ -165,6 +168,7 @@ protected:
     // VK_NULL_HANDLE simply skips the cache. Shared with the rest of the app's pipelines.
     VkPipelineCache pipeline_cache = VK_NULL_HANDLE;
     PFN_vkCmdPushDescriptorSetKHR vk_cmd_push_descriptor_set_ = nullptr;
+    PFN_vkSetDebugUtilsObjectNameEXT vk_set_debug_utils_object_name_ = nullptr;
 
     struct DeviceInfo {
         uint32_t subgroupSize;
@@ -186,6 +190,7 @@ protected:
         VkPipelineLayout pipeline_layout;
         VkPipeline pipeline;
         std::vector<int> buffer_layouts;
+        std::string diagnostic_name;
 
         _ComputePipeline(
             std::vector<int> buffer_layouts) : shader(VK_NULL_HANDLE),
@@ -235,6 +240,22 @@ protected:
     void waitForPendingBatchSlot(CommandBatchSlot& slot);
     void collectTimestampResults(CommandBatchSlot& slot, std::uint32_t timestamp_count);
     void createShaderModule(const std::vector<uint32_t>& spirv_code, VkShaderModule* pShaderModule);
+    void validateBufferRange(const _VulkanBuffer& buffer,
+                             VkDeviceSize relative_offset,
+                             VkDeviceSize size,
+                             std::string_view operation) const;
+    void validateFillRange(const _VulkanBuffer& buffer,
+                           VkDeviceSize relative_offset,
+                           VkDeviceSize size,
+                           std::string_view operation) const;
+    void setDebugObjectName(VkObjectType type, std::uint64_t handle, std::string_view name) const;
+
+    template <typename VkHandle>
+    void setDebugObjectName(const VkObjectType type,
+                            const VkHandle handle,
+                            const std::string_view name) const {
+        setDebugObjectName(type, lfsVkHandleValue(handle), name);
+    }
 
     void createComputeDescriptorSetLayout(_ComputePipeline& pipeline);
     void createComputePipeline(_ComputePipeline& pipeline, const std::string& spirv_path, uint32_t min_shared_memory = 0, bool compatible_subgroup_size = true);
@@ -303,7 +324,11 @@ public:
                 printf("DeviceGuard freed: %s:%d\n", debugInfo1, debugInfo2);
             }
         } else if (cbip != pipeline->isCommandBatchInProgress()) {
-            _THROW_ERROR("commandBatchInProgress changed during DeviceGuard");
+            _THROW_ERROR(std::format(
+                "DeviceGuard batch lifecycle changed unexpectedly (batch_was_active={}, batch_is_active={}, guard_started_batch={})",
+                cbip,
+                pipeline->isCommandBatchInProgress(),
+                !cbip));
         }
     }
 };
@@ -341,7 +366,11 @@ public:
             }
         } else if (cbip != pipeline->isCommandBatchInProgress()) {
             pipeline->cancelCommandBatch();
-            _THROW_ERROR("commandBatchInProgress changed during HostGuard");
+            _THROW_ERROR(std::format(
+                "HostGuard batch lifecycle changed unexpectedly (batch_was_active={}, batch_is_active={}, guard_paused_batch={})",
+                cbip,
+                pipeline->isCommandBatchInProgress(),
+                cbip));
         }
     }
 };

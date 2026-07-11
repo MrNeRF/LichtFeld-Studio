@@ -62,6 +62,15 @@ void VulkanGSRenderer::tagDeferredVisibleCountReadback(const VkSemaphore semapho
     // whenever rendering is continuous, and the stats starve.
     if (visible_count_readback_pending_ &&
         visible_count_readback_signal_ == VK_NULL_HANDLE) {
+        if (semaphore == VK_NULL_HANDLE || value == 0) {
+            _THROW_ERROR(std::format(
+                "Visible-count readback requires a valid completion timeline tag (semaphore={:#x}, value={}, pending={}, prior_semaphore={:#x}, prior_value={})",
+                lfsVkHandleValue(semaphore),
+                value,
+                visible_count_readback_pending_,
+                lfsVkHandleValue(visible_count_readback_signal_),
+                visible_count_readback_value_));
+        }
         visible_count_readback_signal_ = semaphore;
         visible_count_readback_value_ = value;
     }
@@ -70,6 +79,15 @@ void VulkanGSRenderer::tagDeferredVisibleCountReadback(const VkSemaphore semapho
 void VulkanGSRenderer::tagDeferredLodSelectionReadback(const VkSemaphore semaphore,
                                                        const std::uint64_t value) {
     if (lod_selection_readback_pending_) {
+        if (semaphore == VK_NULL_HANDLE || value == 0) {
+            _THROW_ERROR(std::format(
+                "LOD-selection readback requires a valid completion timeline tag (semaphore={:#x}, value={}, pending={}, prior_semaphore={:#x}, prior_value={})",
+                lfsVkHandleValue(semaphore),
+                value,
+                lod_selection_readback_pending_,
+                lfsVkHandleValue(lod_selection_readback_signal_),
+                lod_selection_readback_value_));
+        }
         lod_selection_readback_signal_ = semaphore;
         lod_selection_readback_value_ = value;
     }
@@ -79,6 +97,15 @@ void VulkanGSRenderer::tagDeferredInstanceCountReadback(const VkSemaphore semaph
                                                         const std::uint64_t value) {
     if (instance_count_readback_pending_ &&
         instance_count_readback_signal_ == VK_NULL_HANDLE) {
+        if (semaphore == VK_NULL_HANDLE || value == 0) {
+            _THROW_ERROR(std::format(
+                "Tile-instance readback requires a valid completion timeline tag (semaphore={:#x}, value={}, pending={}, prior_semaphore={:#x}, prior_value={})",
+                lfsVkHandleValue(semaphore),
+                value,
+                instance_count_readback_pending_,
+                lfsVkHandleValue(instance_count_readback_signal_),
+                instance_count_readback_value_));
+        }
         instance_count_readback_signal_ = semaphore;
         instance_count_readback_value_ = value;
     }
@@ -100,21 +127,43 @@ void VulkanGSRenderer::ensureInstanceCountReadback() {
                 VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
     VmaAllocationInfo alloc_info{};
-    if (vmaCreateBuffer(allocator, &info, &aci,
-                        &instance_count_readback_buffer_.buffer,
-                        &instance_count_readback_buffer_.allocation,
-                        &alloc_info) != VK_SUCCESS) {
+    instance_count_readback_buffer_.label = "instance_count_readback";
+    const VkResult create_result = vmaCreateBuffer(allocator, &info, &aci,
+                                                   &instance_count_readback_buffer_.buffer,
+                                                   &instance_count_readback_buffer_.allocation,
+                                                   &alloc_info);
+    if (create_result != VK_SUCCESS) {
         instance_count_readback_buffer_.buffer = VK_NULL_HANDLE;
         instance_count_readback_buffer_.allocation = VK_NULL_HANDLE;
-        _CHECK_FATAL("Failed to allocate instance_count readback buffer");
+        _CHECK_FATAL(std::format(
+            "Tile-instance readback buffer allocation failed (requested_bytes={}, allocator={:#x}, result={}({}))",
+            info.size,
+            lfsVkHandleValue(allocator),
+            lfsVkResultToString(create_result),
+            static_cast<int>(create_result)));
     }
     instance_count_readback_buffer_.allocSize = 2 * sizeof(uint32_t);
     instance_count_readback_buffer_.size = 2 * sizeof(uint32_t);
     instance_count_readback_mapped_ = static_cast<uint32_t*>(alloc_info.pMappedData);
-    if (instance_count_readback_mapped_) {
-        instance_count_readback_mapped_[0] = 0;
-        instance_count_readback_mapped_[1] = 0;
+    if (instance_count_readback_mapped_ == nullptr) {
+        const VkBuffer failed_buffer = instance_count_readback_buffer_.buffer;
+        const VmaAllocation failed_allocation = instance_count_readback_buffer_.allocation;
+        vmaDestroyBuffer(allocator,
+                         failed_buffer,
+                         failed_allocation);
+        instance_count_readback_buffer_ = {};
+        _CHECK_FATAL(std::format(
+            "Tile-instance readback allocation was not persistently mapped (requested_bytes={}, buffer={:#x}, allocation={:#x}, mapped_pointer={:#x})",
+            info.size,
+            lfsVkHandleValue(failed_buffer),
+            lfsVkHandleValue(failed_allocation),
+            lfsVkHandleValue(instance_count_readback_mapped_)));
     }
+    instance_count_readback_mapped_[0] = 0;
+    instance_count_readback_mapped_[1] = 0;
+    setDebugObjectName(VK_OBJECT_TYPE_BUFFER,
+                       instance_count_readback_buffer_.buffer,
+                       "vksplat.readback.tile_instance_count");
     instance_count_readback_initialized_ = true;
     instance_count_readback_pending_ = false;
     instance_count_readback_signal_ = VK_NULL_HANDLE;
@@ -139,8 +188,17 @@ void VulkanGSRenderer::destroyInstanceCountReadback() {
 
 void VulkanGSRenderer::recordInstanceCountReadback(VulkanGSPipelineBuffers& buffers) {
     ensureInstanceCountReadback();
-    if (buffers.tile_sort_count.deviceBuffer.buffer == VK_NULL_HANDLE)
-        return;
+    const auto& count_buffer = buffers.tile_sort_count.deviceBuffer;
+    if (count_buffer.buffer == VK_NULL_HANDLE ||
+        count_buffer.size != 2 * sizeof(uint32_t)) {
+        _THROW_ERROR(std::format(
+            "Tile-instance readback requires the indirect-count buffer's two-word contract (buffer={:#x}, offset={}, active_bytes={}, allocation_bytes={}, required_bytes={})",
+            lfsVkHandleValue(count_buffer.buffer),
+            count_buffer.offset,
+            count_buffer.size,
+            count_buffer.allocSize,
+            2 * sizeof(uint32_t)));
+    }
     // Never stomp an in-flight tagged copy: with the GPU a frame behind, the
     // re-record would reset the tag every frame and the stats would starve.
     if (instance_count_readback_pending_ &&
@@ -151,6 +209,8 @@ void VulkanGSRenderer::recordInstanceCountReadback(VulkanGSPipelineBuffers& buff
     copy.srcOffset = buffers.tile_sort_count.deviceBuffer.offset;
     copy.dstOffset = 0;
     copy.size = 2 * sizeof(uint32_t);
+    validateBufferRange(count_buffer, 0, copy.size, "tile-instance count readback source");
+    validateBufferRange(instance_count_readback_buffer_, 0, copy.size, "tile-instance count readback destination");
     vkCmdCopyBuffer(command_buffer,
                     buffers.tile_sort_count.deviceBuffer.buffer,
                     instance_count_readback_buffer_.buffer,
@@ -187,8 +247,15 @@ VulkanGSRenderer::pollDeferredTileInstanceStats() {
 bool VulkanGSRenderer::shrinkSortBuffersForCapacity(VulkanGSPipelineBuffers& buffers,
                                                     size_t target_capacity,
                                                     size_t visible_capacity) {
-    if (commandBatchInProgress)
-        _THROW_ERROR("shrinkSortBuffersForCapacity called while command batch is active");
+    if (commandBatchInProgress) {
+        _THROW_ERROR(std::format(
+            "shrinkSortBuffersForCapacity cannot retire buffers during an active batch (batch_active={}, target_capacity={}, visible_capacity={}, num_splats={}, current_index_capacity={})",
+            commandBatchInProgress,
+            target_capacity,
+            visible_capacity,
+            buffers.num_splats,
+            buffers.num_indices_high_water));
+    }
     if (buffers.num_splats == 0)
         return false;
 
@@ -249,21 +316,41 @@ void VulkanGSRenderer::ensureVisibleCountReadback() {
                 VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
     VmaAllocationInfo alloc_info{};
-    if (vmaCreateBuffer(allocator, &info, &aci,
-                        &visible_count_readback_buffer_.buffer,
-                        &visible_count_readback_buffer_.allocation,
-                        &alloc_info) != VK_SUCCESS) {
+    visible_count_readback_buffer_.label = "visible_count_readback";
+    const VkResult create_result = vmaCreateBuffer(allocator, &info, &aci,
+                                                   &visible_count_readback_buffer_.buffer,
+                                                   &visible_count_readback_buffer_.allocation,
+                                                   &alloc_info);
+    if (create_result != VK_SUCCESS) {
         visible_count_readback_buffer_.buffer = VK_NULL_HANDLE;
         visible_count_readback_buffer_.allocation = VK_NULL_HANDLE;
-        _CHECK_FATAL("Failed to allocate visible_count readback buffer");
+        _CHECK_FATAL(std::format(
+            "Visible-count readback buffer allocation failed (requested_bytes={}, allocator={:#x}, result={}({}))",
+            info.size,
+            lfsVkHandleValue(allocator),
+            lfsVkResultToString(create_result),
+            static_cast<int>(create_result)));
     }
     visible_count_readback_buffer_.allocSize = 2 * sizeof(uint32_t);
     visible_count_readback_buffer_.size = 2 * sizeof(uint32_t);
     visible_count_readback_mapped_ = static_cast<uint32_t*>(alloc_info.pMappedData);
-    if (visible_count_readback_mapped_) {
-        visible_count_readback_mapped_[0] = 0;
-        visible_count_readback_mapped_[1] = 0;
+    if (visible_count_readback_mapped_ == nullptr) {
+        const VkBuffer failed_buffer = visible_count_readback_buffer_.buffer;
+        const VmaAllocation failed_allocation = visible_count_readback_buffer_.allocation;
+        vmaDestroyBuffer(allocator, failed_buffer, failed_allocation);
+        visible_count_readback_buffer_ = {};
+        _CHECK_FATAL(std::format(
+            "Visible-count readback allocation was not persistently mapped (requested_bytes={}, buffer={:#x}, allocation={:#x}, mapped_pointer={:#x})",
+            info.size,
+            lfsVkHandleValue(failed_buffer),
+            lfsVkHandleValue(failed_allocation),
+            lfsVkHandleValue(visible_count_readback_mapped_)));
     }
+    visible_count_readback_mapped_[0] = 0;
+    visible_count_readback_mapped_[1] = 0;
+    setDebugObjectName(VK_OBJECT_TYPE_BUFFER,
+                       visible_count_readback_buffer_.buffer,
+                       "vksplat.readback.visible_count");
     visible_count_readback_initialized_ = true;
     visible_count_readback_pending_ = false;
     visible_count_readback_signal_ = VK_NULL_HANDLE;
@@ -311,20 +398,41 @@ void VulkanGSRenderer::ensureLodSelectionReadback(const size_t chunk_capacity) {
                 VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
     VmaAllocationInfo alloc_info{};
-    if (vmaCreateBuffer(allocator, &info, &aci,
-                        &lod_selection_readback_buffer_.buffer,
-                        &lod_selection_readback_buffer_.allocation,
-                        &alloc_info) != VK_SUCCESS) {
+    lod_selection_readback_buffer_.label = "lod_selection_readback";
+    const VkResult create_result = vmaCreateBuffer(allocator, &info, &aci,
+                                                   &lod_selection_readback_buffer_.buffer,
+                                                   &lod_selection_readback_buffer_.allocation,
+                                                   &alloc_info);
+    if (create_result != VK_SUCCESS) {
         lod_selection_readback_buffer_.buffer = VK_NULL_HANDLE;
         lod_selection_readback_buffer_.allocation = VK_NULL_HANDLE;
-        _CHECK_FATAL("Failed to allocate LOD selection readback buffer");
+        _CHECK_FATAL(std::format(
+            "LOD-selection readback buffer allocation failed (requested_bytes={}, payload_words={}, allocator={:#x}, result={}({}))",
+            byte_size,
+            2 + chunk_capacity,
+            lfsVkHandleValue(allocator),
+            lfsVkResultToString(create_result),
+            static_cast<int>(create_result)));
     }
     lod_selection_readback_buffer_.allocSize = byte_size;
     lod_selection_readback_buffer_.size = byte_size;
     lod_selection_readback_mapped_ = static_cast<uint32_t*>(alloc_info.pMappedData);
-    if (lod_selection_readback_mapped_) {
-        std::memset(lod_selection_readback_mapped_, 0, byte_size);
+    if (lod_selection_readback_mapped_ == nullptr) {
+        const VkBuffer failed_buffer = lod_selection_readback_buffer_.buffer;
+        const VmaAllocation failed_allocation = lod_selection_readback_buffer_.allocation;
+        vmaDestroyBuffer(allocator, failed_buffer, failed_allocation);
+        lod_selection_readback_buffer_ = {};
+        _CHECK_FATAL(std::format(
+            "LOD-selection readback allocation was not persistently mapped (requested_bytes={}, buffer={:#x}, allocation={:#x}, mapped_pointer={:#x})",
+            byte_size,
+            lfsVkHandleValue(failed_buffer),
+            lfsVkHandleValue(failed_allocation),
+            lfsVkHandleValue(lod_selection_readback_mapped_)));
     }
+    std::memset(lod_selection_readback_mapped_, 0, byte_size);
+    setDebugObjectName(VK_OBJECT_TYPE_BUFFER,
+                       lod_selection_readback_buffer_.buffer,
+                       "vksplat.readback.lod_selection");
     lod_selection_readback_initialized_ = true;
     lod_selection_readback_pending_ = false;
     lod_selection_readback_signal_ = VK_NULL_HANDLE;
@@ -413,8 +521,16 @@ VulkanGSRenderer::pollDeferredLodSelectionStats() {
 void VulkanGSRenderer::recordVisibleCountReadback(VulkanGSPipelineBuffers& buffers,
                                                   const size_t num_splats) {
     ensureVisibleCountReadback();
-    if (buffers.visible_count.deviceBuffer.buffer == VK_NULL_HANDLE)
-        return;
+    const auto& count_buffer = buffers.visible_count.deviceBuffer;
+    if (count_buffer.buffer == VK_NULL_HANDLE || count_buffer.size != 2 * sizeof(uint32_t)) {
+        _THROW_ERROR(std::format(
+            "Visible-count readback requires a two-word count buffer (buffer={:#x}, offset={}, active_bytes={}, allocation_bytes={}, required_bytes={})",
+            lfsVkHandleValue(count_buffer.buffer),
+            count_buffer.offset,
+            count_buffer.size,
+            count_buffer.allocSize,
+            2 * sizeof(uint32_t)));
+    }
     // Never stomp an in-flight tagged copy: with the GPU a frame behind, the
     // re-record would reset the tag every frame and the stats — which drive
     // the visible-capacity high-water mark — would starve, leaving a clamped
@@ -427,6 +543,8 @@ void VulkanGSRenderer::recordVisibleCountReadback(VulkanGSPipelineBuffers& buffe
     copy.srcOffset = buffers.visible_count.deviceBuffer.offset;
     copy.dstOffset = 0;
     copy.size = 2 * sizeof(uint32_t);
+    validateBufferRange(count_buffer, 0, copy.size, "visible-count readback source");
+    validateBufferRange(visible_count_readback_buffer_, 0, copy.size, "visible-count readback destination");
     vkCmdCopyBuffer(command_buffer,
                     buffers.visible_count.deviceBuffer.buffer,
                     visible_count_readback_buffer_.buffer,
@@ -463,6 +581,11 @@ void VulkanGSRenderer::recordLodSelectionReadback(VulkanGSPipelineBuffers& buffe
         copy.srcOffset = src.offset;
         copy.dstOffset = dst_word * sizeof(uint32_t);
         copy.size = words * sizeof(uint32_t);
+        validateBufferRange(src, 0, copy.size, "LOD-selection readback source");
+        validateBufferRange(lod_selection_readback_buffer_,
+                            copy.dstOffset,
+                            copy.size,
+                            "LOD-selection readback destination");
         vkCmdCopyBuffer(command_buffer, src.buffer,
                         lod_selection_readback_buffer_.buffer, 1, &copy);
     };
@@ -480,9 +603,28 @@ void VulkanGSRenderer::recordLodSelectionReadback(VulkanGSPipelineBuffers& buffe
 }
 
 bool VulkanGSRenderer::invalidateReadbackBuffer(_VulkanBuffer& buffer, VkDeviceSize size) {
-    if (buffer.allocation == VK_NULL_HANDLE)
-        return false;
-    return vmaInvalidateAllocation(allocator, buffer.allocation, 0, size) == VK_SUCCESS;
+    validateBufferRange(buffer, 0, size, "invalidateReadbackBuffer");
+    if (buffer.allocation == VK_NULL_HANDLE) {
+        _THROW_ERROR(std::format(
+            "invalidateReadbackBuffer requires a VMA-owned allocation (buffer={:#x}, allocation={:#x}, requested_bytes={}, allocation_bytes={}, label='{}')",
+            lfsVkHandleValue(buffer.buffer),
+            lfsVkHandleValue(buffer.allocation),
+            size,
+            buffer.allocSize,
+            buffer.label ? buffer.label : "<unlabeled>"));
+    }
+    const VkResult result = vmaInvalidateAllocation(allocator, buffer.allocation, 0, size);
+    if (result != VK_SUCCESS) {
+        _THROW_ERROR(std::format(
+            "vmaInvalidateAllocation failed for a VkSplat readback (buffer={:#x}, allocation={:#x}, requested_bytes={}, allocation_bytes={}, result={}({}))",
+            lfsVkHandleValue(buffer.buffer),
+            lfsVkHandleValue(buffer.allocation),
+            size,
+            buffer.allocSize,
+            lfsVkResultToString(result),
+            static_cast<int>(result)));
+    }
+    return true;
 }
 
 void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::string>& spirv_paths,
@@ -795,6 +937,7 @@ void VulkanGSRenderer::executeProjectionForward(
         resizeDeviceBuffer(buffers.primitive_depth_keys, alloc_size);
     bufferMemoryBarrier({{primitive_depth_keys, COMPUTE_SHADER_READ_WRITE}},
                         TRANSFER_COMPUTE_SHADER_WRITE);
+    validateFillRange(primitive_depth_keys, 0, primitive_depth_keys.size, "primitive-depth sentinel fill");
     vkCmdFillBuffer(command_buffer, primitive_depth_keys.buffer,
                     primitive_depth_keys.offset, primitive_depth_keys.size,
                     0xFFFFFFFFu);
@@ -886,8 +1029,15 @@ void VulkanGSRenderer::executeGenerateKeys(
     DEVICE_GUARD;
 
     const size_t num_elements = static_cast<size_t>(uniforms.num_splats);
-    if (instance_capacity == 0 || instance_capacity != uniforms.sort_capacity)
-        _THROW_ERROR("generate_keys received an invalid sort capacity");
+    if (instance_capacity == 0 || instance_capacity != uniforms.sort_capacity ||
+        instance_capacity > static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
+        _THROW_ERROR(std::format(
+            "generate_keys requires a non-zero INT32-bounded capacity matching the uniform (capacity={}, uniform_capacity={}, int32_max={}, num_splats={})",
+            instance_capacity,
+            uniforms.sort_capacity,
+            std::numeric_limits<int32_t>::max(),
+            uniforms.num_splats));
+    }
 
     auto& unsorted_keys = resizeDeviceBuffer(buffers.unsorted_keys(), instance_capacity);
     auto& unsorted_idx = resizeDeviceBuffer(buffers.unsorted_gauss_idx(), instance_capacity);
@@ -896,6 +1046,7 @@ void VulkanGSRenderer::executeGenerateKeys(
     // if a shader path emits fewer keys than the exact cumsum count.
     bufferMemoryBarrier({{unsorted_keys, COMPUTE_SHADER_READ_WRITE}},
                         TRANSFER_COMPUTE_SHADER_WRITE);
+    validateFillRange(unsorted_keys, 0, unsorted_keys.size, "generate_keys sentinel fill");
     vkCmdFillBuffer(command_buffer, unsorted_keys.buffer, unsorted_keys.offset, unsorted_keys.size,
                     0xFFFFFFFFu);
     bufferMemoryBarrier({{unsorted_keys, TRANSFER_COMPUTE_SHADER_WRITE}},
@@ -925,8 +1076,16 @@ void VulkanGSRenderer::executeComputeTileRanges(
     PerfTimer::Timer<PerfTimer::ComputeTileRanges> timer(this);
     DEVICE_GUARD;
 
-    if (instance_capacity == 0 || instance_capacity != uniforms.sort_capacity)
-        _THROW_ERROR("compute_tile_ranges received an invalid sort capacity");
+    if (instance_capacity == 0 || instance_capacity != uniforms.sort_capacity ||
+        instance_capacity > static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
+        _THROW_ERROR(std::format(
+            "compute_tile_ranges requires a non-zero INT32-bounded capacity matching the uniform (capacity={}, uniform_capacity={}, int32_max={}, grid={}x{})",
+            instance_capacity,
+            uniforms.sort_capacity,
+            std::numeric_limits<int32_t>::max(),
+            uniforms.grid_width,
+            uniforms.grid_height));
+    }
 
     const size_t num_tiles = (size_t)(uniforms.grid_height * uniforms.grid_width);
 
@@ -1460,7 +1619,13 @@ void VulkanGSRenderer::executeCumsum(
     // can't reasonably expect more than 1G splats
     // although there may be more than 1G sorting indices
     else {
-        _THROW_ERROR("Too many numbers for cumsum");
+        _THROW_ERROR(std::format(
+            "VkSplat cumsum exceeds the supported three-level scan (element_count={}, block_size={}, level1_groups={}, level2_groups={}, max_level2_groups={})",
+            num_elements,
+            block,
+            _CEIL_DIV(num_elements, block),
+            _CEIL_DIV(_CEIL_DIV(num_elements, block), block),
+            block));
     }
 }
 
@@ -1498,11 +1663,25 @@ void VulkanGSRenderer::executePrepareTileSort(
     DEVICE_GUARD;
 
     if (instance_capacity == 0 || instance_capacity != uniforms.sort_capacity ||
-        instance_capacity > static_cast<size_t>(std::numeric_limits<int32_t>::max()))
-        _THROW_ERROR("prepare_tile_sort received an invalid sort capacity");
+        instance_capacity > static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
+        _THROW_ERROR(std::format(
+            "prepare_tile_sort requires a non-zero INT32-bounded capacity matching the uniform (capacity={}, uniform_capacity={}, int32_max={}, num_splats={})",
+            instance_capacity,
+            uniforms.sort_capacity,
+            std::numeric_limits<int32_t>::max(),
+            uniforms.num_splats));
+    }
 
     resizeDeviceBuffer(buffers.tile_sort_count, 2);
     resizeDeviceBuffer(buffers.tile_sort_dispatch_args, 6);
+    if (buffers.tile_sort_count.deviceBuffer.size != 2 * sizeof(uint32_t)) {
+        _THROW_ERROR(std::format(
+            "prepare_tile_sort count buffer must contain exactly two uint32 words (buffer={:#x}, active_bytes={}, allocation_bytes={}, required_bytes={})",
+            lfsVkHandleValue(buffers.tile_sort_count.deviceBuffer.buffer),
+            buffers.tile_sort_count.deviceBuffer.size,
+            buffers.tile_sort_count.deviceBuffer.allocSize,
+            2 * sizeof(uint32_t)));
+    }
 
     struct PrepareTileSortUniforms {
         uint32_t num_splats;
@@ -1577,9 +1756,29 @@ void VulkanGSRenderer::executeSortIndirectCountImpl(
     const char* cpu_timer_prefix) {
     if (capacity == 0)
         return;
+    if (capacity > static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
+        count_buffer.size != 2 * sizeof(uint32_t) ||
+        dispatch_args_buffer.size < 6 * sizeof(uint32_t) || num_bits <= 0 || num_bits > 32) {
+        _THROW_ERROR(std::format(
+            "Indirect radix sort requires a two-word count, six-word dispatch buffer, valid bit count, and INT32-bounded capacity (capacity={}, int32_max={}, count_buffer={:#x}, count_bytes={}, dispatch_buffer={:#x}, dispatch_bytes={}, num_bits={})",
+            capacity,
+            std::numeric_limits<int32_t>::max(),
+            lfsVkHandleValue(count_buffer.buffer),
+            count_buffer.size,
+            lfsVkHandleValue(dispatch_args_buffer.buffer),
+            dispatch_args_buffer.size,
+            num_bits));
+    }
     if (capacity != buffers.unsorted_keys().deviceSize() ||
-        capacity != buffers.unsorted_gauss_idx().deviceSize())
-        _THROW_ERROR("indirect sort capacity does not match input buffer sizes");
+        capacity != buffers.unsorted_gauss_idx().deviceSize()) {
+        _THROW_ERROR(std::format(
+            "Indirect radix sort capacity must match both input arrays (capacity={}, key_elements={}, value_elements={}, key_bytes={}, value_bytes={})",
+            capacity,
+            buffers.unsorted_keys().deviceSize(),
+            buffers.unsorted_gauss_idx().deviceSize(),
+            buffers.unsorted_keys().deviceBuffer.size,
+            buffers.unsorted_gauss_idx().deviceBuffer.size));
+    }
 
     const auto timer_name = [cpu_timer_prefix](const char* suffix) {
         return std::string(cpu_timer_prefix) + suffix;
@@ -1861,6 +2060,14 @@ void VulkanGSRenderer::executeSortPrimitivesByDepth(
         copy.srcOffset = buffers.sorted_gauss_idx().deviceBuffer.offset;
         copy.dstOffset = sort_indices.offset;
         copy.size = num_splats * sizeof(int32_t);
+        validateBufferRange(buffers.sorted_gauss_idx().deviceBuffer,
+                            0,
+                            copy.size,
+                            "primitive sort-index snapshot source");
+        validateBufferRange(sort_indices,
+                            0,
+                            copy.size,
+                            "primitive sort-index snapshot destination");
         vkCmdCopyBuffer(command_buffer,
                         buffers.sorted_gauss_idx().deviceBuffer.buffer,
                         sort_indices.buffer, 1, &copy);
@@ -2232,14 +2439,22 @@ void VulkanGSRenderer::executeGenerateMacroKeys(
     const size_t capacity = instance_capacity;
     if (capacity == 0 || visible_capacity == 0)
         return;
-    if (capacity != uniforms.sort_capacity)
-        _THROW_ERROR("generate_macro_keys received an invalid sort capacity");
+    if (capacity != uniforms.sort_capacity ||
+        capacity > static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
+        _THROW_ERROR(std::format(
+            "generate_macro_keys requires an INT32-bounded capacity matching the uniform (capacity={}, uniform_capacity={}, int32_max={}, visible_capacity={})",
+            capacity,
+            uniforms.sort_capacity,
+            std::numeric_limits<int32_t>::max(),
+            visible_capacity));
+    }
 
     auto& unsorted_keys = resizeDeviceBuffer(buffers.unsorted_keys(), capacity);
     auto& unsorted_idx = resizeDeviceBuffer(buffers.unsorted_gauss_idx(), capacity);
 
     bufferMemoryBarrier({{unsorted_keys, COMPUTE_SHADER_READ_WRITE}},
                         TRANSFER_COMPUTE_SHADER_WRITE);
+    validateFillRange(unsorted_keys, 0, unsorted_keys.size, "generate_macro_keys sentinel fill");
     vkCmdFillBuffer(command_buffer, unsorted_keys.buffer, unsorted_keys.offset, unsorted_keys.size,
                     0xFFFFFFFFu);
     bufferMemoryBarrier({{unsorted_keys, TRANSFER_COMPUTE_SHADER_WRITE}},
@@ -2269,8 +2484,16 @@ void VulkanGSRenderer::executeComputeMacroRanges(
     PerfTimer::Timer<PerfTimer::ComputeTileRanges> timer(this);
     DEVICE_GUARD;
 
-    if (instance_capacity == 0 || instance_capacity != uniforms.sort_capacity)
-        _THROW_ERROR("compute_macro_ranges received an invalid sort capacity");
+    if (instance_capacity == 0 || instance_capacity != uniforms.sort_capacity ||
+        instance_capacity > static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
+        _THROW_ERROR(std::format(
+            "compute_macro_ranges requires a non-zero INT32-bounded capacity matching the uniform (capacity={}, uniform_capacity={}, int32_max={}, grid={}x{})",
+            instance_capacity,
+            uniforms.sort_capacity,
+            std::numeric_limits<int32_t>::max(),
+            uniforms.grid_width,
+            uniforms.grid_height));
+    }
 
     const size_t num_macro =
         _CEIL_DIV(static_cast<size_t>(uniforms.grid_width), size_t{HIGS_MACRO_T16_W}) *
@@ -2494,14 +2717,27 @@ void VulkanGSRenderer::executeCalculateIndexBufferOffsetVisible(
         return;
     }
     if (instance_capacity > static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
-        instance_capacity != uniforms.sort_capacity)
-        _THROW_ERROR("visible cumsum received an invalid sort capacity");
+        instance_capacity != uniforms.sort_capacity) {
+        _THROW_ERROR(std::format(
+            "Visible-chain cumsum requires an INT32-bounded capacity matching the uniform (capacity={}, uniform_capacity={}, int32_max={}, visible_capacity={})",
+            instance_capacity,
+            uniforms.sort_capacity,
+            std::numeric_limits<int32_t>::max(),
+            visible_capacity));
+    }
 
     const size_t block = 1024;
     const size_t c1_capacity = _CEIL_DIV(visible_capacity, block);
     const size_t c2_capacity = _CEIL_DIV(c1_capacity, block);
-    if (c2_capacity > block)
-        _THROW_ERROR("visible capacity exceeds 3-level indirect cumsum range");
+    if (c2_capacity > block) {
+        _THROW_ERROR(std::format(
+            "Visible capacity exceeds the three-level indirect cumsum range (visible_capacity={}, block_size={}, level1_capacity={}, level2_capacity={}, max_level2_capacity={})",
+            visible_capacity,
+            block,
+            c1_capacity,
+            c2_capacity,
+            block));
+    }
 
     auto& input = buffers.tiles_touched_depth_ordered.deviceBuffer;
     auto& output = resizeDeviceBuffer(buffers.index_buffer_offset, visible_capacity);
@@ -2567,6 +2803,14 @@ void VulkanGSRenderer::executeCalculateIndexBufferOffsetVisible(
         PerfTimer::Timer<PerfTimer::PrepareTileSort> gpu_timer(this);
         resizeDeviceBuffer(buffers.tile_sort_count, 2);
         resizeDeviceBuffer(buffers.tile_sort_dispatch_args, 6);
+        if (buffers.tile_sort_count.deviceBuffer.size != 2 * sizeof(uint32_t)) {
+            _THROW_ERROR(std::format(
+                "Visible-chain prepare_tile_sort count buffer must contain exactly two uint32 words (buffer={:#x}, active_bytes={}, allocation_bytes={}, required_bytes={})",
+                lfsVkHandleValue(buffers.tile_sort_count.deviceBuffer.buffer),
+                buffers.tile_sort_count.deviceBuffer.size,
+                buffers.tile_sort_count.deviceBuffer.allocSize,
+                2 * sizeof(uint32_t)));
+        }
 
         struct PrepareTileSortUniforms {
             uint32_t num_splats;
