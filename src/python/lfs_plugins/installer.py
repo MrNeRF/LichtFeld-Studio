@@ -2,18 +2,22 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Plugin dependency installer using uv."""
 
+from collections import deque
 from dataclasses import asdict, dataclass
 import json
 import logging
 import os
 from pathlib import Path
 from pathlib import PurePosixPath
+import queue
 import shutil
+import signal
 import stat
 import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 from typing import Optional, Callable, Tuple
 from urllib.parse import quote, urlparse
@@ -24,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 from .http import urlopen
 from .plugin import PluginInstance
-from .errors import PluginDependencyError, PluginError
+from .errors import PluginDependencyError, PluginError, PluginLoadCancelled
 try:
     import tomllib
 except ImportError:
@@ -34,6 +38,144 @@ except ImportError:
 PLUGIN_SOURCE_METADATA_NAME = ".lichtfeld-source.json"
 GITHUB_API_URL = "https://api.github.com/repos"
 HTTP_USER_AGENT = "LichtFeld-PluginInstaller/1.0"
+PROCESS_POLL_SECONDS = 0.05
+PROCESS_TERMINATE_GRACE_SECONDS = 0.5
+PROCESS_OUTPUT_TAIL_LINES = 100
+
+
+def _cancel_requested(should_cancel: Optional[Callable[[], bool]]) -> bool:
+    return bool(should_cancel and should_cancel())
+
+
+def _wait_for_process(proc: subprocess.Popen, timeout: float) -> bool:
+    try:
+        proc.wait(timeout=timeout)
+        return True
+    except subprocess.TimeoutExpired:
+        return False
+
+
+def _terminate_process_tree(proc: subprocess.Popen) -> None:
+    """Best-effort termination of a process and descendants on supported hosts."""
+    if proc.poll() is not None:
+        return
+
+    if sys.platform == "win32":
+        # CREATE_NEW_PROCESS_GROUP gives uv its own console group. taskkill /T is
+        # the best portable stdlib-only tree termination available on Windows;
+        # a Job Object would provide stronger guarantees but is not used here.
+        try:
+            tree_kill = subprocess.Popen(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            if not _wait_for_process(tree_kill, PROCESS_TERMINATE_GRACE_SECONDS):
+                tree_kill.kill()
+                _wait_for_process(tree_kill, PROCESS_TERMINATE_GRACE_SECONDS)
+        except OSError:
+            pass
+        if proc.poll() is None:
+            proc.terminate()
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        except OSError:
+            proc.terminate()
+
+    if _wait_for_process(proc, PROCESS_TERMINATE_GRACE_SECONDS):
+        return
+
+    if sys.platform == "win32":
+        proc.kill()
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return
+        except OSError:
+            proc.kill()
+    _wait_for_process(proc, PROCESS_TERMINATE_GRACE_SECONDS)
+
+
+def _process_group_popen_kwargs() -> dict:
+    if sys.platform == "win32":
+        return {
+            "creationflags": getattr(
+                subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200
+            )
+        }
+    return {"start_new_session": True}
+
+
+def _run_cancellable_process(
+    cmd: list[str],
+    *,
+    env: Optional[dict] = None,
+    on_output: Optional[Callable[[str], None]] = None,
+    should_cancel: Optional[Callable[[], bool]] = None,
+) -> subprocess.CompletedProcess:
+    """Run a child in its own process group while streaming bounded output."""
+    if _cancel_requested(should_cancel):
+        raise PluginLoadCancelled("Plugin loading cancelled before starting dependency process")
+
+    popen_kwargs = {
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.STDOUT,
+        "text": True,
+        "bufsize": 1,
+        "env": env,
+    }
+    popen_kwargs.update(_process_group_popen_kwargs())
+
+    proc = subprocess.Popen(cmd, **popen_kwargs)
+    output_queue: queue.Queue[Optional[str]] = queue.Queue()
+    output_tail: deque[str] = deque(maxlen=PROCESS_OUTPUT_TAIL_LINES)
+
+    def read_output() -> None:
+        try:
+            if proc.stdout is not None:
+                for line in proc.stdout:
+                    output_queue.put(line.rstrip())
+        finally:
+            output_queue.put(None)
+
+    reader = threading.Thread(target=read_output, name="plugin-process-output", daemon=True)
+    reader.start()
+    output_finished = False
+
+    try:
+        while not output_finished or proc.poll() is None:
+            if _cancel_requested(should_cancel):
+                _terminate_process_tree(proc)
+                raise PluginLoadCancelled("Plugin dependency process cancelled")
+
+            try:
+                line = output_queue.get(timeout=PROCESS_POLL_SECONDS)
+            except queue.Empty:
+                continue
+
+            if line is None:
+                output_finished = True
+            else:
+                output_tail.append(line)
+                if line and on_output:
+                    on_output(line)
+
+        returncode = proc.wait()
+        if _cancel_requested(should_cancel):
+            raise PluginLoadCancelled("Plugin dependency process cancelled")
+        return subprocess.CompletedProcess(cmd, returncode, "\n".join(output_tail), "")
+    except BaseException:
+        if proc.poll() is None:
+            _terminate_process_tree(proc)
+        raise
+    finally:
+        reader.join(timeout=PROCESS_TERMINATE_GRACE_SECONDS)
+        if proc.stdout is not None:
+            proc.stdout.close()
 
 
 @dataclass(frozen=True)
@@ -455,8 +597,15 @@ class PluginInstaller:
                 return True
         return False
 
-    def ensure_venv(self) -> bool:
+    def ensure_venv(
+        self,
+        on_progress: Optional[Callable[[str], None]] = None,
+        should_cancel: Optional[Callable[[], bool]] = None,
+    ) -> bool:
         """Create plugin-specific venv using uv if needed."""
+        if _cancel_requested(should_cancel):
+            raise PluginLoadCancelled("Plugin loading cancelled before environment setup")
+
         venv_path = self.plugin.info.path / ".venv"
         self.plugin.venv_path = venv_path
         bundled_python = self._require_bundled_python()
@@ -468,6 +617,8 @@ class PluginInstaller:
                     "Existing plugin venv was not created from bundled Python, recreating: %s",
                     venv_path,
                 )
+                if _cancel_requested(should_cancel):
+                    raise PluginLoadCancelled("Plugin loading cancelled before environment repair")
                 shutil.rmtree(venv_path, ignore_errors=True)
             else:
                 logger.info("Plugin venv ready: %s", venv_python)
@@ -475,6 +626,8 @@ class PluginInstaller:
 
         if venv_path.exists():
             logger.warning("Broken venv (missing python), removing: %s", venv_path)
+            if _cancel_requested(should_cancel):
+                raise PluginLoadCancelled("Plugin loading cancelled before environment repair")
             shutil.rmtree(venv_path)
 
         uv = self._find_uv()
@@ -495,21 +648,22 @@ class PluginInstaller:
                 "--no-python-downloads",
             ]
             logger.info("Creating venv (%s): %s", label, " ".join(cmd))
+            if on_progress:
+                on_progress(f"Creating plugin environment ({label})...")
 
-            result = subprocess.run(
+            result = _run_cancellable_process(
                 cmd,
-                capture_output=True,
-                text=True,
                 env=env,
+                on_output=on_progress,
+                should_cancel=should_cancel,
             )
 
             if result.returncode == 0:
                 logger.info("Plugin venv created (%s): %s", label, venv_path)
                 return True
 
-            stderr = (result.stderr or "").strip()
             stdout = (result.stdout or "").strip()
-            detail = stderr or stdout or "no error output"
+            detail = stdout or "no error output"
             logger.warning("uv venv failed using %s (exit %d): %s", label, result.returncode, detail)
             failures.append(f"[{label}] {detail}")
 
@@ -545,9 +699,14 @@ class PluginInstaller:
         return True
 
     def install_dependencies(
-        self, on_progress: Optional[Callable[[str], None]] = None
+        self,
+        on_progress: Optional[Callable[[str], None]] = None,
+        should_cancel: Optional[Callable[[], bool]] = None,
     ) -> bool:
         """Install plugin dependencies via uv sync."""
+        if _cancel_requested(should_cancel):
+            raise PluginLoadCancelled("Plugin loading cancelled before dependency installation")
+
         self._require_bundled_python()
 
         plugin_path = self.plugin.info.path
@@ -583,27 +742,19 @@ class PluginInstaller:
         if on_progress:
             on_progress("Syncing dependencies with uv...")
 
-        output_lines = []
-        with subprocess.Popen(
+        result = _run_cancellable_process(
             cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
             env=self._uv_env(set_pythonhome=False),
-        ) as proc:
-            if proc.stdout is not None:
-                for line in iter(proc.stdout.readline, ""):
-                    line = line.rstrip()
-                    if line and on_progress:
-                        on_progress(line)
-                    output_lines.append(line)
-            proc.wait()
+            on_output=on_progress,
+            should_cancel=should_cancel,
+        )
 
-        if proc.returncode != 0:
-            tail = "\n".join(output_lines[-10:])
+        if result.returncode != 0:
+            tail = "\n".join((result.stdout or "").splitlines()[-10:])
             raise PluginDependencyError(f"uv sync failed:\n{tail}")
 
+        if _cancel_requested(should_cancel):
+            raise PluginLoadCancelled("Plugin loading cancelled after dependency installation")
         self._deps_stamp_path().touch()
         logger.info("Dependencies installed for %s", self.plugin.info.name)
         return True

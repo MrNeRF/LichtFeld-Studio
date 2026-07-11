@@ -10,6 +10,7 @@ from .context import CapabilityBroker, PluginContext, SceneContext, ViewContext
 from .errors import (
     PluginDependencyError,
     PluginError,
+    PluginLoadCancelled,
     PluginLoadError,
     PluginNotFoundError,
     PluginVersionError,
@@ -70,6 +71,7 @@ __all__ = [
     "PluginError",
     "PluginLoadError",
     "PluginDependencyError",
+    "PluginLoadCancelled",
     "PluginVersionError",
     "RegistryError",
     "RegistryOfflineError",

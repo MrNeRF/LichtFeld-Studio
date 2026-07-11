@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Plugin manager for discovery, loading, and lifecycle."""
 
-import builtins
 import importlib.machinery
 import importlib.util
 import logging
@@ -24,7 +23,7 @@ from .compat import (
     compatibility_errors,
     validate_manifest_compatibility_fields,
 )
-from .errors import PluginError, PluginVersionError
+from .errors import PluginError, PluginLoadCancelled, PluginVersionError
 from .installer import (
     PluginInstaller,
     PluginSourceInfo,
@@ -82,6 +81,7 @@ class PluginManager:
     def __init__(self):
         self._plugins: Dict[str, PluginInstance] = {}
         self._plugins_lock = threading.RLock()
+        self._lifecycle_lock = threading.RLock()
         self._plugins_dir = Path.home() / ".lichtfeld" / "plugins"
         self._watcher: Optional[PluginWatcher] = None
         self._on_plugin_loaded: List[Callable] = []
@@ -273,8 +273,38 @@ class PluginManager:
             required_features=list(lf["required_features"]),
         )
 
-    def load(self, name: str, on_progress: Optional[Callable] = None) -> bool:
+    @staticmethod
+    def _raise_if_cancelled(should_cancel: Optional[Callable[[], bool]]) -> None:
+        if should_cancel and should_cancel():
+            raise PluginLoadCancelled("Plugin loading cancelled")
+
+    @staticmethod
+    def _emit_stage(
+        on_stage: Optional[Callable[[str, str], None]],
+        phase: str,
+        detail: str,
+    ) -> None:
+        if on_stage:
+            on_stage(phase, detail)
+
+    def load(
+        self,
+        name: str,
+        on_progress: Optional[Callable[[str], None]] = None,
+        on_stage: Optional[Callable[[str, str], None]] = None,
+        should_cancel: Optional[Callable[[], bool]] = None,
+    ) -> bool:
         """Load a plugin by name."""
+        with self._lifecycle_lock:
+            return self._load_locked(name, on_progress, on_stage, should_cancel)
+
+    def _load_locked(
+        self,
+        name: str,
+        on_progress: Optional[Callable[[str], None]],
+        on_stage: Optional[Callable[[str, str], None]],
+        should_cancel: Optional[Callable[[], bool]],
+    ) -> bool:
         with self._plugins_lock:
             plugin = self._plugins.get(name)
             if not plugin:
@@ -287,28 +317,43 @@ class PluginManager:
         if not plugin:
             raise PluginError(f"Plugin '{name}' not found")
 
+        if plugin.state == PluginState.ACTIVE:
+            return True
+
         self._check_version_compatibility(plugin, name)
 
         try:
             t0 = time.monotonic()
+            plugin.error = None
+            plugin.error_traceback = None
+            self._raise_if_cancelled(should_cancel)
             plugin.state = PluginState.INSTALLING
             installer = PluginInstaller(plugin)
-            installer.ensure_venv()
-            t_venv = time.monotonic()
             progress_fn = on_progress or (lambda msg: _log.info("  [%s] %s", name, msg))
-            installer.install_dependencies(progress_fn)
+            self._emit_stage(on_stage, "environment", f"Preparing environment for {name}")
+            installer.ensure_venv(progress_fn, should_cancel)
+            t_venv = time.monotonic()
+            self._raise_if_cancelled(should_cancel)
+            self._emit_stage(on_stage, "dependencies", f"Installing dependencies for {name}")
+            installer.install_dependencies(progress_fn, should_cancel)
             t_deps = time.monotonic()
 
+            self._raise_if_cancelled(should_cancel)
             plugin.state = PluginState.LOADING
+            self._emit_stage(on_stage, "import", f"Importing {name}")
             self._load_module(plugin)
             t_module = time.monotonic()
 
+            self._raise_if_cancelled(should_cancel)
+            self._emit_stage(on_stage, "activation", f"Activating {name}")
             if hasattr(plugin.module, "on_load"):
                 plugin.module.on_load()
             t_onload = time.monotonic()
 
+            self._raise_if_cancelled(should_cancel)
             plugin.state = PluginState.ACTIVE
             self._update_file_mtimes(plugin)
+            self._emit_stage(on_stage, "complete", f"Loaded {name}")
 
             _log.info(
                 "load(%s) timing: venv=%.0fms deps=%.0fms module=%.0fms on_load=%.0fms total=%.0fms",
@@ -320,7 +365,7 @@ class PluginManager:
                 (t_onload - t0) * 1000,
             )
 
-            for cb in self._on_plugin_loaded:
+            for cb in list(self._on_plugin_loaded):
                 try:
                     cb(plugin.info)
                 except Exception as cb_err:
@@ -328,10 +373,18 @@ class PluginManager:
 
             return True
 
+        except PluginLoadCancelled:
+            self._rollback_failed_load(plugin)
+            plugin.state = PluginState.UNLOADED
+            plugin.error = None
+            plugin.error_traceback = None
+            raise
         except Exception as e:
+            error_traceback = traceback.format_exc()
+            self._rollback_failed_load(plugin)
             plugin.state = PluginState.ERROR
             plugin.error = str(e)
-            plugin.error_traceback = traceback.format_exc()
+            plugin.error_traceback = error_traceback
             _log.error("load(%s) failed: %s\n%s", name, e, plugin.error_traceback)
             return False
 
@@ -348,7 +401,6 @@ class PluginManager:
         if issues:
             raise PluginVersionError(f"Plugin '{name}' {'; '.join(issues)}")
 
-    _SLOW_IMPORT_THRESHOLD_MS = 100
     _SLOW_TOTAL_THRESHOLD_MS = 500
 
     def _load_module(self, plugin: PluginInstance):
@@ -384,7 +436,7 @@ class PluginManager:
         sys.modules[module_name] = module
 
         try:
-            self._exec_with_import_audit(code, module, plugin.info.name)
+            self._exec_module_timed(code, module, plugin.info.name)
         except Exception:
             sys.modules.pop(module_name, None)
             # Clean up paths on failure
@@ -395,40 +447,70 @@ class PluginManager:
             raise
         plugin.module = module
 
-    def _exec_with_import_audit(self, code, module, plugin_name: str):
-        """Execute plugin code while tracking slow top-level imports."""
-        slow_imports: list[tuple[str, float]] = []
-        original_import = builtins.__import__
-        depth = 0
-
-        def _auditing_import(name, *args, **kwargs):
-            nonlocal depth
-            already_loaded = name in sys.modules
-            if already_loaded or depth > 0:
-                return original_import(name, *args, **kwargs)
-            depth += 1
-            t = time.monotonic()
-            try:
-                return original_import(name, *args, **kwargs)
-            finally:
-                elapsed_ms = (time.monotonic() - t) * 1000
-                depth -= 1
-                if elapsed_ms >= self._SLOW_IMPORT_THRESHOLD_MS:
-                    slow_imports.append((name, elapsed_ms))
-
+    def _exec_module_timed(self, code, module, plugin_name: str):
+        """Execute plugin code and report owner-scoped total import time."""
         t0 = time.monotonic()
-        builtins.__import__ = _auditing_import
-        try:
-            exec(code, module.__dict__)
-        finally:
-            builtins.__import__ = original_import
+        exec(code, module.__dict__)
 
         total_ms = (time.monotonic() - t0) * 1000
         if total_ms >= self._SLOW_TOTAL_THRESHOLD_MS:
-            lines = [f"Plugin '{plugin_name}' module load took {total_ms:.0f}ms — defer heavy imports to speed up startup:"]
-            for name, ms in sorted(slow_imports, key=lambda x: -x[1]):
-                lines.append(f"  {name}: {ms:.0f}ms")
-            _log.warning("\n".join(lines))
+            _log.warning("Plugin '%s' module load took %.0fms", plugin_name, total_ms)
+
+    def _rollback_failed_load(self, plugin: PluginInstance) -> None:
+        """Best-effort cleanup after import or activation fails."""
+        name = plugin.info.name
+        if plugin.module and hasattr(plugin.module, "on_unload"):
+            try:
+                plugin.module.on_unload()
+            except Exception:
+                _log.exception("Failed to run on_unload while rolling back '%s'", name)
+
+        try:
+            CapabilityRegistry.instance().unregister_all_for_plugin(name)
+        except Exception:
+            _log.exception("Failed to unregister capabilities while rolling back '%s'", name)
+
+        try:
+            from .ui.subscription_registry import SubscriptionRegistry
+
+            SubscriptionRegistry.instance().unsubscribe_all(name)
+        except Exception:
+            _log.exception("Failed to remove subscriptions while rolling back '%s'", name)
+
+        try:
+            import lichtfeld as lf
+        except Exception:
+            _log.exception("Failed to access UI registrations while rolling back '%s'", name)
+        else:
+            cleanup_calls = (
+                (
+                    "panels",
+                    lambda: lf.ui.unregister_panels_for_module(f"{MODULE_PREFIX}.{name}"),
+                ),
+                ("icons", lambda: lf.ui.free_plugin_icons(name)),
+                ("textures", lambda: lf.ui.free_plugin_textures(name)),
+            )
+            for resource, cleanup in cleanup_calls:
+                try:
+                    cleanup()
+                except Exception:
+                    _log.exception(
+                        "Failed to remove %s while rolling back '%s'", resource, name
+                    )
+
+        module_prefix = f"{MODULE_PREFIX}.{name}"
+        for module_name in [
+            item
+            for item in sys.modules
+            if item == module_prefix or item.startswith(f"{module_prefix}.")
+        ]:
+            sys.modules.pop(module_name, None)
+
+        for path in plugin.sys_paths:
+            if path in sys.path:
+                sys.path.remove(path)
+        plugin.sys_paths = []
+        plugin.module = None
 
     def _get_venv_site_packages(self, plugin: PluginInstance) -> Optional[Path]:
         """Get site-packages path for plugin venv."""
@@ -455,6 +537,10 @@ class PluginManager:
 
     def unload(self, name: str) -> bool:
         """Unload a plugin."""
+        with self._lifecycle_lock:
+            return self._unload_locked(name)
+
+    def _unload_locked(self, name: str) -> bool:
         with self._plugins_lock:
             plugin = self._plugins.get(name)
             if not plugin or plugin.state != PluginState.ACTIVE:
@@ -503,7 +589,7 @@ class PluginManager:
             if self._watcher:
                 self._watcher.clear_plugin_hashes(name)
 
-            for cb in self._on_plugin_unloaded:
+            for cb in list(self._on_plugin_unloaded):
                 try:
                     cb(plugin.info)
                 except Exception as cb_err:
@@ -524,6 +610,10 @@ class PluginManager:
         This reload keeps old models in memory - will leak GPU memory on each reload.
         Restart the application to fully reclaim memory.
         """
+        with self._lifecycle_lock:
+            return self._reload_locked(name)
+
+    def _reload_locked(self, name: str) -> bool:
         from .utils import get_gpu_memory
 
         plugin = self._plugins.get(name)
@@ -562,7 +652,7 @@ class PluginManager:
 
             self._update_file_mtimes(plugin)
 
-            for cb in self._on_plugin_loaded:
+            for cb in list(self._on_plugin_loaded):
                 try:
                     cb(plugin.info)
                 except Exception as cb_err:
@@ -674,6 +764,10 @@ class PluginManager:
 
     def update(self, name: str, on_progress: Optional[Callable[[str], None]] = None) -> bool:
         """Update a plugin according to its recorded install transport."""
+        with self._lifecycle_lock:
+            return self._update_locked(name, on_progress)
+
+    def _update_locked(self, name: str, on_progress: Optional[Callable[[str], None]]) -> bool:
         plugin = self._plugins.get(name)
         plugin_dir = plugin.info.path if plugin else self._find_plugin_dir(name)
 
@@ -708,11 +802,15 @@ class PluginManager:
 
     def uninstall(self, name: str) -> bool:
         """Uninstall a plugin by removing its directory."""
+        with self._lifecycle_lock:
+            return self._uninstall_locked(name)
+
+    def _uninstall_locked(self, name: str) -> bool:
         with self._plugins_lock:
             plugin = self._plugins.get(name)
             if plugin:
                 if plugin.state == PluginState.ACTIVE:
-                    self.unload(name)
+                    self._unload_locked(name)
                 plugin_dir = plugin.info.path
                 del self._plugins[name]
             else:

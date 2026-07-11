@@ -247,7 +247,7 @@ required_features = []
              patch("lfs_plugins.installer.PluginInstaller._get_embedded_python", return_value=embedded_python), \
              patch("lfs_plugins.installer.PluginInstaller._venv_uses_bundled_python", return_value=False), \
              patch("lfs_plugins.installer.PluginInstaller.install_dependencies", return_value=True), \
-             patch("lfs_plugins.installer.subprocess.run", return_value=ok) as mock_run:
+             patch("lfs_plugins.installer._run_cancellable_process", return_value=ok) as mock_run:
             assert mgr.load(plugin_name) is True
             assert mgr.get_state(plugin_name) == PluginState.ACTIVE
             assert mock_run.call_count == 1
@@ -823,6 +823,8 @@ required_features = []
         mock_proc = MagicMock()
         mock_proc.stdout = io.StringIO("")
         mock_proc.returncode = 0
+        mock_proc.poll.return_value = 0
+        mock_proc.wait.return_value = 0
         mock_proc.__enter__ = MagicMock(return_value=mock_proc)
         mock_proc.__exit__ = MagicMock(return_value=False)
         return mock_proc
@@ -930,7 +932,7 @@ required_features = []
         with patch.object(installer, "_find_uv", return_value=mock_uv), \
              patch.object(installer, "_get_embedded_python", return_value=embedded_python), \
              patch.object(installer, "_venv_uses_bundled_python", return_value=False), \
-             patch("lfs_plugins.installer.subprocess.run", return_value=ok) as mock_run:
+             patch("lfs_plugins.installer._run_cancellable_process", return_value=ok) as mock_run:
             assert installer.ensure_venv() is True
             assert mock_run.call_count == 1
 
@@ -1006,7 +1008,7 @@ required_features = []
         with patch.object(installer, "_find_uv", return_value=mock_uv), \
              patch.object(installer, "_is_portable_bundle", return_value=True), \
              patch.object(installer, "_get_embedded_python", return_value=embedded_python), \
-             patch("lfs_plugins.installer.subprocess.run", return_value=fail) as mock_run:
+             patch("lfs_plugins.installer._run_cancellable_process", return_value=fail) as mock_run:
             with pytest.raises(PluginDependencyError):
                 installer.ensure_venv()
 
