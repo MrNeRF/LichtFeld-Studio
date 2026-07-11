@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "internal/cub_workspace.hpp"
 #include "internal/cuda_memory_guard.hpp"
 #include "internal/tensor_functors.hpp"
 #include "internal/tensor_ops.hpp"
@@ -424,23 +425,18 @@ namespace lfs::core::tensor_ops {
         if (n == 0 || src_size == 0)
             return;
 
-        CudaDeviceMemory<int> scan_result(n);
-        if (!scan_result.valid())
-            return;
-
-        size_t temp_bytes = 0;
-        cub::DeviceScan::ExclusiveSum(nullptr, temp_bytes, mask, scan_result.get(), n, stream);
-
-        CudaDeviceMemory<uint8_t> temp_storage(temp_bytes);
-        if (!temp_storage.valid())
-            return;
-
-        cub::DeviceScan::ExclusiveSum(temp_storage.get(), temp_bytes,
-                                      mask, scan_result.get(), n, stream);
+        ScopedDeviceBuffer scan_result(
+            n * sizeof(int), stream, "tensor.masked_scatter_scan");
+        run_cub_operation(
+            "cub::DeviceScan::ExclusiveSum", stream,
+            [&](void* workspace, size_t& workspace_bytes) {
+                return cub::DeviceScan::ExclusiveSum(
+                    workspace, workspace_bytes, mask, scan_result.as<int>(), n, stream);
+            });
 
         int blocks = (n + 255) / 256;
         masked_scatter_compact_kernel<<<blocks, 256, 0, stream>>>(
-            data, mask, src, scan_result.get(), n);
+            data, mask, src, scan_result.as<int>(), n);
     }
 
     // ============= Where Operation =============
