@@ -18,6 +18,10 @@ namespace lfs::core {
 
     namespace internal {
 
+        struct LazyIrTensorAccess {
+            static void set_registered(const Tensor& tensor, bool registered) noexcept;
+        };
+
         enum class LazyOpKind : uint8_t {
             Leaf = 0,
             Unary = 1,
@@ -41,6 +45,8 @@ namespace lfs::core {
 
         LFS_CORE_API bool lazy_ir_active();
         LFS_CORE_API void clear_lazy_ir_for_testing();
+        LFS_CORE_API void lazy_ir_set_node_limit_override_for_testing(std::optional<size_t> limit);
+        LFS_CORE_API void lazy_ir_unregister_tensor(size_t tensor_id);
 
         LFS_CORE_API bool tensor_has_lazy_expr(const Tensor& tensor);
         LFS_CORE_API uint64_t tensor_lazy_expr_id(const Tensor& tensor);

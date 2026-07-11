@@ -428,7 +428,8 @@ namespace lfs::core {
 #ifndef NDEBUG
           view_generation_snapshot_(other.view_generation_snapshot_),
 #endif
-          id_(next_id_++) {
+          id_(next_id_++),
+          lazy_ir_registered_(false) {
 
         if (profiling_enabled_) {
             LOG_DEBUG("Shallow copy: tensor #{} from #{}: shape={}, device={}, dtype={}, refcount={}",
@@ -489,6 +490,11 @@ namespace lfs::core {
             return *this;
         }
 
+        if (lazy_ir_registered_) {
+            internal::lazy_ir_unregister_tensor(id_);
+            lazy_ir_registered_ = false;
+        }
+
         const size_t old_capacity = state_ ? state_->capacity : 0;
         const size_t new_capacity = other.state_ ? other.state_->capacity : 0;
         void* const old_data = data_;
@@ -539,7 +545,8 @@ namespace lfs::core {
 #ifndef NDEBUG
           view_generation_snapshot_(other.view_generation_snapshot_),
 #endif
-          id_(other.id_) {
+          id_(std::exchange(other.id_, 0)),
+          lazy_ir_registered_(std::exchange(other.lazy_ir_registered_, false)) {
 
         if (!state_) {
             state_ = std::make_shared<TensorState>();
@@ -599,6 +606,10 @@ namespace lfs::core {
                 return *this;
             }
 
+            if (lazy_ir_registered_) {
+                internal::lazy_ir_unregister_tensor(id_);
+            }
+
             data_ = std::exchange(other.data_, nullptr);
             data_owner_ = std::move(other.data_owner_);
             state_ = std::move(other.state_);
@@ -613,7 +624,8 @@ namespace lfs::core {
 #ifndef NDEBUG
             view_generation_snapshot_ = other.view_generation_snapshot_;
 #endif
-            id_ = other.id_;
+            id_ = std::exchange(other.id_, 0);
+            lazy_ir_registered_ = std::exchange(other.lazy_ir_registered_, false);
             if (!state_) {
                 state_ = std::make_shared<TensorState>();
             }
@@ -731,6 +743,9 @@ namespace lfs::core {
         if (data_owner_ && profiling_enabled_) {
             LOG_DEBUG("Destroying tensor #{}: shape={}, device={}, refcount={}",
                       id_, shape_.str(), device_name(device_), data_owner_.use_count());
+        }
+        if (lazy_ir_registered_) {
+            internal::lazy_ir_unregister_tensor(id_);
         }
         // shared_ptr automatically handles memory cleanup when refcount reaches 0
     }

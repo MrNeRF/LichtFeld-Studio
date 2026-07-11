@@ -29,6 +29,7 @@ namespace {
             internal::lazy_executor_set_pointwise_fusion_override_for_testing(std::nullopt);
             internal::lazy_executor_set_size_heuristic_override_for_testing(false);
             internal::lazy_executor_set_size_threshold_override_for_testing(std::nullopt);
+            internal::lazy_ir_set_node_limit_override_for_testing(std::nullopt);
             Tensor::reset_lazy_telemetry();
         }
 
@@ -41,6 +42,7 @@ namespace {
             internal::lazy_executor_set_pointwise_fusion_override_for_testing(std::nullopt);
             internal::lazy_executor_set_size_heuristic_override_for_testing(std::nullopt);
             internal::lazy_executor_set_size_threshold_override_for_testing(std::nullopt);
+            internal::lazy_ir_set_node_limit_override_for_testing(std::nullopt);
             Tensor::reset_lazy_telemetry();
         }
     };
@@ -452,6 +454,40 @@ TEST(TensorLazyIrTest, OnModeRegistryGrowthGuardrailInLongCreateDropLoop) {
     const auto diagnostics = internal::lazy_executor_diagnostics_snapshot_for_testing();
     EXPECT_GT(diagnostics.max_registry_entries, 0u);
     EXPECT_LE(diagnostics.max_registry_entries, 16u);
+
+    const auto telemetry = Tensor::lazy_telemetry_snapshot();
+    EXPECT_EQ(telemetry.expr_nodes_live, 0u);
+    EXPECT_EQ(telemetry.tensor_mappings_live, 0u);
+    EXPECT_GT(telemetry.expr_nodes_created, static_cast<uint64_t>(iterations));
+    EXPECT_GT(telemetry.expr_nodes_peak, 0u);
+    EXPECT_LE(telemetry.expr_nodes_peak, 8u);
+    EXPECT_LE(telemetry.tensor_mappings_peak, telemetry.expr_nodes_peak);
+    EXPECT_GT(telemetry.expr_node_limit, 0u);
+    EXPECT_LE(telemetry.expr_nodes_peak, telemetry.expr_node_limit);
+}
+
+TEST(TensorLazyIrTest, OnModeRegistryCapacityFallsBackWithoutChangingResults) {
+    LazyTestGuard guard;
+    internal::lazy_ir_set_node_limit_override_for_testing(1);
+    Tensor::reset_lazy_telemetry();
+
+    auto deferred = Tensor::ones({8}, Device::CPU, DataType::Float32)
+                        .add(1.0f)
+                        .mul(2.0f)
+                        .sub(3.0f);
+    ASSERT_TRUE(deferred.has_lazy_expr());
+
+    const auto values = deferred.to_vector();
+    ASSERT_EQ(values.size(), 8u);
+    for (const float value : values) {
+        EXPECT_FLOAT_EQ(value, 1.0f);
+    }
+
+    const auto telemetry = Tensor::lazy_telemetry_snapshot();
+    EXPECT_EQ(telemetry.expr_node_limit, 1u);
+    EXPECT_LE(telemetry.expr_nodes_live, 1u);
+    EXPECT_LE(telemetry.expr_nodes_peak, 1u);
+    EXPECT_GT(telemetry.expr_nodes_dropped, 0u);
 }
 
 TEST(TensorLazyIrTest, OnModeContextCacheGrowthGuardrailBoundedByPlannedNodes) {

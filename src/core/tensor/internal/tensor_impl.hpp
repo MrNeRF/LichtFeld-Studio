@@ -318,6 +318,8 @@ namespace lfs::core {
 
     class LFS_CORE_API Tensor {
     private:
+        friend struct internal::LazyIrTensorAccess;
+
         struct TensorState {
             // Capacity management for in-place growth (like std::vector)
             size_t capacity = 0;
@@ -382,6 +384,7 @@ namespace lfs::core {
         uint64_t view_generation_snapshot_ = 0;
 
         mutable size_t id_ = 0;
+        mutable bool lazy_ir_registered_ = false;
         static std::atomic<size_t> next_id_;
         static inline bool profiling_enabled_ = false;
 
