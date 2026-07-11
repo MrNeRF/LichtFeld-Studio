@@ -550,9 +550,16 @@ namespace lfs::vis::gui {
                 interop_disabled = true;
                 return false;
             }
+            const std::uint64_t vulkan_ready_value = ++interop_timeline_value;
             if (!context->transitionImageLayoutImmediate(interop_image.image,
                                                          VK_IMAGE_LAYOUT_UNDEFINED,
-                                                         VK_IMAGE_LAYOUT_GENERAL)) {
+                                                         VK_IMAGE_LAYOUT_GENERAL,
+                                                         VK_IMAGE_ASPECT_COLOR_BIT,
+                                                         VK_NULL_HANDLE,
+                                                         0,
+                                                         VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                                         interop_semaphore.semaphore,
+                                                         vulkan_ready_value)) {
                 LOG_WARN("Vulkan UI texture interop initial transition failed: {}", context->lastError());
                 destroyImage();
                 interop_disabled = true;
@@ -583,7 +590,6 @@ namespace lfs::vis::gui {
             image_view = interop_image.view;
             image_layout = VK_IMAGE_LAYOUT_GENERAL;
             image_barriers.registerImage(image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
-            interop_timeline_value = 0;
             mode = Mode::CudaInterop;
 
             // Skip allocating an internal descriptor set: the interop path is consumed via RmlUi
@@ -608,9 +614,16 @@ namespace lfs::vis::gui {
             }
 
             if (image_layout != VK_IMAGE_LAYOUT_GENERAL) {
+                const std::uint64_t vulkan_ready_value = ++interop_timeline_value;
                 if (!ctx->transitionImageLayoutImmediate(image,
                                                          image_layout,
-                                                         VK_IMAGE_LAYOUT_GENERAL)) {
+                                                         VK_IMAGE_LAYOUT_GENERAL,
+                                                         VK_IMAGE_ASPECT_COLOR_BIT,
+                                                         VK_NULL_HANDLE,
+                                                         0,
+                                                         VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                                         interop_semaphore.semaphore,
+                                                         vulkan_ready_value)) {
                     LOG_ERROR("Vulkan UI texture interop transition to GENERAL failed: {}", ctx->lastError());
                     return false;
                 }
@@ -618,6 +631,11 @@ namespace lfs::vis::gui {
             }
 
             const cudaStream_t upload_stream = g_texture_upload_stream.stream();
+            if (!interop.wait(interop_timeline_value, upload_stream)) {
+                LOG_ERROR("Vulkan UI texture CUDA wait for Vulkan image release failed: {}",
+                          interop.lastError());
+                return false;
+            }
             if (!interop.copyTensorToSurface(tensor, upload_stream, flip_y)) {
                 LOG_ERROR("Vulkan UI texture CUDA copy failed: {}", interop.lastError());
                 return false;
@@ -802,7 +820,25 @@ namespace lfs::vis::gui {
         void destroyImage() {
             waitAndReleasePendingUpload();
             destroyRetiredImages();
-            if (mode == Mode::CudaInterop) {
+            const bool has_interop_resources =
+                mode == Mode::CudaInterop || interop.valid() ||
+                interop_image.image != VK_NULL_HANDLE ||
+                interop_semaphore.semaphore != VK_NULL_HANDLE;
+            if (has_interop_resources) {
+                if (g_texture_upload_stream.valid() && !g_texture_upload_stream.synchronize()) {
+                    LOG_WARN("Vulkan UI texture CUDA upload drain failed during image destruction: {}",
+                             g_texture_upload_stream.lastError());
+                }
+                if (context != nullptr) {
+                    if (!context->waitForSubmittedFrames()) {
+                        LOG_WARN("Vulkan UI texture could not drain submitted frames before image destruction: {}",
+                                 context->lastError());
+                    }
+                    if (!context->waitForImmediateSubmits()) {
+                        LOG_WARN("Vulkan UI texture could not drain immediate transitions before image destruction: {}",
+                                 context->lastError());
+                    }
+                }
                 if (image != VK_NULL_HANDLE) {
                     image_barriers.forgetImage(image);
                 }

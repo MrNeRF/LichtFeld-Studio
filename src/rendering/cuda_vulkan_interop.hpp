@@ -129,9 +129,14 @@ namespace lfs::rendering {
         // emits images with OpenGL's bottom-left origin (FrameMetadata::flip_y); pass true when
         // the consuming Vulkan image samples top-left (e.g., RmlUi-bound textures).
         [[nodiscard]] bool copyTensorToSurface(const lfs::core::Tensor& tensor,
-                                               cudaStream_t stream = nullptr,
+                                               cudaStream_t stream,
                                                bool flip_y = false) const;
-        [[nodiscard]] bool signal(std::uint64_t value, cudaStream_t stream = nullptr) const;
+        // Queue an external-timeline wait before CUDA accesses the shared image,
+        // then signal the corresponding CUDA-complete value after the access.
+        // Both require an explicit stream so GUI traffic can never leak onto
+        // the legacy default stream and serialize with training.
+        [[nodiscard]] bool wait(std::uint64_t value, cudaStream_t stream) const;
+        [[nodiscard]] bool signal(std::uint64_t value, cudaStream_t stream) const;
 
     private:
         [[nodiscard]] bool fail(std::string message) const;
@@ -175,8 +180,8 @@ namespace lfs::rendering {
         // viewer-release fence). Lifetime stays owned by this object.
         [[nodiscard]] cudaExternalSemaphore_t handle() const { return cuda_timeline_; }
 
-        [[nodiscard]] bool cudaSignal(std::uint64_t value, cudaStream_t stream = nullptr) const;
-        [[nodiscard]] bool cudaWait(std::uint64_t value, cudaStream_t stream = nullptr) const;
+        [[nodiscard]] bool cudaSignal(std::uint64_t value, cudaStream_t stream) const;
+        [[nodiscard]] bool cudaWait(std::uint64_t value, cudaStream_t stream) const;
 
     private:
         [[nodiscard]] bool fail(std::string message) const;
@@ -207,7 +212,7 @@ namespace lfs::rendering {
         [[nodiscard]] std::size_t size() const { return size_; }
         [[nodiscard]] bool copyFromTensor(const lfs::core::Tensor& tensor,
                                           std::size_t byte_count,
-                                          cudaStream_t stream = nullptr) const;
+                                          cudaStream_t stream) const;
         // Offset-aware variant for coalesced layouts where one CUDA-imported
         // VkBuffer holds multiple sub-regions (xyz | rotations | scales+opacs |
         // sh) instead of four separate allocations.

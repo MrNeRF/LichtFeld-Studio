@@ -168,6 +168,7 @@ namespace lfs::vis {
         [[nodiscard]] LFS_VIS_API std::expected<WindowCapture, std::string> captureActiveFrameRgba();
         [[nodiscard]] bool waitForCurrentFrameSlot();
         [[nodiscard]] bool waitForSubmittedFrames();
+        [[nodiscard]] bool waitForImmediateSubmits();
         [[nodiscard]] bool deviceWaitIdle();
         void addFrameTimelineWait(VkSemaphore semaphore,
                                   std::uint64_t value,
@@ -209,7 +210,9 @@ namespace lfs::vis {
                                                           VkImageAspectFlags aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT,
                                                           VkSemaphore wait_semaphore = VK_NULL_HANDLE,
                                                           std::uint64_t wait_value = 0,
-                                                          VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+                                                          VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                                          VkSemaphore signal_semaphore = VK_NULL_HANDLE,
+                                                          std::uint64_t signal_value = 0);
 
     private:
         bool fail(std::string message);

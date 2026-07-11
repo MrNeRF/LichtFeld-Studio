@@ -115,6 +115,10 @@ namespace lfs::vis {
         std::uint64_t uploaded_source_generation = 0;
 
         void destroy(VulkanContext& context) {
+            if (!context.waitForImmediateSubmits()) {
+                LOG_ERROR("Could not drain Vulkan interop transitions before target destruction: {}",
+                          context.lastError());
+            }
             interop.reset();
             context.destroyExternalSemaphore(semaphore);
             context.destroyExternalImage(image);
@@ -4149,9 +4153,16 @@ namespace lfs::vis::gui {
                 }
                 fail_required_interop(error);
             }
+            const std::uint64_t vulkan_ready_value = ++target->timeline_value;
             if (!context.transitionImageLayoutImmediate(target->image.image,
                                                         VK_IMAGE_LAYOUT_UNDEFINED,
-                                                        VK_IMAGE_LAYOUT_GENERAL)) {
+                                                        VK_IMAGE_LAYOUT_GENERAL,
+                                                        VK_IMAGE_ASPECT_COLOR_BIT,
+                                                        VK_NULL_HANDLE,
+                                                        0,
+                                                        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                                        target->semaphore.semaphore,
+                                                        vulkan_ready_value)) {
                 const std::string error = std::format("image initialization failed: {}", context.lastError());
                 target->destroy(context);
                 fail_required_interop(error);
@@ -4197,9 +4208,16 @@ namespace lfs::vis::gui {
 
         if (target.layout != VK_IMAGE_LAYOUT_GENERAL) {
             LOG_TIMER("interop.transition_to_GENERAL");
+            const std::uint64_t vulkan_ready_value = ++target.timeline_value;
             if (!context.transitionImageLayoutImmediate(target.image.image,
                                                         target.layout,
-                                                        VK_IMAGE_LAYOUT_GENERAL)) {
+                                                        VK_IMAGE_LAYOUT_GENERAL,
+                                                        VK_IMAGE_ASPECT_COLOR_BIT,
+                                                        VK_NULL_HANDLE,
+                                                        0,
+                                                        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                                        target.semaphore.semaphore,
+                                                        vulkan_ready_value)) {
                 fail_required_interop(std::format("image transition to GENERAL failed: {}", context.lastError()));
             }
             target.layout = VK_IMAGE_LAYOUT_GENERAL;
@@ -4209,6 +4227,11 @@ namespace lfs::vis::gui {
             LOG_TIMER("interop.copyTensorToSurface");
             assert(target.layout == VK_IMAGE_LAYOUT_GENERAL &&
                    "CUDA surf2Dwrite requires VK_IMAGE_LAYOUT_GENERAL");
+            if (!target.interop.wait(target.timeline_value,
+                                     vulkan_interop_upload_stream_.stream())) {
+                fail_required_interop(std::format("CUDA wait for Vulkan image release failed: {}",
+                                                  target.interop.lastError()));
+            }
             if (!target.interop.copyTensorToSurface(*vulkan_scene_image_,
                                                     vulkan_interop_upload_stream_.stream())) {
                 fail_required_interop(std::format("CUDA copy failed: {}", target.interop.lastError()));
@@ -4378,9 +4401,16 @@ namespace lfs::vis::gui {
                 }
                 fail_required_interop(error);
             }
+            const std::uint64_t vulkan_ready_value = ++target->timeline_value;
             if (!context.transitionImageLayoutImmediate(target->image.image,
                                                         VK_IMAGE_LAYOUT_UNDEFINED,
-                                                        VK_IMAGE_LAYOUT_GENERAL)) {
+                                                        VK_IMAGE_LAYOUT_GENERAL,
+                                                        VK_IMAGE_ASPECT_COLOR_BIT,
+                                                        VK_NULL_HANDLE,
+                                                        0,
+                                                        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                                        target->semaphore.semaphore,
+                                                        vulkan_ready_value)) {
                 const std::string error = std::format("image initialization failed: {}", context.lastError());
                 target->destroy(context);
                 fail_required_interop(error);
@@ -4423,9 +4453,16 @@ namespace lfs::vis::gui {
         }
 
         if (target.layout != VK_IMAGE_LAYOUT_GENERAL) {
+            const std::uint64_t vulkan_ready_value = ++target.timeline_value;
             if (!context.transitionImageLayoutImmediate(target.image.image,
                                                         target.layout,
-                                                        VK_IMAGE_LAYOUT_GENERAL)) {
+                                                        VK_IMAGE_LAYOUT_GENERAL,
+                                                        VK_IMAGE_ASPECT_COLOR_BIT,
+                                                        VK_NULL_HANDLE,
+                                                        0,
+                                                        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                                        target.semaphore.semaphore,
+                                                        vulkan_ready_value)) {
                 fail_required_interop(std::format("image transition to GENERAL failed: {}", context.lastError()));
             }
             target.layout = VK_IMAGE_LAYOUT_GENERAL;
@@ -4433,6 +4470,11 @@ namespace lfs::vis::gui {
 
         assert(target.layout == VK_IMAGE_LAYOUT_GENERAL &&
                "CUDA surf2Dwrite requires VK_IMAGE_LAYOUT_GENERAL");
+        if (!target.interop.wait(target.timeline_value,
+                                 vulkan_interop_upload_stream_.stream())) {
+            fail_required_interop(std::format("CUDA wait for Vulkan image release failed: {}",
+                                              target.interop.lastError()));
+        }
         if (!target.interop.copyTensorToSurface(*vulkan_split_right_image_,
                                                 vulkan_interop_upload_stream_.stream())) {
             fail_required_interop(std::format("CUDA copy failed: {}", target.interop.lastError()));
@@ -4599,9 +4641,16 @@ namespace lfs::vis::gui {
                 }
                 fail_required_interop(error);
             }
+            const std::uint64_t vulkan_ready_value = ++target->timeline_value;
             if (!context.transitionImageLayoutImmediate(target->image.image,
                                                         VK_IMAGE_LAYOUT_UNDEFINED,
-                                                        VK_IMAGE_LAYOUT_GENERAL)) {
+                                                        VK_IMAGE_LAYOUT_GENERAL,
+                                                        VK_IMAGE_ASPECT_COLOR_BIT,
+                                                        VK_NULL_HANDLE,
+                                                        0,
+                                                        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                                        target->semaphore.semaphore,
+                                                        vulkan_ready_value)) {
                 const std::string error = std::format("image initialization failed: {}", context.lastError());
                 target->destroy(context);
                 fail_required_interop(error);
@@ -4644,9 +4693,16 @@ namespace lfs::vis::gui {
         }
 
         if (target.layout != VK_IMAGE_LAYOUT_GENERAL) {
+            const std::uint64_t vulkan_ready_value = ++target.timeline_value;
             if (!context.transitionImageLayoutImmediate(target.image.image,
                                                         target.layout,
-                                                        VK_IMAGE_LAYOUT_GENERAL)) {
+                                                        VK_IMAGE_LAYOUT_GENERAL,
+                                                        VK_IMAGE_ASPECT_COLOR_BIT,
+                                                        VK_NULL_HANDLE,
+                                                        0,
+                                                        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                                        target.semaphore.semaphore,
+                                                        vulkan_ready_value)) {
                 fail_required_interop(std::format("image transition to GENERAL failed: {}", context.lastError()));
             }
             target.layout = VK_IMAGE_LAYOUT_GENERAL;
@@ -4654,6 +4710,11 @@ namespace lfs::vis::gui {
 
         assert(target.layout == VK_IMAGE_LAYOUT_GENERAL &&
                "CUDA surf2Dwrite requires VK_IMAGE_LAYOUT_GENERAL");
+        if (!target.interop.wait(target.timeline_value,
+                                 vulkan_interop_upload_stream_.stream())) {
+            fail_required_interop(std::format("CUDA wait for Vulkan image release failed: {}",
+                                              target.interop.lastError()));
+        }
         if (!target.interop.copyTensorToSurface(*vulkan_depth_blit_image_,
                                                 vulkan_interop_upload_stream_.stream())) {
             fail_required_interop(std::format("CUDA copy failed: {}", target.interop.lastError()));

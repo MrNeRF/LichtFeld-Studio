@@ -1276,6 +1276,44 @@ namespace lfs::vis {
         return waitForFrameFences();
     }
 
+    bool VulkanContext::waitForImmediateSubmits() {
+        if (device_ == VK_NULL_HANDLE || pending_immediate_submits_.empty()) {
+            return true;
+        }
+
+        constexpr std::uint64_t kImmediateWaitTimeoutNs = 2'000'000'000ull;
+        std::vector<VkFence> fences;
+        fences.reserve(pending_immediate_submits_.size());
+        for (const auto& pending : pending_immediate_submits_) {
+            if (pending.fence != VK_NULL_HANDLE) {
+                fences.push_back(pending.fence);
+            }
+        }
+        if (!fences.empty()) {
+            const VkResult result = vkWaitForFences(device_,
+                                                    static_cast<std::uint32_t>(fences.size()),
+                                                    fences.data(),
+                                                    VK_TRUE,
+                                                    kImmediateWaitTimeoutNs);
+            if (result != VK_SUCCESS) {
+                return fail(std::format("vkWaitForFences(immediate submits) failed: {}",
+                                        vkResultToString(result)));
+            }
+        }
+
+        for (auto& pending : pending_immediate_submits_) {
+            if (pending.fence != VK_NULL_HANDLE) {
+                vkDestroyFence(device_, pending.fence, nullptr);
+            }
+            if (pending.cmd != VK_NULL_HANDLE) {
+                vkFreeCommandBuffers(device_, immediate_command_pool_, 1, &pending.cmd);
+            }
+        }
+        pending_immediate_submits_.clear();
+        last_error_.clear();
+        return true;
+    }
+
     bool VulkanContext::deviceWaitIdle() {
         if (device_ == VK_NULL_HANDLE) {
             return true;
@@ -2729,7 +2767,9 @@ namespace lfs::vis {
                                                        const VkImageAspectFlags aspect_mask,
                                                        const VkSemaphore wait_semaphore,
                                                        const std::uint64_t wait_value,
-                                                       const VkPipelineStageFlags wait_stage) {
+                                                       const VkPipelineStageFlags wait_stage,
+                                                       const VkSemaphore signal_semaphore,
+                                                       const std::uint64_t signal_value) {
         if (device_ == VK_NULL_HANDLE || immediate_command_pool_ == VK_NULL_HANDLE ||
             graphics_queue_ == VK_NULL_HANDLE || image == VK_NULL_HANDLE) {
             return fail("Cannot transition Vulkan image layout before graphics resources are initialized");
@@ -2738,11 +2778,21 @@ namespace lfs::vis {
             return fail("Immediate Vulkan image layout transitions cannot run during an active frame");
         }
         if (old_layout == new_layout) {
+            if (wait_semaphore != VK_NULL_HANDLE || signal_semaphore != VK_NULL_HANDLE) {
+                return fail("A no-op image layout transition cannot carry timeline synchronization");
+            }
             last_error_.clear();
             return true;
         }
-        // Reap any prior fire-and-forget submits that have completed.
+        // Reap any prior fire-and-forget submits that have completed. Bound
+        // the backlog under a stalled GPU so command buffers and fences cannot
+        // grow without limit; this path only blocks once 64 submits are live.
         drainCompletedImmediateSubmits();
+        constexpr std::size_t kMaxPendingImmediateSubmits = 64;
+        if (pending_immediate_submits_.size() >= kMaxPendingImmediateSubmits &&
+            !waitForImmediateSubmits()) {
+            return false;
+        }
 
         VkCommandBufferAllocateInfo allocate_info{};
         allocate_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -2856,6 +2906,14 @@ namespace lfs::vis {
             submit_info.waitSemaphoreCount = 1;
             submit_info.pWaitSemaphores = &wait_semaphore;
             submit_info.pWaitDstStageMask = &resolved_wait_stage;
+        }
+        if (signal_semaphore != VK_NULL_HANDLE) {
+            timeline_submit_info.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
+            timeline_submit_info.signalSemaphoreValueCount = 1;
+            timeline_submit_info.pSignalSemaphoreValues = &signal_value;
+            submit_info.pNext = &timeline_submit_info;
+            submit_info.signalSemaphoreCount = 1;
+            submit_info.pSignalSemaphores = &signal_semaphore;
         }
         VkFenceCreateInfo fence_info{};
         fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;

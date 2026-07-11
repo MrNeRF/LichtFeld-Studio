@@ -530,6 +530,9 @@ namespace lfs::rendering {
         if (!valid()) {
             return fail("CUDA/Vulkan interop target is not initialized");
         }
+        if (stream == nullptr) {
+            return fail("CUDA/Vulkan image copy requires an explicit non-default CUDA stream");
+        }
         PreparedCudaImageTensor prepared{};
         if (!prepareCudaImageTensor(tensor, extent_, stream, prepared, last_error_)) {
             return false;
@@ -571,10 +574,28 @@ namespace lfs::rendering {
         return failCuda("copy tensor to CUDA surface", status);
     }
 
+    bool CudaVulkanInterop::wait(const std::uint64_t value, const cudaStream_t stream) const {
+        last_error_.clear();
+        if (cuda_timeline_ == nullptr) {
+            return fail("CUDA/Vulkan timeline semaphore is not initialized");
+        }
+        if (stream == nullptr) {
+            return fail("CUDA/Vulkan timeline wait requires an explicit non-default CUDA stream");
+        }
+
+        cudaExternalSemaphoreWaitParams params{};
+        params.params.fence.value = value;
+        return failCuda("cudaWaitExternalSemaphoresAsync",
+                        cudaWaitExternalSemaphoresAsync(&cuda_timeline_, &params, 1, stream));
+    }
+
     bool CudaVulkanInterop::signal(const std::uint64_t value, const cudaStream_t stream) const {
         last_error_.clear();
         if (cuda_timeline_ == nullptr) {
             return fail("CUDA/Vulkan timeline semaphore is not initialized");
+        }
+        if (stream == nullptr) {
+            return fail("CUDA/Vulkan timeline signal requires an explicit non-default CUDA stream");
         }
 
         if (value <= last_signaled_) {
@@ -680,6 +701,9 @@ namespace lfs::rendering {
         if (cuda_timeline_ == nullptr) {
             return fail("CUDA timeline semaphore is not initialized");
         }
+        if (stream == nullptr) {
+            return fail("CUDA timeline signal requires an explicit non-default CUDA stream");
+        }
         if (value <= last_signaled_) {
             return fail(std::format("CUDA timeline signal value {} must be greater than {}",
                                     value,
@@ -701,6 +725,9 @@ namespace lfs::rendering {
         last_error_.clear();
         if (cuda_timeline_ == nullptr) {
             return fail("CUDA timeline semaphore is not initialized");
+        }
+        if (stream == nullptr) {
+            return fail("CUDA timeline wait requires an explicit non-default CUDA stream");
         }
         cudaExternalSemaphoreWaitParams params{};
         params.params.fence.value = value;
@@ -836,6 +863,9 @@ namespace lfs::rendering {
         last_error_.clear();
         if (!valid()) {
             return fail("CUDA/Vulkan external buffer is not initialized");
+        }
+        if (stream == nullptr) {
+            return fail("CUDA/Vulkan buffer copy requires an explicit non-default CUDA stream");
         }
         if (byte_count == 0 || dst_offset > size_ || byte_count > size_ - dst_offset) {
             return fail(std::format(
