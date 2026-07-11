@@ -2,30 +2,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 
+#include "core/cuda_error.hpp"
+
 #include <cassert>
-#include <format>
 #include <source_location>
-#include <stdexcept>
-#include <string>
 #include <string_view>
-
-namespace lfs::core::detail {
-
-    [[noreturn]] inline void assertion_failed(
-        const std::string_view contract,
-        const std::string_view expression,
-        const std::string_view message,
-        const std::source_location location) {
-        std::string error = std::format("{} failed: {}", contract, expression);
-        if (!message.empty()) {
-            error += " — ";
-            error += message;
-        }
-        error += std::format(" ({}:{})", location.file_name(), location.line());
-        throw std::runtime_error(error);
-    }
-
-} // namespace lfs::core::detail
 
 // Public/API-boundary contract. This remains enabled in every build type and
 // throws before invalid state reaches an implementation or kernel.

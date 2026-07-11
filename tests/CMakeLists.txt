@@ -111,6 +111,7 @@ set(BENCHMARK_FILES
 # Regular test sources (unit tests, integration tests)
 set(TEST_FILES
     test_assert_hardening.cpp
+    test_cuda_error.cpp
     test_loss_gradients.cpp
     test_regularization_comparison.cpp
     test_gut_rasterizer_gradients.cpp

@@ -3026,7 +3026,10 @@ namespace lfs::core {
 
     TensorError::TensorError(const std::string& msg, const Tensor* t)
         : std::runtime_error(msg),
-          tensor_info_(t ? t->str() : "") {}
+          tensor_info_(t ? t->str() : "") {
+        report_tensor_exception(
+            tensor_info_.empty() ? msg : std::format("{} (tensor={})", msg, tensor_info_));
+    }
 
     Tensor Tensor::zeros_direct(TensorShape shape, size_t capacity, Device device, DataType dtype) {
         LFS_ASSERT_MSG(device == Device::CUDA,

@@ -46,6 +46,7 @@ set(TENSOR_SOURCES
 # Core module sources
 set(CORE_SOURCES
         abi.cpp
+        cuda_error.cpp
         operator_callbacks.cpp
         animatable_property.cpp
         argument_parser.cpp
@@ -120,6 +121,10 @@ endif()
 # Platform-specific settings
 if(UNIX)
     target_link_libraries(lfs_core PUBLIC dl)
+endif()
+
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 12)
+    target_link_libraries(lfs_core PRIVATE stdc++exp)
 endif()
 
 # Compiler options
