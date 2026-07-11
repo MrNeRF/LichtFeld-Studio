@@ -4,9 +4,15 @@
 
 #pragma once
 
+#include "core/assert.hpp"
+
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <format>
+#include <limits>
+#include <string>
+#include <string_view>
 
 // cuda.h defines CUDA_VERSION which GLM needs to detect CUDA version properly
 // Must be included before any GLM headers
@@ -65,17 +71,150 @@ namespace gsplat_lfs {
 #define GSPLAT_CHECK_CUDA_PTR(ptr, name) ((void)0)
 #endif
 
-// CUB wrapper that handles temporary storage allocation
-// Uses cudaMalloc instead of PyTorch caching allocator
-#define CUB_WRAPPER_LFS(func, ...)                           \
-    do {                                                     \
-        size_t temp_storage_bytes = 0;                       \
-        func(nullptr, temp_storage_bytes, __VA_ARGS__);      \
-        void* temp_storage = nullptr;                        \
-        cudaMalloc(&temp_storage, temp_storage_bytes);       \
-        func(temp_storage, temp_storage_bytes, __VA_ARGS__); \
-        cudaFree(temp_storage);                              \
-    } while (false)
+    inline void check_cuda_status(const cudaError_t status, const std::string_view operation) {
+        if (status == cudaSuccess) {
+            return;
+        }
+        const std::string message = std::format(
+            "{} failed: {} ({})", operation, cudaGetErrorString(status), cudaGetErrorName(status));
+        cudaGetLastError();
+        LFS_ASSERT_MSG(status == cudaSuccess, message);
+    }
+
+    inline size_t checked_multiply(const size_t lhs,
+                                   const size_t rhs,
+                                   const std::string_view quantity) {
+        LFS_ASSERT_MSG(
+            lhs == 0 || rhs <= std::numeric_limits<size_t>::max() / lhs,
+            std::format("{} size overflow: {} * {}", quantity, lhs, rhs));
+        return lhs * rhs;
+    }
+
+    inline size_t checked_bytes(const size_t count,
+                                const size_t element_size,
+                                const std::string_view allocation) {
+        return checked_multiply(count, element_size, allocation);
+    }
+
+    void set_cuda_allocation_failure_for_testing(bool fail);
+
+#ifdef LFS_ENABLE_CUDA_FAILURE_INJECTION
+    bool cuda_allocation_failure_is_forced();
+#endif
+
+    inline void maybe_inject_cuda_allocation_failure(const std::string_view label) {
+#ifdef LFS_ENABLE_CUDA_FAILURE_INJECTION
+        if (cuda_allocation_failure_is_forced()) {
+            LFS_ASSERT_MSG(false, std::format("CUDA allocation for '{}' failed (injected)", label));
+        }
+#else
+        (void)label;
+#endif
+    }
+
+    inline void checked_cuda_malloc(void** ptr,
+                                    const size_t bytes,
+                                    const std::string_view label) {
+        LFS_ASSERT(ptr != nullptr);
+        LFS_ASSERT_MSG(bytes > 0, "CUDA allocation requires a nonzero size");
+        maybe_inject_cuda_allocation_failure(label);
+        check_cuda_status(
+            cudaMalloc(ptr, bytes),
+            std::format("CUDA allocation for '{}' ({} bytes)", label, bytes));
+        LFS_ASSERT_MSG(*ptr != nullptr,
+                       std::format("CUDA allocation for '{}' returned null ({} bytes)", label, bytes));
+    }
+
+    class StreamOrderedDeviceBuffer {
+    public:
+        StreamOrderedDeviceBuffer() = default;
+
+        StreamOrderedDeviceBuffer(const size_t bytes,
+                                  const cudaStream_t stream,
+                                  const std::string_view label) {
+            allocate(bytes, stream, label);
+        }
+
+        ~StreamOrderedDeviceBuffer() {
+            reset();
+        }
+
+        StreamOrderedDeviceBuffer(const StreamOrderedDeviceBuffer&) = delete;
+        StreamOrderedDeviceBuffer& operator=(const StreamOrderedDeviceBuffer&) = delete;
+        StreamOrderedDeviceBuffer(StreamOrderedDeviceBuffer&&) = delete;
+        StreamOrderedDeviceBuffer& operator=(StreamOrderedDeviceBuffer&&) = delete;
+
+        void allocate(const size_t bytes,
+                      const cudaStream_t stream,
+                      const std::string_view label) {
+            LFS_ASSERT_MSG(ptr_ == nullptr, "Stream-ordered CUDA buffer cannot be allocated twice");
+            LFS_ASSERT_MSG(bytes > 0, "Stream-ordered CUDA buffer requires a nonzero size");
+            maybe_inject_cuda_allocation_failure(label);
+
+            void* ptr = nullptr;
+#if CUDART_VERSION >= 11020
+            const cudaError_t status = cudaMallocAsync(&ptr, bytes, stream);
+#else
+            const cudaError_t status = cudaMalloc(&ptr, bytes);
+#endif
+            check_cuda_status(
+                status, std::format("CUDA allocation for '{}' ({} bytes)", label, bytes));
+            LFS_ASSERT_MSG(ptr != nullptr,
+                           std::format("CUDA allocation for '{}' returned null ({} bytes)", label, bytes));
+            ptr_ = ptr;
+            stream_ = stream;
+            bytes_ = bytes;
+        }
+
+        void reset() noexcept {
+            if (!ptr_) {
+                return;
+            }
+#if CUDART_VERSION >= 11020
+            const cudaError_t status = cudaFreeAsync(ptr_, stream_);
+#else
+            const cudaError_t status = cudaFree(ptr_);
+#endif
+            if (status != cudaSuccess) {
+                cudaGetLastError();
+            }
+            ptr_ = nullptr;
+            bytes_ = 0;
+        }
+
+        void* get() const noexcept { return ptr_; }
+
+        template <typename T>
+        T* as() const noexcept {
+            return static_cast<T*>(ptr_);
+        }
+
+        size_t size() const noexcept { return bytes_; }
+
+    private:
+        void* ptr_ = nullptr;
+        cudaStream_t stream_ = nullptr;
+        size_t bytes_ = 0;
+    };
+
+    template <typename Operation>
+    void run_cub_operation(const std::string_view name,
+                           const cudaStream_t stream,
+                           Operation&& operation) {
+        size_t workspace_bytes = 0;
+        check_cuda_status(
+            operation(nullptr, workspace_bytes), std::format("{} workspace query", name));
+        LFS_ASSERT_MSG(
+            workspace_bytes > 0,
+            std::format("{} returned an empty workspace for a nonempty operation", name));
+
+        StreamOrderedDeviceBuffer workspace(
+            workspace_bytes, stream, "rasterizer.gsplat.cub_workspace");
+        LFS_ASSERT_MSG(
+            workspace.get() != nullptr,
+            std::format("{} cannot execute with null workspace ({} bytes)", name, workspace_bytes));
+        check_cuda_status(operation(workspace.get(), workspace_bytes), name);
+    }
 
     //
     // Convenience typedefs for CUDA types

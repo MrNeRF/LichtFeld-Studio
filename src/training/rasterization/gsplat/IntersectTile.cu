@@ -209,23 +209,33 @@ namespace gsplat_lfs {
         cub::DoubleBuffer<int64_t> d_keys(isect_ids, isect_ids_sorted);
         cub::DoubleBuffer<int32_t> d_values(flatten_ids, flatten_ids_sorted);
 
-        CUB_WRAPPER_LFS(
-            cub::DeviceRadixSort::SortPairs,
-            d_keys,
-            d_values,
-            n_isects,
-            0,
-            32 + tile_n_bits + cam_n_bits,
-            stream);
+        run_cub_operation(
+            "cub::DeviceRadixSort::SortPairs", stream,
+            [&](void* workspace, size_t& workspace_bytes) {
+                return cub::DeviceRadixSort::SortPairs(
+                    workspace, workspace_bytes,
+                    d_keys, d_values, n_isects,
+                    0, 32 + tile_n_bits + cam_n_bits, stream);
+            });
 
         // Copy results to sorted buffers if needed
         if (d_keys.selector == 0) {
-            cudaMemcpyAsync(isect_ids_sorted, isect_ids,
-                            n_isects * sizeof(int64_t), cudaMemcpyDeviceToDevice, stream);
+            check_cuda_status(
+                cudaMemcpyAsync(
+                    isect_ids_sorted, isect_ids,
+                    checked_bytes(static_cast<size_t>(n_isects), sizeof(int64_t),
+                                  "gsplat sorted intersection ids"),
+                    cudaMemcpyDeviceToDevice, stream),
+                "gsplat sorted intersection id copy");
         }
         if (d_values.selector == 0) {
-            cudaMemcpyAsync(flatten_ids_sorted, flatten_ids,
-                            n_isects * sizeof(int32_t), cudaMemcpyDeviceToDevice, stream);
+            check_cuda_status(
+                cudaMemcpyAsync(
+                    flatten_ids_sorted, flatten_ids,
+                    checked_bytes(static_cast<size_t>(n_isects), sizeof(int32_t),
+                                  "gsplat sorted flatten ids"),
+                    cudaMemcpyDeviceToDevice, stream),
+                "gsplat sorted flatten id copy");
         }
     }
 
@@ -241,12 +251,12 @@ namespace gsplat_lfs {
         auto cast_op = [] __host__ __device__(int32_t x) { return static_cast<int64_t>(x); };
         auto cast_iter = thrust::make_transform_iterator(input, cast_op);
 
-        CUB_WRAPPER_LFS(
-            cub::DeviceScan::InclusiveSum,
-            cast_iter,
-            output,
-            n_elements,
-            stream);
+        run_cub_operation(
+            "cub::DeviceScan::InclusiveSum", stream,
+            [&](void* workspace, size_t& workspace_bytes) {
+                return cub::DeviceScan::InclusiveSum(
+                    workspace, workspace_bytes, cast_iter, output, n_elements, stream);
+            });
     }
 
 } // namespace gsplat_lfs

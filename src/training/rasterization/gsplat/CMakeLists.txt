@@ -16,6 +16,7 @@ endif()
 # All gsplat sources together
 set(GSPLAT_SOURCES
         # C++ files
+        Common.cpp
         Intersect.cpp
         Projection.cpp
         QuatToRotmat.cpp
@@ -52,6 +53,7 @@ target_include_directories(gsplat_backend_lfs
         ${CUDAToolkit_INCLUDE_DIRS}
         PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src/core/include
 )
 
 target_link_libraries(gsplat_backend_lfs
@@ -89,6 +91,12 @@ endif()
 target_compile_definitions(gsplat_backend_lfs PRIVATE
     GLM_FORCE_CUDA
 )
+
+if(BUILD_TESTS)
+    # Common.h contains inline allocation helpers, so every consumer must see
+    # the same test-hook definition to preserve the C++ one-definition rule.
+    target_compile_definitions(gsplat_backend_lfs PUBLIC LFS_ENABLE_CUDA_FAILURE_INJECTION=1)
+endif()
 
 # Print debug info
 message(STATUS "gsplat_backend_lfs configuration:")

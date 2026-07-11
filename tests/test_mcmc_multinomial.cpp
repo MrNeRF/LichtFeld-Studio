@@ -4,10 +4,13 @@
 #include <cmath>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
+#include <limits>
+#include <stdexcept>
 #include <vector>
 
 #include "core/tensor.hpp"
 #include "kernels/mcmc_kernels.hpp"
+#include "lfs/cuda_scratch.hpp"
 
 using namespace lfs::core;
 
@@ -58,6 +61,27 @@ protected:
         ASSERT_EQ(cudaSetDevice(0), cudaSuccess);
     }
 };
+
+TEST_F(McmcMultinomialTest, ScratchAllocationFailureAbortsAndRecovers) {
+    auto weights = Tensor::ones({32}, Device::CUDA);
+    auto opacities = Tensor::ones({32}, Device::CUDA);
+    auto scales = Tensor::zeros({32, 3}, Device::CUDA);
+    auto out_indices = Tensor::zeros({8}, Device::CUDA, DataType::Int64);
+    auto out_opacities = Tensor::zeros({8}, Device::CUDA);
+    auto out_scales = Tensor::zeros({8, 3}, Device::CUDA);
+
+    EXPECT_THROW(
+        (void)lfs::training::cuda_scratch::DeviceBuffer(
+            std::numeric_limits<size_t>::max(), nullptr, "test.impossible_allocation"),
+        std::runtime_error);
+
+    EXPECT_NO_THROW(lfs::training::mcmc::launch_multinomial_sample_all(
+        weights.ptr<float>(), opacities.ptr<float>(), scales.ptr<float>(),
+        32, 8, 1234,
+        out_indices.ptr<int64_t>(), out_opacities.ptr<float>(), out_scales.ptr<float>(),
+        nullptr));
+    EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+}
 
 TEST_F(McmcMultinomialTest, SamplesFollowWeightsAndGatherExactValues) {
     std::vector<float> weights(N, 0.0f);

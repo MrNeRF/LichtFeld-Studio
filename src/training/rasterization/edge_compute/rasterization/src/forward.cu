@@ -58,7 +58,9 @@ int edge_compute::rasterization::edge_forward(
 
     // Initialize tile instance ranges on the frame's stream (see fastgs
     // forward.cu: the old side-stream overlap relied on legacy ordering).
-    cudaMemsetAsync(per_tile_buffers.instance_ranges, 0, sizeof(uint2) * n_tiles, stream);
+    check_cuda_status(
+        cudaMemsetAsync(per_tile_buffers.instance_ranges, 0, sizeof(uint2) * n_tiles, stream),
+        "edge tile-range initialization");
 
     // Allocate per-primitive buffers through arena
     char* per_primitive_buffers_blob = per_primitive_buffers_func(required<PerPrimitiveBuffers>(n_primitives));
@@ -91,18 +93,24 @@ int edge_compute::rasterization::edge_forward(
         mip_filter);
     CHECK_CUDA(config::debug, "preprocess")
 
-    cub::DeviceScan::InclusiveSum(
-        per_primitive_buffers.cub_workspace,
-        per_primitive_buffers.cub_workspace_size,
-        per_primitive_buffers.n_touched_tiles,
-        per_primitive_buffers.offset,
-        n_primitives,
-        stream);
+    check_cuda_status(
+        cub::DeviceScan::InclusiveSum(
+            per_primitive_buffers.cub_workspace,
+            per_primitive_buffers.cub_workspace_size,
+            per_primitive_buffers.n_touched_tiles,
+            per_primitive_buffers.offset,
+            n_primitives,
+            stream),
+        "cub::DeviceScan::InclusiveSum (Primitive Offsets)");
     CHECK_CUDA(config::debug, "cub::DeviceScan::InclusiveSum (Primitive Offsets)")
 
     uint32_t n_instances_u32;
-    cudaMemcpyAsync(&n_instances_u32, per_primitive_buffers.offset + n_primitives - 1, sizeof(n_instances_u32), cudaMemcpyDeviceToHost, stream);
-    cudaStreamSynchronize(stream);
+    check_cuda_status(
+        cudaMemcpyAsync(
+            &n_instances_u32, per_primitive_buffers.offset + n_primitives - 1,
+            sizeof(n_instances_u32), cudaMemcpyDeviceToHost, stream),
+        "edge instance-count readback");
+    check_cuda_status(cudaStreamSynchronize(stream), "edge instance-count stream sync");
     CHECK_CUDA(config::debug, "cudaMemcpy(n_instances)")
     const int n_instances = checked_to_int(n_instances_u32, "n_instances exceeds int range");
 
@@ -125,13 +133,15 @@ int edge_compute::rasterization::edge_forward(
             n_primitives);
         CHECK_CUDA(config::debug, "create_instances")
 
-        cub::DeviceRadixSort::SortPairs(
-            per_instance_buffers.cub_workspace,
-            per_instance_buffers.cub_workspace_size,
-            per_instance_buffers.keys,
-            per_instance_buffers.primitive_indices,
-            n_instances, 0, key_end_bit,
-            stream);
+        check_cuda_status(
+            cub::DeviceRadixSort::SortPairs(
+                per_instance_buffers.cub_workspace,
+                per_instance_buffers.cub_workspace_size,
+                per_instance_buffers.keys,
+                per_instance_buffers.primitive_indices,
+                n_instances, 0, key_end_bit,
+                stream),
+            "cub::DeviceRadixSort::SortPairs (Tile/Depth)");
         CHECK_CUDA(config::debug, "cub::DeviceRadixSort::SortPairs (Tile/Depth)")
     }
 

@@ -377,16 +377,18 @@ namespace gsplat_lfs {
             channels = 4;
         }
 
-        // Temporary buffers for gradients — stream-ordered alloc/free so the
-        // scratch is ordered with the backward kernels that use it (a plain
-        // cudaMalloc/cudaFree only synchronizes against the legacy stream).
-        float* v_colors = nullptr;
-#if CUDART_VERSION >= 11020
-        cudaMallocAsync(&v_colors, C * N * channels * sizeof(float), stream);
-#else
-        cudaMalloc(&v_colors, C * N * channels * sizeof(float));
-#endif
-        cudaMemsetAsync(v_colors, 0, C * N * channels * sizeof(float), stream);
+        const size_t color_values = checked_multiply(
+            checked_multiply(static_cast<size_t>(C), static_cast<size_t>(N),
+                             "gsplat backward color elements"),
+            static_cast<size_t>(channels), "gsplat backward color elements");
+        const size_t color_bytes = checked_bytes(
+            color_values, sizeof(float), "gsplat backward color gradients");
+        StreamOrderedDeviceBuffer color_gradients(
+            color_bytes, stream, "rasterizer.gsplat.color_gradients");
+        auto* v_colors = color_gradients.as<float>();
+        check_cuda_status(
+            cudaMemsetAsync(v_colors, 0, color_bytes, stream),
+            "gsplat backward color-gradient initialization");
 
         // Backward through rasterization
         rasterize_to_pixels_from_world_3dgs_bwd(
@@ -424,12 +426,6 @@ namespace gsplat_lfs {
         if (scaling_modifier != 1.0f) {
             // TODO: Scale v_scales by scaling_modifier
         }
-
-#if CUDART_VERSION >= 11020
-        cudaFreeAsync(v_colors, stream);
-#else
-        cudaFree(v_colors);
-#endif
     }
 
 } // namespace gsplat_lfs

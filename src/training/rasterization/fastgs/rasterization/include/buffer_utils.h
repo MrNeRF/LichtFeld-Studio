@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/assert.hpp"
 #include "helper_math.h"
 #include "rasterization_config.h"
 #include "utils.h"
@@ -304,6 +305,9 @@ namespace fast_lfs::rasterization {
                 std::cerr << "\n[CUDA ERROR] " << message;
                 throw std::runtime_error(message);
             }
+            LFS_ASSERT_MSG(
+                buffers.cub_workspace_size > 0,
+                "FastGS CUB scan returned an empty workspace for nonempty primitive input");
             obtain(blob, buffers.cub_workspace, buffers.cub_workspace_size, 128);
             return buffers;
         }

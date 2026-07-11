@@ -289,7 +289,12 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
             "radix sort workspace query",
             static_cast<uint64_t>(n_primitives),
             n_tiles_u64);
+        LFS_ASSERT_MSG(
+            cub_workspace_size > 0,
+            "FastGS CUB radix sort returned an empty workspace for nonempty instance input");
         cub_workspace.allocate(cub_workspace_size);
+        LFS_ASSERT_MSG(cub_workspace.as<char>() != nullptr,
+                       "FastGS CUB radix sort cannot execute with null workspace");
 
         per_instance_sort_total_size =
             keys_current.size() +

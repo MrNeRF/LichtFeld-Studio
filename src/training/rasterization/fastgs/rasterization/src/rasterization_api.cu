@@ -10,6 +10,7 @@
 #include "diagnostics/vram_profiler.hpp"
 #include "forward.h"
 #include "helper_math.h"
+#include "lfs/cuda_scratch.hpp"
 #include "rasterization_api.h"
 #include "rasterization_config.h"
 #include "utils.h"
@@ -642,9 +643,13 @@ namespace fast_lfs::rasterization {
                                       + 3 * sizeof(float)                                 // cam_pos
                                       + IMG_WIDTH * IMG_HEIGHT * 5 * sizeof(float);       // image + alpha + depth
 
-        char* buffer;
-        cudaMalloc(&buffer, INPUT_SIZE);
-        cudaMemset(buffer, 0, INPUT_SIZE);
+        const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
+        lfs::training::cuda_scratch::DeviceBuffer input_buffer(
+            INPUT_SIZE, stream, "fastgs.warmup.input");
+        char* const buffer = input_buffer.as<char>();
+        lfs::training::cuda_scratch::check_status(
+            cudaMemsetAsync(buffer, 0, INPUT_SIZE, stream),
+            "FastGS warmup input initialization");
 
         float* const means = reinterpret_cast<float*>(buffer);
         float* const scales = means + NUM_GAUSSIANS * 3;
@@ -662,13 +667,23 @@ namespace fast_lfs::rasterization {
         for (int i = 0; i < NUM_GAUSSIANS; ++i) {
             rot_data[i * 4] = 1.0f; // w=1, x=y=z=0
         }
-        cudaMemcpy(rotations, rot_data.data(), rot_data.size() * sizeof(float), cudaMemcpyHostToDevice);
+        lfs::training::cuda_scratch::check_status(
+            cudaMemcpyAsync(rotations, rot_data.data(), rot_data.size() * sizeof(float),
+                            cudaMemcpyHostToDevice, stream),
+            "FastGS warmup rotation upload");
 
         // Initialize w2c to identity and camera position
         const float identity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
         const float cam[3] = {0.0f, 0.0f, 5.0f};
-        cudaMemcpy(w2c, identity, sizeof(identity), cudaMemcpyHostToDevice);
-        cudaMemcpy(cam_pos, cam, sizeof(cam), cudaMemcpyHostToDevice);
+        lfs::training::cuda_scratch::check_status(
+            cudaMemcpyAsync(w2c, identity, sizeof(identity), cudaMemcpyHostToDevice, stream),
+            "FastGS warmup transform upload");
+        lfs::training::cuda_scratch::check_status(
+            cudaMemcpyAsync(cam_pos, cam, sizeof(cam), cudaMemcpyHostToDevice, stream),
+            "FastGS warmup camera upload");
+        lfs::training::cuda_scratch::check_status(
+            cudaStreamSynchronize(stream),
+            "FastGS warmup input upload sync");
 
         // Forward pass compiles forward kernels
         const auto ctx = forward_raw(
@@ -687,9 +702,13 @@ namespace fast_lfs::rasterization {
             constexpr size_t GRAD_SIZE = IMG_WIDTH * IMG_HEIGHT * 4 * sizeof(float);
             constexpr size_t MOMENT_Q_SIZE = PARAM_ELEMENTS * 2 * sizeof(std::uint8_t);
             constexpr size_t SCALE_SIZE = PARAM_ROWS * 2 * sizeof(float);
-            char* grad_buffer;
-            cudaMalloc(&grad_buffer, GRAD_SIZE + MOMENT_Q_SIZE + SCALE_SIZE);
-            cudaMemset(grad_buffer, 0, GRAD_SIZE + MOMENT_Q_SIZE + SCALE_SIZE);
+            constexpr size_t GRAD_BUFFER_SIZE = GRAD_SIZE + MOMENT_Q_SIZE + SCALE_SIZE;
+            lfs::training::cuda_scratch::DeviceBuffer gradient_buffer(
+                GRAD_BUFFER_SIZE, stream, "fastgs.warmup.gradients");
+            char* const grad_buffer = gradient_buffer.as<char>();
+            lfs::training::cuda_scratch::check_status(
+                cudaMemsetAsync(grad_buffer, 0, GRAD_BUFFER_SIZE, stream),
+                "FastGS warmup gradient initialization");
 
             float* const grad_image = reinterpret_cast<float*>(grad_buffer);
             float* const grad_alpha = grad_image + IMG_WIDTH * IMG_HEIGHT * 3;
@@ -734,13 +753,9 @@ namespace fast_lfs::rasterization {
                 IMG_WIDTH, IMG_HEIGHT, FOCAL, FOCAL, CENTER_X, CENTER_Y, true,
                 DensificationType::None, &warmup_adam);
 
-            cudaFree(grad_buffer);
         } else {
             lfs::core::GlobalArenaManager::instance().get_arena().end_frame(ctx.frame_id);
         }
-
-        cudaFree(buffer);
-        // Note: cudaFree is synchronous, no need for cudaDeviceSynchronize
     }
 
 } // namespace fast_lfs::rasterization

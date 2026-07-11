@@ -4,13 +4,27 @@
 
 #pragma once
 
+#include "core/assert.hpp"
 #include "edge_rasterization_config.h"
 #include "helper_math.h"
 #include <cstdint>
 #include <cub/cub.cuh>
 #include <cuda_fp16.h>
+#include <format>
+#include <string>
+#include <string_view>
 
 namespace edge_compute::rasterization {
+
+    inline void check_cuda_status(const cudaError_t status, const std::string_view operation) {
+        if (status == cudaSuccess) {
+            return;
+        }
+        const std::string message = std::format(
+            "{} failed: {} ({})", operation, cudaGetErrorString(status), cudaGetErrorName(status));
+        cudaGetLastError();
+        LFS_ASSERT_MSG(status == cudaSuccess, message);
+    }
 
     using InstanceKey = std::uint32_t;
 
@@ -84,17 +98,21 @@ namespace edge_compute::rasterization {
         float4* conic_opacity;
 
         static PerPrimitiveBuffers from_blob(char*& blob, int n_primitives) {
-            PerPrimitiveBuffers buffers;
+            PerPrimitiveBuffers buffers{};
             obtain(blob, buffers.depth_keys, n_primitives, 128);
             obtain(blob, buffers.n_touched_tiles, n_primitives, 128);
             obtain(blob, buffers.offset, n_primitives, 128);
             obtain(blob, buffers.screen_bounds, n_primitives, 128);
             obtain(blob, buffers.mean2d, n_primitives, 128);
             obtain(blob, buffers.conic_opacity, n_primitives, 128);
-            cub::DeviceScan::InclusiveSum(
-                nullptr, buffers.cub_workspace_size,
-                buffers.n_touched_tiles, buffers.offset,
-                n_primitives);
+            check_cuda_status(
+                cub::DeviceScan::InclusiveSum(
+                    nullptr, buffers.cub_workspace_size,
+                    buffers.n_touched_tiles, buffers.offset,
+                    n_primitives),
+                "cub::DeviceScan::InclusiveSum workspace query");
+            LFS_ASSERT_MSG(buffers.cub_workspace_size > 0,
+                           "CUB scan returned an empty workspace for nonempty primitive input");
             obtain(blob, buffers.cub_workspace, buffers.cub_workspace_size, 128);
             return buffers;
         }
@@ -107,7 +125,7 @@ namespace edge_compute::rasterization {
         cub::DoubleBuffer<uint> primitive_indices;
 
         static PerInstanceBuffers from_blob(char*& blob, int n_instances, int end_bit = 16) {
-            PerInstanceBuffers buffers;
+            PerInstanceBuffers buffers{};
             InstanceKey* keys_current;
             obtain(blob, keys_current, n_instances, 128);
             InstanceKey* keys_alternate;
@@ -118,10 +136,14 @@ namespace edge_compute::rasterization {
             uint* primitive_indices_alternate;
             obtain(blob, primitive_indices_alternate, n_instances, 128);
             buffers.primitive_indices = cub::DoubleBuffer<uint>(primitive_indices_current, primitive_indices_alternate);
-            cub::DeviceRadixSort::SortPairs(
-                nullptr, buffers.cub_workspace_size,
-                buffers.keys, buffers.primitive_indices,
-                n_instances, 0, end_bit);
+            check_cuda_status(
+                cub::DeviceRadixSort::SortPairs(
+                    nullptr, buffers.cub_workspace_size,
+                    buffers.keys, buffers.primitive_indices,
+                    n_instances, 0, end_bit),
+                "cub::DeviceRadixSort::SortPairs workspace query");
+            LFS_ASSERT_MSG(buffers.cub_workspace_size > 0,
+                           "CUB radix sort returned an empty workspace for nonempty instance input");
             obtain(blob, buffers.cub_workspace, buffers.cub_workspace_size, 128);
             return buffers;
         }
