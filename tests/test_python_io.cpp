@@ -15,11 +15,13 @@
 #include <string>
 #include <vector>
 
+#include "core/image_io.hpp"
 #include "core/point_cloud.hpp"
 #include "core/splat_data.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/ply.hpp"
 #include "io/loader.hpp"
+#include "io/nvcodec_image_loader.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "tinyply.hpp"
 
@@ -1360,4 +1362,57 @@ TEST_F(PythonIOTest, PipelinedLoaderStatsRemainResponsiveDuringCompletions) {
     ASSERT_EQ(poller.wait_for(std::chrono::seconds(5)), std::future_status::ready);
     poller.get();
     EXPECT_EQ(loader.get_stats().total_images_loaded, request_count);
+}
+
+TEST_F(PythonIOTest, PipelinedLoaderShutdownReleasesQueuedGpuTensorsBeforeDecodeStream) {
+    if (!NvCodecImageLoader::is_available()) {
+        GTEST_SKIP() << "nvImageCodec is unavailable";
+    }
+
+    constexpr size_t width = 320;
+    constexpr size_t height = 240;
+    const auto image_path = temp_dir / "shutdown_stream_source.jpg";
+    auto image = Tensor::empty(
+        {height, width, size_t{3}}, Device::CPU, DataType::UInt8);
+    std::fill_n(image.ptr<uint8_t>(), image.numel(), uint8_t{127});
+    save_image_u8(image_path, std::move(image));
+
+    PipelinedLoaderConfig config;
+    config.jpeg_batch_size = 1;
+    config.decoder_pool_size = 1;
+    config.prefetch_count = 1;
+    config.output_queue_size = 1;
+    config.io_threads = 1;
+    config.cold_process_threads = 1;
+    config.use_filesystem_cache = false;
+
+    PipelinedImageLoader loader(config);
+    loader.prefetch(0, image_path, LoadParams{});
+
+    const auto ready_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (loader.ready_count() == 0 &&
+           std::chrono::steady_clock::now() < ready_deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_EQ(loader.ready_count(), 1u);
+    EXPECT_GT(loader.get_gpu_memory_stats().total_bytes(), 0u);
+
+    // Do not consume the output. shutdown() must retire this stream-owned tensor
+    // before it releases the allocator's stream references and destroys the stream.
+    loader.shutdown();
+
+    const auto stats = loader.get_stats();
+    EXPECT_EQ(stats.prefetch_queue_size, 0u);
+    EXPECT_EQ(stats.hot_queue_size, 0u);
+    EXPECT_EQ(stats.cold_queue_size, 0u);
+    EXPECT_EQ(stats.output_queue_size, 0u);
+    EXPECT_EQ(stats.pending_pairs_count, 0u);
+    EXPECT_EQ(loader.get_gpu_memory_stats().total_bytes(), 0u);
+    EXPECT_EQ(loader.in_flight_count(), 0u);
+
+    void* probe = nullptr;
+    ASSERT_EQ(cudaMallocAsync(&probe, 4096, nullptr), cudaSuccess);
+    ASSERT_EQ(cudaFreeAsync(probe, nullptr), cudaSuccess);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 }

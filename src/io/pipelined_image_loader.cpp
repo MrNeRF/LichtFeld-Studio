@@ -384,8 +384,10 @@ namespace lfs::io {
                 t.join();
         }
 
-        clear_output_queue();
-        clear_pending_pairs();
+        // Queue and pairing entries may own tensors homed on decode_stream_.
+        // Retire them while that stream is still valid; member destruction is
+        // too late because shutdown destroys the stream first.
+        clear();
 
         cudaDeviceSynchronize();
         if (decode_stream_) {
