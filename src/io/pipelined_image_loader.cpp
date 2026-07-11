@@ -617,7 +617,7 @@ namespace lfs::io {
                     reinterpret_cast<uint8_t*>(decoded.data_ptr()),
                     H, W, C, nullptr);
             } else {
-                decoded = lfs::core::Tensor::zeros(
+                decoded = lfs::core::Tensor::empty(
                     lfs::core::TensorShape({C, H, W}),
                     lfs::core::Device::CUDA, lfs::core::DataType::Float32);
                 decoded.set_name("io.image.gpu_float");
@@ -1899,10 +1899,10 @@ namespace lfs::io {
                                    ? lfs::core::Tensor::empty(
                                          lfs::core::TensorShape({3, H, W}),
                                          lfs::core::Device::CUDA, lfs::core::DataType::UInt8)
-                                   : lfs::core::Tensor::zeros(
+                                   : lfs::core::Tensor::empty(
                                          lfs::core::TensorShape({3, H, W}),
                                          lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-                    auto alpha = lfs::core::Tensor::zeros(
+                    auto alpha = lfs::core::Tensor::empty(
                         lfs::core::TensorShape({H, W}),
                         lfs::core::Device::CUDA, lfs::core::DataType::Float32);
 
@@ -2040,7 +2040,7 @@ namespace lfs::io {
                         } else if (gpu_gray.dtype() == lfs::core::DataType::Float32) {
                             aux_tensor = std::move(gpu_gray);
                         } else {
-                            aux_tensor = lfs::core::Tensor::zeros(
+                            aux_tensor = lfs::core::Tensor::empty(
                                 lfs::core::TensorShape({static_cast<size_t>(target_h), static_cast<size_t>(target_w)}),
                                 lfs::core::Device::CUDA, lfs::core::DataType::Float32);
                             cuda::launch_uint8_hw_to_float32_hw(
@@ -2291,7 +2291,7 @@ namespace lfs::io {
                                            ? lfs::core::Tensor::empty(
                                                  lfs::core::TensorShape({C, H, W}),
                                                  lfs::core::Device::CUDA, lfs::core::DataType::UInt8)
-                                           : lfs::core::Tensor::zeros(
+                                           : lfs::core::Tensor::empty(
                                                  lfs::core::TensorShape({C, H, W}),
                                                  lfs::core::Device::CUDA, lfs::core::DataType::Float32);
                         if (item.params.output_uint8) {
