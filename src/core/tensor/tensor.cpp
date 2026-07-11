@@ -711,6 +711,7 @@ namespace lfs::core {
 
     void Tensor::trim_memory_pool() {
         CudaMemoryPool::instance().trim_cached_memory();
+        PinnedMemoryAllocator::instance().empty_cache();
     }
 
     void Tensor::shutdown_memory_pool() {

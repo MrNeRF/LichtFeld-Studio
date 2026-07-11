@@ -91,5 +91,11 @@ int main(int argc, char** argv) {
     // This eliminates cold-start penalties (e.g., 23.8ms for 4K allocations)
     lfs::core::PinnedMemoryAllocator::instance().prewarm();
 
-    return RUN_ALL_TESTS();
+    const int result = RUN_ALL_TESTS();
+
+    // Preserve singleton dependency order: pinned blocks return pooled events
+    // before the CUDA memory pool shuts that event pool down.
+    lfs::core::PinnedMemoryAllocator::instance().shutdown();
+    lfs::core::Tensor::shutdown_memory_pool();
+    return result;
 }

@@ -7,8 +7,9 @@
 
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <cuda_runtime.h>
-#include <memory>
+#include <list>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
@@ -25,7 +26,8 @@ namespace lfs::core {
      * Features:
      * - Caches freed blocks to avoid expensive cudaHostAlloc/cudaFreeHost calls
      * - Size-based bucketing for efficient reuse
-     * - Thread-safe with per-size-class locking
+     * - LRU eviction under an LFS_PINNED_CACHE_LIMIT_MB byte budget (1 GiB default)
+     * - Thread-safe allocation and cache operations
      * - Similar design to PyTorch's CachingHostAllocator
      *
      * Performance benefits:
@@ -111,12 +113,21 @@ namespace lfs::core {
          * @brief Get statistics about allocator usage
          */
         struct Stats {
-            size_t allocated_bytes{0}; ///< Total bytes currently allocated
-            size_t cached_bytes{0};    ///< Total bytes in cache
-            size_t num_allocs{0};      ///< Number of allocations
-            size_t num_deallocs{0};    ///< Number of deallocations
-            size_t cache_hits{0};      ///< Number of times cache was reused
-            size_t cache_misses{0};    ///< Number of new allocations
+            size_t allocated_bytes{0}; ///< Bytes held by live allocations
+            size_t cached_bytes{0};    ///< Bytes retained for reuse
+            size_t peak_allocated_bytes{0};
+            size_t peak_cached_bytes{0};
+            size_t peak_total_bytes{0};
+            size_t num_allocs{0}; ///< New backend allocations
+            size_t num_deallocs{0};
+            size_t cache_hits{0};
+            size_t cache_misses{0};
+            size_t cuda_host_allocs{0};
+            size_t cuda_host_frees{0};
+            size_t malloc_fallback_allocs{0};
+            size_t malloc_fallback_frees{0};
+            size_t evicted_blocks{0};
+            size_t evicted_bytes{0};
         };
 
         Stats get_stats() const;
@@ -127,11 +138,18 @@ namespace lfs::core {
          *
          * When disabled, falls back to regular malloc/free.
          */
-        void set_enabled(bool enabled) { enabled_ = enabled; }
-        bool is_enabled() const { return enabled_; }
+        void set_enabled(bool enabled) { enabled_.store(enabled, std::memory_order_release); }
+        bool is_enabled() const { return enabled_.load(std::memory_order_acquire); }
+
+        /** Internal fault-injection and cache-policy hooks used by regression tests. */
+        void set_force_fallback_for_testing(bool force) {
+            force_fallback_for_testing_.store(force, std::memory_order_release);
+        }
+        void set_cache_limit_for_testing(size_t bytes);
+        size_t cache_limit_bytes() const;
 
     private:
-        PinnedMemoryAllocator() = default;
+        PinnedMemoryAllocator();
         ~PinnedMemoryAllocator();
 
         // Non-copyable, non-movable
@@ -146,17 +164,26 @@ namespace lfs::core {
          */
         static size_t round_size(size_t bytes);
 
+        enum class Backend : uint8_t {
+            CudaHost,
+            MallocFallback,
+        };
+
         struct Block {
             void* ptr{nullptr};
             size_t size{0};
+            Backend backend{Backend::CudaHost};
+            uint64_t last_used{0};
             // Pooled events, one per stream that used this memory; the block is
             // safe to reuse once every event has completed. Events stay valid
             // after their recording stream is destroyed.
             std::vector<cudaEvent_t> ready_events;
 
             Block() = default;
-            Block(void* p, size_t s) : ptr(p),
-                                       size(s) {}
+            Block(void* p, size_t s, Backend allocation_backend)
+                : ptr(p),
+                  size(s),
+                  backend(allocation_backend) {}
 
             ~Block();
 
@@ -171,19 +198,30 @@ namespace lfs::core {
 
         struct AllocationInfo {
             size_t size{0};
+            Backend backend{Backend::CudaHost};
             std::vector<cudaStream_t> extra_streams;
         };
 
         // Cache of free blocks organized by size
         // Key: rounded size, Value: list of available blocks
-        std::unordered_map<size_t, std::vector<Block>> cache_;
+        std::unordered_map<size_t, std::list<Block>> cache_;
 
         // Track all allocated blocks (for deallocation lookup)
         std::unordered_map<void*, AllocationInfo> allocated_blocks_;
 
+        void update_peaks_locked();
+        void publish_stats_locked() const;
+        std::vector<Block> take_evictions_locked();
+        void release_blocks(std::vector<Block> blocks, bool count_as_evictions);
+        void empty_cache_impl(bool publish_stats);
+        static bool record_uses(Block& block, const std::vector<cudaStream_t>& streams);
+
         mutable std::mutex mutex_;
         Stats stats_;
-        bool enabled_{true}; // Can disable for A/B testing
+        size_t cache_limit_bytes_{0};
+        uint64_t lru_clock_{0};
+        std::atomic<bool> enabled_{true}; // Can disable for A/B testing
+        std::atomic<bool> force_fallback_for_testing_{false};
         std::atomic<bool> shutdown_{false};
     };
 

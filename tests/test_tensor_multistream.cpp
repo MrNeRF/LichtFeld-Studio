@@ -90,7 +90,21 @@ class TensorMultiStreamTest : public ::testing::Test {
 protected:
     void SetUp() override {
         ASSERT_EQ(cudaSetDevice(0), cudaSuccess);
+        auto& pinned = PinnedMemoryAllocator::instance();
+        original_cache_limit_ = pinned.cache_limit_bytes();
+        pinned.set_force_fallback_for_testing(false);
+        pinned.set_enabled(true);
     }
+
+    void TearDown() override {
+        auto& pinned = PinnedMemoryAllocator::instance();
+        pinned.set_force_fallback_for_testing(false);
+        pinned.set_enabled(true);
+        pinned.set_cache_limit_for_testing(original_cache_limit_);
+        pinned.empty_cache();
+    }
+
+    size_t original_cache_limit_ = 0;
 };
 
 TEST_F(TensorMultiStreamTest, SlabSameStreamReuseIsImmediateAndStealFree) {
@@ -277,6 +291,107 @@ TEST_F(TensorMultiStreamTest, PinnedBlockReusedOnlyAfterAllStreamsDone) {
     pinned.deallocate(reused_after, nullptr);
     cudaFree(device_buffer);
     destroyStreamSafely(d2h_stream);
+}
+
+TEST_F(TensorMultiStreamTest, PinnedFallbackUsesMatchingDeallocator) {
+    auto& pinned = PinnedMemoryAllocator::instance();
+    pinned.empty_cache();
+    pinned.reset_stats();
+    pinned.set_force_fallback_for_testing(true);
+
+    constexpr size_t kBytes = 64 * 1024;
+    void* ptr = pinned.allocate(kBytes);
+    ASSERT_NE(ptr, nullptr);
+    EXPECT_EQ(pinned.get_stats().malloc_fallback_allocs, 1u);
+
+    // Provenance belongs to the allocation, not the allocator's current mode.
+    pinned.set_force_fallback_for_testing(false);
+    pinned.deallocate(ptr);
+
+    const auto stats = pinned.get_stats();
+    EXPECT_EQ(stats.allocated_bytes, 0u);
+    EXPECT_EQ(stats.cached_bytes, 0u);
+    EXPECT_EQ(stats.malloc_fallback_allocs, 1u);
+    EXPECT_EQ(stats.malloc_fallback_frees, 1u);
+    EXPECT_EQ(stats.cuda_host_frees, 0u);
+}
+
+TEST_F(TensorMultiStreamTest, PinnedCacheEvictsLeastRecentlyUsedBlocksToBudget) {
+    auto& pinned = PinnedMemoryAllocator::instance();
+    pinned.empty_cache();
+    pinned.reset_stats();
+
+    constexpr size_t kBytes = 1 * 1024 * 1024;
+    pinned.set_cache_limit_for_testing(2 * kBytes);
+
+    void* first = pinned.allocate(kBytes);
+    void* second = pinned.allocate(kBytes);
+    void* third = pinned.allocate(kBytes);
+    ASSERT_NE(first, nullptr);
+    ASSERT_NE(second, nullptr);
+    ASSERT_NE(third, nullptr);
+
+    pinned.deallocate(first);
+    pinned.deallocate(second);
+    ASSERT_EQ(cudaStreamSynchronize(nullptr), cudaSuccess);
+
+    void* touched = pinned.allocate(kBytes);
+    ASSERT_EQ(touched, first);
+    pinned.deallocate(touched);
+    pinned.deallocate(third);
+    ASSERT_EQ(cudaStreamSynchronize(nullptr), cudaSuccess);
+
+    const auto after_eviction = pinned.get_stats();
+    EXPECT_EQ(after_eviction.cached_bytes, 2 * kBytes);
+    EXPECT_EQ(after_eviction.evicted_blocks, 1u);
+    EXPECT_EQ(after_eviction.evicted_bytes, kBytes);
+    EXPECT_EQ(after_eviction.cuda_host_frees, 1u);
+
+    void* retained_a = pinned.allocate(kBytes);
+    void* retained_b = pinned.allocate(kBytes);
+    ASSERT_NE(retained_a, nullptr);
+    ASSERT_NE(retained_b, nullptr);
+    EXPECT_NE(retained_a, second);
+    EXPECT_NE(retained_b, second);
+    EXPECT_TRUE((retained_a == first && retained_b == third) ||
+                (retained_a == third && retained_b == first));
+
+    pinned.deallocate(retained_a);
+    pinned.deallocate(retained_b);
+}
+
+TEST_F(TensorMultiStreamTest, PinnedCacheDoesNotRetainBlockLargerThanBudget) {
+    auto& pinned = PinnedMemoryAllocator::instance();
+    pinned.empty_cache();
+    pinned.reset_stats();
+    pinned.set_cache_limit_for_testing(512 * 1024);
+
+    void* ptr = pinned.allocate(1 * 1024 * 1024);
+    ASSERT_NE(ptr, nullptr);
+    pinned.deallocate(ptr);
+
+    const auto stats = pinned.get_stats();
+    EXPECT_EQ(stats.allocated_bytes, 0u);
+    EXPECT_EQ(stats.cached_bytes, 0u);
+    EXPECT_EQ(stats.evicted_blocks, 1u);
+    EXPECT_EQ(stats.evicted_bytes, 1 * 1024 * 1024u);
+    EXPECT_EQ(stats.cuda_host_frees, 1u);
+}
+
+TEST_F(TensorMultiStreamTest, TrimMemoryPoolReleasesPinnedCache) {
+    auto& pinned = PinnedMemoryAllocator::instance();
+    pinned.empty_cache();
+    pinned.reset_stats();
+
+    void* ptr = pinned.allocate(128 * 1024);
+    ASSERT_NE(ptr, nullptr);
+    pinned.deallocate(ptr);
+    ASSERT_GT(pinned.get_stats().cached_bytes, 0u);
+
+    Tensor::trim_memory_pool();
+    const auto stats = pinned.get_stats();
+    EXPECT_EQ(stats.cached_bytes, 0u);
+    EXPECT_EQ(stats.cuda_host_frees, 1u);
 }
 
 TEST_F(TensorMultiStreamTest, ExplicitH2DTransferGuardsDroppedPinnedSource) {
