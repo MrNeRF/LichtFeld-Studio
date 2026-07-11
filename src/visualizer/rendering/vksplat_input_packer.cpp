@@ -292,12 +292,12 @@ namespace lfs::vis::vksplat {
             return {};
         }
 
-        [[nodiscard]] std::expected<void, std::string> waitForInputStream(
+        [[nodiscard]] std::expected<void, std::string> synchronizeInputStream(
             const cudaStream_t stream,
             const Tensor& tensor,
             const std::string_view label) {
             try {
-                lfs::core::waitForCUDAStream(stream, tensor.stream());
+                tensor.sync_to_stream(stream);
                 return {};
             } catch (const std::exception& e) {
                 return std::unexpected(std::format(
@@ -451,7 +451,7 @@ namespace lfs::vis::vksplat {
         if (auto ok = requireCudaFloat32Contiguous(opacity_raw, "opacity"); !ok) {
             return std::unexpected(ok.error());
         }
-        if (auto ok = waitForInputStream(stream, opacity_raw, "opacity"); !ok) {
+        if (auto ok = synchronizeInputStream(stream, opacity_raw, "opacity"); !ok) {
             return std::unexpected(ok.error());
         }
 
@@ -464,7 +464,7 @@ namespace lfs::vis::vksplat {
                 return std::unexpected(
                     "VkSplat deleted mask must be a contiguous CUDA bool tensor of size N");
             }
-            if (auto ok = waitForInputStream(stream, deleted, "deleted"); !ok) {
+            if (auto ok = synchronizeInputStream(stream, deleted, "deleted"); !ok) {
                 return std::unexpected(ok.error());
             }
             const cudaError_t status = detail::launchPackOpacityMaskingDeleted(
@@ -536,23 +536,23 @@ namespace lfs::vis::vksplat {
             }
         }
 
-        if (auto ok = waitForInputStream(stream, means_raw, "means"); !ok) {
+        if (auto ok = synchronizeInputStream(stream, means_raw, "means"); !ok) {
             return std::unexpected(ok.error());
         }
-        if (auto ok = waitForInputStream(stream, rotation_raw, "rotation"); !ok) {
+        if (auto ok = synchronizeInputStream(stream, rotation_raw, "rotation"); !ok) {
             return std::unexpected(ok.error());
         }
-        if (auto ok = waitForInputStream(stream, scaling_raw, "scaling"); !ok) {
+        if (auto ok = synchronizeInputStream(stream, scaling_raw, "scaling"); !ok) {
             return std::unexpected(ok.error());
         }
-        if (auto ok = waitForInputStream(stream, opacity_raw, "opacity"); !ok) {
+        if (auto ok = synchronizeInputStream(stream, opacity_raw, "opacity"); !ok) {
             return std::unexpected(ok.error());
         }
-        if (auto ok = waitForInputStream(stream, sh0_raw, "sh0"); !ok) {
+        if (auto ok = synchronizeInputStream(stream, sh0_raw, "sh0"); !ok) {
             return std::unexpected(ok.error());
         }
         if (has_shN) {
-            if (auto ok = waitForInputStream(stream, shN_raw, "shN"); !ok) {
+            if (auto ok = synchronizeInputStream(stream, shN_raw, "shN"); !ok) {
                 return std::unexpected(ok.error());
             }
         }
