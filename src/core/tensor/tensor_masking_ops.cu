@@ -550,13 +550,22 @@ namespace lfs::core::tensor_ops {
         else if (boundary == 2)
             sel = ((sel % (int)dim_size) + dim_size) % dim_size;
         else if (sel < 0 || sel >= dim_size) {
-            LFS_DEBUG_ASSERT(sel >= 0 && sel < static_cast<int>(dim_size));
+            LFS_DEBUG_ASSERT_MSG(sel >= 0 && sel < static_cast<int>(dim_size),
+                                 std::format("index_select index must be in range "
+                                             "(selected_index={}, dimension_size={}, "
+                                             "index_position={}, output_index={}, boundary_mode={})",
+                                             sel, dim_size, i, tid, boundary));
             out[tid] = 0;
             return;
         }
 
         const size_t src_idx = o * dim_size * inner + static_cast<size_t>(sel) * inner + j;
-        LFS_DEBUG_ASSERT(src_idx < outer * dim_size * inner);
+        LFS_DEBUG_ASSERT_MSG(src_idx < outer * dim_size * inner,
+                             std::format("index_select source offset must be in range "
+                                         "(source_offset={}, source_numel={}, outer={}, "
+                                         "dimension_size={}, inner={}, output_index={})",
+                                         src_idx, outer * dim_size * inner, outer,
+                                         dim_size, inner, tid));
         out[tid] = in[src_idx];
     }
 
@@ -737,7 +746,11 @@ namespace lfs::core::tensor_ops {
         } else if (boundary == 2) {
             gather_idx = ((gather_idx % (int)in_shape[dim]) + in_shape[dim]) % in_shape[dim];
         } else if (gather_idx < 0 || gather_idx >= in_shape[dim]) {
-            LFS_DEBUG_ASSERT(gather_idx >= 0 && gather_idx < static_cast<int>(in_shape[dim]));
+            LFS_DEBUG_ASSERT_MSG(gather_idx >= 0 && gather_idx < static_cast<int>(in_shape[dim]),
+                                 std::format("gather index must be in range "
+                                             "(gather_index={}, dimension={}, dimension_size={}, "
+                                             "output_index={}, boundary_mode={})",
+                                             gather_idx, dim, in_shape[dim], tid, boundary));
             out[tid] = 0;
             return;
         }
@@ -754,7 +767,11 @@ namespace lfs::core::tensor_ops {
             }
 
             if (coord >= in_shape[d]) {
-                LFS_DEBUG_ASSERT(coord < in_shape[d]);
+                LFS_DEBUG_ASSERT_MSG(coord < in_shape[d],
+                                     std::format("gather coordinate must be in range "
+                                                 "(dimension={}, coordinate={}, dimension_size={}, "
+                                                 "output_index={}, gather_dimension={})",
+                                                 d, coord, in_shape[d], tid, dim));
                 out[tid] = 0;
                 return;
             }
@@ -766,7 +783,11 @@ namespace lfs::core::tensor_ops {
         for (size_t d = 0; d < in_rank; ++d) {
             input_elements *= in_shape[d];
         }
-        LFS_DEBUG_ASSERT(src_idx < input_elements);
+        LFS_DEBUG_ASSERT_MSG(src_idx < input_elements,
+                             std::format("gather source offset must be in range "
+                                         "(source_offset={}, source_numel={}, output_index={}, "
+                                         "input_rank={}, gather_dimension={})",
+                                         src_idx, input_elements, tid, in_rank, dim));
         out[tid] = in[src_idx];
     }
 
@@ -937,12 +958,21 @@ namespace lfs::core::tensor_ops {
 
         int scatter_idx = idx[idx_pos];
         if (scatter_idx < 0 || scatter_idx >= dim_sz) {
-            LFS_DEBUG_ASSERT(scatter_idx >= 0 && scatter_idx < static_cast<int>(dim_sz));
+            LFS_DEBUG_ASSERT_MSG(scatter_idx >= 0 && scatter_idx < static_cast<int>(dim_sz),
+                                 std::format("scatter index must be in range "
+                                             "(scatter_index={}, dimension_size={}, "
+                                             "index_position={}, input_index={}, mode={})",
+                                             scatter_idx, dim_sz, idx_pos, tid, mode));
             return;
         }
 
         size_t dst_idx = outer_idx * dim_sz * inner + scatter_idx * inner + inner_idx;
-        LFS_DEBUG_ASSERT(dst_idx < outer * dim_sz * inner);
+        LFS_DEBUG_ASSERT_MSG(dst_idx < outer * dim_sz * inner,
+                             std::format("scatter destination offset must be in range "
+                                         "(destination_offset={}, destination_numel={}, outer={}, "
+                                         "dimension_size={}, inner={}, input_index={})",
+                                         dst_idx, outer * dim_sz * inner, outer,
+                                         dim_sz, inner, tid));
 
         if (mode == 1) {
             scatter_add(&out[dst_idx], in[tid]);

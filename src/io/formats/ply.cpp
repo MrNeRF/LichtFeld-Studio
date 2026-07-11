@@ -529,14 +529,21 @@ namespace lfs::io {
                 const size_t name_end = prop_name.find_first_of(" \t\r");
                 if (name_end != std::string_view::npos) {
                     LFS_ASSERT_MSG(trim_ascii_whitespace(prop_name.substr(name_end)).empty(),
-                                   "PLY property declarations must contain exactly a type and name");
+                                   std::format("PLY property declarations must contain exactly a type "
+                                               "and name (header_line={}, property_type='{}', "
+                                               "property_text='{}', trailing_text='{}')",
+                                               lines_parsed, type, prop_name,
+                                               trim_ascii_whitespace(prop_name.substr(name_end))));
                     prop_name = prop_name.substr(0, name_end);
                 }
                 if (prop_name.empty()) {
                     throw std::runtime_error("Malformed PLY property line");
                 }
                 LFS_ASSERT_MSG(is_valid_ply_property_name_token(prop_name),
-                               "PLY vertex property names must be non-empty tokens");
+                               std::format("PLY vertex property names must be non-empty tokens "
+                                           "(header_line={}, property_type='{}', property_name='{}', "
+                                           "property_name_length={})",
+                                           lines_parsed, type, prop_name, prop_name.size()));
                 LFS_ASSERT_MSG(vertex_property_names.emplace(prop_name).second,
                                std::format("Duplicate PLY vertex property '{}'", prop_name));
                 ++layout.vertex_property_count;
@@ -1436,7 +1443,9 @@ namespace lfs::io {
         [[nodiscard]] std::optional<NonFiniteFloatValue> find_non_finite_float_value(
             const Tensor& values) {
             LFS_ASSERT_MSG(values.is_valid(),
-                           "PLY finite-value scan requires a valid tensor (valid=false)");
+                           std::format("PLY finite-value scan requires a valid tensor "
+                                       "(tensor_state={}, valid={})",
+                                       values.str(), values.is_valid()));
             LFS_ASSERT_MSG(values.dtype() == DataType::Float32,
                            std::format("PLY finite-value scan requires Float32 "
                                        "(dtype={}({}), shape={})",
@@ -1942,53 +1951,100 @@ namespace lfs::io {
                 if (binary) {
                     MMappedFile mapped_file;
                     LFS_ASSERT_MSG(mapped_file.map(path),
-                                   "Could not reopen temporary PLY output for verification");
+                                   std::format("PLY writer verification must reopen the temporary "
+                                               "binary output (mapped={}, path='{}')",
+                                               mapped_file.data != nullptr,
+                                               lfs::core::path_to_utf8(path)));
                     const auto parsed = parse_header(
                         static_cast<const char*>(mapped_file.data), mapped_file.size);
-                    LFS_ASSERT_MSG(parsed.has_value(), "Could not parse temporary PLY output");
+                    LFS_ASSERT_MSG(parsed.has_value(),
+                                   std::format("PLY writer verification must parse the temporary "
+                                               "binary header (parsed={}, file_bytes={}, path='{}')",
+                                               parsed.has_value(), mapped_file.size,
+                                               lfs::core::path_to_utf8(path)));
                     const auto& [body_offset, layout] = *parsed;
                     LFS_ASSERT_MSG(layout.vertex_count == expected_vertices,
-                                   "PLY writer round-trip changed the vertex count");
+                                   std::format("PLY writer round-trip must preserve the vertex count "
+                                               "(observed_count={}, expected_count={}, path='{}')",
+                                               layout.vertex_count, expected_vertices,
+                                               lfs::core::path_to_utf8(path)));
                     LFS_ASSERT_MSG(layout.vertex_stride == expected_binary_stride,
-                                   "PLY writer round-trip changed the vertex stride");
+                                   std::format("PLY writer round-trip must preserve the vertex stride "
+                                               "(observed_bytes={}, expected_bytes={}, path='{}')",
+                                               layout.vertex_stride, expected_binary_stride,
+                                               lfs::core::path_to_utf8(path)));
                     LFS_ASSERT_MSG(layout.vertex_property_count == expected_properties,
-                                   "PLY writer round-trip changed the property count");
+                                   std::format("PLY writer round-trip must preserve the property count "
+                                               "(observed_count={}, expected_count={}, path='{}')",
+                                               layout.vertex_property_count, expected_properties,
+                                               lfs::core::path_to_utf8(path)));
                     size_t body_size = 0;
                     LFS_ASSERT_MSG(checked_mul_size(expected_vertices, expected_binary_stride, body_size),
-                                   "PLY writer verification size overflow");
+                                   std::format("PLY writer verification body size must fit in size_t "
+                                               "(vertex_count={}, vertex_stride={}, size_t_max={}, path='{}')",
+                                               expected_vertices, expected_binary_stride,
+                                               std::numeric_limits<size_t>::max(),
+                                               lfs::core::path_to_utf8(path)));
                     LFS_ASSERT_MSG(body_offset <= mapped_file.size &&
                                        body_size == mapped_file.size - body_offset,
-                                   "PLY writer emitted a body size inconsistent with its header");
+                                   std::format("PLY writer body size must match its header "
+                                               "(body_offset={}, file_bytes={}, observed_body_bytes={}, "
+                                               "expected_body_bytes={}, path='{}')",
+                                               body_offset, mapped_file.size,
+                                               body_offset <= mapped_file.size
+                                                   ? mapped_file.size - body_offset
+                                                   : 0,
+                                               body_size, lfs::core::path_to_utf8(path)));
                     return {};
                 }
 
                 std::ifstream stream(path);
                 LFS_ASSERT_MSG(stream.is_open(),
-                               "Could not reopen temporary ASCII PLY output for verification");
+                               std::format("PLY writer verification must reopen the temporary ASCII "
+                                           "output (is_open={}, path='{}')",
+                                           stream.is_open(), lfs::core::path_to_utf8(path)));
                 bool saw_magic = false;
                 bool saw_format = false;
                 bool saw_vertex = false;
                 bool parsing_vertex = false;
                 bool saw_end_header = false;
                 size_t property_count = 0;
+                size_t line_number = 0;
                 std::string line;
                 while (std::getline(stream, line)) {
+                    ++line_number;
                     if (!line.empty() && line.back() == '\r')
                         line.pop_back();
                     if (!saw_magic) {
-                        LFS_ASSERT_MSG(line == "ply", "ASCII PLY output has invalid magic");
+                        LFS_ASSERT_MSG(line == "ply",
+                                       std::format("ASCII PLY output must begin with the 'ply' magic "
+                                                   "(observed='{}', expected='ply', line_number={}, path='{}')",
+                                                   line, line_number,
+                                                   lfs::core::path_to_utf8(path)));
                         saw_magic = true;
                         continue;
                     }
                     if (line == "format ascii 1.0") {
-                        LFS_ASSERT_MSG(!saw_format, "ASCII PLY output has duplicate format lines");
+                        LFS_ASSERT_MSG(!saw_format,
+                                       std::format("ASCII PLY output must contain one format line "
+                                                   "(duplicate_line={}, format_seen={}, path='{}')",
+                                                   line_number, saw_format,
+                                                   lfs::core::path_to_utf8(path)));
                         saw_format = true;
                     } else if (line.starts_with("element vertex ")) {
-                        LFS_ASSERT_MSG(!saw_vertex, "ASCII PLY output has duplicate vertex elements");
+                        LFS_ASSERT_MSG(!saw_vertex,
+                                       std::format("ASCII PLY output must contain one vertex element "
+                                                   "(duplicate_line={}, vertex_seen={}, line='{}', path='{}')",
+                                                   line_number, saw_vertex, line,
+                                                   lfs::core::path_to_utf8(path)));
                         size_t count = 0;
                         LFS_ASSERT_MSG(parse_size_token(line.substr(15), count) &&
                                            count == expected_vertices,
-                                       "ASCII PLY writer round-trip changed the vertex count");
+                                       std::format("ASCII PLY writer round-trip must preserve the "
+                                                   "vertex count (observed_count={}, expected_count={}, "
+                                                   "line_number={}, line='{}', path='{}')",
+                                                   count, expected_vertices, line_number, line,
+                                                   lfs::core::path_to_utf8(path)));
                         saw_vertex = true;
                         parsing_vertex = true;
                     } else if (line.starts_with("element ")) {
@@ -2001,12 +2057,20 @@ namespace lfs::io {
                     }
                 }
                 LFS_ASSERT_MSG(saw_magic && saw_format && saw_vertex && saw_end_header,
-                               "ASCII PLY output has an incomplete header");
+                               std::format("ASCII PLY output header must contain magic, format, vertex, "
+                                           "and end_header records (saw_magic={}, saw_format={}, "
+                                           "saw_vertex={}, saw_end_header={}, lines_read={}, path='{}')",
+                                           saw_magic, saw_format, saw_vertex, saw_end_header,
+                                           line_number, lfs::core::path_to_utf8(path)));
                 LFS_ASSERT_MSG(property_count == expected_properties,
-                               "ASCII PLY writer round-trip changed the property count");
+                               std::format("ASCII PLY writer round-trip must preserve the property count "
+                                           "(observed_count={}, expected_count={}, path='{}')",
+                                           property_count, expected_properties,
+                                           lfs::core::path_to_utf8(path)));
 
                 size_t rows = 0;
                 while (std::getline(stream, line)) {
+                    ++line_number;
                     if (trim_ascii_whitespace(line).empty())
                         continue;
                     size_t tokens = 0;
@@ -2020,11 +2084,18 @@ namespace lfs::io {
                         }
                     }
                     LFS_ASSERT_MSG(tokens == expected_properties,
-                                   "ASCII PLY writer emitted a row with the wrong property count");
+                                   std::format("ASCII PLY writer rows must contain one token per property "
+                                               "(row_index={}, line_number={}, observed_tokens={}, "
+                                               "expected_tokens={}, line='{}', path='{}')",
+                                               rows, line_number, tokens, expected_properties,
+                                               line, lfs::core::path_to_utf8(path)));
                     ++rows;
                 }
                 LFS_ASSERT_MSG(rows == expected_vertices,
-                               "ASCII PLY writer emitted a row count inconsistent with its header");
+                               std::format("ASCII PLY writer row count must match its header "
+                                           "(observed_rows={}, expected_rows={}, path='{}')",
+                                           rows, expected_vertices,
+                                           lfs::core::path_to_utf8(path)));
                 return {};
             } catch (const std::exception& e) {
                 return make_error(ErrorCode::WRITE_FAILURE,
@@ -2133,9 +2204,14 @@ namespace lfs::io {
                     tinyply::Type::INVALID, 0);
             }
 
-            for (auto& [t, attrs] : float_blocks) {
+            for (size_t block_index = 0; block_index < float_blocks.size(); ++block_index) {
+                auto& [t, attrs] = float_blocks[block_index];
                 LFS_ASSERT_MSG(attrs.size() == static_cast<size_t>(t.size(1)),
-                               "PLY property names must match their tensor columns");
+                               std::format("PLY property name count must match its tensor columns "
+                                           "(block_index={}, property_name_count={}, tensor_columns={}, "
+                                           "tensor_shape={}, tensor_dtype={}({}))",
+                                           block_index, attrs.size(), t.size(1), t.shape().str(),
+                                           dtype_name(t.dtype()), static_cast<int>(t.dtype())));
 
                 estimated_write_bytes += static_cast<size_t>(t.size(0)) *
                                          static_cast<size_t>(t.size(1)) *

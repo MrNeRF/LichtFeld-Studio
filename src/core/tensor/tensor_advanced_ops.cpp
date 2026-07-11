@@ -8,25 +8,46 @@
 #include <cmath>
 #include <numeric>
 
-#define CHECK_CUDA(call)                                        \
-    do {                                                        \
-        const cudaError_t error = (call);                       \
-        LFS_ASSERT_MSG(error == cudaSuccess,                    \
-                       std::string("CUDA operation failed: ") + \
-                           cudaGetErrorString(error));          \
+#define CHECK_CUDA(call)                                                                 \
+    do {                                                                                 \
+        const cudaError_t error = (call);                                                \
+        LFS_ASSERT_MSG(error == cudaSuccess,                                             \
+                       std::format("{} failed (cuda_error={}({}))", #call,               \
+                                   cudaGetErrorString(error), static_cast<int>(error))); \
     } while (0)
 
 namespace lfs::core {
 
     // ============= PAIRWISE DISTANCE (CDIST) =============
     Tensor Tensor::cdist(const Tensor& other, float p) const {
-        LFS_ASSERT_MSG(is_valid() && other.is_valid(), "cdist requires valid tensors");
+        LFS_ASSERT_MSG(is_valid() && other.is_valid(),
+                       std::format("cdist requires valid input tensors "
+                                   "(left={}, right={})",
+                                   str(), other.str()));
         LFS_ASSERT_MSG(dtype_ == DataType::Float32 && other.dtype() == DataType::Float32,
-                       "cdist currently supports only Float32 tensors");
-        LFS_ASSERT_MSG(device_ == other.device(), "cdist requires tensors on the same device");
-        LFS_ASSERT_MSG(ndim() == 2 && other.ndim() == 2, "cdist requires rank-2 tensors");
-        LFS_ASSERT_MSG(size(1) == other.size(1), "cdist feature dimensions must match");
-        LFS_ASSERT_MSG(std::isfinite(p) && p > 0.0f, "cdist p must be finite and positive");
+                       std::format("cdist requires Float32 inputs "
+                                   "(left_dtype={}({}), right_dtype={}({}), "
+                                   "left_shape={}, right_shape={})",
+                                   dtype_name(dtype_), static_cast<int>(dtype_),
+                                   dtype_name(other.dtype()), static_cast<int>(other.dtype()),
+                                   shape_.str(), other.shape().str()));
+        LFS_ASSERT_MSG(device_ == other.device(),
+                       std::format("cdist inputs must be on the same device "
+                                   "(left_device={}, right_device={})",
+                                   device_name(device_), device_name(other.device())));
+        LFS_ASSERT_MSG(ndim() == 2 && other.ndim() == 2,
+                       std::format("cdist requires rank-2 inputs "
+                                   "(left_rank={}, right_rank={}, left_shape={}, right_shape={})",
+                                   ndim(), other.ndim(), shape_.str(), other.shape().str()));
+        LFS_ASSERT_MSG(size(1) == other.size(1),
+                       std::format("cdist feature dimensions must match "
+                                   "(left_features={}, right_features={}, "
+                                   "left_shape={}, right_shape={})",
+                                   size(1), other.size(1), shape_.str(), other.shape().str()));
+        LFS_ASSERT_MSG(std::isfinite(p) && p > 0.0f,
+                       std::format("cdist p must be finite and positive "
+                                   "(p={}, p_finite={})",
+                                   p, std::isfinite(p)));
 
         size_t N = size(0);
         size_t M = other.size(0);
@@ -91,10 +112,19 @@ namespace lfs::core {
         LOG_DEBUG("  dim: {}, keepdim: {}", dim, keepdim);
         LOG_DEBUG("  numel: {}", numel());
 
-        LFS_ASSERT_MSG(is_valid(), "min_with_indices requires a valid tensor");
-        LFS_ASSERT_MSG(numel() > 0, "min_with_indices requires a non-empty tensor");
+        LFS_ASSERT_MSG(is_valid(),
+                       std::format("min_with_indices requires a valid input tensor "
+                                   "(input={})",
+                                   str()));
+        LFS_ASSERT_MSG(numel() > 0,
+                       std::format("min_with_indices requires a non-empty input "
+                                   "(input_numel={}, input_shape={})",
+                                   numel(), shape_.str()));
         LFS_ASSERT_MSG(dtype_ == DataType::Float32,
-                       "min_with_indices currently supports only Float32");
+                       std::format("min_with_indices requires Float32 input "
+                                   "(input_dtype={}({}), input_shape={}, input_device={})",
+                                   dtype_name(dtype_), static_cast<int>(dtype_),
+                                   shape_.str(), device_name(device_)));
 
         // Move to CPU for computation
         LOG_DEBUG("  Moving to CPU if needed...");
@@ -106,7 +136,9 @@ namespace lfs::core {
         LOG_DEBUG("  Resolved dim: {}", dim);
 
         LFS_ASSERT_MSG(dim >= 0 && dim < static_cast<int>(cpu_tensor.ndim()),
-                       "min_with_indices dimension is out of range");
+                       std::format("min_with_indices dimension must be in range "
+                                   "(dimension={}, valid_range=[0,{}), input_shape={})",
+                                   dim, cpu_tensor.ndim(), cpu_tensor.shape().str()));
 
         // Handle 1D scalar reduction
         if (cpu_tensor.ndim() == 1 && dim == 0 && !keepdim) {
@@ -307,10 +339,19 @@ namespace lfs::core {
         LOG_DEBUG("  Input device: {}", device_name(device_));
         LOG_DEBUG("  dim: {}, keepdim: {}", dim, keepdim);
 
-        LFS_ASSERT_MSG(is_valid(), "max_with_indices requires a valid tensor");
-        LFS_ASSERT_MSG(numel() > 0, "max_with_indices requires a non-empty tensor");
+        LFS_ASSERT_MSG(is_valid(),
+                       std::format("max_with_indices requires a valid input tensor "
+                                   "(input={})",
+                                   str()));
+        LFS_ASSERT_MSG(numel() > 0,
+                       std::format("max_with_indices requires a non-empty input "
+                                   "(input_numel={}, input_shape={})",
+                                   numel(), shape_.str()));
         LFS_ASSERT_MSG(dtype_ == DataType::Float32,
-                       "max_with_indices currently supports only Float32");
+                       std::format("max_with_indices requires Float32 input "
+                                   "(input_dtype={}({}), input_shape={}, input_device={})",
+                                   dtype_name(dtype_), static_cast<int>(dtype_),
+                                   shape_.str(), device_name(device_)));
 
         // Move to CPU for computation
         LOG_DEBUG("  Moving to CPU if needed...");
@@ -322,7 +363,9 @@ namespace lfs::core {
         LOG_DEBUG("  Resolved dim: {}", dim);
 
         LFS_ASSERT_MSG(dim >= 0 && dim < static_cast<int>(cpu_tensor.ndim()),
-                       "max_with_indices dimension is out of range");
+                       std::format("max_with_indices dimension must be in range "
+                                   "(dimension={}, valid_range=[0,{}), input_shape={})",
+                                   dim, cpu_tensor.ndim(), cpu_tensor.shape().str()));
 
         // For 1D tensors with dim=0 (returns scalar)
         if (cpu_tensor.ndim() == 1 && dim == 0 && !keepdim) {
@@ -476,13 +519,23 @@ namespace lfs::core {
 
     // ============= SORTING =============
     std::pair<Tensor, Tensor> Tensor::sort(int dim, bool descending) const {
-        LFS_ASSERT_MSG(is_valid(), "sort requires a valid tensor");
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32, "sort currently supports only Float32");
-        LFS_ASSERT_MSG(numel() > 0, "sort requires a non-empty tensor");
+        LFS_ASSERT_MSG(is_valid(),
+                       std::format("sort requires a valid input tensor (input={})", str()));
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32,
+                       std::format("sort requires Float32 input "
+                                   "(input_dtype={}({}), input_shape={}, input_device={})",
+                                   dtype_name(dtype_), static_cast<int>(dtype_),
+                                   shape_.str(), device_name(device_)));
+        LFS_ASSERT_MSG(numel() > 0,
+                       std::format("sort requires a non-empty input "
+                                   "(input_numel={}, input_shape={})",
+                                   numel(), shape_.str()));
 
         dim = resolve_dim(dim);
         LFS_ASSERT_MSG(dim >= 0 && dim < static_cast<int>(ndim()),
-                       "sort dimension is out of range");
+                       std::format("sort dimension must be in range "
+                                   "(dimension={}, valid_range=[0,{}), input_shape={})",
+                                   dim, ndim(), shape_.str()));
 
         // Create output tensors on same device
         auto sorted = clone();
@@ -579,7 +632,10 @@ namespace lfs::core {
 
     // ============= SCALAR BOOLEAN REDUCTIONS =============
     bool Tensor::any_scalar() const {
-        LFS_ASSERT_MSG(is_valid(), "any_scalar requires a valid tensor");
+        LFS_ASSERT_MSG(is_valid(),
+                       std::format("any_scalar requires a valid input tensor "
+                                   "(input={})",
+                                   str()));
         if (numel() == 0) {
             return false;
         }
@@ -587,7 +643,10 @@ namespace lfs::core {
     }
 
     bool Tensor::all_scalar() const {
-        LFS_ASSERT_MSG(is_valid(), "all_scalar requires a valid tensor");
+        LFS_ASSERT_MSG(is_valid(),
+                       std::format("all_scalar requires a valid input tensor "
+                                   "(input={})",
+                                   str()));
         if (numel() == 0) {
             return true;
         }
