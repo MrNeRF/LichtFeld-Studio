@@ -865,3 +865,46 @@ Marker: `ASSERT-CHERRYPICK-UNIFY-2026-07-11`.
 - `*AssertHardening*` passed **19/19**. The touched tensor/COLMAP/PLY suite selection passed **244/244**, better than the broad pre-cherry-pick baseline that included two unrelated PLY/USD appearance failures. The focused Vulkan filter remained exactly **52/55**, with only the same three documented resize-deferral failures and unchanged signatures.
 - The first exact 1,000-iteration bicycle smoke was intentionally treated as a finding when its new dtype contract blocked checkpoint serialization. The final exact rerun completed in **4.238 s** at **236.0 iter/s**, saved a **28,820,793-byte** iteration-1,000 checkpoint containing **69,267 splats**, and emitted zero assertion, invariant, or validation noise.
 - The static audit found zero message-less or literal-only assertion sites in the cherry-picked tensor/io scope. `git diff --check` passed. The pre-existing gtest CUDA-runtime-unload teardown diagnostics remain unchanged. No push or PR was created.
+
+## Indirect dispatch contract and failed-pass timeline round
+
+Marker: `INDIRECT-CONTRACT-FIX-2026-07-11`.
+
+### Root cause and true visible-sort contract
+
+- P3 converted the radix and range stages to GPU-resident indirect dispatches and upgraded `tile_sort_dispatch_args` to two `VkDispatchIndirectCommand` values, but the shared radix helper then imposed that six-word tile layout on every caller. The visible-primitive allocation remained its original three words. The new always-on layout check caught the resulting 12-byte-versus-24-byte mismatch on the first GUI PLY run instead of allowing an out-of-bounds indirect read.
+- The three-word visible layout is correct. `prepare_visible_sort.slang` writes exactly one radix command, and the visible chain has no range-construction consumer at that point. `prepare_tile_sort.slang` writes a radix command followed by a range-construction command because `executeComputeTileRanges`/`executeComputeMacroRanges` consume the second command. The shared sort helper now accepts the caller's named layout and radix offset instead of assuming the tile layout.
+- The visible depth sort intentionally uses all 32 key bits. Projection produces the bit representation of a non-negative floating-point radial-distance key, so unsigned integer order is monotonic over the produced domain; no 33rd bit or truncated key is required.
+
+### Single-source indirect layouts
+
+- `shader/src/slang/indirect_layout.inc` is the macro-only source consumed directly by Slang producers and by the C++ `indirect_layout.h` wrapper. It defines the command X/Y/Z words plus the complete word counts and logical command offsets for visible sort, tile sort, tile batches, the HiGS visible chain, survivor projection state, and macro-wave raster/compose commands.
+- C++ `static_assert`s tie every adjacent command and final word count to `sizeof(VkDispatchIndirectCommand)`. Allocations, shared-scratch estimation/binding, producer writes, radix validation, and every indirect-dispatch byte offset now derive from those constants. Shader include changes are dependencies of the generated SPIR-V target.
+- Runtime validation names the violated layout constant and reports the buffer handle, required/active/allocation bytes, base offset, and label. The device-free `VkSplatIndirectLayoutTest.SharedWordCountsAndOffsetsMatchEveryProducerContract` pins all layouts and offsets.
+- A final rasterizer sweep found no `3 * sizeof(uint32_t)`, `6 * sizeof(uint32_t)`, bare 12-/24-byte allocation, or numeric `executeComputeIndirect` offset for these buffers. All 15 rasterizer call sites use a named offset (the radix helper receives one of the named radix offsets).
+
+### Failed-pass timeline protocol
+
+- Completion values are candidates until `vkQueueSubmit` succeeds. Starting or recording a batch does not advance `render_complete_value_`; a cancelled pre-submit attempt therefore leaves no timeline gap, and the next attempt safely reuses the same candidate.
+- `VulkanGSPipeline` records the accepted signal value immediately after successful `vkQueueSubmit`, before post-submit bookkeeping. Forward and selection-overlay catches consult that host-side submission evidence: pre-submit failures cancel without publishing a value, while the rare post-submit exception still publishes the accepted signal to the arena/trainer.
+- Cancelled values are not host-signalled. A host signal may not overtake an outstanding queue signal on the same timeline, so host retirement would require additional ordering and would weaken the existing strict-monotonicity contract. Candidate-on-submit preserves that contract without a second synchronization mechanism.
+- Input-storage retirements predicted before recording are reconciled on every exit and clamped to the last submitted value when no batch consumed them. The former two-second `vkWaitSemaphores` failed-pass probe was deleted; no failure path waits for a value that was never submitted.
+- A persistent VkSplat failure is a defined degraded state: the renderer retries dirty work, keeps presenting the last size-compatible good image, logs once per distinct diagnostic, and resets that diagnostic gate on success, model change, empty scene, or resource release.
+
+### Regression and runtime evidence
+
+- Fail-before is statically reproducible from the parent source: `visible_sort_dispatch_args` was allocated with 3 words while `executeSortIndirectCountImpl` required at least 6. A headless training/render-export path does not exercise the GUI viewer's visible-sort chain, so the two mandated real viewer launches are the deterministic runtime reproduction.
+- A temporary local fault injection, removed before commit, allowed two good submits and then threw immediately after command-batch begin but before submit. For 43 seconds the viewer retained its last good 4,999,807-splat frame at 60 FPS, emitted exactly one degraded-state error, emitted zero `vkWaitSemaphores`/`VK_TIMEOUT` lines, and exited with status 0 within 0.17 seconds of Ctrl-C.
+- `./build/LichtFeld-Studio --view splat_64400.ply` rendered the 3,000,000-splat SH3 asset; `--view 3k.ply` rendered the 4,999,807-splat SH0 asset. Both production runs had debug utils active, validation layers inactive for the Release build, zero assert/validation-error/error lines, and clean status-0 Ctrl-C shutdowns. The broader interactive-validation backlog remains open.
+
+### Source commit
+
+- `d5e56195b` — `fix(vulkan): define indirect and timeline contracts`
+
+### Gates
+
+- `cmake --build build -j8` passed in the final production state; no build used more than eight jobs. The 53-output Slang target compiled the shared include and all producer variants, then reported no pending work in the final sweep.
+- The section 7 focused filter remained exactly **52/55**. Only the three established `ViewportFrameLifecycleServiceTest` resize-deferral failures remained with their baseline signatures.
+- `*AssertHardening*` passed **19/19**. `VkSplatLayouts/*:VkSplatDeviceLayouts/*:VkSplatIndirectLayoutTest.*` passed **15/15**, including the new device-free layout-contract test.
+- The exact 1,000-iteration bicycle headless smoke completed successfully in **12.664 s** at **79.0 iter/s**, saved iteration 1,000 with **69,267 splats**, and emitted no assertion, invariant, validation, or error noise.
+- `clang-format --dry-run --Werror` passed for every changed C++/header/test file after formatting. Slang files retained their project dialect formatting and compiled successfully. `git diff --check` and the forbidden-literal/indirect-offset sweeps passed. No push or PR was created.
