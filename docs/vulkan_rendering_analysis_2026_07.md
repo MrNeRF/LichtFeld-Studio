@@ -777,11 +777,7 @@ Marker: `VULKAN-ASSERT-HARDENING-2026-07-11`.
 
 ### Vocabulary and enforced contracts
 
-- Rasterizer `_THROW_ERROR`, `_THROW_ERROR_ALWAYS`, and `_CHECK_FATAL` remain always-on. `LFS_VK_DEBUG_ASSERT(condition, fmt, ...)` now protects per-element and other hot invariants only in non-`NDEBUG` builds; release preprocessing removes both the condition and all formatting arguments.
-- Visualizer `LFS_VK_CHECK(expr)` and `LFS_VK_CHECK_MSG(expr, fmt, ...)` evaluate a `VkResult` exactly once, report the expression, symbolic and numeric result, observed context, and source location, then use the caller's existing bool/`lastError()` failure route. The remaining direct-result paths use the same formatter. The scoped raw C/C++ `assert(...)` count is now zero.
-- Always-on contracts cover frame begin/end/present order, command-batch begin/record/submit/cancel order, every frame-slot and swapchain-image array boundary, retirement before destruction, descriptor-ring consistency, submit array/count agreement, command-buffer/fence validity, buffer ranges and alignments, dispatch limits, the two-word indirect-count allocation and `INT32_MAX` capacity bound, CUDA/Vulkan UUID and allocation-size agreement, external handles, required streams, and strictly increasing timeline values on Vulkan and CUDA wait/signal edges.
-- Debug-only contracts cover barrier-tracker ownership, timestamp/query bounds, mapped-buffer ranges, mesh/VkSplat retirement, packing layouts, pass-graph state, pass preconditions, and ring-slot access. No per-splat or per-pixel release check was added.
-- `LFS_VK_VALIDATION_FATAL=1` makes a validation-layer ERROR log the driver message at critical severity and abort. It is off by default and has no effect when validation is inactive. Vulkan startup now logs `validation_layers`, `debug_utils`, and `validation_errors_fatal` as active or inactive.
+The canonical vocabulary, message-quality rules, release/debug placement, Vulkan wrappers, validation-fatal flag, and ABI tripwire are documented in the [unified assertion policy](docs/development/assertions.md). This round established the Vulkan contracts summarized below; later assertion changes must follow that shared policy rather than introducing another formatter or compile-out rule.
 
 ### Static coverage counts
 
@@ -821,3 +817,51 @@ There are **181 concrete naming call sites**. Coverage by Vulkan object type is:
 - Every post-commit section 7 focused-filter run remained **52/55**. The only failures were the three baseline `ViewportFrameLifecycleServiceTest` resize-deferral cases, with the same dirty `16` versus expected `9` and incomplete-deferral signatures. The pre-existing CUDA-unload teardown diagnostics were unchanged.
 - The exact 1,000-iteration bicycle headless smoke completed successfully in **11.773 s** at **84.9 iter/s**, saved iteration 1,000 with **69,267 splats**, and emitted no assertion, invariant, or validation noise.
 - Static sweeps found zero legacy `assert(...)` calls and no ignored `VkResult` return in the requested scope. `git diff --check` passed. Nothing was pushed and no PR was opened.
+
+## Assert cherry-pick and unification round
+
+Marker: `ASSERT-CHERRYPICK-UNIFY-2026-07-11`.
+
+### Cherry-pick integration
+
+- Cherry-picked `bf764c7e0d1b02e5578244287734d866bc9b4196` as `55600b61d`, preserving its original author and `assert hardening: tensor and io boundary contracts, abi tripwire` message.
+- `tensor_masking_ops.cpp` conflicted because the incoming commit assumed an earlier generic masked-select dtype fix while this branch carried newer stream ownership. The resolution preserves the branch's stream plumbing and supplies typed CPU/CUDA dispatch for `float`, `double`, `half`, `int32`, `int64`, `uint8`, and `bool`; the incoming exact-`int64` regression now exercises that combined behavior.
+- `ply.cpp` conflicted because the incoming commit assumed an earlier normal-import change that is absent on this branch. The resolution keeps this branch's point-cloud schema, omits only the inapplicable normal-specific hunk, and retains all independent PLY header, payload, finiteness, range, and output-size contracts.
+- CMake, ABI-stamp, application-startup, documentation, and test registration applied without conflicts; no intent from either branch was discarded at those integration points.
+
+### Unification decisions
+
+- `core/assert.hpp` now owns the host failure formatter, source location, and `NDEBUG` compile-out rule. Always-on `LFS_ASSERT[_MSG]` and debug-only `LFS_DEBUG_ASSERT[_MSG]` therefore report through one primitive.
+- CUDA device assertions retain native `assert` because device code cannot format or throw. Host debug checks use the shared self-describing formatter, and release preprocessing evaluates neither their conditions nor messages.
+- Rasterizer and visualizer keep their established call-site idioms. `LFS_VK_DEBUG_ASSERT` is a domain wrapper over the shared debug primitive; `LFS_VK_CHECK[_MSG]` remains an always-on, single-evaluation `VkResult` adapter into each caller's bool/`lastError()` path.
+- ABI mismatch checking remains the first application boundary. A null loaded stamp is handled safely, and both the expected and observed stamps are present in the fatal startup message.
+- The canonical policy is now `docs/docs/development/assertions.md`; the Vulkan hardening section links to it instead of maintaining a second vocabulary definition.
+
+### Quality-pass findings
+
+- Removed four pre-launch `cudaGetLastError()` probes from masked-select, gather, and index-select paths. Those probes could clear and misattribute a stale CUDA error to the operation that had not yet launched; immediate post-launch checks remain.
+- Moved full-file PLY and COLMAP writer read-back verification under `#ifndef NDEBUG`. Release retains schema, size, range, finiteness, and write-result boundaries without paying a redundant per-record reread. The public PLY save boundary now validates a `PointCloud` once rather than repeating the same full scan inside its binary writer.
+- Kept record-local PLY and COLMAP parser checks always-on because each untrusted external record is a release boundary, not an already-proven hot loop. The remaining probability validation in `multinomial` shares the loop that must sum the weights, so it adds no second release traversal.
+- Improved tensor, PLY, and COLMAP failures to include observed dtype, device, shape, count, index, path, record identifier, and offending non-finite value. PLY writer/reader and COLMAP writer/reader symmetry was audited: writers enforce the same schema, finite/range, normalized-pose, and reciprocal-track invariants their readers assume.
+- Restored the generic masked-select dtype surface required by the cherry-picked tests while preserving this branch's stream ownership; no unsupported dtype silently falls through to a float interpretation.
+- Added symmetric overflow contracts to `append_zeros` for row counts, row width, element counts, byte counts, and write offsets, matching the strengthened `append_gather` boundary before any multiplication or allocation can wrap.
+- **Real bug found by the static boundary audit:** fused segmented reduction computed `source_numel / segment_size` before checking that `segment_size` was nonzero. The non-empty and exact-divisibility contracts now execute before division and remain always-on because they guard allocation and dispatch dimensions.
+- The fused `conv1x1_*_out` CUDA paths only record one image. They now reject `batch_size != 1` at the public boundary instead of silently producing incomplete output, and all output-rank checks precede output-shape indexing.
+- The final message sweep replaced every remaining message-less or literal-only tensor assertion in the cherry-picked scope. A parser-based audit now reports zero such sites; CUDA/CURAND failures also include the failed expression plus symbolic and numeric status.
+- **Real bug exposed by the runtime gate:** checkpoint serialization requested `ptr<uint8_t>()` from every tensor regardless of its actual dtype to copy raw bytes. The new pointer-type contract correctly rejected a float tensor at iteration 1,000, so the checkpoint was not written. Serialization now uses the untyped `data_ptr()` byte boundary, pointer mismatch diagnostics include the requested C++ type plus tensor dtype/shape/device, and `AssertHardeningRegression.TensorSerializationUsesUntypedByteAccess` prevents recurrence.
+
+### Source commits
+
+- `55600b61d` — `assert hardening: tensor and io boundary contracts, abi tripwire`
+- `185b336b2` — `refactor(asserts): unify debug assertion vocabulary`
+- `ea6015f4f` — `refactor(asserts): harden unified boundary contracts`
+- `b9f272463` — `refactor(asserts): use untyped tensor serialization access`
+- `3221bc200` — `refactor(asserts): make tensor contracts self-describing`
+
+### Gates
+
+- `cmake --build build -j8` passed after the final source change; no build used more than eight jobs. The `cmake-build-debug` `lfs_visualizer` target also passed, compiling the debug-only conditions and format arguments. `clang-format --dry-run --Werror` passed for every file in the final source commit after formatting.
+- The generated application/core ABI stamp matched in the live build (`--help` exited 0). An `LD_PRELOAD` probe forced the loaded stamp to `forced-stale-core`; startup exited 2 before argument parsing and reported both the generated expected hash and the observed stale stamp with rebuild guidance.
+- `*AssertHardening*` passed **19/19**. The touched tensor/COLMAP/PLY suite selection passed **244/244**, better than the broad pre-cherry-pick baseline that included two unrelated PLY/USD appearance failures. The focused Vulkan filter remained exactly **52/55**, with only the same three documented resize-deferral failures and unchanged signatures.
+- The first exact 1,000-iteration bicycle smoke was intentionally treated as a finding when its new dtype contract blocked checkpoint serialization. The final exact rerun completed in **4.238 s** at **236.0 iter/s**, saved a **28,820,793-byte** iteration-1,000 checkpoint containing **69,267 splats**, and emitted zero assertion, invariant, or validation noise.
+- The static audit found zero message-less or literal-only assertion sites in the cherry-picked tensor/io scope. `git diff --check` passed. The pre-existing gtest CUDA-runtime-unload teardown diagnostics remain unchanged. No push or PR was created.
