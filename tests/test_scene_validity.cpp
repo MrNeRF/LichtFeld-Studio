@@ -63,6 +63,28 @@ namespace lfs::python {
         EXPECT_GT(after.num_deallocs, before.num_deallocs);
     }
 
+    TEST(TrainerConstructionTest, ManagerClearReleasesTrainerResourcesAndPoolCache) {
+        core::Scene scene;
+        const core::NodeId cameras = scene.addGroup("Cameras");
+        scene.addCamera("camera.png", cameras, std::make_shared<core::Camera>());
+        lfs::vis::TrainerManager manager;
+        manager.setScene(&scene);
+        const auto before = core::PinnedMemoryAllocator::instance().get_stats();
+
+        manager.setTrainer(std::make_unique<training::Trainer>(scene));
+        const auto active = core::PinnedMemoryAllocator::instance().get_stats();
+        ASSERT_TRUE(manager.hasTrainer());
+        EXPECT_GT(active.allocated_bytes, before.allocated_bytes);
+
+        manager.clearTrainer();
+
+        const auto after = core::PinnedMemoryAllocator::instance().get_stats();
+        EXPECT_FALSE(manager.hasTrainer());
+        EXPECT_EQ(manager.splatExportableStorage(), nullptr);
+        EXPECT_EQ(after.allocated_bytes, before.allocated_bytes);
+        EXPECT_EQ(after.cached_bytes, 0u);
+    }
+
     namespace {
         std::unique_ptr<core::SplatData> make_test_splat(size_t count, const int sh_degree = 0) {
             std::vector<float> means(count * 3, 0.0f);

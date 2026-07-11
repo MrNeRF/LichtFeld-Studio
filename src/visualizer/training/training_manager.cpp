@@ -280,7 +280,14 @@ namespace lfs::vis {
         {
             std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
             trainer_.reset();
+            // Model tensors retain their own shared ownership while edit/view mode
+            // still uses the exportable block. The manager must not remain the final
+            // owner after scene teardown.
+            splat_storage_.reset();
         }
+        // Trainer::shutdown() trims before Tensor-valued members are destroyed.
+        // Trim again after destruction so those returned blocks do not survive clear.
+        lfs::core::Tensor::trim_memory_pool();
 
         updateResourceTracking();
 
