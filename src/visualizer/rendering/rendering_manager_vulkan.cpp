@@ -997,6 +997,14 @@ namespace lfs::vis {
             return settings_;
         }();
         SceneManager* const scene_manager = context.scene_manager;
+        auto* const trainer_manager = scene_manager ? scene_manager->getTrainerManager() : nullptr;
+        const bool is_training = scene_manager && scene_manager->hasDataset() &&
+                                 trainer_manager && trainer_manager->isRunning();
+        if (!is_training && vksplat_viewport_renderer_) {
+            // Clear a callback capturing the previous trainer before any cached or
+            // minimized-frame early return can leave it reachable by an auxiliary submit.
+            vksplat_viewport_renderer_->setLiveSubmitCallback({});
+        }
         if (context.vulkan_context) {
             last_vulkan_context_ = context.vulkan_context;
         }
@@ -1140,15 +1148,6 @@ namespace lfs::vis {
             return cached_frame_result();
         }
 
-        auto* const trainer_manager = scene_manager ? scene_manager->getTrainerManager() : nullptr;
-        const bool is_training = scene_manager && scene_manager->hasDataset() &&
-                                 trainer_manager && trainer_manager->isRunning();
-        if (!is_training && vksplat_viewport_renderer_) {
-            // Cached non-training frames bypass the handshake block below; clear
-            // any callback that still captures the previous trainer before it can
-            // outlive that trainer and be reached by a later auxiliary submit.
-            vksplat_viewport_renderer_->setLiveSubmitCallback({});
-        }
         if (resize_deferring && is_training) {
             requestResizeTrainingPause(trainer_manager);
         }
