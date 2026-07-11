@@ -555,6 +555,7 @@ namespace lfs::training {
         uint64_t viewer_borrow_waited_ = 0;
         mutable std::mutex stream_sync_mutex_;
 
+        void createCudaResources();
         void createSyncPrimitives();
         void destroySyncPrimitives();
         void recordParamsReady();

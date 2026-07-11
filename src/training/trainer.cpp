@@ -10,6 +10,7 @@
 #include "components/sparsity_optimizer.hpp"
 #include "control/command_api.hpp"
 #include "control/control_boundary.hpp"
+#include "core/assert.hpp"
 #include "core/checkpoint_format.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/memory_arena.hpp"
@@ -84,6 +85,16 @@ namespace lfs::training {
         constexpr double BYTES_PER_GIB = 1024.0 * 1024.0 * 1024.0;
         constexpr float CAMERA_LOSS_EMA_ALPHA = 0.2f;
         constexpr int CAMERA_LOSS_PUBLISH_INTERVAL = 16;
+
+        void require_cuda_success(const cudaError_t status, const std::string_view operation) {
+            if (status == cudaSuccess) {
+                return;
+            }
+            const std::string message = std::format(
+                "{} failed: {} ({})", operation, cudaGetErrorString(status), cudaGetErrorName(status));
+            cudaGetLastError();
+            LFS_ASSERT_MSG(status == cudaSuccess, message);
+        }
 
         [[nodiscard]] bool env_flag_enabled(const char* name) {
             const char* raw = std::getenv(name);
@@ -2128,62 +2139,90 @@ namespace lfs::training {
         : base_dataset_(std::move(dataset)),
           strategy_(std::move(strategy)),
           provided_splits_(std::move(provided_splits)) {
+        LFS_ASSERT_MSG(base_dataset_ != nullptr, "Trainer requires a camera dataset");
+        LFS_ASSERT_MSG(strategy_ != nullptr, "Trainer requires a training strategy");
+
         // Check CUDA availability
         int device_count = 0;
-        cudaError_t error = cudaGetDeviceCount(&device_count);
-        if (error != cudaSuccess || device_count == 0) {
-            throw std::runtime_error("CUDA is not available – aborting.");
-        }
-
-        cudaStreamCreateWithFlags(&callback_stream_, cudaStreamNonBlocking);
-        // Use the default stream flags so synchronous readbacks and cold-path
-        // uploads remain ordered with training work. Overlap partners use
-        // non-blocking streams with explicit event edges.
-        cudaStreamCreate(&training_stream_);
-        cudaStreamCreateWithFlags(&metrics_stream_, cudaStreamNonBlocking);
-        nvtxNameCudaStreamA(training_stream_, "lfs.train");
-        nvtxNameCudaStreamA(callback_stream_, "lfs.train.callback");
-        nvtxNameCudaStreamA(metrics_stream_, "lfs.metrics");
-        createSyncPrimitives();
+        require_cuda_success(cudaGetDeviceCount(&device_count), "CUDA device discovery");
+        LFS_ASSERT_MSG(device_count > 0, "CUDA is not available - aborting");
+        createCudaResources();
 
         LOG_DEBUG("Trainer constructed with {} cameras", base_dataset_->get_cameras().size());
     }
 
     Trainer::Trainer(lfs::core::Scene& scene)
         : scene_(&scene) {
+        LFS_ASSERT_MSG(scene.hasTrainingData(), "Scene has no cameras");
+
         int device_count = 0;
-        cudaError_t error = cudaGetDeviceCount(&device_count);
-        if (error != cudaSuccess || device_count == 0) {
-            throw std::runtime_error("CUDA is not available – aborting.");
-        }
-
-        cudaStreamCreateWithFlags(&callback_stream_, cudaStreamNonBlocking);
-        // Use the default stream flags so synchronous readbacks and cold-path
-        // uploads remain ordered with training work. Overlap partners use
-        // non-blocking streams with explicit event edges.
-        cudaStreamCreate(&training_stream_);
-        cudaStreamCreateWithFlags(&metrics_stream_, cudaStreamNonBlocking);
-        nvtxNameCudaStreamA(training_stream_, "lfs.train");
-        nvtxNameCudaStreamA(callback_stream_, "lfs.train.callback");
-        nvtxNameCudaStreamA(metrics_stream_, "lfs.metrics");
-        createSyncPrimitives();
-
-        if (!scene.hasTrainingData()) {
-            throw std::runtime_error("Scene has no cameras");
-        }
+        require_cuda_success(cudaGetDeviceCount(&device_count), "CUDA device discovery");
+        LFS_ASSERT_MSG(device_count > 0, "CUDA is not available - aborting");
+        createCudaResources();
 
         LOG_DEBUG("Trainer constructed from Scene with {} cameras", scene.getAllCameras().size());
     }
 
-    void Trainer::createSyncPrimitives() {
-        cudaEventCreateWithFlags(&params_ready_event_, cudaEventDisableTiming);
-        for (auto& event : reader_done_events_) {
-            cudaEventCreateWithFlags(&event, cudaEventDisableTiming);
+    void Trainer::createCudaResources() {
+        try {
+            require_cuda_success(
+                cudaStreamCreateWithFlags(&callback_stream_, cudaStreamNonBlocking),
+                "Trainer callback stream creation");
+
+            // Use the default stream flags so synchronous readbacks and cold-path
+            // uploads remain ordered with training work. Overlap partners use
+            // non-blocking streams with explicit event edges.
+            require_cuda_success(
+                cudaStreamCreate(&training_stream_),
+                "Trainer training stream creation");
+            require_cuda_success(
+                cudaStreamCreateWithFlags(&metrics_stream_, cudaStreamNonBlocking),
+                "Trainer metrics stream creation");
+
+            nvtxNameCudaStreamA(training_stream_, "lfs.train");
+            nvtxNameCudaStreamA(callback_stream_, "lfs.train.callback");
+            nvtxNameCudaStreamA(metrics_stream_, "lfs.metrics");
+            createSyncPrimitives();
+        } catch (...) {
+            // A C++ destructor is not invoked when its constructor throws.
+            // Roll back every member handle published by this transaction.
+            destroySyncPrimitives();
+            if (metrics_stream_) {
+                cudaStreamDestroy(metrics_stream_);
+                metrics_stream_ = nullptr;
+            }
+            if (training_stream_) {
+                cudaStreamDestroy(training_stream_);
+                training_stream_ = nullptr;
+            }
+            if (callback_stream_) {
+                cudaStreamDestroy(callback_stream_);
+                callback_stream_ = nullptr;
+            }
+            throw;
         }
-        for (auto& slot : loss_slots_) {
-            slot.pinned = static_cast<float*>(
+    }
+
+    void Trainer::createSyncPrimitives() {
+        require_cuda_success(
+            cudaEventCreateWithFlags(&params_ready_event_, cudaEventDisableTiming),
+            "Trainer parameter-ready event creation");
+        for (size_t i = 0; i < reader_done_events_.size(); ++i) {
+            require_cuda_success(
+                cudaEventCreateWithFlags(&reader_done_events_[i], cudaEventDisableTiming),
+                std::format("Trainer reader event {} creation", i));
+        }
+        for (size_t i = 0; i < loss_slots_.size(); ++i) {
+            require_cuda_success(
+                cudaEventCreateWithFlags(&loss_slots_[i].done, cudaEventDisableTiming),
+                std::format("Trainer loss event {} creation", i));
+        }
+        for (size_t i = 0; i < loss_slots_.size(); ++i) {
+            loss_slots_[i].pinned = static_cast<float*>(
                 lfs::core::PinnedMemoryAllocator::instance().allocate(sizeof(float)));
-            cudaEventCreateWithFlags(&slot.done, cudaEventDisableTiming);
+            LFS_ASSERT_MSG(
+                loss_slots_[i].pinned != nullptr,
+                std::format("Trainer loss slot {} pinned allocation failed", i));
         }
     }
 

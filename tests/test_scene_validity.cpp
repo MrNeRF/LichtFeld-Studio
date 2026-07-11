@@ -11,11 +11,13 @@
 
 #include "core/cuda/sh_layout.cuh"
 #include "core/parameters.hpp"
+#include "core/pinned_memory_allocator.hpp"
 #include "core/point_cloud.hpp"
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
 #include "python/python_runtime.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
+#include "training/trainer.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/core/services.hpp"
@@ -24,6 +26,42 @@
 #include "visualizer/training/training_manager.hpp"
 
 namespace lfs::python {
+
+    TEST(TrainerConstructionTest, RejectsInvalidSceneBeforeAllocatingCudaResources) {
+        core::Scene scene;
+        const auto before = core::PinnedMemoryAllocator::instance().get_stats();
+
+        try {
+            training::Trainer trainer(scene);
+            FAIL() << "Trainer accepted a scene without cameras";
+        } catch (const std::runtime_error& error) {
+            EXPECT_NE(std::string_view(error.what()).find("Scene has no cameras"),
+                      std::string_view::npos);
+        }
+
+        const auto after = core::PinnedMemoryAllocator::instance().get_stats();
+        EXPECT_EQ(after.allocated_bytes, before.allocated_bytes);
+        EXPECT_EQ(after.cached_bytes, before.cached_bytes);
+        EXPECT_EQ(after.num_allocs, before.num_allocs);
+        EXPECT_EQ(after.num_deallocs, before.num_deallocs);
+    }
+
+    TEST(TrainerConstructionTest, CreatesAndReleasesCudaResourcesForValidScene) {
+        core::Scene scene;
+        const core::NodeId cameras = scene.addGroup("Cameras");
+        scene.addCamera("camera.png", cameras, std::make_shared<core::Camera>());
+        const auto before = core::PinnedMemoryAllocator::instance().get_stats();
+
+        {
+            training::Trainer trainer(scene);
+            const auto active = core::PinnedMemoryAllocator::instance().get_stats();
+            EXPECT_GT(active.allocated_bytes, before.allocated_bytes);
+        }
+
+        const auto after = core::PinnedMemoryAllocator::instance().get_stats();
+        EXPECT_EQ(after.allocated_bytes, before.allocated_bytes);
+        EXPECT_GT(after.num_deallocs, before.num_deallocs);
+    }
 
     namespace {
         std::unique_ptr<core::SplatData> make_test_splat(size_t count, const int sh_degree = 0) {
