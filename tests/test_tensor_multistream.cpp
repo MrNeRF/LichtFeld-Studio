@@ -24,6 +24,17 @@ namespace {
     constexpr size_t SLAB_BYTES = 64 * 1024;
     constexpr size_t BUCKET_BYTES = 4 * 1024 * 1024;
 
+    void seedPinnedCache(const size_t bytes) {
+        auto& pinned = PinnedMemoryAllocator::instance();
+        void* first = pinned.allocate(bytes);
+        void* second = pinned.allocate(bytes);
+        ASSERT_NE(first, nullptr);
+        ASSERT_NE(second, nullptr);
+        pinned.deallocate(first);
+        pinned.deallocate(second);
+        ASSERT_EQ(cudaStreamSynchronize(nullptr), cudaSuccess);
+    }
+
     void destroyStreamSafely(cudaStream_t stream) {
         CudaMemoryPool::instance().release_stream(stream);
         cudaStreamDestroy(stream);
@@ -266,6 +277,146 @@ TEST_F(TensorMultiStreamTest, PinnedBlockReusedOnlyAfterAllStreamsDone) {
     pinned.deallocate(reused_after, nullptr);
     cudaFree(device_buffer);
     destroyStreamSafely(d2h_stream);
+}
+
+TEST_F(TensorMultiStreamTest, ExplicitH2DTransferGuardsDroppedPinnedSource) {
+    auto& pinned = PinnedMemoryAllocator::instance();
+    pinned.empty_cache();
+    pinned.reset_stats();
+    seedPinnedCache(256 * 1024 * sizeof(float));
+
+    GateStream transfer;
+    transfer.close();
+    constexpr size_t kElements = 256 * 1024;
+
+    Tensor gpu;
+    void* source_ptr = nullptr;
+    {
+        auto source = Tensor::ones({kElements}, Device::CPU);
+        source_ptr = source.data_ptr();
+        gpu = source.to(Device::CUDA, transfer.get());
+    }
+
+    auto replacement = Tensor::empty({kElements}, Device::CPU);
+    ASSERT_NE(replacement.data_ptr(), nullptr);
+    EXPECT_NE(replacement.data_ptr(), source_ptr);
+    EXPECT_GE(pinned.get_stats().cache_hits, 2u);
+
+    transfer.release();
+    ASSERT_EQ(cudaStreamSynchronize(transfer.get()), cudaSuccess);
+
+    auto reused_after_completion = Tensor::empty({kElements}, Device::CPU);
+    EXPECT_EQ(reused_after_completion.data_ptr(), source_ptr);
+    EXPECT_GE(pinned.get_stats().cache_hits, 1u);
+
+    const auto values = gpu.to(Device::CPU).to_vector();
+    ASSERT_EQ(values.size(), kElements);
+    EXPECT_FLOAT_EQ(values.front(), 1.0f);
+    EXPECT_FLOAT_EQ(values.back(), 1.0f);
+}
+
+TEST_F(TensorMultiStreamTest, ExplicitD2HTransferGuardsDroppedPinnedDestination) {
+    auto& pinned = PinnedMemoryAllocator::instance();
+    pinned.empty_cache();
+    pinned.reset_stats();
+    seedPinnedCache(256 * 1024 * sizeof(float));
+
+    GateStream transfer;
+    constexpr size_t kElements = 256 * 1024;
+
+    auto gpu = Tensor::full({kElements}, 2.0f, Device::CUDA);
+    ASSERT_EQ(cudaStreamSynchronize(gpu.stream()), cudaSuccess);
+    transfer.close();
+
+    void* destination_ptr = nullptr;
+    {
+        auto destination = gpu.to(Device::CPU, transfer.get());
+        destination_ptr = destination.data_ptr();
+    }
+
+    auto replacement = Tensor::empty({kElements}, Device::CPU);
+    ASSERT_NE(replacement.data_ptr(), nullptr);
+    EXPECT_NE(replacement.data_ptr(), destination_ptr);
+
+    transfer.release();
+    ASSERT_EQ(cudaStreamSynchronize(transfer.get()), cudaSuccess);
+
+    auto reused_after_completion = Tensor::empty({kElements}, Device::CPU);
+    EXPECT_EQ(reused_after_completion.data_ptr(), destination_ptr);
+}
+
+TEST_F(TensorMultiStreamTest, ExplicitH2DViewMoveAssignmentGuardsDroppedPinnedSource) {
+    auto& pinned = PinnedMemoryAllocator::instance();
+    pinned.empty_cache();
+    pinned.reset_stats();
+    seedPinnedCache(256 * 1024 * sizeof(float));
+
+    GateStream transfer;
+    constexpr size_t kElements = 256 * 1024;
+
+    auto destination = Tensor::zeros({kElements + 2}, Device::CUDA);
+    auto destination_view = destination.slice(0, 1, kElements + 1);
+    ASSERT_TRUE(destination_view.is_view());
+    destination_view.set_stream(transfer.get());
+    transfer.close();
+
+    void* source_ptr = nullptr;
+    {
+        auto source = Tensor::full({kElements}, 3.0f, Device::CPU);
+        source_ptr = source.data_ptr();
+        ASSERT_EQ(source.shape(), destination_view.shape());
+        ASSERT_FLOAT_EQ(source.ptr<float>()[0], 3.0f);
+        destination_view = std::move(source);
+        EXPECT_EQ(destination_view.device(), Device::CUDA);
+        EXPECT_TRUE(destination_view.is_view());
+    }
+
+    auto replacement = Tensor::empty({kElements}, Device::CPU);
+    ASSERT_NE(replacement.data_ptr(), nullptr);
+    EXPECT_NE(replacement.data_ptr(), source_ptr);
+
+    transfer.release();
+    ASSERT_EQ(cudaStreamSynchronize(transfer.get()), cudaSuccess);
+
+    const auto values = destination.to(Device::CPU).to_vector();
+    ASSERT_EQ(values.size(), kElements + 2);
+    EXPECT_FLOAT_EQ(values.front(), 0.0f);
+    EXPECT_FLOAT_EQ(values[1], 3.0f);
+    EXPECT_FLOAT_EQ(values[kElements], 3.0f);
+    EXPECT_FLOAT_EQ(values.back(), 0.0f);
+}
+
+TEST_F(TensorMultiStreamTest, ExplicitD2HViewAssignmentGuardsDroppedPinnedDestination) {
+    auto& pinned = PinnedMemoryAllocator::instance();
+    pinned.empty_cache();
+    pinned.reset_stats();
+    seedPinnedCache(256 * 1024 * sizeof(float));
+
+    GateStream transfer;
+    constexpr size_t kElements = 256 * 1024;
+
+    auto source = Tensor::full({kElements}, 4.0f, Device::CUDA);
+    ASSERT_EQ(cudaStreamSynchronize(source.stream()), cudaSuccess);
+
+    void* destination_ptr = nullptr;
+    {
+        auto destination = Tensor::empty({kElements}, Device::CPU);
+        destination_ptr = destination.data_ptr();
+        auto destination_view = destination.slice(0, 0, kElements);
+        destination_view.set_stream(transfer.get());
+        transfer.close();
+        destination_view = source;
+    }
+
+    auto replacement = Tensor::empty({kElements}, Device::CPU);
+    ASSERT_NE(replacement.data_ptr(), nullptr);
+    EXPECT_NE(replacement.data_ptr(), destination_ptr);
+
+    transfer.release();
+    ASSERT_EQ(cudaStreamSynchronize(transfer.get()), cudaSuccess);
+
+    auto reused_after_completion = Tensor::empty({kElements}, Device::CPU);
+    EXPECT_EQ(reused_after_completion.data_ptr(), destination_ptr);
 }
 
 TEST_F(TensorMultiStreamTest, ArenaCrossStreamFrameHandoff) {

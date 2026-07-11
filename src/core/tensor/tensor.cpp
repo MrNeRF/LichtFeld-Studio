@@ -457,17 +457,22 @@ namespace lfs::core {
                 const void* src_ptr = other.data_ptr();
 
                 if (device_ == Device::CUDA && other.device_ == Device::CUDA) {
-                    CHECK_CUDA(cudaMemcpyAsync(dst_ptr, src_ptr, bytes(), cudaMemcpyDeviceToDevice, stream()));
+                    const cudaStream_t copy_stream = stream();
+                    other.sync_to_stream(copy_stream);
+                    CHECK_CUDA(cudaMemcpyAsync(dst_ptr, src_ptr, bytes(), cudaMemcpyDeviceToDevice, copy_stream));
+                    record_stream(copy_stream);
+                    other.record_stream(copy_stream);
                 } else if (device_ == Device::CUDA && other.device_ == Device::CPU) {
-                    CHECK_CUDA(cudaMemcpyAsync(dst_ptr, src_ptr, bytes(), cudaMemcpyHostToDevice, stream()));
+                    const cudaStream_t copy_stream = stream();
+                    CHECK_CUDA(cudaMemcpyAsync(dst_ptr, src_ptr, bytes(), cudaMemcpyHostToDevice, copy_stream));
+                    record_stream(copy_stream);
+                    other.record_stream(copy_stream);
                 } else if (device_ == Device::CPU && other.device_ == Device::CUDA) {
-                    // GPU→CPU requires sync before copy to ensure data is ready
-                    if (other.stream()) {
-                        CHECK_CUDA(cudaStreamSynchronize(other.stream()));
-                    } else {
-                        CHECK_CUDA(cudaDeviceSynchronize());
-                    }
-                    CHECK_CUDA(cudaMemcpyAsync(dst_ptr, src_ptr, bytes(), cudaMemcpyDeviceToHost, stream()));
+                    const cudaStream_t copy_stream = stream();
+                    other.sync_to_stream(copy_stream);
+                    CHECK_CUDA(cudaMemcpyAsync(dst_ptr, src_ptr, bytes(), cudaMemcpyDeviceToHost, copy_stream));
+                    record_stream(copy_stream);
+                    other.record_stream(copy_stream);
                 } else {
                     std::memcpy(dst_ptr, src_ptr, bytes());
                 }
@@ -564,17 +569,22 @@ namespace lfs::core {
                     const void* src_ptr = other.data_ptr();
 
                     if (device_ == Device::CUDA && other.device_ == Device::CUDA) {
-                        CHECK_CUDA(cudaMemcpyAsync(dst_ptr, src_ptr, bytes(), cudaMemcpyDeviceToDevice, stream()));
+                        const cudaStream_t copy_stream = stream();
+                        other.sync_to_stream(copy_stream);
+                        CHECK_CUDA(cudaMemcpyAsync(dst_ptr, src_ptr, bytes(), cudaMemcpyDeviceToDevice, copy_stream));
+                        record_stream(copy_stream);
+                        other.record_stream(copy_stream);
                     } else if (device_ == Device::CUDA && other.device_ == Device::CPU) {
-                        CHECK_CUDA(cudaMemcpyAsync(dst_ptr, src_ptr, bytes(), cudaMemcpyHostToDevice, stream()));
+                        const cudaStream_t copy_stream = stream();
+                        CHECK_CUDA(cudaMemcpyAsync(dst_ptr, src_ptr, bytes(), cudaMemcpyHostToDevice, copy_stream));
+                        record_stream(copy_stream);
+                        other.record_stream(copy_stream);
                     } else if (device_ == Device::CPU && other.device_ == Device::CUDA) {
-                        // GPU→CPU requires sync before copy to ensure data is ready
-                        if (other.stream()) {
-                            CHECK_CUDA(cudaStreamSynchronize(other.stream()));
-                        } else {
-                            CHECK_CUDA(cudaDeviceSynchronize());
-                        }
-                        CHECK_CUDA(cudaMemcpyAsync(dst_ptr, src_ptr, bytes(), cudaMemcpyDeviceToHost, stream()));
+                        const cudaStream_t copy_stream = stream();
+                        other.sync_to_stream(copy_stream);
+                        CHECK_CUDA(cudaMemcpyAsync(dst_ptr, src_ptr, bytes(), cudaMemcpyDeviceToHost, copy_stream));
+                        record_stream(copy_stream);
+                        other.record_stream(copy_stream);
                     } else {
                         std::memcpy(dst_ptr, src_ptr, bytes());
                     }
@@ -648,7 +658,10 @@ namespace lfs::core {
                        std::format("set_stream requires a valid tensor "
                                    "(tensor={}, requested_stream={})",
                                    str(), static_cast<const void*>(stream)));
-        if (device_ == Device::CUDA && data_owner_) {
+        if (device_ == Device::CUDA && data_owner_ && state_->stream != stream) {
+            // Rehoming changes where future writes occur. Preserve prior writes
+            // from the old home before changing allocator ownership metadata.
+            bridgeStreams(state_->stream, stream);
             CudaMemoryPool::instance().rehome_stream(data_owner_.get(), stream);
         }
         state_->stream = stream;
@@ -1008,7 +1021,7 @@ namespace lfs::core {
             if (device_ == Device::CUDA && device == Device::CPU) {
                 // GPU→CPU: Materialize on GPU FIRST (GPU kernel is faster)
                 LOG_DEBUG("GPU→CPU: materializing on GPU before download");
-                return contiguous().to(device);
+                return contiguous().to(device, stream);
             } else if (device_ == Device::CPU && device == Device::CUDA) {
                 // CPU→GPU: Use fused strided upload kernel!
                 LOG_DEBUG("CPU→GPU non-contiguous: using fused strided upload kernel (rank={})", shape_.rank());
@@ -1042,12 +1055,9 @@ namespace lfs::core {
                         dtype_,
                         transfer_stream);
 
-                    // NO SYNC: Let CUDA runtime handle synchronization when data is accessed
-                    // The pinned memory (src) is hopefully safe because:
-                    // 1. It's managed by shared_ptr in data_owner_
-                    // 2. Stream-aware allocator tracks the stream and won't reuse until complete
-                    // Update source tensor's stream for deallocator
-                    const_cast<Tensor*>(this)->set_stream(transfer_stream);
+                    // The host owner can retire immediately after this call. Register
+                    // the actual reader stream with the pinned allocator before return.
+                    record_stream(transfer_stream);
                     LOG_DEBUG("Optimized rank-{} strided upload launched (async): {} elements", shape_.rank(), numel());
                     return t;
                 }
@@ -1083,8 +1093,7 @@ namespace lfs::core {
                 CHECK_CUDA(cudaFree(d_shape));
                 CHECK_CUDA(cudaFree(d_strides));
 
-                // CRITICAL: Update source tensor's stream for deallocator
-                const_cast<Tensor*>(this)->set_stream(transfer_stream);
+                record_stream(transfer_stream);
 
                 LOG_DEBUG("Generic strided upload launched (async): {} elements", numel());
                 return t;
@@ -1181,9 +1190,7 @@ namespace lfs::core {
             }
             CHECK_CUDA(cudaMemcpyAsync(t.data_, src, bytes(), cudaMemcpyHostToDevice, transfer_stream));
 
-            // CRITICAL: Update source tensor's stream so deallocator knows which stream used this memory
-            // This is needed for the stream-aware pinned memory allocator
-            const_cast<Tensor*>(this)->set_stream(transfer_stream);
+            record_stream(transfer_stream);
 
             // If stream is provided, caller is responsible for sync.
             // Otherwise wait only on transfer_stream — the H2D is the only work
@@ -1194,20 +1201,16 @@ namespace lfs::core {
                 CHECK_CUDA(cudaStreamSynchronize(transfer_stream));
             }
         } else if (device_ == Device::CUDA && device == Device::CPU) {
-            // API BOUNDARY: Sync before GPU→CPU transfer so we see the latest
-            // writes to the source tensor. Sync only the source's stream — a
-            // full device sync was draining unrelated GPU work.
-            if (stream) {
-                CHECK_CUDA(cudaStreamSynchronize(stream));
-            } else {
-                CHECK_CUDA(cudaStreamSynchronize(this->stream()));
-            }
-            // Async transfer for GPU→CPU as well (destination is pinned)
-            cudaStream_t transfer_stream = stream ? stream : 0;
+            // Order the transfer after the source's producing stream without
+            // draining unrelated CUDA work. Explicit-stream calls remain async.
+            const cudaStream_t transfer_stream = stream ? stream : nullptr;
+            sync_to_stream(transfer_stream);
             if (stream) {
                 t.set_stream(transfer_stream);
             }
             CHECK_CUDA(cudaMemcpyAsync(t.data_, src, bytes(), cudaMemcpyDeviceToHost, transfer_stream));
+            record_stream(transfer_stream);
+            t.record_stream(transfer_stream);
 
             if (!stream) {
                 CHECK_CUDA(cudaStreamSynchronize(transfer_stream));
@@ -2921,48 +2924,70 @@ namespace lfs::core {
         LOG_DEBUG("  Allocating: {} rows × {} elements/row × {} bytes/elem = {} MB",
                   new_capacity, row_size, element_size, new_bytes / (1024.0 * 1024.0));
 
-        // First, explicitly release the old buffer to avoid double allocation
-        // This ensures the old buffer is freed BEFORE we allocate the new one
-        void* old_data = data_;
-        std::shared_ptr<void> old_owner = data_owner_; // Keep reference temporarily
+        // Keep the installed owner untouched until allocation, copy, and all
+        // replacement metadata have succeeded.
+        void* const old_data = data_;
 
         // Allocate new buffer
         void* new_data = nullptr;
         if (device_ == Device::CUDA) {
             const cudaError_t status = cudaMalloc(&new_data, new_bytes);
-            LFS_ASSERT_MSG(status == cudaSuccess && new_data != nullptr,
-                           std::format("reserve CUDA allocation must return success and non-null storage "
-                                       "(cuda_error={}({}), data_pointer={}, bytes={}, "
-                                       "requested_capacity={}, row_size={}, tensor_shape={})",
-                                       cudaGetErrorString(status), static_cast<int>(status), new_data,
-                                       new_bytes, new_capacity, row_size, shape_.str()));
+            if (status != cudaSuccess || new_data == nullptr) {
+                const std::string error = std::format(
+                    "reserve CUDA allocation failed (cuda_error={}({}), data_pointer={}, "
+                    "bytes={}, requested_capacity={}, row_size={}, tensor_shape={})",
+                    cudaGetErrorString(status), static_cast<int>(status), new_data,
+                    new_bytes, new_capacity, row_size, shape_.str());
+                if (new_data != nullptr) {
+                    cudaFree(new_data);
+                }
+                // The failure is handled here; do not leak it through CUDA's
+                // thread-local last-error slot into the caller's next operation.
+                (void)cudaGetLastError();
+                throw std::runtime_error(error);
+            }
             LOG_DEBUG("  ✓ CUDA allocation succeeded: {} MB at {}", new_bytes / (1024.0 * 1024.0), new_data);
         } else {
             new_data = std::malloc(new_bytes);
-            LFS_ASSERT_MSG(new_data != nullptr,
-                           std::format("reserve CPU allocation must return non-null storage "
-                                       "(data_pointer={}, bytes={}, requested_capacity={}, "
-                                       "row_size={}, tensor_shape={})",
-                                       new_data, new_bytes, new_capacity, row_size, shape_.str()));
+            if (new_data == nullptr) {
+                throw std::runtime_error(std::format(
+                    "reserve CPU allocation failed (data_pointer={}, bytes={}, "
+                    "requested_capacity={}, row_size={}, tensor_shape={})",
+                    new_data, new_bytes, new_capacity, row_size, shape_.str()));
+            }
             LOG_DEBUG("  ✓ CPU allocation succeeded: {} MB at {}", new_bytes / (1024.0 * 1024.0), new_data);
         }
 
+        std::shared_ptr<void> new_owner;
+        if (device_ == Device::CUDA) {
+            record_storage_allocation(StorageAccountingKind::CudaDirect, new_bytes);
+            new_owner = std::shared_ptr<void>(new_data, [bytes = new_bytes](void* ptr) {
+                cudaFree(ptr);
+                Tensor::record_storage_deallocation(StorageAccountingKind::CudaDirect, bytes);
+            });
+        } else {
+            new_owner = std::shared_ptr<void>(new_data, [](void* ptr) {
+                std::free(ptr);
+            });
+        }
+        auto new_storage_meta = std::make_shared<StorageMeta>();
+
         // Copy existing data
         if (old_data && numel() > 0) {
-            const size_t copy_bytes = numel() * element_size;
+            const size_t copy_bytes =
+                checked_size_product(numel(), element_size, "reserve copy byte count");
             if (device_ == Device::CUDA) {
                 const cudaError_t status =
                     cudaMemcpy(new_data, old_data, copy_bytes, cudaMemcpyDeviceToDevice);
                 if (status != cudaSuccess) {
-                    cudaFree(new_data);
-                    LFS_ASSERT_MSG(false,
-                                   std::format("reserve CUDA device-to-device copy failed "
-                                               "(cuda_error={}({}), bytes={}, source_pointer={}, "
-                                               "destination_pointer={}, tensor_shape={}, "
-                                               "requested_capacity={})",
-                                               cudaGetErrorString(status), static_cast<int>(status),
-                                               copy_bytes, old_data, new_data, shape_.str(),
-                                               new_capacity));
+                    const std::string error = std::format(
+                        "reserve CUDA device-to-device copy failed "
+                        "(cuda_error={}({}), bytes={}, source_pointer={}, "
+                        "destination_pointer={}, tensor_shape={}, requested_capacity={})",
+                        cudaGetErrorString(status), static_cast<int>(status),
+                        copy_bytes, old_data, new_data, shape_.str(), new_capacity);
+                    (void)cudaGetLastError();
+                    throw std::runtime_error(error);
                 }
             } else {
                 std::memcpy(new_data, old_data, copy_bytes);
@@ -2972,32 +2997,10 @@ namespace lfs::core {
         bump_storage_generation();
 
         data_ = new_data;
-        if (device_ == Device::CUDA) {
-            record_storage_allocation(StorageAccountingKind::CudaDirect, new_bytes);
-            data_owner_ = std::shared_ptr<void>(new_data, [device = device_, bytes = new_bytes](void* ptr) {
-                if (device == Device::CUDA) {
-                    cudaFree(ptr);
-                    Tensor::record_storage_deallocation(StorageAccountingKind::CudaDirect, bytes);
-                } else {
-                    std::free(ptr);
-                }
-            });
-        } else {
-            data_owner_ = std::shared_ptr<void>(new_data, [device = device_](void* ptr) {
-                if (device == Device::CUDA) {
-                    cudaFree(ptr);
-                } else {
-                    std::free(ptr);
-                }
-            });
-        }
-        init_storage_meta();
+        data_owner_ = std::move(new_owner);
+        storage_meta_ = std::move(new_storage_meta);
         state_->capacity = new_capacity;
         state_->logical_size = current_rows;
-
-        // Explicitly release old buffer AFTER copy is complete
-        // This ensures we don't have both buffers alive at the same time
-        old_owner.reset(); // Decrement ref count, potentially freeing old buffer immediately
 
         LOG_DEBUG("✓ Tensor #{}: reserve({}) SUCCEEDED - capacity now {}, size {} ({:.1f}% utilization)",
                   id_, new_capacity, state_->capacity, current_rows, 100.0 * current_rows / state_->capacity);

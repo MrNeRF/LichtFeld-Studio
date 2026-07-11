@@ -386,7 +386,8 @@ TEST_F(TensorStreamTest, ToDeviceNonContiguousCpuToCudaRespectsExplicitStream) {
 
     auto gpu = view.to(Device::CUDA, stream);
     EXPECT_EQ(gpu.stream(), stream);
-    EXPECT_EQ(view.stream(), stream);
+    // An async reader is an additional use, not a transfer of ownership.
+    EXPECT_EQ(view.stream(), nullptr);
 
     ASSERT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
     auto back = gpu.to(Device::CPU).to_vector();
