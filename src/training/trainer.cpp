@@ -1266,12 +1266,29 @@ namespace lfs::training {
         }
 
         struct PipelineMemoryEstimate {
-            size_t max_image_bytes = 0;
-            bool masks_possible = false;
+            size_t max_slot_bytes = 0;
         };
 
+        [[nodiscard]] constexpr size_t saturatingSizeMultiply(
+            const size_t left,
+            const size_t right) noexcept {
+            return left != 0 && right > std::numeric_limits<size_t>::max() / left
+                       ? std::numeric_limits<size_t>::max()
+                       : left * right;
+        }
+
+        [[nodiscard]] constexpr size_t saturatingSizeAdd(
+            const size_t left,
+            const size_t right) noexcept {
+            return right > std::numeric_limits<size_t>::max() - left
+                       ? std::numeric_limits<size_t>::max()
+                       : left + right;
+        }
+
         [[nodiscard]] PipelineMemoryEstimate estimatePipelineMemory(
-            const std::shared_ptr<CameraDataset>& dataset) {
+            const std::shared_ptr<CameraDataset>& dataset,
+            const lfs::io::PipelinedLoaderConfig& config,
+            const PipelinedAuxiliaryImageConfig& aux_config) {
             PipelineMemoryEstimate estimate;
             if (!dataset) {
                 return estimate;
@@ -1284,13 +1301,29 @@ namespace lfs::training {
 
                 const size_t width = static_cast<size_t>(std::max(cam->image_width(), 0));
                 const size_t height = static_cast<size_t>(std::max(cam->image_height(), 0));
-                if (width > 0 && height > 0) {
-                    estimate.max_image_bytes = std::max(
-                        estimate.max_image_bytes,
-                        width * height * size_t{3} * sizeof(uint8_t));
+                if (width == 0 || height == 0) {
+                    continue;
                 }
 
-                estimate.masks_possible = estimate.masks_possible || cam->has_mask() || cam->has_alpha();
+                // One in-flight cold request can hold the decoded output beside its
+                // upload staging. Sixteen-bit sources become float32 RGB (12 B/px)
+                // while retaining a uint16 RGB staging image (6 B/px). Eight-bit
+                // requests retain uint8 RGB output and staging (3 B/px each).
+                size_t bytes_per_pixel = config.use_16bit_color ? size_t{18} : size_t{6};
+                const bool loads_mask =
+                    (aux_config.load_masks && cam->has_mask()) ||
+                    (aux_config.use_alpha_as_mask && cam->has_alpha());
+                if (loads_mask) {
+                    bytes_per_pixel = saturatingSizeAdd(bytes_per_pixel, sizeof(float));
+                }
+                if (aux_config.load_depths && cam->has_depth()) {
+                    bytes_per_pixel = saturatingSizeAdd(bytes_per_pixel, sizeof(float));
+                }
+
+                const size_t pixels = saturatingSizeMultiply(width, height);
+                estimate.max_slot_bytes = std::max(
+                    estimate.max_slot_bytes,
+                    saturatingSizeMultiply(pixels, bytes_per_pixel));
             }
 
             return estimate;
@@ -1298,9 +1331,10 @@ namespace lfs::training {
 
         [[nodiscard]] lfs::io::PipelinedLoaderConfig tunePipelinedLoaderConfig(
             lfs::io::PipelinedLoaderConfig config,
-            const std::shared_ptr<CameraDataset>& dataset) {
-            const auto estimate = estimatePipelineMemory(dataset);
-            if (estimate.max_image_bytes == 0) {
+            const std::shared_ptr<CameraDataset>& dataset,
+            const PipelinedAuxiliaryImageConfig& aux_config) {
+            const auto estimate = estimatePipelineMemory(dataset, config, aux_config);
+            if (estimate.max_slot_bytes == 0) {
                 config.decoder_pool_size = std::min(config.decoder_pool_size, config.jpeg_batch_size);
                 return config;
             }
@@ -1333,24 +1367,25 @@ namespace lfs::training {
                 }
             }
 
-            const size_t per_ready_image_bytes = estimate.max_image_bytes +
-                                                 (estimate.masks_possible ? estimate.max_image_bytes / 3 : 0);
             constexpr size_t MIN_PIPELINE_BUDGET_BYTES = 256ULL * 1024 * 1024;
             constexpr size_t MAX_PIPELINE_BUDGET_BYTES = 512ULL * 1024 * 1024;
-            const size_t target_pipeline_budget =
-                std::clamp(free_bytes / 32, MIN_PIPELINE_BUDGET_BYTES, MAX_PIPELINE_BUDGET_BYTES);
+            const size_t target_pipeline_budget = std::max<size_t>(
+                1,
+                std::min(
+                    free_bytes / 2,
+                    std::clamp(free_bytes / 32, MIN_PIPELINE_BUDGET_BYTES, MAX_PIPELINE_BUDGET_BYTES)));
 
-            const size_t recommended_prefetch = std::clamp(
-                target_pipeline_budget / std::max<size_t>(per_ready_image_bytes, 1),
-                size_t{2},
-                config.prefetch_count);
+            config.prefetch_count = std::max<size_t>(1, config.prefetch_count);
+            const size_t recommended_prefetch = std::min(
+                config.prefetch_count,
+                std::max<size_t>(1, target_pipeline_budget / estimate.max_slot_bytes));
 
             if (recommended_prefetch < config.prefetch_count) {
                 LOG_INFO(
-                    "Reducing image pipeline depth {} -> {} (largest image {:.1f} MB, free VRAM {:.1f} GB)",
+                    "Reducing image pipeline depth {} -> {} (largest slot {:.1f} MB, free VRAM {:.1f} GB)",
                     config.prefetch_count,
                     recommended_prefetch,
-                    estimate.max_image_bytes / (1024.0 * 1024.0),
+                    estimate.max_slot_bytes / (1024.0 * 1024.0),
                     free_bytes / (1024.0 * 1024.0 * 1024.0));
                 config.prefetch_count = recommended_prefetch;
             }
@@ -5613,8 +5648,6 @@ namespace lfs::training {
                 LOG_INFO("{:.0f}% non-JPEG images, using {} cold threads", non_jpeg_ratio * 100.0f, cold_threads);
             }
 
-            pipelined_config = tunePipelinedLoaderConfig(pipelined_config, train_dataset_);
-
             const bool alpha_available = scene_ && scene_->imagesHaveAlpha();
             PipelinedAuxiliaryImageConfig aux_pipeline_config;
             if (params_.optimization.use_depth_loss &&
@@ -5761,6 +5794,9 @@ namespace lfs::training {
                         std::max<size_t>(1, pipelined_config.prefetch_count));
                 }
             }
+
+            pipelined_config = tunePipelinedLoaderConfig(
+                pipelined_config, train_dataset_, aux_pipeline_config);
 
             auto train_dataloader = create_infinite_pipelined_dataloader(
                 train_dataset_, pipelined_config, aux_pipeline_config);
