@@ -1174,21 +1174,8 @@ namespace lfs::vis {
         } else if (!pending_view_paths_.empty()) {
             auto paths = std::exchange(pending_view_paths_, {});
             LOG_INFO("Loading {} splat file(s)", paths.size());
-            if (const auto result = data_loader_->loadPLY(paths[0]); !result) {
-                LOG_ERROR("Failed to load {}: {}", lfs::core::path_to_utf8(paths[0]), result.error());
-                state::SplatFileLoadFailed{.path = paths[0], .error = result.error()}.emit();
-            } else {
-                for (size_t i = 1; i < paths.size(); ++i) {
-                    try {
-                        data_loader_->addSplatFileToScene(paths[i]);
-                    } catch (const std::exception& e) {
-                        LOG_ERROR("Failed to add {}: {}", lfs::core::path_to_utf8(paths[i]), e.what());
-                        state::SplatFileLoadFailed{.path = paths[i], .error = e.what()}.emit();
-                    }
-                }
-                if (paths.size() > 1) {
-                    scene_manager_->consolidateNodeModels();
-                }
+            if (const auto result = data_loader_->loadSplatFiles(paths); !result) {
+                LOG_ERROR("Failed to load startup splat batch: {}", result.error());
             }
         } else if (!pending_dataset_path_.empty()) {
             auto path = std::exchange(pending_dataset_path_, {});
