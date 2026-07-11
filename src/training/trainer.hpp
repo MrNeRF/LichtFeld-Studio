@@ -266,6 +266,7 @@ namespace lfs::training {
         // Returns the resized background image for the given camera dimensions
         // Returns empty tensor if no background image is set
         lfs::core::Tensor get_background_image_for_camera(int width, int height);
+        void clearBackgroundImageCache();
 
         lfs::core::Tensor get_random_background_for_camera(int width, int height, int iteration);
 
@@ -421,9 +422,18 @@ namespace lfs::training {
 
         lfs::core::Tensor background_{};
         lfs::core::Tensor bg_mix_buffer_;
-        lfs::core::Tensor bg_image_base_{};                              // Original background image [C, H, W]
-        std::unordered_map<uint64_t, lfs::core::Tensor> bg_image_cache_; // Cache of resized bg images keyed by (H << 32) | W
-        lfs::core::Tensor random_bg_buffer_{};                           // Reusable buffer for random background
+        lfs::core::Tensor bg_image_base_{}; // Original background image [C, H, W]
+        struct BackgroundImageCacheEntry {
+            lfs::core::Tensor tensor;
+            size_t allocation_bytes = 0;
+            uint64_t last_used = 0;
+        };
+        // Resized backgrounds are bounded by physical bucket size, not entry count.
+        static constexpr size_t BG_IMAGE_CACHE_BUDGET_BYTES = 256ULL * 1024 * 1024;
+        std::unordered_map<uint64_t, BackgroundImageCacheEntry> bg_image_cache_;
+        size_t bg_image_cache_bytes_ = 0;
+        uint64_t bg_image_cache_clock_ = 0;
+        lfs::core::Tensor random_bg_buffer_{}; // Reusable buffer for random background
         std::unique_ptr<TrainingProgress> progress_;
         size_t train_dataset_size_ = 0;
         size_t total_cameras_count_ = 0;

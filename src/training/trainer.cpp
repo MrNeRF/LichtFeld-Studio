@@ -955,14 +955,6 @@ namespace lfs::training {
             return tensor_reserved_bytes(workspace.ssim_map);
         }
 
-        [[nodiscard]] size_t bg_image_cache_bytes(const std::unordered_map<uint64_t, lfs::core::Tensor>& cache) {
-            size_t total = 0;
-            for (const auto& [_, tensor] : cache) {
-                total += tensor_reserved_bytes(tensor);
-            }
-            return total;
-        }
-
         [[nodiscard]] size_t splat_tensor_bytes(const lfs::core::SplatData& splat) {
             std::vector<std::pair<std::string, size_t>> entries;
             add_tensor_entry(entries, "means", splat.means());
@@ -3238,8 +3230,8 @@ namespace lfs::training {
                 add_tensor_entry(trainer_entries, "trainer.loss_accumulator", loss_accumulator_);
                 add_tensor_entry(trainer_entries, "trainer.densification_error_map", densification_error_map_);
                 add_tensor_entry(trainer_entries, "trainer.pipelined_mask", pipelined_mask_);
-                if (const size_t cache_bytes = bg_image_cache_bytes(bg_image_cache_); cache_bytes > 0) {
-                    trainer_entries.emplace_back("trainer.bg_image_cache", cache_bytes);
+                if (bg_image_cache_bytes_ > 0) {
+                    trainer_entries.emplace_back("trainer.bg_image_cache", bg_image_cache_bytes_);
                 }
                 if (const size_t bytes = photometric_workspace_bytes(photometric_loss_); bytes > 0) {
                     trainer_entries.emplace_back("trainer.photometric_workspaces", bytes);
@@ -3578,7 +3570,7 @@ namespace lfs::training {
                 if (bg_image_base_.device() != lfs::core::Device::CUDA) {
                     bg_image_base_ = bg_image_base_.to(lfs::core::Device::CUDA);
                 }
-                bg_image_cache_.clear();
+                clearBackgroundImageCache();
                 if (bg_image_base_.shape()[0] != 3) {
                     LOG_WARN("Background image has {} channels, expected 3 (RGB)", bg_image_base_.shape()[0]);
                     bg_image_base_ = {};
@@ -3595,7 +3587,7 @@ namespace lfs::training {
         }
 
         if (!bg_mode_is_image && (bg_image_base_.is_valid() || !bg_image_cache_.empty())) {
-            bg_image_cache_.clear();
+            clearBackgroundImageCache();
             bg_image_base_ = {};
         }
 
@@ -3743,6 +3735,12 @@ namespace lfs::training {
         return bg_mix_buffer_;
     }
 
+    void Trainer::clearBackgroundImageCache() {
+        bg_image_cache_.clear();
+        bg_image_cache_bytes_ = 0;
+        bg_image_cache_clock_ = 0;
+    }
+
     lfs::core::Tensor Trainer::get_background_image_for_camera(int width, int height) {
         // Return empty tensor if no background image is loaded
         if (!bg_image_base_.is_valid() || bg_image_base_.is_empty()) {
@@ -3753,7 +3751,8 @@ namespace lfs::training {
         const uint64_t cache_key = (static_cast<uint64_t>(height) << 32) | static_cast<uint64_t>(width);
         auto it = bg_image_cache_.find(cache_key);
         if (it != bg_image_cache_.end()) {
-            return it->second;
+            it->second.last_used = ++bg_image_cache_clock_;
+            return it->second.tensor;
         }
 
         // Resize background image to match camera dimensions
@@ -3763,7 +3762,6 @@ namespace lfs::training {
 
         // If dimensions match, use the original
         if (src_w == width && src_h == height) {
-            bg_image_cache_[cache_key] = bg_image_base_;
             return bg_image_base_;
         }
 
@@ -3782,8 +3780,31 @@ namespace lfs::training {
             height, width,
             resized.stream());
 
-        // Cache the resized image
-        bg_image_cache_[cache_key] = resized;
+        // Cache only if this physical bucket can fit under the hard byte ceiling.
+        // Returned Tensor copies retain storage safely if an older entry is evicted.
+        const size_t allocation_bytes = lfs::core::SizeBucketedPool::get_bucket_size(resized.bytes());
+        if (allocation_bytes <= BG_IMAGE_CACHE_BUDGET_BYTES) {
+            while (!bg_image_cache_.empty() &&
+                   bg_image_cache_bytes_ > BG_IMAGE_CACHE_BUDGET_BYTES - allocation_bytes) {
+                const auto lru = std::min_element(
+                    bg_image_cache_.begin(), bg_image_cache_.end(), [](const auto& left, const auto& right) {
+                        return left.second.last_used < right.second.last_used;
+                    });
+                bg_image_cache_bytes_ -= std::min(bg_image_cache_bytes_, lru->second.allocation_bytes);
+                bg_image_cache_.erase(lru);
+            }
+
+            bg_image_cache_.emplace(
+                cache_key,
+                BackgroundImageCacheEntry{
+                    .tensor = resized,
+                    .allocation_bytes = allocation_bytes,
+                    .last_used = ++bg_image_cache_clock_});
+            bg_image_cache_bytes_ += allocation_bytes;
+            LFS_ASSERT_MSG(
+                bg_image_cache_bytes_ <= BG_IMAGE_CACHE_BUDGET_BYTES,
+                "Background image cache exceeded its physical byte budget");
+        }
         LOG_DEBUG("Background image resized: {}x{} -> {}x{}", src_w, src_h, width, height);
 
         return resized;
@@ -3924,7 +3945,7 @@ namespace lfs::training {
                 record_vram_tensor("train.persistent", "background", background_);
                 record_vram_tensor("train.persistent", "background_mix_buffer", bg_mix_buffer_);
                 record_vram_tensor("train.persistent", "background_image_base", bg_image_base_);
-                record_vram_current("train.persistent", "background_image_cache", bg_image_cache_bytes(bg_image_cache_));
+                record_vram_current("train.persistent", "background_image_cache", bg_image_cache_bytes_);
                 record_pipeline_vram_breakdown(getActiveImageLoader());
             }
             auto& loss_tensor_gpu = loss_accumulator_;
