@@ -6,6 +6,7 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "point_cloud_vulkan_renderer.hpp"
+#include "rendering/export_post_process.hpp"
 #include "rendering/ppisp_overrides_utils.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/selection_ops.hpp"
@@ -120,6 +121,7 @@ namespace lfs::vis {
         }
         camera_metrics_worker_.request_stop();
         camera_metrics_cv_.notify_all();
+        lfs::rendering::releaseEnvironmentMapCaches();
     }
 
     void RenderingManager::setWakeCallback(std::function<void()> callback) {

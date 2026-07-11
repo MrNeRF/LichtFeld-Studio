@@ -31,6 +31,9 @@ namespace lfs::rendering {
     ExportResult<std::shared_ptr<const CudaEnvironmentMap>> getOrLoadCudaEnvironmentMap(
         const std::filesystem::path& path);
     void releaseCudaEnvironmentMapCache();
+    // Releases both decoded host pixels and CUDA residency. Active shared
+    // users keep their map alive until their work completes.
+    void releaseEnvironmentMapCaches();
 
     // u8 HWC [bh, W, 3|4] CUDA -> float CHW rgb [3, bh, W] (*1/255). With a 4-channel
     // source and non-null alpha_out, also writes straight alpha [bh, W].
