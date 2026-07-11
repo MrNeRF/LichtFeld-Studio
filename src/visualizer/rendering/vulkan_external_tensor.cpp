@@ -138,6 +138,16 @@ namespace lfs::vis {
                                                debug_name ? debug_name : "<unnamed>",
                                                context.lastError()));
         }
+        context.setDebugObjectNamef(VK_OBJECT_TYPE_BUFFER,
+                                    buffer.buffer,
+                                    "interop.tensor.{}[{}]",
+                                    debug_name ? debug_name : "unnamed",
+                                    bytes);
+        context.setDebugObjectNamef(VK_OBJECT_TYPE_DEVICE_MEMORY,
+                                    buffer.memory,
+                                    "interop.tensor.{}[{}].memory",
+                                    debug_name ? debug_name : "unnamed",
+                                    buffer.allocation_size);
         if (buffer.size != bytes || buffer.allocation_size < buffer.size) {
             const std::string error = std::format(
                 "Vulkan external tensor allocation size disagrees with the CUDA-visible payload (name='{}', requested_bytes={}, vulkan_visible_size={}, vulkan_allocation_size={})",

@@ -37,7 +37,18 @@ namespace lfs::vis {
             info.codeSize = bytes;
             info.pCode = code;
             VkShaderModule m = VK_NULL_HANDLE;
-            if (vkCreateShaderModule(device, &info, nullptr, &m) != VK_SUCCESS) {
+            const VkResult result = vkCreateShaderModule(device, &info, nullptr, &m);
+            if (result != VK_SUCCESS) {
+                LOG_ERROR("Vulkan: {}",
+                          formatVkCheckFailure(
+                              "vkCreateShaderModule(device, &info, nullptr, &m)",
+                              result,
+                              std::format("Depth-blit shader-module creation failed (device={:#x}, code_ptr={:#x}, code_size={})",
+                                          vkHandleValue(device),
+                                          reinterpret_cast<std::uintptr_t>(code),
+                                          bytes),
+                              __FILE__,
+                              __LINE__));
                 return VK_NULL_HANDLE;
             }
             return m;
@@ -95,15 +106,27 @@ namespace lfs::vis {
             pipeline_cache = ctx.pipelineCache();
             screen_quad_buffer = screen_quad;
             if (device == VK_NULL_HANDLE || allocator == VK_NULL_HANDLE) {
-                return false;
+                return vkCheckFailed(std::format(
+                    "Depth-blit initialization requires a live device and allocator (device={:#x}, allocator={:#x}, graphics_queue={:#x}, screen_quad_buffer={:#x}) ({}:{})",
+                    vkHandleValue(device),
+                    reinterpret_cast<std::uintptr_t>(allocator),
+                    vkHandleValue(graphics_queue),
+                    vkHandleValue(screen_quad_buffer),
+                    __FILE__,
+                    __LINE__));
             }
             VkCommandPoolCreateInfo pool{};
             pool.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
             pool.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
             pool.queueFamilyIndex = ctx.graphicsQueueFamily();
-            if (vkCreateCommandPool(device, &pool, nullptr, &transfer_pool) != VK_SUCCESS) {
-                return false;
-            }
+            LFS_VK_CHECK_MSG(vkCreateCommandPool(device, &pool, nullptr, &transfer_pool),
+                             "Depth-blit transfer command-pool creation failed (device={:#x}, queue_family={}, flags={:#x})",
+                             vkHandleValue(device),
+                             pool.queueFamilyIndex,
+                             static_cast<std::uint32_t>(pool.flags));
+            context->setDebugObjectName(VK_OBJECT_TYPE_COMMAND_POOL,
+                                        transfer_pool,
+                                        "depth_blit.transfer.pool");
             return createSampler() && createDescriptors() &&
                    createPipeline(color_format, depth_format);
         }
@@ -182,11 +205,18 @@ namespace lfs::vis {
             sa.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
                        VMA_ALLOCATION_CREATE_MAPPED_BIT;
             VmaAllocationInfo ai{};
-            if (vmaCreateBuffer(allocator, &bi, &sa, &staging_buffer, &staging_alloc, &ai) != VK_SUCCESS) {
-                return false;
-            }
+            LFS_VK_CHECK_MSG(
+                vmaCreateBuffer(allocator, &bi, &sa, &staging_buffer, &staging_alloc, &ai),
+                "Depth-blit staging-buffer allocation failed (allocator={:#x}, requested_size={}, usage={:#x})",
+                reinterpret_cast<std::uintptr_t>(allocator),
+                bytes,
+                static_cast<std::uint32_t>(bi.usage));
             staging_mapped = ai.pMappedData;
             staging_capacity = bytes;
+            context->setDebugObjectNamef(VK_OBJECT_TYPE_BUFFER,
+                                         staging_buffer,
+                                         "depth_blit.upload.staging[{}]",
+                                         staging_capacity);
             return true;
         }
 
@@ -207,37 +237,77 @@ namespace lfs::vis {
             a.commandPool = transfer_pool;
             a.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
             a.commandBufferCount = 1;
-            if (vkAllocateCommandBuffers(device, &a, &transfer_cmd) != VK_SUCCESS) {
-                return false;
-            }
+            LFS_VK_CHECK_MSG(vkAllocateCommandBuffers(device, &a, &transfer_cmd),
+                             "Depth-blit transfer command-buffer allocation failed (device={:#x}, command_pool={:#x}, requested_count={})",
+                             vkHandleValue(device),
+                             vkHandleValue(transfer_pool),
+                             a.commandBufferCount);
+            context->setDebugObjectName(VK_OBJECT_TYPE_COMMAND_BUFFER,
+                                        transfer_cmd,
+                                        "depth_blit.transfer.command");
             VkFenceCreateInfo fi{};
             fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
             fi.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-            if (vkCreateFence(device, &fi, nullptr, &transfer_fence) != VK_SUCCESS) {
+            const VkResult fence_result = vkCreateFence(device, &fi, nullptr, &transfer_fence);
+            if (fence_result != VK_SUCCESS) {
                 vkFreeCommandBuffers(device, transfer_pool, 1, &transfer_cmd);
                 transfer_cmd = VK_NULL_HANDLE;
-                return false;
+                return vkCheckFailed(formatVkCheckFailure(
+                    "vkCreateFence(device, &fi, nullptr, &transfer_fence)",
+                    fence_result,
+                    std::format("Depth-blit transfer fence creation failed (device={:#x}, command_pool={:#x}, flags={:#x})",
+                                vkHandleValue(device),
+                                vkHandleValue(transfer_pool),
+                                static_cast<std::uint32_t>(fi.flags)),
+                    __FILE__,
+                    __LINE__));
             }
+            context->setDebugObjectName(VK_OBJECT_TYPE_FENCE,
+                                        transfer_fence,
+                                        "depth_blit.transfer.fence");
             return true;
         }
 
         bool replaceTransferFenceSignaled(const char* const failed_operation,
                                           const VkResult failed_result) {
-            LOG_ERROR("VulkanDepthBlitPass: {} failed: {}",
-                      failed_operation,
-                      static_cast<int>(failed_result));
+            LOG_ERROR("Vulkan: {}",
+                      formatVkCheckFailure(
+                          failed_operation,
+                          failed_result,
+                          std::format("Depth-blit transfer command lifecycle failed (device={:#x}, queue={:#x}, command_pool={:#x}, command_buffer={:#x}, fence={:#x})",
+                                      vkHandleValue(device),
+                                      vkHandleValue(graphics_queue),
+                                      vkHandleValue(transfer_pool),
+                                      vkHandleValue(transfer_cmd),
+                                      vkHandleValue(transfer_fence)),
+                          __FILE__,
+                          __LINE__));
             VkFenceCreateInfo info{};
             info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
             info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
             VkFence replacement = VK_NULL_HANDLE;
-            if (vkCreateFence(device, &info, nullptr, &replacement) != VK_SUCCESS) {
-                LOG_ERROR("VulkanDepthBlitPass: failed to replace poisoned transfer fence");
+            const VkResult replacement_result = vkCreateFence(device, &info, nullptr, &replacement);
+            if (replacement_result != VK_SUCCESS) {
+                LOG_ERROR("Vulkan: {}",
+                          formatVkCheckFailure(
+                              "vkCreateFence(device, &info, nullptr, &replacement)",
+                              replacement_result,
+                              std::format("Depth-blit failed to replace a poisoned transfer fence (device={:#x}, old_fence={:#x}, command_buffer={:#x}, flags={:#x})",
+                                          vkHandleValue(device),
+                                          vkHandleValue(transfer_fence),
+                                          vkHandleValue(transfer_cmd),
+                                          static_cast<std::uint32_t>(info.flags)),
+                              __FILE__,
+                              __LINE__));
                 return false;
             }
             if (transfer_fence != VK_NULL_HANDLE) {
                 vkDestroyFence(device, transfer_fence, nullptr);
             }
             transfer_fence = replacement;
+            context->setDebugObjectName(VK_OBJECT_TYPE_FENCE,
+                                        transfer_fence,
+                                        "depth_blit.transfer.fence");
             return false;
         }
 
@@ -250,7 +320,16 @@ namespace lfs::vis {
             s.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
             s.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
             s.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-            return vkCreateSampler(device, &s, nullptr, &sampler) == VK_SUCCESS;
+            LFS_VK_CHECK_MSG(vkCreateSampler(device, &s, nullptr, &sampler),
+                             "Depth-blit sampler creation failed (device={:#x}, mag_filter={}, min_filter={}, address_mode={})",
+                             vkHandleValue(device),
+                             static_cast<int>(s.magFilter),
+                             static_cast<int>(s.minFilter),
+                             static_cast<int>(s.addressModeU));
+            context->setDebugObjectName(VK_OBJECT_TYPE_SAMPLER,
+                                        sampler,
+                                        "depth_blit.depth.sampler");
+            return true;
         }
 
         bool createDescriptors() {
@@ -263,9 +342,14 @@ namespace lfs::vis {
             li.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
             li.bindingCount = 1;
             li.pBindings = &b;
-            if (vkCreateDescriptorSetLayout(device, &li, nullptr, &desc_layout) != VK_SUCCESS) {
-                return false;
-            }
+            LFS_VK_CHECK_MSG(vkCreateDescriptorSetLayout(device, &li, nullptr, &desc_layout),
+                             "Depth-blit descriptor-set layout creation failed (device={:#x}, binding_count={}, descriptor_type={})",
+                             vkHandleValue(device),
+                             li.bindingCount,
+                             static_cast<int>(b.descriptorType));
+            context->setDebugObjectName(VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT,
+                                        desc_layout,
+                                        "depth_blit.descriptor.layout");
             VkDescriptorPoolSize ps{};
             ps.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             const std::uint32_t frame_count = static_cast<std::uint32_t>(
@@ -276,9 +360,15 @@ namespace lfs::vis {
             pi.maxSets = frame_count;
             pi.poolSizeCount = 1;
             pi.pPoolSizes = &ps;
-            if (vkCreateDescriptorPool(device, &pi, nullptr, &desc_pool) != VK_SUCCESS) {
-                return false;
-            }
+            LFS_VK_CHECK_MSG(vkCreateDescriptorPool(device, &pi, nullptr, &desc_pool),
+                             "Depth-blit descriptor-pool creation failed (device={:#x}, frame_count={}, max_sets={}, descriptor_count={})",
+                             vkHandleValue(device),
+                             frame_count,
+                             pi.maxSets,
+                             ps.descriptorCount);
+            context->setDebugObjectName(VK_OBJECT_TYPE_DESCRIPTOR_POOL,
+                                        desc_pool,
+                                        "depth_blit.descriptor.pool");
             std::vector<VkDescriptorSetLayout> layouts(frame_count, desc_layout);
             std::vector<VkDescriptorSet> sets(frame_count, VK_NULL_HANDLE);
             VkDescriptorSetAllocateInfo ai{};
@@ -286,12 +376,19 @@ namespace lfs::vis {
             ai.descriptorPool = desc_pool;
             ai.descriptorSetCount = frame_count;
             ai.pSetLayouts = layouts.data();
-            if (vkAllocateDescriptorSets(device, &ai, sets.data()) != VK_SUCCESS) {
-                return false;
-            }
+            LFS_VK_CHECK_MSG(vkAllocateDescriptorSets(device, &ai, sets.data()),
+                             "Depth-blit descriptor-set allocation failed (device={:#x}, descriptor_pool={:#x}, descriptor_layout={:#x}, requested_count={})",
+                             vkHandleValue(device),
+                             vkHandleValue(desc_pool),
+                             vkHandleValue(desc_layout),
+                             ai.descriptorSetCount);
             frame_descriptors.resize(frame_count);
             for (std::size_t i = 0; i < sets.size(); ++i) {
                 frame_descriptors[i].set = sets[i];
+                context->setDebugObjectNamef(VK_OBJECT_TYPE_DESCRIPTOR_SET,
+                                             sets[i],
+                                             "depth_blit.descriptor[{}]",
+                                             i);
             }
             return true;
         }
@@ -412,11 +509,25 @@ namespace lfs::vis {
             layout_info.pSetLayouts = &desc_layout;
             layout_info.pushConstantRangeCount = 1;
             layout_info.pPushConstantRanges = &push;
-            if (vkCreatePipelineLayout(device, &layout_info, nullptr, &pipeline_layout) != VK_SUCCESS) {
+            const VkResult layout_result =
+                vkCreatePipelineLayout(device, &layout_info, nullptr, &pipeline_layout);
+            if (layout_result != VK_SUCCESS) {
                 vkDestroyShaderModule(device, vert, nullptr);
                 vkDestroyShaderModule(device, frag, nullptr);
-                return false;
+                return vkCheckFailed(formatVkCheckFailure(
+                    "vkCreatePipelineLayout(device, &layout_info, nullptr, &pipeline_layout)",
+                    layout_result,
+                    std::format("Depth-blit pipeline-layout creation failed (device={:#x}, descriptor_layout={:#x}, set_layout_count={}, push_constant_bytes={})",
+                                vkHandleValue(device),
+                                vkHandleValue(desc_layout),
+                                layout_info.setLayoutCount,
+                                push.size),
+                    __FILE__,
+                    __LINE__));
             }
+            context->setDebugObjectName(VK_OBJECT_TYPE_PIPELINE_LAYOUT,
+                                        pipeline_layout,
+                                        "depth_blit.pipeline.layout");
 
             VkPipelineRenderingCreateInfo rendering_info{};
             rendering_info.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
@@ -443,7 +554,23 @@ namespace lfs::vis {
             const VkResult r = vkCreateGraphicsPipelines(device, pipeline_cache, 1, &pi, nullptr, &pipeline);
             vkDestroyShaderModule(device, vert, nullptr);
             vkDestroyShaderModule(device, frag, nullptr);
-            return r == VK_SUCCESS;
+            if (r != VK_SUCCESS) {
+                return vkCheckFailed(formatVkCheckFailure(
+                    "vkCreateGraphicsPipelines(device, pipeline_cache, 1, &pi, nullptr, &pipeline)",
+                    r,
+                    std::format("Depth-blit graphics-pipeline creation failed (device={:#x}, pipeline_cache={:#x}, pipeline_layout={:#x}, color_format={}, depth_format={})",
+                                vkHandleValue(device),
+                                vkHandleValue(pipeline_cache),
+                                vkHandleValue(pipeline_layout),
+                                static_cast<int>(color_format),
+                                static_cast<int>(depth_format)),
+                    __FILE__,
+                    __LINE__));
+            }
+            context->setDebugObjectName(VK_OBJECT_TYPE_PIPELINE,
+                                        pipeline,
+                                        "depth_blit.pipeline");
+            return true;
         }
 
         void destroyImage() {
@@ -530,9 +657,19 @@ namespace lfs::vis {
             VmaAllocationCreateInfo ai{};
             ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
             VmaAllocationInfo allocation_info{};
-            if (vmaCreateImage(allocator, &img, &ai, &image, &image_alloc, &allocation_info) != VK_SUCCESS) {
-                return false;
-            }
+            LFS_VK_CHECK_MSG(
+                vmaCreateImage(allocator, &img, &ai, &image, &image_alloc, &allocation_info),
+                "Depth-blit image allocation failed (allocator={:#x}, requested_extent={}x{}, format={}, usage={:#x})",
+                reinterpret_cast<std::uintptr_t>(allocator),
+                w,
+                h,
+                static_cast<int>(img.format),
+                static_cast<std::uint32_t>(img.usage));
+            context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE,
+                                         image,
+                                         "depth_blit.image[{}x{}]",
+                                         w,
+                                         h);
             image_vram_label = std::format("r32_float:{}x{}", w, h);
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
                 "vulkan.depth_blit.image",
@@ -546,10 +683,27 @@ namespace lfs::vis {
             vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             vi.subresourceRange.levelCount = 1;
             vi.subresourceRange.layerCount = 1;
-            if (vkCreateImageView(device, &vi, nullptr, &image_view) != VK_SUCCESS) {
+            const VkResult view_result = vkCreateImageView(device, &vi, nullptr, &image_view);
+            if (view_result != VK_SUCCESS) {
                 destroyImage();
-                return false;
+                return vkCheckFailed(formatVkCheckFailure(
+                    "vkCreateImageView(device, &vi, nullptr, &image_view)",
+                    view_result,
+                    std::format("Depth-blit image-view creation failed (device={:#x}, image={:#x}, requested_extent={}x{}, format={}, aspect_mask={:#x})",
+                                vkHandleValue(device),
+                                vkHandleValue(vi.image),
+                                w,
+                                h,
+                                static_cast<int>(vi.format),
+                                static_cast<std::uint32_t>(vi.subresourceRange.aspectMask)),
+                    __FILE__,
+                    __LINE__));
             }
+            context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE_VIEW,
+                                         image_view,
+                                         "depth_blit.image[{}x{}].view",
+                                         w,
+                                         h);
             image_width = w;
             image_height = h;
             return true;
@@ -557,12 +711,23 @@ namespace lfs::vis {
 
         bool uploadDepth(const lfs::core::Tensor& depth) {
             if (depth.ndim() != 3 || depth.size(0) != 1) {
-                return false;
+                return vkCheckFailed(std::format(
+                    "Depth upload requires a [1,H,W] tensor (observed_rank={}, observed_channel_count={}) ({}:{})",
+                    depth.ndim(),
+                    depth.ndim() > 0 ? depth.size(0) : -1,
+                    __FILE__,
+                    __LINE__));
             }
             const std::uint32_t h = static_cast<std::uint32_t>(depth.size(1));
             const std::uint32_t w = static_cast<std::uint32_t>(depth.size(2));
             if (w == 0 || h == 0) {
-                return false;
+                return vkCheckFailed(std::format(
+                    "Depth upload requires non-zero dimensions (observed_width={}, observed_height={}, tensor_rank={}) ({}:{})",
+                    w,
+                    h,
+                    depth.ndim(),
+                    __FILE__,
+                    __LINE__));
             }
             if (!ensureImage(w, h)) {
                 return false;
@@ -571,13 +736,39 @@ namespace lfs::vis {
             if (!ensureStaging(bytes) || !ensureTransferCmd()) {
                 return false;
             }
+            if (staging_buffer == VK_NULL_HANDLE || staging_alloc == VK_NULL_HANDLE ||
+                staging_mapped == nullptr || staging_capacity < bytes || image == VK_NULL_HANDLE ||
+                transfer_cmd == VK_NULL_HANDLE || transfer_fence == VK_NULL_HANDLE ||
+                graphics_queue == VK_NULL_HANDLE) {
+                return vkCheckFailed(std::format(
+                    "Depth upload resources must cover the copy before recording (staging_buffer={:#x}, staging_allocation={:#x}, staging_mapped={:#x}, staging_capacity={}, copy_size={}, image={:#x}, command_buffer={:#x}, fence={:#x}, queue={:#x}) ({}:{})",
+                    vkHandleValue(staging_buffer),
+                    reinterpret_cast<std::uintptr_t>(staging_alloc),
+                    reinterpret_cast<std::uintptr_t>(staging_mapped),
+                    staging_capacity,
+                    bytes,
+                    vkHandleValue(image),
+                    vkHandleValue(transfer_cmd),
+                    vkHandleValue(transfer_fence),
+                    vkHandleValue(graphics_queue),
+                    __FILE__,
+                    __LINE__));
+            }
 
             const auto host = depth.to(lfs::core::Device::CPU).contiguous();
             std::memcpy(staging_mapped, host.ptr<float>(), static_cast<std::size_t>(bytes));
             VkResult result = vmaFlushAllocation(allocator, staging_alloc, 0, bytes);
             if (result != VK_SUCCESS) {
-                LOG_ERROR("VulkanDepthBlitPass: staging flush failed: {}", static_cast<int>(result));
-                return false;
+                return vkCheckFailed(formatVkCheckFailure(
+                    "vmaFlushAllocation(allocator, staging_alloc, 0, bytes)",
+                    result,
+                    std::format("Depth-blit staging flush failed (allocator={:#x}, allocation={:#x}, offset=0, flush_size={}, capacity={})",
+                                reinterpret_cast<std::uintptr_t>(allocator),
+                                reinterpret_cast<std::uintptr_t>(staging_alloc),
+                                bytes,
+                                staging_capacity),
+                    __FILE__,
+                    __LINE__));
             }
 
             // Wait for any prior submit on this transfer CB before re-recording.
@@ -585,9 +776,15 @@ namespace lfs::vis {
             result = vkWaitForFences(device, 1, &transfer_fence, VK_TRUE,
                                      std::numeric_limits<std::uint64_t>::max());
             if (result != VK_SUCCESS) {
-                LOG_ERROR("VulkanDepthBlitPass: prior transfer wait failed: {}",
-                          static_cast<int>(result));
-                return false;
+                return vkCheckFailed(formatVkCheckFailure(
+                    "vkWaitForFences(device, 1, &transfer_fence, VK_TRUE, UINT64_MAX)",
+                    result,
+                    std::format("Depth-blit prior upload did not retire before command-buffer reuse (device={:#x}, fence={:#x}, command_buffer={:#x}, fence_count=1)",
+                                vkHandleValue(device),
+                                vkHandleValue(transfer_fence),
+                                vkHandleValue(transfer_cmd)),
+                    __FILE__,
+                    __LINE__));
             }
             result = vkResetFences(device, 1, &transfer_fence);
             if (result != VK_SUCCESS) {
@@ -636,6 +833,12 @@ namespace lfs::vis {
             si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
             si.commandBufferCount = 1;
             si.pCommandBuffers = &transfer_cmd;
+            if (si.commandBufferCount != 1 || si.pCommandBuffers == nullptr ||
+                si.pCommandBuffers[0] == VK_NULL_HANDLE || transfer_fence == VK_NULL_HANDLE ||
+                graphics_queue == VK_NULL_HANDLE) {
+                return replaceTransferFenceSignaled("Depth-blit submit integrity check",
+                                                    VK_ERROR_INITIALIZATION_FAILED);
+            }
             // Async submit: in-order queue execution makes the upload visible to the
             // viewport pass that samples this image right after on the same queue.
             result = vkQueueSubmit(graphics_queue, 1, &si, transfer_fence);

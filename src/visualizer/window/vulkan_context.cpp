@@ -1375,7 +1375,20 @@ namespace lfs::vis {
         if ((swapchain_image_usage_ & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) == 0)
             return fail_capture("The Vulkan swapchain does not support transfer-source readback");
         if (active_image_index_ >= swapchain_images_.size())
-            return fail_capture(std::format("Invalid active swapchain image index {}", active_image_index_));
+            return fail_capture(std::format(
+                "Full-window capture active image index is outside the swapchain (active_image_index={}, swapchain_image_count={})",
+                active_image_index_,
+                swapchain_images_.size()));
+        if (active_frame_index_ >= command_buffers_.size() ||
+            command_buffers_[active_frame_index_] == VK_NULL_HANDLE) {
+            return fail_capture(std::format(
+                "Full-window capture active frame slot must reference a command buffer (active_frame_index={}, command_buffer_count={}, command_buffer={:#x})",
+                active_frame_index_,
+                command_buffers_.size(),
+                active_frame_index_ < command_buffers_.size()
+                    ? vkHandleValue(command_buffers_[active_frame_index_])
+                    : 0));
+        }
 
         const bool bgra =
             swapchain_format_ == VK_FORMAT_B8G8R8A8_UNORM ||
@@ -1416,17 +1429,39 @@ namespace lfs::vis {
         allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
         allocation_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
 
-        VkResult result = static_cast<VkResult>(
-            vmaCreateBuffer(allocator_,
-                            &buffer_info,
-                            &allocation_info,
-                            &staging_buffer,
-                            &staging_allocation,
-                            nullptr));
+        VmaAllocationInfo staging_info{};
+        VkResult result = static_cast<VkResult>(vmaCreateBuffer(allocator_,
+                                                                &buffer_info,
+                                                                &allocation_info,
+                                                                &staging_buffer,
+                                                                &staging_allocation,
+                                                                &staging_info));
         if (result != VK_SUCCESS)
-            return fail_capture(std::format("vmaCreateBuffer(window capture) failed: {}",
-                                            vkResultToString(result)));
+            return fail_capture(std::format(
+                "vmaCreateBuffer(window capture) failed: {} ({}) (allocator={:#x}, requested_size={}, usage={:#x})",
+                vkResultToString(result),
+                static_cast<int>(result),
+                reinterpret_cast<std::uintptr_t>(allocator_),
+                byte_size,
+                static_cast<std::uint32_t>(buffer_info.usage)));
+        if (staging_buffer == VK_NULL_HANDLE || staging_allocation == VK_NULL_HANDLE ||
+            staging_info.size < byte_size) {
+            const std::string error = std::format(
+                "Full-window capture staging allocation must cover the image copy (buffer={:#x}, allocation={:#x}, allocation_size={}, copy_size={}, extent={}x{})",
+                vkHandleValue(staging_buffer),
+                reinterpret_cast<std::uintptr_t>(staging_allocation),
+                staging_info.size,
+                byte_size,
+                extent.width,
+                extent.height);
+            destroy_staging();
+            return fail_capture(error);
+        }
         vmaSetAllocationName(allocator_, staging_allocation, "Window capture readback");
+        setDebugObjectNamef(VK_OBJECT_TYPE_BUFFER,
+                            staging_buffer,
+                            "window.capture.readback[{}]",
+                            byte_size);
 
         VkCommandBuffer command_buffer = command_buffers_[active_frame_index_];
         if (!finishActiveRendering(command_buffer)) {
@@ -1513,9 +1548,21 @@ namespace lfs::vis {
             return fail("Cannot wait for Vulkan frame slot before device initialization");
         }
         const std::size_t current_frame = frame_index_;
+        if (current_frame >= in_flight_.size() ||
+            current_frame >= frame_submit_serials_.size()) {
+            return fail(std::format(
+                "Current Vulkan frame slot is outside synchronization arrays (frame_index={}, in_flight_count={}, submit_serial_count={})",
+                current_frame,
+                in_flight_.size(),
+                frame_submit_serials_.size()));
+        }
         VkFence frame_fence = in_flight_[current_frame];
         if (frame_fence == VK_NULL_HANDLE) {
-            return fail("Cannot wait for Vulkan frame slot before sync objects are initialized");
+            return fail(std::format(
+                "Current Vulkan frame slot has no synchronization fence (frame_index={}, fence={:#x}, last_submit_id={})",
+                current_frame,
+                vkHandleValue(frame_fence),
+                frame_submit_serials_[current_frame]));
         }
         const VkResult result = vkWaitForFences(device_, 1, &frame_fence, VK_TRUE, kWaitForeverNs);
         if (result != VK_SUCCESS) {
@@ -2297,7 +2344,13 @@ namespace lfs::vis {
             LOG_INFO("Vulkan: no dedicated async-compute family; sharing graphics queue family {}",
                      graphics_queue_family_);
         }
-        setDebugObjectName(VK_OBJECT_TYPE_DEVICE, device_, "LichtFeld Vulkan device");
+        setDebugObjectName(VK_OBJECT_TYPE_DEVICE, device_, "lichtfeld.device");
+        setDebugObjectName(VK_OBJECT_TYPE_QUEUE, graphics_queue_, "lichtfeld.queue.graphics");
+        setDebugObjectName(VK_OBJECT_TYPE_QUEUE, present_queue_, "lichtfeld.queue.present");
+        setDebugObjectName(VK_OBJECT_TYPE_QUEUE,
+                           compute_queue_,
+                           has_dedicated_compute_queue_ ? "lichtfeld.queue.compute"
+                                                        : "lichtfeld.queue.graphics_compute");
         external_memory_interop_enabled_ = enable_external_memory;
         external_semaphore_interop_enabled_ = enable_external_semaphore;
         external_memory_dedicated_allocation_enabled_ = enable_dedicated_allocation;
@@ -2663,8 +2716,11 @@ namespace lfs::vis {
             out = {};
             return fail(std::format("vkCreateImage(external) failed: {}", vkResultToString(result)));
         }
-        setDebugObjectName(VK_OBJECT_TYPE_IMAGE, out.image,
-                           std::format("External image {}x{}", extent.width, extent.height));
+        setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE,
+                            out.image,
+                            "interop.external.image[{}x{}]",
+                            extent.width,
+                            extent.height);
 
         VkMemoryRequirements memory_requirements{};
         vkGetImageMemoryRequirements(device_, out.image, &memory_requirements);
@@ -2698,7 +2754,11 @@ namespace lfs::vis {
             destroyExternalImage(out);
             return fail(std::format("vkAllocateMemory(external image) failed: {}", vkResultToString(result)));
         }
-        setDebugObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, out.memory, "External image memory");
+        setDebugObjectNamef(VK_OBJECT_TYPE_DEVICE_MEMORY,
+                            out.memory,
+                            "interop.external.image[{}x{}].memory",
+                            extent.width,
+                            extent.height);
         recordCurrentVulkanBytes(out.diagnostic_scope, out.diagnostic_label, static_cast<std::size_t>(out.allocation_size));
 
         result = vkBindImageMemory(device_, out.image, out.memory, 0);
@@ -2755,7 +2815,11 @@ namespace lfs::vis {
             destroyExternalImage(out);
             return fail(std::format("vkCreateImageView(external image) failed: {}", vkResultToString(result)));
         }
-        setDebugObjectName(VK_OBJECT_TYPE_IMAGE_VIEW, out.view, "External image view");
+        setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE_VIEW,
+                            out.view,
+                            "interop.external.image[{}x{}].view",
+                            extent.width,
+                            extent.height);
         return true;
     }
 
@@ -2831,7 +2895,10 @@ namespace lfs::vis {
             out = {};
             return fail(std::format("vkCreateBuffer(external) failed: {}", vkResultToString(result)));
         }
-        setDebugObjectName(VK_OBJECT_TYPE_BUFFER, out.buffer, std::format("External buffer {} bytes", size));
+        setDebugObjectNamef(VK_OBJECT_TYPE_BUFFER,
+                            out.buffer,
+                            "interop.external.buffer[{}]",
+                            size);
 
         VkMemoryRequirements memory_requirements{};
         vkGetBufferMemoryRequirements(device_, out.buffer, &memory_requirements);
@@ -2870,7 +2937,10 @@ namespace lfs::vis {
             destroyExternalBuffer(out);
             return fail(std::format("vkAllocateMemory(external buffer) failed: {}", vkResultToString(result)));
         }
-        setDebugObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, out.memory, "External buffer memory");
+        setDebugObjectNamef(VK_OBJECT_TYPE_DEVICE_MEMORY,
+                            out.memory,
+                            "interop.external.buffer[{}].memory",
+                            out.allocation_size);
         recordCurrentVulkanBytes(out.diagnostic_scope, out.diagnostic_label, static_cast<std::size_t>(out.allocation_size));
 
         result = vkBindBufferMemory(device_, out.buffer, out.memory, 0);
@@ -2962,8 +3032,10 @@ namespace lfs::vis {
             out = {};
             return fail(std::format("vkCreateBuffer(imported) failed: {}", vkResultToString(result)));
         }
-        setDebugObjectName(VK_OBJECT_TYPE_BUFFER, out.buffer,
-                           std::format("Imported external buffer {} bytes", size));
+        setDebugObjectNamef(VK_OBJECT_TYPE_BUFFER,
+                            out.buffer,
+                            "interop.imported.buffer[{}]",
+                            size);
 
         VkMemoryRequirements memory_requirements{};
         vkGetBufferMemoryRequirements(device_, out.buffer, &memory_requirements);
@@ -3019,7 +3091,10 @@ namespace lfs::vis {
             destroyExternalBuffer(out);
             return fail(std::format("vkAllocateMemory(import) failed: {}", vkResultToString(result)));
         }
-        setDebugObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, out.memory, "Imported external buffer memory");
+        setDebugObjectNamef(VK_OBJECT_TYPE_DEVICE_MEMORY,
+                            out.memory,
+                            "interop.imported.buffer[{}].memory",
+                            size);
 
         result = vkBindBufferMemory(device_, out.buffer, out.memory, 0);
         if (result != VK_SUCCESS) {
@@ -3093,7 +3168,10 @@ namespace lfs::vis {
             out = {};
             return fail(std::format("vkCreateSemaphore(external timeline) failed: {}", vkResultToString(result)));
         }
-        setDebugObjectName(VK_OBJECT_TYPE_SEMAPHORE, out.semaphore, "External timeline semaphore");
+        setDebugObjectNamef(VK_OBJECT_TYPE_SEMAPHORE,
+                            out.semaphore,
+                            "interop.timeline.external[{}]",
+                            initial_value);
 
 #ifdef _WIN32
         auto get_semaphore_handle = reinterpret_cast<PFN_vkGetSemaphoreWin32HandleKHR>(
@@ -3297,6 +3375,10 @@ namespace lfs::vis {
         if (result != VK_SUCCESS) {
             return fail(std::format("vkAllocateCommandBuffers(layout transition) failed: {}", vkResultToString(result)));
         }
+        setDebugObjectNamef(VK_OBJECT_TYPE_COMMAND_BUFFER,
+                            command_buffer,
+                            "immediate.transition[{}].command",
+                            pending_immediate_submits_.size());
 
         VkCommandBufferBeginInfo begin_info{};
         begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -3430,6 +3512,10 @@ namespace lfs::vis {
             vkFreeCommandBuffers(device_, immediate_command_pool_, 1, &command_buffer);
             return fail(std::format("vkCreateFence(layout transition) failed: {}", vkResultToString(result)));
         }
+        setDebugObjectNamef(VK_OBJECT_TYPE_FENCE,
+                            submit_fence,
+                            "immediate.transition[{}].fence",
+                            pending_immediate_submits_.size());
 
         result = vkQueueSubmit(graphics_queue_, 1, &submit_info, submit_fence);
         if (result != VK_SUCCESS) {
@@ -3528,7 +3614,7 @@ namespace lfs::vis {
         if (result != VK_SUCCESS) {
             return fail(std::format("vkCreateSwapchainKHR failed: {}", vkResultToString(result)));
         }
-        setDebugObjectName(VK_OBJECT_TYPE_SWAPCHAIN_KHR, swapchain_, "Main swapchain");
+        setDebugObjectName(VK_OBJECT_TYPE_SWAPCHAIN_KHR, swapchain_, "swapchain.main");
 
         LFS_VK_CHECK_MSG(
             vkGetSwapchainImagesKHR(device_, swapchain_, &image_count, nullptr),
@@ -3622,9 +3708,10 @@ namespace lfs::vis {
                 return fail(std::format("vkCreateSemaphore(image_available {}) failed: {}",
                                         i, vkResultToString(sem_result)));
             }
-            setDebugObjectName(VK_OBJECT_TYPE_SEMAPHORE,
-                               image_available_[i],
-                               std::format("Image-available semaphore {}", i));
+            setDebugObjectNamef(VK_OBJECT_TYPE_SEMAPHORE,
+                                image_available_[i],
+                                "swapchain.acquire[{}]",
+                                i);
         }
         // vkQueuePresentKHR consumes the render-finished wait per swapchain image, not per frame
         // slot. Pairing this semaphore with the acquired image prevents binary re-signal while a
@@ -3638,9 +3725,10 @@ namespace lfs::vis {
                                         i,
                                         vkResultToString(sem_result)));
             }
-            setDebugObjectName(VK_OBJECT_TYPE_SEMAPHORE,
-                               render_finished_[i],
-                               std::format("Swapchain image {} render-finished semaphore", i));
+            setDebugObjectNamef(VK_OBJECT_TYPE_SEMAPHORE,
+                                render_finished_[i],
+                                "swapchain.present[{}]",
+                                i);
         }
         next_acquire_index_ = 0;
         active_acquire_index_ = 0;
@@ -3650,9 +3738,10 @@ namespace lfs::vis {
             image_barriers_.registerImage(swapchain_images_[i],
                                           VK_IMAGE_ASPECT_COLOR_BIT,
                                           VK_IMAGE_LAYOUT_UNDEFINED);
-            setDebugObjectName(VK_OBJECT_TYPE_IMAGE,
-                               swapchain_images_[i],
-                               std::format("Swapchain image {}", i));
+            setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE,
+                                swapchain_images_[i],
+                                "swapchain.image[{}]",
+                                i);
         }
         framebuffer_resize_last_recreate_ = std::chrono::steady_clock::now();
         return true;
@@ -3680,9 +3769,10 @@ namespace lfs::vis {
             if (result != VK_SUCCESS) {
                 return fail(std::format("vkCreateImageView failed: {}", vkResultToString(result)));
             }
-            setDebugObjectName(VK_OBJECT_TYPE_IMAGE_VIEW,
-                               swapchain_image_views_[i],
-                               std::format("Swapchain image view {}", i));
+            setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE_VIEW,
+                                swapchain_image_views_[i],
+                                "swapchain.image[{}].view",
+                                i);
         }
         return true;
     }
@@ -3762,7 +3852,10 @@ namespace lfs::vis {
                 destroy_created();
                 return fail(std::format("vmaCreateImage(depth/stencil frame {}) failed: {}", i, vkResultToString(result)));
             }
-            setDebugObjectName(VK_OBJECT_TYPE_IMAGE, resource.image, std::format("Depth/stencil image frame {}", i));
+            setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE,
+                                resource.image,
+                                "swapchain.depth[{}]",
+                                i);
             const std::string allocation_name = std::format("Depth/stencil allocation frame {}", i);
             vmaSetAllocationName(allocator_, resource.allocation, allocation_name.c_str());
             recordCurrentVulkanBytes("vulkan.swapchain.depth_stencil",
@@ -3775,9 +3868,10 @@ namespace lfs::vis {
                 destroy_created();
                 return fail(std::format("vkCreateImageView(depth/stencil frame {}) failed: {}", i, vkResultToString(result)));
             }
-            setDebugObjectName(VK_OBJECT_TYPE_IMAGE_VIEW,
-                               resource.view,
-                               std::format("Depth/stencil image view frame {}", i));
+            setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE_VIEW,
+                                resource.view,
+                                "swapchain.depth[{}].view",
+                                i);
 
             image_barriers_.registerImage(resource.image,
                                           depthStencilAspectMask(),
@@ -3796,9 +3890,10 @@ namespace lfs::vis {
             if (result != VK_SUCCESS) {
                 return fail(std::format("vkCreateCommandPool(frame {}) failed: {}", i, vkResultToString(result)));
             }
-            setDebugObjectName(VK_OBJECT_TYPE_COMMAND_POOL,
-                               command_pools_[i],
-                               std::format("Frame {} graphics command pool", i));
+            setDebugObjectNamef(VK_OBJECT_TYPE_COMMAND_POOL,
+                                command_pools_[i],
+                                "frame[{}].graphics.pool",
+                                i);
         }
 
         VkCommandPoolCreateInfo immediate_info{};
@@ -3809,7 +3904,9 @@ namespace lfs::vis {
         if (result != VK_SUCCESS) {
             return fail(std::format("vkCreateCommandPool(immediate) failed: {}", vkResultToString(result)));
         }
-        setDebugObjectName(VK_OBJECT_TYPE_COMMAND_POOL, immediate_command_pool_, "Immediate graphics command pool");
+        setDebugObjectName(VK_OBJECT_TYPE_COMMAND_POOL,
+                           immediate_command_pool_,
+                           "immediate.graphics.pool");
         return true;
     }
 
@@ -3824,9 +3921,10 @@ namespace lfs::vis {
             if (result != VK_SUCCESS) {
                 return fail(std::format("vkAllocateCommandBuffers(frame {}) failed: {}", i, vkResultToString(result)));
             }
-            setDebugObjectName(VK_OBJECT_TYPE_COMMAND_BUFFER,
-                               command_buffers_[i],
-                               std::format("Frame {} command buffer", i));
+            setDebugObjectNamef(VK_OBJECT_TYPE_COMMAND_BUFFER,
+                                command_buffers_[i],
+                                "frame[{}].graphics.command",
+                                i);
         }
         return true;
     }
@@ -3841,15 +3939,22 @@ namespace lfs::vis {
             if (result != VK_SUCCESS) {
                 return fail(std::format("vkCreateFence(frame {}) failed: {}", i, vkResultToString(result)));
             }
-            setDebugObjectName(VK_OBJECT_TYPE_FENCE,
-                               in_flight_[i],
-                               std::format("Frame {} in-flight fence", i));
+            setDebugObjectNamef(VK_OBJECT_TYPE_FENCE,
+                                in_flight_[i],
+                                "frame[{}].in_flight.fence",
+                                i);
         }
         return true;
     }
 
     bool VulkanContext::replaceFrameFenceSignaled(const std::size_t frame_slot) {
         if (frame_slot >= in_flight_.size() || device_ == VK_NULL_HANDLE) {
+            LOG_ERROR("Cannot replace frame fence without a live device and in-range slot (device={:#x}, frame_slot={}, fence_count={}) ({}:{})",
+                      vkHandleValue(device_),
+                      frame_slot,
+                      in_flight_.size(),
+                      __FILE__,
+                      __LINE__);
             return false;
         }
 
@@ -3859,9 +3964,17 @@ namespace lfs::vis {
         VkFence replacement = VK_NULL_HANDLE;
         const VkResult result = vkCreateFence(device_, &fence_info, nullptr, &replacement);
         if (result != VK_SUCCESS) {
-            LOG_ERROR("Vulkan: could not replace frame {} fence after submit failure: {}",
-                      frame_slot,
-                      vkResultToString(result));
+            LOG_ERROR("Vulkan: {}",
+                      formatVkCheckFailure(
+                          "vkCreateFence(device_, &fence_info, nullptr, &replacement)",
+                          result,
+                          std::format("Frame-fence recovery failed after submission failure (device={:#x}, frame_slot={}, old_fence={:#x}, flags={:#x})",
+                                      vkHandleValue(device_),
+                                      frame_slot,
+                                      vkHandleValue(in_flight_[frame_slot]),
+                                      static_cast<std::uint32_t>(fence_info.flags)),
+                          __FILE__,
+                          __LINE__));
             return false;
         }
 
@@ -3876,9 +3989,10 @@ namespace lfs::vis {
         if (retired != VK_NULL_HANDLE) {
             vkDestroyFence(device_, retired, nullptr);
         }
-        setDebugObjectName(VK_OBJECT_TYPE_FENCE,
-                           replacement,
-                           std::format("Frame {} recovered in-flight fence", frame_slot));
+        setDebugObjectNamef(VK_OBJECT_TYPE_FENCE,
+                            replacement,
+                            "frame[{}].in_flight.fence",
+                            frame_slot);
         return true;
     }
 
@@ -3973,7 +4087,9 @@ namespace lfs::vis {
             return fail(std::format("vkCreatePipelineCache failed: {}", vkResultToString(result)));
         }
 
-        setDebugObjectName(VK_OBJECT_TYPE_PIPELINE_CACHE, pipeline_cache_, "On-disk pipeline cache");
+        setDebugObjectName(VK_OBJECT_TYPE_PIPELINE_CACHE,
+                           pipeline_cache_,
+                           "lichtfeld.pipeline_cache");
         if (!cache_data.empty()) {
             LOG_INFO("Loaded Vulkan pipeline cache: {} ({} bytes)",
                      lfs::core::path_to_utf8(path),
