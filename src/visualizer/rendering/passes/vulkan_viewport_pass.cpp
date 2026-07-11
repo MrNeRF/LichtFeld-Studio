@@ -32,7 +32,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cassert>
 #include <cmath>
 #include <cstring>
 #include <functional>
@@ -1892,8 +1891,15 @@ namespace lfs::vis {
                                 const VkExtent2D extent,
                                 const VulkanViewportPassParams& params) const {
             const auto& frame = resourcesForFrame(params.frame_slot);
-            assert(frame.grid_uniform.count > 0 && grid_pipeline != VK_NULL_HANDLE &&
-                   frame.grid_descriptor_set != VK_NULL_HANDLE && frame.grid_uniform.buffer != VK_NULL_HANDLE);
+            LFS_VK_DEBUG_ASSERT(
+                frame.grid_uniform.count > 0 && grid_pipeline != VK_NULL_HANDLE &&
+                    frame.grid_descriptor_set != VK_NULL_HANDLE && frame.grid_uniform.buffer != VK_NULL_HANDLE,
+                "Viewport grid pass requires uploaded uniforms, pipeline, descriptor set, and buffer (frame_slot={}, uniform_count={}, pipeline={:#x}, descriptor_set={:#x}, uniform_buffer={:#x})",
+                params.frame_slot,
+                frame.grid_uniform.count,
+                vkHandleValue(grid_pipeline),
+                vkHandleValue(frame.grid_descriptor_set),
+                vkHandleValue(frame.grid_uniform.buffer));
 
             vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, grid_pipeline);
             vkCmdBindDescriptorSets(command_buffer,
@@ -1935,8 +1941,14 @@ namespace lfs::vis {
                                  const DynamicBuffer& resource,
                                  const FrameResources& frame,
                                  const ShapeOverlayPush& push) const {
-            assert(resource.count > 0 && resource.buffer != VK_NULL_HANDLE &&
-                   shape_overlay_pipeline != VK_NULL_HANDLE);
+            LFS_VK_DEBUG_ASSERT(
+                resource.count > 0 && resource.buffer != VK_NULL_HANDLE &&
+                    shape_overlay_pipeline != VK_NULL_HANDLE,
+                "Viewport shape-overlay pass requires vertices, a vertex buffer, and a pipeline (vertex_count={}, vertex_buffer={:#x}, pipeline={:#x}, descriptor_set={:#x})",
+                resource.count,
+                vkHandleValue(resource.buffer),
+                vkHandleValue(shape_overlay_pipeline),
+                vkHandleValue(frame.shape_overlay_descriptor_set));
             const VkDeviceSize offset = 0;
             vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, shape_overlay_pipeline);
             if (frame.shape_overlay_descriptor_set != VK_NULL_HANDLE) {
@@ -1982,7 +1994,12 @@ namespace lfs::vis {
 
         void recordEnvironmentPass(VkCommandBuffer command_buffer, const FramebufferRect& rect,
                                    const VulkanViewportPassParams& params) {
-            assert(params.environment.enabled && environment_pass.hasTexture(params.frame_slot));
+            LFS_VK_DEBUG_ASSERT(
+                params.environment.enabled && environment_pass.hasTexture(params.frame_slot),
+                "Viewport environment pass must be enabled and have a texture for its frame slot (frame_slot={}, enabled={}, texture_ready={})",
+                params.frame_slot,
+                params.environment.enabled,
+                environment_pass.hasTexture(params.frame_slot));
             environment_pass.record(command_buffer,
                                     VkRect2D{
                                         .offset = {rect.x, rect.y},
@@ -1999,7 +2016,15 @@ namespace lfs::vis {
                 scene_image_uploader.hasImage() &&
                 frame.scene_descriptor_set != VK_NULL_HANDLE && scene_pipeline != VK_NULL_HANDLE;
             const bool split_active = sceneSplitActive(params);
-            assert(split_active || has_scene);
+            LFS_VK_DEBUG_ASSERT(
+                split_active || has_scene,
+                "Viewport scene pass requires either a ready split view or a complete scene-image binding (frame_slot={}, split_enabled={}, split_ready={}, scene_image_ready={}, descriptor_set={:#x}, pipeline={:#x})",
+                params.frame_slot,
+                params.split_view.enabled,
+                split_active,
+                scene_image_uploader.hasImage(),
+                vkHandleValue(frame.scene_descriptor_set),
+                vkHandleValue(scene_pipeline));
             if (split_active) {
                 // content_rect arrives panel-local; lift it into framebuffer
                 // coords so the shader's letterbox check matches gl_FragCoord.
@@ -2028,8 +2053,14 @@ namespace lfs::vis {
 
         void recordDepthBlitPass(VkCommandBuffer command_buffer, const FramebufferRect& rect,
                                  const VulkanViewportPassParams& params) {
-            assert(!sceneSplitActive(params) && !params.mesh_items.empty() &&
-                   depth_blit_pass.hasDepth(params.frame_slot));
+            LFS_VK_DEBUG_ASSERT(
+                !sceneSplitActive(params) && !params.mesh_items.empty() &&
+                    depth_blit_pass.hasDepth(params.frame_slot),
+                "Viewport depth-blit pass requires non-split mesh rendering with a ready depth image (frame_slot={}, split_active={}, mesh_items={}, depth_ready={})",
+                params.frame_slot,
+                sceneSplitActive(params),
+                params.mesh_items.size(),
+                depth_blit_pass.hasDepth(params.frame_slot));
             const VkRect2D depth_rect{
                 .offset = {rect.x, rect.y},
                 .extent = {static_cast<std::uint32_t>(rect.width),
@@ -2040,7 +2071,13 @@ namespace lfs::vis {
 
         void recordMeshPass(VkCommandBuffer command_buffer, const FramebufferRect& rect,
                             const VulkanViewportPassParams& params) {
-            assert(!params.mesh_items.empty());
+            LFS_VK_DEBUG_ASSERT(
+                !params.mesh_items.empty(),
+                "Viewport mesh pass requires at least one mesh draw item (frame_slot={}, mesh_items={}, mesh_panels={}, split_enabled={})",
+                params.frame_slot,
+                params.mesh_items.size(),
+                params.mesh_panels.size(),
+                params.split_view.enabled);
             const bool split_active = sceneSplitActive(params);
             const bool split_mesh_panels_active = split_active && !params.mesh_panels.empty();
             VulkanMeshPassParams mesh_params{
@@ -2090,8 +2127,15 @@ namespace lfs::vis {
                                        const VulkanViewportPassParams& params) {
             const VkCommandBuffer command_buffer = ctx.cmd;
             auto& frame = resourcesForFrame(params.frame_slot);
-            assert(frame.textured_overlay.count > 0 && textured_overlay_pipeline != VK_NULL_HANDLE &&
-                   frame.textured_overlay.buffer != VK_NULL_HANDLE && !params.textured_overlays.empty());
+            LFS_VK_DEBUG_ASSERT(
+                frame.textured_overlay.count > 0 && textured_overlay_pipeline != VK_NULL_HANDLE &&
+                    frame.textured_overlay.buffer != VK_NULL_HANDLE && !params.textured_overlays.empty(),
+                "Viewport textured-overlay pass requires vertices, overlays, a vertex buffer, and a pipeline (frame_slot={}, vertex_count={}, overlay_count={}, vertex_buffer={:#x}, pipeline={:#x})",
+                params.frame_slot,
+                frame.textured_overlay.count,
+                params.textured_overlays.size(),
+                vkHandleValue(frame.textured_overlay.buffer),
+                vkHandleValue(textured_overlay_pipeline));
             const VkDeviceSize offset = 0;
             vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, textured_overlay_pipeline);
             vkCmdBindVertexBuffers(command_buffer, 0, 1, &frame.textured_overlay.buffer, &offset);
@@ -2143,8 +2187,15 @@ namespace lfs::vis {
         void recordBaseOverlayPass(VkCommandBuffer command_buffer, const VulkanViewportPassParams& params) {
             auto& frame = resourcesForFrame(params.frame_slot);
             const std::uint32_t overlay_vertices = overlaySplit(frame, params).base;
-            assert(overlay_vertices > 0 && overlay_pipeline != VK_NULL_HANDLE &&
-                   frame.overlay.buffer != VK_NULL_HANDLE);
+            LFS_VK_DEBUG_ASSERT(
+                overlay_vertices > 0 && overlay_pipeline != VK_NULL_HANDLE &&
+                    frame.overlay.buffer != VK_NULL_HANDLE,
+                "Viewport base-overlay pass requires vertices, a vertex buffer, and a pipeline (frame_slot={}, base_vertices={}, total_vertices={}, vertex_buffer={:#x}, pipeline={:#x})",
+                params.frame_slot,
+                overlay_vertices,
+                frame.overlay.count,
+                vkHandleValue(frame.overlay.buffer),
+                vkHandleValue(overlay_pipeline));
             const VkDeviceSize offset = 0;
             vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, overlay_pipeline);
             vkCmdBindVertexBuffers(command_buffer, 0, 1, &frame.overlay.buffer, &offset);
@@ -2164,10 +2215,19 @@ namespace lfs::vis {
                                const VulkanViewportPassParams& params) {
             const VkCommandBuffer command_buffer = ctx.cmd;
             auto& frame = resourcesForFrame(params.frame_slot);
-            assert(frame.frustum_instances.count > 0 && frustum_pipeline != VK_NULL_HANDLE &&
-                   frame.frustum_descriptor_set != VK_NULL_HANDLE &&
-                   frame.shape_overlay_descriptor_set != VK_NULL_HANDLE &&
-                   frame.frustum_instances.buffer != VK_NULL_HANDLE);
+            LFS_VK_DEBUG_ASSERT(
+                frame.frustum_instances.count > 0 && frustum_pipeline != VK_NULL_HANDLE &&
+                    frame.frustum_descriptor_set != VK_NULL_HANDLE &&
+                    frame.shape_overlay_descriptor_set != VK_NULL_HANDLE &&
+                    frame.frustum_instances.buffer != VK_NULL_HANDLE,
+                "Viewport frustum pass requires instances, pipeline, both descriptor sets, and an instance buffer (frame_slot={}, instance_count={}, batch_count={}, pipeline={:#x}, frustum_descriptor_set={:#x}, shape_descriptor_set={:#x}, instance_buffer={:#x})",
+                params.frame_slot,
+                frame.frustum_instances.count,
+                params.frustum_batches.size(),
+                vkHandleValue(frustum_pipeline),
+                vkHandleValue(frame.frustum_descriptor_set),
+                vkHandleValue(frame.shape_overlay_descriptor_set),
+                vkHandleValue(frame.frustum_instances.buffer));
             vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, frustum_pipeline);
             const std::array<VkDescriptorSet, 2> sets{
                 frame.shape_overlay_descriptor_set, frame.frustum_descriptor_set};
@@ -2214,7 +2274,12 @@ namespace lfs::vis {
         }
 
         void recordPivotPass(VkCommandBuffer command_buffer, const VulkanViewportPassParams& params) {
-            assert(!params.pivot_overlays.empty() && pivot_pipeline != VK_NULL_HANDLE);
+            LFS_VK_DEBUG_ASSERT(
+                !params.pivot_overlays.empty() && pivot_pipeline != VK_NULL_HANDLE,
+                "Viewport pivot pass requires at least one pivot and a valid pipeline (frame_slot={}, pivot_count={}, pipeline={:#x})",
+                params.frame_slot,
+                params.pivot_overlays.size(),
+                vkHandleValue(pivot_pipeline));
             vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pivot_pipeline);
             for (const auto& pivot : params.pivot_overlays) {
                 PivotPush push{};
@@ -2242,7 +2307,15 @@ namespace lfs::vis {
 
         void recordVignettePass(VkCommandBuffer command_buffer, const FramebufferRect& rect,
                                 const VulkanViewportPassParams& params) {
-            assert(params.vignette_enabled && vignette_pipeline != VK_NULL_HANDLE);
+            LFS_VK_DEBUG_ASSERT(
+                params.vignette_enabled && vignette_pipeline != VK_NULL_HANDLE,
+                "Viewport vignette pass must be enabled and have a valid pipeline (frame_slot={}, enabled={}, pipeline={:#x}, intensity={}, radius={}, softness={})",
+                params.frame_slot,
+                params.vignette_enabled,
+                vkHandleValue(vignette_pipeline),
+                params.vignette_intensity,
+                params.vignette_radius,
+                params.vignette_softness);
             VignettePush push{};
             push.viewport_intensity_radius = {
                 static_cast<float>(rect.width),
@@ -2272,8 +2345,16 @@ namespace lfs::vis {
         void recordPostUiOverlayPass(VkCommandBuffer command_buffer, const VulkanViewportPassParams& params) {
             auto& frame = resourcesForFrame(params.frame_slot);
             const OverlayVertexSplit split = overlaySplit(frame, params);
-            assert(split.post_ui > 0 && overlay_pipeline != VK_NULL_HANDLE &&
-                   frame.overlay.buffer != VK_NULL_HANDLE);
+            LFS_VK_DEBUG_ASSERT(
+                split.post_ui > 0 && overlay_pipeline != VK_NULL_HANDLE &&
+                    frame.overlay.buffer != VK_NULL_HANDLE,
+                "Viewport post-UI overlay pass requires trailing vertices, a vertex buffer, and a pipeline (frame_slot={}, post_ui_vertices={}, base_vertices={}, total_vertices={}, vertex_buffer={:#x}, pipeline={:#x})",
+                params.frame_slot,
+                split.post_ui,
+                split.base,
+                frame.overlay.count,
+                vkHandleValue(frame.overlay.buffer),
+                vkHandleValue(overlay_pipeline));
             const VkDeviceSize offset = 0;
             vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, overlay_pipeline);
             vkCmdBindVertexBuffers(command_buffer, 0, 1, &frame.overlay.buffer, &offset);

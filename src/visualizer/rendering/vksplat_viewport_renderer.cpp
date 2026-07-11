@@ -2916,7 +2916,11 @@ namespace lfs::vis {
     }
 
     void VksplatViewportRenderer::releaseOpacityCopySlot(VulkanContext& context, const std::size_t ring_slot) {
-        assert(ring_slot < cuda_opacity_copies_.size());
+        LFS_VK_DEBUG_ASSERT(
+            ring_slot < cuda_opacity_copies_.size(),
+            "VkSplat opacity-copy ring slot must be in range before release (ring_slot={}, ring_size={})",
+            ring_slot,
+            cuda_opacity_copies_.size());
         auto& slot = cuda_opacity_copies_[ring_slot];
         const VkBuffer released_buffer = slot.buffer.buffer;
 
@@ -3603,7 +3607,12 @@ namespace lfs::vis {
         if (!context.externalMemoryInteropEnabled()) {
             return std::unexpected("VkSplat overlay bindings require CUDA/Vulkan external-memory interop");
         }
-        assert(ring_slot < cuda_overlays_.size());
+        LFS_VK_DEBUG_ASSERT(
+            ring_slot < cuda_overlays_.size(),
+            "VkSplat overlay ring slot must be in range before upload (ring_slot={}, ring_size={}, splats={})",
+            ring_slot,
+            cuda_overlays_.size(),
+            num_splats);
         // Keep overlay uploads on the current stream. Selection/preview masks
         // can be produced by foreign CUDA streams; the legacy default stream
         // preserves ordering for the current interop handoff without the
@@ -4319,7 +4328,14 @@ namespace lfs::vis {
         if (!context.externalMemoryInteropEnabled()) {
             return std::unexpected("VkSplat input binding requires CUDA/Vulkan external-memory interop");
         }
-        assert(ring_slot < ring_uploaded_.size());
+        LFS_VK_DEBUG_ASSERT(
+            ring_slot < ring_uploaded_.size(),
+            "VkSplat input-upload ring slot must be in range before snapshot access (ring_slot={}, ring_size={}, splats={}, force_upload={}, requested_sh_degree={})",
+            ring_slot,
+            ring_uploaded_.size(),
+            n,
+            force_upload,
+            upload_sh_degree);
 
         const int effective_upload_sh_degree =
             upload_sh_degree < 0
