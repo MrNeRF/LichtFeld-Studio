@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/assert.hpp"
+
 #include <cstdint>
 #include <format>
 #include <string>
@@ -113,17 +115,11 @@ inline std::uint64_t lfsVkHandleValue(const VkHandle handle) noexcept {
 // Retained as a semantic alias at call sites that guard driver-facing handles.
 #define _CHECK_FATAL(...) _THROW_ERROR(__VA_ARGS__)
 
-// Hot invariants fail at their first violation in debug builds. Release builds
-// do not evaluate either the condition or the formatting arguments.
-#ifndef NDEBUG
-#define LFS_VK_DEBUG_ASSERT(condition, ...)                \
-    do {                                                   \
-        if (!(condition)) {                                \
-            _THROW_ERROR_ALWAYS(std::format(__VA_ARGS__)); \
-        }                                                  \
-    } while (false)
-#else
-#define LFS_VK_DEBUG_ASSERT(condition, ...) ((void)0)
+// Vulkan keeps its call-site idiom while sharing the core debug primitive.
+// In Release, neither the condition nor the formatting arguments are evaluated.
+#ifndef LFS_VK_DEBUG_ASSERT
+#define LFS_VK_DEBUG_ASSERT(condition, ...) \
+    LFS_DEBUG_ASSERT_MSG(condition, std::format(__VA_ARGS__))
 #endif
 
 #define _CEIL_DIV(x, m)   (((x) + (m)-1) / (m))

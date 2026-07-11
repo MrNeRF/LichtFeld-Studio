@@ -4,11 +4,11 @@
 
 #pragma once
 
+#include "core/assert.hpp"
 #include "core/logger.hpp"
 
 #include <cstdint>
 #include <format>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -119,11 +119,6 @@ namespace lfs::vis {
         return false;
     }
 
-    [[noreturn]] inline void vkDebugAssertFailed(std::string message) {
-        LOG_ERROR("Vulkan debug invariant: {}", message);
-        throw std::logic_error(std::move(message));
-    }
-
 } // namespace lfs::vis
 
 #define LFS_VK_CHECK(expr)                                             \
@@ -145,17 +140,6 @@ namespace lfs::vis {
     } while (false)
 
 #ifndef LFS_VK_DEBUG_ASSERT
-#ifndef NDEBUG
-#define LFS_VK_DEBUG_ASSERT(condition, ...)                                       \
-    do {                                                                          \
-        if (!(condition)) {                                                       \
-            ::lfs::vis::vkDebugAssertFailed(std::format("{} ({}:{})",             \
-                                                        std::format(__VA_ARGS__), \
-                                                        __FILE__,                 \
-                                                        __LINE__));               \
-        }                                                                         \
-    } while (false)
-#else
-#define LFS_VK_DEBUG_ASSERT(condition, ...) ((void)0)
-#endif
+#define LFS_VK_DEBUG_ASSERT(condition, ...) \
+    LFS_DEBUG_ASSERT_MSG(condition, std::format(__VA_ARGS__))
 #endif
