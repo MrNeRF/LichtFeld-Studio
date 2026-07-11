@@ -253,6 +253,16 @@ namespace lfs::core {
 
         const Stats& stats() const { return stats_; }
 
+        // Fault-isolated policy hook for allocator regression tests. Zero
+        // restores automatic device-sized budgeting on the next cache use.
+        void set_cache_budget_for_testing(const size_t bytes) {
+            cache_budget_bytes_.store(bytes, std::memory_order_release);
+            if (bytes != 0) {
+                enforce_cache_budget();
+                publish_cache_bytes();
+            }
+        }
+
         void print_stats() const {
             uint64_t hits = stats_.cache_hits.load();
             uint64_t misses = stats_.cache_misses.load();
@@ -303,15 +313,6 @@ namespace lfs::core {
             return cache_budget_bytes_.load(std::memory_order_acquire);
         }
 
-        size_t cached_entry_count() {
-            size_t count = 0;
-            for (size_t i = 0; i < NUM_BUCKETS; ++i) {
-                std::lock_guard<std::mutex> lock(buckets_[i].mutex);
-                count += buckets_[i].cache.size();
-            }
-            return count;
-        }
-
         size_t choose_eviction_bucket() {
             size_t best = NUM_BUCKETS;
             uint64_t best_epoch = std::numeric_limits<uint64_t>::max();
@@ -339,11 +340,6 @@ namespace lfs::core {
         void enforce_cache_budget() {
             const size_t budget = current_cache_budget();
             while (stats_.bytes_cached.load(std::memory_order_relaxed) > budget) {
-                // Keep one oversized reusable buffer if it is the whole working set;
-                // otherwise the next iteration pays cudaMallocAsync every time.
-                if (cached_entry_count() <= 1)
-                    break;
-
                 const size_t victim_idx = choose_eviction_bucket();
                 if (victim_idx >= NUM_BUCKETS)
                     break;

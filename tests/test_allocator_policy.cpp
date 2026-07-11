@@ -36,3 +36,24 @@ TEST(AllocatorPolicyTest, BucketCacheBudgetStaysBoundedOnLargeGpus) {
     EXPECT_EQ(SizeBucketedPool::cache_budget_for_total_memory(24 * GiB), 256 * MiB);
     EXPECT_EQ(SizeBucketedPool::cache_budget_for_total_memory(48 * GiB), 256 * MiB);
 }
+
+TEST(AllocatorPolicyTest, OversizedSingletonDoesNotEscapeBucketCacheBudget) {
+    constexpr size_t MiB = 1024 * 1024;
+    auto& pool = SizeBucketedPool::instance();
+    pool.trim_cache();
+    pool.set_cache_budget_for_testing(1 * MiB);
+
+    // The first use is deliberately probationary. A second miss makes this a
+    // reusable bucket and exercises global budget enforcement on deallocation.
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        void* ptr = pool.allocate(2 * MiB);
+        EXPECT_NE(ptr, nullptr);
+        if (ptr) {
+            pool.deallocate(ptr, 2 * MiB);
+        }
+    }
+
+    EXPECT_EQ(pool.stats().bytes_cached.load(std::memory_order_relaxed), 0u);
+    pool.trim_cache();
+    pool.set_cache_budget_for_testing(0);
+}
