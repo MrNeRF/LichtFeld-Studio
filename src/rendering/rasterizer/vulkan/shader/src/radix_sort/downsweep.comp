@@ -242,6 +242,9 @@ void main() {
 
   for (uint i = index; i < PARTITION_SIZE; i += WORKGROUP_SIZE) {
     uint32_t value = localHistogram[i];
-    valuesOut.data[localOffsets1[i / WORKGROUP_SIZE]] = value;
+    uint32_t dstOffset = localOffsets1[i / WORKGROUP_SIZE];
+    if (dstOffset < elementCount) {
+      valuesOut.data[dstOffset] = value;
+    }
   }
 }
