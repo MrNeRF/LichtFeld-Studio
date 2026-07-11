@@ -1592,6 +1592,8 @@ namespace lfs::vis {
         buffers_.num_indices = 0;
         buffers_.num_indices_high_water = 0;
         buffers_.is_unsorted_1 = true;
+        resident_sort_capacity_ = 0;
+        last_render_used_macro_chain_ = false;
         macro_chain_warmup_pending_ = true;
         visible_high_water_ = 0;
         visible_clamp_pending_ = false;
@@ -1760,6 +1762,8 @@ namespace lfs::vis {
         ring_completion_values_ = {};
         next_ring_slot_ = 0;
         current_input_sh_degree_ = -1;
+        resident_sort_capacity_ = 0;
+        last_render_used_macro_chain_ = false;
         macro_chain_warmup_pending_ = true;
         compose_.reset();
         buffers_ = {};
@@ -4672,7 +4676,7 @@ namespace lfs::vis {
         const std::size_t output_index = outputSlotIndex(output_slot);
         auto& output = output_slots_[output_index][output_ring_slot];
 
-        const bool has_pixel_state = buffers_.num_indices > 0 &&
+        const bool has_pixel_state = uniforms.sort_capacity > 0 &&
                                      buffers_.pixel_state.deviceBuffer.buffer != VK_NULL_HANDLE &&
                                      buffers_.pixel_state.deviceBuffer.size > 0 &&
                                      buffers_.pixel_depth.deviceBuffer.buffer != VK_NULL_HANDLE &&
@@ -6285,7 +6289,7 @@ namespace lfs::vis {
         if (num_splats == 0 || buffers_.num_splats != num_splats) {
             return std::unexpected("VkSplat selection overlay cached model does not match the current model");
         }
-        if (buffers_.num_indices == 0 ||
+        if (resident_sort_capacity_ == 0 ||
             !hasDeviceBuffer(buffers_.sorted_gauss_idx()) ||
             !hasDeviceBuffer(buffers_.tile_ranges) ||
             !hasDeviceBuffer(buffers_.xy_vs) ||
@@ -6331,7 +6335,7 @@ namespace lfs::vis {
                                           request.mip_filter);
             uniforms.step = static_cast<std::uint32_t>(modelTransformCount(request.scene.model_transforms));
             uniforms.sort_capacity = static_cast<uint32_t>(
-                std::min<std::size_t>(buffers_.num_indices,
+                std::min<std::size_t>(resident_sort_capacity_,
                                       static_cast<std::size_t>(std::numeric_limits<uint32_t>::max())));
         }
 
@@ -6485,6 +6489,9 @@ namespace lfs::vis {
         if (auto ok = waitForRingSlot(ring_slot, "render"); !ok) {
             return std::unexpected(ok.error());
         }
+        // From this point onward a failed render may have partially rewritten the
+        // shared sort/raster state. Publish it for overlay reuse only after submit.
+        resident_sort_capacity_ = 0;
         // Track whether each deferred capacity readback produced fresh stats
         // this frame; feeds the one-shot-capture settle signal computed below.
         bool visibility_stats_polled = false;
@@ -7524,7 +7531,6 @@ namespace lfs::vis {
                         }
                     }
                 }
-                last_render_used_macro_chain_ = higs_active;
                 LOG_TIMER("vksplat.render.record.composePixelState");
                 // Record compose into the rasterizer's batch so the entire frame
                 // submits and waits exactly once instead of fence-blocking twice.
@@ -7563,6 +7569,8 @@ namespace lfs::vis {
         // the arena and the trainer before the guard/locks let them reuse the
         // scratch this batch still reads.
         last_signaled_render_value_ = completion_value;
+        last_render_used_macro_chain_ = higs_active;
+        resident_sort_capacity_ = shared_sort_capacity;
         if (shared_arena_guard) {
             shared_arena_guard->noteVulkanRelease(render_complete_cuda_.handle(), completion_value);
         }

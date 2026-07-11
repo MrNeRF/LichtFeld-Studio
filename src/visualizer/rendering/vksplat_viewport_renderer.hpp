@@ -594,6 +594,10 @@ namespace lfs::vis {
         // Whether the last main render used the macro-tile chain; the
         // selection-overlay re-render reuses its sorted buffers and must match.
         bool last_render_used_macro_chain_ = false;
+        // Sort capacity belonging to the last successfully submitted main render.
+        // Deferred CPU count readbacks are intentionally one frame stale, so
+        // selection overlays must not use buffers_.num_indices as residency state.
+        std::size_t resident_sort_capacity_ = 0;
         // The first frame after a model/input reset needs the synchronous
         // render-tile chain so the viewport never presents the macro chain's
         // zero-count warm-up frame.
