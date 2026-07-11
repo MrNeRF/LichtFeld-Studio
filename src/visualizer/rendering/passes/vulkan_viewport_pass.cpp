@@ -13,6 +13,7 @@
 #include "vulkan_scene_image_uploader.hpp"
 #include "window/vulkan_barrier2.hpp"
 #include "window/vulkan_context.hpp"
+#include "window/vulkan_result.hpp"
 
 #include "viewport/frustum.vert.spv.h"
 #include "viewport/grid.frag.spv.h"
@@ -663,8 +664,16 @@ namespace lfs::vis {
             pool_info.queueFamilyIndex = graphics_queue_family;
             pool_info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
             VkCommandPool pool = VK_NULL_HANDLE;
-            if (vkCreateCommandPool(device, &pool_info, nullptr, &pool) != VK_SUCCESS) {
-                return false;
+            VkResult result = vkCreateCommandPool(device, &pool_info, nullptr, &pool);
+            if (result != VK_SUCCESS) {
+                return vkCheckFailed(formatVkCheckFailure(
+                    "vkCreateCommandPool(device, &pool_info, nullptr, &pool)",
+                    result,
+                    std::format("One-shot graphics command-pool creation failed (device={:#x}, queue_family={})",
+                                vkHandleValue(device),
+                                graphics_queue_family),
+                    __FILE__,
+                    __LINE__));
             }
             VkCommandBufferAllocateInfo cb_alloc{};
             cb_alloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -672,16 +681,51 @@ namespace lfs::vis {
             cb_alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
             cb_alloc.commandBufferCount = 1;
             VkCommandBuffer cb = VK_NULL_HANDLE;
-            if (vkAllocateCommandBuffers(device, &cb_alloc, &cb) != VK_SUCCESS) {
+            result = vkAllocateCommandBuffers(device, &cb_alloc, &cb);
+            if (result != VK_SUCCESS) {
+                const std::string error = formatVkCheckFailure(
+                    "vkAllocateCommandBuffers(device, &cb_alloc, &cb)",
+                    result,
+                    std::format("One-shot graphics command-buffer allocation failed (device={:#x}, command_pool={:#x}, requested_count=1)",
+                                vkHandleValue(device),
+                                vkHandleValue(pool)),
+                    __FILE__,
+                    __LINE__);
                 vkDestroyCommandPool(device, pool, nullptr);
-                return false;
+                return vkCheckFailed(error);
             }
             VkCommandBufferBeginInfo begin{};
             begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
             begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-            vkBeginCommandBuffer(cb, &begin);
+            result = vkBeginCommandBuffer(cb, &begin);
+            if (result != VK_SUCCESS) {
+                const std::string error = formatVkCheckFailure(
+                    "vkBeginCommandBuffer(cb, &begin)",
+                    result,
+                    std::format("One-shot graphics command buffer did not enter recording state (command_buffer={:#x}, command_pool={:#x})",
+                                vkHandleValue(cb),
+                                vkHandleValue(pool)),
+                    __FILE__,
+                    __LINE__);
+                vkFreeCommandBuffers(device, pool, 1, &cb);
+                vkDestroyCommandPool(device, pool, nullptr);
+                return vkCheckFailed(error);
+            }
             record(cb);
-            vkEndCommandBuffer(cb);
+            result = vkEndCommandBuffer(cb);
+            if (result != VK_SUCCESS) {
+                const std::string error = formatVkCheckFailure(
+                    "vkEndCommandBuffer(cb)",
+                    result,
+                    std::format("One-shot graphics command buffer did not leave recording state (command_buffer={:#x}, command_pool={:#x})",
+                                vkHandleValue(cb),
+                                vkHandleValue(pool)),
+                    __FILE__,
+                    __LINE__);
+                vkFreeCommandBuffers(device, pool, 1, &cb);
+                vkDestroyCommandPool(device, pool, nullptr);
+                return vkCheckFailed(error);
+            }
             VkSubmitInfo submit{};
             submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
             submit.commandBufferCount = 1;
@@ -689,17 +733,74 @@ namespace lfs::vis {
             VkFenceCreateInfo fence_info{};
             fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
             VkFence fence = VK_NULL_HANDLE;
-            const bool ok =
-                vkCreateFence(device, &fence_info, nullptr, &fence) == VK_SUCCESS &&
-                vkQueueSubmit(graphics_queue, 1, &submit, fence) == VK_SUCCESS &&
-                vkWaitForFences(device, 1, &fence, VK_TRUE,
-                                std::numeric_limits<std::uint64_t>::max()) == VK_SUCCESS;
+            result = vkCreateFence(device, &fence_info, nullptr, &fence);
+            std::string error;
+            if (result != VK_SUCCESS) {
+                error = formatVkCheckFailure(
+                    "vkCreateFence(device, &fence_info, nullptr, &fence)",
+                    result,
+                    std::format("One-shot graphics submission fence creation failed (device={:#x}, command_buffer={:#x})",
+                                vkHandleValue(device),
+                                vkHandleValue(cb)),
+                    __FILE__,
+                    __LINE__);
+            } else {
+                if (graphics_queue == VK_NULL_HANDLE || cb == VK_NULL_HANDLE ||
+                    fence == VK_NULL_HANDLE || submit.commandBufferCount != 1 ||
+                    submit.pCommandBuffers == nullptr || submit.pCommandBuffers[0] != cb) {
+                    error = std::format(
+                        "One-shot graphics submit requires a non-null queue, one expected command buffer, and a non-null fence (queue={:#x}, command_buffer={:#x}, fence={:#x}, command_buffer_count={}, command_buffer_array={:#x}, submitted_command_buffer={:#x}) ({}:{})",
+                        vkHandleValue(graphics_queue),
+                        vkHandleValue(cb),
+                        vkHandleValue(fence),
+                        submit.commandBufferCount,
+                        reinterpret_cast<std::uintptr_t>(submit.pCommandBuffers),
+                        submit.pCommandBuffers != nullptr
+                            ? vkHandleValue(submit.pCommandBuffers[0])
+                            : 0,
+                        __FILE__,
+                        __LINE__);
+                } else {
+                    result = vkQueueSubmit(graphics_queue, 1, &submit, fence);
+                }
+                if (error.empty() && result != VK_SUCCESS) {
+                    error = formatVkCheckFailure(
+                        "vkQueueSubmit(graphics_queue, 1, &submit, fence)",
+                        result,
+                        std::format("One-shot graphics submission failed (queue={:#x}, command_buffer={:#x}, command_buffer_count=1, wait_semaphore_count=0, signal_semaphore_count=0, fence={:#x})",
+                                    vkHandleValue(graphics_queue),
+                                    vkHandleValue(cb),
+                                    vkHandleValue(fence)),
+                        __FILE__,
+                        __LINE__);
+                } else {
+                    result = vkWaitForFences(device,
+                                             1,
+                                             &fence,
+                                             VK_TRUE,
+                                             std::numeric_limits<std::uint64_t>::max());
+                    if (result != VK_SUCCESS) {
+                        error = formatVkCheckFailure(
+                            "vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX)",
+                            result,
+                            std::format("One-shot graphics submission did not retire (device={:#x}, fence={:#x}, command_buffer={:#x}, fence_count=1)",
+                                        vkHandleValue(device),
+                                        vkHandleValue(fence),
+                                        vkHandleValue(cb)),
+                            __FILE__,
+                            __LINE__);
+                    }
+                }
+            }
             if (fence != VK_NULL_HANDLE) {
                 vkDestroyFence(device, fence, nullptr);
             }
             vkFreeCommandBuffers(device, pool, 1, &cb);
             vkDestroyCommandPool(device, pool, nullptr);
-            return ok;
+            if (!error.empty()) {
+                return vkCheckFailed(std::move(error));
+            }
+            return true;
         }
 
         [[nodiscard]] bool createShapeOverlayDescriptors() {
@@ -1055,11 +1156,24 @@ namespace lfs::vis {
             pipeline_info.renderPass = VK_NULL_HANDLE;
             pipeline_info.subpass = 0;
 
-            const bool ok =
-                vkCreateGraphicsPipelines(device, pipeline_cache, 1, &pipeline_info, nullptr, &pipeline) == VK_SUCCESS;
+            const VkResult pipeline_result =
+                vkCreateGraphicsPipelines(device, pipeline_cache, 1, &pipeline_info, nullptr, &pipeline);
             vkDestroyShaderModule(device, vertex_module, nullptr);
             vkDestroyShaderModule(device, fragment_module, nullptr);
-            return ok;
+            if (pipeline_result != VK_SUCCESS) {
+                return vkCheckFailed(formatVkCheckFailure(
+                    "vkCreateGraphicsPipelines(device, pipeline_cache, 1, &pipeline_info, nullptr, &pipeline)",
+                    pipeline_result,
+                    std::format("Viewport graphics pipeline creation failed (device={:#x}, pipeline_cache={:#x}, pipeline_layout={:#x}, color_format={}, depth_stencil_format={})",
+                                vkHandleValue(device),
+                                vkHandleValue(pipeline_cache),
+                                vkHandleValue(pipeline_layout),
+                                static_cast<int>(color_format),
+                                static_cast<int>(depth_stencil_format)),
+                    __FILE__,
+                    __LINE__));
+            }
+            return true;
         }
 
         [[nodiscard]] bool createPipelines() {

@@ -12,10 +12,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <format>
 #include <optional>
+#include <source_location>
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 #include <vulkan/vulkan.h>
 
@@ -161,7 +165,22 @@ namespace lfs::vis {
         void setDebugObjectName(VkObjectType object_type, VkHandle object, std::string_view name) const {
             setDebugObjectName(object_type, vulkanObjectHandle(object), name);
         }
+        template <typename VkHandle, typename... Args>
+        void setDebugObjectNamef(VkObjectType object_type,
+                                 VkHandle object,
+                                 std::format_string<Args...> format,
+                                 Args&&... args) const {
+            if (!debugObjectNamingEnabled() || object == VK_NULL_HANDLE) {
+                return;
+            }
+            setDebugObjectName(object_type,
+                               vulkanObjectHandle(object),
+                               std::format(format, std::forward<Args>(args)...));
+        }
         void setDebugObjectName(VkObjectType object_type, std::uint64_t object_handle, std::string_view name) const;
+        [[nodiscard]] bool debugObjectNamingEnabled() const noexcept {
+            return debug_utils_enabled_ && vk_set_debug_utils_object_name_ != nullptr;
+        }
 
         [[nodiscard]] bool beginFrame(const VkClearValue& clear_value, Frame& frame);
         [[nodiscard]] bool endFrame();
@@ -215,7 +234,9 @@ namespace lfs::vis {
                                                           std::uint64_t signal_value = 0);
 
     private:
-        bool fail(std::string message);
+        bool fail(std::string message,
+                  std::source_location location = std::source_location::current());
+        bool vkCheckFailed(std::string message);
 
         struct QueueFamilies {
             std::optional<uint32_t> graphics;
@@ -348,8 +369,12 @@ namespace lfs::vis {
             VkFence fence = VK_NULL_HANDLE;
         };
         std::vector<PendingImmediateSubmit> pending_immediate_submits_;
-        void drainCompletedImmediateSubmits();
+        [[nodiscard]] bool drainCompletedImmediateSubmits();
         std::vector<FrameTimelineWait> frame_timeline_waits_;
+        bool frame_timeline_waits_valid_ = true;
+        std::unordered_map<VkSemaphore, std::uint64_t> last_frame_timeline_wait_values_;
+        std::unordered_map<VkSemaphore, std::uint64_t> last_immediate_timeline_wait_values_;
+        std::unordered_map<VkSemaphore, std::uint64_t> last_immediate_timeline_signal_values_;
         // image_available_ is sized to swapchain image count (not framesInFlight). We must
         // pass a fresh semaphore to each vkAcquireNextImageKHR — reusing one before its
         // signal has been consumed by submit is undefined per spec. Rotation is independent
@@ -380,6 +405,7 @@ namespace lfs::vis {
         bool frame_suboptimal_ = false;
         bool debug_utils_enabled_ = false;
         bool validation_enabled_ = false;
+        bool validation_errors_fatal_ = false;
         bool instance_external_memory_capabilities_enabled_ = false;
         bool instance_external_semaphore_capabilities_enabled_ = false;
         bool instance_surface_maintenance_enabled_ = false;

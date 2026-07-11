@@ -10,6 +10,7 @@
 #include "diagnostics/vram_profiler.hpp"
 #include "window/vulkan_barrier2.hpp"
 #include "window/vulkan_context.hpp"
+#include "window/vulkan_result.hpp"
 
 #include <array>
 #include <cstring>
@@ -444,7 +445,15 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] FrameLightResources& lightResourcesForFrame(const std::size_t frame_slot) {
-            return frame_light_resources[frame_slot % frame_light_resources.size()];
+            if (frame_slot >= frame_light_resources.size()) [[unlikely]] {
+                throw std::logic_error(std::format(
+                    "Mesh frame slot is outside the draw-resource ring (frame_slot={}, ring_size={}) ({}:{})",
+                    frame_slot,
+                    frame_light_resources.size(),
+                    __FILE__,
+                    __LINE__));
+            }
+            return frame_light_resources[frame_slot];
         }
 
         bool createDummyShadow() {
@@ -791,7 +800,16 @@ namespace lfs::vis {
 
         void destroyMaterial(GpuMaterial& m) const {
             if (m.descriptor != VK_NULL_HANDLE && m.descriptor_pool != VK_NULL_HANDLE) {
-                vkFreeDescriptorSets(device, m.descriptor_pool, 1, &m.descriptor);
+                const VkResult result =
+                    vkFreeDescriptorSets(device, m.descriptor_pool, 1, &m.descriptor);
+                if (result != VK_SUCCESS) {
+                    LOG_ERROR("vkFreeDescriptorSets failed while destroying a mesh material (device={:#x}, descriptor_pool={:#x}, descriptor_set={:#x}, result={}({}))",
+                              vkHandleValue(device),
+                              vkHandleValue(m.descriptor_pool),
+                              vkHandleValue(m.descriptor),
+                              vkResultToString(result),
+                              static_cast<int>(result));
+                }
             }
             if (m.ubo != VK_NULL_HANDLE) {
                 vmaDestroyBuffer(allocator, m.ubo, m.ubo_alloc);
@@ -1811,12 +1829,38 @@ namespace lfs::vis {
                     break;
                 }
             }
-            if (has_stale_mesh && context != nullptr && !context->waitForSubmittedFrames()) {
-                LOG_WARN("VulkanMeshPass: deferred stale mesh eviction because submitted frames did not retire");
-                return;
+            bool submitted_frames_retired = !has_stale_mesh;
+            if (has_stale_mesh) {
+                if (context == nullptr) {
+                    LOG_ERROR("VulkanMeshPass deferred stale mesh eviction because retirement cannot be proven (context={:#x}, frame_counter={}, cache_size={}, eviction_age={})",
+                              vkHandleValue(context),
+                              frame_counter,
+                              mesh_cache.size(),
+                              kEvictAfter);
+                    return;
+                }
+                submitted_frames_retired = context->waitForSubmittedFrames();
+                if (!submitted_frames_retired) {
+                    LOG_WARN("VulkanMeshPass deferred stale mesh eviction because submitted frames did not retire (frame_counter={}, cache_size={}, eviction_age={}, error='{}')",
+                             frame_counter,
+                             mesh_cache.size(),
+                             kEvictAfter,
+                             context->lastError());
+                    return;
+                }
             }
             for (auto it = mesh_cache.begin(); it != mesh_cache.end();) {
                 if (frame_counter - it->second.last_used_frame > kEvictAfter) {
+                    LFS_VK_DEBUG_ASSERT(
+                        submitted_frames_retired,
+                        "Deferred mesh destruction requires all submitted frames to retire (frames_retired={}, frame_counter={}, last_used_frame={}, age={}, eviction_age={}, vertex_buffer={:#x}, index_buffer={:#x})",
+                        submitted_frames_retired,
+                        frame_counter,
+                        it->second.last_used_frame,
+                        frame_counter - it->second.last_used_frame,
+                        kEvictAfter,
+                        vkHandleValue(it->second.vertex_buffer),
+                        vkHandleValue(it->second.index_buffer));
                     destroyMesh(it->second);
                     it = mesh_cache.erase(it);
                 } else {
@@ -1828,6 +1872,16 @@ namespace lfs::vis {
         void record(VkCommandBuffer cb, VkRect2D viewport_rect, const VulkanMeshPassParams& params) {
             if (pipeline_cull == VK_NULL_HANDLE || params.items.empty()) {
                 return;
+            }
+            if (cb == VK_NULL_HANDLE || params.frame_slot >= frame_light_resources.size()) [[unlikely]] {
+                throw std::logic_error(std::format(
+                    "Mesh recording requires a command buffer and in-range frame slot (command_buffer={:#x}, frame_slot={}, ring_size={}, item_count={}) ({}:{})",
+                    vkHandleValue(cb),
+                    params.frame_slot,
+                    frame_light_resources.size(),
+                    params.items.size(),
+                    __FILE__,
+                    __LINE__));
             }
 
             VkViewport viewport{};
@@ -1871,12 +1925,30 @@ namespace lfs::vis {
                                            gpu.cached_light_vp_valid;
                 const std::size_t draw_index = draw_base + item_index;
                 if (draw_index >= frame.draws.size()) {
-                    LOG_ERROR("VulkanMeshPass: missing frame-local resource for draw {}", draw_index);
-                    continue;
+                    throw std::logic_error(std::format(
+                        "Mesh draw index is outside the retired frame's resource array (frame_slot={}, draw_index={}, draw_count={}, draw_base={}, item_index={}) ({}:{})",
+                        params.frame_slot,
+                        draw_index,
+                        frame.draws.size(),
+                        draw_base,
+                        item_index,
+                        __FILE__,
+                        __LINE__));
                 }
                 auto& draw = frame.draws[draw_index];
-                if (draw.descriptor == VK_NULL_HANDLE ||
-                    !writeLightUbo(draw,
+                if (draw.descriptor == VK_NULL_HANDLE || draw.buffer == VK_NULL_HANDLE) [[unlikely]] {
+                    throw std::logic_error(std::format(
+                        "Mesh draw recording requires a non-null per-frame descriptor and UBO (frame_slot={}, draw_index={}, draw_count={}, descriptor_set={:#x}, ubo={:#x}, descriptor_capacity={}) ({}:{})",
+                        params.frame_slot,
+                        draw_index,
+                        frame.draws.size(),
+                        vkHandleValue(draw.descriptor),
+                        vkHandleValue(draw.buffer),
+                        frame.descriptor_capacity,
+                        __FILE__,
+                        __LINE__));
+                }
+                if (!writeLightUbo(draw,
                                    params,
                                    item,
                                    shadow_active ? gpu.cached_light_vp : glm::mat4(1.0f),

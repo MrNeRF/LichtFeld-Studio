@@ -10,6 +10,7 @@
 #include "internal/resource_paths.hpp"
 #include "window/vulkan_barrier2.hpp"
 #include "window/vulkan_context.hpp"
+#include "window/vulkan_result.hpp"
 
 #include <OpenImageIO/imageio.h>
 #include <algorithm>
@@ -248,11 +249,27 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] FrameDescriptor& descriptorForFrame(const std::size_t frame_slot) {
-            return frame_descriptors[frame_slot % frame_descriptors.size()];
+            if (frame_slot >= frame_descriptors.size()) [[unlikely]] {
+                throw std::logic_error(std::format(
+                    "Environment frame slot is outside the descriptor ring (frame_slot={}, ring_size={}) ({}:{})",
+                    frame_slot,
+                    frame_descriptors.size(),
+                    __FILE__,
+                    __LINE__));
+            }
+            return frame_descriptors[frame_slot];
         }
 
         [[nodiscard]] const FrameDescriptor& descriptorForFrame(const std::size_t frame_slot) const {
-            return frame_descriptors[frame_slot % frame_descriptors.size()];
+            if (frame_slot >= frame_descriptors.size()) [[unlikely]] {
+                throw std::logic_error(std::format(
+                    "Environment frame slot is outside the descriptor ring (frame_slot={}, ring_size={}) ({}:{})",
+                    frame_slot,
+                    frame_descriptors.size(),
+                    __FILE__,
+                    __LINE__));
+            }
+            return frame_descriptors[frame_slot];
         }
 
         void rebindDescriptor(FrameDescriptor& descriptor) const {
@@ -624,6 +641,17 @@ namespace lfs::vis {
         void record(VkCommandBuffer cb, VkRect2D rect, const VulkanEnvironmentParams& params,
                     const std::size_t frame_slot) {
             const auto& descriptor = descriptorForFrame(frame_slot);
+            if (cb == VK_NULL_HANDLE || descriptor.set == VK_NULL_HANDLE) [[unlikely]] {
+                throw std::logic_error(std::format(
+                    "Environment recording requires a command buffer and per-frame descriptor set (command_buffer={:#x}, frame_slot={}, ring_size={}, descriptor_set={:#x}, bound_view={:#x}) ({}:{})",
+                    vkHandleValue(cb),
+                    frame_slot,
+                    frame_descriptors.size(),
+                    vkHandleValue(descriptor.set),
+                    vkHandleValue(descriptor.bound_view),
+                    __FILE__,
+                    __LINE__));
+            }
             if (!params.enabled || pipeline == VK_NULL_HANDLE || descriptor.bound_view == VK_NULL_HANDLE ||
                 screen_quad_buffer == VK_NULL_HANDLE) {
                 return;

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "vulkan_image_barrier_tracker.hpp"
+#include "vulkan_result.hpp"
 
 namespace lfs::vis {
 
@@ -106,9 +107,26 @@ namespace lfs::vis {
                                                     const VkImageAspectFlags aspect_mask,
                                                     const VkImageLayout new_layout) {
         if (command_buffer == VK_NULL_HANDLE || image == VK_NULL_HANDLE) {
-            return;
+            throw std::logic_error(std::format(
+                "Image barrier transition requires non-null handles (command_buffer={:#x}, image={:#x}, aspect_mask={:#x}, requested_layout={}({})) ({}:{})",
+                vkHandleValue(command_buffer),
+                vkHandleValue(image),
+                static_cast<std::uint32_t>(aspect_mask),
+                vkImageLayoutToString(new_layout),
+                static_cast<int>(new_layout),
+                __FILE__,
+                __LINE__));
         }
 
+        [[maybe_unused]] const auto tracked = images_.find(image);
+        LFS_VK_DEBUG_ASSERT(
+            tracked != images_.end(),
+            "Image barrier tracker does not know the transitioned image (image={:#x}, requested_layout={}({}), aspect_mask={:#x}, tracked_images={})",
+            vkHandleValue(image),
+            vkImageLayoutToString(new_layout),
+            static_cast<int>(new_layout),
+            static_cast<std::uint32_t>(aspect_mask),
+            images_.size());
         auto& state = images_[image];
         if (state.aspect_mask == 0) {
             state.aspect_mask = aspect_mask;

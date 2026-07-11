@@ -1424,6 +1424,7 @@ namespace lfs::vis {
         VkDescriptorSetLayout descriptor_set_layout = VK_NULL_HANDLE;
         VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
         VkPipeline pipeline = VK_NULL_HANDLE;
+        std::array<std::uint32_t, 3> max_group_count{};
 
         void destroy(VkDevice device) {
             if (device == VK_NULL_HANDLE) {
@@ -1625,7 +1626,20 @@ namespace lfs::vis {
         live_submit_callback_ = {};
         if (context_ && context_->device() != VK_NULL_HANDLE) {
             const VkDevice device = context_->device();
-            vkDeviceWaitIdle(device);
+            const VkResult idle_result = vkDeviceWaitIdle(device);
+            if (idle_result != VK_SUCCESS) {
+                LOG_ERROR("Vulkan: {}",
+                          formatVkCheckFailure(
+                              "vkDeviceWaitIdle(device)",
+                              idle_result,
+                              std::format("VkSplat renderer reset could not retire device work before resource destruction (device={:#x}, readback_fence={:#x}, readback_command_pool={:#x}, readback_command_buffer={:#x})",
+                                          vkHandleValue(device),
+                                          vkHandleValue(readback_fence_),
+                                          vkHandleValue(readback_pool_),
+                                          vkHandleValue(readback_cmd_)),
+                              __FILE__,
+                              __LINE__));
+            }
             if (readback_fence_ != VK_NULL_HANDLE) {
                 vkDestroyFence(device, readback_fence_, nullptr);
                 readback_fence_ = VK_NULL_HANDLE;
@@ -4516,7 +4530,22 @@ namespace lfs::vis {
         const glm::ivec2 size,
         const OutputSlot output_slot,
         const std::size_t ring_slot) {
-        auto& slot = output_slots_[outputSlotIndex(output_slot)][ring_slot];
+        const std::size_t output_index = outputSlotIndex(output_slot);
+        if (output_index >= output_slots_.size() ||
+            ring_slot >= output_slots_[output_index].size() || size.x <= 0 || size.y <= 0) {
+            return std::unexpected(std::format(
+                "VkSplat output allocation requires valid slot/ring indices and positive dimensions (output_slot={}, output_index={}, output_slot_count={}, ring_slot={}, ring_size={}, requested_size={}x{}) ({}:{})",
+                outputSlotDiagnosticName(output_slot),
+                output_index,
+                output_slots_.size(),
+                ring_slot,
+                output_index < output_slots_.size() ? output_slots_[output_index].size() : 0,
+                size.x,
+                size.y,
+                __FILE__,
+                __LINE__));
+        }
+        auto& slot = output_slots_[output_index][ring_slot];
         if (slot.image.image != VK_NULL_HANDLE && slot.depth_image.image != VK_NULL_HANDLE &&
             slot.size == size) {
             return {};
@@ -4538,6 +4567,19 @@ namespace lfs::vis {
             return std::unexpected(std::format("VkSplat output resize wait failed: {}",
                                                context.lastError()));
         }
+        LFS_VK_DEBUG_ASSERT(
+            !replacing_existing_output || context.lastError().empty(),
+            "VkSplat output destruction requires submitted graphics frames to retire (replacing_existing={}, output_slot={}, ring_slot={}, old_size={}x{}, new_size={}x{}, color_image={:#x}, depth_image={:#x}, retirement_error='{}')",
+            replacing_existing_output,
+            outputSlotDiagnosticName(output_slot),
+            ring_slot,
+            slot.size.x,
+            slot.size.y,
+            size.x,
+            size.y,
+            vkHandleValue(slot.image.image),
+            vkHandleValue(slot.depth_image.image),
+            context.lastError());
         if (slot.image.image != VK_NULL_HANDLE) {
             context.imageBarriers().forgetImage(slot.image.image);
         }
@@ -4588,6 +4630,13 @@ namespace lfs::vis {
         }
         compose_ = std::make_unique<ComposePipeline>();
         VkDevice device = context.device();
+        VkPhysicalDeviceProperties properties{};
+        vkGetPhysicalDeviceProperties(context.physicalDevice(), &properties);
+        compose_->max_group_count = {
+            properties.limits.maxComputeWorkGroupCount[0],
+            properties.limits.maxComputeWorkGroupCount[1],
+            properties.limits.maxComputeWorkGroupCount[2],
+        };
         VkResult result = VK_SUCCESS;
 
         VkShaderModuleCreateInfo shader_info{};
@@ -4672,7 +4721,35 @@ namespace lfs::vis {
             return ok;
         }
         const std::size_t output_index = outputSlotIndex(output_slot);
+        if (cmd == VK_NULL_HANDLE || output_index >= output_slots_.size() ||
+            output_ring_slot >= output_slots_[output_index].size()) {
+            return std::unexpected(std::format(
+                "VkSplat composition requires a command buffer and in-range output slot (command_buffer={:#x}, output_slot={}, output_index={}, output_slot_count={}, ring_slot={}, ring_size={}) ({}:{})",
+                vkHandleValue(cmd),
+                outputSlotDiagnosticName(output_slot),
+                output_index,
+                output_slots_.size(),
+                output_ring_slot,
+                output_index < output_slots_.size() ? output_slots_[output_index].size() : 0,
+                __FILE__,
+                __LINE__));
+        }
         auto& output = output_slots_[output_index][output_ring_slot];
+        if (output.image.image == VK_NULL_HANDLE || output.image.view == VK_NULL_HANDLE ||
+            output.depth_image.image == VK_NULL_HANDLE || output.depth_image.view == VK_NULL_HANDLE) {
+            return std::unexpected(std::format(
+                "VkSplat composition requires complete color/depth output images (output_slot={}, ring_slot={}, color_image={:#x}, color_view={:#x}, depth_image={:#x}, depth_view={:#x}, size={}x{}) ({}:{})",
+                outputSlotDiagnosticName(output_slot),
+                output_ring_slot,
+                vkHandleValue(output.image.image),
+                vkHandleValue(output.image.view),
+                vkHandleValue(output.depth_image.image),
+                vkHandleValue(output.depth_image.view),
+                output.size.x,
+                output.size.y,
+                __FILE__,
+                __LINE__));
+        }
 
         const bool has_pixel_state = uniforms.sort_capacity > 0 &&
                                      buffers_.pixel_state.deviceBuffer.buffer != VK_NULL_HANDLE &&
@@ -4724,6 +4801,26 @@ namespace lfs::vis {
         }
 
         VkDescriptorBufferInfo pixel_info{};
+        const auto valid_buffer_range = [](const _VulkanBuffer& buffer) {
+            return buffer.buffer != VK_NULL_HANDLE && buffer.size > 0 &&
+                   buffer.offset <= buffer.allocSize &&
+                   buffer.size <= buffer.allocSize - buffer.offset;
+        };
+        if (!valid_buffer_range(buffers_.pixel_state.deviceBuffer) ||
+            !valid_buffer_range(buffers_.pixel_depth.deviceBuffer)) {
+            return std::unexpected(std::format(
+                "VkSplat composition buffer ranges must fit their allocations (pixel_buffer={:#x}, pixel_offset={}, pixel_size={}, pixel_allocation={}, depth_buffer={:#x}, depth_offset={}, depth_size={}, depth_allocation={}) ({}:{})",
+                vkHandleValue(buffers_.pixel_state.deviceBuffer.buffer),
+                buffers_.pixel_state.deviceBuffer.offset,
+                buffers_.pixel_state.deviceBuffer.size,
+                buffers_.pixel_state.deviceBuffer.allocSize,
+                vkHandleValue(buffers_.pixel_depth.deviceBuffer.buffer),
+                buffers_.pixel_depth.deviceBuffer.offset,
+                buffers_.pixel_depth.deviceBuffer.size,
+                buffers_.pixel_depth.deviceBuffer.allocSize,
+                __FILE__,
+                __LINE__));
+        }
         pixel_info.buffer = buffers_.pixel_state.deviceBuffer.buffer;
         pixel_info.offset = buffers_.pixel_state.deviceBuffer.offset;
         pixel_info.range = buffers_.pixel_state.deviceBuffer.size;
@@ -4812,10 +4909,27 @@ namespace lfs::vis {
                            0,
                            sizeof(push),
                            &push);
-        vkCmdDispatch(cmd,
-                      _CEIL_DIV(uniforms.image_width, 16),
-                      _CEIL_DIV(uniforms.image_height, 16),
-                      1);
+        const std::uint32_t group_x = _CEIL_DIV(uniforms.image_width, 16);
+        const std::uint32_t group_y = _CEIL_DIV(uniforms.image_height, 16);
+        constexpr std::uint32_t group_z = 1;
+        if (group_x == 0 || group_y == 0 ||
+            group_x > compose_->max_group_count[0] ||
+            group_y > compose_->max_group_count[1] ||
+            group_z > compose_->max_group_count[2]) {
+            return std::unexpected(std::format(
+                "VkSplat compose dispatch groups must be non-zero and within maxComputeWorkGroupCount (groups=[{},{},{}], max=[{},{},{}], image={}x{}, local_size=16x16) ({}:{})",
+                group_x,
+                group_y,
+                group_z,
+                compose_->max_group_count[0],
+                compose_->max_group_count[1],
+                compose_->max_group_count[2],
+                uniforms.image_width,
+                uniforms.image_height,
+                __FILE__,
+                __LINE__));
+        }
+        vkCmdDispatch(cmd, group_x, group_y, group_z);
         context.imageBarriers().transitionImage(cmd,
                                                 output.image.image,
                                                 VK_IMAGE_ASPECT_COLOR_BIT,

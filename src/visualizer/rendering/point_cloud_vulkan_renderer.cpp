@@ -6,6 +6,7 @@
 
 #include "core/logger.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "window/vulkan_result.hpp"
 
 #include <algorithm>
 #include <array>
@@ -798,7 +799,20 @@ namespace lfs::vis {
                 return;
             }
             if (fence != VK_NULL_HANDLE) {
-                vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
+                const VkResult wait_result = vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
+                if (wait_result != VK_SUCCESS) {
+                    LOG_ERROR("Vulkan: {}",
+                              formatVkCheckFailure(
+                                  "vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX)",
+                                  wait_result,
+                                  std::format("Point-cloud renderer destruction fence did not retire (device={:#x}, fence={:#x}, command_pool={:#x}, command_buffer={:#x})",
+                                              vkHandleValue(device),
+                                              vkHandleValue(fence),
+                                              vkHandleValue(command_pool),
+                                              vkHandleValue(command_buffer)),
+                                  __FILE__,
+                                  __LINE__));
+                }
                 vkDestroyFence(device, fence, nullptr);
                 fence = VK_NULL_HANDLE;
             }
@@ -1237,7 +1251,18 @@ namespace lfs::vis {
             }
 
             if (auto u = uploadIfChanged(command_buffer, req); !u) {
-                vkEndCommandBuffer(command_buffer);
+                const VkResult end_result = vkEndCommandBuffer(command_buffer);
+                if (end_result != VK_SUCCESS) {
+                    LOG_ERROR("Vulkan: {}",
+                              formatVkCheckFailure(
+                                  "vkEndCommandBuffer(command_buffer)",
+                                  end_result,
+                                  std::format("Point-cloud upload error cleanup could not end command-buffer recording (command_buffer={:#x}, upload_error={})",
+                                              vkHandleValue(command_buffer),
+                                              u.error()),
+                                  __FILE__,
+                                  __LINE__));
+                }
                 return std::unexpected<std::string>(u.error());
             }
 

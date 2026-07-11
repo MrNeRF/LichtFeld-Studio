@@ -4,6 +4,14 @@
 
 #pragma once
 
+#include "core/logger.hpp"
+
+#include <cstdint>
+#include <format>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <type_traits>
 #include <vulkan/vulkan.h>
 
 namespace lfs::vis {
@@ -52,4 +60,102 @@ namespace lfs::vis {
         }
     }
 
+    template <typename VkHandle>
+    [[nodiscard]] inline std::uint64_t vkHandleValue(const VkHandle handle) noexcept {
+        if constexpr (std::is_pointer_v<VkHandle>) {
+            return reinterpret_cast<std::uint64_t>(handle);
+        } else {
+            return static_cast<std::uint64_t>(handle);
+        }
+    }
+
+    [[nodiscard]] inline const char* vkImageLayoutToString(const VkImageLayout layout) noexcept {
+        switch (layout) {
+        case VK_IMAGE_LAYOUT_UNDEFINED: return "VK_IMAGE_LAYOUT_UNDEFINED";
+        case VK_IMAGE_LAYOUT_GENERAL: return "VK_IMAGE_LAYOUT_GENERAL";
+        case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL: return "VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL";
+        case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL: return "VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL";
+        case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL: return "VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL";
+        case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL: return "VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL";
+        case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL: return "VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL";
+        case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL: return "VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL";
+        case VK_IMAGE_LAYOUT_PREINITIALIZED: return "VK_IMAGE_LAYOUT_PREINITIALIZED";
+        case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR: return "VK_IMAGE_LAYOUT_PRESENT_SRC_KHR";
+        case VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL: return "VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL";
+        case VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL: return "VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL";
+        default: return "VK_IMAGE_LAYOUT_UNKNOWN";
+        }
+    }
+
+    [[nodiscard]] inline std::string formatVkCheckFailure(
+        const std::string_view expression,
+        const VkResult result,
+        const std::string_view context,
+        const std::string_view file,
+        const int line) {
+        if (context.empty()) {
+            return std::format("{} failed: {} ({}) ({}:{})",
+                               expression,
+                               vkResultToString(result),
+                               static_cast<int>(result),
+                               file,
+                               line);
+        }
+        return std::format("{} failed: {} ({}) — {} ({}:{})",
+                           expression,
+                           vkResultToString(result),
+                           static_cast<int>(result),
+                           context,
+                           file,
+                           line);
+    }
+
+    // Namespace-level fallback for visualizer helpers that use bool-return
+    // failure paths but do not own VulkanContext::lastError(). VulkanContext
+    // supplies a member with the same name so unqualified macro lookup routes
+    // failures into its persistent error state instead.
+    [[nodiscard]] inline bool vkCheckFailed(std::string message) {
+        LOG_ERROR("Vulkan: {}", message);
+        return false;
+    }
+
+    [[noreturn]] inline void vkDebugAssertFailed(std::string message) {
+        LOG_ERROR("Vulkan debug invariant: {}", message);
+        throw std::logic_error(std::move(message));
+    }
+
 } // namespace lfs::vis
+
+#define LFS_VK_CHECK(expr)                                             \
+    do {                                                               \
+        const VkResult lfs_vk_check_result_ = (expr);                  \
+        if (lfs_vk_check_result_ != VK_SUCCESS) {                      \
+            return vkCheckFailed(::lfs::vis::formatVkCheckFailure(     \
+                #expr, lfs_vk_check_result_, {}, __FILE__, __LINE__)); \
+        }                                                              \
+    } while (false)
+
+#define LFS_VK_CHECK_MSG(expr, ...)                                                          \
+    do {                                                                                     \
+        const VkResult lfs_vk_check_result_ = (expr);                                        \
+        if (lfs_vk_check_result_ != VK_SUCCESS) {                                            \
+            return vkCheckFailed(::lfs::vis::formatVkCheckFailure(                           \
+                #expr, lfs_vk_check_result_, std::format(__VA_ARGS__), __FILE__, __LINE__)); \
+        }                                                                                    \
+    } while (false)
+
+#ifndef LFS_VK_DEBUG_ASSERT
+#ifndef NDEBUG
+#define LFS_VK_DEBUG_ASSERT(condition, ...)                                       \
+    do {                                                                          \
+        if (!(condition)) {                                                       \
+            ::lfs::vis::vkDebugAssertFailed(std::format("{} ({}:{})",             \
+                                                        std::format(__VA_ARGS__), \
+                                                        __FILE__,                 \
+                                                        __LINE__));               \
+        }                                                                         \
+    } while (false)
+#else
+#define LFS_VK_DEBUG_ASSERT(condition, ...) ((void)0)
+#endif
+#endif

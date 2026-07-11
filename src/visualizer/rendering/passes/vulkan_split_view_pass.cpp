@@ -9,6 +9,7 @@
 #include "rendering/image_layout.hpp"
 #include "window/vulkan_barrier2.hpp"
 #include "window/vulkan_context.hpp"
+#include "window/vulkan_result.hpp"
 
 #include <algorithm>
 #include <array>
@@ -276,11 +277,27 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] FrameDescriptor& descriptorForFrame(const std::size_t frame_slot) {
-            return frame_descriptors[frame_slot % frame_descriptors.size()];
+            if (frame_slot >= frame_descriptors.size()) [[unlikely]] {
+                throw std::logic_error(std::format(
+                    "Split-view frame slot is outside the descriptor ring (frame_slot={}, ring_size={}) ({}:{})",
+                    frame_slot,
+                    frame_descriptors.size(),
+                    __FILE__,
+                    __LINE__));
+            }
+            return frame_descriptors[frame_slot];
         }
 
         [[nodiscard]] const FrameDescriptor& descriptorForFrame(const std::size_t frame_slot) const {
-            return frame_descriptors[frame_slot % frame_descriptors.size()];
+            if (frame_slot >= frame_descriptors.size()) [[unlikely]] {
+                throw std::logic_error(std::format(
+                    "Split-view frame slot is outside the descriptor ring (frame_slot={}, ring_size={}) ({}:{})",
+                    frame_slot,
+                    frame_descriptors.size(),
+                    __FILE__,
+                    __LINE__));
+            }
+            return frame_descriptors[frame_slot];
         }
 
         bool createPipeline(VkFormat color_format, VkFormat depth_format) {
@@ -414,8 +431,27 @@ namespace lfs::vis {
             // Drain any pending transfer submit so we never destroy device memory
             // that the GPU is still reading from.
             if (p.fence != VK_NULL_HANDLE) {
-                vkWaitForFences(device, 1, &p.fence, VK_TRUE,
-                                std::numeric_limits<std::uint64_t>::max());
+                const VkResult wait_result =
+                    vkWaitForFences(device,
+                                    1,
+                                    &p.fence,
+                                    VK_TRUE,
+                                    std::numeric_limits<std::uint64_t>::max());
+                if (wait_result != VK_SUCCESS) {
+                    LOG_ERROR("Vulkan: {}",
+                              formatVkCheckFailure(
+                                  "vkWaitForFences(device, 1, &p.fence, VK_TRUE, UINT64_MAX)",
+                                  wait_result,
+                                  std::format("Split-view panel image retirement fence did not complete (device={:#x}, fence={:#x}, image={:#x}, image_view={:#x}, panel_size={}x{})",
+                                              vkHandleValue(device),
+                                              vkHandleValue(p.fence),
+                                              vkHandleValue(p.image),
+                                              vkHandleValue(p.view),
+                                              p.width,
+                                              p.height),
+                                  __FILE__,
+                                  __LINE__));
+                }
             }
             if (p.view != VK_NULL_HANDLE) {
                 vkDestroyImageView(device, p.view, nullptr);
@@ -795,6 +831,19 @@ namespace lfs::vis {
         void record(VkCommandBuffer cb, const VkRect2D& panel_rect,
                     const VulkanSplitViewParams& params, const std::size_t frame_slot) {
             const auto& descriptor = descriptorForFrame(frame_slot);
+            if (cb == VK_NULL_HANDLE || descriptor.set == VK_NULL_HANDLE) [[unlikely]] {
+                throw std::logic_error(std::format(
+                    "Split-view recording requires a command buffer and per-frame descriptor set (command_buffer={:#x}, frame_slot={}, ring_size={}, descriptor_set={:#x}, left_view={:#x}, right_view={:#x}, descriptor_ready={}) ({}:{})",
+                    vkHandleValue(cb),
+                    frame_slot,
+                    frame_descriptors.size(),
+                    vkHandleValue(descriptor.set),
+                    vkHandleValue(descriptor.left_view),
+                    vkHandleValue(descriptor.right_view),
+                    descriptor.ready,
+                    __FILE__,
+                    __LINE__));
+            }
             if (!ready(frame_slot) || !params.enabled || screen_quad_buffer == VK_NULL_HANDLE) {
                 return;
             }
