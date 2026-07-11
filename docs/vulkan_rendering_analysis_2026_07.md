@@ -908,3 +908,91 @@ Marker: `INDIRECT-CONTRACT-FIX-2026-07-11`.
 - `*AssertHardening*` passed **19/19**. `VkSplatLayouts/*:VkSplatDeviceLayouts/*:VkSplatIndirectLayoutTest.*` passed **15/15**, including the new device-free layout-contract test.
 - The exact 1,000-iteration bicycle headless smoke completed successfully in **12.664 s** at **79.0 iter/s**, saved iteration 1,000 with **69,267 splats**, and emitted no assertion, invariant, validation, or error noise.
 - `clang-format --dry-run --Werror` passed for every changed C++/header/test file after formatting. Slang files retained their project dialect formatting and compiled successfully. `git diff --check` and the forbidden-literal/indirect-offset sweeps passed. No push or PR was created.
+
+## Multi-PLY interaction and load-performance follow-up
+
+Marker: `INTERACTION-HANG-FIX-2026-07-11`.
+
+### Verdict and profile
+
+The non-interactive scene was an async-plugin startup-overlay regression introduced on this
+branch; it was not caused by multi-node rendering or consolidation. The existing sequential
+PLY load cost, however, predated the plugin round and was addressed independently.
+
+The exact mounted workload contains three 744,001,532-byte binary PLYs (709 MiB and
+3,000,000 SH3 Gaussians each). The pre-change cold run loaded them in 1.343 s, 2.929 s, and
+1.041 s, then consolidated at 5.519 s total. Cache-warm pre-change loads were 0.457 s,
+0.458 s, and 0.458 s per file.
+
+Static inspection and phase logging changed the proposed implementation:
+
+- the importer already used `mmap`, `MADV_SEQUENTIAL`/`MADV_WILLNEED`, and
+  `posix_fadvise(POSIX_FADV_WILLNEED)`; stream I/O was not the bottleneck;
+- clean files paid for a full validation scan and then separate extraction scans;
+- six tensor uploads each synchronized the CUDA stream separately;
+- cache-warm extraction was CPU-bound, while cold runs were storage-bound;
+- pinning the roughly 1.5 GiB source/staging working set cost about 700 ms in the quick
+  profile, while the final H2D phase is only about 53-59 ms, so whole-file pinning loses;
+- an experimental two-file page-touch read-ahead made the cold workload worse
+  (6.249 s total, with both workers taking about 5.7 s) by competing with first-file decode
+  on the USB T7. That experiment was removed before the final commit.
+
+### Final mechanism
+
+Commit `e43273316` (`perf(io): accelerate multi-file PLY loading`) implements the measured
+path:
+
+- clean PLY payload validation, SH swizzle, and all attribute extraction are fused into one
+  six-thread-bounded TBB pass;
+- invalid-row files retain the established indexed compaction path. The fused counters are
+  checked against the reference validator before compact extraction, and the full-size
+  staging allocation is released before allocating compact buffers;
+- all six tensors are allocated first, H2D copies are enqueued on the caller's current CUDA
+  stream, every destination records that stream under the tensor allocator contract, and one
+  synchronization retires the batch;
+- `DataLoadingService::loadSplatFiles()` owns the batch state machine. Scene attachment and
+  Vulkan-backed allocation remain serialized on the graphics thread, but a corrupt file is
+  logged/emitted and skipped so later files still load; consolidation uses the successful
+  count, not the requested count;
+- explicit concurrent full-file walkers were deliberately rejected after measurement: they
+  cannot increase bounded-device bandwidth, multiply large staging pressure, and made this
+  exact workload slower. The existing kernel sequential read-ahead plus fused decode already
+  saturates the device.
+
+### Before/after numbers
+
+For the fair warm-plugin/cold-storage rerun, all three files started with zero resident pages.
+The final path loaded them in 1.738 s, 1.702 s, and 1.683 s and completed consolidation in
+5.325 s. Phase times were respectively:
+
+| File | map/header | fused decode | allocate/upload | total |
+|---|---:|---:|---:|---:|
+| `baseline_7k.ply` | 86.4 ms | 1592.6 ms | 59.3 ms | 1738 ms |
+| `gamma15_7k.ply` | 83.6 ms | 1564.5 ms | 54.1 ms | 1702 ms |
+| `sharpen05_7k.ply` | 82.8 ms | 1546.1 ms | 54.6 ms | 1683 ms |
+
+That is a 194 ms / 3.5% cold-batch improvement over 5.519 s; the batch sustained about
+419 MB/s including upload and consolidation and is storage-bound. The CPU-cost target shows
+the larger gain: a cache-warm `splat_64400.ply` load took 142 ms
+(`map/header=0.1 ms`, `decode=90.1 ms`, `allocate/upload=52.6 ms`) versus the prior
+457-458 ms, about 3.2x faster. A simultaneous cold densification import raised the cold
+three-file batch to 6.182 s; that run is reported as contention evidence, not as the fair
+before/after number.
+
+### Runtime and automated gates
+
+- The exact three-file GUI scene accepted orbit/zoom, File-menu, and resize input, including
+  an in-process action sequence completed 586 ms after the batch-complete record. It closed
+  through the application confirmation with status 0 and no error/assertion/validation-error
+  lines.
+- The required single-file `--view splat_64400.ply` run loaded in 0.189 s at the batch level.
+  With the densification `.venv` and dependency stamp absent, camera/menu/resize input began
+  while dependency/import work was still active and completed in 595 ms; the plugin finished
+  5.149 s after the batch record. The preload update stall maximum was 0.103 ms, terminal
+  overlay dismissal worked, and shutdown was status 0 with a clean diagnostic scan.
+- `cmake --build build -j6` passed. The Vulkan focused filter remained 52/55 with only the
+  three documented lifecycle failures; `*AssertHardening*` passed 19/19; async-plugin pytest
+  passed 10/10; and the focused PLY/SH slice passed 10 tests with one expected missing-asset
+  skip. `clang-format --dry-run --Werror` and `git diff --check` passed.
+- No temporary PLY copies were created. The test plugin environment was deleted after each
+  cold run and the original 11 GiB environment and `.deps_installed` stamp were restored.

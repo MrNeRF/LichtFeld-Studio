@@ -722,3 +722,76 @@ and its stamp were restored after the run.
    test -e "$plugin_dir/.venv/.deps_installed"
    test -z "${cold_cache:-}" || rm -rf -- "$cold_cache"
    ```
+
+### Follow-up: terminal overlay interaction regression
+
+Marker: `INTERACTION-HANG-FIX-2026-07-11`.
+
+#### Verdict and root cause
+
+This was **our async-plugin regression**, not a multi-file consolidation, camera-bounds,
+or render-demand bug. On the pre-fix branch, the exact three-file directory rendered all
+9,000,000 Gaussians and continued producing render-loop diagnostics, but the terminal
+`Loaded plugins 1/1` startup overlay remained visible and no camera, menu, or window input
+reached the underlay. A single-PLY launch with plugins enabled reproduced the same terminal
+state, which excludes the multi-node/consolidation path.
+
+Two coupled overlay contracts caused the apparent hang:
+
+- `StartupOverlay::blocksUnderlayInput()` treated `!plugin_load_state_.active` as modal.
+  The coordinator correctly published `active=false` on completion, so its terminal state
+  re-enabled the global input guard.
+- `GuiManager` masked the frame input for a blocking startup overlay and then supplied that
+  same masked input to the overlay. The overlay therefore could not observe the click or key
+  that was supposed to dismiss it. The render loop was alive; all interaction was suppressed.
+
+Commit `149ae66c2` (`fix(viewer): keep completed plugin overlay interactive`) makes the
+coordinator lifecycle explicit at the overlay boundary. Once startup preload has begun,
+the overlay cannot become modal again; monotonic lifecycle assertions enforce that rule.
+`GuiManager` preserves an unmasked input snapshot for the overlay before masking the
+underlay, and `VisualizerImpl` asserts that a started preload can never latch the startup
+input guard. The legacy notification adapter now also publishes `loading`/`completed`
+lifecycle state instead of only mutating the `active` bit.
+
+#### GUI validation
+
+- Warm-plugin/cold-storage exact directory run:
+  `./build/LichtFeld-Studio -v /media/paja/T7/lcc_images/results/sharpen_ab/plys/`.
+  All three files loaded and consolidated, orbit/zoom, File menu, and resize worked, and the
+  app closed through its own top-right close control and confirmation with exit status 0.
+  The log contained no error, critical, assertion, VUID, device-lost, or validation-error
+  line (apart from the benign diagnostics info record).
+- Cold-plugin exact directory run: the original 11 GiB densification `.venv` was renamed
+  intact, leaving both `.venv` and its `.deps_installed` stamp absent. The in-process monitor
+  completed its orbit/zoom/menu/resize sequence within 586 ms of `Splat batch loaded`; the app
+  again closed normally with status 0. Plugin import overlapped the longer cold PLY reads and
+  happened to finish before the third PLY, so this run proves the terminal-state fix but is
+  not used as the in-flight-plugin proof.
+- Definitive cold-plugin single-file run:
+  `./build/LichtFeld-Studio --view splat_64400.ply`. The file was ready in 0.189 s and GUI
+  input began 49 ms later, while the overlay still showed densification dependency progress.
+  Camera motion, zoom, the File menu, and a 1280x720 to 1400x860 resize completed in 595 ms.
+  Densification did not finish until 5.149 s after the batch-complete record
+  (`venv=24 ms`, `deps=812 ms`, `module=4238 ms`, `total=5075 ms`). The maximum measured
+  preload contribution to `VisualizerImpl::update()` was 0.103 ms. After completion, the
+  next camera click both affected the viewport and dismissed the terminal overlay. The app
+  closed through its confirmation dialog with status 0 and a clean diagnostic scan.
+
+The original densification environment and stamp were restored after both cold runs. One
+exploratory automation attempt used `xdotool windowclose`; that destroys the X11 window,
+caused SDL to receive `BadWindow`, and let Xlib call `exit()` during Python object teardown.
+It is not an application close-path result and was discarded. All reported gates used the
+application's own close button and confirmation dialog.
+
+#### Follow-up commits and gates
+
+- `149ae66c2` — `fix(viewer): keep completed plugin overlay interactive`
+- `e43273316` — `perf(io): accelerate multi-file PLY loading`
+- `docs(viewer): record interaction and PLY validation` records this follow-up.
+
+After each source commit, `cmake --build build -j6` passed. The focused Vulkan filter stayed
+at its documented 52/55 baseline with only the same three resize-deferral failures;
+`*AssertHardening*` passed 19/19; the async-plugin pytest file passed 10/10 using the bundled
+Python; and the focused PLY slice passed 10 tests with one expected missing-trained-asset
+skip. The pre-existing CUDA-runtime-unload diagnostics still appear after gtest process
+teardown and do not change the test outcomes.
