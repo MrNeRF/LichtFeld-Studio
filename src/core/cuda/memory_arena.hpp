@@ -27,6 +27,7 @@ namespace lfs::core {
             size_t max_physical = 8ULL << 30;  // 8GB max physical memory
             size_t granularity = 2 << 20;      // 2MB allocation granularity
             size_t alignment = 256;
+            bool enable_vmm = true; // Disable to use and validate the cudaMalloc fallback.
             bool enable_profiling = false;
             size_t log_interval = 1000; // Log every N frames
         };

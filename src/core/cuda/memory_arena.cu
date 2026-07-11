@@ -2,12 +2,14 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/assert.hpp"
 #include "core/logger.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "memory_arena.hpp"
 #include <algorithm>
 #include <cstring>
 #include <cuda_runtime.h>
+#include <format>
 #include <limits>
 #include <stdexcept>
 #include <thread>
@@ -24,12 +26,18 @@ namespace lfs::core {
           creation_time_(std::chrono::steady_clock::now()) {
 
         // Check if VMM is supported
-        int device;
-        cudaGetDevice(&device);
-        if (!is_vmm_supported(device)) {
+        int device = -1;
+        const cudaError_t device_status = cudaGetDevice(&device);
+        LFS_ASSERT_MSG(
+            device_status == cudaSuccess,
+            std::format("Failed to query CUDA device for arena construction: {}",
+                        cudaGetErrorString(device_status)));
+        if (config_.enable_vmm && !is_vmm_supported(device)) {
             LOG_WARN("VMM not supported, falling back to smaller allocation");
             config_.initial_commit = 128 << 20;
             config_.max_physical = 4ULL << 30;
+        } else if (!config_.enable_vmm) {
+            LOG_DEBUG("VMM disabled; using traditional arena allocation");
         }
 
         LOG_DEBUG("Arena config: virtual=%zu GB, initial=%zu MB, max=%zu GB, granularity=%zu MB",
@@ -615,10 +623,22 @@ namespace lfs::core {
 
         for (auto& [device, arena] : device_arenas_) {
             if (arena) {
-                decommit_unused_memory(*arena);
+                const cudaError_t set_device_status = cudaSetDevice(device);
+                LFS_ASSERT_MSG(
+                    set_device_status == cudaSuccess,
+                    std::format("Failed to select CUDA device {} for arena reset: {}",
+                                device, cudaGetErrorString(set_device_status)));
+                const cudaError_t sync_status = cudaDeviceSynchronize();
+                LFS_ASSERT_MSG(
+                    sync_status == cudaSuccess,
+                    std::format("Failed to drain CUDA device {} for arena reset: {}",
+                                device, cudaGetErrorString(sync_status)));
+
+                // No frame can own the arena now. Publish the empty high-water
+                // before deciding which VMM chunks are unused, otherwise the old
+                // frame offset pins every chunk it crossed.
                 arena->offset.store(0, std::memory_order_release);
-                cudaSetDevice(device);
-                cudaDeviceSynchronize();
+                decommit_unused_memory(*arena);
             }
         }
 
@@ -815,7 +835,7 @@ namespace lfs::core {
             // Set device before allocating
             cudaSetDevice(device);
 
-            if (is_vmm_supported(device)) {
+            if (config_.enable_vmm && is_vmm_supported(device)) {
                 // Use VMM path
                 auto& arena = *arena_ptr;
 
@@ -885,7 +905,7 @@ namespace lfs::core {
                     LOG_TRACE("Arena cudaMalloc: %zu MB", initial_size >> 20);
                     lfs::diagnostics::VramProfiler::instance().recordAllocation(
                         arena.fallback_buffer, initial_size,
-                        lfs::diagnostics::VramAllocationMethod::Direct,
+                        lfs::diagnostics::VramAllocationMethod::Arena,
                         "rasterizer.arena.initial");
                     arena.capacity = initial_size;
                     arena.committed_size = initial_size;
@@ -1001,7 +1021,7 @@ namespace lfs::core {
                             lfs::diagnostics::VramProfiler::instance().recordAllocation(
                                 reinterpret_cast<void*>(arena.d_ptr + map_offset),
                                 chunk_size,
-                                lfs::diagnostics::VramAllocationMethod::Direct,
+                                lfs::diagnostics::VramAllocationMethod::Arena,
                                 "rasterizer.arena.vmm_chunk");
                             total_allocated += chunk_size;
                             LOG_TRACE("VMM chunk %d: %zu MB", i, chunk_size >> 20);
@@ -1062,7 +1082,7 @@ namespace lfs::core {
         lfs::diagnostics::VramProfiler::instance().recordAllocation(
             reinterpret_cast<void*>(arena.d_ptr + map_offset),
             commit_size,
-            lfs::diagnostics::VramAllocationMethod::Direct,
+            lfs::diagnostics::VramAllocationMethod::Arena,
             "rasterizer.arena.vmm");
 
         arena.committed_size = map_offset + commit_size;
@@ -1129,6 +1149,7 @@ namespace lfs::core {
             size_t new_size = arena.chunks.size() - chunks_to_remove;
             arena.chunks.erase(arena.chunks.begin() + new_size, arena.chunks.end());
             arena.committed_size -= total_freed;
+            arena.capacity = arena.committed_size;
 
             LOG_DEBUG("Decommitted %zu MB (%zu chunks), arena now at %zu MB",
                       total_freed >> 20, chunks_to_remove, arena.committed_size >> 20);
@@ -1292,7 +1313,9 @@ namespace lfs::core {
                 }
             } else {
                 // Traditional path
-                success = grow_arena(arena, new_committed);
+                // grow_arena owns the fallback growth multiplier. Passing the
+                // already-expanded VMM target here compounded it a second time.
+                success = grow_arena(arena, total_needed);
             }
 
             if (!success) {
@@ -1364,7 +1387,7 @@ namespace lfs::core {
         }
         lfs::diagnostics::VramProfiler::instance().recordAllocation(
             new_buffer, new_capacity,
-            lfs::diagnostics::VramAllocationMethod::Direct,
+            lfs::diagnostics::VramAllocationMethod::Arena,
             "rasterizer.arena.grown");
 
         LOG_TRACE("Arena realloc: %zu MB", new_capacity >> 20);
