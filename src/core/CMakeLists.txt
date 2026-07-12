@@ -48,6 +48,7 @@ set(CORE_SOURCES
         abi.cpp
         crash_handler.cpp
         cuda_error.cpp
+        memory_pressure.cpp
         operator_callbacks.cpp
         animatable_property.cpp
         argument_parser.cpp
