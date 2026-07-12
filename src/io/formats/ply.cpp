@@ -84,6 +84,7 @@ namespace lfs::io {
         constexpr size_t PLY_MIN_SIZE = 10;
         constexpr size_t FILE_SIZE_THRESHOLD_MB = 50;
         constexpr size_t VALIDATION_CANCEL_INTERVAL = 65536;
+        constexpr size_t MAX_HEADER_BYTES = 1024 * 1024;
         constexpr float MIN_ROTATION_NORM_SQUARED = 1.0e-12f;
         constexpr int MAX_DECODE_THREADS = 6;
 
@@ -148,6 +149,45 @@ namespace lfs::io {
 
             value = parsed;
             return true;
+        }
+
+        template <typename Visitor>
+        [[nodiscard]] bool visit_bounded_ply_header(
+            const std::filesystem::path& filepath,
+            Visitor&& visitor) {
+            std::ifstream file;
+            if (!lfs::core::open_file_for_read(filepath, std::ios::binary, file))
+                return false;
+
+            std::vector<char> buffer(ply_constants::MAX_HEADER_BYTES + 1);
+            file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+            const size_t bytes_read = static_cast<size_t>(file.gcount());
+            const std::string_view contents(
+                buffer.data(), std::min(bytes_read, ply_constants::MAX_HEADER_BYTES));
+
+            size_t offset = 0;
+            bool first_line = true;
+            while (offset < contents.size()) {
+                const size_t newline = contents.find('\n', offset);
+                if (newline == std::string_view::npos)
+                    return false;
+
+                std::string_view line = contents.substr(offset, newline - offset);
+                if (!line.empty() && line.back() == '\r')
+                    line.remove_suffix(1);
+                offset = newline + 1;
+
+                if (first_line) {
+                    first_line = false;
+                    if (line != "ply")
+                        return false;
+                    continue;
+                }
+                if (line == "end_header")
+                    return true;
+                visitor(line);
+            }
+            return false;
         }
 
         [[nodiscard]] bool parse_property_index(const std::string_view name,
@@ -441,7 +481,8 @@ namespace lfs::io {
         }
 
         const char* ptr = data + (has_crlf ? 5 : 4);
-        const char* end = data + file_size;
+        const size_t header_search_bytes = std::min(file_size, ply_constants::MAX_HEADER_BYTES);
+        const char* end = data + header_search_bytes;
 
         FastPropertyLayout layout = {};
         bool is_binary = false;
@@ -496,24 +537,37 @@ namespace lfs::io {
                                            line, lines_parsed));
                 is_binary = true;
                 has_format = true;
-            } else if (line_len >= 8 && std::strncmp(line_start, "element ", 8) == 0) {
+            } else if (line.starts_with("element ")) {
                 LFS_ASSERT_MSG(has_format,
                                std::format("PLY format line must precede element declarations "
                                            "(format_seen=false, element_line={}, text='{}')",
                                            lines_parsed, line));
-                if (line_len >= 15 && std::strncmp(line_start, "element vertex ", 15) == 0) {
+                const std::string_view declaration = trim_ascii_whitespace(line.substr(8));
+                const size_t name_end = declaration.find_first_of(" \t\r");
+                if (name_end == std::string_view::npos)
+                    throw std::runtime_error("Malformed PLY element declaration");
+                const std::string_view element_name = declaration.substr(0, name_end);
+                size_t element_count = 0;
+                if (!is_valid_ply_property_name_token(element_name) ||
+                    !parse_size_token(declaration.substr(name_end), element_count)) {
+                    throw std::runtime_error("Malformed PLY element declaration");
+                }
+
+                if (element_name == ply_constants::VERTEX_ELEMENT) {
                     LFS_ASSERT_MSG(!has_vertex_element,
                                    std::format("PLY header must not declare the vertex element more than once "
                                                "(duplicate_line={}, text='{}')",
                                                lines_parsed, line));
-                    const std::string_view count_token(line_start + 15, line_len - 15);
-                    if (!parse_size_token(count_token, layout.vertex_count)) {
-                        throw std::runtime_error("Invalid PLY vertex count");
-                    }
+                    layout.vertex_count = element_count;
                     layout.vertex_stride = 0;
                     has_vertex_element = true;
                     parsing_vertex = true;
                 } else {
+                    if (!has_vertex_element && element_count != 0) {
+                        throw std::runtime_error(std::format(
+                            "PLY element '{}' with {} rows appears before vertex data",
+                            element_name, element_count));
+                    }
                     parsing_vertex = false;
                 }
             } else if (line_len >= 9 && std::strncmp(line_start, "property ", 9) == 0 && parsing_vertex) {
@@ -634,6 +688,10 @@ namespace lfs::io {
             throw std::runtime_error(error_msg);
         }
 
+        if (file_size > ply_constants::MAX_HEADER_BYTES) {
+            LOG_ERROR("PLY header exceeds the {} byte budget", ply_constants::MAX_HEADER_BYTES);
+            throw std::runtime_error("PLY header exceeds the 1 MiB byte budget");
+        }
         LOG_ERROR("No end_header found in PLY file");
         throw std::runtime_error("No end_header found in PLY file");
     }
@@ -2877,47 +2935,35 @@ namespace lfs::io {
         if (!std::filesystem::exists(filepath))
             return false;
 
-        std::ifstream file;
-        if (!lfs::core::open_file_for_read(filepath, std::ios::binary, file))
-            return false;
-
-        std::string line;
-        while (std::getline(file, line)) {
-            if (line.find("end_header") != std::string::npos)
-                break;
-            if (line.compare(0, 13, "element face ") == 0) {
-                const int count = std::atoi(line.c_str() + 13);
-                if (count > 0)
-                    return true;
-            }
-        }
-        return false;
+        bool has_faces = false;
+        const bool complete_header = visit_bounded_ply_header(filepath, [&](const std::string_view line) {
+            if (!line.starts_with("element face "))
+                return;
+            size_t count = 0;
+            if (parse_size_token(line.substr(13), count) && count > 0)
+                has_faces = true;
+        });
+        return complete_header && has_faces;
     }
 
     bool is_gaussian_splat_ply(const std::filesystem::path& filepath) {
         if (!std::filesystem::exists(filepath))
             return false;
 
-        std::ifstream file;
-        if (!lfs::core::open_file_for_read(filepath, std::ios::binary, file))
-            return false;
-
-        std::string line;
         bool has_opacity = false, has_scale = false, has_rotation = false;
-
-        while (std::getline(file, line)) {
-            if (line.find("end_header") != std::string::npos)
-                break;
-            if (line.find("property") != std::string::npos) {
-                if (line.find("opacity") != std::string::npos)
-                    has_opacity = true;
-                if (line.find("scale_0") != std::string::npos)
-                    has_scale = true;
-                if (line.find("rot_0") != std::string::npos)
-                    has_rotation = true;
-            }
-        }
-        return has_opacity && has_scale && has_rotation;
+        const bool complete_header = visit_bounded_ply_header(filepath, [&](const std::string_view line) {
+            const std::string_view property = trim_ascii_whitespace(line);
+            if (!property.starts_with("property "))
+                return;
+            const size_t name_start = property.find_last_of(" \t");
+            if (name_start == std::string_view::npos)
+                return;
+            const std::string_view name = property.substr(name_start + 1);
+            has_opacity |= name == ply_constants::OPACITY;
+            has_scale |= name == "scale_0";
+            has_rotation |= name == "rot_0";
+        });
+        return complete_header && has_opacity && has_scale && has_rotation;
     }
 
     std::expected<lfs::core::PointCloud, std::string> load_ply_point_cloud(const std::filesystem::path& filepath,
@@ -2933,6 +2979,9 @@ namespace lfs::io {
         }
 
         try {
+            if (!visit_bounded_ply_header(filepath, [](const std::string_view) {}))
+                return std::unexpected("PLY header is missing, malformed, or exceeds the 1 MiB byte budget");
+
             std::ifstream file;
             if (!lfs::core::open_file_for_read(filepath, std::ios::binary, file)) {
                 return std::unexpected(std::format("Cannot open: {}", lfs::core::path_to_utf8(filepath)));

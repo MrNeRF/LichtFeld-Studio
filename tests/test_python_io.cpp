@@ -787,6 +787,57 @@ TEST_F(PythonIOTest, PlyLoadRejectsPartialRotationSchema) {
               std::string::npos);
 }
 
+TEST_F(PythonIOTest, PlyLoadRejectsNonemptyElementsBeforeVertices) {
+    const fs::path input_path = temp_dir / "pre_vertex_element.ply";
+    std::string body;
+    append_float(body, 123.0f);
+    append_floats(body, std::array<float, 11>{
+                            1.0f, 2.0f, 3.0f,
+                            -2.0f, -2.0f, -2.0f,
+                            0.25f,
+                            1.0f, 0.0f, 0.0f, 0.0f});
+    write_binary_test_ply(
+        input_path,
+        "ply\n"
+        "format binary_little_endian 1.0\n"
+        "element metadata 1\n"
+        "property float value\n"
+        "element vertex 1\n"
+        "property float x\n"
+        "property float y\n"
+        "property float z\n"
+        "property float scale_0\n"
+        "property float scale_1\n"
+        "property float scale_2\n"
+        "property float opacity\n"
+        "property float rot_0\n"
+        "property float rot_1\n"
+        "property float rot_2\n"
+        "property float rot_3\n"
+        "end_header\n",
+        body);
+
+    const auto result = load_ply(input_path);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_NE(result.error().find("before vertex"), std::string::npos);
+}
+
+TEST_F(PythonIOTest, PlyClassifiersRequireBoundedCompleteHeaders) {
+    const fs::path input_path = temp_dir / "unterminated_header.ply";
+    std::string contents =
+        "ply\n"
+        "format ascii 1.0\n"
+        "element face 1\n"
+        "property float opacity\n"
+        "property float scale_0\n"
+        "property float rot_0\n";
+    contents.append(2 * 1024 * 1024, 'x');
+    write_text_file(input_path, contents);
+
+    EXPECT_FALSE(ply_has_faces(input_path));
+    EXPECT_FALSE(is_gaussian_splat_ply(input_path));
+}
+
 TEST_F(PythonIOTest, PlyLoadAccountsForNonFloatVertexProperties) {
     const fs::path input_path = temp_dir / "extra_uchar_property.ply";
     write_gaussian_ply_with_extra_uchar_property(input_path);
@@ -1371,7 +1422,7 @@ TEST_F(PythonIOTest, PlySaveRejectsEmptyExtraAttributesWhenDeletedMaskPresent) {
 
     const auto result = save_ply(splat, options);
     ASSERT_FALSE(result.has_value());
-    EXPECT_NE(result.error().format().find("must not be empty"), std::string::npos);
+    EXPECT_NE(result.error().format().find("must be valid"), std::string::npos);
 }
 
 TEST_F(PythonIOTest, PipelinedLoaderStatsRemainResponsiveDuringCompletions) {
