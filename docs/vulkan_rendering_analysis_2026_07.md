@@ -1231,3 +1231,72 @@ After every source commit, `cmake --build build -j6` passed, the mandated cross-
 passed 292/292, and `test_async_plugin_loading.py` passed 10/10 under the build's Python 3.12.
 The final headless/GUI evidence is reported with the final branch handoff after rebuilding the
 version-stamped binary from the documentation commit.
+
+## Visual validation fixes
+
+Validation marker: `VISUAL-VALIDATION-FIXES-2026-07-13`.
+
+### Post-training GT comparison retained a retired CUDA stream
+
+The retaining owner was the `SizeBucketedPool` free list, not
+`GTComparisonImageCache`. The failing GT load allocated its decode tensor on the live render
+stream, then reused a cached block whose `home_stream` was the retired
+`PipelinedImageLoader` decode stream. `CudaMemoryPool::deallocate` removed allocation metadata
+before routing the block into its suballocator, while `release_stream` independently swept the
+map and retagged existing cached blocks. A deallocation in that transit window could therefore
+insert a block carrying the loader stream after the retag pass; the next GT decode attempted to
+bridge that dead stream and reported `cudaErrorContextIsDestroyed`.
+
+Stream retirement and deallocation routing now share a reader/writer lifecycle gate.
+Deallocations hold shared ownership from allocation-map removal through final suballocator
+routing. Retirement takes exclusive ownership before its final stream synchronization and keeps
+it through live-allocation rehoming plus slab, bucket, and pinned-cache migration
+(`memory_pool.hpp:186-209`, `232-255`). This guarantees that a block is visible either in the
+allocation map or in its destination allocator during retirement, and that no stream work can
+be enqueued between the final synchronization and retagging.
+
+The exact 800-step GUI repro completed, dismissed its completion modal, enabled split mode at
+position `0.5`, and rendered distinct GT/splat halves. The requested MCP viewport proof is
+`.codex_tmp/claude-vulkan/visual-validation/fix-gt-after-training.png`; the clearer full-window
+proof with the divider is
+`.codex_tmp/claude-vulkan/visual-validation/fixes-2026-07-13/fix-gt-after-training-window.png`.
+The complete session log is `fixes-2026-07-13/gui-training-gt.log` and contains zero error-level,
+CUDA, validation, or frame-lifecycle lines.
+
+### Full-window capture ended the Vulkan frame twice
+
+`render.capture_window` queued synchronous swapchain readback during
+`GuiManager::render`. `VulkanContext::captureActiveFrameRgba` submitted the active frame through
+`endFrame` so it could wait for readback, but `GuiManager` unconditionally called `endFrame`
+again after the render-work queue returned. The observed `active_frame_index`/`frame_index`
+mismatch was the state after the first legitimate submission, not a failed `beginFrame`.
+
+The consuming contract is now explicit in the API name
+`captureAndEndActiveFrameRgba` (`vulkan_context.hpp:185-188`,
+`vulkan_context.cpp:1365-1501`, `mcp_gui_tools.cpp:195-202`). After queued render work,
+`GuiManager` presents only if the frame remains active (`gui_manager.cpp:6554-6564`). The
+`endFrame` invariant and its diagnostic are unchanged; the known capture path no longer calls
+it twice.
+
+The single-PLY session loaded `splat_64400.ply`, changed camera orbit, resized through two window
+sizes, performed MCP viewport and full-window capture, and closed through the visible window
+control. Proof is
+`.codex_tmp/claude-vulkan/visual-validation/fixes-2026-07-13/fix-frame-lifecycle-window.png`;
+`gui-single-ply.log` contains zero `endFrame` or other error lines.
+
+### Gates
+
+- `cmake --build build -j6`: passed.
+- Focused `TensorMultiStreamTest.*`: 17/17 passed.
+- Mandated cross-round gtest filter: 292/292 passed with zero new failures.
+- `test_async_plugin_loading.py`: 10/10 passed.
+- 1k headless bicycle smoke: exit 0, iteration 1000, one final PLY, one checkpoint, zero error
+  noise.
+- GUI `--view splat_64400.ply`: load/orbit/resize/capture/close passed with zero error lines.
+- GUI `-v /media/paja/T7/lcc_images/results/sharpen_ab/plys/`: three 3M-Gaussian models loaded,
+  captured, and closed with zero error lines.
+- Exact 800-step GUI training/GT split repro: GT rendered and the session closed with zero error
+  lines.
+
+No tests were added or changed; the existing focused, cross-round, Python, headless, and GUI
+coverage exercised both fixes directly.
