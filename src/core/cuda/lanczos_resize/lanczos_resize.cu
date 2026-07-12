@@ -8,7 +8,6 @@
 #include "core/tensor/internal/cuda_memory_guard.hpp"
 #include "lanczos_resize.hpp"
 
-#include <cassert>
 #include <cmath>
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
@@ -531,7 +530,6 @@ namespace lfs::core {
         const int channels = static_cast<int>(input.size(0));
         const int input_h = static_cast<int>(input.size(1));
         const int input_w = static_cast<int>(input.size(2));
-        assert(channels == NUM_CHANNELS && "lanczos_resize_float_chw expects 3 channels");
         if (channels != NUM_CHANNELS) {
             LOG_ERROR("lanczos_resize_float_chw: Only 3-channel images supported, got {}", channels);
             return Tensor();
