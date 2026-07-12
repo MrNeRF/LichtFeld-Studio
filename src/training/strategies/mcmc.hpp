@@ -73,6 +73,7 @@ namespace lfs::training {
                                            ParamType param_type);
         lfs::core::Tensor get_sampling_weights() const;
         void ensure_densification_info_shape();
+        void ensure_ratio_workspace_size(size_t required);
 
         // Member variables
         std::unique_ptr<AdamOptimizer> _optimizer;
@@ -85,7 +86,7 @@ namespace lfs::training {
         // State variables
         int _n_max = 0;                  // max relocation ratio
         lfs::core::Tensor _noise_buffer; // Reusable buffer for noise injection
-        lfs::core::Tensor _ones_int32;   // [max_cap] cached ones for ratio counting
+        lfs::core::Tensor _ones_int32;   // Cached ones for ratio counting; grows with the live model.
         lfs::core::Tensor _error_score_max;
         int _error_score_windows = 0;
     };

@@ -171,6 +171,13 @@ namespace lfs::training {
         return zero_frozen_scores(*_splat_data, _error_score_max.clamp_min(1e-12f));
     }
 
+    void MCMC::ensure_ratio_workspace_size(const size_t required) {
+        if (!_ones_int32.is_valid() || _ones_int32.numel() < required) {
+            _ones_int32 = lfs::core::Tensor::ones(
+                {required}, _splat_data->means().device(), lfs::core::DataType::Int32);
+        }
+    }
+
     int MCMC::relocate_gs() {
         LOG_TIMER("MCMC::relocate_gs");
         LFS_TRACE("kernel.mcmc.relocate");
@@ -254,6 +261,7 @@ namespace lfs::training {
         Tensor ratios;
         {
             LOG_TIMER("relocate_count_occurrences");
+            ensure_ratio_workspace_size(opacities.numel());
             auto ones_N = _ones_int32.slice(0, 0, opacities.numel()).clone();
             ratios = ones_N.index_add_(0, sampled_idxs, _ones_int32.slice(0, 0, sampled_idxs.numel()));
             ratios = ratios.index_select(0, sampled_idxs).contiguous();
@@ -440,6 +448,7 @@ namespace lfs::training {
         Tensor ratios;
         {
             LOG_TIMER("add_new_count_occurrences");
+            ensure_ratio_workspace_size(opacities.numel());
             ratios = _ones_int32.slice(0, 0, opacities.numel()).clone();
             ratios = ratios.index_add_(0, sampled_idxs, _ones_int32.slice(0, 0, sampled_idxs.numel()));
             ratios = ratios.index_select(0, sampled_idxs);
@@ -548,10 +557,7 @@ namespace lfs::training {
         auto sampled_opacities = opacities.index_select(0, sampled_idxs_i64);
         auto sampled_scales = _splat_data->get_scaling().index_select(0, sampled_idxs_i64);
 
-        // Ensure cached ones buffer covers current model size
-        if (!_ones_int32.is_valid() || _ones_int32.numel() < required) {
-            _ones_int32 = Tensor::ones({required}, Device::CUDA, DataType::Int32);
-        }
+        ensure_ratio_workspace_size(required);
 
         // Count occurrences in int32 and keep +1 baseline.
         auto ratios = _ones_int32.slice(0, 0, required).clone();
