@@ -1311,6 +1311,10 @@ namespace lfs::training {
                 if (aux_config.load_depths && cam->has_depth()) {
                     bytes_per_pixel = saturatingSizeAdd(bytes_per_pixel, sizeof(float));
                 }
+                if (aux_config.load_normals && cam->has_normal()) {
+                    // Cached normal decode retains float HWC input beside float CHW output.
+                    bytes_per_pixel = saturatingSizeAdd(bytes_per_pixel, size_t{6} * sizeof(float));
+                }
 
                 const size_t pixels = saturatingSizeMultiply(width, height);
                 estimate.max_slot_bytes = std::max(

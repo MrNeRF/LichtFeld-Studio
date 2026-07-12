@@ -261,6 +261,8 @@ namespace lfs::core {
                 const int input_h, const int input_w,
                 const int output_h, const int output_w,
                 const int kernel_size,
+                const uint32_t coefficient_stride_x,
+                const uint32_t coefficient_stride_y,
                 const float* __restrict__ pre_coef_x,
                 const float* __restrict__ pre_coef_y,
                 const float* __restrict__ input, // [C, H, W] float32
@@ -289,19 +291,16 @@ namespace lfs::core {
                 min((int)(center.x + kernel_size * scale_w + 0.5f), input_w),
                 min((int)(center.y + kernel_size * scale_h + 0.5f), input_h)};
 
-            const uint32_t coef_offset_step_y = (uint32_t)(kernel_size * scale_h * 2 + 1 + 0.5f);
-            const uint32_t coef_offset_step_x = (uint32_t)(kernel_size * scale_w * 2 + 1 + 0.5f);
-
             const int input_plane = input_h * input_w;
             const int output_plane = output_h * output_w;
 
             float accumulator[CHANNELS] = {0.0f};
 
             for (int y = LU.y; y < RD.y; y++) {
-                const float kernel_value_y = pre_coef_y[pix.y * coef_offset_step_y + y - LU.y];
+                const float kernel_value_y = pre_coef_y[pix.y * coefficient_stride_y + y - LU.y];
                 for (int x = LU.x; x < RD.x; x++) {
                     const uint32_t input_pix_id = input_w * y + x;
-                    const float kernel_value_x = pre_coef_x[pix.x * coef_offset_step_x + x - LU.x];
+                    const float kernel_value_x = pre_coef_x[pix.x * coefficient_stride_x + x - LU.x];
                     const float kernel_value = kernel_value_y * kernel_value_x;
 
                     for (int ch = 0; ch < CHANNELS; ch++) {
@@ -518,6 +517,16 @@ namespace lfs::core {
             LOG_ERROR("lanczos_resize_float_chw: Input must be 3D tensor [C, H, W]");
             return Tensor();
         }
+        if (output_h <= 0 || output_w <= 0 || kernel_size <= 0) {
+            LOG_ERROR("lanczos_resize_float_chw: Output dimensions and kernel size must be positive");
+            return {};
+        }
+        if (input.size(1) == 0 || input.size(2) == 0 ||
+            input.size(1) > static_cast<size_t>(std::numeric_limits<int>::max()) ||
+            input.size(2) > static_cast<size_t>(std::numeric_limits<int>::max())) {
+            LOG_ERROR("lanczos_resize_float_chw: Input dimensions must be non-zero and fit in int");
+            return {};
+        }
 
         const int channels = static_cast<int>(input.size(0));
         const int input_h = static_cast<int>(input.size(1));
@@ -534,32 +543,38 @@ namespace lfs::core {
                          static_cast<size_t>(output_w)}),
             Device::CUDA, DataType::Float32);
 
-        cudaMemsetAsync(output.data_ptr(), 0, output.bytes(), cuda_stream);
+        LFS_CUDA_CHECK_MSG(
+            cudaMemsetAsync(output.data_ptr(), 0, output.bytes(), cuda_stream),
+            "Lanczos CHW output bytes={}", output.bytes());
 
-        const uint32_t offset_step_x = (uint32_t)(kernel_size * (1.0 * input_w / output_w) * 2 + 1 + 0.5f);
-        const uint32_t offset_step_y = (uint32_t)(kernel_size * (1.0 * input_h / output_h) * 2 + 1 + 0.5f);
+        const auto layout_x = coefficient_layout(input_w, output_w, kernel_size);
+        const auto layout_y = coefficient_layout(input_h, output_h, kernel_size);
+        if (!layout_x || !layout_y) {
+            LOG_ERROR("lanczos_resize_float_chw: coefficient layout overflow");
+            return {};
+        }
 
-        float* coef_x;
-        float* coef_y;
-        cudaMalloc(&coef_x, sizeof(float) * output_w * offset_step_x);
-        cudaMalloc(&coef_y, sizeof(float) * output_h * offset_step_y);
+        auto coef_x = allocate_coefficients(layout_x->count, "x");
+        auto coef_y = allocate_coefficients(layout_y->count, "y");
 
         const int threads = BLOCK_X * BLOCK_Y;
         detail::PreComputeCoef<<<(output_w + threads - 1) / threads, threads, 0, cuda_stream>>>(
-            input_w, output_w, kernel_size, offset_step_x, coef_x);
+            input_w, output_w, kernel_size, layout_x->stride, coef_x.get());
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "Lanczos CHW x coefficient kernel launch");
         detail::PreComputeCoef<<<(output_h + threads - 1) / threads, threads, 0, cuda_stream>>>(
-            input_h, output_h, kernel_size, offset_step_y, coef_y);
+            input_h, output_h, kernel_size, layout_y->stride, coef_y.get());
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "Lanczos CHW y coefficient kernel launch");
 
         const dim3 tile_grid((output_w + BLOCK_X - 1) / BLOCK_X, (output_h + BLOCK_Y - 1) / BLOCK_Y);
         const dim3 block(BLOCK_X, BLOCK_Y, 1);
 
         detail::LanczosResamplePlanarCUDA<NUM_CHANNELS><<<tile_grid, block, 0, cuda_stream>>>(
             input_h, input_w, output_h, output_w, kernel_size,
-            coef_x, coef_y,
+            layout_x->stride, layout_y->stride,
+            coef_x.get(), coef_y.get(),
             input.ptr<float>(), output.ptr<float>());
-
-        cudaFree(coef_x);
-        cudaFree(coef_y);
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "Lanczos CHW resample kernel launch");
+        LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(cuda_stream), "Lanczos CHW resample completion");
 
         return output;
     }

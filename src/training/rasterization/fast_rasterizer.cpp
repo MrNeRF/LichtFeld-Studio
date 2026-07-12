@@ -340,9 +340,13 @@ namespace lfs::training {
             last_width = width;
             last_height = height;
         }
-        if (render_normal && (!normal.is_valid() ||
-                              normal.shape() != core::TensorShape({3, static_cast<size_t>(height), static_cast<size_t>(width)}))) {
+        if (render_normal &&
+            (!normal.is_valid() ||
+             normal.shape() != core::TensorShape({3, static_cast<size_t>(height), static_cast<size_t>(width)}) ||
+             normal.stream() != raster_stream)) {
             normal = core::Tensor::empty({3, static_cast<size_t>(height), static_cast<size_t>(width)});
+            if (normal.stream() != raster_stream)
+                normal.set_stream(raster_stream);
         }
 
         // Call forward_raw with raw pointers (no PyTorch wrappers)
