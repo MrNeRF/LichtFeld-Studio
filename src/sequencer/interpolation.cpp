@@ -3,6 +3,7 @@
 
 #include "interpolation.hpp"
 #include <algorithm>
+#include <stdexcept>
 
 namespace lfs::sequencer {
 
@@ -95,9 +96,15 @@ namespace lfs::sequencer {
         if (keyframes.size() < 2) {
             return keyframes.empty() ? std::vector<glm::vec3>{} : std::vector<glm::vec3>{keyframes[0].position};
         }
+        if (samples_per_segment <= 0)
+            throw std::invalid_argument("Path samples per segment must be positive");
+
+        const size_t segments = keyframes.size() - 1;
+        if (segments > (MAX_GENERATED_PATH_SAMPLES - 1) / static_cast<size_t>(samples_per_segment))
+            throw std::length_error("Generated path exceeds the sample budget");
 
         std::vector<glm::vec3> points;
-        points.reserve((keyframes.size() - 1) * static_cast<size_t>(samples_per_segment) + 1);
+        points.reserve(segments * static_cast<size_t>(samples_per_segment) + 1);
 
         // Generate points per-segment to avoid redundant segment lookups
         for (size_t seg = 0; seg < keyframes.size() - 1; ++seg) {
