@@ -1793,7 +1793,7 @@ namespace lfs::vis {
                             const bool cache_hit =
                                 gt_comparison_image_cache_.image &&
                                 gt_comparison_image_cache_.camera_uid == camera->uid() &&
-                                gt_comparison_image_cache_.render_width == preview_max_dimension &&
+                                gt_comparison_image_cache_.image_size == preview_gt_size &&
                                 gt_comparison_image_cache_.undistort_requested == undistort_requested &&
                                 gt_comparison_image_cache_.image_path == camera->image_path();
                             if (cache_hit) {
@@ -1825,7 +1825,6 @@ namespace lfs::vis {
                                         gt_image = resizeChwDisplayTensor(gt_image, preview_gt_size);
                                         gt_comparison_image_cache_ = {
                                             .camera_uid = camera->uid(),
-                                            .render_width = preview_max_dimension,
                                             .undistort_requested = undistort_requested,
                                             .image_path = camera->image_path(),
                                             .image = gt_image,

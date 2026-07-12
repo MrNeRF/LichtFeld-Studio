@@ -487,9 +487,7 @@ namespace lfs::io {
     PipelinedImageLoader::CacheStats PipelinedImageLoader::get_stats() const {
         CacheStats s;
         {
-            // Completion publishes a ready image while holding pending_pairs_mutex_
-            // and then updates these counters. Never hold stats_mutex_ while taking
-            // pending_pairs_mutex_ or a stats snapshot can deadlock that path.
+            // Snapshot each independently protected domain without nesting locks.
             std::lock_guard<std::mutex> stats_lock(stats_mutex_);
             s = stats_;
         }

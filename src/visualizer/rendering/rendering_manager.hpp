@@ -717,7 +717,6 @@ namespace lfs::vis {
         glm::ivec2 vulkan_gt_comparison_content_size_{0, 0};
         struct GTComparisonImageCache {
             int camera_uid = -1;
-            int render_width = 0;
             bool undistort_requested = false;
             std::filesystem::path image_path;
             std::shared_ptr<lfs::core::Tensor> image;
