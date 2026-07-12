@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstddef>
 #include <future>
 #include <glm/gtc/matrix_transform.hpp>
@@ -20,6 +21,7 @@
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
 #include "python/python_runtime.hpp"
+#include "training/components/bilateral_grid.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
@@ -80,6 +82,40 @@ namespace lfs::python {
         EXPECT_TRUE(pause_succeeded);
         EXPECT_TRUE(stop_future.get());
         EXPECT_EQ(state_machine.getState(), vis::TrainingState::Stopping);
+    }
+
+    TEST(BilateralGridValidationTest, RejectsInvalidConstructorAndImageContracts) {
+        EXPECT_THROW((lfs::training::BilateralGrid(0, 16, 16, 8, 100)), std::invalid_argument);
+        EXPECT_THROW((lfs::training::BilateralGrid(1, -1, 16, 8, 100)), std::invalid_argument);
+        EXPECT_THROW((lfs::training::BilateralGrid(1, 2, 2, 2, 100,
+                                                   {.warmup_steps = -1})),
+                     std::invalid_argument);
+        EXPECT_THROW((lfs::training::BilateralGrid(1, 50'000, 50'000, 1, 100)), std::length_error);
+
+        lfs::training::BilateralGrid grid(1, 2, 2, 2, 100);
+        auto cpu_image = core::Tensor::ones({3, 2, 2}, core::Device::CPU);
+        auto wrong_channels = core::Tensor::ones({2, 2, 2}, core::Device::CUDA);
+        auto image = core::Tensor::ones({3, 2, 2}, core::Device::CUDA);
+        auto wrong_grad = core::Tensor::ones({3, 2, 1}, core::Device::CUDA);
+
+        EXPECT_THROW((void)grid.apply(cpu_image, 0), std::invalid_argument);
+        EXPECT_THROW((void)grid.apply(wrong_channels, 0), std::invalid_argument);
+        EXPECT_THROW((void)grid.backward(image, wrong_grad, 0), std::invalid_argument);
+    }
+
+    TEST(BilateralGridValidationTest, SingletonImageAxesRemainFinite) {
+        lfs::training::BilateralGrid grid(1, 2, 2, 2, 100);
+        auto image = core::Tensor::ones({3, 1, 1}, core::Device::CUDA);
+        auto grad = core::Tensor::ones({3, 1, 1}, core::Device::CUDA);
+
+        const auto output = grid.apply(image, 0).cpu().to_vector();
+        const auto grad_input = grid.backward(image, grad, 0).cpu().to_vector();
+        ASSERT_EQ(output.size(), 3u);
+        ASSERT_EQ(grad_input.size(), 3u);
+        for (const float value : output)
+            EXPECT_TRUE(std::isfinite(value));
+        for (const float value : grad_input)
+            EXPECT_TRUE(std::isfinite(value));
     }
 
     TEST(TrainerConstructionTest, RejectsInvalidSceneBeforeAllocatingCudaResources) {
