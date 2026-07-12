@@ -3653,7 +3653,11 @@ namespace lfs::training {
 
         if (save_requested_.exchange(false)) {
             LOG_INFO("Saving checkpoint and PLY at iteration {}...", iter);
-            save_ply(params_.dataset.output_path, "", iter, /*join=*/false, /*save_checkpoint=*/false);
+            if (auto ply_result = save_ply(
+                    params_.dataset.output_path, "", iter, /*join=*/false, /*save_checkpoint=*/false);
+                !ply_result) {
+                LOG_ERROR("Failed to save PLY: {}", ply_result.error());
+            }
             auto result = save_checkpoint(iter);
             if (result) {
                 const auto checkpoint_path = lfs::training::checkpoint_output_path(params_.dataset.output_path);
@@ -3668,9 +3672,6 @@ namespace lfs::training {
         // Handle stop request - this permanently stops training
         if (stop_requested_.load()) {
             LOG_INFO("Stopping training permanently at iteration {}...", iter);
-            LOG_DEBUG("Saving final model...");
-            save_ply(params_.dataset.output_path, params_.dataset.output_name, iter, /*join=*/true);
-            is_running_ = false;
         }
     }
 
@@ -5475,7 +5476,11 @@ namespace lfs::training {
                                                        iter == get_sparsity_boundary_iteration();
                 if (save_regular_phase_output) {
                     LOG_INFO("Saving regular-phase checkpoint and PLY at iteration {} before sparsification", iter);
-                    save_ply(params_.dataset.output_path, "", iter, /*join=*/false, /*save_checkpoint=*/false);
+                    if (auto ply_result = save_ply(
+                            params_.dataset.output_path, "", iter, /*join=*/false, /*save_checkpoint=*/false);
+                        !ply_result) {
+                        LOG_WARN("Failed to save regular-phase PLY at iteration {}: {}", iter, ply_result.error());
+                    }
                     if (auto result = save_checkpoint(iter); !result) {
                         LOG_WARN("Failed to save regular-phase checkpoint at iteration {}: {}", iter, result.error());
                     }
@@ -5603,31 +5608,33 @@ namespace lfs::training {
         is_running_ = true; // Now we can start
         LOG_INFO("Starting training loop");
         auto& cache_loader = lfs::io::CacheLoader::getInstance();
-        cache_loader.reset_cache();
-        cache_loader.update_cache_params(params_.dataset.loading_params.use_cpu_memory,
-                                         params_.dataset.loading_params.use_fs_cache,
-                                         train_dataset_size_,
-                                         params_.dataset.loading_params.min_cpu_free_GB,
-                                         params_.dataset.loading_params.min_cpu_free_memory_ratio,
-                                         params_.dataset.loading_params.print_cache_status,
-                                         params_.dataset.loading_params.print_status_freq_num);
-
-        // Notify Python control layer that training is starting
-        {
-            lfs::training::HookContext ctx{
-                .iteration = 0,
-                .loss = current_loss_.load(),
-                .num_gaussians = strategy_ ? strategy_->get_model().size() : 0,
-                .is_refining = strategy_ ? strategy_->is_refining(0) : false,
-                .trainer = this};
-            lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::SafeControl);
-            lfs::training::CommandCenter::instance().update_snapshot(
-                ctx, get_total_iterations(), is_paused_.load(), is_running_.load(), stop_requested_.load(),
-                lfs::training::TrainingPhase::SafeControl);
-            lfs::training::ControlBoundary::instance().notify(lfs::training::ControlHook::TrainingStart, ctx);
-        }
+        std::optional<std::string> terminal_error;
 
         try {
+            cache_loader.reset_cache();
+            cache_loader.update_cache_params(params_.dataset.loading_params.use_cpu_memory,
+                                             params_.dataset.loading_params.use_fs_cache,
+                                             train_dataset_size_,
+                                             params_.dataset.loading_params.min_cpu_free_GB,
+                                             params_.dataset.loading_params.min_cpu_free_memory_ratio,
+                                             params_.dataset.loading_params.print_cache_status,
+                                             params_.dataset.loading_params.print_status_freq_num);
+
+            // Notify Python control layer that training is starting
+            {
+                lfs::training::HookContext ctx{
+                    .iteration = 0,
+                    .loss = current_loss_.load(),
+                    .num_gaussians = strategy_ ? strategy_->get_model().size() : 0,
+                    .is_refining = strategy_ ? strategy_->is_refining(0) : false,
+                    .trainer = this};
+                lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::SafeControl);
+                lfs::training::CommandCenter::instance().update_snapshot(
+                    ctx, get_total_iterations(), is_paused_.load(), is_running_.load(), stop_requested_.load(),
+                    lfs::training::TrainingPhase::SafeControl);
+                lfs::training::ControlBoundary::instance().notify(lfs::training::ControlHook::TrainingStart, ctx);
+            }
+
             std::optional<lfs::core::CUDAStreamGuard> stream_guard;
             if (training_stream_) {
                 stream_guard.emplace(training_stream_);
@@ -5865,7 +5872,9 @@ namespace lfs::training {
                 lfs::core::Tensor gt_image;
                 auto example_opt = train_dataloader->next();
                 if (!example_opt) {
-                    LOG_ERROR("DataLoader returned nullopt unexpectedly");
+                    terminal_error = std::format(
+                        "DataLoader ended unexpectedly at iteration {}", current_iteration_.load());
+                    LOG_ERROR("{}", *terminal_error);
                     break;
                 }
                 auto& example = *example_opt;
@@ -5936,7 +5945,8 @@ namespace lfs::training {
                         // Device is drained — consume completed loss readbacks
                         // before the retry resubmits into the ring.
                         if (auto harvested = harvestLossReadbacks(true, false); !harvested) {
-                            return std::unexpected(harvested.error());
+                            terminal_error = harvested.error();
+                            break;
                         }
 
                         lfs::core::GlobalArenaManager::instance().get_arena().full_reset();
@@ -5948,10 +5958,12 @@ namespace lfs::training {
                         LOG_INFO("OOM recovery: retrying iteration {}", iter);
                         step_result = train_step(iter, cam, gt_image, render_mode, stop_token);
                         if (!step_result) {
-                            return std::unexpected(step_result.error());
+                            terminal_error = step_result.error();
+                            break;
                         }
                     } else {
-                        return std::unexpected(step_result.error());
+                        terminal_error = step_result.error();
+                        break;
                     }
                 }
 
@@ -5988,73 +6000,111 @@ namespace lfs::training {
             clearActiveImageLoader();
             active_image_loader_guard.release();
 
-            // Ensure callback is finished before final save
-            if (callback_busy_.load()) {
-                cudaStreamSynchronize(callback_stream_);
-            }
-
-            // Final save if not already saved by stop request
-            if (!stop_requested_.load() && !stop_token.stop_requested()) {
-                auto final_path = params_.dataset.output_path;
-                const bool rotate_checkpoint = get_active_sparsify_steps() == 0;
-                save_ply(final_path, params_.dataset.output_name, get_total_iterations(), /*join=*/true,
-                         /*save_checkpoint=*/rotate_checkpoint);
-            }
-
             maybe_publish_camera_loss_heatmap(current_iteration_.load(), true);
 
             if (auto harvested = harvestLossReadbacks(true, false); !harvested) {
-                return std::unexpected(harvested.error());
+                if (terminal_error) {
+                    *terminal_error += "; loss readback finalization failed: " + harvested.error();
+                } else {
+                    terminal_error = harvested.error();
+                }
             }
+        } catch (const std::exception& e) {
+            terminal_error = std::format("Training failed: {}", e.what());
+        }
 
+        const auto append_terminal_error = [&terminal_error](std::string error) {
+            if (terminal_error) {
+                *terminal_error += "; " + error;
+            } else {
+                terminal_error = std::move(error);
+            }
+        };
+
+        if (callback_busy_.load()) {
+            const auto callback_status = cudaStreamSynchronize(callback_stream_);
+            if (callback_status != cudaSuccess) {
+                append_terminal_error(std::format("Failed to finish training callback: {}",
+                                                  cudaGetErrorString(callback_status)));
+            }
+        }
+
+        const int terminal_iteration = current_iteration_.load();
+        const bool user_stopped = stop_requested_.load() || stop_token.stop_requested();
+        const bool rotate_checkpoint = get_active_sparsify_steps() == 0;
+        try {
+            LOG_INFO("Saving {} model at iteration {}...",
+                     terminal_error ? "recovery" : (user_stopped ? "stopped" : "final"),
+                     terminal_iteration);
+            if (auto save_result = save_ply(
+                    params_.dataset.output_path,
+                    params_.dataset.output_name,
+                    terminal_iteration,
+                    /*join=*/true,
+                    /*save_checkpoint=*/rotate_checkpoint);
+                !save_result) {
+                append_terminal_error(std::format("Terminal save failed at iteration {}: {}",
+                                                  terminal_iteration, save_result.error()));
+            }
+        } catch (const std::exception& e) {
+            append_terminal_error(std::format("Terminal save threw at iteration {}: {}",
+                                              terminal_iteration, e.what()));
+        }
+
+        is_running_ = false;
+        training_complete_ = true;
+        clearActiveImageLoader();
+        cache_loader.clear_cpu_cache();
+        lfs::core::image_io::wait_for_pending_saves();
+
+        try {
             if (progress_) {
                 progress_->complete();
             }
-            evaluator_->save_report();
-            if (progress_) {
+            if (evaluator_) {
+                evaluator_->save_report();
+            }
+            if (progress_ && strategy_) {
                 progress_->print_final_summary(static_cast<int>(strategy_->get_model().size()));
             }
-
-            is_running_ = false;
-            training_complete_ = true;
-
-            cache_loader.clear_cpu_cache();
-            lfs::core::image_io::wait_for_pending_saves();
-
-            // Notify training end
-            {
-                lfs::training::HookContext ctx{
-                    .iteration = current_iteration_.load(),
-                    .loss = current_loss_.load(),
-                    .num_gaussians = strategy_ ? strategy_->get_model().size() : 0,
-                    .is_refining = strategy_ ? strategy_->is_refining(current_iteration_.load()) : false,
-                    .trainer = this};
-                lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::SafeControl);
-                lfs::training::CommandCenter::instance().update_snapshot(
-                    ctx, get_total_iterations(), is_paused_.load(), is_running_.load(), stop_requested_.load(),
-                    lfs::training::TrainingPhase::SafeControl);
-                lfs::training::ControlBoundary::instance().notify(lfs::training::ControlHook::TrainingEnd, ctx);
-            }
-
-            lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::Idle);
-
-            LOG_INFO("Training completed successfully");
-            return {};
         } catch (const std::exception& e) {
-            is_running_ = false;
-            cache_loader.clear_cpu_cache();
-            lfs::core::image_io::wait_for_pending_saves();
-            lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::Idle);
-
-            return std::unexpected(std::format("Training failed: {}", e.what()));
+            append_terminal_error(std::format("Terminal reporting failed: {}", e.what()));
         }
+
+        auto& command_center = lfs::training::CommandCenter::instance();
+        auto snapshot_guard = makeScopeGuard([&command_center, this]() {
+            command_center.clear_snapshot(this);
+        });
+        try {
+            lfs::training::HookContext ctx{
+                .iteration = terminal_iteration,
+                .loss = current_loss_.load(),
+                .num_gaussians = strategy_ ? strategy_->get_model().size() : 0,
+                .is_refining = strategy_ ? strategy_->is_refining(terminal_iteration) : false,
+                .trainer = this};
+            command_center.set_phase(lfs::training::TrainingPhase::SafeControl);
+            command_center.update_snapshot(
+                ctx, get_total_iterations(), is_paused_.load(), false, user_stopped,
+                lfs::training::TrainingPhase::SafeControl);
+            auto& boundary = lfs::training::ControlBoundary::instance();
+            boundary.notify(lfs::training::ControlHook::TrainingEnd, ctx);
+            boundary.drain_callbacks();
+        } catch (const std::exception& e) {
+            append_terminal_error(std::format("TrainingEnd callback dispatch failed: {}", e.what()));
+        }
+
+        if (terminal_error) {
+            return std::unexpected(*terminal_error);
+        }
+        LOG_INFO("Training completed successfully");
+        return {};
     }
 
-    void Trainer::save_ply(const std::filesystem::path& save_path,
-                           const std::string& filename,
-                           const int iter_num,
-                           const bool join_threads,
-                           const bool save_checkpoint_file) {
+    std::expected<void, std::string> Trainer::save_ply(const std::filesystem::path& save_path,
+                                                       const std::string& filename,
+                                                       const int iter_num,
+                                                       const bool join_threads,
+                                                       const bool save_checkpoint_file) {
 
         std::filesystem::path ply_output_path = filename.empty() ? save_path / ("splat_" + std::to_string(iter_num) + ".ply") : save_path / (filename + ".ply");
 
@@ -6069,6 +6119,7 @@ namespace lfs::training {
             params_.exclude_frozen_add_splats_from_export);
         const auto& model_for_export = export_model ? *export_model : model;
         const auto ply_result = lfs::io::save_ply(model_for_export, ply_options);
+        std::vector<std::string> errors;
         if (!ply_result) {
             if (ply_result.error().code == lfs::io::ErrorCode::INSUFFICIENT_DISK_SPACE) {
                 lfs::core::events::state::DiskSpaceSaveFailed{
@@ -6082,7 +6133,7 @@ namespace lfs::training {
                     .emit();
             }
             LOG_WARN("Failed to save PLY: {}", ply_result.error().message);
-            return; // Don't save checkpoint if PLY failed
+            errors.push_back("PLY: " + ply_result.error().message);
         }
 
         PPISPControllerPool* controller_to_save = controller_pool_for_save(iter_num);
@@ -6093,6 +6144,7 @@ namespace lfs::training {
                                                               bilateral_grid_.get(), ppisp_.get(), controller_to_save);
             if (!ckpt_result) {
                 LOG_WARN("Failed to save checkpoint: {}", ckpt_result.error());
+                errors.push_back("checkpoint: " + ckpt_result.error());
             }
         }
 
@@ -6109,10 +6161,22 @@ namespace lfs::training {
                                                       metadata ? &*metadata : nullptr);
             if (!ppisp_result) {
                 LOG_WARN("Failed to save PPISP file: {}", ppisp_result.error());
+                errors.push_back("PPISP: " + ppisp_result.error());
             }
         }
 
         LOG_DEBUG("PLY save initiated: {} (sync={})", lfs::core::path_to_utf8(save_path), join_threads);
+        if (!errors.empty()) {
+            std::string message;
+            for (const auto& error : errors) {
+                if (!message.empty()) {
+                    message += "; ";
+                }
+                message += error;
+            }
+            return std::unexpected(std::move(message));
+        }
+        return {};
     }
 
     std::expected<void, std::string> Trainer::save_checkpoint(int iteration) {
@@ -6206,8 +6270,11 @@ namespace lfs::training {
     }
 
     void Trainer::save_final_ply_and_checkpoint(const int iteration) {
-        save_ply(params_.dataset.output_path, params_.dataset.output_name, iteration, /*join=*/true,
-                 /*save_checkpoint=*/false);
+        if (auto result = save_ply(params_.dataset.output_path, params_.dataset.output_name, iteration, /*join=*/true,
+                                   /*save_checkpoint=*/false);
+            !result) {
+            LOG_WARN("Failed to save final PLY: {}", result.error());
+        }
         if (auto result = save_checkpoint(iteration); !result) {
             LOG_WARN("Failed to save checkpoint: {}", result.error());
         }

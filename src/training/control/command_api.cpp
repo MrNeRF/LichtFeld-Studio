@@ -169,6 +169,16 @@ namespace lfs::training {
         }
     }
 
+    void CommandCenter::clear_snapshot(const Trainer* trainer) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (snapshot_.trainer != trainer) {
+            return;
+        }
+        snapshot_ = {};
+        pending_commands_.clear();
+        phase_.store(TrainingPhase::Idle, std::memory_order_relaxed);
+    }
+
     TrainingSnapshot CommandCenter::snapshot() const {
         std::lock_guard<std::mutex> lock(mutex_);
         TrainingSnapshot snap = snapshot_;

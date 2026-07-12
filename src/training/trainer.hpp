@@ -377,11 +377,11 @@ namespace lfs::training {
         // Handle control requests
         void handle_control_requests(int iter, std::stop_token stop_token = {});
 
-        void save_ply(const std::filesystem::path& save_path,
-                      const std::string& filename,
-                      int iter_num,
-                      bool join_threads = true,
-                      bool save_checkpoint = true);
+        std::expected<void, std::string> save_ply(const std::filesystem::path& save_path,
+                                                  const std::string& filename,
+                                                  int iter_num,
+                                                  bool join_threads = true,
+                                                  bool save_checkpoint = true);
         void updateGTLoadConfigSnapshot();
         void clearActiveImageLoader();
 
