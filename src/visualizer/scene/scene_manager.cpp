@@ -182,20 +182,32 @@ namespace lfs::vis {
             if (!model) {
                 return;
             }
-            std::thread([retired = std::move(model)]() mutable {
-                retired.reset();
+            try {
+                std::thread([retired = std::move(model)]() mutable {
+                    retired.reset();
+                    core::Tensor::trim_memory_pool();
+                }).detach();
+            } catch (const std::exception& e) {
+                LOG_WARN("Failed to start asynchronous splat retirement: {}", e.what());
+                model.reset();
                 core::Tensor::trim_memory_pool();
-            }).detach();
+            }
         }
 
         void retireSplatModelsAsync(std::vector<std::unique_ptr<core::SplatData>> models) {
             if (models.empty()) {
                 return;
             }
-            std::thread([retired = std::move(models)]() mutable {
-                retired.clear();
+            try {
+                std::thread([retired = std::move(models)]() mutable {
+                    retired.clear();
+                    core::Tensor::trim_memory_pool();
+                }).detach();
+            } catch (const std::exception& e) {
+                LOG_WARN("Failed to start asynchronous splat retirement: {}", e.what());
+                models.clear();
                 core::Tensor::trim_memory_pool();
-            }).detach();
+            }
         }
 
         [[nodiscard]] const char* sceneNodeUiType(const core::NodeType type) {
@@ -403,6 +415,10 @@ namespace lfs::vis {
         LOG_DEBUG("SceneManager initialized");
     }
     SceneManager::~SceneManager() {
+        if (consolidated_compaction_thread_.joinable()) {
+            consolidated_compaction_thread_.request_stop();
+            consolidated_compaction_thread_.join();
+        }
         clearMeshCpuCache();
     }
 
@@ -1068,29 +1084,63 @@ namespace lfs::vis {
         consolidated_compaction_thread_ = std::jthread(
             [this, viewer, snapshot = std::move(*snapshot)](std::stop_token stop_token) mutable {
                 std::vector<core::Scene::ConsolidatedNodeSlot> compacted_slots;
-                auto compacted_model = core::Scene::compactConsolidatedSnapshot(snapshot, compacted_slots);
+                std::shared_ptr<core::SplatData> compacted_model;
+                try {
+                    compacted_model = core::Scene::compactConsolidatedSnapshot(snapshot, compacted_slots);
+                } catch (const std::exception& e) {
+                    LOG_ERROR("Consolidated model compaction failed: {}", e.what());
+                    std::lock_guard lock(consolidated_compaction_mutex_);
+                    consolidated_compaction_running_ = false;
+                    consolidated_compaction_pending_ = true;
+                    return;
+                } catch (...) {
+                    LOG_ERROR("Consolidated model compaction failed with an unknown exception");
+                    std::lock_guard lock(consolidated_compaction_mutex_);
+                    consolidated_compaction_running_ = false;
+                    consolidated_compaction_pending_ = true;
+                    return;
+                }
                 if (stop_token.stop_requested()) {
+                    std::lock_guard lock(consolidated_compaction_mutex_);
+                    consolidated_compaction_running_ = false;
+                    consolidated_compaction_pending_ = false;
                     return;
                 }
 
-                auto publish = [this,
-                                generation = snapshot.generation,
-                                old_model = snapshot.model,
-                                compacted_model = std::move(compacted_model),
-                                compacted_slots = std::move(compacted_slots)]() mutable {
-                    if (auto* rendering = services().renderingOrNull()) {
-                        rendering->releaseSceneModelResources();
-                    }
+                struct PendingPublish {
+                    uint64_t generation = 0;
+                    std::shared_ptr<const core::SplatData> old_model;
+                    std::shared_ptr<core::SplatData> compacted_model;
+                    std::vector<core::Scene::ConsolidatedNodeSlot> compacted_slots;
+                };
+                auto state = std::make_shared<PendingPublish>(PendingPublish{
+                    .generation = snapshot.generation,
+                    .old_model = std::move(snapshot.model),
+                    .compacted_model = std::move(compacted_model),
+                    .compacted_slots = std::move(compacted_slots),
+                });
 
-                    const bool installed = scene_.installConsolidatedCompaction(
-                        compacted_model,
-                        std::move(compacted_slots),
-                        generation);
-                    if (installed) {
-                        scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+                auto publish = [this, state]() mutable {
+                    bool installed = false;
+                    try {
                         if (auto* rendering = services().renderingOrNull()) {
-                            rendering->markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY);
+                            rendering->releaseSceneModelResources();
                         }
+
+                        installed = scene_.installConsolidatedCompaction(
+                            state->compacted_model,
+                            std::move(state->compacted_slots),
+                            state->generation);
+                        if (installed) {
+                            scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+                            if (auto* rendering = services().renderingOrNull()) {
+                                rendering->markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY);
+                            }
+                        }
+                    } catch (const std::exception& e) {
+                        LOG_ERROR("Failed to publish consolidated model compaction: {}", e.what());
+                    } catch (...) {
+                        LOG_ERROR("Failed to publish consolidated model compaction: unknown exception");
                     }
 
                     bool rerun = !installed;
@@ -1101,17 +1151,33 @@ namespace lfs::vis {
                         consolidated_compaction_pending_ = false;
                     }
                     if (rerun) {
-                        if (!installed && compacted_model) {
-                            retireSplatModelAsync(std::move(compacted_model));
+                        if (!installed && state->compacted_model) {
+                            retireSplatModelAsync(std::move(state->compacted_model));
                         }
-                        retireSplatModelAsync(std::move(old_model));
-                        scheduleConsolidatedCompaction();
+                        retireSplatModelAsync(std::move(state->old_model));
+                        try {
+                            scheduleConsolidatedCompaction();
+                        } catch (const std::exception& e) {
+                            LOG_ERROR("Failed to reschedule consolidated model compaction: {}", e.what());
+                        } catch (...) {
+                            LOG_ERROR("Failed to reschedule consolidated model compaction: unknown exception");
+                        }
                     } else {
-                        retireSplatModelAsync(std::move(old_model));
+                        retireSplatModelAsync(std::move(state->old_model));
                     }
                 };
 
-                if (viewer && viewer->postWork(Visualizer::WorkItem{.run = std::move(publish), .cancel = {}})) {
+                auto cancel = [this, state]() mutable {
+                    std::lock_guard lock(consolidated_compaction_mutex_);
+                    consolidated_compaction_running_ = false;
+                    consolidated_compaction_pending_ = false;
+                    state.reset();
+                };
+
+                if (viewer && viewer->postWork(Visualizer::WorkItem{
+                                  .run = std::move(publish),
+                                  .cancel = std::move(cancel),
+                              })) {
                     return;
                 }
 
