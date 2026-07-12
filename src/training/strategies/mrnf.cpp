@@ -1511,23 +1511,29 @@ namespace lfs::training {
     }
 
     void MRNF::deserialize(std::istream& is) {
-        uint32_t magic, version;
-        is.read(reinterpret_cast<char*>(&magic), sizeof(magic));
-        is.read(reinterpret_cast<char*>(&version), sizeof(version));
+        uint32_t magic = 0, version = 0;
+        lfs::core::serialization_detail::read_exact(is, &magic, sizeof(magic), "MRNF magic");
+        lfs::core::serialization_detail::read_exact(is, &version, sizeof(version), "MRNF version");
 
         if (magic != LFS_MAGIC)
             throw std::runtime_error("Invalid MRNF checkpoint: wrong magic");
         if (version == 0 || version > LFS_VERSION)
             throw std::runtime_error("Unsupported MRNF checkpoint version: " + std::to_string(version));
 
-        uint8_t has_optimizer;
-        is.read(reinterpret_cast<char*>(&has_optimizer), sizeof(has_optimizer));
-        if (has_optimizer && _optimizer)
+        uint8_t has_optimizer = 0;
+        lfs::core::serialization_detail::read_exact(
+            is, &has_optimizer, sizeof(has_optimizer), "MRNF optimizer flag");
+        if (has_optimizer > 1 || (has_optimizer && !_optimizer))
+            throw std::runtime_error("Invalid MRNF checkpoint: optimizer flag/state mismatch");
+        if (has_optimizer)
             _optimizer->deserialize(is);
 
-        uint8_t has_scheduler;
-        is.read(reinterpret_cast<char*>(&has_scheduler), sizeof(has_scheduler));
-        if (has_scheduler && _scheduler)
+        uint8_t has_scheduler = 0;
+        lfs::core::serialization_detail::read_exact(
+            is, &has_scheduler, sizeof(has_scheduler), "MRNF scheduler flag");
+        if (has_scheduler > 1 || (has_scheduler && !_scheduler))
+            throw std::runtime_error("Invalid MRNF checkpoint: scheduler flag/state mismatch");
+        if (has_scheduler)
             _scheduler->deserialize(is);
 
         const double optimizer_mean_lr = _optimizer ? _optimizer->get_param_lr(ParamType::Means) : 0.0;
@@ -1535,17 +1541,40 @@ namespace lfs::training {
 
         if (version >= 2) {
             uint8_t has_free_mask = 0;
-            is.read(reinterpret_cast<char*>(&has_free_mask), sizeof(has_free_mask));
+            lfs::core::serialization_detail::read_exact(
+                is, &has_free_mask, sizeof(has_free_mask), "MRNF free-mask flag");
+            if (has_free_mask > 1)
+                throw std::runtime_error("Invalid MRNF checkpoint: free-mask flag must be boolean");
             if (has_free_mask) {
-                is >> _free_mask;
-                if (_free_mask.device() != lfs::core::Device::CUDA) {
-                    _free_mask = _free_mask.cuda();
+                lfs::core::Tensor free_mask;
+                is >> free_mask;
+                const size_t model_size = static_cast<size_t>(_splat_data->size());
+                const size_t max_capacity = _params && _params->max_cap > 0
+                                                ? static_cast<size_t>(_params->max_cap)
+                                                : model_size;
+                if (!free_mask.is_valid() || !lfs::core::is_bool_like(free_mask.dtype()) ||
+                    free_mask.ndim() != 1 || free_mask.numel() < model_size ||
+                    free_mask.numel() > max_capacity) {
+                    throw std::runtime_error("Invalid MRNF checkpoint: free mask has incompatible schema");
                 }
+                if (free_mask.device() != lfs::core::Device::CUDA)
+                    free_mask = free_mask.cuda();
+                _free_mask = std::move(free_mask);
             }
         }
         if (version >= 3) {
-            is.read(reinterpret_cast<char*>(&_mean_lr_unscaled), sizeof(_mean_lr_unscaled));
-            is.read(reinterpret_cast<char*>(&_scale_lr_current), sizeof(_scale_lr_current));
+            double mean_lr_unscaled = 0.0;
+            double scale_lr_current = 0.0;
+            lfs::core::serialization_detail::read_exact(
+                is, &mean_lr_unscaled, sizeof(mean_lr_unscaled), "MRNF mean learning rate");
+            lfs::core::serialization_detail::read_exact(
+                is, &scale_lr_current, sizeof(scale_lr_current), "MRNF scale learning rate");
+            if (!std::isfinite(mean_lr_unscaled) || mean_lr_unscaled < 0.0 ||
+                !std::isfinite(scale_lr_current) || scale_lr_current < 0.0) {
+                throw std::runtime_error("Invalid MRNF checkpoint: learning-rate state is invalid");
+            }
+            _mean_lr_unscaled = mean_lr_unscaled;
+            _scale_lr_current = scale_lr_current;
         } else {
             _mean_lr_unscaled = _params ? _params->means_lr : _mean_lr_unscaled;
             _scale_lr_current = optimizer_scaling_lr > 0.0
@@ -1589,6 +1618,39 @@ namespace lfs::training {
                 _optimizer->set_param_lr(ParamType::Means, _mean_lr_unscaled * _bounds.median_size);
             }
         }
+    }
+
+    bool MRNF::can_adopt_checkpoint_state(const IStrategy& loaded) const noexcept {
+        const auto* source = dynamic_cast<const MRNF*>(&loaded);
+        return source && static_cast<bool>(_optimizer) == static_cast<bool>(source->_optimizer) &&
+               static_cast<bool>(_scheduler) == static_cast<bool>(source->_scheduler);
+    }
+
+    void MRNF::adopt_checkpoint_state(IStrategy& loaded) noexcept {
+        auto* source = dynamic_cast<MRNF*>(&loaded);
+        if (!source || !can_adopt_checkpoint_state(*source))
+            return;
+        if (_optimizer)
+            _optimizer->adopt_checkpoint_state(*source->_optimizer);
+        if (_scheduler)
+            _scheduler->adopt_checkpoint_state(*source->_scheduler);
+        _params.swap(source->_params);
+        std::swap(_refine_weight_max, source->_refine_weight_max);
+        std::swap(_vis_count, source->_vis_count);
+        std::swap(_precomputed_edge_scores, source->_precomputed_edge_scores);
+        std::swap(_edge_precompute_valid, source->_edge_precompute_valid);
+        std::swap(_edge_score_sum, source->_edge_score_sum);
+        std::swap(_edge_canny_nms_output, source->_edge_canny_nms_output);
+        std::swap(_edge_sample_count, source->_edge_sample_count);
+        std::swap(_edge_last_sample_iter, source->_edge_last_sample_iter);
+        std::swap(_free_mask, source->_free_mask);
+        std::swap(_bounds, source->_bounds);
+        std::swap(_bounds_valid, source->_bounds_valid);
+        std::swap(_refine_windows_since_bounds, source->_refine_windows_since_bounds);
+        std::swap(_mean_lr_unscaled, source->_mean_lr_unscaled);
+        std::swap(_scale_lr_current, source->_scale_lr_current);
+        std::swap(_mean_lr_gamma, source->_mean_lr_gamma);
+        std::swap(_scale_lr_gamma, source->_scale_lr_gamma);
     }
 
     void MRNF::reserve_optimizer_capacity(size_t capacity) {

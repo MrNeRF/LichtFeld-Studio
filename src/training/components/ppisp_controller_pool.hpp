@@ -73,6 +73,10 @@ namespace lfs::training {
         /// Deserialize all controller states.
         void deserialize(std::istream& is);
 
+        /// Transfer a fully validated persistent checkpoint state. Transient
+        /// inference buffers and the synchronization primitive stay owned here.
+        void adopt_checkpoint_state(PPISPControllerPool& loaded) noexcept;
+
         /// Serialize only weights for inference (no optimizer state).
         void serialize_inference(std::ostream& os) const;
 

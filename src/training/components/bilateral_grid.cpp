@@ -5,6 +5,7 @@
 #include "core/logger.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 
 namespace lfs::training {
@@ -187,9 +188,9 @@ namespace lfs::training {
     }
 
     void BilateralGrid::deserialize(std::istream& is) {
-        uint32_t magic, version;
-        is.read(reinterpret_cast<char*>(&magic), sizeof(magic));
-        is.read(reinterpret_cast<char*>(&version), sizeof(version));
+        uint32_t magic = 0, version = 0;
+        lfs::core::serialization_detail::read_exact(is, &magic, sizeof(magic), "bilateral-grid magic");
+        lfs::core::serialization_detail::read_exact(is, &version, sizeof(version), "bilateral-grid version");
 
         if (magic != CHECKPOINT_MAGIC) {
             throw std::runtime_error("Invalid BilateralGrid checkpoint");
@@ -198,30 +199,108 @@ namespace lfs::training {
             throw std::runtime_error("Unsupported BilateralGrid checkpoint version");
         }
 
-        is.read(reinterpret_cast<char*>(&num_images_), sizeof(num_images_));
-        is.read(reinterpret_cast<char*>(&grid_width_), sizeof(grid_width_));
-        is.read(reinterpret_cast<char*>(&grid_height_), sizeof(grid_height_));
-        is.read(reinterpret_cast<char*>(&grid_guidance_), sizeof(grid_guidance_));
+        int num_images = 0;
+        int grid_width = 0;
+        int grid_height = 0;
+        int grid_guidance = 0;
+        Config config{};
+        int64_t step = 0;
+        double current_lr = 0.0;
+        double initial_lr = 0.0;
+        int total_iterations = 0;
+        lfs::core::serialization_detail::read_exact(is, &num_images, sizeof(num_images), "bilateral-grid image count");
+        lfs::core::serialization_detail::read_exact(is, &grid_width, sizeof(grid_width), "bilateral-grid width");
+        lfs::core::serialization_detail::read_exact(is, &grid_height, sizeof(grid_height), "bilateral-grid height");
+        lfs::core::serialization_detail::read_exact(is, &grid_guidance, sizeof(grid_guidance), "bilateral-grid guidance size");
+        lfs::core::serialization_detail::read_exact(is, &config, sizeof(config), "bilateral-grid configuration");
+        lfs::core::serialization_detail::read_exact(is, &step, sizeof(step), "bilateral-grid step");
+        lfs::core::serialization_detail::read_exact(is, &current_lr, sizeof(current_lr), "bilateral-grid learning rate");
+        lfs::core::serialization_detail::read_exact(is, &initial_lr, sizeof(initial_lr), "bilateral-grid initial learning rate");
+        lfs::core::serialization_detail::read_exact(
+            is, &total_iterations, sizeof(total_iterations), "bilateral-grid iteration count");
 
-        is.read(reinterpret_cast<char*>(&config_), sizeof(config_));
-        is.read(reinterpret_cast<char*>(&step_), sizeof(step_));
-        is.read(reinterpret_cast<char*>(&current_lr_), sizeof(current_lr_));
-        is.read(reinterpret_cast<char*>(&initial_lr_), sizeof(initial_lr_));
-        is.read(reinterpret_cast<char*>(&total_iterations_), sizeof(total_iterations_));
+        if (num_images <= 0 || grid_width <= 0 || grid_height <= 0 || grid_guidance <= 0 ||
+            num_images > 10'000'000 || grid_width > 4096 || grid_height > 4096 || grid_guidance > 4096 ||
+            step < 0 || total_iterations <= 0 ||
+            !std::isfinite(current_lr) || current_lr < 0.0 ||
+            !std::isfinite(initial_lr) || initial_lr < 0.0 ||
+            !std::isfinite(config.lr) || config.lr < 0.0 ||
+            !std::isfinite(config.beta1) || config.beta1 < 0.0 || config.beta1 >= 1.0 ||
+            !std::isfinite(config.beta2) || config.beta2 < 0.0 || config.beta2 >= 1.0 ||
+            !std::isfinite(config.eps) || config.eps <= 0.0 || config.warmup_steps < 0 ||
+            !std::isfinite(config.warmup_start_factor) || config.warmup_start_factor < 0.0 ||
+            !std::isfinite(config.final_lr_factor) || config.final_lr_factor <= 0.0) {
+            throw std::runtime_error("Invalid BilateralGrid checkpoint state");
+        }
 
-        is >> grids_ >> exp_avg_ >> exp_avg_sq_;
-        grids_ = grids_.cuda();
-        exp_avg_ = exp_avg_.cuda();
-        exp_avg_sq_ = exp_avg_sq_.cuda();
+        uint64_t grid_elements = static_cast<uint64_t>(num_images);
+        for (const auto factor : {GRID_CHANNELS,
+                                  static_cast<size_t>(grid_guidance),
+                                  static_cast<size_t>(grid_height),
+                                  static_cast<size_t>(grid_width)}) {
+            if (grid_elements > std::numeric_limits<uint64_t>::max() / factor)
+                throw std::runtime_error("Invalid BilateralGrid checkpoint: grid size overflows");
+            grid_elements *= factor;
+        }
+        if (grid_elements > lfs::core::MAX_SERIALIZED_TENSOR_BYTES / sizeof(float))
+            throw std::runtime_error("Invalid BilateralGrid checkpoint: grid exceeds byte budget");
 
-        accumulated_grads_ = lfs::core::Tensor::zeros(grids_.shape(), lfs::core::Device::CUDA);
+        lfs::core::Tensor grids, exp_avg, exp_avg_sq;
+        is >> grids >> exp_avg >> exp_avg_sq;
+        const lfs::core::TensorShape expected_shape{
+            static_cast<size_t>(num_images), GRID_CHANNELS,
+            static_cast<size_t>(grid_guidance), static_cast<size_t>(grid_height), static_cast<size_t>(grid_width)};
+        if (grids.dtype() != lfs::core::DataType::Float32 || grids.shape() != expected_shape ||
+            exp_avg.dtype() != lfs::core::DataType::Float32 || exp_avg.shape() != expected_shape ||
+            exp_avg_sq.dtype() != lfs::core::DataType::Float32 || exp_avg_sq.shape() != expected_shape) {
+            throw std::runtime_error("Invalid BilateralGrid checkpoint tensor schema");
+        }
 
-        const size_t total_elements = num_images_ * grid_guidance_ * grid_height_ * grid_width_;
+        grids = grids.cuda();
+        exp_avg = exp_avg.cuda();
+        exp_avg_sq = exp_avg_sq.cuda();
+        auto accumulated_grads = lfs::core::Tensor::zeros(expected_shape, lfs::core::Device::CUDA);
+
+        const size_t total_elements = static_cast<size_t>(grid_elements / GRID_CHANNELS);
         const size_t temp_size = std::max(size_t(2048), (total_elements + 255) / 256);
-        tv_temp_buffer_ = lfs::core::Tensor::empty({temp_size}, lfs::core::Device::CUDA);
+        auto tv_temp_buffer = lfs::core::Tensor::empty({temp_size}, lfs::core::Device::CUDA);
 
-        const size_t grid_slice_size = GRID_CHANNELS * grid_guidance_ * grid_height_ * grid_width_;
-        grad_buffer_ = lfs::core::Tensor::empty({grid_slice_size}, lfs::core::Device::CUDA);
+        const size_t grid_slice_size = static_cast<size_t>(grid_elements / static_cast<uint64_t>(num_images));
+        auto grad_buffer = lfs::core::Tensor::empty({grid_slice_size}, lfs::core::Device::CUDA);
+
+        num_images_ = num_images;
+        grid_width_ = grid_width;
+        grid_height_ = grid_height;
+        grid_guidance_ = grid_guidance;
+        config_ = config;
+        step_ = step;
+        current_lr_ = current_lr;
+        initial_lr_ = initial_lr;
+        total_iterations_ = total_iterations;
+        grids_ = std::move(grids);
+        exp_avg_ = std::move(exp_avg);
+        exp_avg_sq_ = std::move(exp_avg_sq);
+        accumulated_grads_ = std::move(accumulated_grads);
+        tv_temp_buffer_ = std::move(tv_temp_buffer);
+        grad_buffer_ = std::move(grad_buffer);
+    }
+
+    void BilateralGrid::adopt_checkpoint_state(BilateralGrid& loaded) noexcept {
+        std::swap(grids_, loaded.grids_);
+        std::swap(exp_avg_, loaded.exp_avg_);
+        std::swap(exp_avg_sq_, loaded.exp_avg_sq_);
+        std::swap(accumulated_grads_, loaded.accumulated_grads_);
+        std::swap(grad_buffer_, loaded.grad_buffer_);
+        std::swap(tv_temp_buffer_, loaded.tv_temp_buffer_);
+        std::swap(config_, loaded.config_);
+        std::swap(step_, loaded.step_);
+        std::swap(current_lr_, loaded.current_lr_);
+        std::swap(initial_lr_, loaded.initial_lr_);
+        std::swap(total_iterations_, loaded.total_iterations_);
+        std::swap(num_images_, loaded.num_images_);
+        std::swap(grid_width_, loaded.grid_width_);
+        std::swap(grid_height_, loaded.grid_height_);
+        std::swap(grid_guidance_, loaded.grid_guidance_);
     }
 
 } // namespace lfs::training

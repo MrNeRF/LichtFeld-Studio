@@ -52,6 +52,9 @@ namespace lfs::training {
 
         void serialize(std::ostream& os) const override;
         void deserialize(std::istream& is) override;
+        bool has_checkpoint_runtime_state() const noexcept override { return static_cast<bool>(_optimizer); }
+        bool can_adopt_checkpoint_state(const IStrategy& loaded) const noexcept override;
+        void adopt_checkpoint_state(IStrategy& loaded) noexcept override;
         const char* strategy_type() const override { return "mrnf"; }
 
         void reserve_optimizer_capacity(size_t capacity) override;

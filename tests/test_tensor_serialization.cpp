@@ -195,6 +195,81 @@ TEST_F(TensorSerializationTest, InvalidMagicNumber) {
     EXPECT_THROW(ss >> loaded, std::runtime_error);
 }
 
+TEST_F(TensorSerializationTest, RejectsUnsupportedDtypeWithoutMutatingDestination) {
+    std::stringstream ss;
+    const TensorFileHeader header{
+        .magic = TENSOR_FILE_MAGIC,
+        .version = TENSOR_FILE_VERSION,
+        .dtype = 0xff,
+        .device = static_cast<uint8_t>(Device::CPU),
+        .rank = 1,
+        .numel = 1,
+    };
+    ss.write(reinterpret_cast<const char*>(&header), sizeof(header));
+
+    Tensor destination = Tensor::from_vector({42.0f}, {1}, Device::CPU);
+    EXPECT_THROW(ss >> destination, std::runtime_error);
+    ASSERT_TRUE(destination.is_valid());
+    EXPECT_FLOAT_EQ(destination.ptr<float>()[0], 42.0f);
+}
+
+TEST_F(TensorSerializationTest, RejectsExcessiveRankBeforeReadingDimensions) {
+    std::stringstream ss;
+    const TensorFileHeader header{
+        .magic = TENSOR_FILE_MAGIC,
+        .version = TENSOR_FILE_VERSION,
+        .dtype = static_cast<uint8_t>(DataType::Float32),
+        .device = static_cast<uint8_t>(Device::CPU),
+        .rank = static_cast<uint16_t>(MAX_SERIALIZED_TENSOR_RANK + 1),
+        .numel = 1,
+    };
+    ss.write(reinterpret_cast<const char*>(&header), sizeof(header));
+
+    Tensor loaded;
+    EXPECT_THROW(ss >> loaded, std::runtime_error);
+    EXPECT_FALSE(loaded.is_valid());
+}
+
+TEST_F(TensorSerializationTest, RejectsPayloadOverBudgetBeforeAllocation) {
+    std::stringstream ss;
+    const uint64_t numel = MAX_SERIALIZED_TENSOR_BYTES / sizeof(float) + 1;
+    const TensorFileHeader header{
+        .magic = TENSOR_FILE_MAGIC,
+        .version = TENSOR_FILE_VERSION,
+        .dtype = static_cast<uint8_t>(DataType::Float32),
+        .device = static_cast<uint8_t>(Device::CPU),
+        .rank = 1,
+        .numel = numel,
+    };
+    ss.write(reinterpret_cast<const char*>(&header), sizeof(header));
+    ss.write(reinterpret_cast<const char*>(&numel), sizeof(numel));
+
+    Tensor loaded;
+    EXPECT_THROW(ss >> loaded, std::runtime_error);
+    EXPECT_FALSE(loaded.is_valid());
+}
+
+TEST_F(TensorSerializationTest, RejectsTruncatedPayloadBeforeAllocation) {
+    std::stringstream ss;
+    constexpr uint64_t numel = 4;
+    const TensorFileHeader header{
+        .magic = TENSOR_FILE_MAGIC,
+        .version = TENSOR_FILE_VERSION,
+        .dtype = static_cast<uint8_t>(DataType::Float32),
+        .device = static_cast<uint8_t>(Device::CPU),
+        .rank = 1,
+        .numel = numel,
+    };
+    constexpr float partial_payload = 1.0f;
+    ss.write(reinterpret_cast<const char*>(&header), sizeof(header));
+    ss.write(reinterpret_cast<const char*>(&numel), sizeof(numel));
+    ss.write(reinterpret_cast<const char*>(&partial_payload), sizeof(partial_payload));
+
+    Tensor loaded;
+    EXPECT_THROW(ss >> loaded, std::runtime_error);
+    EXPECT_FALSE(loaded.is_valid());
+}
+
 TEST_F(TensorSerializationTest, NonexistentFile) {
     EXPECT_THROW(load_tensor("/nonexistent/path/tensor.lft"), std::runtime_error);
 }

@@ -54,6 +54,13 @@ namespace lfs::training {
         virtual void serialize(std::ostream& os) const = 0;
         virtual void deserialize(std::istream& is) = 0;
 
+        // A checkpoint is parsed into an isolated strategy first. Built-in strategies
+        // then transfer that validated state without rebinding their scene-owned model.
+        // Custom strategies that serialize state must opt in to the same transaction.
+        virtual bool has_checkpoint_runtime_state() const noexcept { return false; }
+        virtual bool can_adopt_checkpoint_state(const IStrategy&) const noexcept { return false; }
+        virtual void adopt_checkpoint_state(IStrategy&) noexcept {}
+
         // Strategy type identifier for checkpoint compatibility
         virtual const char* strategy_type() const = 0;
 

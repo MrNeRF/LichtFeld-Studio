@@ -196,6 +196,7 @@ namespace lfs::training {
         // Serialization (full state for checkpoints)
         void serialize(std::ostream& os) const;
         void deserialize(std::istream& is);
+        void adopt_checkpoint_state(PPISP& loaded) noexcept;
 
         // Inference-only serialization (weights only, no Adam state)
         void serialize_inference(std::ostream& os) const;

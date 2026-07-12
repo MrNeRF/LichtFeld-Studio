@@ -4,6 +4,7 @@
 
 #include "adam_optimizer.hpp"
 #include "adam_api.h" // fast_lfs::optimizer::adam_step_raw
+#include "core/checkpoint_format.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
@@ -13,6 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cuda_runtime.h>
+#include <optional>
 #include <stdexcept>
 
 namespace lfs::training {
@@ -1213,9 +1215,9 @@ namespace lfs::training {
     }
 
     void AdamOptimizer::deserialize(std::istream& is) {
-        uint32_t magic, version;
-        is.read(reinterpret_cast<char*>(&magic), sizeof(magic));
-        is.read(reinterpret_cast<char*>(&version), sizeof(version));
+        uint32_t magic = 0, version = 0;
+        lfs::core::serialization_detail::read_exact(is, &magic, sizeof(magic), "Adam magic");
+        lfs::core::serialization_detail::read_exact(is, &version, sizeof(version), "Adam version");
 
         if (magic != ADAM_STATE_MAGIC) {
             throw std::runtime_error("Invalid AdamOptimizer checkpoint");
@@ -1224,61 +1226,108 @@ namespace lfs::training {
             throw std::runtime_error("Unsupported checkpoint version");
         }
 
-        is.read(reinterpret_cast<char*>(&config_.lr), sizeof(config_.lr));
-        is.read(reinterpret_cast<char*>(&config_.beta1), sizeof(config_.beta1));
-        is.read(reinterpret_cast<char*>(&config_.beta2), sizeof(config_.beta2));
-        is.read(reinterpret_cast<char*>(&config_.eps), sizeof(config_.eps));
-        is.read(reinterpret_cast<char*>(&config_.growth_factor), sizeof(config_.growth_factor));
-        is.read(reinterpret_cast<char*>(&config_.initial_capacity), sizeof(config_.initial_capacity));
-
-        uint32_t num_param_lrs;
-        is.read(reinterpret_cast<char*>(&num_param_lrs), sizeof(num_param_lrs));
-        config_.param_lrs.clear();
-        for (uint32_t i = 0; i < num_param_lrs; ++i) {
-            uint32_t name_len;
-            is.read(reinterpret_cast<char*>(&name_len), sizeof(name_len));
-            std::string name(name_len, '\0');
-            is.read(name.data(), name_len);
-            double lr;
-            is.read(reinterpret_cast<char*>(&lr), sizeof(lr));
-            config_.param_lrs[name] = lr;
+        AdamConfig loaded_config;
+        lfs::core::serialization_detail::read_exact(is, &loaded_config.lr, sizeof(loaded_config.lr), "Adam learning rate");
+        lfs::core::serialization_detail::read_exact(is, &loaded_config.beta1, sizeof(loaded_config.beta1), "Adam beta1");
+        lfs::core::serialization_detail::read_exact(is, &loaded_config.beta2, sizeof(loaded_config.beta2), "Adam beta2");
+        lfs::core::serialization_detail::read_exact(is, &loaded_config.eps, sizeof(loaded_config.eps), "Adam epsilon");
+        lfs::core::serialization_detail::read_exact(
+            is, &loaded_config.growth_factor, sizeof(loaded_config.growth_factor), "Adam growth factor");
+        lfs::core::serialization_detail::read_exact(
+            is, &loaded_config.initial_capacity, sizeof(loaded_config.initial_capacity), "Adam initial capacity");
+        if (!std::isfinite(loaded_config.lr) || loaded_config.lr < 0.0f ||
+            !std::isfinite(loaded_config.beta1) || loaded_config.beta1 < 0.0 || loaded_config.beta1 >= 1.0 ||
+            !std::isfinite(loaded_config.beta2) || loaded_config.beta2 < 0.0 || loaded_config.beta2 >= 1.0 ||
+            !std::isfinite(loaded_config.eps) || loaded_config.eps <= 0.0 ||
+            !std::isfinite(loaded_config.growth_factor) || loaded_config.growth_factor < 1.0f ||
+            loaded_config.initial_capacity > lfs::core::MAX_CHECKPOINT_GAUSSIANS) {
+            throw std::runtime_error("Invalid AdamOptimizer checkpoint configuration");
         }
 
-        uint32_t num_states;
-        is.read(reinterpret_cast<char*>(&num_states), sizeof(num_states));
+        const auto type_from_name = [](const std::string_view name) -> std::optional<ParamType> {
+            if (name == "means")
+                return ParamType::Means;
+            if (name == "sh0")
+                return ParamType::Sh0;
+            if (name == "shN")
+                return ParamType::ShN;
+            if (name == "scaling")
+                return ParamType::Scaling;
+            if (name == "rotation")
+                return ParamType::Rotation;
+            if (name == "opacity")
+                return ParamType::Opacity;
+            return std::nullopt;
+        };
 
-        states_.clear();
-        for (uint32_t i = 0; i < num_states; ++i) {
-            uint32_t name_len;
-            is.read(reinterpret_cast<char*>(&name_len), sizeof(name_len));
+        uint32_t num_param_lrs = 0;
+        lfs::core::serialization_detail::read_exact(
+            is, &num_param_lrs, sizeof(num_param_lrs), "Adam parameter learning-rate count");
+        if (num_param_lrs > all_param_types().size())
+            throw std::runtime_error("Invalid AdamOptimizer checkpoint: too many parameter learning rates");
+        for (uint32_t i = 0; i < num_param_lrs; ++i) {
+            uint32_t name_len = 0;
+            lfs::core::serialization_detail::read_exact(
+                is, &name_len, sizeof(name_len), "Adam parameter name length");
+            if (name_len == 0 || name_len > 16)
+                throw std::runtime_error("Invalid AdamOptimizer checkpoint: parameter name length is out of bounds");
             std::string name(name_len, '\0');
-            is.read(name.data(), name_len);
+            lfs::core::serialization_detail::read_exact(is, name.data(), name_len, "Adam parameter name");
+            double lr = 0.0;
+            lfs::core::serialization_detail::read_exact(is, &lr, sizeof(lr), "Adam parameter learning rate");
+            if (!type_from_name(name) || !std::isfinite(lr) || lr < 0.0 ||
+                !loaded_config.param_lrs.emplace(name, lr).second) {
+                throw std::runtime_error("Invalid AdamOptimizer checkpoint: invalid parameter learning rate");
+            }
+        }
+
+        uint32_t num_states = 0;
+        lfs::core::serialization_detail::read_exact(is, &num_states, sizeof(num_states), "Adam state count");
+        if (num_states > all_param_types().size())
+            throw std::runtime_error("Invalid AdamOptimizer checkpoint: too many states");
+
+        std::unordered_map<std::string, AdamParamState> loaded_states;
+        for (uint32_t i = 0; i < num_states; ++i) {
+            uint32_t name_len = 0;
+            lfs::core::serialization_detail::read_exact(is, &name_len, sizeof(name_len), "Adam state name length");
+            if (name_len == 0 || name_len > 16)
+                throw std::runtime_error("Invalid AdamOptimizer checkpoint: state name length is out of bounds");
+            std::string name(name_len, '\0');
+            lfs::core::serialization_detail::read_exact(is, name.data(), name_len, "Adam state name");
+            const auto maybe_type = type_from_name(name);
+            if (!maybe_type || loaded_states.contains(name))
+                throw std::runtime_error("Invalid AdamOptimizer checkpoint: unknown or duplicate state name");
 
             AdamParamState state;
-            is.read(reinterpret_cast<char*>(&state.step_count), sizeof(state.step_count));
-            is.read(reinterpret_cast<char*>(&state.capacity), sizeof(state.capacity));
-            is.read(reinterpret_cast<char*>(&state.size), sizeof(state.size));
+            lfs::core::serialization_detail::read_exact(is, &state.step_count, sizeof(state.step_count), "Adam step count");
+            lfs::core::serialization_detail::read_exact(is, &state.capacity, sizeof(state.capacity), "Adam state capacity");
+            lfs::core::serialization_detail::read_exact(is, &state.size, sizeof(state.size), "Adam state size");
+            if (state.step_count < 0 || state.size > state.capacity)
+                throw std::runtime_error("Invalid AdamOptimizer checkpoint: inconsistent state bounds");
 
-            const auto type_from_name = [](const std::string& n) {
-                if (n == "means")
-                    return ParamType::Means;
-                if (n == "sh0")
-                    return ParamType::Sh0;
-                if (n == "shN")
-                    return ParamType::ShN;
-                if (n == "scaling")
-                    return ParamType::Scaling;
-                if (n == "rotation")
-                    return ParamType::Rotation;
-                return ParamType::Opacity;
-            };
             const bool is_shN = (name == "shN");
-            const ParamType ptype = type_from_name(name);
+            const ParamType ptype = *maybe_type;
+            const auto& parameter = get_param(ptype);
+            const size_t expected_state_size = version == 1 && is_shN
+                                                   ? static_cast<size_t>(splat_data_.size())
+                                                   : parameter.shape()[0];
+            if (!parameter.is_valid() || state.size != expected_state_size)
+                throw std::runtime_error("Invalid AdamOptimizer checkpoint: state size does not match model");
 
             if (version == 1) {
                 // Legacy fp32 moments (no scales). Read, bridge canonical shN -> swizzled, quantise.
                 lfs::core::Tensor favg, favg_sq;
                 is >> favg >> favg_sq;
+                if (!favg.is_valid() || favg.dtype() != lfs::core::DataType::Float32 ||
+                    favg.shape() != favg_sq.shape() || favg_sq.dtype() != lfs::core::DataType::Float32) {
+                    throw std::runtime_error("Invalid AdamOptimizer checkpoint: legacy moment schema mismatch");
+                }
+                if ((!is_shN && favg.shape() != parameter.shape()) ||
+                    (is_shN && (favg.ndim() != 3 ||
+                                favg.shape()[0] != static_cast<size_t>(splat_data_.size()) ||
+                                favg.shape()[2] != 3))) {
+                    throw std::runtime_error("Invalid AdamOptimizer checkpoint: legacy moment shape mismatch");
+                }
                 favg = favg.cuda();
                 favg_sq = favg_sq.cuda();
 
@@ -1299,31 +1348,46 @@ namespace lfs::training {
                 quantize_float_moments(ptype, state, std::move(favg), std::move(favg_sq));
             } else {
                 is >> state.exp_avg >> state.exp_avg_sq >> state.exp_avg_scale >> state.exp_avg_sq_scale;
+                const size_t primitive_rows = static_cast<size_t>(splat_data_.size());
+                if (state.exp_avg.dtype() != lfs::core::DataType::UInt8 ||
+                    state.exp_avg_sq.dtype() != lfs::core::DataType::UInt8 ||
+                    state.exp_avg.shape() != parameter.shape() ||
+                    state.exp_avg_sq.shape() != parameter.shape() ||
+                    state.exp_avg_scale.dtype() != lfs::core::DataType::Float32 ||
+                    state.exp_avg_sq_scale.dtype() != lfs::core::DataType::Float32 ||
+                    state.exp_avg_scale.ndim() != 1 || state.exp_avg_scale.numel() != primitive_rows ||
+                    state.exp_avg_sq_scale.shape() != state.exp_avg_scale.shape()) {
+                    throw std::runtime_error("Invalid AdamOptimizer checkpoint: moment schema mismatch");
+                }
                 state.exp_avg = state.exp_avg.cuda();
                 state.exp_avg_sq = state.exp_avg_sq.cuda();
                 state.exp_avg_scale = state.exp_avg_scale.cuda();
                 state.exp_avg_sq_scale = state.exp_avg_sq_scale.cuda();
             }
 
-            // Reserve growth headroom: moments in their own units (floats for shN, rows
-            // otherwise); scales per-primitive.
-            const size_t moment_target = std::max(state.capacity, compute_new_capacity(state.size, state.size));
-            if (moment_target > state.size && state.exp_avg.is_valid()) {
-                state.exp_avg.reserve(moment_target);
-                state.exp_avg_sq.reserve(moment_target);
-                state.capacity = moment_target;
-            }
-            const size_t scale_cur = state.exp_avg_scale.is_valid() ? state.exp_avg_scale.shape()[0] : 0;
-            const size_t scale_target = std::max(scale_cur, compute_new_capacity(scale_cur, scale_cur));
-            if (scale_target > scale_cur && state.exp_avg_scale.is_valid()) {
-                state.exp_avg_scale.reserve(scale_target);
-                state.exp_avg_sq_scale.reserve(scale_target);
-            }
-            states_[name] = std::move(state);
+            // Serialized capacity is advisory and may be attacker-controlled.
+            // The validated checkpoint max_cap is reserved by load_checkpoint
+            // after all state has parsed successfully.
+            state.capacity = state.exp_avg.is_valid() ? state.exp_avg.shape()[0] : state.size;
+            loaded_states.emplace(std::move(name), std::move(state));
         }
+
+        config_ = std::move(loaded_config);
+        states_ = std::move(loaded_states);
 
         // Gradient buffers are transient and allocated lazily by get_grad().
         LOG_DEBUG("Deserialized AdamOptimizer: {} states", num_states);
+    }
+
+    void AdamOptimizer::adopt_checkpoint_state(AdamOptimizer& loaded) noexcept {
+        config_.lr = loaded.config_.lr;
+        config_.beta1 = loaded.config_.beta1;
+        config_.beta2 = loaded.config_.beta2;
+        config_.eps = loaded.config_.eps;
+        config_.growth_factor = loaded.config_.growth_factor;
+        config_.initial_capacity = loaded.config_.initial_capacity;
+        config_.param_lrs.swap(loaded.config_.param_lrs);
+        states_.swap(loaded.states_);
     }
 
     void AdamOptimizer::reserve_capacity(const size_t capacity) {

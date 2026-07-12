@@ -933,9 +933,9 @@ namespace lfs::training {
     }
 
     void MCMC::deserialize(std::istream& is) {
-        uint32_t magic, version;
-        is.read(reinterpret_cast<char*>(&magic), sizeof(magic));
-        is.read(reinterpret_cast<char*>(&version), sizeof(version));
+        uint32_t magic = 0, version = 0;
+        lfs::core::serialization_detail::read_exact(is, &magic, sizeof(magic), "MCMC magic");
+        lfs::core::serialization_detail::read_exact(is, &version, sizeof(version), "MCMC version");
 
         if (magic != MCMC_MAGIC) {
             throw std::runtime_error("Invalid MCMC checkpoint: wrong magic");
@@ -945,20 +945,48 @@ namespace lfs::training {
         }
 
         // Deserialize optimizer state
-        uint8_t has_optimizer;
-        is.read(reinterpret_cast<char*>(&has_optimizer), sizeof(has_optimizer));
-        if (has_optimizer && _optimizer) {
+        uint8_t has_optimizer = 0;
+        lfs::core::serialization_detail::read_exact(
+            is, &has_optimizer, sizeof(has_optimizer), "MCMC optimizer flag");
+        if (has_optimizer > 1 || (has_optimizer && !_optimizer))
+            throw std::runtime_error("Invalid MCMC checkpoint: optimizer flag/state mismatch");
+        if (has_optimizer) {
             _optimizer->deserialize(is);
         }
 
         // Deserialize scheduler state
-        uint8_t has_scheduler;
-        is.read(reinterpret_cast<char*>(&has_scheduler), sizeof(has_scheduler));
-        if (has_scheduler && _scheduler) {
+        uint8_t has_scheduler = 0;
+        lfs::core::serialization_detail::read_exact(
+            is, &has_scheduler, sizeof(has_scheduler), "MCMC scheduler flag");
+        if (has_scheduler > 1 || (has_scheduler && !_scheduler))
+            throw std::runtime_error("Invalid MCMC checkpoint: scheduler flag/state mismatch");
+        if (has_scheduler) {
             _scheduler->deserialize(is);
         }
 
         LOG_DEBUG("Deserialized MCMC strategy");
+    }
+
+    bool MCMC::can_adopt_checkpoint_state(const IStrategy& loaded) const noexcept {
+        const auto* source = dynamic_cast<const MCMC*>(&loaded);
+        return source && static_cast<bool>(_optimizer) == static_cast<bool>(source->_optimizer) &&
+               static_cast<bool>(_scheduler) == static_cast<bool>(source->_scheduler);
+    }
+
+    void MCMC::adopt_checkpoint_state(IStrategy& loaded) noexcept {
+        auto* source = dynamic_cast<MCMC*>(&loaded);
+        if (!source || !can_adopt_checkpoint_state(*source))
+            return;
+        if (_optimizer)
+            _optimizer->adopt_checkpoint_state(*source->_optimizer);
+        if (_scheduler)
+            _scheduler->adopt_checkpoint_state(*source->_scheduler);
+        _params.swap(source->_params);
+        std::swap(_n_max, source->_n_max);
+        std::swap(_noise_buffer, source->_noise_buffer);
+        std::swap(_ones_int32, source->_ones_int32);
+        std::swap(_error_score_max, source->_error_score_max);
+        std::swap(_error_score_windows, source->_error_score_windows);
     }
 
     void MCMC::reserve_optimizer_capacity(size_t capacity) {
