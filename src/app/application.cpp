@@ -187,7 +187,9 @@ namespace lfs::app {
 
                     manager->startTraining();
                     training_done.get_future().wait();
-                    manager->waitForCompletion();
+                    if (!manager->waitForCompletion()) {
+                        throw std::runtime_error("Training worker did not finish after terminal event");
+                    }
 
                     publisher.stop();
                     responder.stop();

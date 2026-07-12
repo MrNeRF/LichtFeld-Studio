@@ -1132,10 +1132,13 @@ namespace lfs::vis {
         }
     }
 
-    void SceneManager::resetToEmptyState(const bool trainer_already_cleared) {
+    bool SceneManager::resetToEmptyState(const bool trainer_already_cleared) {
         if (!trainer_already_cleared) {
             if (auto* trainer = services().trainerOrNull()) {
-                trainer->clearTrainer();
+                if (!trainer->clearTrainer()) {
+                    LOG_ERROR("Scene reset deferred while the training worker is still stopping");
+                    return false;
+                }
             }
         }
 
@@ -1166,6 +1169,7 @@ namespace lfs::vis {
         state::SceneCleared{}.emit();
 
         LOG_INFO("Scene cleared");
+        return true;
     }
 
     SceneManager::TrainingRemovalImpact SceneManager::classifyTrainingRemovalImpact(const std::string& name) const {
@@ -1260,8 +1264,9 @@ namespace lfs::vis {
             if (auto* trainer = services().trainerOrNull()) {
                 LOG_INFO("Stopping training due to node deletion: {}", name);
                 trainer->stopTraining();
-                trainer->waitForCompletion();
-                trainer->clearTrainer();
+                if (!trainer->waitForCompletion() || !trainer->clearTrainer()) {
+                    return std::unexpected("Cannot remove the training model while its worker is still stopping");
+                }
                 scene_.setTrainingModelNode("");
                 trainer_cleared = true;
             }
@@ -1329,7 +1334,9 @@ namespace lfs::vis {
             .emit();
 
         if (scene_.getNodeCount() == 0) {
-            resetToEmptyState(trainer_cleared);
+            if (!resetToEmptyState(trainer_cleared)) {
+                return std::unexpected("Cannot finish scene reset while the training worker is still stopping");
+            }
         }
 
         if (history_before) {
@@ -2497,7 +2504,9 @@ namespace lfs::vis {
             core::Scene::Transaction txn(scene_);
 
             if (services().trainerOrNull()) {
-                services().trainerOrNull()->clearTrainer();
+                if (!services().trainerOrNull()->clearTrainer()) {
+                    return std::unexpected("Previous training worker is still stopping");
+                }
             }
             if (!clear()) {
                 return std::unexpected("Failed to clear existing scene");
@@ -2572,7 +2581,9 @@ namespace lfs::vis {
             core::Scene::Transaction txn(scene_);
 
             if (services().trainerOrNull()) {
-                services().trainerOrNull()->clearTrainer();
+                if (!services().trainerOrNull()->clearTrainer()) {
+                    return std::unexpected("Previous training worker is still stopping");
+                }
             }
             if (!clear()) {
                 return std::unexpected("Failed to clear existing scene");
@@ -2789,7 +2800,9 @@ namespace lfs::vis {
             core::Scene::Transaction txn(scene_);
 
             if (services().trainerOrNull()) {
-                services().trainerOrNull()->clearTrainer();
+                if (!services().trainerOrNull()->clearTrainer()) {
+                    throw std::runtime_error("Previous training worker is still stopping");
+                }
             }
             if (!clear()) {
                 throw std::runtime_error("Failed to clear existing scene");
@@ -2890,8 +2903,7 @@ namespace lfs::vis {
             }
         }
         op::undoHistory().clear();
-        resetToEmptyState(false);
-        return true;
+        return resetToEmptyState(false);
     }
 
     void SceneManager::switchToEditMode() {
@@ -2920,7 +2932,10 @@ namespace lfs::vis {
             if (trainer_mgr->isTrainingActive()) {
                 trainer_mgr->stopTraining();
             }
-            trainer_mgr->waitForCompletion();
+            if (!trainer_mgr->waitForCompletion()) {
+                LOG_ERROR("switchToEditMode deferred while the training worker is still stopping");
+                return;
+            }
             trainer = trainer_mgr->getTrainer();
             if (trainer && trainer->hasPPISP()) {
                 ppisp = trainer->takePPISP();
@@ -2950,7 +2965,10 @@ namespace lfs::vis {
             scene_.getWorldTransform(model_node->id);
 
         if (trainer_mgr) {
-            trainer_mgr->clearTrainer();
+            if (!trainer_mgr->clearTrainer()) {
+                LOG_ERROR("switchToEditMode deferred while the training worker still owns the trainer");
+                return;
+            }
         }
 
         scene_.clear();

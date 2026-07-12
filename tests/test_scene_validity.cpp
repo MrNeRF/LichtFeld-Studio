@@ -77,7 +77,7 @@ namespace lfs::python {
         ASSERT_TRUE(manager.hasTrainer());
         EXPECT_GT(active.allocated_bytes, before.allocated_bytes);
 
-        manager.clearTrainer();
+        ASSERT_TRUE(manager.clearTrainer());
 
         const auto after = core::PinnedMemoryAllocator::instance().get_stats();
         EXPECT_FALSE(manager.hasTrainer());

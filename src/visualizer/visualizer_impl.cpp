@@ -1158,15 +1158,17 @@ namespace lfs::vis {
 
         if (pending_new_project_ && trainer_manager_ &&
             trainer_manager_->canPerform(TrainingAction::ClearScene)) {
-            pending_new_project_ = false;
-            trainer_manager_->waitForCompletion();
-            performNewProject();
+            if (trainer_manager_->waitForCompletion()) {
+                pending_new_project_ = false;
+                performNewProject();
+            }
         }
 
         if (pending_reset_ && trainer_manager_ && !trainer_manager_->isTrainingActive()) {
-            pending_reset_ = false;
-            trainer_manager_->waitForCompletion();
-            performReset();
+            if (trainer_manager_->waitForCompletion()) {
+                pending_reset_ = false;
+                performReset();
+            }
         }
 
         if (!gui_frame_rendered_) {
@@ -1615,7 +1617,7 @@ namespace lfs::vis {
         if (trainer_manager_) {
             if (trainer_manager_->isTrainingActive()) {
                 trainer_manager_->stopTraining();
-                trainer_manager_->waitForCompletion();
+                (void)trainer_manager_->waitForCompletion();
             }
             trainer_manager_.reset();
         }

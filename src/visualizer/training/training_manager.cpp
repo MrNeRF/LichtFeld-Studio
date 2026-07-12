@@ -163,19 +163,10 @@ namespace lfs::vis {
 
         if (training_thread_ && training_thread_->joinable()) {
             training_thread_->request_stop();
-            auto timeout = std::chrono::milliseconds(500);
-            {
-                std::unique_lock<std::mutex> lock(completion_mutex_);
-                if (completion_cv_.wait_for(lock, timeout, [this] { return training_complete_; })) {
-                    lock.unlock();
-                    training_thread_->join();
-                } else {
-                    lock.unlock();
-                    LOG_WARN("Thread didn't respond to stop request, detaching");
-                    training_thread_->detach();
-                }
+            if (!waitForCompletion()) {
+                LOG_ERROR("Training resource cleanup deferred because the worker still owns the trainer");
+                return;
             }
-            training_thread_.reset();
         }
 
         if (trainer_) {
@@ -202,14 +193,26 @@ namespace lfs::vis {
         if (training_thread_ && training_thread_->joinable()) {
             LOG_INFO("Stopping training thread during destruction...");
             stopTraining();
-            waitForCompletion();
+            if (!waitForCompletion()) {
+                // Destruction cannot leave a worker that captures this manager or
+                // its scene/trainer pointers. A final join is intentionally
+                // unbounded here; the interactive clear path keeps ownership and
+                // returns instead of reaching this shutdown-only fallback.
+                LOG_WARN("Waiting without a timeout for training worker during shutdown");
+                training_thread_->request_stop();
+                training_thread_->join();
+                training_thread_.reset();
+            }
         }
     }
 
     void TrainerManager::setTrainer(std::unique_ptr<lfs::training::Trainer> trainer) {
         LOG_TIMER_TRACE("TrainerManager::setTrainer");
 
-        clearTrainer();
+        if (!clearTrainer()) {
+            LOG_ERROR("Cannot install trainer while the previous training worker is still stopping");
+            return;
+        }
 
         if (trainer) {
             const auto& params = trainer->getParams();
@@ -231,7 +234,10 @@ namespace lfs::vis {
     void TrainerManager::setTrainerFromCheckpoint(std::unique_ptr<lfs::training::Trainer> trainer, int checkpoint_iteration) {
         LOG_TIMER_TRACE("TrainerManager::setTrainerFromCheckpoint");
 
-        clearTrainer();
+        if (!clearTrainer()) {
+            LOG_ERROR("Cannot install checkpoint trainer while the previous training worker is still stopping");
+            return;
+        }
 
         if (trainer) {
             const auto& params = trainer->getParams();
@@ -256,7 +262,7 @@ namespace lfs::vis {
         return trainer_ != nullptr;
     }
 
-    void TrainerManager::clearTrainer() {
+    bool TrainerManager::clearTrainer() {
         LOG_DEBUG("Clearing trainer");
 
         const auto state = getState();
@@ -271,10 +277,13 @@ namespace lfs::vis {
         if (training_thread_ && training_thread_->joinable()) {
             if (training_thread_->get_id() == std::this_thread::get_id()) {
                 LOG_ERROR("Cannot clear trainer from its own training thread");
-                return;
+                return false;
             }
             LOG_INFO("Waiting for training thread before clearing trainer");
-            waitForCompletion();
+            if (!waitForCompletion()) {
+                LOG_ERROR("Trainer clear deferred: training worker did not reach its terminal state");
+                return false;
+            }
         }
 
         {
@@ -298,6 +307,7 @@ namespace lfs::vis {
         python::update_training_state(false, "idle");
         python::update_trainer_loaded(false, 0);
         LOG_INFO("Trainer cleared");
+        return true;
     }
 
     bool TrainerManager::startTraining() {
@@ -714,9 +724,13 @@ namespace lfs::vis {
         }
     }
 
-    void TrainerManager::waitForCompletion() {
+    bool TrainerManager::waitForCompletion() {
         if (!training_thread_ || !training_thread_->joinable()) {
-            return;
+            return true;
+        }
+        if (training_thread_->get_id() == std::this_thread::get_id()) {
+            LOG_ERROR("Cannot wait for the training worker from its own thread");
+            return false;
         }
 
         std::unique_lock<std::mutex> lock(completion_mutex_);
@@ -724,11 +738,12 @@ namespace lfs::vis {
                                      [this] { return training_complete_; })) {
             LOG_ERROR("Training thread join timed out ({}s)", COMPLETION_TIMEOUT_SEC);
             training_thread_->request_stop();
-            return;
+            return false;
         }
 
         training_thread_->join();
         training_thread_.reset();
+        return true;
     }
 
     int TrainerManager::getCurrentIteration() const {
