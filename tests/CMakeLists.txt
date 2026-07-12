@@ -218,6 +218,7 @@ set(TEST_FILES
     test_mcp_app_utils.cpp
     test_mcp_shared_scene_tools.cpp
     test_mcp_sequencer_tools.cpp
+    test_tcp_publisher.cpp
     test_view_info_json.cpp
     test_video_export_utils.cpp
     test_visualizer_post_work.cpp
@@ -378,11 +379,12 @@ target_compile_definitions(lichtfeld_tests PRIVATE
 
 if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
     set(LFS_TEST_INTERNAL_LINK_LIBS
-        "$<LINK_GROUP:RESCAN,lfs_mcp,lfs_visualizer,lfs_sequencer,lfs_rendering,lfs_training,lfs_core,lfs_geometry,lfs_io,lfs_video,fastlfs_backend,spz_lib,lfs_python_utils>"
+        "$<LINK_GROUP:RESCAN,lfs_mcp,lfs_tcp,lfs_visualizer,lfs_sequencer,lfs_rendering,lfs_training,lfs_core,lfs_geometry,lfs_io,lfs_video,fastlfs_backend,spz_lib,lfs_python_utils>"
     )
 else()
     set(LFS_TEST_INTERNAL_LINK_LIBS
         lfs_mcp
+        lfs_tcp
         lfs_visualizer
         lfs_sequencer
         lfs_rendering
