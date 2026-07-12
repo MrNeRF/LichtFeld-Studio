@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
+#include <future>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 #include <memory>
@@ -28,6 +29,57 @@
 #include "visualizer/training/training_manager.hpp"
 
 namespace lfs::python {
+
+    TEST(TrainingStateMachineTest, PublishesFinishReasonBeforeFinishedCallback) {
+        vis::TrainingStateMachine state_machine;
+        ASSERT_TRUE(state_machine.transitionTo(vis::TrainingState::Paused));
+        ASSERT_TRUE(state_machine.transitionTo(vis::TrainingState::Stopping));
+
+        vis::FinishReason callback_reason = vis::FinishReason::None;
+        state_machine.setStateChangeCallback([&](vis::TrainingState, vis::TrainingState new_state) {
+            if (new_state == vis::TrainingState::Finished) {
+                callback_reason = state_machine.getFinishReason();
+            }
+        });
+
+        ASSERT_TRUE(state_machine.transitionToFinished(vis::FinishReason::UserStopped));
+        EXPECT_EQ(callback_reason, vis::FinishReason::UserStopped);
+        EXPECT_EQ(state_machine.getFinishReason(), vis::FinishReason::UserStopped);
+    }
+
+    TEST(TrainingStateMachineTest, SerializesConcurrentTransitionsThroughCallbacks) {
+        vis::TrainingStateMachine state_machine;
+        ASSERT_TRUE(state_machine.transitionTo(vis::TrainingState::Ready));
+        ASSERT_TRUE(state_machine.transitionTo(vis::TrainingState::Running));
+
+        std::promise<void> pause_callback_entered;
+        std::promise<void> release_pause_callback;
+        auto release_future = release_pause_callback.get_future().share();
+        state_machine.setStateChangeCallback(
+            [&](vis::TrainingState, vis::TrainingState new_state) {
+                if (new_state == vis::TrainingState::Paused) {
+                    pause_callback_entered.set_value();
+                    release_future.wait();
+                }
+            });
+
+        bool pause_succeeded = false;
+        std::thread pause_thread([&] {
+            pause_succeeded = state_machine.transitionTo(vis::TrainingState::Paused);
+        });
+        pause_callback_entered.get_future().wait();
+
+        auto stop_future = std::async(std::launch::async, [&] {
+            return state_machine.transitionTo(vis::TrainingState::Stopping);
+        });
+        EXPECT_EQ(stop_future.wait_for(std::chrono::milliseconds(50)), std::future_status::timeout);
+
+        release_pause_callback.set_value();
+        pause_thread.join();
+        EXPECT_TRUE(pause_succeeded);
+        EXPECT_TRUE(stop_future.get());
+        EXPECT_EQ(state_machine.getState(), vis::TrainingState::Stopping);
+    }
 
     TEST(TrainerConstructionTest, RejectsInvalidSceneBeforeAllocatingCudaResources) {
         core::Scene scene;

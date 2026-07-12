@@ -14,6 +14,11 @@ namespace lfs::vis {
         return s == TrainingState::Running || s == TrainingState::Paused;
     }
 
+    FinishReason TrainingStateMachine::getFinishReason() const {
+        std::lock_guard lock(mutex_);
+        return finish_reason_;
+    }
+
     bool TrainingStateMachine::canPerform(TrainingAction action) const {
         const auto state_idx = static_cast<size_t>(getState());
         const auto action_idx = static_cast<size_t>(action);
@@ -92,6 +97,16 @@ namespace lfs::vis {
     }
 
     bool TrainingStateMachine::transitionTo(TrainingState new_state) {
+        std::lock_guard lock(mutex_);
+        return transitionToLocked(new_state, FinishReason::None);
+    }
+
+    bool TrainingStateMachine::transitionToFinished(FinishReason reason) {
+        std::lock_guard lock(mutex_);
+        return transitionToLocked(TrainingState::Finished, reason);
+    }
+
+    bool TrainingStateMachine::transitionToLocked(TrainingState new_state, FinishReason finish_reason) {
         const auto old_state = getState();
 
         if (!isValidTransition(old_state, new_state)) {
@@ -103,11 +118,8 @@ namespace lfs::vis {
         LOG_DEBUG("Training state: {} -> {}", stateName(old_state), stateName(new_state));
 
         executeExitActions(old_state);
+        finish_reason_ = new_state == TrainingState::Finished ? finish_reason : FinishReason::None;
         state_.store(new_state, std::memory_order_release);
-
-        if (new_state != TrainingState::Finished) {
-            finish_reason_ = FinishReason::None;
-        }
 
         executeEntryActions(new_state);
 
@@ -118,20 +130,29 @@ namespace lfs::vis {
         return true;
     }
 
-    bool TrainingStateMachine::transitionToFinished(FinishReason reason) {
-        if (!transitionTo(TrainingState::Finished)) {
-            return false;
-        }
-        finish_reason_ = reason;
-        return true;
-    }
-
     void TrainingStateMachine::setResources(const TrainingResources& resources) {
+        std::lock_guard lock(mutex_);
         resources_ = resources;
     }
 
+    TrainingResources TrainingStateMachine::getResources() const {
+        std::lock_guard lock(mutex_);
+        return resources_;
+    }
+
     void TrainingStateMachine::clearResourceTracking() {
+        std::lock_guard lock(mutex_);
         resources_ = TrainingResources{};
+    }
+
+    void TrainingStateMachine::setStateChangeCallback(StateChangeCallback callback) {
+        std::lock_guard lock(mutex_);
+        on_state_change_ = std::move(callback);
+    }
+
+    void TrainingStateMachine::setCleanupCallback(CleanupCallback callback) {
+        std::lock_guard lock(mutex_);
+        on_cleanup_ = std::move(callback);
     }
 
     bool TrainingStateMachine::isValidTransition(TrainingState from, TrainingState to) const {

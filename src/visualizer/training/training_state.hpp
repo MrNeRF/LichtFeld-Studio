@@ -9,6 +9,7 @@
 #include <array>
 #include <atomic>
 #include <functional>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -71,7 +72,7 @@ namespace lfs::vis {
         [[nodiscard]] TrainingState getState() const { return state_.load(std::memory_order_acquire); }
         [[nodiscard]] bool isInState(TrainingState state) const { return getState() == state; }
         [[nodiscard]] bool isActive() const; // Running or Paused
-        [[nodiscard]] FinishReason getFinishReason() const { return finish_reason_; }
+        [[nodiscard]] FinishReason getFinishReason() const;
 
         // Action permission checks - call BEFORE attempting action
         [[nodiscard]] bool canPerform(TrainingAction action) const;
@@ -83,12 +84,12 @@ namespace lfs::vis {
 
         // Resource tracking
         void setResources(const TrainingResources& resources);
-        [[nodiscard]] const TrainingResources& getResources() const { return resources_; }
+        [[nodiscard]] TrainingResources getResources() const;
         void clearResourceTracking();
 
         // Callbacks
-        void setStateChangeCallback(StateChangeCallback callback) { on_state_change_ = std::move(callback); }
-        void setCleanupCallback(CleanupCallback callback) { on_cleanup_ = std::move(callback); }
+        void setStateChangeCallback(StateChangeCallback callback);
+        void setCleanupCallback(CleanupCallback callback);
 
         // Utility
         [[nodiscard]] static std::string_view stateName(TrainingState state);
@@ -96,10 +97,14 @@ namespace lfs::vis {
 
     private:
         [[nodiscard]] bool isValidTransition(TrainingState from, TrainingState to) const;
+        [[nodiscard]] bool transitionToLocked(TrainingState new_state, FinishReason finish_reason);
         void executeExitActions(TrainingState old_state);
         void executeEntryActions(TrainingState new_state);
 
         std::atomic<TrainingState> state_{TrainingState::Idle};
+        // Transition callbacks are part of the transaction and may query the
+        // machine again, so re-entrant locking is intentional here.
+        mutable std::recursive_mutex mutex_;
         FinishReason finish_reason_{FinishReason::None};
         TrainingResources resources_;
 
