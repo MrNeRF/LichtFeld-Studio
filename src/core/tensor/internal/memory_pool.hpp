@@ -9,7 +9,6 @@
 #include "core/logger.hpp"
 #include "core/pinned_memory_allocator.hpp"
 #include "cuda_event_pool.hpp"
-#include "deferred_free_queue.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gpu_slab_allocator.hpp"
 #include "size_bucketed_pool.hpp"
@@ -67,7 +66,6 @@ namespace lfs::core {
             if (suspend_deallocations_.load(std::memory_order_acquire)) {
                 return;
             }
-            DeferredFreeQueue::instance().shutdown();
             SizeBucketedPool::instance().shutdown();
             GPUSlabAllocator::instance().shutdown();
             CudaEventPool::instance().shutdown();
@@ -126,12 +124,6 @@ namespace lfs::core {
                     track_allocation(ptr, bytes, AllocMethod::Bucketed, stream);
                     if constexpr (ENABLE_ALLOCATION_PROFILING) {
                         AllocationProfiler::instance().record_allocation(bytes, 3);
-                    }
-                    if ((stats_.bucket_allocs.load(std::memory_order_relaxed) +
-                         stats_.async_allocs.load(std::memory_order_relaxed)) %
-                            100 ==
-                        0) {
-                        DeferredFreeQueue::instance().process();
                     }
                     log_stats_periodically();
                     return ptr;
@@ -397,7 +389,6 @@ namespace lfs::core {
                     std::source_location::current(), CudaFailureDisposition::LogOnly);
                 return;
             }
-            DeferredFreeQueue::instance().flush();
             {
                 std::lock_guard<std::mutex> lock(map_mutex_);
                 for (auto& [ptr, info] : allocation_map_) {
