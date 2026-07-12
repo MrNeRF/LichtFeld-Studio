@@ -49,7 +49,14 @@ namespace {
         std::vector<std::string> messages_;
     };
 
-    TEST(CudaErrorDiagnostics, BreadcrumbRingWrapsMostRecentFirst) {
+    class CudaErrorDiagnostics : public ::testing::Test {
+    protected:
+        void SetUp() override {
+            lfs::core::reset_failure_report_dedup_for_testing();
+        }
+    };
+
+    TEST_F(CudaErrorDiagnostics, BreadcrumbRingWrapsMostRecentFirst) {
         lfs::core::clear_cuda_breadcrumbs_for_testing();
         for (size_t i = 0; i < lfs::core::CUDA_BREADCRUMB_CAPACITY + 9; ++i) {
             lfs::core::record_cuda_breadcrumb("wrap", __FILE__, static_cast<uint32_t>(i + 1));
@@ -64,7 +71,7 @@ namespace {
         EXPECT_EQ(breadcrumbs.back().line, 10);
     }
 
-    TEST(CudaErrorDiagnostics, BreadcrumbRingThreadSafetySmoke) {
+    TEST_F(CudaErrorDiagnostics, BreadcrumbRingThreadSafetySmoke) {
         lfs::core::clear_cuda_breadcrumbs_for_testing();
         constexpr size_t THREAD_COUNT = 8;
         constexpr size_t WRITES_PER_THREAD = 512;
@@ -90,7 +97,7 @@ namespace {
         }
     }
 
-    TEST(CudaErrorDiagnostics, ContractReportFormattingHasSharedSections) {
+    TEST_F(CudaErrorDiagnostics, ContractReportFormattingHasSharedSections) {
         const std::string report = lfs::core::format_contract_failure_report(
             "test contract", "lhs.dtype() == rhs.dtype()", "dtype mismatch",
             std::source_location::current(), "  #0 formatting_test\n");
@@ -106,7 +113,7 @@ namespace {
         EXPECT_NE(report.find("LFS_CUDA_SYNC_DEBUG=1"), std::string::npos);
     }
 
-    TEST(CudaErrorDiagnostics, SuccessfulCheckDoesNotFormatFailureContext) {
+    TEST_F(CudaErrorDiagnostics, SuccessfulCheckDoesNotFormatFailureContext) {
         if (lfs::core::cuda_sync_debug_enabled()) {
             GTEST_SKIP() << "sync-debug mode deliberately runs the full completion path";
         }
@@ -117,7 +124,7 @@ namespace {
         EXPECT_EQ(format_evaluations, 0);
     }
 
-    TEST(CudaErrorDiagnostics, ForcedCudaErrorReportHasExpectedSections) {
+    TEST_F(CudaErrorDiagnostics, ForcedCudaErrorReportHasExpectedSections) {
         ErrorLogCapture capture;
 
         EXPECT_THROW(LFS_CUDA_CHECK(cudaSetDevice(-1)), std::runtime_error);
@@ -134,7 +141,7 @@ namespace {
         (void)cudaGetLastError();
     }
 
-    TEST(CudaErrorDiagnostics, ContractReportNamesTensorCallerInStack) {
+    TEST_F(CudaErrorDiagnostics, ContractReportNamesTensorCallerInStack) {
         ErrorLogCapture capture;
         const auto values = lfs::core::Tensor::from_vector(
             {1.0f, 2.0f}, {2}, lfs::core::Device::CPU);

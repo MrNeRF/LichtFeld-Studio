@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include "core/memory_pressure.hpp"
 #include "core/tensor.hpp"
 
@@ -40,6 +41,64 @@ protected:
 
     MemoryPressureCoordinator& coordinator() { return MemoryPressureCoordinator::instance(); }
 };
+
+class CudaErrorDiagnosticsTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        reset_cuda_diagnostics_for_testing();
+        reset_failure_report_dedup_for_testing();
+        MemoryPressureCoordinator::instance().reset_for_testing();
+    }
+
+    void TearDown() override {
+        MemoryPressureCoordinator::instance().reset_for_testing();
+        reset_cuda_diagnostics_for_testing();
+    }
+};
+
+TEST_F(CudaErrorDiagnosticsTest, CudaErrorClassifier) {
+    EXPECT_TRUE(is_cuda_unavailable_error(cudaErrorInitializationError));
+    EXPECT_TRUE(is_cuda_unavailable_error(cudaErrorNoDevice));
+    EXPECT_TRUE(is_cuda_unavailable_error(cudaErrorInsufficientDriver));
+    EXPECT_FALSE(is_cuda_unavailable_error(cudaErrorMemoryAllocation));
+    EXPECT_FALSE(is_cuda_unavailable_error(cudaSuccess));
+    EXPECT_FALSE(is_cuda_unavailable_error(cudaErrorInvalidDevice));
+}
+
+TEST_F(CudaErrorDiagnosticsTest, CudaUnavailableLatchIsOnceAndTerminal) {
+    EXPECT_FALSE(cuda_is_unavailable());
+    EXPECT_TRUE(latch_cuda_unavailable(cudaErrorInitializationError));
+    EXPECT_FALSE(latch_cuda_unavailable(cudaErrorInitializationError));
+    EXPECT_TRUE(cuda_is_unavailable());
+}
+
+TEST_F(CudaErrorDiagnosticsTest, FailureReportDedupEmitsFullThenRepeats) {
+    uint64_t count = 0;
+    EXPECT_TRUE(decide_failure_report_for_testing("F", 7, "site.cpp:10", count));
+    EXPECT_EQ(count, 1u);
+    EXPECT_FALSE(decide_failure_report_for_testing("F", 7, "site.cpp:10", count));
+    EXPECT_EQ(count, 2u);
+    EXPECT_FALSE(decide_failure_report_for_testing("F", 7, "site.cpp:10", count));
+    EXPECT_EQ(count, 3u);
+    EXPECT_TRUE(decide_failure_report_for_testing("F", 7, "other.cpp:10", count));
+    EXPECT_EQ(count, 1u);
+}
+
+TEST_F(CudaErrorDiagnosticsTest, LatchedAllocationFailsFastTyped) {
+    int device_count = 0;
+    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
+        GTEST_SKIP() << "no CUDA device";
+    }
+
+    auto& pressure = MemoryPressureCoordinator::instance();
+    pressure.set_allocation_probe(
+        [](const MemoryDomain domain, size_t) { return domain == MemoryDomain::CudaDevice; });
+    ASSERT_TRUE(latch_cuda_unavailable(cudaErrorInitializationError));
+    const uint64_t episodes_before = pressure.episode_count();
+
+    EXPECT_THROW(Tensor::zeros({1024}, Device::CUDA), MemoryAllocationError);
+    EXPECT_EQ(pressure.episode_count(), episodes_before);
+}
 
 TEST_F(MemoryPressureTest, TypedErrorCarriesMetadata) {
     AllocationFailure failure = device_failure(1234);
