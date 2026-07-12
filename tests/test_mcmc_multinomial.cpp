@@ -8,9 +8,12 @@
 #include <stdexcept>
 #include <vector>
 
+#include "core/cuda_error.hpp"
 #include "core/tensor.hpp"
 #include "kernels/mcmc_kernels.hpp"
 #include "lfs/cuda_scratch.hpp"
+
+#include <source_location>
 
 using namespace lfs::core;
 
@@ -74,6 +77,16 @@ TEST_F(McmcMultinomialTest, ScratchAllocationFailureAbortsAndRecovers) {
         (void)lfs::training::cuda_scratch::DeviceBuffer(
             std::numeric_limits<size_t>::max(), nullptr, "test.impossible_allocation"),
         std::runtime_error);
+
+    // The impossible allocation deliberately leaves a recoverable
+    // cudaErrorMemoryAllocation in the CUDA status. Per the handled-failure
+    // contract (docs/docs/development/assertions.md), a caller that recovers must
+    // consume it through the central status adapter, otherwise the next checked
+    // call correctly reports it as a pre-existing error.
+    ensure_cuda_success(cudaGetLastError(),
+                        "recover from injected scratch allocation failure", {},
+                        std::source_location::current(),
+                        CudaFailureDisposition::LogOnly);
 
     EXPECT_NO_THROW(lfs::training::mcmc::launch_multinomial_sample_all(
         weights.ptr<float>(), opacities.ptr<float>(), scales.ptr<float>(),
