@@ -103,10 +103,12 @@ namespace lfs::training {
 
             // Keep K tensor cached and update values in-place to avoid per-call allocations.
             thread_local core::Tensor cached_K_tensor;
-            if (!cached_K_tensor.is_valid() || cached_K_tensor.numel() != 9) {
+            if (!cached_K_tensor.is_valid() || cached_K_tensor.numel() != 9 ||
+                cached_K_tensor.stream() != fwd_stream) {
                 cached_K_tensor = core::Tensor::empty({1, 3, 3}, core::Device::CUDA, core::DataType::Float32);
+                if (cached_K_tensor.stream() != fwd_stream)
+                    cached_K_tensor.set_stream(fwd_stream);
             }
-            cached_K_tensor.set_stream(fwd_stream);
             const std::array<float, 9> K_host = {
                 k00, 0.0f, k02,
                 0.0f, k11, k12,
@@ -380,10 +382,12 @@ namespace lfs::training {
 
                 const size_t image_channels = image_hwc.shape()[2];
                 const core::TensorShape image_shape = {image_channels, static_cast<size_t>(H), static_cast<size_t>(W)};
-                if (!cached_image_chw.is_valid() || cached_image_chw.shape() != image_shape) {
+                if (!cached_image_chw.is_valid() || cached_image_chw.shape() != image_shape ||
+                    cached_image_chw.stream() != fwd_stream) {
                     cached_image_chw = core::Tensor::empty(image_shape, core::Device::CUDA, core::DataType::Float32);
+                    if (cached_image_chw.stream() != fwd_stream)
+                        cached_image_chw.set_stream(fwd_stream);
                 }
-                cached_image_chw.set_stream(fwd_stream);
 
                 kernels::launch_permute_hwc_to_chw(
                     image_hwc.ptr<float>(),
@@ -397,10 +401,12 @@ namespace lfs::training {
             }
 
             const core::TensorShape alpha_shape = {1UL, static_cast<size_t>(H), static_cast<size_t>(W)};
-            if (!cached_alpha_chw.is_valid() || cached_alpha_chw.shape() != alpha_shape) {
+            if (!cached_alpha_chw.is_valid() || cached_alpha_chw.shape() != alpha_shape ||
+                cached_alpha_chw.stream() != fwd_stream) {
                 cached_alpha_chw = core::Tensor::empty(alpha_shape, core::Device::CUDA, core::DataType::Float32);
+                if (cached_alpha_chw.stream() != fwd_stream)
+                    cached_alpha_chw.set_stream(fwd_stream);
             }
-            cached_alpha_chw.set_stream(fwd_stream);
             cudaMemcpyAsync(
                 cached_alpha_chw.ptr<float>(),
                 render_alphas_ptr_out,
@@ -416,10 +422,12 @@ namespace lfs::training {
                 }
 
                 const core::TensorShape depth_shape = {1UL, static_cast<size_t>(H), static_cast<size_t>(W)};
-                if (!cached_depth_chw.is_valid() || cached_depth_chw.shape() != depth_shape) {
+                if (!cached_depth_chw.is_valid() || cached_depth_chw.shape() != depth_shape ||
+                    cached_depth_chw.stream() != fwd_stream) {
                     cached_depth_chw = core::Tensor::empty(depth_shape, core::Device::CUDA, core::DataType::Float32);
+                    if (cached_depth_chw.stream() != fwd_stream)
+                        cached_depth_chw.set_stream(fwd_stream);
                 }
-                cached_depth_chw.set_stream(fwd_stream);
                 cudaMemcpyAsync(
                     cached_depth_chw.ptr<float>(),
                     depth_hwc.ptr<float>(),
