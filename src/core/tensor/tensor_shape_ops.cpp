@@ -10,14 +10,6 @@
 #include <execution>
 #include <numeric>
 
-#define CHECK_CUDA(call)                                                                 \
-    do {                                                                                 \
-        const cudaError_t error = (call);                                                \
-        LFS_ASSERT_MSG(error == cudaSuccess,                                             \
-                       std::format("{} failed (cuda_error={}({}))", #call,               \
-                                   cudaGetErrorString(error), static_cast<int>(error))); \
-    } while (0)
-
 namespace lfs::core {
 
     Tensor Tensor::reshape(TensorShape new_shape) const {
@@ -434,7 +426,5 @@ namespace lfs::core {
 
         return resolved;
     }
-
-#undef CHECK_CUDA
 
 } // namespace lfs::core

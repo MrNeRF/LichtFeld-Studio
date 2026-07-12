@@ -6,6 +6,8 @@
 #include "app/converter.hpp"
 #include "core/abi.hpp"
 #include "core/argument_parser.hpp"
+#include "core/crash_handler.hpp"
+#include "core/cuda_error.hpp"
 #include "core/executable_path.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -192,6 +194,9 @@ int main(int argc, char* argv[]) {
                      loaded_core_stamp != nullptr ? loaded_core_stamp : "<null>");
         return 2;
     }
+
+    lfs::core::install_crash_handlers();
+    lfs::core::initialize_cuda_diagnostics();
 
     auto result = lfs::core::args::parse_args(argc, argv);
     if (!result) {

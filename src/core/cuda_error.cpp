@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <format>
@@ -137,7 +138,9 @@ namespace lfs::core {
             if (state.stream != 0) {
                 out << std::format("Stream: {:#x}\n", state.stream);
             }
-            if (state.pre_call_error != cudaSuccess || state.pre_call_sync_error != cudaSuccess) {
+            if (!state.pre_call_sampled) {
+                out << "Attribution: pre-call CUDA state was not sampled by this status adapter.\n";
+            } else if (state.pre_call_error != cudaSuccess || state.pre_call_sync_error != cudaSuccess) {
                 out << "Attribution: pre-existing CUDA error detected BEFORE this call — "
                        "this site is NOT the origin.\n";
                 if (state.pre_call_error != cudaSuccess) {
@@ -221,11 +224,18 @@ namespace lfs::core {
         return enabled;
     }
 
-    void initialize_cuda_diagnostics() {
-        if (cuda_sync_debug_enabled()) {
-            std::call_once(g_sync_debug_log_once, [] {
-                LOG_INFO("LFS_CUDA_SYNC_DEBUG=1 active: synchronizing before and after every checked CUDA operation");
-            });
+    void initialize_cuda_diagnostics() noexcept {
+        try {
+            if (cuda_sync_debug_enabled()) {
+                std::call_once(g_sync_debug_log_once, [] {
+                    std::fprintf(
+                        stderr,
+                        "LFS_CUDA_SYNC_DEBUG=1 active: synchronizing before and after every checked CUDA operation\n");
+                });
+            }
+        } catch (...) {
+            // Diagnostic initialization must not turn a checked CUDA call into
+            // a process termination when the logger itself is unavailable.
         }
     }
 
@@ -235,6 +245,7 @@ namespace lfs::core {
         initialize_cuda_diagnostics();
         CudaCheckState state;
         state.stream = reinterpret_cast<uintptr_t>(stream);
+        state.pre_call_sampled = true;
         if (cuda_sync_debug_enabled()) {
             state.pre_call_sync_error = stream ? cudaStreamSynchronize(stream) : cudaDeviceSynchronize();
         }
@@ -244,34 +255,108 @@ namespace lfs::core {
         return state;
     }
 
+    CudaCheckCompletion complete_cuda_check(
+        const cudaError_t result,
+        const CudaCheckState& state) noexcept {
+        CudaCheckCompletion completion;
+        if (cuda_sync_debug_enabled()) {
+            completion.post_sync_error =
+                state.stream != 0
+                    ? cudaStreamSynchronize(reinterpret_cast<cudaStream_t>(state.stream))
+                    : cudaDeviceSynchronize();
+            completion.post_peek_error = cudaPeekAtLastError();
+        }
+
+        completion.effective_error = result != cudaSuccess
+                                         ? result
+                                     : completion.post_sync_error != cudaSuccess
+                                         ? completion.post_sync_error
+                                         : completion.post_peek_error;
+        return completion;
+    }
+
+    [[noreturn]] void report_cuda_check_failure(
+        const CudaCheckCompletion& completion,
+        const CudaCheckState& state,
+        const char* expression,
+        const std::string_view message,
+        const std::source_location& location) {
+        const std::string report = format_cuda_failure_report(
+            completion.effective_error, state, expression, message, location,
+            completion.post_sync_error, completion.post_peek_error);
+        Logger::get().log_internal(LogLevel::Error, location, report);
+        throw std::runtime_error(std::format(
+            "CUDA call failed: {} at {}:{}", expression, location.file_name(), location.line()));
+    }
+
     void finish_cuda_check(const cudaError_t result,
                            const CudaCheckState& state,
                            const char* expression,
                            const std::string_view message,
                            const std::source_location& location) {
-        cudaError_t post_sync_error = cudaSuccess;
-        cudaError_t post_peek_error = cudaSuccess;
-        if (cuda_sync_debug_enabled()) {
-            post_sync_error = state.stream != 0
-                                  ? cudaStreamSynchronize(reinterpret_cast<cudaStream_t>(state.stream))
-                                  : cudaDeviceSynchronize();
-            post_peek_error = cudaPeekAtLastError();
-        }
-
-        const cudaError_t effective_error = result != cudaSuccess
-                                                ? result
-                                            : post_sync_error != cudaSuccess
-                                                ? post_sync_error
-                                                : post_peek_error;
-        if (effective_error == cudaSuccess) [[likely]] {
+        const CudaCheckCompletion completion = complete_cuda_check(result, state);
+        if (completion.effective_error == cudaSuccess) [[likely]] {
             return;
         }
+        report_cuda_check_failure(completion, state, expression, message, location);
+    }
 
-        const std::string report = format_cuda_failure_report(
-            effective_error, state, expression, message, location, post_sync_error, post_peek_error);
-        Logger::get().log_internal(LogLevel::Error, location, report);
-        throw std::runtime_error(std::format(
-            "CUDA call failed: {} at {}:{}", expression, location.file_name(), location.line()));
+    void ensure_cuda_success(const cudaError_t result,
+                             const std::string_view expression,
+                             const std::string_view message,
+                             const std::source_location& location,
+                             const CudaFailureDisposition disposition) {
+        if (result == cudaSuccess) [[likely]] {
+            return;
+        }
+        if (disposition == CudaFailureDisposition::Throw) {
+            const std::string expression_copy(expression);
+            finish_cuda_check(result, CudaCheckState{}, expression_copy.c_str(), message, location);
+            return;
+        }
+        try {
+            const std::string expression_copy(expression);
+            const std::string report = format_cuda_failure_report(
+                result, CudaCheckState{}, expression_copy.c_str(), message, location,
+                cudaSuccess, cudaSuccess);
+            Logger::get().log_internal(LogLevel::Error, location, report);
+        } catch (...) {
+            // Recovery, teardown, and allocator fallback paths use LogOnly and
+            // must never acquire a new failure mode from diagnostics themselves.
+        }
+    }
+
+    void validate_cuda_device_pointer(const void* pointer,
+                                      const std::string_view name,
+                                      const std::source_location& location) {
+        if (!pointer) {
+            detail::assertion_failed(
+                "LFS boundary contract", "pointer != nullptr",
+                std::format("CUDA pointer '{}' must not be null", name), location);
+        }
+
+        cudaPointerAttributes attributes{};
+        const auto state = prepare_cuda_check(
+            "cudaPointerGetAttributes(&attributes, pointer)", location);
+        const cudaError_t result = cudaPointerGetAttributes(&attributes, pointer);
+        finish_cuda_check(result, state, "cudaPointerGetAttributes(&attributes, pointer)",
+                          std::format("validating CUDA pointer '{}' ({})", name, pointer), location);
+        if (attributes.type != cudaMemoryTypeDevice) {
+            detail::assertion_failed(
+                "LFS boundary contract", "attributes.type == cudaMemoryTypeDevice",
+                std::format("CUDA pointer '{}' has memory type {} instead of device type {}",
+                            name, static_cast<int>(attributes.type),
+                            static_cast<int>(cudaMemoryTypeDevice)),
+                location);
+        }
+    }
+
+    void validate_cuda_device_pointer_optional(const void* pointer,
+                                               const std::string_view name,
+                                               const std::source_location& location) {
+        if (pointer) {
+            validate_cuda_device_pointer(pointer, name, location);
+        }
     }
 
     std::string capture_host_stacktrace(const size_t skip_frames) {
@@ -308,7 +393,8 @@ namespace lfs::core {
 #endif
     }
 
-    std::string format_contract_failure_report(
+    std::string format_failure_report(
+        const std::string_view family,
         const std::string_view contract,
         const std::string_view expression,
         const std::string_view message,
@@ -316,7 +402,7 @@ namespace lfs::core {
         const std::string_view stacktrace) {
         std::ostringstream out;
         out << "========== LFS FAILURE REPORT ==========\n";
-        out << "Family: tensor contract violation\n";
+        out << "Family: " << family << '\n';
         out << "Contract: " << contract << '\n';
         out << "Failed expression: " << expression << '\n';
         out << std::format("Detection site: {}:{} ({})\n",
@@ -332,6 +418,16 @@ namespace lfs::core {
                "LFS_CUDA_SYNC_DEBUG=1 to synchronize after every op and pinpoint the true origin.\n";
         out << "========================================";
         return out.str();
+    }
+
+    std::string format_contract_failure_report(
+        const std::string_view contract,
+        const std::string_view expression,
+        const std::string_view message,
+        const std::source_location& location,
+        const std::string_view stacktrace) {
+        return format_failure_report(
+            "tensor contract violation", contract, expression, message, location, stacktrace);
     }
 
     void report_tensor_exception(const std::string_view message,

@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "cuda_event_pool.hpp"
 #include "diagnostics/vram_profiler.hpp"
@@ -103,6 +104,7 @@ namespace lfs::core {
         }
 
         void* try_allocate_cached(size_t bytes, cudaStream_t stream = nullptr) {
+            LFS_CUDA_BREADCRUMB_STREAM("tensor.bucket.allocate", stream);
             const size_t bucket_size = get_bucket_size(bytes);
             const size_t bucket_idx = get_bucket_index(bucket_size);
             if (bucket_idx >= NUM_BUCKETS)
@@ -157,7 +159,14 @@ namespace lfs::core {
                 const bool large_probationary_buffer =
                     bucket_size > budget / 2 && bucket.hits == 0 && bucket.misses < 2;
                 if (large_probationary_buffer) {
-                    cudaFreeAsync(ptr, stream);
+                    const cudaError_t free_status = cudaFreeAsync(ptr, stream);
+                    if (free_status != cudaSuccess) {
+                        ensure_cuda_success(
+                            free_status, "cudaFreeAsync(size-bucket probationary block)",
+                            std::format("ptr={}, bytes={}, stream={}", ptr, bucket_size,
+                                        static_cast<void*>(stream)),
+                            std::source_location::current(), CudaFailureDisposition::LogOnly);
+                    }
                     publish_cache_bytes();
                     return true;
                 }
@@ -168,7 +177,14 @@ namespace lfs::core {
                     bucket.cache.erase(bucket.cache.begin());
                     bucket.cached_bytes -= bucket_size;
                     stats_.bytes_cached.fetch_sub(bucket_size, std::memory_order_relaxed);
-                    cudaFreeAsync(old.ptr, old.stream);
+                    const cudaError_t free_status = cudaFreeAsync(old.ptr, old.stream);
+                    if (free_status != cudaSuccess) {
+                        ensure_cuda_success(
+                            free_status, "cudaFreeAsync(size-bucket entry eviction)",
+                            std::format("ptr={}, bytes={}, stream={}", old.ptr, bucket_size,
+                                        static_cast<void*>(old.stream)),
+                            std::source_location::current(), CudaFailureDisposition::LogOnly);
+                    }
                 }
 
                 bucket.cache.push_back({ptr, stream});
@@ -193,7 +209,10 @@ namespace lfs::core {
                 trim_cache();
                 err = cudaMallocAsync(&ptr, bucket_size, stream);
                 if (err != cudaSuccess) {
-                    LOG_ERROR("cudaMallocAsync failed for {} bytes: {}", bucket_size, cudaGetErrorString(err));
+                    ensure_cuda_success(err, "cudaMallocAsync(size bucket retry)",
+                                        std::format("bucket_bytes={}", bucket_size),
+                                        std::source_location::current(),
+                                        CudaFailureDisposition::LogOnly);
                     cudaGetLastError(); // Clear sticky error state for clean recovery
                     return nullptr;
                 }
@@ -204,10 +223,18 @@ namespace lfs::core {
         }
 
         void deallocate(void* ptr, size_t bytes, cudaStream_t stream = nullptr) {
+            LFS_CUDA_BREADCRUMB_STREAM("tensor.bucket.free", stream);
             if (!ptr)
                 return;
             if (!cache_free(ptr, bytes, stream)) {
-                cudaFreeAsync(ptr, stream);
+                const cudaError_t free_status = cudaFreeAsync(ptr, stream);
+                if (free_status != cudaSuccess) {
+                    ensure_cuda_success(
+                        free_status, "cudaFreeAsync(size-bucket uncached block)",
+                        std::format("ptr={}, bytes={}, stream={}", ptr, bytes,
+                                    static_cast<void*>(stream)),
+                        std::source_location::current(), CudaFailureDisposition::LogOnly);
+                }
             }
         }
 
@@ -242,7 +269,15 @@ namespace lfs::core {
                     // Stream-ordered free: these were cudaMallocAsync'd and a block
                     // last used on a non-default stream may still have pending work,
                     // which a plain cudaFree would not be ordered against.
-                    cudaFreeAsync(block.ptr, block.stream);
+                    const cudaError_t free_status = cudaFreeAsync(block.ptr, block.stream);
+                    if (free_status != cudaSuccess) {
+                        ensure_cuda_success(
+                            free_status, "cudaFreeAsync(size-bucket cache trim)",
+                            std::format("ptr={}, bytes={}, stream={}", block.ptr,
+                                        buckets_[i].bucket_size,
+                                        static_cast<void*>(block.stream)),
+                            std::source_location::current(), CudaFailureDisposition::LogOnly);
+                    }
                 }
                 buckets_[i].cache.clear();
                 buckets_[i].cached_bytes = 0;
@@ -302,8 +337,14 @@ namespace lfs::core {
             size_t free_bytes = 0;
             size_t total_bytes = 0;
             size_t budget = MAX_CACHE_BUDGET;
-            if (cudaMemGetInfo(&free_bytes, &total_bytes) == cudaSuccess) {
+            const cudaError_t memory_status = cudaMemGetInfo(&free_bytes, &total_bytes);
+            if (memory_status == cudaSuccess) {
                 budget = cache_budget_for_total_memory(total_bytes);
+            } else {
+                ensure_cuda_success(
+                    memory_status, "cudaMemGetInfo(size-bucket cache budget)",
+                    std::format("fallback_budget_bytes={}", budget),
+                    std::source_location::current(), CudaFailureDisposition::LogOnly);
             }
 
             size_t expected = 0;
@@ -358,7 +399,14 @@ namespace lfs::core {
                     stats_.bytes_cached.fetch_sub(victim_size, std::memory_order_relaxed);
                 }
 
-                cudaFreeAsync(victim.ptr, victim.stream);
+                const cudaError_t free_status = cudaFreeAsync(victim.ptr, victim.stream);
+                if (free_status != cudaSuccess) {
+                    ensure_cuda_success(
+                        free_status, "cudaFreeAsync(size-bucket budget eviction)",
+                        std::format("ptr={}, bytes={}, stream={}", victim.ptr, victim_size,
+                                    static_cast<void*>(victim.stream)),
+                        std::source_location::current(), CudaFailureDisposition::LogOnly);
+                }
             }
         }
 

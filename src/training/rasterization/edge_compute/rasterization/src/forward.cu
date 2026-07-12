@@ -58,7 +58,7 @@ int edge_compute::rasterization::edge_forward(
 
     // Initialize tile instance ranges on the frame's stream (see fastgs
     // forward.cu: the old side-stream overlap relied on legacy ordering).
-    check_cuda_status(
+    LFS_CUDA_CHECK_MSG(
         cudaMemsetAsync(per_tile_buffers.instance_ranges, 0, sizeof(uint2) * n_tiles, stream),
         "edge tile-range initialization");
 
@@ -91,9 +91,9 @@ int edge_compute::rasterization::edge_forward(
         far_,
         depth_bits,
         mip_filter);
-    CHECK_CUDA(config::debug, "preprocess")
+    LFS_EDGE_PHASE_CHECK(config::debug, "preprocess");
 
-    check_cuda_status(
+    LFS_CUDA_CHECK_MSG(
         cub::DeviceScan::InclusiveSum(
             per_primitive_buffers.cub_workspace,
             per_primitive_buffers.cub_workspace_size,
@@ -102,16 +102,16 @@ int edge_compute::rasterization::edge_forward(
             n_primitives,
             stream),
         "cub::DeviceScan::InclusiveSum (Primitive Offsets)");
-    CHECK_CUDA(config::debug, "cub::DeviceScan::InclusiveSum (Primitive Offsets)")
+    LFS_EDGE_PHASE_CHECK(config::debug, "cub::DeviceScan::InclusiveSum (Primitive Offsets)");
 
     uint32_t n_instances_u32;
-    check_cuda_status(
+    LFS_CUDA_CHECK_MSG(
         cudaMemcpyAsync(
             &n_instances_u32, per_primitive_buffers.offset + n_primitives - 1,
             sizeof(n_instances_u32), cudaMemcpyDeviceToHost, stream),
         "edge instance-count readback");
-    check_cuda_status(cudaStreamSynchronize(stream), "edge instance-count stream sync");
-    CHECK_CUDA(config::debug, "cudaMemcpy(n_instances)")
+    LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream), "edge instance-count stream sync");
+    LFS_EDGE_PHASE_CHECK(config::debug, "cudaMemcpy(n_instances)");
     const int n_instances = checked_to_int(n_instances_u32, "n_instances exceeds int range");
 
     const int alloc_instances = std::max(n_instances, 1);
@@ -131,9 +131,9 @@ int edge_compute::rasterization::edge_forward(
             grid.x,
             depth_bits,
             n_primitives);
-        CHECK_CUDA(config::debug, "create_instances")
+        LFS_EDGE_PHASE_CHECK(config::debug, "create_instances");
 
-        check_cuda_status(
+        LFS_CUDA_CHECK_MSG(
             cub::DeviceRadixSort::SortPairs(
                 per_instance_buffers.cub_workspace,
                 per_instance_buffers.cub_workspace_size,
@@ -142,7 +142,7 @@ int edge_compute::rasterization::edge_forward(
                 n_instances, 0, key_end_bit,
                 stream),
             "cub::DeviceRadixSort::SortPairs (Tile/Depth)");
-        CHECK_CUDA(config::debug, "cub::DeviceRadixSort::SortPairs (Tile/Depth)")
+        LFS_EDGE_PHASE_CHECK(config::debug, "cub::DeviceRadixSort::SortPairs (Tile/Depth)");
     }
 
     // Extract instance ranges
@@ -152,7 +152,7 @@ int edge_compute::rasterization::edge_forward(
             per_tile_buffers.instance_ranges,
             depth_bits,
             n_instances);
-        CHECK_CUDA(config::debug, "extract_instance_ranges")
+        LFS_EDGE_PHASE_CHECK(config::debug, "extract_instance_ranges");
     }
 
     // Perform blending
@@ -166,7 +166,7 @@ int edge_compute::rasterization::edge_forward(
         grid.x,
         pixel_weights,
         accum_weights);
-    CHECK_CUDA(config::debug, "blend")
+    LFS_EDGE_PHASE_CHECK(config::debug, "blend");
 
     return n_instances;
 }

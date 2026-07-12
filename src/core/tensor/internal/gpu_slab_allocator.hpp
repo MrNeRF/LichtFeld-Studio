@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "core/cuda_error.hpp"
 #include "core/export.hpp"
 #include "core/logger.hpp"
 #include "cuda_event_pool.hpp"
@@ -12,6 +13,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cuda_runtime.h>
+#include <format>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
@@ -205,7 +207,15 @@ namespace lfs::core {
         GPUSlabAllocator() {
             int device_count = 0;
             cudaError_t err = cudaGetDeviceCount(&device_count);
-            if (err != cudaSuccess || device_count == 0) {
+            if (err != cudaSuccess) {
+                ensure_cuda_success(
+                    err, "cudaGetDeviceCount(GPU slab allocator)",
+                    "fallback=disable slab allocator", std::source_location::current(),
+                    CudaFailureDisposition::LogOnly);
+                enabled_.store(false, std::memory_order_release);
+                return;
+            }
+            if (device_count == 0) {
                 LOG_DEBUG("GPUSlabAllocator: No CUDA devices available");
                 enabled_.store(false, std::memory_order_release);
                 return;
@@ -225,11 +235,17 @@ namespace lfs::core {
         }
 
         bool allocate_slab(size_t size_class) {
+            LFS_CUDA_BREADCRUMB("tensor.slab.allocate");
             const size_t block_size = get_block_size(size_class);
             const size_t slab_size = slab_size_for_class(size_class);
 
             void* slab_base = nullptr;
-            if (cudaMalloc(&slab_base, slab_size) != cudaSuccess) {
+            const cudaError_t status = cudaMalloc(&slab_base, slab_size);
+            if (status != cudaSuccess) {
+                ensure_cuda_success(status, "cudaMalloc(GPU slab)",
+                                    std::format("slab_bytes={}, size_class={}", slab_size, size_class),
+                                    std::source_location::current(),
+                                    CudaFailureDisposition::LogOnly);
                 return false;
             }
 
@@ -265,9 +281,17 @@ namespace lfs::core {
         }
 
         void cleanup() {
+            LFS_CUDA_BREADCRUMB("tensor.slab.free");
             std::lock_guard<std::mutex> lock(slabs_mutex_);
             for (const auto& slab : slabs_) {
-                cudaFree(slab.base);
+                const cudaError_t free_status = cudaFree(slab.base);
+                if (free_status != cudaSuccess) {
+                    ensure_cuda_success(
+                        free_status, "cudaFree(GPU slab)",
+                        std::format("ptr={}, bytes={}, size_class={}", slab.base, slab.size,
+                                    slab.size_class),
+                        std::source_location::current(), CudaFailureDisposition::LogOnly);
+                }
             }
             slabs_.clear();
             stats_.total_slab_memory = 0;

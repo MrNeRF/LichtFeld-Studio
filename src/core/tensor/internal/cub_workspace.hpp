@@ -17,16 +17,6 @@ namespace lfs::core::tensor_ops {
     LFS_CORE_API bool cub_workspace_failure_is_forced();
     LFS_CORE_API void set_cub_workspace_failure_for_testing(bool fail);
 
-    inline void check_cuda_status(const cudaError_t status, const std::string_view operation) {
-        if (status == cudaSuccess) {
-            return;
-        }
-        const std::string message = std::format(
-            "{} failed: {} ({})", operation, cudaGetErrorString(status), cudaGetErrorName(status));
-        cudaGetLastError();
-        LFS_ASSERT_MSG(status == cudaSuccess, message);
-    }
-
     class ScopedDeviceBuffer {
     public:
         ScopedDeviceBuffer() = default;
@@ -90,8 +80,8 @@ namespace lfs::core::tensor_ops {
                            const cudaStream_t stream,
                            Operation&& operation) {
         size_t workspace_bytes = 0;
-        check_cuda_status(
-            operation(nullptr, workspace_bytes), std::format("{} workspace query", name));
+        LFS_CUDA_CHECK_MSG(operation(nullptr, workspace_bytes),
+                           "{} workspace query", name);
         LFS_ASSERT_MSG(
             workspace_bytes > 0,
             std::format("{} returned an empty workspace for a nonempty operation", name));
@@ -104,7 +94,8 @@ namespace lfs::core::tensor_ops {
         LFS_ASSERT_MSG(
             workspace.get() != nullptr,
             std::format("{} cannot execute with null workspace ({} bytes)", name, workspace_bytes));
-        check_cuda_status(operation(workspace.get(), workspace_bytes), name);
+        LFS_CUDA_CHECK_MSG(operation(workspace.get(), workspace_bytes),
+                           "tensor CUB workspace operation: {}", name);
     }
 
 } // namespace lfs::core::tensor_ops

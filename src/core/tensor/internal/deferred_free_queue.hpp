@@ -3,11 +3,12 @@
 
 #pragma once
 
-#include "core/logger.hpp"
+#include "core/cuda_error.hpp"
 #include "cuda_event_pool.hpp"
 #include <atomic>
 #include <cstdint>
 #include <cuda_runtime.h>
+#include <format>
 #include <mutex>
 #include <vector>
 
@@ -44,15 +45,34 @@ namespace lfs::core {
 
             cudaEvent_t event = CudaEventPool::instance().acquire();
             if (!event) {
-                cudaStreamSynchronize(stream);
+                const cudaError_t sync_status = cudaStreamSynchronize(stream);
+                if (sync_status != cudaSuccess) {
+                    ensure_cuda_success(
+                        sync_status, "cudaStreamSynchronize(deferred-free fallback)",
+                        std::format("ptr={}, bytes={}, stream={}", ptr, size,
+                                    static_cast<void*>(stream)),
+                        std::source_location::current(), CudaFailureDisposition::LogOnly);
+                }
                 callback(ptr, size);
                 return;
             }
 
-            cudaError_t err = cudaEventRecord(event, stream);
+            const cudaError_t err = cudaEventRecord(event, stream);
             if (err != cudaSuccess) {
                 CudaEventPool::instance().release(event);
-                cudaStreamSynchronize(stream);
+                ensure_cuda_success(
+                    err, "cudaEventRecord(deferred free)",
+                    std::format("ptr={}, bytes={}, stream={}, fallback=stream sync",
+                                ptr, size, static_cast<void*>(stream)),
+                    std::source_location::current(), CudaFailureDisposition::LogOnly);
+                const cudaError_t sync_status = cudaStreamSynchronize(stream);
+                if (sync_status != cudaSuccess) {
+                    ensure_cuda_success(
+                        sync_status, "cudaStreamSynchronize(deferred-free event fallback)",
+                        std::format("ptr={}, bytes={}, stream={}", ptr, size,
+                                    static_cast<void*>(stream)),
+                        std::source_location::current(), CudaFailureDisposition::LogOnly);
+                }
                 callback(ptr, size);
                 return;
             }
@@ -88,7 +108,10 @@ namespace lfs::core {
                     } else if (err == cudaErrorNotReady) {
                         ++i;
                     } else {
-                        LOG_WARN("cudaEventQuery failed: {}", cudaGetErrorString(err));
+                        ensure_cuda_success(
+                            err, "cudaEventQuery(deferred free)",
+                            std::format("ptr={}, bytes={}", item.ptr, item.size),
+                            std::source_location::current(), CudaFailureDisposition::LogOnly);
                         ++i;
                     }
                 }
@@ -113,7 +136,12 @@ namespace lfs::core {
                 pending_.clear();
             }
 
-            cudaDeviceSynchronize();
+            const cudaError_t sync_status = cudaDeviceSynchronize();
+            if (sync_status != cudaSuccess) {
+                ensure_cuda_success(
+                    sync_status, "cudaDeviceSynchronize(deferred-free flush)", {},
+                    std::source_location::current(), CudaFailureDisposition::LogOnly);
+            }
 
             for (const auto& item : to_free) {
                 CudaEventPool::instance().release(item.event);

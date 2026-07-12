@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "viewport_artifact_service.hpp"
-#include "core/cuda_debug.hpp"
+#include "core/cuda_error.hpp"
 #include "rendering/rendering.hpp"
 #include <cmath>
 #include <cuda_runtime.h>
@@ -248,12 +248,12 @@ namespace lfs::vis {
                     float d;
                     const float* gpu_ptr = depth_ptr->ptr<float>() + scaled_y * depth_width + scaled_x;
                     const cudaStream_t stream = depth_ptr->stream();
-                    CHECK_CUDA(cudaMemcpyAsync(&d,
-                                               gpu_ptr,
-                                               sizeof(float),
-                                               cudaMemcpyDeviceToHost,
-                                               stream));
-                    CHECK_CUDA(cudaStreamSynchronize(stream));
+                    LFS_CUDA_CHECK(cudaMemcpyAsync(&d,
+                                                   gpu_ptr,
+                                                   sizeof(float),
+                                                   cudaMemcpyDeviceToHost,
+                                                   stream));
+                    LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
                     splat_depth = linearizeDepthSample(
                         d, active_near_plane, active_far_plane, active_orthographic, metadata_.depth_is_ndc);
                 }

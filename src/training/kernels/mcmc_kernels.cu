@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include "core/tensor.hpp"
 #include "lfs/cuda_scratch.hpp"
 #include "mcmc_kernels.hpp"
@@ -45,7 +46,10 @@ namespace lfs::training::mcmc {
                     binom *= static_cast<float>(n - k) / static_cast<float>(k + 1);
             }
         }
-        cudaMemcpyToSymbol(d_relocation_coefficients, coeffs.data(), RELOCATION_N_MAX * RELOCATION_N_MAX * sizeof(float));
+        LFS_CUDA_CHECK_MSG(
+            cudaMemcpyToSymbol(d_relocation_coefficients, coeffs.data(),
+                               RELOCATION_N_MAX * RELOCATION_N_MAX * sizeof(float)),
+            "MCMC relocation coefficient upload (n_max={})", n_max);
     }
 
     // Equation (9) in "3D Gaussian Splatting as Markov Chain Monte Carlo"
@@ -958,7 +962,7 @@ namespace lfs::training::mcmc {
             sampled_opacities,
             sampled_scales,
             N);
-        cuda_scratch::check_status(cudaGetLastError(), "MCMC multinomial gather kernel launch");
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "MCMC multinomial gather kernel launch");
     }
 
     // Multinomial sampling from all N weights (no alive_indices indirection)
@@ -1063,7 +1067,7 @@ namespace lfs::training::mcmc {
             sampled_indices,
             sampled_opacities,
             sampled_scales);
-        cuda_scratch::check_status(cudaGetLastError(), "MCMC multinomial kernel launch");
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "MCMC multinomial kernel launch");
     }
 
     // Compute rotation magnitude squared kernel (eliminates [N,4] intermediate tensor)

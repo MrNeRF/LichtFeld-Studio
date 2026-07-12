@@ -2,6 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/pinned_memory_allocator.hpp"
+
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "internal/cuda_event_pool.hpp"
@@ -51,6 +53,9 @@ namespace lfs::core {
         for (const cudaEvent_t event : ready_events) {
             const cudaError_t status = cudaEventDestroy(event);
             if (status != cudaSuccess) {
+                ensure_cuda_success(
+                    status, "cudaEventDestroy(pinned static teardown)", {},
+                    std::source_location::current(), CudaFailureDisposition::LogOnly);
                 cudaGetLastError();
             }
         }
@@ -95,7 +100,9 @@ namespace lfs::core {
                 continue;
             }
             if (status != cudaSuccess) {
-                LOG_ERROR("cudaEventQuery failed for pinned block: {}", cudaGetErrorString(status));
+                ensure_cuda_success(status, "cudaEventQuery(pinned block)", {},
+                                    std::source_location::current(),
+                                    CudaFailureDisposition::LogOnly);
                 cudaGetLastError();
                 return false;
             }
@@ -177,6 +184,7 @@ namespace lfs::core {
     }
 
     void* PinnedMemoryAllocator::allocate(const size_t bytes) {
+        LFS_CUDA_BREADCRUMB("tensor.pinned.allocate");
         if (bytes == 0) {
             return nullptr;
         }
@@ -232,8 +240,10 @@ namespace lfs::core {
             if (status == cudaSuccess) {
                 backend = Backend::CudaHost;
             } else {
-                LOG_WARN("cudaHostAlloc failed for {} bytes ({}); using pageable memory",
-                         allocation_size, cudaGetErrorString(status));
+                ensure_cuda_success(status, "cudaHostAlloc(pinned block)",
+                                    std::format("bytes={}, fallback=malloc", allocation_size),
+                                    std::source_location::current(),
+                                    CudaFailureDisposition::LogOnly);
                 cudaGetLastError();
             }
         }
@@ -268,6 +278,7 @@ namespace lfs::core {
 
     bool PinnedMemoryAllocator::record_uses(Block& block,
                                             const std::vector<cudaStream_t>& streams) {
+        LFS_CUDA_BREADCRUMB("tensor.pinned.record_stream");
         bool all_streams_safe = true;
         for (const cudaStream_t stream : streams) {
             cudaEvent_t event = CudaEventPool::instance().acquire();
@@ -278,13 +289,19 @@ namespace lfs::core {
                     continue;
                 }
                 CudaEventPool::instance().release(event);
+                ensure_cuda_success(record_status, "cudaEventRecord(pinned block)",
+                                    std::format("stream={}", static_cast<void*>(stream)),
+                                    std::source_location::current(),
+                                    CudaFailureDisposition::LogOnly);
                 cudaGetLastError();
             }
 
             const cudaError_t sync_status = cudaStreamSynchronize(stream);
             if (sync_status != cudaSuccess && !is_cuda_shutdown(sync_status)) {
-                LOG_ERROR("Could not guard pinned allocation on stream {}: {}",
-                          static_cast<void*>(stream), cudaGetErrorString(sync_status));
+                ensure_cuda_success(sync_status, "cudaStreamSynchronize(pinned quarantine)",
+                                    std::format("stream={}", static_cast<void*>(stream)),
+                                    std::source_location::current(),
+                                    CudaFailureDisposition::LogOnly);
                 cudaGetLastError();
                 all_streams_safe = false;
             }
@@ -301,8 +318,9 @@ namespace lfs::core {
             }
             return true;
         }
-        LOG_ERROR("Pinned allocation quarantine: device synchronization failed: {}",
-                  cudaGetErrorString(device_status));
+        ensure_cuda_success(device_status, "cudaDeviceSynchronize(pinned quarantine)", {},
+                            std::source_location::current(),
+                            CudaFailureDisposition::LogOnly);
         cudaGetLastError();
         return false;
     }
@@ -335,6 +353,7 @@ namespace lfs::core {
 
     void PinnedMemoryAllocator::release_blocks(std::vector<Block> blocks,
                                                const bool count_as_evictions) {
+        LFS_CUDA_BREADCRUMB("tensor.pinned.free");
         size_t cuda_frees = 0;
         size_t fallback_frees = 0;
         size_t evicted_bytes = 0;
@@ -345,8 +364,9 @@ namespace lfs::core {
             for (const cudaEvent_t event : block.ready_events) {
                 const cudaError_t status = cudaEventSynchronize(event);
                 if (status != cudaSuccess && !is_cuda_shutdown(status)) {
-                    LOG_ERROR("cudaEventSynchronize failed while releasing pinned memory: {}",
-                              cudaGetErrorString(status));
+                    ensure_cuda_success(status, "cudaEventSynchronize(pinned release)", {},
+                                        std::source_location::current(),
+                                        CudaFailureDisposition::LogOnly);
                     cudaGetLastError();
                     safe_to_release = false;
                 }
@@ -371,8 +391,10 @@ namespace lfs::core {
                         cudaGetLastError();
                     }
                 } else {
-                    LOG_ERROR("cudaFreeHost failed for {} bytes: {}",
-                              block.size, cudaGetErrorString(status));
+                    ensure_cuda_success(status, "cudaFreeHost(pinned block)",
+                                        std::format("bytes={}", block.size),
+                                        std::source_location::current(),
+                                        CudaFailureDisposition::LogOnly);
                     cudaGetLastError();
                 }
             } else {
@@ -492,8 +514,10 @@ namespace lfs::core {
         }
         const cudaError_t status = cudaStreamSynchronize(stream);
         if (status != cudaSuccess && !is_cuda_shutdown(status)) {
-            LOG_ERROR("Could not release pinned-memory stream tracking: {}",
-                      cudaGetErrorString(status));
+            ensure_cuda_success(status, "cudaStreamSynchronize(pinned release_stream)",
+                                std::format("stream={}", static_cast<void*>(stream)),
+                                std::source_location::current(),
+                                CudaFailureDisposition::LogOnly);
             cudaGetLastError();
             return;
         }

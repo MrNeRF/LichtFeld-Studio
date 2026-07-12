@@ -33,6 +33,18 @@ namespace lfs::core {
         cudaError_t pre_call_error = cudaSuccess;
         cudaError_t pre_call_sync_error = cudaSuccess;
         uintptr_t stream = 0;
+        bool pre_call_sampled = false;
+    };
+
+    struct LFS_CORE_API CudaCheckCompletion {
+        cudaError_t effective_error = cudaSuccess;
+        cudaError_t post_sync_error = cudaSuccess;
+        cudaError_t post_peek_error = cudaSuccess;
+    };
+
+    enum class CudaFailureDisposition : uint8_t {
+        Throw,
+        LogOnly,
     };
 
     LFS_CORE_API void record_cuda_breadcrumb(const char* tag,
@@ -43,18 +55,48 @@ namespace lfs::core {
     LFS_CORE_API void clear_cuda_breadcrumbs_for_testing() noexcept;
 
     LFS_CORE_API bool cuda_sync_debug_enabled() noexcept;
-    LFS_CORE_API void initialize_cuda_diagnostics();
+    LFS_CORE_API void initialize_cuda_diagnostics() noexcept;
     LFS_CORE_API CudaCheckState prepare_cuda_check(
         const char* expression,
         const std::source_location& location,
         cudaStream_t stream = nullptr) noexcept;
+    LFS_CORE_API CudaCheckCompletion complete_cuda_check(
+        cudaError_t result,
+        const CudaCheckState& state) noexcept;
+    [[noreturn]] LFS_CORE_API void report_cuda_check_failure(
+        const CudaCheckCompletion& completion,
+        const CudaCheckState& state,
+        const char* expression,
+        std::string_view message,
+        const std::source_location& location);
     LFS_CORE_API void finish_cuda_check(cudaError_t result,
                                         const CudaCheckState& state,
                                         const char* expression,
                                         std::string_view message,
                                         const std::source_location& location);
+    LFS_CORE_API void ensure_cuda_success(
+        cudaError_t result,
+        std::string_view expression,
+        std::string_view message = {},
+        const std::source_location& location = std::source_location::current(),
+        CudaFailureDisposition disposition = CudaFailureDisposition::Throw);
+    LFS_CORE_API void validate_cuda_device_pointer(
+        const void* pointer,
+        std::string_view name,
+        const std::source_location& location = std::source_location::current());
+    LFS_CORE_API void validate_cuda_device_pointer_optional(
+        const void* pointer,
+        std::string_view name,
+        const std::source_location& location = std::source_location::current());
 
     LFS_CORE_API std::string capture_host_stacktrace(size_t skip_frames = 0);
+    LFS_CORE_API std::string format_failure_report(
+        std::string_view family,
+        std::string_view contract,
+        std::string_view expression,
+        std::string_view message,
+        const std::source_location& location,
+        std::string_view stacktrace);
     LFS_CORE_API std::string format_contract_failure_report(
         std::string_view contract,
         std::string_view expression,
@@ -84,17 +126,25 @@ namespace lfs::core {
 
 } // namespace lfs::core
 
-#define LFS_CUDA_DETAIL_CHECK_IMPL(call, message)                                           \
-    do {                                                                                    \
-        ::lfs::core::record_cuda_breadcrumb(#call, __FILE__, __LINE__);                     \
-        const auto _lfs_cuda_state = ::lfs::core::prepare_cuda_check(                       \
-            #call, std::source_location::current());                                        \
-        const auto _lfs_cuda_result = (call);                                               \
-        static_assert(std::is_same_v<std::remove_cv_t<decltype(_lfs_cuda_result)>,          \
-                                     cudaError_t>,                                          \
-                      "LFS_CUDA_CHECK requires an expression returning cudaError_t");       \
-        ::lfs::core::finish_cuda_check(_lfs_cuda_result, _lfs_cuda_state, #call, (message), \
-                                       std::source_location::current());                    \
+#define LFS_CUDA_DETAIL_CHECK_IMPL(call, message)                                     \
+    do {                                                                              \
+        ::lfs::core::record_cuda_breadcrumb(#call, __FILE__, __LINE__);               \
+        const auto _lfs_cuda_state = ::lfs::core::prepare_cuda_check(                 \
+            #call, std::source_location::current());                                  \
+        const auto _lfs_cuda_result = (call);                                         \
+        static_assert(std::is_same_v<std::remove_cv_t<decltype(_lfs_cuda_result)>,    \
+                                     cudaError_t>,                                    \
+                      "LFS_CUDA_CHECK requires an expression returning cudaError_t"); \
+        if (_lfs_cuda_result != cudaSuccess ||                                        \
+            ::lfs::core::cuda_sync_debug_enabled()) [[unlikely]] {                    \
+            const auto _lfs_cuda_completion = ::lfs::core::complete_cuda_check(       \
+                _lfs_cuda_result, _lfs_cuda_state);                                   \
+            if (_lfs_cuda_completion.effective_error != cudaSuccess) [[unlikely]] {   \
+                ::lfs::core::report_cuda_check_failure(                               \
+                    _lfs_cuda_completion, _lfs_cuda_state, #call, (message),          \
+                    std::source_location::current());                                 \
+            }                                                                         \
+        }                                                                             \
     } while (false)
 
 #define LFS_CUDA_CHECK(call) LFS_CUDA_DETAIL_CHECK_IMPL(call, std::string_view{})

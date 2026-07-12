@@ -9,14 +9,6 @@
 #include <curand_kernel.h>
 #include <random>
 
-#define CHECK_CUDA(call)                                                                 \
-    do {                                                                                 \
-        const cudaError_t error = (call);                                                \
-        LFS_ASSERT_MSG(error == cudaSuccess,                                             \
-                       std::format("{} failed (cuda_error={}({}))", #call,               \
-                                   cudaGetErrorString(error), static_cast<int>(error))); \
-    } while (0)
-
 #define CHECK_CURAND(call)                                                            \
     do {                                                                              \
         const curandStatus_t error = (call);                                          \
@@ -197,9 +189,9 @@ namespace lfs::core {
                 // the n-element destination was a one-float buffer overflow.
                 auto scratch = Tensor::empty({n + 1}, Device::CUDA, DataType::Float32);
                 CHECK_CURAND(curandGenerateNormal(*gen, scratch.ptr<float>(), n + 1, mean, std));
-                CHECK_CUDA(cudaMemcpyAsync(ptr<float>(), scratch.ptr<float>(), n * sizeof(float),
-                                           cudaMemcpyDeviceToDevice, stream()));
-                CHECK_CUDA(cudaStreamSynchronize(stream()));
+                LFS_CUDA_CHECK(cudaMemcpyAsync(ptr<float>(), scratch.ptr<float>(), n * sizeof(float),
+                                               cudaMemcpyDeviceToDevice, stream()));
+                LFS_CUDA_CHECK(cudaStreamSynchronize(stream()));
             } else {
                 CHECK_CURAND(curandGenerateNormal(*gen, ptr<float>(), n, mean, std));
             }
@@ -219,7 +211,6 @@ namespace lfs::core {
         return *this;
     }
 
-#undef CHECK_CUDA
 #undef CHECK_CURAND
 
 } // namespace lfs::core

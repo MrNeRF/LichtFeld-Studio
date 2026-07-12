@@ -4,6 +4,7 @@
 #pragma once
 
 #include "core/assert.hpp"
+#include "core/cuda_error.hpp"
 #include "diagnostics/vram_profiler.hpp"
 
 #include <cuda_runtime.h>
@@ -13,16 +14,6 @@
 #include <string_view>
 
 namespace lfs::training::cuda_scratch {
-
-    inline void check_status(const cudaError_t status, const std::string_view operation) {
-        if (status == cudaSuccess) {
-            return;
-        }
-        const std::string message = std::format(
-            "{} failed: {} ({})", operation, cudaGetErrorString(status), cudaGetErrorName(status));
-        cudaGetLastError();
-        LFS_ASSERT_MSG(status == cudaSuccess, message);
-    }
 
     inline size_t checked_bytes(const size_t count,
                                 const size_t element_size,
@@ -59,13 +50,14 @@ namespace lfs::training::cuda_scratch {
             LFS_ASSERT_MSG(bytes > 0, "CUDA scratch buffer requires a nonzero size");
             void* ptr = nullptr;
 #if CUDART_VERSION >= 11020
-            const cudaError_t status = cudaMallocAsync(&ptr, bytes, stream);
+            LFS_CUDA_CHECK_MSG(cudaMallocAsync(&ptr, bytes, stream),
+                               "CUDA scratch allocation '{}' ({} bytes)", label, bytes);
             constexpr auto method = diagnostics::VramAllocationMethod::Async;
 #else
-            const cudaError_t status = cudaMalloc(&ptr, bytes);
+            LFS_CUDA_CHECK_MSG(cudaMalloc(&ptr, bytes),
+                               "CUDA scratch allocation '{}' ({} bytes)", label, bytes);
             constexpr auto method = diagnostics::VramAllocationMethod::Direct;
 #endif
-            check_status(status, std::format("CUDA allocation for '{}' ({} bytes)", label, bytes));
             LFS_ASSERT_MSG(ptr != nullptr,
                            std::format("CUDA allocation for '{}' returned null ({} bytes)", label, bytes));
 
@@ -94,6 +86,11 @@ namespace lfs::training::cuda_scratch {
             const cudaError_t status = cudaFree(ptr_);
 #endif
             if (status != cudaSuccess) {
+                lfs::core::ensure_cuda_success(
+                    status, "CUDA scratch buffer free",
+                    std::format("ptr={}, bytes={}", ptr_, bytes_),
+                    std::source_location::current(),
+                    lfs::core::CudaFailureDisposition::LogOnly);
                 cudaGetLastError();
             }
             ptr_ = nullptr;
@@ -122,7 +119,8 @@ namespace lfs::training::cuda_scratch {
                      const cudaStream_t stream,
                      Query&& query)
             : operation_(operation) {
-            check_status(query(nullptr, bytes_), std::format("{} workspace query", operation_));
+            LFS_CUDA_CHECK_MSG(query(nullptr, bytes_),
+                               "{} workspace query", operation_);
             LFS_ASSERT_MSG(
                 bytes_ > 0,
                 std::format("{} returned an empty workspace for a nonempty operation", operation_));
@@ -134,7 +132,8 @@ namespace lfs::training::cuda_scratch {
 
         template <typename Operation>
         void run(Operation&& operation) {
-            check_status(operation(buffer_.get(), bytes_), operation_);
+            LFS_CUDA_CHECK_MSG(operation(buffer_.get(), bytes_),
+                               "training CUB workspace operation: {}", operation_);
         }
 
         CubWorkspace(const CubWorkspace&) = delete;

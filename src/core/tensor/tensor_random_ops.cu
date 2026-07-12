@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include "internal/tensor_functors.hpp"
 #include "internal/tensor_ops.hpp"
 #include <cuda_runtime.h>
@@ -190,7 +191,9 @@ namespace lfs::core::tensor_ops {
         });
 
         if (sum <= 0) {
-            cudaMemsetAsync(samples, 0, num_samples * sizeof(int64_t), stream);
+            LFS_CUDA_CHECK_MSG(
+                cudaMemsetAsync(samples, 0, num_samples * sizeof(int64_t), stream),
+                "multinomial empty-weight output (sample_count={})", num_samples);
             return;
         }
 

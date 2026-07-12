@@ -7,6 +7,8 @@
 
 #pragma once
 
+#include "core/cuda_error.hpp"
+
 #include <cstdint>
 #include <cuda_runtime.h>
 
@@ -38,6 +40,10 @@ namespace lfs::core {
                 // Query device 0 (can be extended for multi-GPU)
                 cudaError_t err = cudaGetDeviceProperties(&prop, 0);
                 if (err != cudaSuccess) {
+                    ensure_cuda_success(
+                        err, "cudaGetDeviceProperties(tensor GPU configuration)",
+                        "device=0, fallback=conservative defaults",
+                        std::source_location::current(), CudaFailureDisposition::LogOnly);
                     // Fallback to safe defaults
                     cfg.sm_count = 108; // Assume A100/H100 for safety
                     cfg.max_threads_per_sm = 2048;
@@ -144,7 +150,7 @@ namespace lfs::core {
  *
  * This is the classic CEIL_DIV pattern: (N + M - 1) / M
  */
-#define CEIL_DIV(M, N) (((M) + (N) - 1) / (N))
+#define CEIL_DIV(M, N) (((M) + (N)-1) / (N))
 
 /**
  * @brief Get optimal grid size for a kernel launch

@@ -5,7 +5,6 @@
 #include "buffer_utils.h"
 #include "core/cuda/memory_arena.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
-#include "cuda_utils.h"
 #include "edge_rasterization_api.h"
 #include "edge_rasterization_config.h"
 #include "forward.h"
@@ -41,11 +40,11 @@ namespace edge_compute::rasterization {
             stream = lfs::core::getCurrentCUDAStream();
         }
         // Validate inputs using pure CUDA validation
-        CHECK_CUDA_PTR(means_ptr, "means_ptr");
-        CHECK_CUDA_PTR(scales_raw_ptr, "scales_raw_ptr");
-        CHECK_CUDA_PTR(rotations_raw_ptr, "rotations_raw_ptr");
-        CHECK_CUDA_PTR(opacities_raw_ptr, "opacities_raw_ptr");
-        CHECK_CUDA_PTR(w2c_ptr, "w2c_ptr");
+        lfs::core::validate_cuda_device_pointer(means_ptr, "means_ptr");
+        lfs::core::validate_cuda_device_pointer(scales_raw_ptr, "scales_raw_ptr");
+        lfs::core::validate_cuda_device_pointer(rotations_raw_ptr, "rotations_raw_ptr");
+        lfs::core::validate_cuda_device_pointer(opacities_raw_ptr, "opacities_raw_ptr");
+        lfs::core::validate_cuda_device_pointer(w2c_ptr, "w2c_ptr");
 
         if (n_primitives <= 0 || width <= 0 || height <= 0) {
             throw std::runtime_error("Invalid dimensions in forward_raw");

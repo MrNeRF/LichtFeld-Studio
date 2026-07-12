@@ -255,7 +255,7 @@ namespace lfs::core {
         // wait_timeout: nullopt = non-blocking try; 0 = wait forever; else bounded.
         std::optional<uint64_t> begin_frame_impl(cudaStream_t stream, bool from_rendering,
                                                  std::optional<uint32_t> wait_timeout_ms);
-        bool wait_for_previous_frame(cudaStream_t stream);
+        cudaError_t wait_for_previous_frame(cudaStream_t stream);
         // Host-blocks on a pending Vulkan release fence (note_external_release)
         // and clears it. Must run before any path that frees or replaces arena
         // backing — a device sync cannot observe the in-flight Vulkan batch.

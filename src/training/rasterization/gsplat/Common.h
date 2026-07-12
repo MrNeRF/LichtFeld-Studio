@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/assert.hpp"
+#include "core/cuda_error.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -59,27 +60,15 @@ struct UnscentedTransformParameters {
 
 namespace gsplat_lfs {
 
-// Validation macros (no-ops in release, enabled in debug)
+// Redundant pointer validation is debug-only; public tensor/device contracts are
+// established by the caller before this low-level backend boundary.
 #ifdef DEBUG
-#define GSPLAT_CHECK_CUDA_PTR(ptr, name)                         \
-    do {                                                         \
-        if ((ptr) == nullptr) {                                  \
-            fprintf(stderr, "GSPLAT ERROR: %s is null\n", name); \
-        }                                                        \
-    } while (false)
-#else
-#define GSPLAT_CHECK_CUDA_PTR(ptr, name) ((void)0)
-#endif
-
-    inline void check_cuda_status(const cudaError_t status, const std::string_view operation) {
-        if (status == cudaSuccess) {
-            return;
-        }
-        const std::string message = std::format(
-            "{} failed: {} ({})", operation, cudaGetErrorString(status), cudaGetErrorName(status));
-        cudaGetLastError();
-        LFS_ASSERT_MSG(status == cudaSuccess, message);
+    inline void debug_validate_cuda_pointer(const void* pointer, const std::string_view name) {
+        lfs::core::validate_cuda_device_pointer(pointer, name);
     }
+#else
+    inline void debug_validate_cuda_pointer(const void*, std::string_view) {}
+#endif
 
     inline size_t checked_multiply(const size_t lhs,
                                    const size_t rhs,
@@ -118,9 +107,8 @@ namespace gsplat_lfs {
         LFS_ASSERT(ptr != nullptr);
         LFS_ASSERT_MSG(bytes > 0, "CUDA allocation requires a nonzero size");
         maybe_inject_cuda_allocation_failure(label);
-        check_cuda_status(
-            cudaMalloc(ptr, bytes),
-            std::format("CUDA allocation for '{}' ({} bytes)", label, bytes));
+        LFS_CUDA_CHECK_MSG(cudaMalloc(ptr, bytes),
+                           "gsplat CUDA allocation '{}' ({} bytes)", label, bytes);
         LFS_ASSERT_MSG(*ptr != nullptr,
                        std::format("CUDA allocation for '{}' returned null ({} bytes)", label, bytes));
     }
@@ -153,12 +141,12 @@ namespace gsplat_lfs {
 
             void* ptr = nullptr;
 #if CUDART_VERSION >= 11020
-            const cudaError_t status = cudaMallocAsync(&ptr, bytes, stream);
+            LFS_CUDA_CHECK_MSG(cudaMallocAsync(&ptr, bytes, stream),
+                               "gsplat stream-ordered allocation '{}' ({} bytes)", label, bytes);
 #else
-            const cudaError_t status = cudaMalloc(&ptr, bytes);
+            LFS_CUDA_CHECK_MSG(cudaMalloc(&ptr, bytes),
+                               "gsplat allocation '{}' ({} bytes)", label, bytes);
 #endif
-            check_cuda_status(
-                status, std::format("CUDA allocation for '{}' ({} bytes)", label, bytes));
             LFS_ASSERT_MSG(ptr != nullptr,
                            std::format("CUDA allocation for '{}' returned null ({} bytes)", label, bytes));
             ptr_ = ptr;
@@ -176,6 +164,11 @@ namespace gsplat_lfs {
             const cudaError_t status = cudaFree(ptr_);
 #endif
             if (status != cudaSuccess) {
+                lfs::core::ensure_cuda_success(
+                    status, "gsplat stream-ordered buffer free",
+                    std::format("ptr={}, bytes={}", ptr_, bytes_),
+                    std::source_location::current(),
+                    lfs::core::CudaFailureDisposition::LogOnly);
                 cudaGetLastError();
             }
             ptr_ = nullptr;
@@ -202,8 +195,8 @@ namespace gsplat_lfs {
                            const cudaStream_t stream,
                            Operation&& operation) {
         size_t workspace_bytes = 0;
-        check_cuda_status(
-            operation(nullptr, workspace_bytes), std::format("{} workspace query", name));
+        LFS_CUDA_CHECK_MSG(operation(nullptr, workspace_bytes),
+                           "{} workspace query", name);
         LFS_ASSERT_MSG(
             workspace_bytes > 0,
             std::format("{} returned an empty workspace for a nonempty operation", name));
@@ -213,7 +206,8 @@ namespace gsplat_lfs {
         LFS_ASSERT_MSG(
             workspace.get() != nullptr,
             std::format("{} cannot execute with null workspace ({} bytes)", name, workspace_bytes));
-        check_cuda_status(operation(workspace.get(), workspace_bytes), name);
+        LFS_CUDA_CHECK_MSG(operation(workspace.get(), workspace_bytes),
+                           "gsplat CUB workspace operation: {}", name);
     }
 
     //

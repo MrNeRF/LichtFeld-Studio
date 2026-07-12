@@ -179,7 +179,10 @@ namespace gsplat_lfs {
         int32_t* offsets,
         cudaStream_t stream) {
         if (n_isects == 0) {
-            cudaMemsetAsync(offsets, 0, C * tile_height * tile_width * sizeof(int32_t), stream);
+            LFS_CUDA_CHECK_MSG(
+                cudaMemsetAsync(offsets, 0,
+                                C * tile_height * tile_width * sizeof(int32_t), stream),
+                "gsplat empty intersection-offset kernel output");
             return;
         }
 
@@ -191,6 +194,8 @@ namespace gsplat_lfs {
 
         intersect_offset_kernel<<<grid, threads, 0, stream>>>(
             n_isects, isect_ids, C, n_tiles, tile_n_bits, offsets);
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(),
+                           "gsplat intersection-offset kernel launch");
     }
 
     void radix_sort_double_buffer(
@@ -220,7 +225,7 @@ namespace gsplat_lfs {
 
         // Copy results to sorted buffers if needed
         if (d_keys.selector == 0) {
-            check_cuda_status(
+            LFS_CUDA_CHECK_MSG(
                 cudaMemcpyAsync(
                     isect_ids_sorted, isect_ids,
                     checked_bytes(static_cast<size_t>(n_isects), sizeof(int64_t),
@@ -229,7 +234,7 @@ namespace gsplat_lfs {
                 "gsplat sorted intersection id copy");
         }
         if (d_values.selector == 0) {
-            check_cuda_status(
+            LFS_CUDA_CHECK_MSG(
                 cudaMemcpyAsync(
                     flatten_ids_sorted, flatten_ids,
                     checked_bytes(static_cast<size_t>(n_isects), sizeof(int32_t),

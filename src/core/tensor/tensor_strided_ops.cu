@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/cuda_debug.hpp"
+#include "core/cuda_error.hpp"
 #include "internal/tensor_impl.hpp"
 #include "internal/tensor_ops.hpp"
 #include <algorithm>
@@ -113,7 +113,7 @@ namespace lfs::core {
             strided_scatter_int32_to_float32_rank2<<<blocks, SCATTER_BLOCK_SIZE, 0, stream>>>(
                 static_cast<const int32_t*>(input), static_cast<float*>(output),
                 shape[0], shape[1], strides[0], strides[1], n);
-            CHECK_CUDA(cudaGetLastError());
+            LFS_CUDA_CHECK(cudaGetLastError());
         }
 
         void launch_strided_scatter(
@@ -157,7 +157,7 @@ namespace lfs::core {
 
 #undef LAUNCH_RANK2
 #undef LAUNCH_GENERIC
-            CHECK_CUDA(cudaGetLastError());
+            LFS_CUDA_CHECK(cudaGetLastError());
         }
 
         void launch_strided_scatter_immediate(
@@ -209,7 +209,7 @@ namespace lfs::core {
 #undef LAUNCH_SCATTER2
 #undef LAUNCH_SCATTER3
 #undef LAUNCH_SCATTER4
-            CHECK_CUDA(cudaGetLastError());
+            LFS_CUDA_CHECK(cudaGetLastError());
         }
 
         // Strided copy kernels (read strided → write contiguous)
@@ -325,7 +325,7 @@ namespace lfs::core {
 #undef LAUNCH_COPY2
 #undef LAUNCH_COPY3
 #undef LAUNCH_COPY4
-            CHECK_CUDA(cudaGetLastError());
+            LFS_CUDA_CHECK(cudaGetLastError());
         }
 
         void launch_strided_copy(
@@ -376,7 +376,7 @@ namespace lfs::core {
             default:
                 break;
             }
-            CHECK_CUDA(cudaGetLastError());
+            LFS_CUDA_CHECK(cudaGetLastError());
         }
 
         // ============= Fused Strided Upload Kernel =============

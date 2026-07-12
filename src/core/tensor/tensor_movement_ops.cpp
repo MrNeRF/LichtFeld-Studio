@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "internal/tensor_broadcast.hpp"
 #include "internal/tensor_impl.hpp"
@@ -396,26 +397,22 @@ namespace lfs::core {
                         const cudaError_t self_status =
                             cudaMemcpy(result.data_ptr(), data_ptr(), self_bytes,
                                        cudaMemcpyDeviceToDevice);
-                        LFS_ASSERT_MSG(self_status == cudaSuccess,
-                                       std::format("cat movement destination CUDA copy failed "
-                                                   "(cuda_error={}({}), bytes={}, destination_shape={}, "
-                                                   "result_shape={})",
-                                                   cudaGetErrorString(self_status),
-                                                   static_cast<int>(self_status), self_bytes,
-                                                   shape_.str(), result.shape().str()));
+                        ensure_cuda_success(
+                            self_status, "cudaMemcpy(cat movement destination)",
+                            std::format("bytes={}, destination_shape={}, result_shape={}",
+                                        self_bytes, shape_.str(), result.shape().str()));
                     }
                     if (other_bytes > 0) {
                         const cudaError_t other_status =
                             cudaMemcpy(static_cast<char*>(result.data_ptr()) + self_bytes,
                                        other.data_ptr(), other_bytes,
                                        cudaMemcpyDeviceToDevice);
-                        LFS_ASSERT_MSG(other_status == cudaSuccess,
-                                       std::format("cat movement source CUDA copy failed "
-                                                   "(cuda_error={}({}), bytes={}, source_shape={}, "
-                                                   "result_shape={}, destination_offset={})",
-                                                   cudaGetErrorString(other_status),
-                                                   static_cast<int>(other_status), other_bytes,
-                                                   other.shape().str(), result.shape().str(), self_bytes));
+                        ensure_cuda_success(
+                            other_status, "cudaMemcpy(cat movement source)",
+                            std::format("bytes={}, source_shape={}, result_shape={}, "
+                                        "destination_offset={}",
+                                        other_bytes, other.shape().str(), result.shape().str(),
+                                        self_bytes));
                     }
                 } else {
                     if (self_bytes > 0) {

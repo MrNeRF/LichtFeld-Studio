@@ -46,6 +46,7 @@ set(TENSOR_SOURCES
 # Core module sources
 set(CORE_SOURCES
         abi.cpp
+        crash_handler.cpp
         cuda_error.cpp
         operator_callbacks.cpp
         animatable_property.cpp

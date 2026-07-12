@@ -14,14 +14,6 @@
 #include <numeric>
 #include <ranges>
 
-#define CHECK_CUDA(call)                                                                 \
-    do {                                                                                 \
-        const cudaError_t error = (call);                                                \
-        LFS_ASSERT_MSG(error == cudaSuccess,                                             \
-                       std::format("{} failed (cuda_error={}({}))", #call,               \
-                                   cudaGetErrorString(error), static_cast<int>(error))); \
-    } while (0)
-
 namespace lfs::core {
 
     namespace {
@@ -161,6 +153,7 @@ namespace lfs::core {
 
     // ============= Masking Operations =============
     Tensor Tensor::masked_select(const Tensor& mask) const {
+        LFS_CUDA_BREADCRUMB_STREAM("tensor.masked_select", stream());
         LFS_ASSERT_MSG(is_valid() && mask.is_valid(),
                        std::format("masked_select requires valid input and mask tensors "
                                    "(input_valid={}, mask_valid={})",
@@ -215,16 +208,12 @@ namespace lfs::core {
                                                  result.ptr<uint8_t>(), numel(), output_size, stream());
                 break;
             }
-            const cudaError_t launch_error = cudaGetLastError();
-            LFS_ASSERT_MSG(launch_error == cudaSuccess,
-                           std::format("masked_select CUDA kernel launch failed "
-                                       "(cuda_error={}({}), input_shape={}, input_dtype={}({}), "
-                                       "mask_shape={}, selected_count={}, stream={})",
-                                       cudaGetErrorString(launch_error),
-                                       static_cast<int>(launch_error), shape_.str(),
-                                       dtype_name(dtype_), static_cast<int>(dtype_),
-                                       mask.shape().str(), output_size,
-                                       static_cast<const void*>(stream())));
+            LFS_CUDA_CHECK_MSG(
+                cudaGetLastError(),
+                "masked_select kernel launch (input_shape={}, input_dtype={}({}), "
+                "mask_shape={}, selected_count={}, stream={})",
+                shape_.str(), dtype_name(dtype_), static_cast<int>(dtype_),
+                mask.shape().str(), output_size, static_cast<const void*>(stream()));
             // No sync - tensor operation
         } else {
             switch (dtype_) {
@@ -338,6 +327,7 @@ namespace lfs::core {
     }
 
     Tensor Tensor::index_select(int dim, const Tensor& indices, BoundaryMode mode) const {
+        LFS_CUDA_BREADCRUMB_STREAM("tensor.index_select", stream());
         const_cast<Tensor*>(this)->materialize_if_deferred();
         LFS_ASSERT_MSG(is_valid() && indices.is_valid(),
                        std::format("index_select requires valid input and index tensors "
@@ -463,12 +453,11 @@ namespace lfs::core {
             } else {
                 throw std::runtime_error("index_select: unsupported dtype for CUDA");
             }
-            const cudaError_t launch_error = cudaGetLastError();
-            LFS_ASSERT_MSG(launch_error == cudaSuccess,
-                           std::format(
-                               "index_select CUDA kernel launch failed for input {}, output {}, {} indices on dimension {}: {}",
-                               shape_.str(), out.shape().str(), indices.numel(), dim,
-                               cudaGetErrorString(launch_error)));
+            LFS_CUDA_CHECK_MSG(
+                cudaGetLastError(),
+                "index_select kernel launch (input_shape={}, output_shape={}, "
+                "index_count={}, dimension={})",
+                shape_.str(), out.shape().str(), indices.numel(), dim);
             // No sync - tensor operation
         } else {
             // CPU implementation
@@ -526,6 +515,7 @@ namespace lfs::core {
     }
 
     Tensor Tensor::gather(int dim, const Tensor& indices, BoundaryMode mode) const {
+        LFS_CUDA_BREADCRUMB_STREAM("tensor.gather", stream());
         const_cast<Tensor*>(this)->materialize_if_deferred();
         LFS_ASSERT_MSG(is_valid() && indices.is_valid(),
                        std::format("gather requires valid input and index tensors "
@@ -587,16 +577,12 @@ namespace lfs::core {
                 } else {
                     throw std::runtime_error("gather: unsupported dtype for CUDA");
                 }
-                const cudaError_t launch_error = cudaGetLastError();
-                LFS_ASSERT_MSG(launch_error == cudaSuccess,
-                               std::format(
-                                   "gather CUDA kernel launch failed "
-                                   "(cuda_error={}({}), input_shape={}, output_shape={}, "
-                                   "index_shape={}, dimension={}, boundary_mode={}, stream={})",
-                                   cudaGetErrorString(launch_error),
-                                   static_cast<int>(launch_error), shape_.str(),
-                                   result.shape().str(), indices.shape().str(), dim,
-                                   static_cast<int>(mode), static_cast<const void*>(stream())));
+                LFS_CUDA_CHECK_MSG(
+                    cudaGetLastError(),
+                    "gather kernel launch (input_shape={}, output_shape={}, "
+                    "index_shape={}, dimension={}, boundary_mode={}, stream={})",
+                    shape_.str(), result.shape().str(), indices.shape().str(), dim,
+                    static_cast<int>(mode), static_cast<const void*>(stream()));
                 // No sync - tensor operation
             } else {
                 const int* idx_data = is_int64 ? indices_int32.ptr<int>() : indices_same_device.ptr<int>();
@@ -689,16 +675,12 @@ namespace lfs::core {
                                           indices.shape().dims().data(), shape_.rank(), dim,
                                           result.numel(), static_cast<int>(mode), stream());
             }
-            const cudaError_t launch_error = cudaGetLastError();
-            LFS_ASSERT_MSG(launch_error == cudaSuccess,
-                           std::format(
-                               "multi-dimensional gather CUDA kernel launch failed "
-                               "(cuda_error={}({}), input_shape={}, output_shape={}, "
-                               "index_shape={}, dimension={}, boundary_mode={}, stream={})",
-                               cudaGetErrorString(launch_error),
-                               static_cast<int>(launch_error), shape_.str(),
-                               result.shape().str(), indices.shape().str(), dim,
-                               static_cast<int>(mode), static_cast<const void*>(stream())));
+            LFS_CUDA_CHECK_MSG(
+                cudaGetLastError(),
+                "multi-dimensional gather kernel launch (input_shape={}, output_shape={}, "
+                "index_shape={}, dimension={}, boundary_mode={}, stream={})",
+                shape_.str(), result.shape().str(), indices.shape().str(), dim,
+                static_cast<int>(mode), static_cast<const void*>(stream()));
             // No sync - tensor operation
         } else {
             const int* idx_data = idx_ptr;
@@ -1656,8 +1638,8 @@ namespace lfs::core {
                 // Copy back preserving capacity
                 auto result = cpu_tensor.to(device_);
                 const size_t bytes = numel() * dtype_size(dtype_);
-                CHECK_CUDA(cudaMemcpyAsync(data_, result.ptr<void>(), bytes, cudaMemcpyDeviceToDevice, stream()));
-                CHECK_CUDA(cudaStreamSynchronize(stream()));
+                LFS_CUDA_CHECK(cudaMemcpyAsync(data_, result.ptr<void>(), bytes, cudaMemcpyDeviceToDevice, stream()));
+                LFS_CUDA_CHECK(cudaStreamSynchronize(stream()));
             } else {
                 // CPU implementation
                 DataT* data = ptr<DataT>();
@@ -1865,7 +1847,7 @@ namespace lfs::core {
                         c >= 0 && c < col_bound) {
                         const size_t offset = static_cast<size_t>(r) * strides_[0] +
                                               static_cast<size_t>(c) * strides_[1];
-                        CHECK_CUDA(cudaMemcpyAsync(
+                        LFS_CUDA_CHECK(cudaMemcpyAsync(
                             data_ptr + offset,
                             val_ptr + i,
                             sizeof(float),
@@ -1930,8 +1912,8 @@ namespace lfs::core {
             // Use CUDA kernel for counting
             size_t count = 0;
             size_t* d_count = nullptr;
-            CHECK_CUDA(cudaMalloc(&d_count, sizeof(size_t)));
-            CHECK_CUDA(cudaMemset(d_count, 0, sizeof(size_t)));
+            LFS_CUDA_CHECK(cudaMalloc(&d_count, sizeof(size_t)));
+            LFS_CUDA_CHECK(cudaMemset(d_count, 0, sizeof(size_t)));
 
             if (is_bool_like(dtype_)) {
                 tensor_ops::launch_count_nonzero_bool(ptr<unsigned char>(), d_count, numel(), stream());
@@ -1940,9 +1922,9 @@ namespace lfs::core {
             }
 
             // API BOUNDARY: Sync before reading result from GPU
-            CHECK_CUDA(cudaDeviceSynchronize());
-            CHECK_CUDA(cudaMemcpy(&count, d_count, sizeof(size_t), cudaMemcpyDeviceToHost));
-            CHECK_CUDA(cudaFree(d_count));
+            LFS_CUDA_CHECK(cudaDeviceSynchronize());
+            LFS_CUDA_CHECK(cudaMemcpy(&count, d_count, sizeof(size_t), cudaMemcpyDeviceToHost));
+            LFS_CUDA_CHECK(cudaFree(d_count));
 
             return count;
         } else {
@@ -2284,14 +2266,13 @@ namespace lfs::core {
 
         if (device_ == Device::CUDA) {
             float value;
-            cudaError_t err = cudaMemcpy(&value, ptr<float>() + linear_idx, sizeof(float), cudaMemcpyDeviceToHost);
-            LFS_ASSERT_MSG(err == cudaSuccess,
-                           std::format("at() CUDA device-to-host copy failed "
-                                       "(cuda_error={}({}), bytes={}, linear_index={}, "
-                                       "tensor_shape={}, source_pointer={})",
-                                       cudaGetErrorString(err), static_cast<int>(err), sizeof(float),
-                                       linear_idx, shape_.str(),
-                                       static_cast<const void*>(ptr<float>() + linear_idx)));
+            LFS_CUDA_CHECK_MSG(
+                cudaMemcpy(&value, ptr<float>() + linear_idx, sizeof(float),
+                           cudaMemcpyDeviceToHost),
+                "Tensor::at readback (bytes={}, linear_index={}, tensor_shape={}, "
+                "source_pointer={})",
+                sizeof(float), linear_idx, shape_.str(),
+                static_cast<const void*>(ptr<float>() + linear_idx));
             return value;
         }
         return ptr<float>()[linear_idx];
@@ -2310,8 +2291,8 @@ namespace lfs::core {
 
         if (t.numel() > 0 && data.data() != nullptr) {
             if (device == Device::CUDA) {
-                CHECK_CUDA(cudaMemcpy(t.data_ptr(), data.data(), t.bytes(),
-                                      cudaMemcpyHostToDevice));
+                LFS_CUDA_CHECK(cudaMemcpy(t.data_ptr(), data.data(), t.bytes(),
+                                          cudaMemcpyHostToDevice));
             } else {
                 std::memcpy(t.data_ptr(), data.data(), t.bytes());
             }
@@ -2380,17 +2361,11 @@ namespace lfs::core {
         unsigned char val = value ? 1 : 0;
 
         if (device_ == Device::CUDA) {
-            cudaError_t err = cudaMemcpy(
-                ptr<unsigned char>() + linear_idx,
-                &val,
-                1,
-                cudaMemcpyHostToDevice);
-            LFS_ASSERT_MSG(err == cudaSuccess,
-                           std::format("set_bool CUDA host-to-device copy failed "
-                                       "(cuda_error={}({}), bytes=1, linear_index={}, "
-                                       "tensor_shape={}, value={})",
-                                       cudaGetErrorString(err), static_cast<int>(err),
-                                       linear_idx, shape_.str(), value));
+            LFS_CUDA_CHECK_MSG(
+                cudaMemcpy(ptr<unsigned char>() + linear_idx, &val, 1,
+                           cudaMemcpyHostToDevice),
+                "Tensor::set_bool upload (bytes=1, linear_index={}, tensor_shape={}, value={})",
+                linear_idx, shape_.str(), value);
         } else {
             ptr<unsigned char>()[linear_idx] = val;
         }
@@ -2423,16 +2398,11 @@ namespace lfs::core {
 
         if (device_ == Device::CUDA) {
             unsigned char val;
-            cudaError_t err = cudaMemcpy(
-                &val,
-                ptr<unsigned char>() + linear_idx,
-                1,
-                cudaMemcpyDeviceToHost);
-            LFS_ASSERT_MSG(err == cudaSuccess,
-                           std::format("get_bool CUDA device-to-host copy failed "
-                                       "(cuda_error={}({}), bytes=1, linear_index={}, tensor_shape={})",
-                                       cudaGetErrorString(err), static_cast<int>(err),
-                                       linear_idx, shape_.str()));
+            LFS_CUDA_CHECK_MSG(
+                cudaMemcpy(&val, ptr<unsigned char>() + linear_idx, 1,
+                           cudaMemcpyDeviceToHost),
+                "Tensor::get_bool readback (bytes=1, linear_index={}, tensor_shape={})",
+                linear_idx, shape_.str());
             return val != 0;
         } else {
             return ptr<unsigned char>()[linear_idx] != 0;
@@ -2480,7 +2450,7 @@ namespace lfs::core {
             tensor_ops::launch_masked_scatter(const_cast<Tensor*>(tensor_)->ptr<float>(),
                                               mask_.ptr<unsigned char>(), other.ptr<float>(),
                                               tensor_->numel(), other.numel(), tensor_->stream());
-            CHECK_CUDA(cudaGetLastError());
+            LFS_CUDA_CHECK(cudaGetLastError());
             // No sync - tensor operation
         } else {
             float* data = const_cast<Tensor*>(tensor_)->ptr<float>();
@@ -2677,14 +2647,14 @@ namespace lfs::core {
                                                 output_ptr, input_shape,
                                                 shape_.rank(), 0, n_gather,
                                                 0 /*BoundaryMode::Assert*/, stream());
-                CHECK_CUDA(cudaStreamSynchronize(stream()));
+                LFS_CUDA_CHECK(cudaStreamSynchronize(stream()));
             } else if (dtype_ == DataType::UInt8 || dtype_ == DataType::Bool) {
                 uint8_t* output_ptr = ptr<uint8_t>() + write_offset_elements;
                 tensor_ops::launch_index_select(ptr<uint8_t>(), idx_ptr,
                                                 output_ptr, input_shape,
                                                 shape_.rank(), 0, n_gather,
                                                 0 /*BoundaryMode::Assert*/, stream());
-                CHECK_CUDA(cudaStreamSynchronize(stream()));
+                LFS_CUDA_CHECK(cudaStreamSynchronize(stream()));
             } else {
                 LFS_ASSERT_MSG(false,
                                std::format("append_gather CUDA dispatch reached an unsupported dtype "
@@ -2823,8 +2793,8 @@ namespace lfs::core {
         // Zero out the appended region
         if (device_ == Device::CUDA) {
             void* write_ptr = static_cast<uint8_t*>(data_) + write_offset_bytes;
-            CHECK_CUDA(cudaMemsetAsync(write_ptr, 0, zero_bytes, stream()));
-            CHECK_CUDA(cudaStreamSynchronize(stream()));
+            LFS_CUDA_CHECK(cudaMemsetAsync(write_ptr, 0, zero_bytes, stream()));
+            LFS_CUDA_CHECK(cudaStreamSynchronize(stream()));
         } else {
             void* write_ptr = static_cast<uint8_t*>(data_) + write_offset_bytes;
             std::memset(write_ptr, 0, zero_bytes);
@@ -2841,7 +2811,5 @@ namespace lfs::core {
 
         return *this;
     }
-
-#undef CHECK_CUDA
 
 } // namespace lfs::core

@@ -106,6 +106,17 @@ namespace {
         EXPECT_NE(report.find("LFS_CUDA_SYNC_DEBUG=1"), std::string::npos);
     }
 
+    TEST(CudaErrorDiagnostics, SuccessfulCheckDoesNotFormatFailureContext) {
+        if (lfs::core::cuda_sync_debug_enabled()) {
+            GTEST_SKIP() << "sync-debug mode deliberately runs the full completion path";
+        }
+
+        int format_evaluations = 0;
+        LFS_CUDA_CHECK_MSG(cudaSuccess, "unused failure context {}", ++format_evaluations);
+
+        EXPECT_EQ(format_evaluations, 0);
+    }
+
     TEST(CudaErrorDiagnostics, ForcedCudaErrorReportHasExpectedSections) {
         ErrorLogCapture capture;
 

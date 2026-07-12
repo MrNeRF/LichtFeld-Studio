@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/assert.hpp"
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "memory_arena.hpp"
@@ -27,11 +28,8 @@ namespace lfs::core {
 
         // Check if VMM is supported
         int device = -1;
-        const cudaError_t device_status = cudaGetDevice(&device);
-        LFS_ASSERT_MSG(
-            device_status == cudaSuccess,
-            std::format("Failed to query CUDA device for arena construction: {}",
-                        cudaGetErrorString(device_status)));
+        LFS_CUDA_CHECK_MSG(cudaGetDevice(&device),
+                           "RasterizerMemoryArena construction");
         if (config_.enable_vmm && !is_vmm_supported(device)) {
             LOG_WARN("VMM not supported, falling back to smaller allocation");
             config_.initial_commit = 128 << 20;
@@ -51,7 +49,13 @@ namespace lfs::core {
         {
             std::lock_guard<std::mutex> event_lock(last_frame_event_mutex_);
             if (last_frame_event_) {
-                cudaEventDestroy(last_frame_event_);
+                const cudaError_t destroy_status = cudaEventDestroy(last_frame_event_);
+                if (destroy_status != cudaSuccess) {
+                    ensure_cuda_success(
+                        destroy_status, "cudaEventDestroy(arena frame completion)",
+                        "context=arena destruction", std::source_location::current(),
+                        CudaFailureDisposition::LogOnly);
+                }
                 last_frame_event_ = nullptr;
                 last_frame_event_valid_ = false;
             }
@@ -114,7 +118,13 @@ namespace lfs::core {
             pending_render_frames_ = other.pending_render_frames_;
             active_training_frames_ = other.active_training_frames_;
             if (last_frame_event_) {
-                cudaEventDestroy(last_frame_event_);
+                const cudaError_t destroy_status = cudaEventDestroy(last_frame_event_);
+                if (destroy_status != cudaSuccess) {
+                    ensure_cuda_success(
+                        destroy_status, "cudaEventDestroy(arena frame completion)",
+                        "context=arena move assignment", std::source_location::current(),
+                        CudaFailureDisposition::LogOnly);
+                }
             }
             last_frame_event_ = other.last_frame_event_;
             last_frame_event_valid_ = other.last_frame_event_valid_;
@@ -131,8 +141,24 @@ namespace lfs::core {
     bool RasterizerMemoryArena::is_vmm_supported(int device) const {
         // Check compute capability
         int major = 0, minor = 0;
-        cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device);
-        cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, device);
+        const cudaError_t major_status =
+            cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device);
+        if (major_status != cudaSuccess) {
+            ensure_cuda_success(
+                major_status, "cudaDeviceGetAttribute(compute capability major)",
+                std::format("device={}, fallback=disable VMM", device),
+                std::source_location::current(), CudaFailureDisposition::LogOnly);
+            return false;
+        }
+        const cudaError_t minor_status =
+            cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, device);
+        if (minor_status != cudaSuccess) {
+            ensure_cuda_success(
+                minor_status, "cudaDeviceGetAttribute(compute capability minor)",
+                std::format("device={}, fallback=disable VMM", device),
+                std::source_location::current(), CudaFailureDisposition::LogOnly);
+            return false;
+        }
 
         // VMM requires compute capability 6.0+
         if (major < 6) {
@@ -220,16 +246,31 @@ namespace lfs::core {
         // replaced under it.
         cudaExternalSemaphoreWaitParams wait_params{};
         wait_params.params.fence.value = release_value;
-        if (cudaWaitExternalSemaphoresAsync(&release_semaphore, &wait_params, 1, nullptr) != cudaSuccess) {
-            LOG_WARN("RasterizerMemoryArena: external release drain wait failed (value {})", release_value);
+        const cudaError_t wait_status =
+            cudaWaitExternalSemaphoresAsync(&release_semaphore, &wait_params, 1, nullptr);
+        if (wait_status != cudaSuccess) {
+            ensure_cuda_success(
+                wait_status, "cudaWaitExternalSemaphoresAsync(arena drain)",
+                std::format("release_value={}, fallback=device sync", release_value),
+                std::source_location::current(), CudaFailureDisposition::LogOnly);
             // The GPU-side fence wait couldn't be enqueued; fall back to a full
             // device sync so the caller doesn't free/replace the backing under
             // in-flight CUDA work (the Vulkan batch can't be observed here).
-            cudaDeviceSynchronize();
+            const cudaError_t sync_status = cudaDeviceSynchronize();
+            if (sync_status != cudaSuccess) {
+                ensure_cuda_success(
+                    sync_status, "cudaDeviceSynchronize(arena drain fallback)",
+                    std::format("release_value={}", release_value),
+                    std::source_location::current(), CudaFailureDisposition::LogOnly);
+            }
             return;
         }
-        if (cudaStreamSynchronize(nullptr) != cudaSuccess) {
-            LOG_WARN("RasterizerMemoryArena: external release drain sync failed (value {})", release_value);
+        const cudaError_t sync_status = cudaStreamSynchronize(nullptr);
+        if (sync_status != cudaSuccess) {
+            ensure_cuda_success(
+                sync_status, "cudaStreamSynchronize(arena drain)",
+                std::format("release_value={}", release_value),
+                std::source_location::current(), CudaFailureDisposition::LogOnly);
         }
     }
 
@@ -239,7 +280,7 @@ namespace lfs::core {
     // chain fall back to a device-wide sync. A pending Vulkan release (viewport
     // frames) is waited explicitly — neither the chain event nor a device sync
     // can see in-flight Vulkan work.
-    bool RasterizerMemoryArena::wait_for_previous_frame(cudaStream_t stream) {
+    cudaError_t RasterizerMemoryArena::wait_for_previous_frame(cudaStream_t stream) {
         static const bool legacy_sync = []() {
             const char* env = std::getenv("LFS_ARENA_LEGACY_SYNC");
             return env && env[0] == '1';
@@ -255,8 +296,17 @@ namespace lfs::core {
             external_release_semaphore_ = nullptr;
             external_release_value_ = 0;
             if (stream && !legacy_sync) {
-                chain_ok = last_frame_event_valid_ &&
-                           cudaStreamWaitEvent(stream, last_frame_event_, 0) == cudaSuccess;
+                if (last_frame_event_valid_) {
+                    const cudaError_t chain_status =
+                        cudaStreamWaitEvent(stream, last_frame_event_, 0);
+                    chain_ok = chain_status == cudaSuccess;
+                    if (!chain_ok) {
+                        ensure_cuda_success(
+                            chain_status, "cudaStreamWaitEvent(arena frame chain)",
+                            "fallback=device sync", std::source_location::current(),
+                            CudaFailureDisposition::LogOnly);
+                    }
+                }
             }
         }
 
@@ -266,13 +316,25 @@ namespace lfs::core {
             cudaExternalSemaphoreWaitParams wait_params{};
             wait_params.params.fence.value = release_value;
             const cudaStream_t wait_stream = (stream && !legacy_sync) ? stream : nullptr;
-            if (cudaWaitExternalSemaphoresAsync(&release_semaphore, &wait_params, 1, wait_stream) != cudaSuccess) {
-                LOG_WARN("RasterizerMemoryArena: external release wait failed (value {})", release_value);
+            const cudaError_t wait_status = cudaWaitExternalSemaphoresAsync(
+                &release_semaphore, &wait_params, 1, wait_stream);
+            if (wait_status != cudaSuccess) {
+                ensure_cuda_success(
+                    wait_status, "cudaWaitExternalSemaphoresAsync(arena frame)",
+                    std::format("release_value={}, fallback=legacy stream", release_value),
+                    std::source_location::current(), CudaFailureDisposition::LogOnly);
                 // The GPU-side wait wasn't enqueued; host-block on the fence so the
                 // arena isn't reset/reused while the Vulkan batch still reads it
                 // (the device-sync fallback below only covers in-flight CUDA work).
-                if (cudaWaitExternalSemaphoresAsync(&release_semaphore, &wait_params, 1, nullptr) == cudaSuccess) {
-                    cudaStreamSynchronize(nullptr);
+                const cudaError_t fallback_wait_status =
+                    cudaWaitExternalSemaphoresAsync(
+                        &release_semaphore, &wait_params, 1, nullptr);
+                if (fallback_wait_status != cudaSuccess) {
+                    return fallback_wait_status;
+                }
+                const cudaError_t fallback_sync_status = cudaStreamSynchronize(nullptr);
+                if (fallback_sync_status != cudaSuccess) {
+                    return fallback_sync_status;
                 }
                 chain_ok = false;
             } else if (wait_stream != nullptr) {
@@ -284,13 +346,14 @@ namespace lfs::core {
         }
 
         if (chain_ok) {
-            return true;
+            return cudaSuccess;
         }
-        return cudaDeviceSynchronize() == cudaSuccess;
+        return cudaDeviceSynchronize();
     }
 
     std::optional<uint64_t> RasterizerMemoryArena::begin_frame_impl(cudaStream_t stream, bool from_rendering,
                                                                     std::optional<uint32_t> wait_timeout_ms) {
+        LFS_CUDA_BREADCRUMB_STREAM("arena.begin_frame", stream);
         {
             std::unique_lock<std::mutex> sync_lock(sync_mutex_);
             const auto can_begin = [this, from_rendering]() {
@@ -313,23 +376,28 @@ namespace lfs::core {
 
         uint64_t frame_id = frame_counter_.fetch_add(1, std::memory_order_relaxed);
 
-        if (!wait_for_previous_frame(stream)) {
-            const cudaError_t sync_err = cudaGetLastError();
+        const cudaError_t wait_status = wait_for_previous_frame(stream);
+        if (wait_status != cudaSuccess) {
             end_frame(frame_id, from_rendering);
-            throw std::runtime_error("RasterizerMemoryArena::begin_frame failed while synchronizing prior GPU work: " +
-                                     std::string(cudaGetErrorName(sync_err)) + ": " +
-                                     cudaGetErrorString(sync_err));
+            ensure_cuda_success(
+                wait_status, "RasterizerMemoryArena::wait_for_previous_frame",
+                std::format("frame_id={}, stream={}", frame_id, static_cast<void*>(stream)));
         }
 
         // CRITICAL FIX: Reset arena offset at the beginning of each frame!
-        int device;
-        cudaError_t err = cudaGetDevice(&device);
-        if (err == cudaSuccess) {
-            std::lock_guard<std::mutex> lock(arena_mutex_);
+        int device = -1;
+        const cudaError_t device_status = cudaGetDevice(&device);
+        if (device_status != cudaSuccess) {
+            end_frame(frame_id, from_rendering);
+            ensure_cuda_success(
+                device_status, "cudaGetDevice(arena begin frame)",
+                std::format("frame_id={}", frame_id));
+        }
+        {
+            std::lock_guard<std::mutex> arena_lock(arena_mutex_);
             auto it = device_arenas_.find(device);
             if (it != device_arenas_.end() && it->second) {
                 // Reset the offset to reuse the buffer from the beginning
-                size_t old_offset = it->second->offset.load(std::memory_order_acquire);
                 it->second->offset.store(0, std::memory_order_release);
 
                 // Log memory status periodically (but not too often)
@@ -365,12 +433,29 @@ namespace lfs::core {
             std::lock_guard<std::mutex> event_lock(last_frame_event_mutex_);
             if (stream) {
                 if (!last_frame_event_) {
-                    if (cudaEventCreateWithFlags(&last_frame_event_, cudaEventDisableTiming) != cudaSuccess) {
+                    const cudaError_t create_status = cudaEventCreateWithFlags(
+                        &last_frame_event_, cudaEventDisableTiming);
+                    if (create_status != cudaSuccess) {
+                        ensure_cuda_success(
+                            create_status, "cudaEventCreateWithFlags(arena frame completion)",
+                            std::format("frame_id={}", frame_id),
+                            std::source_location::current(), CudaFailureDisposition::LogOnly);
                         last_frame_event_ = nullptr;
                     }
                 }
-                last_frame_event_valid_ =
-                    last_frame_event_ && cudaEventRecord(last_frame_event_, stream) == cudaSuccess;
+                if (last_frame_event_) {
+                    const cudaError_t record_status = cudaEventRecord(last_frame_event_, stream);
+                    last_frame_event_valid_ = record_status == cudaSuccess;
+                    if (!last_frame_event_valid_) {
+                        ensure_cuda_success(
+                            record_status, "cudaEventRecord(arena frame completion)",
+                            std::format("frame_id={}, stream={}", frame_id,
+                                        static_cast<void*>(stream)),
+                            std::source_location::current(), CudaFailureDisposition::LogOnly);
+                    }
+                } else {
+                    last_frame_event_valid_ = false;
+                }
             } else {
                 last_frame_event_valid_ = false;
             }
@@ -401,6 +486,11 @@ namespace lfs::core {
                     }
                 }
             }
+        } else {
+            ensure_cuda_success(
+                err, "cudaGetDevice(arena end frame)",
+                std::format("frame_id={}", frame_id), std::source_location::current(),
+                CudaFailureDisposition::LogOnly);
         }
 
         std::lock_guard<std::mutex> lock(frame_mutex_);
@@ -435,8 +525,13 @@ namespace lfs::core {
         // Called with arena_mutex_ already held
         int device;
         cudaError_t err = cudaGetDevice(&device);
-        if (err != cudaSuccess)
+        if (err != cudaSuccess) {
+            ensure_cuda_success(
+                err, "cudaGetDevice(arena memory status)",
+                std::format("frame_id={}", frame_id), std::source_location::current(),
+                CudaFailureDisposition::LogOnly);
             return;
+        }
 
         auto it = device_arenas_.find(device);
         if (it == device_arenas_.end() || !it->second)
@@ -490,11 +585,8 @@ namespace lfs::core {
             }
 
             int device;
-            cudaError_t err = cudaGetDevice(&device);
-            if (err != cudaSuccess) {
-                throw std::runtime_error("Failed to get CUDA device: " +
-                                         std::string(cudaGetErrorString(err)));
-            }
+            LFS_CUDA_CHECK_MSG(cudaGetDevice(&device),
+                               "RasterizerMemoryArena allocation");
 
             Arena& arena = get_or_create_arena(device);
             char* const ptr = allocate_internal(arena, size, frame_id);
@@ -562,12 +654,29 @@ namespace lfs::core {
     void RasterizerMemoryArena::empty_cuda_cache() {
         // Try to force CUDA to release cached memory
         // This is less aggressive than cudaDeviceReset()
-        cudaDeviceSynchronize();
+        const cudaError_t sync_status = cudaDeviceSynchronize();
+        if (sync_status != cudaSuccess) {
+            ensure_cuda_success(
+                sync_status, "cudaDeviceSynchronize(arena cache trim)", {},
+                std::source_location::current(), CudaFailureDisposition::LogOnly);
+            return;
+        }
 
         // Allocate and immediately free a small buffer to trigger cleanup
-        void* dummy;
-        cudaMalloc(&dummy, 1);
-        cudaFree(dummy);
+        void* dummy = nullptr;
+        const cudaError_t allocation_status = cudaMalloc(&dummy, 1);
+        if (allocation_status != cudaSuccess) {
+            ensure_cuda_success(
+                allocation_status, "cudaMalloc(arena cache trim probe)", {},
+                std::source_location::current(), CudaFailureDisposition::LogOnly);
+            return;
+        }
+        const cudaError_t free_status = cudaFree(dummy);
+        if (free_status != cudaSuccess) {
+            ensure_cuda_success(
+                free_status, "cudaFree(arena cache trim probe)", {},
+                std::source_location::current(), CudaFailureDisposition::LogOnly);
+        }
     }
 
     void RasterizerMemoryArena::release_arena_storage(Arena& arena) {
@@ -593,7 +702,13 @@ namespace lfs::core {
 
         if (arena.fallback_buffer && arena.owns_fallback_buffer) {
             lfs::diagnostics::VramProfiler::instance().recordDeallocation(arena.fallback_buffer);
-            cudaFree(arena.fallback_buffer);
+            const cudaError_t free_status = cudaFree(arena.fallback_buffer);
+            if (free_status != cudaSuccess) {
+                ensure_cuda_success(
+                    free_status, "cudaFree(arena backing)",
+                    std::format("capacity_bytes={}", arena.capacity),
+                    std::source_location::current(), CudaFailureDisposition::LogOnly);
+            }
         }
         arena.fallback_buffer = nullptr;
         arena.owns_fallback_buffer = true;
@@ -623,16 +738,10 @@ namespace lfs::core {
 
         for (auto& [device, arena] : device_arenas_) {
             if (arena) {
-                const cudaError_t set_device_status = cudaSetDevice(device);
-                LFS_ASSERT_MSG(
-                    set_device_status == cudaSuccess,
-                    std::format("Failed to select CUDA device {} for arena reset: {}",
-                                device, cudaGetErrorString(set_device_status)));
-                const cudaError_t sync_status = cudaDeviceSynchronize();
-                LFS_ASSERT_MSG(
-                    sync_status == cudaSuccess,
-                    std::format("Failed to drain CUDA device {} for arena reset: {}",
-                                device, cudaGetErrorString(sync_status)));
+                LFS_CUDA_CHECK_MSG(cudaSetDevice(device),
+                                   "RasterizerMemoryArena reset device={}", device);
+                LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(),
+                                   "RasterizerMemoryArena reset device={}", device);
 
                 // No frame can own the arena now. Publish the empty high-water
                 // before deciding which VMM chunks are unused, otherwise the old
@@ -680,8 +789,22 @@ namespace lfs::core {
         // drain its release fence before the swap releases that storage.
         drain_external_release();
 
-        cudaSetDevice(backing.device);
-        cudaDeviceSynchronize();
+        const cudaError_t set_device_status = cudaSetDevice(backing.device);
+        if (set_device_status != cudaSuccess) {
+            ensure_cuda_success(
+                set_device_status, "cudaSetDevice(external arena install)",
+                std::format("device={}", backing.device), std::source_location::current(),
+                CudaFailureDisposition::LogOnly);
+            return false;
+        }
+        const cudaError_t sync_status = cudaDeviceSynchronize();
+        if (sync_status != cudaSuccess) {
+            ensure_cuda_success(
+                sync_status, "cudaDeviceSynchronize(external arena install)",
+                std::format("device={}", backing.device), std::source_location::current(),
+                CudaFailureDisposition::LogOnly);
+            return false;
+        }
 
         std::scoped_lock lock(arena_mutex_, frame_mutex_);
         frame_contexts_.clear();
@@ -726,7 +849,8 @@ namespace lfs::core {
             return active_frames_ == 0 && pending_render_frames_ == 0;
         });
 
-        cudaDeviceSynchronize();
+        LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(),
+                           "clearing external RasterizerMemoryArena backing");
 
         std::scoped_lock lock(arena_mutex_, frame_mutex_);
         for (auto it = device_arenas_.begin(); it != device_arenas_.end();) {
@@ -767,7 +891,14 @@ namespace lfs::core {
             return false;
         }
 
-        cudaDeviceSynchronize();
+        const cudaError_t sync_status = cudaDeviceSynchronize();
+        if (sync_status != cudaSuccess) {
+            ensure_cuda_success(
+                sync_status, "cudaDeviceSynchronize(external arena growth)",
+                std::format("requested_bytes={}", new_size),
+                std::source_location::current(), CudaFailureDisposition::LogOnly);
+            return false;
+        }
 
         std::scoped_lock lock(arena_mutex_, frame_mutex_);
 
@@ -824,16 +955,17 @@ namespace lfs::core {
     }
 
     RasterizerMemoryArena::Arena& RasterizerMemoryArena::get_or_create_arena(int device) {
+        LFS_CUDA_BREADCRUMB("arena.get_or_create");
         std::lock_guard<std::mutex> lock(arena_mutex_);
+
+        LFS_CUDA_CHECK_MSG(cudaSetDevice(device),
+                           "RasterizerMemoryArena initialization device={}", device);
 
         auto& arena_ptr = device_arenas_[device];
         if (!arena_ptr) {
             arena_ptr = std::make_unique<Arena>();
             arena_ptr->device = device;
             arena_ptr->last_log_time = std::chrono::steady_clock::now();
-
-            // Set device before allocating
-            cudaSetDevice(device);
 
             if (config_.enable_vmm && is_vmm_supported(device)) {
                 // Use VMM path
@@ -884,8 +1016,8 @@ namespace lfs::core {
             size_t free_memory, total_memory;
             cudaError_t err = cudaMemGetInfo(&free_memory, &total_memory);
             if (err != cudaSuccess) {
-                throw std::runtime_error("Failed to query GPU memory: " +
-                                         std::string(cudaGetErrorString(err)));
+                ensure_cuda_success(err, "cudaMemGetInfo(arena initialization)",
+                                    std::format("device={}", device));
             }
 
             // Start with a reasonable initial size
@@ -913,9 +1045,19 @@ namespace lfs::core {
                     arena.offset.store(0, std::memory_order_release);
                     allocated = true;
 
-                    cudaMemGetInfo(&free_memory, &total_memory);
-                    LOG_INFO("Traditional allocation: device=%d, size=%zu MB, GPU free=%zu MB",
-                             device, initial_size >> 20, free_memory >> 20);
+                    const cudaError_t memory_status =
+                        cudaMemGetInfo(&free_memory, &total_memory);
+                    if (memory_status == cudaSuccess) {
+                        LOG_INFO("Traditional allocation: device=%d, size=%zu MB, GPU free=%zu MB",
+                                 device, initial_size >> 20, free_memory >> 20);
+                    } else {
+                        ensure_cuda_success(
+                            memory_status, "cudaMemGetInfo(arena initialization statistics)",
+                            std::format("device={}, allocation_bytes={}", device, initial_size),
+                            std::source_location::current(), CudaFailureDisposition::LogOnly);
+                        LOG_INFO("Traditional allocation: device=%d, size=%zu MB",
+                                 device, initial_size >> 20);
+                    }
                 } else {
                     initial_size /= 2;
                     LOG_DEBUG("Allocation failed, trying %zu MB", initial_size >> 20);
@@ -923,7 +1065,9 @@ namespace lfs::core {
             }
 
             if (!allocated) {
-                throw std::runtime_error("Failed to allocate arena after multiple attempts");
+                ensure_cuda_success(err, "cudaMalloc(arena initialization)",
+                                    std::format("device={}, attempts exhausted", device));
+                throw std::runtime_error("Arena allocation failed without a CUDA status");
             }
         }
 
@@ -958,8 +1102,16 @@ namespace lfs::core {
         }
 
         // Check available GPU memory with larger buffer
-        size_t free_memory, total_memory;
-        cudaMemGetInfo(&free_memory, &total_memory);
+        size_t free_memory = 0;
+        size_t total_memory = 0;
+        cudaError_t memory_status = cudaMemGetInfo(&free_memory, &total_memory);
+        if (memory_status != cudaSuccess) {
+            ensure_cuda_success(
+                memory_status, "cudaMemGetInfo(arena VMM commit)",
+                std::format("device={}, requested_bytes={}", arena.device, commit_size),
+                std::source_location::current(), CudaFailureDisposition::LogOnly);
+            return false;
+        }
 
         // Need substantial buffer for VMM and other operations
         size_t buffer_needed = std::min(size_t(1) << 30, total_memory / 10); // 1GB or 10% of total
@@ -967,7 +1119,14 @@ namespace lfs::core {
         if (free_memory < commit_size + buffer_needed) {
             // Try cleanup
             empty_cuda_cache();
-            cudaMemGetInfo(&free_memory, &total_memory);
+            memory_status = cudaMemGetInfo(&free_memory, &total_memory);
+            if (memory_status != cudaSuccess) {
+                ensure_cuda_success(
+                    memory_status, "cudaMemGetInfo(arena VMM commit retry)",
+                    std::format("device={}, requested_bytes={}", arena.device, commit_size),
+                    std::source_location::current(), CudaFailureDisposition::LogOnly);
+                return false;
+            }
 
             if (free_memory < commit_size + buffer_needed) {
                 // Not enough memory - try to allocate as much as we can up to requested size
@@ -1162,6 +1321,7 @@ namespace lfs::core {
     }
 
     char* RasterizerMemoryArena::allocate_internal(Arena& arena, size_t size, uint64_t frame_id) {
+        LFS_CUDA_BREADCRUMB("arena.allocate");
         size_t aligned_size = align_size(size);
 
         if (config_.enable_profiling && (frame_id % config_.log_interval == 0)) {
@@ -1309,7 +1469,13 @@ namespace lfs::core {
                 // Synchronize after committing new memory to ensure no GPU kernels
                 // are still accessing old memory regions before we allow new allocations
                 if (success) {
-                    cudaDeviceSynchronize();
+                    const cudaError_t sync_status = cudaDeviceSynchronize();
+                    if (sync_status != cudaSuccess) {
+                        ensure_cuda_success(
+                            sync_status, "cudaDeviceSynchronize(arena VMM growth)",
+                            std::format("growth_bytes={}, retry={}", growth_amount, retry),
+                            std::source_location::current(), CudaFailureDisposition::LogOnly);
+                    }
                 }
             } else {
                 // Traditional path
@@ -1322,7 +1488,13 @@ namespace lfs::core {
                 if (retry < MAX_RETRIES - 1) {
                     LOG_DEBUG("Growth failed, cleanup and retry %d/%d", retry + 1, MAX_RETRIES);
                     empty_cuda_cache();
-                    cudaDeviceSynchronize();
+                    const cudaError_t sync_status = cudaDeviceSynchronize();
+                    if (sync_status != cudaSuccess) {
+                        ensure_cuda_success(
+                            sync_status, "cudaDeviceSynchronize(arena growth retry)",
+                            std::format("retry={}, requested_bytes={}", retry + 1, aligned_size),
+                            std::source_location::current(), CudaFailureDisposition::LogOnly);
+                    }
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                     continue;
                 } else {
@@ -1340,6 +1512,7 @@ namespace lfs::core {
     }
 
     bool RasterizerMemoryArena::grow_arena(Arena& arena, size_t required_size) {
+        LFS_CUDA_BREADCRUMB("arena.grow");
         // Called with arena_mutex_ held (fallback for non-VMM systems)
         const size_t old_capacity = arena.capacity;
         size_t new_capacity = std::max(required_size * 2, static_cast<size_t>(arena.capacity * 1.5f));
@@ -1358,6 +1531,10 @@ namespace lfs::core {
         size_t free_memory, total_memory;
         cudaError_t err = cudaMemGetInfo(&free_memory, &total_memory);
         if (err != cudaSuccess) {
+            ensure_cuda_success(err, "cudaMemGetInfo(arena growth)",
+                                std::format("required_bytes={}", required_size),
+                                std::source_location::current(),
+                                CudaFailureDisposition::LogOnly);
             return false;
         }
 
@@ -1370,7 +1547,14 @@ namespace lfs::core {
         if (free_memory < additional_needed + MIN_FREE_BUFFER) {
             LOG_DEBUG("Low memory, attempting cleanup");
             empty_cuda_cache();
-            cudaMemGetInfo(&free_memory, &total_memory);
+            err = cudaMemGetInfo(&free_memory, &total_memory);
+            if (err != cudaSuccess) {
+                ensure_cuda_success(
+                    err, "cudaMemGetInfo(arena growth retry)",
+                    std::format("required_bytes={}", required_size),
+                    std::source_location::current(), CudaFailureDisposition::LogOnly);
+                return false;
+            }
 
             if (free_memory < additional_needed + MIN_FREE_BUFFER) {
                 LOG_WARN("Insufficient memory for growth: need %zu MB, free %zu MB",
@@ -1382,7 +1566,11 @@ namespace lfs::core {
         void* new_buffer = nullptr;
         err = cudaMalloc(&new_buffer, new_capacity);
         if (err != cudaSuccess) {
-            LOG_WARN("Growth allocation failed: %s", cudaGetErrorString(err));
+            ensure_cuda_success(err, "cudaMalloc(arena growth)",
+                                std::format("old_capacity={}, new_capacity={}, required={}",
+                                            old_capacity, new_capacity, required_size),
+                                std::source_location::current(),
+                                CudaFailureDisposition::LogOnly);
             return false;
         }
         lfs::diagnostics::VramProfiler::instance().recordAllocation(
@@ -1396,16 +1584,32 @@ namespace lfs::core {
         if (copy_size > 0 && arena.fallback_buffer) {
             err = cudaMemcpy(new_buffer, arena.fallback_buffer, copy_size, cudaMemcpyDeviceToDevice);
             if (err != cudaSuccess) {
+                ensure_cuda_success(err, "cudaMemcpy(arena growth)",
+                                    std::format("copy_bytes={}, old_capacity={}, new_capacity={}",
+                                                copy_size, old_capacity, new_capacity),
+                                    std::source_location::current(),
+                                    CudaFailureDisposition::LogOnly);
                 lfs::diagnostics::VramProfiler::instance().recordDeallocation(new_buffer);
-                cudaFree(new_buffer);
-                LOG_ERROR("Copy failed during growth: %s", cudaGetErrorString(err));
+                const cudaError_t free_status = cudaFree(new_buffer);
+                if (free_status != cudaSuccess) {
+                    ensure_cuda_success(
+                        free_status, "cudaFree(failed arena growth buffer)",
+                        std::format("ptr={}, bytes={}", new_buffer, new_capacity),
+                        std::source_location::current(), CudaFailureDisposition::LogOnly);
+                }
                 return false;
             }
         }
 
         if (arena.fallback_buffer) {
             lfs::diagnostics::VramProfiler::instance().recordDeallocation(arena.fallback_buffer);
-            cudaFree(arena.fallback_buffer);
+            const cudaError_t free_status = cudaFree(arena.fallback_buffer);
+            if (free_status != cudaSuccess) {
+                ensure_cuda_success(
+                    free_status, "cudaFree(previous arena backing)",
+                    std::format("ptr={}, bytes={}", arena.fallback_buffer, old_capacity),
+                    std::source_location::current(), CudaFailureDisposition::LogOnly);
+            }
         }
         arena.fallback_buffer = new_buffer;
         arena.capacity = new_capacity;
@@ -1413,8 +1617,17 @@ namespace lfs::core {
         arena.generation = generation_counter_.fetch_add(1, std::memory_order_relaxed);
         arena.realloc_count.fetch_add(1, std::memory_order_relaxed);
 
-        cudaMemGetInfo(&free_memory, &total_memory);
-        LOG_DEBUG("Growth successful: new capacity=%zu MB, GPU free=%zu MB", new_capacity >> 20, free_memory >> 20);
+        const cudaError_t memory_status = cudaMemGetInfo(&free_memory, &total_memory);
+        if (memory_status == cudaSuccess) {
+            LOG_DEBUG("Growth successful: new capacity=%zu MB, GPU free=%zu MB",
+                      new_capacity >> 20, free_memory >> 20);
+        } else {
+            ensure_cuda_success(
+                memory_status, "cudaMemGetInfo(arena post-growth statistics)",
+                std::format("new_capacity={}", new_capacity), std::source_location::current(),
+                CudaFailureDisposition::LogOnly);
+            LOG_DEBUG("Growth successful: new capacity=%zu MB", new_capacity >> 20);
+        }
 
         return true;
     }
@@ -1469,9 +1682,18 @@ namespace lfs::core {
                 info.num_reallocations = it->second->realloc_count.load(std::memory_order_relaxed);
                 info.utilization_percent = info.arena_capacity > 0 ? (100.0f * info.peak_usage / info.arena_capacity) : 0.0f;
             }
+        } else {
+            ensure_cuda_success(err, "cudaGetDevice(arena memory info)", {},
+                                std::source_location::current(),
+                                CudaFailureDisposition::LogOnly);
         }
 
-        cudaMemGetInfo(&info.gpu_free, &info.gpu_total);
+        const cudaError_t memory_status = cudaMemGetInfo(&info.gpu_free, &info.gpu_total);
+        if (memory_status != cudaSuccess) {
+            ensure_cuda_success(memory_status, "cudaMemGetInfo(arena memory info)", {},
+                                std::source_location::current(),
+                                CudaFailureDisposition::LogOnly);
+        }
         return info;
     }
 
@@ -1494,6 +1716,9 @@ namespace lfs::core {
         size_t free_memory, total_memory;
         cudaError_t err = cudaMemGetInfo(&free_memory, &total_memory);
         if (err != cudaSuccess) {
+            ensure_cuda_success(err, "cudaMemGetInfo(arena memory pressure)",
+                                "fallback=maximum pressure", std::source_location::current(),
+                                CudaFailureDisposition::LogOnly);
             return 1.0f;
         }
         return 1.0f - (static_cast<float>(free_memory) / static_cast<float>(total_memory));
@@ -1510,8 +1735,10 @@ namespace lfs::core {
 
         if (!arena_) {
             // Auto-detect GPU VRAM size
-            size_t free_mem, total_mem;
-            cudaMemGetInfo(&free_mem, &total_mem);
+            size_t free_mem = 0;
+            size_t total_mem = 0;
+            LFS_CUDA_CHECK_MSG(cudaMemGetInfo(&free_mem, &total_mem),
+                               "initializing the global rasterizer arena");
 
             // Create with VMM-optimized settings
             RasterizerMemoryArena::Config config;

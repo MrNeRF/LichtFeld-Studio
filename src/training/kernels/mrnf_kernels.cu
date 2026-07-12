@@ -231,18 +231,18 @@ namespace lfs::training::mrnf_strategy {
 
         for (int axis = 0; axis < 3; ++axis) {
             extract_axis_kernel<<<blocks, threads, 0, s>>>(means, d_input, axis, N);
-            cuda_scratch::check_status(cudaGetLastError(), "MRNF percentile axis extraction");
+            LFS_CUDA_CHECK_MSG(cudaGetLastError(), "MRNF percentile axis extraction");
             cub_workspace.run([&](void* workspace, size_t& workspace_bytes) {
                 return cub::DeviceRadixSort::SortKeys(
                     workspace, workspace_bytes, d_input, d_sorted, n_int, 0, 32, s);
             });
-            cuda_scratch::check_status(
+            LFS_CUDA_CHECK_MSG(
                 cudaMemcpyAsync(&h_low, d_sorted + low_idx, sizeof(float), cudaMemcpyDeviceToHost, s),
                 "MRNF percentile low readback");
-            cuda_scratch::check_status(
+            LFS_CUDA_CHECK_MSG(
                 cudaMemcpyAsync(&h_high, d_sorted + high_idx, sizeof(float), cudaMemcpyDeviceToHost, s),
                 "MRNF percentile high readback");
-            cuda_scratch::check_status(cudaStreamSynchronize(s), "MRNF percentile stream sync");
+            LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(s), "MRNF percentile stream sync");
 
             centers[axis] = (h_low + h_high) * 0.5f;
             extents[axis] = (h_high - h_low) * 0.5f;
@@ -380,7 +380,7 @@ namespace lfs::training::mrnf_strategy {
                 thrust::sequence(policy, indices_ptr, indices_ptr + static_cast<std::ptrdiff_t>(sort_count));
             });
         }
-        cuda_scratch::check_status(cudaGetLastError(), "MRNF Gumbel key generation");
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "MRNF Gumbel key generation");
 
         const int sort_count_int = static_cast<int>(sort_count);
         cuda_scratch::CubWorkspace cub_workspace(
@@ -400,7 +400,7 @@ namespace lfs::training::mrnf_strategy {
                 sort_count_int, 0, 32, s);
         });
 
-        cuda_scratch::check_status(
+        LFS_CUDA_CHECK_MSG(
             cudaMemcpyAsync(
                 output_indices, d_indices_sorted,
                 cuda_scratch::checked_bytes(K, sizeof(int64_t), "MRNF Gumbel output"),

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/pinned_memory_allocator.hpp"
 #include "core/tensor_trace.hpp"
@@ -35,14 +36,6 @@ namespace lfs::core {
                 execution_stream = tensor.stream();
             }
             return execution_stream;
-        }
-
-        void assert_cuda_success(const cudaError_t status,
-                                 const std::string_view operation) {
-            LFS_ASSERT_MSG(status == cudaSuccess,
-                           std::format("{} failed (cuda_error={}({}))",
-                                       operation, cudaGetErrorString(status),
-                                       static_cast<int>(status)));
         }
 
         Tensor empty_on_tensor_stream(const TensorShape& shape, Device device, DataType dtype, const Tensor& tensor) {
@@ -292,8 +285,8 @@ namespace lfs::core {
             if (result.device_ == Device::CUDA) {
                 if (result.dtype_ == DataType::Float32) {
                     if (value == 0.0f) {
-                        assert_cuda_success(cudaMemset(result.data_, 0, result.bytes()),
-                                            "constant Float32 CUDA memset");
+                        LFS_CUDA_CHECK_MSG(cudaMemset(result.data_, 0, result.bytes()),
+                                           "constant Float32 CUDA memset");
                     } else {
                         tensor_ops::launch_load_op(
                             result.data_,
@@ -307,46 +300,46 @@ namespace lfs::core {
                     }
                 } else if (result.dtype_ == DataType::Float16) {
                     if (value == 0.0f) {
-                        assert_cuda_success(cudaMemset(result.data_, 0, result.bytes()),
-                                            "constant Float16 CUDA memset");
+                        LFS_CUDA_CHECK_MSG(cudaMemset(result.data_, 0, result.bytes()),
+                                           "constant Float16 CUDA memset");
                     } else {
                         // Create Float16 values on CPU, then copy to GPU
                         std::vector<__half> temp(result.numel(), __float2half(value));
-                        assert_cuda_success(
+                        LFS_CUDA_CHECK_MSG(
                             cudaMemcpy(result.data_, temp.data(), result.bytes(),
                                        cudaMemcpyHostToDevice),
                             "constant Float16 CUDA copy");
                     }
                 } else if (result.dtype_ == DataType::Bool) {
                     unsigned char fill_val = (value != 0.0f) ? 1 : 0;
-                    assert_cuda_success(cudaMemset(result.data_, fill_val, result.bytes()),
-                                        "constant Bool CUDA memset");
+                    LFS_CUDA_CHECK_MSG(cudaMemset(result.data_, fill_val, result.bytes()),
+                                       "constant Bool CUDA memset");
                 } else if (result.dtype_ == DataType::Int32) {
                     if (value == 0.0f) {
-                        assert_cuda_success(cudaMemset(result.data_, 0, result.bytes()),
-                                            "constant Int32 CUDA memset");
+                        LFS_CUDA_CHECK_MSG(cudaMemset(result.data_, 0, result.bytes()),
+                                           "constant Int32 CUDA memset");
                     } else {
                         std::vector<int> temp(result.numel(), static_cast<int>(value));
-                        assert_cuda_success(
+                        LFS_CUDA_CHECK_MSG(
                             cudaMemcpy(result.data_, temp.data(), result.bytes(),
                                        cudaMemcpyHostToDevice),
                             "constant Int32 CUDA copy");
                     }
                 } else if (result.dtype_ == DataType::Int64) {
                     if (value == 0.0f) {
-                        assert_cuda_success(cudaMemset(result.data_, 0, result.bytes()),
-                                            "constant Int64 CUDA memset");
+                        LFS_CUDA_CHECK_MSG(cudaMemset(result.data_, 0, result.bytes()),
+                                           "constant Int64 CUDA memset");
                     } else {
                         std::vector<int64_t> temp(result.numel(), static_cast<int64_t>(value));
-                        assert_cuda_success(
+                        LFS_CUDA_CHECK_MSG(
                             cudaMemcpy(result.data_, temp.data(), result.bytes(),
                                        cudaMemcpyHostToDevice),
                             "constant Int64 CUDA copy");
                     }
                 } else if (result.dtype_ == DataType::UInt8) {
                     const uint8_t fill_val = static_cast<uint8_t>(std::clamp(value, 0.0f, 255.0f));
-                    assert_cuda_success(cudaMemset(result.data_, fill_val, result.bytes()),
-                                        "constant UInt8 CUDA memset");
+                    LFS_CUDA_CHECK_MSG(cudaMemset(result.data_, fill_val, result.bytes()),
+                                       "constant UInt8 CUDA memset");
                 }
             } else {
                 if (result.dtype_ == DataType::Float32) {
@@ -476,7 +469,7 @@ namespace lfs::core {
                     for (size_t i = 0; i < count; ++i) {
                         data[i] = start + i * step;
                     }
-                    assert_cuda_success(
+                    LFS_CUDA_CHECK_MSG(
                         cudaMemcpy(result.data_, data.data(), bytes, cudaMemcpyHostToDevice),
                         "Float32 arange CUDA copy");
                 } else if (result.dtype_ == DataType::Int32) {
@@ -484,7 +477,7 @@ namespace lfs::core {
                     for (size_t i = 0; i < count; ++i) {
                         data[i] = static_cast<int>(start + i * step);
                     }
-                    assert_cuda_success(
+                    LFS_CUDA_CHECK_MSG(
                         cudaMemcpy(result.data_, data.data(), bytes, cudaMemcpyHostToDevice),
                         "Int32 arange CUDA copy");
                 }
@@ -617,13 +610,11 @@ namespace lfs::core {
                                                "(curand_status={}, generated_count={}, requested_count={}, "
                                                "mean={}, stddev={})",
                                                static_cast<int>(status), n + 1, n, mean, std));
-                    const auto copy_status = cudaMemcpy(result.ptr<float>(), scratch.ptr<float>(),
-                                                        n * sizeof(float), cudaMemcpyDeviceToDevice);
-                    LFS_ASSERT_MSG(copy_status == cudaSuccess,
-                                   std::format("normal/randn CUDA scratch copy must succeed "
-                                               "(cuda_error={}({}), bytes={}, requested_count={})",
-                                               cudaGetErrorString(copy_status),
-                                               static_cast<int>(copy_status), n * sizeof(float), n));
+                    LFS_CUDA_CHECK_MSG(
+                        cudaMemcpy(result.ptr<float>(), scratch.ptr<float>(), n * sizeof(float),
+                                   cudaMemcpyDeviceToDevice),
+                        "normal/randn scratch copy (bytes={}, requested_count={})",
+                        n * sizeof(float), n);
                 } else {
                     const auto status = curandGenerateNormal(*gen, result.ptr<float>(), n, mean, std);
                     LFS_ASSERT_MSG(status == CURAND_STATUS_SUCCESS,
@@ -899,11 +890,11 @@ namespace lfs::core {
             size_t min_dim = std::min(m, n);
 
             if (result.device_ == Device::CUDA) {
-                assert_cuda_success(cudaGetLastError(),
-                                    "eye pending CUDA state check");
+                LFS_CUDA_CHECK_MSG(cudaGetLastError(),
+                                   "eye pending CUDA state check");
                 tensor_ops::launch_eye(result.ptr<float>(), m, n, result.stream());
-                assert_cuda_success(cudaGetLastError(),
-                                    "eye CUDA kernel launch");
+                LFS_CUDA_CHECK_MSG(cudaGetLastError(),
+                                   "eye CUDA kernel launch");
                 // No sync - tensor operation
             } else {
                 float* data = result.ptr<float>();
@@ -1010,6 +1001,7 @@ namespace lfs::core {
     }
 
     Tensor Tensor::reduce(ReduceOp op, const ReduceArgs& args) const {
+        LFS_CUDA_BREADCRUMB_STREAM("tensor.reduce", stream());
         constexpr std::array op_names = {
             "sum", "mean", "max", "min", "prod", "any", "all",
             "std", "var", "argmax", "argmin", "count_nonzero", "norm"};
@@ -1488,35 +1480,35 @@ namespace lfs::core {
             if (input->device_ == Device::CUDA) {
                 if (out_dtype == DataType::Float32) {
                     std::vector<float> temp(result.numel(), identity_value);
-                    assert_cuda_success(
+                    LFS_CUDA_CHECK_MSG(
                         cudaMemcpy(result.data_ptr(), temp.data(), result.bytes(),
                                    cudaMemcpyHostToDevice),
                         "empty reduction CUDA copy");
                 } else if (out_dtype == DataType::Bool) {
                     unsigned char bool_val = (identity_value != 0.0f) ? 1 : 0;
-                    assert_cuda_success(
+                    LFS_CUDA_CHECK_MSG(
                         cudaMemset(result.data_ptr(), bool_val, result.bytes()),
                         "empty reduction CUDA memset");
                 } else if (out_dtype == DataType::Int32) {
                     if (identity_value == 0.0f) {
-                        assert_cuda_success(cudaMemset(result.data_ptr(), 0, result.bytes()),
-                                            "empty Int32 reduction CUDA memset");
+                        LFS_CUDA_CHECK_MSG(cudaMemset(result.data_ptr(), 0, result.bytes()),
+                                           "empty Int32 reduction CUDA memset");
                     } else {
                         std::vector<int32_t> temp(
                             result.numel(), static_cast<int32_t>(identity_value));
-                        assert_cuda_success(
+                        LFS_CUDA_CHECK_MSG(
                             cudaMemcpy(result.data_ptr(), temp.data(), result.bytes(),
                                        cudaMemcpyHostToDevice),
                             "empty Int32 reduction CUDA copy");
                     }
                 } else if (out_dtype == DataType::Int64) {
                     if (identity_value == 0.0f) {
-                        assert_cuda_success(cudaMemset(result.data_ptr(), 0, result.bytes()),
-                                            "empty Int64 reduction CUDA memset");
+                        LFS_CUDA_CHECK_MSG(cudaMemset(result.data_ptr(), 0, result.bytes()),
+                                           "empty Int64 reduction CUDA memset");
                     } else {
                         std::vector<int64_t> temp(
                             result.numel(), static_cast<int64_t>(identity_value));
-                        assert_cuda_success(
+                        LFS_CUDA_CHECK_MSG(
                             cudaMemcpy(result.data_ptr(), temp.data(), result.bytes(),
                                        cudaMemcpyHostToDevice),
                             "empty Int64 reduction CUDA copy");
@@ -2237,6 +2229,7 @@ namespace lfs::core {
     // ============= STATIC CAT OPERATION =============
 
     Tensor Tensor::cat(const std::vector<Tensor>& tensors, int dim) {
+        LFS_CUDA_BREADCRUMB("tensor.cat");
         if (tensors.empty()) {
             throw std::invalid_argument("Cannot concatenate empty vector of tensors");
         }
@@ -2396,17 +2389,7 @@ namespace lfs::core {
                 LOG_DEBUG("  Starting CUDA memcpy for {} additional tensors, initial offset={} bytes",
                           tensors.size() - 1, offset);
 
-                // Validate destination buffer before copying
-                cudaPointerAttributes dest_attrs;
-                cudaError_t attr_err = cudaPointerGetAttributes(&dest_attrs, result.data_);
-                if (attr_err != cudaSuccess) {
-                    LOG_ERROR("  Destination buffer validation FAILED: {}", cudaGetErrorString(attr_err));
-                    LOG_ERROR("  Buffer ptr={}, attempting to access at offset={}", result.data_, offset);
-                    cudaGetLastError(); // Clear error
-                } else {
-                    LOG_DEBUG("  Destination buffer valid: type={}, device={}, devicePtr={}, hostPtr={}",
-                              static_cast<int>(dest_attrs.type), dest_attrs.device, dest_attrs.devicePointer, dest_attrs.hostPointer);
-                }
+                validate_cuda_device_pointer(result.data_, "in-place cat destination");
 
                 for (size_t i = 1; i < tensors.size(); ++i) {
                     const size_t bytes = tensors[i].bytes();
@@ -2415,31 +2398,18 @@ namespace lfs::core {
                     LOG_DEBUG("  Copying tensor[{}]: shape_[0]={}, numel={}, {} bytes from src={} at offset {}",
                               i, tensor_rows, tensors[i].numel(), bytes, src_ptr, offset);
 
-                    // Validate source buffer
-                    cudaPointerAttributes src_attrs;
-                    attr_err = cudaPointerGetAttributes(&src_attrs, src_ptr);
-                    if (attr_err != cudaSuccess) {
-                        LOG_ERROR("  Source buffer validation FAILED: {}", cudaGetErrorString(attr_err));
-                        cudaGetLastError(); // Clear error
-                    } else {
-                        LOG_DEBUG("  Source buffer valid: type={}, device={}, devicePtr={}",
-                                  static_cast<int>(src_attrs.type), src_attrs.device, src_attrs.devicePointer);
-                    }
+                    validate_cuda_device_pointer(src_ptr, "in-place cat source");
 
-                    cudaError_t err = cudaMemcpy(
-                        static_cast<char*>(result.data_) + offset,
-                        src_ptr,
-                        bytes,
-                        cudaMemcpyDeviceToDevice);
-                    if (err != cudaSuccess) {
-                        LOG_ERROR("  cudaMemcpy FAILED: {}", cudaGetErrorString(err));
-                        LOG_ERROR("  Source tensor[{}]: ptr={}, device={}, is_contiguous={}, is_view={}",
-                                  i, src_ptr, static_cast<int>(tensors[i].device()),
-                                  tensors[i].is_contiguous(), tensors[i].is_view());
-                        LOG_ERROR("  Destination: buffer_start={}, offset={}, bytes={}, total={}",
-                                  result.data_, offset, bytes, offset + bytes);
-                        throw std::runtime_error(std::string("cudaMemcpy failed in in-place cat: ") + cudaGetErrorString(err));
-                    }
+                    LFS_CUDA_CHECK_MSG(
+                        cudaMemcpy(static_cast<char*>(result.data_) + offset, src_ptr, bytes,
+                                   cudaMemcpyDeviceToDevice),
+                        "in-place cat copy (tensor_index={}, source_pointer={}, "
+                        "source_device={}, source_contiguous={}, source_is_view={}, "
+                        "destination_pointer={}, destination_offset={}, bytes={}, "
+                        "destination_end={})",
+                        i, src_ptr, static_cast<int>(tensors[i].device()),
+                        tensors[i].is_contiguous(), tensors[i].is_view(), result.data_, offset,
+                        bytes, offset + bytes);
                     offset += bytes;
                 }
                 LOG_DEBUG("  CUDA memcpy complete, final offset={} bytes", offset);
@@ -2475,7 +2445,7 @@ namespace lfs::core {
                 size_t offset = 0;
                 for (const auto& t : tensors) {
                     size_t bytes = t.bytes();
-                    assert_cuda_success(
+                    LFS_CUDA_CHECK_MSG(
                         cudaMemcpy(static_cast<char*>(result.data_ptr()) + offset,
                                    t.data_ptr(), bytes, cudaMemcpyDeviceToDevice),
                         "cat CUDA copy");
@@ -2654,7 +2624,7 @@ namespace lfs::core {
             if (dim == 0 && first_device == Device::CUDA) {
                 // dim=0: output slices are contiguous, use direct memcpy
                 void* dst = static_cast<char*>(result.data_ptr()) + i * bytes_per_tensor;
-                assert_cuda_success(
+                LFS_CUDA_CHECK_MSG(
                     cudaMemcpy(dst, tensors[i].data_ptr(), bytes_per_tensor,
                                cudaMemcpyDeviceToDevice),
                     "stack CUDA copy");
@@ -2705,7 +2675,7 @@ namespace lfs::core {
                 tensor_ops::launch_clamp_fused(src, dst, min_val, max_val, numel(), result.stream());
             } else if (dtype_ == DataType::Int32) {
                 // Fallback: copy then clamp for int
-                assert_cuda_success(
+                LFS_CUDA_CHECK_MSG(
                     cudaMemcpy(result.data_, data_ptr(), bytes(), cudaMemcpyDeviceToDevice),
                     "Int32 clamp CUDA copy");
                 tensor_ops::launch_clamp_scalar_int(result.ptr<int>(),

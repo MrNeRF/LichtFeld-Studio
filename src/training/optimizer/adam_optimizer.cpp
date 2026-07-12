@@ -5,6 +5,7 @@
 #include "adam_optimizer.hpp"
 #include "adam_api.h" // fast_lfs::optimizer::adam_step_raw
 #include "core/cuda/sh_layout.cuh"
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
@@ -13,16 +14,6 @@
 #include <cmath>
 #include <cuda_runtime.h>
 #include <stdexcept>
-
-// Simple CUDA error checking macro
-#define CHECK_CUDA(call)                                           \
-    do {                                                           \
-        cudaError_t err = call;                                    \
-        if (err != cudaSuccess) {                                  \
-            throw std::runtime_error(std::string("CUDA error: ") + \
-                                     cudaGetErrorString(err));     \
-        }                                                          \
-    } while (0)
 
 namespace lfs::training {
 
@@ -61,7 +52,7 @@ namespace lfs::training {
             if (elements == 0) {
                 return;
             }
-            CHECK_CUDA(cudaMemsetAsync(
+            LFS_CUDA_CHECK(cudaMemsetAsync(
                 tensor.ptr<uint8_t>(),
                 QUANTIZED_MOMENT_ZERO_POINT,
                 elements * sizeof(uint8_t),
@@ -75,7 +66,7 @@ namespace lfs::training {
             if (!tensor.is_valid() || tensor.dtype() != lfs::core::DataType::UInt8 || elements == 0) {
                 return;
             }
-            CHECK_CUDA(cudaMemsetAsync(
+            LFS_CUDA_CHECK(cudaMemsetAsync(
                 tensor.ptr<uint8_t>() + element_offset,
                 QUANTIZED_MOMENT_ZERO_POINT,
                 elements * sizeof(uint8_t),
@@ -202,7 +193,7 @@ namespace lfs::training {
         for (auto& [_, state] : states_) {
             if (state.grad.is_valid() && state.grad.numel() > 0) {
                 const size_t bytes = state.size * (state.grad.numel() / state.grad.shape()[0]) * sizeof(float);
-                CHECK_CUDA(cudaMemsetAsync(state.grad.ptr<float>(), 0, bytes, state.grad.stream()));
+                LFS_CUDA_CHECK(cudaMemsetAsync(state.grad.ptr<float>(), 0, bytes, state.grad.stream()));
             }
         }
     }
@@ -636,8 +627,8 @@ namespace lfs::training {
         const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
         const size_t idx_bytes = indices.size() * sizeof(int64_t);
         int64_t* d_indices = nullptr;
-        CHECK_CUDA(cudaMallocAsync(&d_indices, idx_bytes, stream));
-        CHECK_CUDA(cudaMemcpyAsync(d_indices, indices.data(), idx_bytes, cudaMemcpyHostToDevice, stream));
+        LFS_CUDA_CHECK(cudaMallocAsync(&d_indices, idx_bytes, stream));
+        LFS_CUDA_CHECK(cudaMemcpyAsync(d_indices, indices.data(), idx_bytes, cudaMemcpyHostToDevice, stream));
 
         lfs::core::waitForCUDAStream(stream, state.exp_avg_scale.stream());
         lfs::core::waitForCUDAStream(stream, state.exp_avg_sq_scale.stream());
@@ -671,7 +662,7 @@ namespace lfs::training {
 
         state.exp_avg_scale.set_stream(stream);
         state.exp_avg_sq_scale.set_stream(stream);
-        CHECK_CUDA(cudaFreeAsync(d_indices, stream));
+        LFS_CUDA_CHECK(cudaFreeAsync(d_indices, stream));
     }
 
     void AdamOptimizer::extend_state_by_gather(ParamType type, const lfs::core::Tensor& indices) {
@@ -843,13 +834,13 @@ namespace lfs::training {
         const size_t row_size = shape[0] == 0 ? 0 : param.numel() / shape[0];
         if (state.size > 0 && state.exp_avg.numel() > 0) {
             const size_t old_bytes = state.exp_avg.numel() * sizeof(uint8_t);
-            CHECK_CUDA(cudaMemcpyAsync(new_exp_avg.ptr<uint8_t>(), state.exp_avg.ptr<uint8_t>(), old_bytes, cudaMemcpyDeviceToDevice, stream));
-            CHECK_CUDA(cudaMemcpyAsync(new_exp_avg_sq.ptr<uint8_t>(), state.exp_avg_sq.ptr<uint8_t>(), old_bytes, cudaMemcpyDeviceToDevice, stream));
+            LFS_CUDA_CHECK(cudaMemcpyAsync(new_exp_avg.ptr<uint8_t>(), state.exp_avg.ptr<uint8_t>(), old_bytes, cudaMemcpyDeviceToDevice, stream));
+            LFS_CUDA_CHECK(cudaMemcpyAsync(new_exp_avg_sq.ptr<uint8_t>(), state.exp_avg_sq.ptr<uint8_t>(), old_bytes, cudaMemcpyDeviceToDevice, stream));
         }
         const size_t offset = state.exp_avg.numel() * sizeof(uint8_t);
         const size_t new_bytes = growth * row_size * sizeof(uint8_t);
-        CHECK_CUDA(cudaMemsetAsync(reinterpret_cast<char*>(new_exp_avg.ptr<uint8_t>()) + offset, QUANTIZED_MOMENT_ZERO_POINT, new_bytes, stream));
-        CHECK_CUDA(cudaMemsetAsync(reinterpret_cast<char*>(new_exp_avg_sq.ptr<uint8_t>()) + offset, 0, new_bytes, stream));
+        LFS_CUDA_CHECK(cudaMemsetAsync(reinterpret_cast<char*>(new_exp_avg.ptr<uint8_t>()) + offset, QUANTIZED_MOMENT_ZERO_POINT, new_bytes, stream));
+        LFS_CUDA_CHECK(cudaMemsetAsync(reinterpret_cast<char*>(new_exp_avg_sq.ptr<uint8_t>()) + offset, 0, new_bytes, stream));
 
         new_exp_avg.set_stream(stream);
         new_exp_avg_sq.set_stream(stream);
@@ -860,8 +851,8 @@ namespace lfs::training {
         auto new_m_scale = lfs::core::Tensor::zeros(scale_shape, param.device());
         auto new_v_scale = lfs::core::Tensor::zeros(scale_shape, param.device());
         if (scale_cur > 0 && state.exp_avg_scale.numel() > 0) {
-            CHECK_CUDA(cudaMemcpyAsync(new_m_scale.ptr<float>(), state.exp_avg_scale.ptr<float>(), scale_cur * sizeof(float), cudaMemcpyDeviceToDevice, stream));
-            CHECK_CUDA(cudaMemcpyAsync(new_v_scale.ptr<float>(), state.exp_avg_sq_scale.ptr<float>(), scale_cur * sizeof(float), cudaMemcpyDeviceToDevice, stream));
+            LFS_CUDA_CHECK(cudaMemcpyAsync(new_m_scale.ptr<float>(), state.exp_avg_scale.ptr<float>(), scale_cur * sizeof(float), cudaMemcpyDeviceToDevice, stream));
+            LFS_CUDA_CHECK(cudaMemcpyAsync(new_v_scale.ptr<float>(), state.exp_avg_sq_scale.ptr<float>(), scale_cur * sizeof(float), cudaMemcpyDeviceToDevice, stream));
         }
         new_m_scale.set_stream(stream);
         new_v_scale.set_stream(stream);
@@ -1032,18 +1023,20 @@ namespace lfs::training {
                         // Fallback: no reserved capacity. Reallocate at exact size.
                         auto realloc_u8 = [&](lfs::core::Tensor& t) {
                             auto fresh = lfs::core::Tensor::zeros({new_floats}, lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
-                            cudaMemcpyAsync(fresh.ptr<uint8_t>(), t.ptr<uint8_t>(),
-                                            old_floats * sizeof(uint8_t),
-                                            cudaMemcpyDeviceToDevice, nullptr);
+                            LFS_CUDA_CHECK(cudaMemcpyAsync(
+                                fresh.ptr<uint8_t>(), t.ptr<uint8_t>(),
+                                old_floats * sizeof(uint8_t),
+                                cudaMemcpyDeviceToDevice, nullptr));
                             t = std::move(fresh);
                         };
                         auto realloc_m = [&](lfs::core::Tensor& t) {
                             auto fresh = lfs::core::Tensor::zeros({new_floats}, lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
-                            CHECK_CUDA(cudaMemsetAsync(fresh.ptr<uint8_t>(), QUANTIZED_MOMENT_ZERO_POINT,
-                                                       new_floats * sizeof(uint8_t), fresh.stream()));
-                            cudaMemcpyAsync(fresh.ptr<uint8_t>(), t.ptr<uint8_t>(),
-                                            old_floats * sizeof(uint8_t),
-                                            cudaMemcpyDeviceToDevice, nullptr);
+                            LFS_CUDA_CHECK(cudaMemsetAsync(fresh.ptr<uint8_t>(), QUANTIZED_MOMENT_ZERO_POINT,
+                                                           new_floats * sizeof(uint8_t), fresh.stream()));
+                            LFS_CUDA_CHECK(cudaMemcpyAsync(
+                                fresh.ptr<uint8_t>(), t.ptr<uint8_t>(),
+                                old_floats * sizeof(uint8_t),
+                                cudaMemcpyDeviceToDevice, nullptr));
                             t = std::move(fresh);
                         };
                         realloc_m(state.exp_avg);
@@ -1097,10 +1090,10 @@ namespace lfs::training {
         const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
         const size_t idx_bytes = indices.size() * sizeof(int64_t);
         int64_t* d_indices = nullptr;
-        CHECK_CUDA(cudaMallocAsync(&d_indices, idx_bytes, stream));
-        CHECK_CUDA(cudaMemcpyAsync(d_indices, indices.data(), idx_bytes, cudaMemcpyHostToDevice, stream));
+        LFS_CUDA_CHECK(cudaMallocAsync(&d_indices, idx_bytes, stream));
+        LFS_CUDA_CHECK(cudaMemcpyAsync(d_indices, indices.data(), idx_bytes, cudaMemcpyHostToDevice, stream));
         relocate_params_at_indices_gpu(type, d_indices, indices.size());
-        CHECK_CUDA(cudaFreeAsync(d_indices, stream));
+        LFS_CUDA_CHECK(cudaFreeAsync(d_indices, stream));
     }
 
     void AdamOptimizer::relocate_params_at_indices_gpu(ParamType type, const int64_t* indices_device, const size_t n_indices) {

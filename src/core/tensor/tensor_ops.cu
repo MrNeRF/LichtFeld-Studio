@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/cuda_debug.hpp"
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "internal/cub_workspace.hpp"
 #include "internal/memory_pool.hpp"
@@ -35,8 +35,6 @@
 #include <thrust/transform.h>
 #include <thrust/tuple.h>
 
-// CHECK_CUDA provided by core/cuda_debug.hpp
-
 namespace lfs::core::tensor_ops {
 
     namespace {
@@ -59,11 +57,12 @@ namespace lfs::core::tensor_ops {
             });
 
             float result = 0.0f;
-            check_cuda_status(
+            LFS_CUDA_CHECK_MSG(
                 cudaMemcpyAsync(&result, result_buffer.get(), sizeof(float),
                                 cudaMemcpyDeviceToHost, stream),
                 "scalar reduction readback");
-            check_cuda_status(cudaStreamSynchronize(stream), "scalar reduction stream sync");
+            LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream),
+                               "scalar reduction stream sync");
             return result;
         }
     } // namespace
@@ -1120,7 +1119,7 @@ namespace lfs::core::tensor_ops {
                                       thrust::device_pointer_cast(d_out_bool),
                                       [] __device__(int64_t val) { return val != 0; });
                 } else {
-                    check_cuda_status(
+                    LFS_CUDA_CHECK_MSG(
                         cudaMemcpyAsync(d_out_int64, d_temp_result, sizeof(int64_t),
                                         cudaMemcpyDeviceToDevice, stream),
                         "bool max reduction output copy");
@@ -1151,7 +1150,7 @@ namespace lfs::core::tensor_ops {
                                       thrust::device_pointer_cast(d_out_bool),
                                       [] __device__(int64_t val) { return val != 0; });
                 } else {
-                    check_cuda_status(
+                    LFS_CUDA_CHECK_MSG(
                         cudaMemcpyAsync(d_out_int64, d_temp_result, sizeof(int64_t),
                                         cudaMemcpyDeviceToDevice, stream),
                         "bool min reduction output copy");
@@ -1851,10 +1850,14 @@ namespace lfs::core::tensor_ops {
             h_input_sizes[i] = tensors[i].shape()[tensors[i].shape().rank() - 1];
         }
 
-        cudaMemcpyAsync(const_cast<float**>(d_input_ptrs), h_input_ptrs.data(),
-                        num_tensors * sizeof(float*), cudaMemcpyHostToDevice, stream);
-        cudaMemcpyAsync(d_input_sizes, h_input_sizes.data(),
-                        num_tensors * sizeof(size_t), cudaMemcpyHostToDevice, stream);
+        LFS_CUDA_CHECK_MSG(
+            cudaMemcpyAsync(const_cast<float**>(d_input_ptrs), h_input_ptrs.data(),
+                            num_tensors * sizeof(float*), cudaMemcpyHostToDevice, stream),
+            "cat metadata pointer copy (tensor_count={})", num_tensors);
+        LFS_CUDA_CHECK_MSG(
+            cudaMemcpyAsync(d_input_sizes, h_input_sizes.data(),
+                            num_tensors * sizeof(size_t), cudaMemcpyHostToDevice, stream),
+            "cat metadata size copy (tensor_count={})", num_tensors);
 
         int block_size = 256;
         size_t num_blocks = (num_rows + block_size - 1) / block_size;
@@ -1961,10 +1964,14 @@ namespace lfs::core::tensor_ops {
             h_input_sizes[i] = tensors[i].shape()[resolved_dim];
         }
 
-        cudaMemcpyAsync(const_cast<float**>(d_input_ptrs), h_input_ptrs.data(),
-                        num_tensors * sizeof(float*), cudaMemcpyHostToDevice, stream);
-        cudaMemcpyAsync(d_input_sizes, h_input_sizes.data(),
-                        num_tensors * sizeof(size_t), cudaMemcpyHostToDevice, stream);
+        LFS_CUDA_CHECK_MSG(
+            cudaMemcpyAsync(const_cast<float**>(d_input_ptrs), h_input_ptrs.data(),
+                            num_tensors * sizeof(float*), cudaMemcpyHostToDevice, stream),
+            "cat-middle metadata pointer copy (tensor_count={})", num_tensors);
+        LFS_CUDA_CHECK_MSG(
+            cudaMemcpyAsync(d_input_sizes, h_input_sizes.data(),
+                            num_tensors * sizeof(size_t), cudaMemcpyHostToDevice, stream),
+            "cat-middle metadata size copy (tensor_count={})", num_tensors);
 
         int block_size = 256;
         size_t num_blocks = (total_elements + block_size - 1) / block_size;
@@ -2664,7 +2671,7 @@ namespace lfs::core::tensor_ops {
                     data, value, shape[0], strides[0], storage_offset);
             }
 
-            CHECK_CUDA(cudaGetLastError());
+            LFS_CUDA_CHECK(cudaGetLastError());
             // NOTE: No sync here - caller (Tensor::fill_) handles sync if needed
             return;
         }
@@ -2682,7 +2689,7 @@ namespace lfs::core::tensor_ops {
                     data, value, storage_offset, strides[0], n);
             }
 
-            CHECK_CUDA(cudaGetLastError());
+            LFS_CUDA_CHECK(cudaGetLastError());
             // NOTE: No sync here - caller (Tensor::fill_) handles sync if needed
             return;
         }
@@ -2706,7 +2713,7 @@ namespace lfs::core::tensor_ops {
                     storage_offset, n);
             }
 
-            CHECK_CUDA(cudaGetLastError());
+            LFS_CUDA_CHECK(cudaGetLastError());
             // NOTE: No sync here - caller (Tensor::fill_) handles sync if needed
             return;
         }
@@ -2730,7 +2737,7 @@ namespace lfs::core::tensor_ops {
                     storage_offset, n);
             }
 
-            CHECK_CUDA(cudaGetLastError());
+            LFS_CUDA_CHECK(cudaGetLastError());
             // NOTE: No sync here - caller (Tensor::fill_) handles sync if needed
             return;
         }
@@ -2754,7 +2761,7 @@ namespace lfs::core::tensor_ops {
                     data, value, meta, storage_offset, ndim, n);
             }
 
-            CHECK_CUDA(cudaGetLastError());
+            LFS_CUDA_CHECK(cudaGetLastError());
             // NOTE: No sync here - caller (Tensor::fill_) handles sync if needed
             return;
         }
@@ -2765,10 +2772,10 @@ namespace lfs::core::tensor_ops {
         // Copy shape and strides to device
         size_t* d_shape;
         size_t* d_strides;
-        CHECK_CUDA(cudaMalloc(&d_shape, ndim * sizeof(size_t)));
-        CHECK_CUDA(cudaMalloc(&d_strides, ndim * sizeof(size_t)));
-        CHECK_CUDA(cudaMemcpy(d_shape, shape.data(), ndim * sizeof(size_t), cudaMemcpyHostToDevice));
-        CHECK_CUDA(cudaMemcpy(d_strides, strides.data(), ndim * sizeof(size_t), cudaMemcpyHostToDevice));
+        LFS_CUDA_CHECK(cudaMalloc(&d_shape, ndim * sizeof(size_t)));
+        LFS_CUDA_CHECK(cudaMalloc(&d_strides, ndim * sizeof(size_t)));
+        LFS_CUDA_CHECK(cudaMemcpy(d_shape, shape.data(), ndim * sizeof(size_t), cudaMemcpyHostToDevice));
+        LFS_CUDA_CHECK(cudaMemcpy(d_strides, strides.data(), ndim * sizeof(size_t), cudaMemcpyHostToDevice));
 
         // Use 2D grid for large arrays to avoid exceeding grid dimension limits
         if (num_blocks <= max_blocks_x) {
@@ -2781,14 +2788,14 @@ namespace lfs::core::tensor_ops {
                 data, value, d_shape, d_strides, storage_offset, ndim, n);
         }
 
-        CHECK_CUDA(cudaGetLastError());
+        LFS_CUDA_CHECK(cudaGetLastError());
         if (stream == nullptr) {
-            CHECK_CUDA(cudaDeviceSynchronize());
+            LFS_CUDA_CHECK(cudaDeviceSynchronize());
         }
 
         // Clean up device memory
-        CHECK_CUDA(cudaFree(d_shape));
-        CHECK_CUDA(cudaFree(d_strides));
+        LFS_CUDA_CHECK(cudaFree(d_shape));
+        LFS_CUDA_CHECK(cudaFree(d_strides));
     }
 
     // Explicit instantiations
@@ -2865,16 +2872,26 @@ namespace lfs::core::tensor_ops {
 
             void init() {
                 if (!initialized) {
-                    CHECK_CUDA(cudaMalloc(&d_result, sizeof(int)));
-                    CHECK_CUDA(cudaMallocHost(&h_result_pinned, sizeof(int))); // Pinned memory
+                    LFS_CUDA_CHECK(cudaMalloc(&d_result, sizeof(int)));
+                    LFS_CUDA_CHECK(cudaMallocHost(&h_result_pinned, sizeof(int))); // Pinned memory
                     initialized = true;
                 }
             }
 
             ~NaNCheckBuffers() {
                 if (initialized) {
-                    cudaFree(d_result);
-                    cudaFreeHost(h_result_pinned);
+                    const cudaError_t device_status = cudaFree(d_result);
+                    if (device_status != cudaSuccess) {
+                        ensure_cuda_success(
+                            device_status, "cudaFree(NaN-check device buffer)", {},
+                            std::source_location::current(), CudaFailureDisposition::LogOnly);
+                    }
+                    const cudaError_t host_status = cudaFreeHost(h_result_pinned);
+                    if (host_status != cudaSuccess) {
+                        ensure_cuda_success(
+                            host_status, "cudaFreeHost(NaN-check pinned buffer)", {},
+                            std::source_location::current(), CudaFailureDisposition::LogOnly);
+                    }
                 }
             }
         };
@@ -2893,7 +2910,7 @@ namespace lfs::core::tensor_ops {
 
         // Zero the result flag
         *h_result = 0;
-        CHECK_CUDA(cudaMemcpyAsync(d_result, h_result, sizeof(int), cudaMemcpyHostToDevice, stream));
+        LFS_CUDA_CHECK(cudaMemcpyAsync(d_result, h_result, sizeof(int), cudaMemcpyHostToDevice, stream));
 
         // Launch kernel
         constexpr int BLOCK_SIZE = 256;
@@ -2910,8 +2927,8 @@ namespace lfs::core::tensor_ops {
         }
 
         // Copy result back using pinned memory (very fast!)
-        CHECK_CUDA(cudaMemcpyAsync(h_result, d_result, sizeof(int), cudaMemcpyDeviceToHost, stream));
-        CHECK_CUDA(cudaStreamSynchronize(stream));
+        LFS_CUDA_CHECK(cudaMemcpyAsync(h_result, d_result, sizeof(int), cudaMemcpyDeviceToHost, stream));
+        LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
 
         return *h_result != 0;
     }

@@ -12,6 +12,7 @@
  * Expected: 2-4× speedup on large reductions!
  */
 
+#include "core/cuda_error.hpp"
 #include "internal/gpu_config.hpp"
 #include "internal/packed128.cuh"
 #include "internal/tensor_functors.hpp"
@@ -1034,7 +1035,8 @@ namespace lfs::core::tensor_ops {
         bool need_free = false;
 
         if (partial == nullptr) {
-            cudaMallocAsync(&partial, grid_size * sizeof(float), stream);
+            LFS_CUDA_CHECK_MSG(cudaMallocAsync(&partial, grid_size * sizeof(float), stream),
+                               "warp-reduce partial buffer (elements={})", grid_size);
             need_free = true;
         }
 
@@ -1069,7 +1071,8 @@ namespace lfs::core::tensor_ops {
 
         // Free partial buffer if we allocated it
         if (need_free) {
-            cudaFreeAsync(partial, stream);
+            LFS_CUDA_CHECK_MSG(cudaFreeAsync(partial, stream),
+                               "warp-reduce partial buffer");
         }
     }
 
@@ -1531,7 +1534,8 @@ namespace lfs::core::tensor_ops {
         case ReduceOp::Sum:
         case ReduceOp::Mean:
             if (grid_y > 1)
-                cudaMemsetAsync(output, 0, N * sizeof(float), stream);
+                LFS_CUDA_CHECK_MSG(cudaMemsetAsync(output, 0, N * sizeof(float), stream),
+                                   "column-reduce accumulator (columns={})", N);
             column_reduce_sum_kernel<<<grid, BLOCK, 0, stream>>>(input, output, M, N);
             if (op == ReduceOp::Mean) {
                 float inv_M = 1.0f / static_cast<float>(M);

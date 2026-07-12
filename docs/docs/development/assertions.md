@@ -22,24 +22,101 @@ actual state, shape, dtype, handle, index, or count do not meet this policy.
 
 ## Shared vocabulary
 
-`src/core/include/core/assert.hpp` owns the common failure formatter and the
-release/debug compile-out policy.
+`src/core/include/core/assert.hpp` and `core/cuda_error.hpp` are one documented
+failure family. Both tensor contracts and CUDA runtime errors emit one
+consolidated `LFS FAILURE REPORT` block before following their established
+throw/return path.
 
-- `LFS_ASSERT(condition)` and `LFS_ASSERT_MSG(condition, message)` are
-  always-on boundary contracts. They throw `std::runtime_error` in every build
-  type. Prefer the message form for any condition whose runtime values are not
-  fully evident from the expression.
-- `LFS_DEBUG_ASSERT(condition)` and
-  `LFS_DEBUG_ASSERT_MSG(condition, message)` are redundant internal
-  invariants. Host failures use the same self-describing formatter. CUDA
-  device code uses native `assert`, because device code cannot format or throw.
-  Both macros compile to no code when `NDEBUG` is defined; neither the
-  condition nor message arguments are evaluated.
+| Check | Use it for | Cost class | Release behavior |
+|---|---|---|---|
+| `LFS_ASSERT(condition)` | Self-explanatory public/API contract | One branch | Always enabled; throws `std::runtime_error` on failure |
+| `LFS_ASSERT_MSG(condition, message)` | Public contract needing observed values | One branch; message is failure-only | Always enabled; logs the shared report and throws |
+| `LFS_DEBUG_ASSERT[_MSG]` | Redundant internal invariant after an always-on boundary | Zero in release | Compiles out completely under `NDEBUG`; CUDA device code uses native `assert` |
+| `LFS_CUDA_CHECK(call)` | Any `cudaError_t`-returning runtime call | Checked call, pre-call non-clearing error sample, comparison, and relaxed breadcrumb write | Always enabled; logs the shared report and throws on failure |
+| `LFS_CUDA_CHECK_MSG(call, fmt, ...)` | CUDA call needing allocation, shape, stream, or phase context | Same happy path; context formatting is failure-only | Always enabled; same failure semantics as `LFS_CUDA_CHECK` |
+| `LFS_CUDA_BREADCRUMB("tag")` / `LFS_CUDA_BREADCRUMB_STREAM("tag", stream)` | Key allocation, free, copy, or launch boundary without its own runtime call; use the stream form when ownership is known | Fixed array write plus relaxed atomic increment | Always enabled; static string literals only, no allocation or lock |
+
+`LFS_CUDA_CHECK` accepts only expressions whose result type is exactly
+`cudaError_t`; accidental use with a pointer, integer, or boolean fails at
+compile time. CUDA calls already made inside callback-shaped APIs route their
+status into the same reporter through the central status adapter. Do not add a
+local `CHECK_CUDA`, `CUDA_CHECK`, `check_cuda_result`, or one-line logger.
 
 Do not use a debug assertion as the only validation of caller-controlled data.
 Validate once at the public or subsystem boundary, then use debug assertions
 for per-element bounds, tracker consistency, and already-proven loop
 invariants.
+
+## What one pasted failure block contains
+
+The reporter emits one log record, so concurrent logger output cannot split the
+diagnostic into unrelated lines. A shortened CUDA example is annotated below:
+
+```text
+========== LFS FAILURE REPORT ==========
+Family: CUDA runtime error                         # CUDA or tensor contract
+Error: cudaErrorMemoryAllocation (2): out of memory
+Failed expression: cudaMalloc(&new_buffer, bytes) # expression that returned the status
+Detection site: .../memory_arena.cu:1390 (...)    # where it was detected
+Context: requested_bytes=2147483648
+Attribution: pre-existing CUDA error detected BEFORE this call — this site is NOT the origin.
+Thread: 845109...                                  # stable hash for this process
+CUDA device: 0 / device count: 1
+VRAM: free=612 MiB, used=23459 MiB, total=24071 MiB
+Host stack trace:
+  #0 lfs::core::RasterizerMemoryArena::grow_arena(...)
+CUDA breadcrumbs (most recent first):
+  #8841 arena.grow at .../memory_arena.cu:1350 thread=... stream=0x0
+  #8840 tensor.pool.allocate at .../memory_pool.hpp:69 thread=... stream=0x...
+Hint: CUDA reports async errors at the next sync point. Set LFS_CUDA_SYNC_DEBUG=1 ...
+========================================
+```
+
+Tensor contract failures use the same detection site, runtime snapshot,
+breadcrumbs, and host stack. The stack is captured only on failure and must
+retain the public caller; a dtype error that names only `masked_select` is not a
+complete report.
+
+`cudaMemGetInfo`, current-device, and device-count queries are guarded while
+building the report. A damaged context is printed as `unavailable` with the
+query's own CUDA status rather than causing a second crash.
+
+## Diagnostic environment flags
+
+| Variable | Effect |
+|---|---|
+| `LFS_CUDA_SYNC_DEBUG=1` | Synchronizes and peeks before and after every central CUDA check. Startup logs once when active. This is an attribution mode, not a production performance setting. |
+| `LFS_VK_VALIDATION_FATAL=1` | Routes a Vulkan validation ERROR through the fatal path instead of logging and continuing. |
+| `LFS_NO_CRASH_HANDLER=1` | Leaves terminate, fatal-signal, and unhandled-exception handling to a debugger or sanitizer. |
+
+Normal CUDA reports sample `cudaPeekAtLastError` before the checked call. If it
+was already non-success, the report says explicitly that the detection site is
+not the origin. With sync debug enabled, stream/device synchronization is also
+performed before and after the call so asynchronous execution failures surface
+at the nearest boundary.
+
+At startup, LichtFeld pre-opens a per-process crash log and prints its path.
+`std::terminate` reports the active exception type, `what()`, breadcrumbs, and
+host stack through the shared reporter, flushes the logger, then aborts. POSIX
+SIGSEGV/SIGABRT/SIGFPE/SIGBUS handling writes only to the pre-opened descriptor,
+uses `backtrace_symbols_fd`, restores the default disposition, and re-raises.
+Windows installs `SetUnhandledExceptionFilter` as a best-effort address trace;
+symbolization remains a postmortem debugger step.
+
+## Adding a new check
+
+1. Put shape, dtype, device, size, state, and ownership rules at the public
+   boundary with `LFS_ASSERT_MSG`; include the observed values.
+2. Wrap every checked CUDA runtime expression directly in `LFS_CUDA_CHECK` or
+   `LFS_CUDA_CHECK_MSG`. Do not save and reword the status in a local macro.
+3. At a high-value tensor allocation/free/copy/launch boundary with no runtime
+   call of its own, add one static-literal `LFS_CUDA_BREADCRUMB`, or
+   `LFS_CUDA_BREADCRUMB_STREAM` when the owning stream is available.
+4. Preserve the caller's established failure control flow. If a subsystem must
+   recover or fall back, use the central status adapter with its explicit
+   log-only disposition; do not silently clear the CUDA status.
+5. Add a failure-path test that asserts the shared sections and the public
+   caller in the host stack. Do not test only the short exception string.
 
 ## Vulkan domain wrappers
 

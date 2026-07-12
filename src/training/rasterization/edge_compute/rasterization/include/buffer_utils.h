@@ -16,16 +16,6 @@
 
 namespace edge_compute::rasterization {
 
-    inline void check_cuda_status(const cudaError_t status, const std::string_view operation) {
-        if (status == cudaSuccess) {
-            return;
-        }
-        const std::string message = std::format(
-            "{} failed: {} ({})", operation, cudaGetErrorString(status), cudaGetErrorName(status));
-        cudaGetLastError();
-        LFS_ASSERT_MSG(status == cudaSuccess, message);
-    }
-
     using InstanceKey = std::uint32_t;
 
     inline int extract_end_bit(uint n) {
@@ -105,7 +95,7 @@ namespace edge_compute::rasterization {
             obtain(blob, buffers.screen_bounds, n_primitives, 128);
             obtain(blob, buffers.mean2d, n_primitives, 128);
             obtain(blob, buffers.conic_opacity, n_primitives, 128);
-            check_cuda_status(
+            LFS_CUDA_CHECK_MSG(
                 cub::DeviceScan::InclusiveSum(
                     nullptr, buffers.cub_workspace_size,
                     buffers.n_touched_tiles, buffers.offset,
@@ -136,7 +126,7 @@ namespace edge_compute::rasterization {
             uint* primitive_indices_alternate;
             obtain(blob, primitive_indices_alternate, n_instances, 128);
             buffers.primitive_indices = cub::DoubleBuffer<uint>(primitive_indices_current, primitive_indices_alternate);
-            check_cuda_status(
+            LFS_CUDA_CHECK_MSG(
                 cub::DeviceRadixSort::SortPairs(
                     nullptr, buffers.cub_workspace_size,
                     buffers.keys, buffers.primitive_indices,

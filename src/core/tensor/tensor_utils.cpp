@@ -9,14 +9,6 @@
 #include <functional>
 #include <numeric>
 
-#define CHECK_CUDA(call)                                                                 \
-    do {                                                                                 \
-        const cudaError_t error = (call);                                                \
-        LFS_ASSERT_MSG(error == cudaSuccess,                                             \
-                       std::format("{} failed (cuda_error={}({}))", #call,               \
-                                   cudaGetErrorString(error), static_cast<int>(error))); \
-    } while (0)
-
 namespace lfs::core {
 
     // ============= Tensor Static Factory Methods =============
@@ -50,8 +42,8 @@ namespace lfs::core {
         }
 
         if (device == Device::CUDA) {
-            CHECK_CUDA(cudaMemcpy(t.ptr<float>(), data.data(), steps * sizeof(float),
-                                  cudaMemcpyHostToDevice));
+            LFS_CUDA_CHECK(cudaMemcpy(t.ptr<float>(), data.data(), steps * sizeof(float),
+                                      cudaMemcpyHostToDevice));
         } else {
             std::memcpy(t.ptr<float>(), data.data(), steps * sizeof(float));
         }
@@ -79,9 +71,9 @@ namespace lfs::core {
         }
 
         if (diagonal.device() == Device::CUDA) {
-            CHECK_CUDA(cudaGetLastError());
+            LFS_CUDA_CHECK(cudaGetLastError());
             tensor_ops::launch_diag(diagonal.ptr<float>(), result.ptr<float>(), n, result.stream());
-            CHECK_CUDA(cudaGetLastError());
+            LFS_CUDA_CHECK(cudaGetLastError());
             // No sync - returns tensor
         } else {
             const float* diag_data = diagonal.ptr<float>();
@@ -103,7 +95,7 @@ namespace lfs::core {
         MemoryInfo info;
 
         size_t free_bytes, total_bytes;
-        CHECK_CUDA(cudaMemGetInfo(&free_bytes, &total_bytes));
+        LFS_CUDA_CHECK(cudaMemGetInfo(&free_bytes, &total_bytes));
 
         info.free_bytes = free_bytes;
         info.total_bytes = total_bytes;
@@ -161,8 +153,8 @@ namespace lfs::core::functional {
             }
 
             if (!dst_data.empty()) {
-                CHECK_CUDA(cudaMemcpy(result.ptr<float>(), dst_data.data(),
-                                      dst_data.size() * sizeof(float), cudaMemcpyHostToDevice));
+                LFS_CUDA_CHECK(cudaMemcpy(result.ptr<float>(), dst_data.data(),
+                                          dst_data.size() * sizeof(float), cudaMemcpyHostToDevice));
             }
         } else {
             const float* src = input.ptr<float>();
@@ -230,8 +222,8 @@ namespace lfs::core::functional {
             }
 
             if (!dst_data.empty()) {
-                CHECK_CUDA(cudaMemcpy(result.ptr<float>(), dst_data.data(),
-                                      dst_data.size() * sizeof(float), cudaMemcpyHostToDevice));
+                LFS_CUDA_CHECK(cudaMemcpy(result.ptr<float>(), dst_data.data(),
+                                          dst_data.size() * sizeof(float), cudaMemcpyHostToDevice));
             }
         } else {
             const float* src = input.ptr<float>();
@@ -246,5 +238,3 @@ namespace lfs::core::functional {
     }
 
 } // namespace lfs::core::functional
-
-#undef CHECK_CUDA

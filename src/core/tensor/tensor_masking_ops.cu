@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include "internal/cub_workspace.hpp"
 #include "internal/cuda_memory_guard.hpp"
 #include "internal/tensor_functors.hpp"
@@ -255,7 +256,7 @@ namespace lfs::core::tensor_ops {
         std::copy(a_shape, a_shape + a_rank, h_shapes);
         std::copy(b_shape, b_shape + b_rank, h_shapes + 10);
         std::copy(c_shape, c_shape + c_rank, h_shapes + 20);
-        shapes.copy_from_host(h_shapes, 30);
+        LFS_CUDA_CHECK(shapes.copy_from_host(h_shapes, 30));
 
         bool fast_path = (a_rank == c_rank && b_rank == c_rank &&
                           std::equal(a_shape, a_shape + a_rank, c_shape) &&
@@ -275,7 +276,7 @@ namespace lfs::core::tensor_ops {
         std::copy(a_shape, a_shape + a_rank, h_shapes);
         std::copy(b_shape, b_shape + b_rank, h_shapes + 10);
         std::copy(c_shape, c_shape + c_rank, h_shapes + 20);
-        shapes.copy_from_host(h_shapes, 30);
+        LFS_CUDA_CHECK(shapes.copy_from_host(h_shapes, 30));
 
         bool fast_path = (a_rank == c_rank && b_rank == c_rank &&
                           std::equal(a_shape, a_shape + a_rank, c_shape) &&
@@ -295,7 +296,7 @@ namespace lfs::core::tensor_ops {
         std::copy(a_shape, a_shape + a_rank, h_shapes);
         std::copy(b_shape, b_shape + b_rank, h_shapes + 10);
         std::copy(c_shape, c_shape + c_rank, h_shapes + 20);
-        shapes.copy_from_host(h_shapes, 30);
+        LFS_CUDA_CHECK(shapes.copy_from_host(h_shapes, 30));
 
         bool fast_path = (a_rank == c_rank && b_rank == c_rank &&
                           std::equal(a_shape, a_shape + a_rank, c_shape) &&
@@ -315,7 +316,7 @@ namespace lfs::core::tensor_ops {
         std::copy(a_shape, a_shape + a_rank, h_shapes);
         std::copy(b_shape, b_shape + b_rank, h_shapes + 10);
         std::copy(c_shape, c_shape + c_rank, h_shapes + 20);
-        shapes.copy_from_host(h_shapes, 30);
+        LFS_CUDA_CHECK(shapes.copy_from_host(h_shapes, 30));
 
         bool fast_path = (a_rank == c_rank && b_rank == c_rank &&
                           std::equal(a_shape, a_shape + a_rank, c_shape) &&
@@ -335,7 +336,7 @@ namespace lfs::core::tensor_ops {
         std::copy(a_shape, a_shape + a_rank, h_shapes);
         std::copy(b_shape, b_shape + b_rank, h_shapes + 10);
         std::copy(c_shape, c_shape + c_rank, h_shapes + 20);
-        shapes.copy_from_host(h_shapes, 30);
+        LFS_CUDA_CHECK(shapes.copy_from_host(h_shapes, 30));
 
         bool fast_path = (a_rank == c_rank && b_rank == c_rank &&
                           std::equal(a_shape, a_shape + a_rank, c_shape) &&
@@ -355,7 +356,7 @@ namespace lfs::core::tensor_ops {
         std::copy(a_shape, a_shape + a_rank, h_shapes);
         std::copy(b_shape, b_shape + b_rank, h_shapes + 10);
         std::copy(c_shape, c_shape + c_rank, h_shapes + 20);
-        shapes.copy_from_host(h_shapes, 30);
+        LFS_CUDA_CHECK(shapes.copy_from_host(h_shapes, 30));
 
         bool fast_path = (a_rank == c_rank && b_rank == c_rank &&
                           std::equal(a_shape, a_shape + a_rank, c_shape) &&
@@ -468,7 +469,7 @@ namespace lfs::core::tensor_ops {
         std::copy(x_shape, x_shape + x_rank, h_shapes + 10);
         std::copy(y_shape, y_shape + y_rank, h_shapes + 20);
         std::copy(r_shape, r_shape + r_rank, h_shapes + 30);
-        shapes.copy_from_host(h_shapes, 40);
+        LFS_CUDA_CHECK(shapes.copy_from_host(h_shapes, 40));
 
         // Use 2D grid for large arrays to avoid exceeding grid dimension limits
         size_t num_blocks = (total + 255) / 256;
@@ -488,7 +489,7 @@ namespace lfs::core::tensor_ops {
     // ============= Count Nonzero =============
     void launch_count_nonzero_bool(const unsigned char* data, size_t* count, size_t n, cudaStream_t stream) {
         if (n == 0) {
-            cudaMemsetAsync(count, 0, sizeof(size_t), stream);
+            LFS_CUDA_CHECK(cudaMemsetAsync(count, 0, sizeof(size_t), stream));
             return;
         }
 
@@ -501,12 +502,12 @@ namespace lfs::core::tensor_ops {
 
         // Write to device memory (use sync copy since result is stack variable)
         // OPTIMIZATION: cudaMemcpy (blocking) is more efficient than cudaMemcpyAsync + cudaStreamSynchronize
-        cudaMemcpy(count, &result, sizeof(size_t), cudaMemcpyHostToDevice);
+        LFS_CUDA_CHECK(cudaMemcpy(count, &result, sizeof(size_t), cudaMemcpyHostToDevice));
     }
 
     void launch_count_nonzero_float(const float* data, size_t* count, size_t n, cudaStream_t stream) {
         if (n == 0) {
-            cudaMemsetAsync(count, 0, sizeof(size_t), stream);
+            LFS_CUDA_CHECK(cudaMemsetAsync(count, 0, sizeof(size_t), stream));
             return;
         }
 
@@ -520,7 +521,7 @@ namespace lfs::core::tensor_ops {
         // Then write to device memory
         // Write to device memory (use sync copy since result is stack variable)
         // OPTIMIZATION: cudaMemcpy (blocking) is more efficient than cudaMemcpyAsync + cudaStreamSynchronize
-        cudaMemcpy(count, &result, sizeof(size_t), cudaMemcpyHostToDevice);
+        LFS_CUDA_CHECK(cudaMemcpy(count, &result, sizeof(size_t), cudaMemcpyHostToDevice));
     }
 
     // ============= Index Operations =============
@@ -830,8 +831,8 @@ namespace lfs::core::tensor_ops {
             h_in_shape[i] = in_shape[i];
         }
 
-        d_in_shape.copy_from_host(h_in_shape, 10);
-        d_idx_shape.copy_from_host(h_idx_shape, 10);
+        LFS_CUDA_CHECK(d_in_shape.copy_from_host(h_in_shape, 10));
+        LFS_CUDA_CHECK(d_idx_shape.copy_from_host(h_idx_shape, 10));
 
         int blocks = (total + 255) / 256;
         gather_kernel<float><<<blocks, 256, 0, stream>>>(
@@ -882,8 +883,8 @@ namespace lfs::core::tensor_ops {
             h_in_shape[i] = in_shape[i];
         }
 
-        d_in_shape.copy_from_host(h_in_shape, 10);
-        d_idx_shape.copy_from_host(h_idx_shape, 10);
+        LFS_CUDA_CHECK(d_in_shape.copy_from_host(h_in_shape, 10));
+        LFS_CUDA_CHECK(d_idx_shape.copy_from_host(h_idx_shape, 10));
 
         int blocks = (total + 255) / 256;
         gather_kernel<int64_t><<<blocks, 256, 0, stream>>>(

@@ -28,7 +28,12 @@ namespace gsplat_lfs {
             if (!ptr) {
                 return;
             }
-            if (cudaFree(ptr) != cudaSuccess) {
+            const cudaError_t status = cudaFree(ptr);
+            if (status != cudaSuccess) {
+                lfs::core::ensure_cuda_success(
+                    status, "cudaFree(gsplat device memory)", {},
+                    std::source_location::current(),
+                    lfs::core::CudaFailureDisposition::LogOnly);
                 cudaGetLastError();
             }
         }
@@ -89,12 +94,12 @@ namespace gsplat_lfs {
 
             void ensure_sort_buffers(size_t n_isects, cudaStream_t stream) {
                 if (!sort_reuse_event) {
-                    check_cuda_status(
+                    LFS_CUDA_CHECK_MSG(
                         cudaEventCreateWithFlags(&sort_reuse_event, cudaEventDisableTiming),
                         "gsplat sort-cache event creation");
                 }
                 if (sort_reuse_event_recorded) {
-                    check_cuda_status(
+                    LFS_CUDA_CHECK_MSG(
                         cudaStreamWaitEvent(stream, sort_reuse_event, 0),
                         "gsplat sort-cache stream handoff");
                 }
@@ -126,8 +131,16 @@ namespace gsplat_lfs {
                     // Without an event, the only safe recovery is to drain the
                     // stream before allowing another caller to reuse the cache.
                     sort_reuse_event_recorded = false;
-                    (void)cudaStreamSynchronize(stream);
-                    check_cuda_status(status, "gsplat sort-cache event record");
+                    const cudaError_t sync_status = cudaStreamSynchronize(stream);
+                    if (sync_status != cudaSuccess) {
+                        lfs::core::ensure_cuda_success(
+                            sync_status, "cudaStreamSynchronize(gsplat sort-cache fallback)", {},
+                            std::source_location::current(),
+                            lfs::core::CudaFailureDisposition::LogOnly);
+                    }
+                    lfs::core::ensure_cuda_success(
+                        status, "cudaEventRecord(gsplat sort cache)",
+                        "fallback=stream synchronization");
                 }
                 sort_reuse_event_recorded = true;
             }
@@ -137,7 +150,13 @@ namespace gsplat_lfs {
                 free_device_memory(isect_ids_sort);
                 free_device_memory(flatten_ids_sort);
                 if (sort_reuse_event) {
-                    cudaEventDestroy(sort_reuse_event);
+                    const cudaError_t status = cudaEventDestroy(sort_reuse_event);
+                    if (status != cudaSuccess) {
+                        lfs::core::ensure_cuda_success(
+                            status, "cudaEventDestroy(gsplat sort cache)", {},
+                            std::source_location::current(),
+                            lfs::core::CudaFailureDisposition::LogOnly);
+                    }
                 }
             }
         };
@@ -198,7 +217,7 @@ namespace gsplat_lfs {
             tiles_per_gauss_out,
             nullptr, nullptr, // isect_ids, flatten_ids
             stream);
-        check_cuda_status(cudaGetLastError(), "gsplat tile-count kernel launch");
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "gsplat tile-count kernel launch");
 
         // GPU-based inclusive scan using CUB (replaces slow CPU cumsum)
         auto& cache = get_cache();
@@ -210,11 +229,11 @@ namespace gsplat_lfs {
 
         // Get total intersection count (single 8-byte copy instead of full array)
         int64_t n_isects;
-        check_cuda_status(
+        LFS_CUDA_CHECK_MSG(
             cudaMemcpyAsync(&n_isects, d_cum_tiles + n_elements - 1, sizeof(int64_t),
                             cudaMemcpyDeviceToHost, stream),
             "gsplat intersection-count readback");
-        check_cuda_status(cudaStreamSynchronize(stream), "gsplat intersection-count stream sync");
+        LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream), "gsplat intersection-count stream sync");
         LFS_ASSERT_MSG(
             n_isects >= 0 && n_isects <= std::numeric_limits<int32_t>::max(),
             std::format("gsplat intersection count {} exceeds int32 range", n_isects));
@@ -243,7 +262,7 @@ namespace gsplat_lfs {
             nullptr, // tiles_per_gauss (not needed in second pass)
             isect_ids.as<int64_t>(), flatten_ids.as<int32_t>(),
             stream);
-        check_cuda_status(cudaGetLastError(), "gsplat intersection kernel launch");
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "gsplat intersection kernel launch");
 
         // Sort by isect_ids if requested
         if (sort && n_isects > 0) {
@@ -257,14 +276,14 @@ namespace gsplat_lfs {
                     stream);
 
                 // Copy sorted results back (sort may have used either buffer)
-                check_cuda_status(
+                LFS_CUDA_CHECK_MSG(
                     cudaMemcpyAsync(
                         isect_ids.get(), cache.isect_ids_sort,
                         checked_bytes(static_cast<size_t>(n_isects), sizeof(int64_t),
                                       "gsplat sorted intersection output"),
                         cudaMemcpyDeviceToDevice, stream),
                     "gsplat sorted intersection output copy");
-                check_cuda_status(
+                LFS_CUDA_CHECK_MSG(
                     cudaMemcpyAsync(
                         flatten_ids.get(), cache.flatten_ids_sort,
                         checked_bytes(static_cast<size_t>(n_isects), sizeof(int32_t),
@@ -293,8 +312,10 @@ namespace gsplat_lfs {
         int32_t* isect_offsets,
         cudaStream_t stream) {
         if (n_isects == 0) {
-            cudaMemsetAsync(isect_offsets, 0,
-                            C * tile_height * tile_width * sizeof(int32_t), stream);
+            LFS_CUDA_CHECK_MSG(
+                cudaMemsetAsync(isect_offsets, 0,
+                                C * tile_height * tile_width * sizeof(int32_t), stream),
+                "gsplat empty intersection-offset output");
             return;
         }
 

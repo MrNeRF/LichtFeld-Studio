@@ -19,6 +19,7 @@
 #include <memory>
 #include <optional>
 #include <random>
+#include <source_location>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -2046,27 +2047,19 @@ namespace lfs::core {
                 // A blocking memcpy only orders against the legacy stream; data
                 // produced on the tensor's home stream must be drained first.
                 if (const cudaStream_t home = state_->stream; home != nullptr) {
-                    const cudaError_t sync_status = cudaStreamSynchronize(home);
-                    LFS_ASSERT_MSG(sync_status == cudaSuccess,
-                                   std::format("item<T>() CUDA home-stream synchronization failed "
-                                               "(cuda_error={}({}), stream={}, requested_cpp_type={}, "
-                                               "tensor_shape={}, tensor_dtype={}({}))",
-                                               cudaGetErrorString(sync_status),
-                                               static_cast<int>(sync_status),
-                                               static_cast<const void*>(home),
-                                               detail::tensor_cpp_type_name<T>(), shape_.str(),
-                                               dtype_name(dtype_), static_cast<int>(dtype_)));
+                    LFS_CUDA_CHECK_MSG(
+                        cudaStreamSynchronize(home),
+                        "item<T>() home-stream synchronization (stream={}, "
+                        "requested_cpp_type={}, tensor_shape={}, tensor_dtype={}({}))",
+                        static_cast<const void*>(home), detail::tensor_cpp_type_name<T>(),
+                        shape_.str(), dtype_name(dtype_), static_cast<int>(dtype_));
                 }
-                const cudaError_t copy_status =
-                    cudaMemcpy(&value, item_ptr, sizeof(T), cudaMemcpyDeviceToHost);
-                LFS_ASSERT_MSG(copy_status == cudaSuccess,
-                               std::format("item<T>() CUDA device-to-host copy failed "
-                                           "(cuda_error={}({}), bytes={}, source_pointer={}, "
-                                           "requested_cpp_type={}, tensor_shape={}, tensor_dtype={}({}))",
-                                           cudaGetErrorString(copy_status),
-                                           static_cast<int>(copy_status), sizeof(T), item_ptr,
-                                           detail::tensor_cpp_type_name<T>(), shape_.str(),
-                                           dtype_name(dtype_), static_cast<int>(dtype_)));
+                LFS_CUDA_CHECK_MSG(
+                    cudaMemcpy(&value, item_ptr, sizeof(T), cudaMemcpyDeviceToHost),
+                    "item<T>() readback (bytes={}, source_pointer={}, requested_cpp_type={}, "
+                    "tensor_shape={}, tensor_dtype={}({}))",
+                    sizeof(T), item_ptr, detail::tensor_cpp_type_name<T>(), shape_.str(),
+                    dtype_name(dtype_), static_cast<int>(dtype_));
             } else {
                 value = *static_cast<const T*>(item_ptr);
             }
@@ -2501,35 +2494,27 @@ namespace lfs::core {
                 // Blocking memcpy only orders against the legacy stream; drain
                 // the tensor's home stream first.
                 if (const cudaStream_t home = tensor_->stream(); home != nullptr) {
-                    const cudaError_t sync_status = cudaStreamSynchronize(home);
-                    LFS_ASSERT_MSG(sync_status == cudaSuccess,
-                                   std::format("TensorRowProxy::item_as() CUDA home-stream "
-                                               "synchronization failed "
-                                               "(cuda_error={}({}), stream={}, row_index={}, "
-                                               "linear_index={}, tensor_shape={}, tensor_dtype={}({}))",
-                                               cudaGetErrorString(sync_status),
-                                               static_cast<int>(sync_status),
-                                               static_cast<const void*>(home), row_index_, linear_index,
-                                               tensor_->shape().str(), dtype_name(tensor_->dtype()),
-                                               static_cast<int>(tensor_->dtype())));
+                    LFS_CUDA_CHECK_MSG(
+                        cudaStreamSynchronize(home),
+                        "TensorRowProxy::item_as() home-stream synchronization "
+                        "(stream={}, row_index={}, linear_index={}, tensor_shape={}, "
+                        "tensor_dtype={}({}))",
+                        static_cast<const void*>(home), row_index_, linear_index,
+                        tensor_->shape().str(), dtype_name(tensor_->dtype()),
+                        static_cast<int>(tensor_->dtype()));
                 }
 
                 const auto copy_and_convert = [&]<typename Stored>() -> T {
                     Stored value{};
                     const auto* source = static_cast<const char*>(tensor_->data_ptr()) +
                                          linear_index * sizeof(Stored);
-                    const cudaError_t copy_status =
-                        cudaMemcpy(&value, source, sizeof(Stored), cudaMemcpyDeviceToHost);
-                    LFS_ASSERT_MSG(copy_status == cudaSuccess,
-                                   std::format("TensorRowProxy::item_as() CUDA device-to-host copy failed "
-                                               "(cuda_error={}({}), bytes={}, source_pointer={}, "
-                                               "row_index={}, linear_index={}, tensor_shape={}, "
-                                               "tensor_dtype={}({}))",
-                                               cudaGetErrorString(copy_status),
-                                               static_cast<int>(copy_status), sizeof(Stored),
-                                               static_cast<const void*>(source), row_index_, linear_index,
-                                               tensor_->shape().str(), dtype_name(tensor_->dtype()),
-                                               static_cast<int>(tensor_->dtype())));
+                    LFS_CUDA_CHECK_MSG(
+                        cudaMemcpy(&value, source, sizeof(Stored), cudaMemcpyDeviceToHost),
+                        "TensorRowProxy::item_as() readback (bytes={}, source_pointer={}, "
+                        "row_index={}, linear_index={}, tensor_shape={}, tensor_dtype={}({}))",
+                        sizeof(Stored), static_cast<const void*>(source), row_index_, linear_index,
+                        tensor_->shape().str(), dtype_name(tensor_->dtype()),
+                        static_cast<int>(tensor_->dtype()));
                     return static_cast<T>(value);
                 };
 
@@ -2677,7 +2662,9 @@ namespace lfs::core {
 
     class LFS_CORE_API TensorError : public std::runtime_error {
     public:
-        TensorError(const std::string& msg, const Tensor* t = nullptr);
+        TensorError(const std::string& msg,
+                    const Tensor* t = nullptr,
+                    const std::source_location& location = std::source_location::current());
         const std::string& tensor_info() const { return tensor_info_; }
 
     private:
