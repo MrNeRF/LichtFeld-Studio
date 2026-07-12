@@ -502,7 +502,8 @@ namespace lfs::app {
                 const auto write_result = encoder.writeFrameGpu(image_hwc.data_ptr(), cfg.width, cfg.height, nullptr);
                 if (!write_result) {
                     LOG_ERROR("Failed to encode frame {}: {}", frame, write_result.error());
-                    encoder.close();
+                    if (const auto close_result = encoder.close(); !close_result)
+                        LOG_WARN("Failed to finalize partial video: {}", close_result.error());
                     return 1;
                 }
                 LOG_INFO("Encoded frame {}/{}", frame + 1, total_frames);
