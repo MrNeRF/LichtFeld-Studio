@@ -11,6 +11,7 @@
 #include <gtest/gtest.h>
 #include <iterator>
 #include <limits>
+#include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -20,6 +21,7 @@
 #include "core/splat_data.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/ply.hpp"
+#include "io/formats/transforms.hpp"
 #include "io/loader.hpp"
 #include "io/nvcodec_image_loader.hpp"
 #include "io/pipelined_image_loader.hpp"
@@ -520,6 +522,52 @@ TEST_F(PythonIOTest, LoadTransformsDatasetCanBeCancelled) {
 
     ASSERT_FALSE(result.has_value());
     EXPECT_EQ(result.error().code, ErrorCode::CANCELLED);
+}
+
+TEST_F(PythonIOTest, RejectsMalformedTransformsCameraContractsBeforeCameraConstruction) {
+    const fs::path transforms_path = temp_dir / "malformed_transforms.json";
+    const auto expect_rejected = [&](nlohmann::json transforms) {
+        write_text_file(transforms_path, transforms.dump());
+        EXPECT_THROW(
+            (void)read_transforms_cameras_and_images(transforms_path, {}),
+            std::runtime_error);
+    };
+
+    const nlohmann::json identity_matrix = {
+        {1.0, 0.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0, 0.0},
+        {0.0, 0.0, 1.0, 0.0},
+        {0.0, 0.0, 0.0, 1.0},
+    };
+    nlohmann::json valid = {
+        {"w", 64},
+        {"h", 64},
+        {"fl_x", 50.0},
+        {"fl_y", 50.0},
+        {"frames", nlohmann::json::array({
+                       {{"file_path", "frame.png"}, {"transform_matrix", identity_matrix}},
+                   })},
+    };
+
+    auto invalid = valid;
+    invalid["w"] = 0;
+    expect_rejected(std::move(invalid));
+
+    invalid = valid;
+    invalid["fl_x"] = 0.0;
+    expect_rejected(std::move(invalid));
+
+    invalid = valid;
+    invalid["frames"][0]["transform_matrix"][2] = nlohmann::json::array({0.0, 0.0, 1.0});
+    expect_rejected(std::move(invalid));
+
+    invalid = valid;
+    invalid["frames"][0]["transform_matrix"][2] = nlohmann::json::array({0.0, 0.0, 0.0, 0.0});
+    expect_rejected(std::move(invalid));
+
+    invalid = valid;
+    invalid["frames"][0]["transform_matrix"][3] = nlohmann::json::array({0.0, 0.0, 1.0, 1.0});
+    expect_rejected(std::move(invalid));
 }
 
 // Test loading COLMAP dataset
