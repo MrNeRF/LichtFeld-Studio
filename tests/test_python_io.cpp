@@ -1463,6 +1463,29 @@ TEST_F(PythonIOTest, PipelinedLoaderStatsRemainResponsiveDuringCompletions) {
     EXPECT_EQ(loader.get_stats().total_images_loaded, request_count);
 }
 
+TEST_F(PythonIOTest, PipelinedLoaderReportsPrimaryImageFailure) {
+    PipelinedLoaderConfig config;
+    config.jpeg_batch_size = 1;
+    config.decoder_pool_size = 1;
+    config.prefetch_count = 1;
+    config.output_queue_size = 1;
+    config.io_threads = 1;
+    config.cold_process_threads = 1;
+    config.use_filesystem_cache = false;
+
+    PipelinedImageLoader loader(config);
+    const auto missing_path = temp_dir / "missing_training_image.png";
+    loader.prefetch(17, missing_path, LoadParams{});
+
+    try {
+        (void)loader.get();
+        FAIL() << "Expected the primary image failure to reach the consumer";
+    } catch (const std::runtime_error& e) {
+        EXPECT_NE(std::string(e.what()).find("missing_training_image.png"), std::string::npos);
+    }
+    EXPECT_EQ(loader.in_flight_count(), 0u);
+}
+
 TEST_F(PythonIOTest, PipelinedLoaderShutdownReleasesQueuedGpuTensorsBeforeDecodeStream) {
     if (!NvCodecImageLoader::is_available()) {
         GTEST_SKIP() << "nvImageCodec is unavailable";
