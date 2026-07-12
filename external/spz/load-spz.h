@@ -1,5 +1,6 @@
 #pragma once
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -7,6 +8,14 @@
 #include "splat-types.h"
 
 namespace spz {
+
+    // These limits bound all allocations driven by an untrusted SPZ stream. They
+    // remain comfortably above practical scenes while keeping the gzip and
+    // expanded-float peaks finite.
+    inline constexpr size_t kMaxSpzCompressedBytes = 1ULL * 1024 * 1024 * 1024;
+    inline constexpr size_t kMaxSpzDecompressedBytes = 2ULL * 1024 * 1024 * 1024;
+    inline constexpr uint32_t kMaxSpzPoints = 30'000'000;
+    inline constexpr uint8_t kMaxSpzFractionalBits = 24;
 
     // Represents a single inflated gaussian. Each gaussian has 236 bytes. Although the data is easier
     // to intepret in this format, it is not more precise than the packed format, since it was inflated.
