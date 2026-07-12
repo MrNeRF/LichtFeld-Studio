@@ -38,6 +38,7 @@
 #include <iostream>
 #include <optional>
 #include <stdexcept>
+#include <string_view>
 #include <unordered_map>
 #ifdef WIN32
 #include <windows.h>
@@ -83,6 +84,41 @@ namespace lfs::vis {
                 }
             }
             return transforms;
+        }
+
+        void cancelRemainingWork(std::vector<Visualizer::WorkItem>& work,
+                                 const size_t first,
+                                 const std::string_view queue_name) noexcept {
+            for (size_t i = first; i < work.size(); ++i) {
+                try {
+                    if (work[i].cancel)
+                        work[i].cancel();
+                } catch (const std::exception& e) {
+                    LOG_ERROR("Exception while cancelling {} work: {}", queue_name, e.what());
+                } catch (...) {
+                    LOG_ERROR("Unknown exception while cancelling {} work", queue_name);
+                }
+            }
+        }
+
+        // Posted work is an external callback boundary. A failing item may report
+        // through its own promise, but must never unwind the GUI frame loop.
+        void runPostedWork(std::vector<Visualizer::WorkItem>& work,
+                           const std::string_view queue_name) noexcept {
+            for (size_t i = 0; i < work.size(); ++i) {
+                try {
+                    if (work[i].run)
+                        work[i].run();
+                } catch (const std::exception& e) {
+                    LOG_ERROR("Exception in {} work: {}", queue_name, e.what());
+                    cancelRemainingWork(work, i + 1, queue_name);
+                    return;
+                } catch (...) {
+                    LOG_ERROR("Unknown exception in {} work", queue_name);
+                    cancelRemainingWork(work, i + 1, queue_name);
+                    return;
+                }
+            }
         }
 
     } // namespace
@@ -1118,18 +1154,7 @@ namespace lfs::vis {
                 work.swap(work_queue_);
             }
             update_work_processed_ = !work.empty();
-            for (size_t i = 0; i < work.size(); ++i) {
-                try {
-                    if (work[i].run)
-                        work[i].run();
-                } catch (...) {
-                    for (size_t j = i + 1; j < work.size(); ++j) {
-                        if (work[j].cancel)
-                            work[j].cancel();
-                    }
-                    throw;
-                }
-            }
+            runPostedWork(work, "viewer");
         }
 
         if (gui_manager_) {
@@ -1232,19 +1257,7 @@ namespace lfs::vis {
             return;
 
         processing_render_work_ = true;
-        for (size_t i = 0; i < render_work.size(); ++i) {
-            try {
-                if (render_work[i].run)
-                    render_work[i].run();
-            } catch (...) {
-                for (size_t j = i + 1; j < render_work.size(); ++j) {
-                    if (render_work[j].cancel)
-                        render_work[j].cancel();
-                }
-                processing_render_work_ = false;
-                throw;
-            }
-        }
+        runPostedWork(render_work, "render");
         processing_render_work_ = false;
     }
 

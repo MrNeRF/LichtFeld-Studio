@@ -4,13 +4,11 @@
 #pragma once
 
 #include "mcp/mcp_protocol.hpp"
+#include "visualizer/post_work_utils.hpp"
 #include "visualizer/visualizer.hpp"
 
-#include <atomic>
 #include <expected>
 #include <functional>
-#include <future>
-#include <memory>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -48,39 +46,10 @@ namespace lfs::app {
         auto post_and_wait_impl(PostFn&& post_fn, F&& fn) {
             using R = std::invoke_result_t<F>;
             constexpr const char* shutdown_error = "Viewer is shutting down";
-
-            auto task = std::make_shared<std::decay_t<F>>(std::forward<F>(fn));
-            auto promise = std::make_shared<std::promise<R>>();
-            auto completed = std::make_shared<std::atomic_bool>(false);
-            auto future = promise->get_future();
-
-            auto finish_with_value = [promise, completed](auto&& value) mutable {
-                if (!completed->exchange(true))
-                    promise->set_value(std::forward<decltype(value)>(value));
-            };
-            auto finish_with_exception = [promise, completed](std::exception_ptr error) {
-                if (!completed->exchange(true))
-                    promise->set_exception(std::move(error));
-            };
-
-            const bool posted = post_fn(vis::Visualizer::WorkItem{
-                .run =
-                    [task, finish_with_value, finish_with_exception]() mutable {
-                        try {
-                            finish_with_value(std::invoke(*task));
-                        } catch (...) {
-                            finish_with_exception(std::current_exception());
-                        }
-                    },
-                .cancel =
-                    [finish_with_value]() mutable {
-                        finish_with_value(make_post_failure<R>(shutdown_error));
-                    }});
-
-            if (!posted)
-                return make_post_failure<R>(shutdown_error);
-
-            return future.get();
+            return vis::post_work_and_wait(
+                std::forward<PostFn>(post_fn),
+                std::forward<F>(fn),
+                [] { return make_post_failure<R>(shutdown_error); });
         }
 
     } // namespace detail

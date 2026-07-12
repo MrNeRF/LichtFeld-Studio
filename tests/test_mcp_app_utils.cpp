@@ -164,6 +164,27 @@ TEST(McpAppUtilsTest, PostAndWaitQueuesAndWaitsOffViewerThread) {
     EXPECT_EQ(result["mode"], "queued");
 }
 
+TEST(McpAppUtilsTest, PostAndWaitReturnsQueuedExceptionWithoutUnwindingWorkQueue) {
+    FakeVisualizer viewer;
+    std::promise<void> result_promise;
+    auto result_future = result_promise.get_future();
+
+    std::jthread worker([&](std::stop_token) {
+        try {
+            (void)lfs::app::post_and_wait(&viewer, []() -> nlohmann::json {
+                throw std::runtime_error("posted work failed");
+            });
+            result_promise.set_value();
+        } catch (...) {
+            result_promise.set_exception(std::current_exception());
+        }
+    });
+
+    ASSERT_TRUE(viewer.waitForPostedWork());
+    EXPECT_NO_THROW(EXPECT_TRUE(viewer.runNextWorkItem()));
+    EXPECT_THROW(result_future.get(), std::runtime_error);
+}
+
 TEST(McpAppUtilsTest, ToolRegistryHandlerUsingPostAndWaitExecutesInlineOnViewerThread) {
     static constexpr const char* kToolName = "test.mcp.viewer_thread.inline";
     ScopedToolRegistration cleanup(kToolName);

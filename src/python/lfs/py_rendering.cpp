@@ -23,13 +23,13 @@
 #include "scene/scene_render_state.hpp"
 #include "visualizer/internal/viewport.hpp"
 #include "visualizer/ipc/view_context.hpp"
+#include "visualizer/post_work_utils.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
 #include "visualizer/rendering/viewport_appearance_correction.hpp"
 #include "visualizer/visualizer.hpp"
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <cassert>
 #include <cctype>
 #include <cmath>
@@ -38,7 +38,6 @@
 #include <expected>
 #include <filesystem>
 #include <functional>
-#include <future>
 #include <numbers>
 #include <variant>
 
@@ -109,31 +108,11 @@ namespace lfs::python {
                 return std::nullopt;
             }
 
-            auto promise = std::make_shared<std::promise<std::optional<vis::ViewportRender>>>();
-            auto future = promise->get_future();
-            auto completed = std::make_shared<std::atomic_bool>(false);
-
-            auto finish = [promise, completed](std::optional<vis::ViewportRender> result) mutable {
-                if (!completed->exchange(true)) {
-                    promise->set_value(std::move(result));
-                }
-            };
-
-            const bool posted = viewer->postWork(vis::Visualizer::WorkItem{
-                .run =
-                    [invoke_capture, finish]() mutable {
-                        finish(invoke_capture());
-                    },
-                .cancel =
-                    [finish]() mutable {
-                        finish(std::nullopt);
-                    }});
-            if (!posted) {
-                return std::nullopt;
-            }
-
             nb::gil_scoped_release release;
-            return future.get();
+            return vis::post_work_and_wait(
+                [viewer](vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
+                invoke_capture,
+                []() -> std::optional<vis::ViewportRender> { return std::nullopt; });
         }
 
         [[nodiscard]] core::PointCloud pointCloudFromMesh(const core::MeshData& mesh) {
@@ -393,31 +372,11 @@ namespace lfs::python {
                 return std::nullopt;
             }
 
-            auto promise = std::make_shared<std::promise<std::optional<core::Tensor>>>();
-            auto future = promise->get_future();
-            auto completed = std::make_shared<std::atomic_bool>(false);
-
-            auto finish = [promise, completed](std::optional<core::Tensor> result) mutable {
-                if (!completed->exchange(true)) {
-                    promise->set_value(std::move(result));
-                }
-            };
-
-            const bool posted = viewer->postWork(vis::Visualizer::WorkItem{
-                .run =
-                    [path, width, height, focal_length_mm, rotation, translation, finish]() mutable {
-                        finish(renderAssetPreviewOnViewerThread(path, width, height, focal_length_mm, rotation, translation));
-                    },
-                .cancel =
-                    [finish]() mutable {
-                        finish(std::nullopt);
-                    }});
-            if (!posted) {
-                return std::nullopt;
-            }
-
             nb::gil_scoped_release release;
-            return future.get();
+            return vis::post_work_and_wait(
+                [viewer](vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
+                invoke_render,
+                []() -> std::optional<core::Tensor> { return std::nullopt; });
         }
 
         [[nodiscard]] std::optional<glm::mat3> tensorToVisualizerRotation(const PyTensor& py_tensor) {
@@ -563,49 +522,11 @@ namespace lfs::python {
                 return std::nullopt;
             }
 
-            auto promise = std::make_shared<std::promise<std::optional<core::Tensor>>>();
-            auto future = promise->get_future();
-            auto completed = std::make_shared<std::atomic_bool>(false);
-
-            auto finish = [promise, completed](std::optional<core::Tensor> result) mutable {
-                if (!completed->exchange(true)) {
-                    promise->set_value(std::move(result));
-                }
-            };
-
-            const bool posted = viewer->postWork(vis::Visualizer::WorkItem{
-                .run =
-                    [rotation,
-                     translation,
-                     width,
-                     height,
-                     fov_degrees,
-                     readback,
-                     background_color_override,
-                     orthographic_override,
-                     ortho_scale_override,
-                     finish]() mutable {
-                        finish(renderViewOnViewerThread(
-                            rotation,
-                            translation,
-                            width,
-                            height,
-                            fov_degrees,
-                            readback,
-                            background_color_override,
-                            orthographic_override,
-                            ortho_scale_override));
-                    },
-                .cancel =
-                    [finish]() mutable {
-                        finish(std::nullopt);
-                    }});
-            if (!posted) {
-                return std::nullopt;
-            }
-
             nb::gil_scoped_release release;
-            return future.get();
+            return vis::post_work_and_wait(
+                [viewer](vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
+                invoke_render,
+                []() -> std::optional<core::Tensor> { return std::nullopt; });
         }
 
         [[nodiscard]] std::optional<std::pair<core::Tensor, core::Tensor>> renderViewAndDepthOnViewerThread(
@@ -666,32 +587,12 @@ namespace lfs::python {
                 return std::nullopt;
             }
 
-            auto promise =
-                std::make_shared<std::promise<std::optional<std::pair<core::Tensor, core::Tensor>>>>();
-            auto future = promise->get_future();
-            auto completed = std::make_shared<std::atomic_bool>(false);
-            auto finish =
-                [promise, completed](std::optional<std::pair<core::Tensor, core::Tensor>> result) mutable {
-                    if (!completed->exchange(true)) {
-                        promise->set_value(std::move(result));
-                    }
-                };
-
-            const bool posted = viewer->postWork(vis::Visualizer::WorkItem{
-                .run =
-                    [rotation, translation, width, height, fov_degrees, expected_depth, finish]() mutable {
-                        finish(renderViewAndDepthOnViewerThread(rotation, translation, width, height, fov_degrees, expected_depth));
-                    },
-                .cancel =
-                    [finish]() mutable {
-                        finish(std::nullopt);
-                    }});
-            if (!posted) {
-                return std::nullopt;
-            }
-
             nb::gil_scoped_release release;
-            return future.get();
+            using Result = std::optional<std::pair<core::Tensor, core::Tensor>>;
+            return vis::post_work_and_wait(
+                [viewer](vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
+                invoke_render,
+                []() -> Result { return std::nullopt; });
         }
     } // namespace
 
@@ -1266,31 +1167,13 @@ namespace lfs::python {
                 return std::unexpected("viewer is not accepting export work");
             }
 
-            auto promise = std::make_shared<std::promise<ExportImageResult>>();
-            auto future = promise->get_future();
-            auto completed = std::make_shared<std::atomic_bool>(false);
-
-            auto finish = [promise, completed](ExportImageResult result) mutable {
-                if (!completed->exchange(true)) {
-                    promise->set_value(std::move(result));
-                }
-            };
-
-            const bool posted = viewer->postWork(vis::Visualizer::WorkItem{
-                .run =
-                    [invoke_render = std::move(invoke_render), finish]() mutable {
-                        finish(invoke_render());
-                    },
-                .cancel =
-                    [finish]() mutable {
-                        finish(std::unexpected("viewport export was cancelled"));
-                    }});
-            if (!posted) {
-                return std::unexpected("failed to post export work to the viewer");
-            }
-
             nb::gil_scoped_release release;
-            return future.get();
+            return vis::post_work_and_wait(
+                [viewer](vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
+                std::move(invoke_render),
+                []() -> ExportImageResult {
+                    return std::unexpected("viewport export was cancelled");
+                });
         }
 
         [[nodiscard]] core::Tensor renderCurrentViewExport(const vis::ViewInfo& view_info,
@@ -1836,7 +1719,8 @@ namespace lfs::python {
                     return static_cast<float>(self.height) / self.ortho_scale;
                 },
                 "Vertical view extent in world units (Blender-compatible orthographic scale). Larger when zoomed out, smaller when zoomed in.")
-            .def_prop_ro("position", [](const PyViewInfo& self) -> std::tuple<float, float, float> {
+            .def_prop_ro(
+                "position", [](const PyViewInfo& self) -> std::tuple<float, float, float> {
                     auto t = self.translation.tensor().cpu();
                     auto acc = t.accessor<float, 1>();
                     return {acc(0), acc(1), acc(2)}; }, "Camera position as (x, y, z) tuple");
