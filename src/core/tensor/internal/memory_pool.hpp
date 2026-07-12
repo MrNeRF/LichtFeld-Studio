@@ -18,6 +18,7 @@
 #include <iomanip>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <sstream>
 #include <string_view>
 #include <unordered_map>
@@ -185,6 +186,12 @@ namespace lfs::core {
         void release_stream(cudaStream_t stream) {
             if (!stream)
                 return;
+
+            // A deallocation removes its allocation-map entry before routing the
+            // block into a suballocator. Keep that entire transition atomic with
+            // respect to stream retirement; otherwise a late free can repopulate
+            // a cache with the stream after the cache has already been retagged.
+            std::unique_lock stream_routing_lock(stream_routing_mutex_);
             LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream),
                                "releasing CUDA memory-pool stream={}",
                                static_cast<void*>(stream));
@@ -228,6 +235,10 @@ namespace lfs::core {
                 return;
             if (shutdown_.load(std::memory_order_acquire))
                 return;
+
+            // release_stream() must see this block either in allocation_map_ or
+            // in its destination suballocator, never in transit between them.
+            std::shared_lock stream_routing_lock(stream_routing_mutex_);
             if (suspend_deallocations_.load(std::memory_order_acquire)) {
                 AllocationInfo info;
                 take_allocation(ptr, info);
@@ -658,6 +669,7 @@ namespace lfs::core {
 
         std::unordered_map<void*, AllocationInfo> allocation_map_;
         std::mutex map_mutex_;
+        std::shared_mutex stream_routing_mutex_;
         std::atomic<size_t> direct_alloc_count_{0};
         bool slab_enabled_{false};
         std::atomic<bool> shutdown_{false};
