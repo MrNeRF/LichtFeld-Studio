@@ -8,6 +8,7 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "io/atomic_output.hpp"
 #include "io/error.hpp"
 #include "strategies/istrategy.hpp"
 #include <fstream>
@@ -17,34 +18,6 @@
 namespace lfs::training {
 
     namespace {
-        constexpr char kCheckpointTempSuffix[] = ".tmp";
-
-        std::filesystem::path checkpoint_temp_path(const std::filesystem::path& checkpoint_path) {
-            auto temp_path = checkpoint_path;
-            temp_path += kCheckpointTempSuffix;
-            return temp_path;
-        }
-
-        std::expected<void, std::string> replace_checkpoint_file(
-            const std::filesystem::path& checkpoint_path,
-            const std::filesystem::path& temp_checkpoint_path) {
-
-            std::error_code ec;
-            std::filesystem::remove(checkpoint_path, ec);
-            if (ec) {
-                return std::unexpected("Failed to remove existing checkpoint file '" +
-                                       lfs::core::path_to_utf8(checkpoint_path) + "': " + ec.message());
-            }
-
-            std::filesystem::rename(temp_checkpoint_path, checkpoint_path, ec);
-            if (ec) {
-                return std::unexpected("Failed to replace checkpoint file '" +
-                                       lfs::core::path_to_utf8(checkpoint_path) + "': " + ec.message());
-            }
-
-            return {};
-        }
-
         [[nodiscard]] lfs::core::SplatTensorAllocator make_checkpoint_tensor_allocator(
             lfs::core::SplatTensorAllocator allocator,
             const std::size_t target_row_capacity) {
@@ -87,7 +60,11 @@ namespace lfs::training {
 
             const auto checkpoint_dir = checkpoint_directory(path);
             const auto checkpoint_path = checkpoint_output_path(path);
-            const auto temp_checkpoint_path = checkpoint_temp_path(checkpoint_path);
+            lfs::io::ScopedAtomicOutputFile atomic_checkpoint(
+                checkpoint_path,
+                lfs::io::AtomicOutputTempName::AppendSuffix,
+                lfs::io::AtomicOutputDurability::Durable);
+            const auto& temp_checkpoint_path = atomic_checkpoint.temp_path();
 
             // Create checkpoint directory with error checking
             std::error_code ec;
@@ -242,8 +219,9 @@ namespace lfs::training {
                                        lfs::core::path_to_utf8(temp_checkpoint_path));
             }
 
-            if (auto replace_result = replace_checkpoint_file(checkpoint_path, temp_checkpoint_path); !replace_result)
-                return std::unexpected(replace_result.error());
+            if (auto replace_result = atomic_checkpoint.commit(); !replace_result) {
+                return std::unexpected(replace_result.error().format());
+            }
 
             std::string extras;
             if (bilateral_grid)
