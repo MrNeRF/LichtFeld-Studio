@@ -3112,8 +3112,15 @@ namespace lfs::io {
                 } else {
                     normal_tensor = Tensor();
                 }
-                LFS_ASSERT_MSG(!normal_tensor.is_valid() || float_tensor_values_are_finite(normal_tensor),
-                               "PLY normals must be finite");
+                if (normal_tensor.is_valid()) {
+                    if (const auto invalid = find_non_finite_float_value(normal_tensor)) {
+                        LFS_ASSERT_MSG(false,
+                                       std::format("PLY normals must be finite "
+                                                   "(flat_index={}, value={}, shape={})",
+                                                   invalid->index, invalid->value,
+                                                   normal_tensor.shape().str()));
+                    }
+                }
             }
 
             throw_if_load_cancel_requested(options, "PLY point cloud load cancelled");

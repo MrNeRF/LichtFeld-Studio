@@ -535,8 +535,9 @@ namespace fast_lfs::rasterization {
                 if (!grad_normal_helper) {
                     throw std::runtime_error("OUT_OF_MEMORY: Failed to allocate normal gradient helper buffer from arena");
                 }
-                CUDA_CHECK(cudaMemsetAsync(grad_normal_helper, 0, static_cast<size_t>(n_primitives) * sizeof(float3), stream),
-                           "cudaMemsetAsync(grad_normal_helper)");
+                LFS_CUDA_CHECK_MSG(
+                    cudaMemsetAsync(grad_normal_helper, 0, static_cast<size_t>(n_primitives) * sizeof(float3), stream),
+                    "cudaMemsetAsync(grad_normal_helper)");
             }
 
             // Zero out helper buffers

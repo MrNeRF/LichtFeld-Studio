@@ -51,6 +51,24 @@ namespace lfs::vis {
         using lfs::core::Device;
         using lfs::core::Tensor;
 
+        struct ScopedStagingBuffer {
+            VmaAllocator allocator = VK_NULL_HANDLE;
+            VkBuffer buffer = VK_NULL_HANDLE;
+            VmaAllocation allocation = VK_NULL_HANDLE;
+            VmaAllocationInfo allocation_info{};
+            std::string vram_scope;
+            std::string vram_label;
+
+            ~ScopedStagingBuffer() {
+                if (allocator != VK_NULL_HANDLE && buffer != VK_NULL_HANDLE) {
+                    if (!vram_scope.empty() && !vram_label.empty()) {
+                        lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(vram_scope, vram_label, 0);
+                    }
+                    vmaDestroyBuffer(allocator, buffer, allocation);
+                }
+            }
+        };
+
         constexpr std::uint32_t kVkSplatCameraModelPinhole = 0u;
         constexpr std::uint32_t kVkSplatCameraModelOrthographic = 1u;
         constexpr std::uint32_t kVkSplatCameraModelEquirectangular = 3u;
