@@ -149,11 +149,21 @@ if(NOT GIT_TAGGED_VERSION)
     set(GIT_TAGGED_VERSION "unknown")
 endif()
 
-# Generate git_version.h at configure time
-file(WRITE "${CMAKE_BINARY_DIR}/include/git_version.h"
-"#pragma once\n\
-#define GIT_COMMIT_HASH_SHORT \"${GIT_COMMIT_HASH_SHORT}\"\n\
-#define GIT_TAGGED_VERSION \"${GIT_TAGGED_VERSION}\"\n"
+execute_process(
+    COMMAND ${CMAKE_COMMAND}
+            "-DGIT_SRC_DIR=${CMAKE_SOURCE_DIR}"
+            "-DGIT_VERSION_HEADER=${CMAKE_BINARY_DIR}/include/git_version.h"
+            -P "${CMAKE_SOURCE_DIR}/cmake/GenerateGitVersion.cmake"
+    COMMAND_ERROR_IS_FATAL ANY
+)
+add_custom_target(lfs_git_version ALL
+    BYPRODUCTS "${CMAKE_BINARY_DIR}/include/git_version.h"
+    COMMAND ${CMAKE_COMMAND}
+            "-DGIT_SRC_DIR=${CMAKE_SOURCE_DIR}"
+            "-DGIT_VERSION_HEADER=${CMAKE_BINARY_DIR}/include/git_version.h"
+            -P "${CMAKE_SOURCE_DIR}/cmake/GenerateGitVersion.cmake"
+    COMMENT "Refreshing git_version.h"
+    VERBATIM
 )
 
 # App/core ABI tripwire. Hash every lfs_core implementation and interface input,
@@ -551,6 +561,16 @@ add_executable(${PROJECT_NAME}
     src/app/converter.cpp
     resources/lichtfeld-studio.rc
 )
+
+foreach(_lfs_git_version_consumer IN ITEMS
+        ${PROJECT_NAME}
+        lfs_visualizer
+        lfs_py
+        lfs_mcp)
+    if(TARGET ${_lfs_git_version_consumer})
+        add_dependencies(${_lfs_git_version_consumer} lfs_git_version)
+    endif()
+endforeach()
 
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
