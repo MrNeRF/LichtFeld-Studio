@@ -21,6 +21,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <limits>
 #include <numeric>
 #include <random>
 #include <stdexcept>
@@ -642,7 +643,6 @@ namespace lfs::training {
             compute_bounds();
         }
 
-        const float max_allowed = _bounds.max_extent * 100.0f;
         const size_t n = static_cast<size_t>(_splat_data->size());
 
         auto raw_opacities = _splat_data->opacity_raw();
@@ -650,8 +650,6 @@ namespace lfs::training {
             raw_opacities = raw_opacities.squeeze(-1);
         const auto& log_scales = _splat_data->scaling_raw();
         const auto& means = _splat_data->means();
-        const float log_max_allowed = std::log(max_allowed);
-
         assert(raw_opacities.numel() == n);
         assert(log_scales.shape()[0] == n && log_scales.shape()[1] == 3);
         assert(means.shape()[0] == n && means.shape()[1] == 3);
@@ -659,16 +657,27 @@ namespace lfs::training {
         auto scale_min = log_scales.min(1);
         auto scale_max = log_scales.max(1);
 
-        auto center = Tensor::from_vector(
-            {_bounds.center[0], _bounds.center[1], _bounds.center[2]},
-            TensorShape({1, 3}), Device::CUDA);
-        auto dist_from_center = (means - center).abs().max(1);
-
         auto prune_mask = (raw_opacities < MRNF_RAW_OPACITY_PRUNE_THRESHOLD) |
                           compute_near_zero_rotation_mask(_splat_data->rotation_raw()) |
-                          (scale_min < MRNF_LOG_MIN_SCALE_THRESHOLD) |
-                          (scale_max > log_max_allowed) |
-                          (dist_from_center > max_allowed);
+                          (scale_min < MRNF_LOG_MIN_SCALE_THRESHOLD);
+
+        // Bounds-dependent pruning is unsafe for one-point or colocated models:
+        // log(0) would classify every finite scale as oversized. Keep the
+        // bounds-independent safety checks active until a real scene extent exists.
+        if (_bounds_valid) {
+            const float max_allowed =
+                _bounds.max_extent <= std::numeric_limits<float>::max() / 100.0f
+                    ? _bounds.max_extent * 100.0f
+                    : std::numeric_limits<float>::max();
+            const float log_max_allowed = std::log(max_allowed);
+            auto center = Tensor::from_vector(
+                {_bounds.center[0], _bounds.center[1], _bounds.center[2]},
+                TensorShape({1, 3}), Device::CUDA);
+            auto dist_from_center = (means - center).abs().max(1);
+            prune_mask = prune_mask |
+                         (scale_max > log_max_allowed) |
+                         (dist_from_center > max_allowed);
+        }
 
         if (_free_mask.is_valid() && n > 0) {
             auto active_mask = _free_mask.slice(0, 0, n).logical_not();
@@ -1342,11 +1351,42 @@ namespace lfs::training {
             return;
         }
 
+        mrnf_strategy::MRNFBounds candidate{};
         mrnf_strategy::launch_percentile_bounds(
             active_means.ptr<float>(),
             n,
             _params->bounds_percentile,
-            &_bounds);
+            &candidate);
+
+        float coordinate_scale = 1.0f;
+        bool finite_bounds = std::isfinite(candidate.max_extent) && candidate.max_extent >= 0.0f;
+        for (int axis = 0; axis < 3; ++axis) {
+            finite_bounds = finite_bounds &&
+                            std::isfinite(candidate.center[axis]) &&
+                            std::isfinite(candidate.extent[axis]) &&
+                            candidate.extent[axis] >= 0.0f;
+            coordinate_scale = std::max(coordinate_scale, std::abs(candidate.center[axis]));
+        }
+        const float extent_epsilon =
+            32.0f * std::numeric_limits<float>::epsilon() * coordinate_scale;
+        if (!finite_bounds || candidate.max_extent <= extent_epsilon) {
+            if (!_bounds_valid) {
+                LOG_WARN("MRNF: spatial bounds unavailable for a degenerate active model; "
+                         "skipping bounds-dependent noise and pruning");
+            }
+            return;
+        }
+
+        if (!std::isfinite(candidate.median_size) || candidate.median_size <= extent_epsilon) {
+            // A line-like model has a useful spatial extent but a zero median
+            // axis. Use its full largest-axis extent to keep the mean LR finite.
+            candidate.median_size =
+                candidate.max_extent <= std::numeric_limits<float>::max() / 2.0f
+                    ? candidate.max_extent * 2.0f
+                    : candidate.max_extent;
+        }
+
+        _bounds = candidate;
 
         _bounds_valid = true;
         _refine_windows_since_bounds = 0;
