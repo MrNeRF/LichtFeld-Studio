@@ -5,6 +5,7 @@
  * Based on NVIDIA PPISP implementation.
  */
 
+#include "core/cuda_error.hpp"
 #include "lfs/kernels/ppisp.cuh"
 #include "ppisp_math.cuh"
 #include "ppisp_math_bwd.cuh"
@@ -277,20 +278,30 @@ namespace lfs::training::kernels {
         if (idx >= num_elements)
             return;
 
-        float g = grad[idx];
-        float m = exp_avg[idx];
-        float v = exp_avg_sq[idx];
+        const bool valid_param = isfinite(params[idx]);
+        const float parameter = valid_param ? params[idx] : 0.0f;
+        const float g = valid_param && isfinite(grad[idx]) ? grad[idx] : 0.0f;
+        float m = valid_param && isfinite(exp_avg[idx]) ? exp_avg[idx] : 0.0f;
+        float v = valid_param && isfinite(exp_avg_sq[idx]) && exp_avg_sq[idx] >= 0.0f
+                      ? exp_avg_sq[idx]
+                      : 0.0f;
 
         m = beta1 * m + (1.0f - beta1) * g;
         v = beta2 * v + (1.0f - beta2) * g * g;
 
-        exp_avg[idx] = m;
-        exp_avg_sq[idx] = v;
+        const float m_hat = m * bc1_rcp;
+        const float v_hat_sqrt = sqrtf(v) * bc2_sqrt_rcp;
+        const float updated = parameter - lr * m_hat / (v_hat_sqrt + eps);
 
-        float m_hat = m * bc1_rcp;
-        float v_hat_sqrt = sqrtf(v) * bc2_sqrt_rcp;
-
-        params[idx] -= lr * m_hat / (v_hat_sqrt + eps);
+        if (isfinite(updated) && isfinite(m) && isfinite(v)) {
+            params[idx] = updated;
+            exp_avg[idx] = m;
+            exp_avg_sq[idx] = v;
+        } else {
+            params[idx] = parameter;
+            exp_avg[idx] = 0.0f;
+            exp_avg_sq[idx] = 0.0f;
+        }
     }
 
     // Inverse of bounded_positive_forward: find raw value that produces target
@@ -390,8 +401,7 @@ namespace lfs::training::kernels {
             reinterpret_cast<const ColorPPISPParams*>(color_params),
             reinterpret_cast<const CRFPPISPChannelParams*>(crf_params), rgb_in, rgb_out, camera_idx, frame_idx);
 
-        cudaError_t err = cudaGetLastError();
-        assert(err == cudaSuccess && "PPISP forward kernel launch failed");
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "PPISP forward kernel launch failed");
     }
 
     void launch_ppisp_forward_chw(const float* exposure_params, const float* vignetting_params,
@@ -423,8 +433,7 @@ namespace lfs::training::kernels {
             reinterpret_cast<ColorPPISPParams*>(grad_color_params),
             reinterpret_cast<CRFPPISPChannelParams*>(grad_crf_params), grad_rgb_in, camera_idx, frame_idx);
 
-        cudaError_t err = cudaGetLastError();
-        assert(err == cudaSuccess && "PPISP backward kernel launch failed");
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "PPISP backward kernel launch failed");
     }
 
     void launch_ppisp_adam_update(float* params, float* exp_avg, float* exp_avg_sq, const float* grad, int num_elements,
@@ -437,8 +446,7 @@ namespace lfs::training::kernels {
         ppisp_adam_update_kernel<<<blocks, threads, 0, stream>>>(params, exp_avg, exp_avg_sq, grad, num_elements, lr,
                                                                  beta1, beta2, bc1_rcp, bc2_sqrt_rcp, eps);
 
-        cudaError_t err = cudaGetLastError();
-        assert(err == cudaSuccess && "PPISP Adam update kernel launch failed");
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "PPISP Adam update kernel launch failed");
     }
 
     void launch_ppisp_init_identity(float* exposure, float* vignetting, float* color, float* crf, int num_cameras,
@@ -455,8 +463,7 @@ namespace lfs::training::kernels {
         ppisp_init_identity_kernel<<<blocks, threads, 0, stream>>>(exposure, vignetting, color, crf, num_cameras,
                                                                    num_frames);
 
-        cudaError_t err = cudaGetLastError();
-        assert(err == cudaSuccess && "PPISP init kernel launch failed");
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "PPISP init kernel launch failed");
     }
 
     void launch_ppisp_reg_loss(const float* params, float* loss_out, int num_elements, cudaStream_t stream) {
@@ -466,8 +473,7 @@ namespace lfs::training::kernels {
 
         ppisp_reg_loss_kernel<<<blocks, threads, 0, stream>>>(params, loss_out, num_elements);
 
-        cudaError_t err = cudaGetLastError();
-        assert(err == cudaSuccess && "PPISP reg loss kernel launch failed");
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "PPISP reg loss kernel launch failed");
     }
 
     void launch_ppisp_reg_backward(const float* params, float* grad, float weight, int num_elements,
@@ -478,8 +484,7 @@ namespace lfs::training::kernels {
 
         ppisp_reg_backward_kernel<<<blocks, threads, 0, stream>>>(params, grad, weight, num_elements);
 
-        cudaError_t err = cudaGetLastError();
-        assert(err == cudaSuccess && "PPISP reg backward kernel launch failed");
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "PPISP reg backward kernel launch failed");
     }
 
 } // namespace lfs::training::kernels

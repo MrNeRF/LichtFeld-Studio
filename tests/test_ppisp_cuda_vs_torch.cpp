@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include <gtest/gtest.h>
+#include <limits>
 #include <random>
 #include <torch/torch.h>
 
@@ -483,6 +484,54 @@ const torch::Tensor COLOR_PINV_BLOCK_DIAG = torch::tensor({
         check(color, "color");
         check(crf, "crf");
         check(rgb_in, "rgb_in");
+    }
+
+    TEST_F(PPISPCudaVsTorchTest, ExtremeAndNonFiniteParametersStayFinite) {
+        auto params = createParams(1, 1, DEFAULT_SEED);
+        params.exposure.fill_(1000.0f);
+        params.vignetting.fill_(std::numeric_limits<float>::infinity());
+        params.color.fill_(std::numeric_limits<float>::quiet_NaN());
+        params.crf.select(2, 0).fill_(1000.0f);
+        params.crf.select(2, 1).fill_(-1000.0f);
+        params.crf.select(2, 2).fill_(1000.0f);
+        params.crf.select(2, 3).fill_(1000.0f);
+        params.crf.select(1, 1).select(1, 3).fill_(-1000.0f);
+        params.crf.select(1, 2).select(1, 3).fill_(std::numeric_limits<float>::quiet_NaN());
+
+        const auto rgb_in = createImage(8, 8, DEFAULT_SEED);
+        const auto output = runCudaForward(params, rgb_in, 8, 8, 0, 0);
+        EXPECT_TRUE(torch::isfinite(output).all().item<bool>());
+
+        const auto grads = runCudaBackward(params, rgb_in, torch::ones_like(output), 8, 8, 0, 0);
+        EXPECT_TRUE(torch::isfinite(grads.rgb_in).all().item<bool>());
+        EXPECT_TRUE(torch::isfinite(grads.exposure).all().item<bool>());
+        EXPECT_TRUE(torch::isfinite(grads.vignetting).all().item<bool>());
+        EXPECT_TRUE(torch::isfinite(grads.color).all().item<bool>());
+        EXPECT_TRUE(torch::isfinite(grads.crf).all().item<bool>());
+        EXPECT_EQ(grads.exposure.item<float>(), 0.0f);
+    }
+
+    TEST_F(PPISPCudaVsTorchTest, AdamSanitizesNonFiniteParametersGradientsAndState) {
+        auto params = torch::tensor(
+            {std::numeric_limits<float>::quiet_NaN(), 1.0f}, GPU_F32);
+        auto exp_avg = torch::tensor(
+            {std::numeric_limits<float>::infinity(), 0.0f}, GPU_F32);
+        auto exp_avg_sq = torch::tensor({-1.0f, 0.0f}, GPU_F32);
+        auto grad = torch::tensor(
+            {std::numeric_limits<float>::quiet_NaN(), std::numeric_limits<float>::infinity()}, GPU_F32);
+
+        lfs::training::kernels::launch_ppisp_adam_update(
+            params.data_ptr<float>(), exp_avg.data_ptr<float>(), exp_avg_sq.data_ptr<float>(),
+            grad.data_ptr<float>(), 2, 1.0e-3f, 0.9f, 0.999f, 10.0f, 10.0f, 1.0e-8f, nullptr);
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+        EXPECT_TRUE(torch::isfinite(params).all().item<bool>());
+        EXPECT_TRUE(torch::isfinite(exp_avg).all().item<bool>());
+        EXPECT_TRUE(torch::isfinite(exp_avg_sq).all().item<bool>());
+        EXPECT_EQ(params[0].item<float>(), 0.0f);
+        EXPECT_EQ(params[1].item<float>(), 1.0f);
+        EXPECT_EQ(exp_avg.abs().max().item<float>(), 0.0f);
+        EXPECT_EQ(exp_avg_sq.abs().max().item<float>(), 0.0f);
     }
 
 } // namespace
