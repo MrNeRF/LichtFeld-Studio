@@ -7,6 +7,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 #include <memory>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -62,6 +63,36 @@ namespace lfs::python {
         const auto after = core::PinnedMemoryAllocator::instance().get_stats();
         EXPECT_EQ(after.allocated_bytes, before.allocated_bytes);
         EXPECT_GT(after.num_deallocs, before.num_deallocs);
+    }
+
+    TEST(TrainerConstructionTest, ParameterSnapshotsStayGenerationConsistent) {
+        core::Scene scene;
+        const core::NodeId cameras = scene.addGroup("Cameras");
+        scene.addCamera("camera.png", cameras, std::make_shared<core::Camera>());
+        training::Trainer trainer(scene);
+
+        core::param::TrainingParameters initial;
+        initial.optimization.iterations = 1;
+        initial.dataset.output_name = "generation_1";
+        trainer.setParams(initial);
+
+        std::atomic<bool> writer_done{false};
+        std::thread writer([&] {
+            for (size_t generation = 2; generation <= 2'000; ++generation) {
+                auto params = trainer.getParams();
+                params.optimization.iterations = generation;
+                params.dataset.output_name = "generation_" + std::to_string(generation);
+                trainer.setParams(params);
+            }
+            writer_done.store(true, std::memory_order_release);
+        });
+
+        while (!writer_done.load(std::memory_order_acquire)) {
+            const auto snapshot = trainer.getParams();
+            EXPECT_EQ(snapshot.dataset.output_name,
+                      "generation_" + std::to_string(snapshot.optimization.iterations));
+        }
+        writer.join();
     }
 
     TEST(TrainerConstructionTest, ManagerClearReleasesTrainerResourcesAndPoolCache) {

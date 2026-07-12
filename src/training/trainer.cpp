@@ -1463,7 +1463,10 @@ namespace lfs::training {
         save_requested_ = false;
         stop_requested_ = false;
         is_paused_ = false;
-        is_running_ = false;
+        {
+            std::lock_guard<std::mutex> lock(params_mutex_);
+            is_running_ = false;
+        }
         training_complete_ = false;
         ready_to_start_ = false;
         current_iteration_ = 0;
@@ -1476,12 +1479,13 @@ namespace lfs::training {
     }
 
     int Trainer::get_regular_iterations() const {
-        return static_cast<int>(params_.optimization.iterations);
+        return static_cast<int>(getParams().optimization.iterations);
     }
 
     int Trainer::get_active_sparsify_steps() const {
-        return params_.optimization.enable_sparsity
-                   ? std::max(0, params_.optimization.sparsify_steps)
+        const auto params = getParams();
+        return params.optimization.enable_sparsity
+                   ? std::max(0, params.optimization.sparsify_steps)
                    : 0;
     }
 
@@ -1494,8 +1498,13 @@ namespace lfs::training {
     }
 
     lfs::core::param::OptimizationParameters Trainer::get_runtime_optimization_params() const {
-        auto runtime_params = params_.optimization;
-        runtime_params.iterations = static_cast<size_t>(std::max(0, get_total_iterations()));
+        const auto params = getParams();
+        auto runtime_params = params.optimization;
+        const int sparsify_steps = runtime_params.enable_sparsity
+                                       ? std::max(0, runtime_params.sparsify_steps)
+                                       : 0;
+        runtime_params.iterations = static_cast<size_t>(
+            std::max(0, static_cast<int>(runtime_params.iterations) + sparsify_steps));
         return runtime_params;
     }
 
@@ -3308,11 +3317,12 @@ namespace lfs::training {
         if (!initialized_.load() || !strategy_) {
             return std::unexpected("trainer is not initialized");
         }
+        const auto params = getParams();
 
         auto inputs = load_camera_metrics_inputs(
             camera,
             getGTLoadConfigSnapshot(),
-            params_.optimization,
+            params.optimization,
             getActiveImageLoader());
         if (!inputs) {
             return std::unexpected(inputs.error());
@@ -3356,13 +3366,13 @@ namespace lfs::training {
 
             try {
                 RenderOutput output;
-                if (params_.optimization.gut) {
+                if (params.optimization.gut) {
                     output = gsplat_rasterize(
                         camera, model, background,
                         1.0f, false, GsplatRenderMode::RGB, true);
                 } else {
                     output = fast_rasterize(
-                        camera, model, background, params_.optimization.mip_filter);
+                        camera, model, background, params.optimization.mip_filter);
                 }
 
                 rendered = output.image;
@@ -3542,19 +3552,55 @@ namespace lfs::training {
         LOG_DEBUG("GPU memory released");
 
         initialized_ = false;
-        is_running_ = false;
+        {
+            std::lock_guard<std::mutex> lock(params_mutex_);
+            is_running_ = false;
+        }
         training_complete_ = false;
     }
 
     void Trainer::setParams(const lfs::core::param::TrainingParameters& params) {
-        // Check if background image path changed and needs to be (re)loaded
-        const bool bg_image_path_changed =
-            params.optimization.bg_image_path != params_.optimization.bg_image_path;
+        bool bg_image_path_changed = false;
+        {
+            std::lock_guard<std::mutex> lock(params_mutex_);
+            if (is_running_.load(std::memory_order_acquire)) {
+                pending_params_ = params;
+                return;
+            }
+            const auto& current = pending_params_ ? *pending_params_ : params_;
+            bg_image_path_changed =
+                params.optimization.bg_image_path != current.optimization.bg_image_path;
+            params_ = params;
+            pending_params_.reset();
+        }
+        apply_param_side_effects(params, bg_image_path_changed);
+    }
+
+    void Trainer::apply_pending_params_at_safe_point() {
+        std::optional<lfs::core::param::TrainingParameters> update;
+        bool bg_image_path_changed = false;
+        {
+            std::lock_guard<std::mutex> lock(params_mutex_);
+            if (!pending_params_) {
+                return;
+            }
+            update = std::move(pending_params_);
+            pending_params_.reset();
+            bg_image_path_changed =
+                update->optimization.bg_image_path != params_.optimization.bg_image_path;
+            params_ = *update;
+        }
+        apply_param_side_effects(*update, bg_image_path_changed);
+    }
+
+    void Trainer::apply_param_side_effects(
+        const lfs::core::param::TrainingParameters& params,
+        const bool bg_image_path_changed) {
+        // Metrics render under render_mutex_ shared and read background_ directly.
+        // Publish the parameter-dependent tensors as one exclusive update.
+        const std::unique_lock<std::shared_mutex> render_lock(render_mutex_);
         const bool bg_mode_is_image =
             params.optimization.bg_mode == lfs::core::param::BackgroundMode::Image;
-
-        // Update params first
-        params_ = params;
 
         // Load/reload background image if needed
         if (bg_mode_is_image && bg_image_path_changed &&
@@ -3574,6 +3620,7 @@ namespace lfs::training {
                 if (bg_image_base_.shape()[0] != 3) {
                     LOG_WARN("Background image has {} channels, expected 3 (RGB)", bg_image_base_.shape()[0]);
                     bg_image_base_ = {};
+                    std::lock_guard<std::mutex> lock(params_mutex_);
                     params_.optimization.bg_mode = lfs::core::param::BackgroundMode::SolidColor;
                 } else {
                     LOG_INFO("Background image: {} [{}x{}]",
@@ -3582,6 +3629,7 @@ namespace lfs::training {
                 }
             } catch (const std::exception& e) {
                 LOG_WARN("Failed to load background image: {}", e.what());
+                std::lock_guard<std::mutex> lock(params_mutex_);
                 params_.optimization.bg_mode = lfs::core::param::BackgroundMode::SolidColor;
             }
         }
@@ -3625,6 +3673,8 @@ namespace lfs::training {
     }
 
     void Trainer::handle_control_requests(int iter, std::stop_token stop_token) {
+        apply_pending_params_at_safe_point();
+
         // Check stop token first
         if (stop_token.stop_requested()) {
             stop_requested_ = true;
@@ -3653,16 +3703,17 @@ namespace lfs::training {
 
         if (save_requested_.exchange(false)) {
             LOG_INFO("Saving checkpoint and PLY at iteration {}...", iter);
+            const auto params = getParams();
             if (auto ply_result = save_ply(
-                    params_.dataset.output_path, "", iter, /*join=*/false, /*save_checkpoint=*/false);
+                    params.dataset.output_path, "", iter, /*join=*/false, /*save_checkpoint=*/false);
                 !ply_result) {
                 LOG_ERROR("Failed to save PLY: {}", ply_result.error());
             }
             auto result = save_checkpoint(iter);
             if (result) {
-                const auto checkpoint_path = lfs::training::checkpoint_output_path(params_.dataset.output_path);
+                const auto checkpoint_path = lfs::training::checkpoint_output_path(params.dataset.output_path);
                 LOG_INFO("Checkpoint and PLY saved to {} (checkpoint: {})",
-                         lfs::core::path_to_utf8(params_.dataset.output_path),
+                         lfs::core::path_to_utf8(params.dataset.output_path),
                          lfs::core::path_to_utf8(checkpoint_path));
             } else {
                 LOG_ERROR("Failed to save checkpoint: {}", result.error());
@@ -3866,6 +3917,9 @@ namespace lfs::training {
 
             if (on_iteration_start_)
                 on_iteration_start_();
+            // Manager/Python callbacks publish parameter updates via setParams().
+            // Install them before forward or optimizer work observes params_.
+            apply_pending_params_at_safe_point();
 
             // Gate this step's in-place parameter writes behind in-flight model
             // reads (viewer packs, metric renders) — GPU-side waits, ~free once
@@ -5598,14 +5652,17 @@ namespace lfs::training {
             return std::unexpected("Trainer not initialized. Call initialize() before train()");
         }
 
-        is_running_ = false;
         training_complete_ = false;
         ready_to_start_ = false; // Reset the flag
         lfs::training::CommandCenter::instance().set_phase(lfs::training::TrainingPhase::SafeControl);
 
         ready_to_start_ = true; // Skip GUI wait for now
 
-        is_running_ = true; // Now we can start
+        {
+            std::lock_guard<std::mutex> lock(params_mutex_);
+            is_running_ = true; // Active setParams() calls queue from this point onward.
+        }
+        apply_pending_params_at_safe_point();
         LOG_INFO("Starting training loop");
         auto& cache_loader = lfs::io::CacheLoader::getInstance();
         std::optional<std::string> terminal_error;
@@ -6032,13 +6089,15 @@ namespace lfs::training {
         const int terminal_iteration = current_iteration_.load();
         const bool user_stopped = stop_requested_.load() || stop_token.stop_requested();
         const bool rotate_checkpoint = get_active_sparsify_steps() == 0;
+        apply_pending_params_at_safe_point();
+        const auto terminal_params = getParams();
         try {
             LOG_INFO("Saving {} model at iteration {}...",
                      terminal_error ? "recovery" : (user_stopped ? "stopped" : "final"),
                      terminal_iteration);
             if (auto save_result = save_ply(
-                    params_.dataset.output_path,
-                    params_.dataset.output_name,
+                    terminal_params.dataset.output_path,
+                    terminal_params.dataset.output_name,
                     terminal_iteration,
                     /*join=*/true,
                     /*save_checkpoint=*/rotate_checkpoint);
@@ -6051,7 +6110,10 @@ namespace lfs::training {
                                               terminal_iteration, e.what()));
         }
 
-        is_running_ = false;
+        {
+            std::lock_guard<std::mutex> lock(params_mutex_);
+            is_running_ = false;
+        }
         training_complete_ = true;
         clearActiveImageLoader();
         cache_loader.clear_cpu_cache();
@@ -6186,7 +6248,8 @@ namespace lfs::training {
 
         PPISPControllerPool* controller_to_save = controller_pool_for_save(iteration);
 
-        return lfs::training::save_checkpoint(params_.dataset.output_path, iteration, *strategy_,
+        const auto params = getParams();
+        return lfs::training::save_checkpoint(params.dataset.output_path, iteration, *strategy_,
                                               params_for_checkpoint_save(),
                                               bilateral_grid_.get(), ppisp_.get(), controller_to_save);
     }
@@ -6207,14 +6270,15 @@ namespace lfs::training {
     lfs::core::Tensor Trainer::applyPPISPForViewport(const lfs::core::Tensor& rgb, const int camera_uid,
                                                      const PPISPViewportOverrides& overrides,
                                                      const bool use_controller) const {
-        if (!ppisp_ || !params_.optimization.use_ppisp || rgb.shape().rank() != 3) {
+        const auto params = getParams();
+        if (!ppisp_ || !params.optimization.use_ppisp || rgb.shape().rank() != 3) {
             return rgb;
         }
 
         const bool is_chw = (rgb.shape()[0] == 3);
         const auto rgb_chw = is_chw ? rgb : rgb.permute({2, 0, 1}).contiguous();
         const bool is_training_camera = ppisp_->is_known_frame(camera_uid);
-        const bool has_controller = ppisp_controller_pool_ && params_.optimization.ppisp_use_controller;
+        const bool has_controller = ppisp_controller_pool_ && params.optimization.ppisp_use_controller;
         const int camera_idx = is_training_camera ? ppisp_->camera_index(ppisp_->camera_for_frame(camera_uid)) : 0;
 
         lfs::core::Tensor result;
@@ -6255,13 +6319,14 @@ namespace lfs::training {
         if (is_ppisp_frozen()) {
             return ppisp_controller_pool_.get();
         }
-        return iteration >= params_.optimization.resolved_ppisp_controller_activation_step(get_total_iterations())
+        const auto params = getParams();
+        return iteration >= params.optimization.resolved_ppisp_controller_activation_step(get_total_iterations())
                    ? ppisp_controller_pool_.get()
                    : nullptr;
     }
 
     lfs::core::param::TrainingParameters Trainer::params_for_checkpoint_save() const {
-        auto params = params_;
+        auto params = getParams();
         if (scene_) {
             const auto disabled = scene_->getTrainingDisabledCameraUids();
             params.disabled_camera_uids.assign(disabled.begin(), disabled.end());
@@ -6270,7 +6335,8 @@ namespace lfs::training {
     }
 
     void Trainer::save_final_ply_and_checkpoint(const int iteration) {
-        if (auto result = save_ply(params_.dataset.output_path, params_.dataset.output_name, iteration, /*join=*/true,
+        const auto params = getParams();
+        if (auto result = save_ply(params.dataset.output_path, params.dataset.output_name, iteration, /*join=*/true,
                                    /*save_checkpoint=*/false);
             !result) {
             LOG_WARN("Failed to save final PLY: {}", result.error());

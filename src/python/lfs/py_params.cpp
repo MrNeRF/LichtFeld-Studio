@@ -795,7 +795,7 @@ namespace lfs::python {
         return tm->getEditableDatasetParams();
     }
 
-    const core::param::DatasetConfig& PyDatasetConfig::params() const {
+    core::param::DatasetConfig PyDatasetConfig::params() const {
         const auto* tm = get_trainer_manager();
         if (!tm) {
             throw std::runtime_error("TrainerManager not available");

@@ -150,7 +150,7 @@ namespace lfs::training {
         // Get current training state
         int get_current_iteration() const { return current_iteration_.load(); }
         int get_total_iterations() const;
-        const std::filesystem::path& get_output_path() const { return params_.dataset.output_path; }
+        std::filesystem::path get_output_path() const { return getParams().dataset.output_path; }
         float get_current_loss() const { return current_loss_.load(); }
         bool fillCameraLossColors(const std::vector<std::shared_ptr<const lfs::core::Camera>>& cameras,
                                   std::vector<std::array<float, 3>>& colors) const;
@@ -191,7 +191,10 @@ namespace lfs::training {
         void setViewerReleaseFence(cudaExternalSemaphore_t semaphore);
         void publishViewerBorrow(uint64_t value);
 
-        const lfs::core::param::TrainingParameters& getParams() const { return params_; }
+        lfs::core::param::TrainingParameters getParams() const {
+            std::lock_guard<std::mutex> lock(params_mutex_);
+            return params_;
+        }
         void setParams(const lfs::core::param::TrainingParameters& params);
         void setSplatTensorAllocator(lfs::core::SplatTensorAllocator allocator) {
             splat_tensor_allocator_ = std::move(allocator);
@@ -218,10 +221,16 @@ namespace lfs::training {
                                                 bool use_controller = true) const;
 
         /// Check if PPISP is enabled, initialized, and ready for rendering
-        bool hasPPISP() const { return ppisp_ != nullptr && params_.optimization.use_ppisp && ppisp_->isFinalized(); }
+        bool hasPPISP() const {
+            const auto params = getParams();
+            return ppisp_ != nullptr && params.optimization.use_ppisp && ppisp_->isFinalized();
+        }
 
         /// Check if PPISP controller is enabled and ready for novel views
-        bool hasPPISPController() const { return ppisp_controller_pool_ != nullptr && params_.optimization.ppisp_use_controller; }
+        bool hasPPISPController() const {
+            const auto params = getParams();
+            return ppisp_controller_pool_ != nullptr && params.optimization.ppisp_use_controller;
+        }
 
         PPISPControllerPool* getPPISPControllerPool() const { return ppisp_controller_pool_.get(); }
         PPISP* getPPISP() const { return ppisp_.get(); }
@@ -360,13 +369,16 @@ namespace lfs::training {
             const PPISPFileMetadata& metadata,
             const std::filesystem::path& sidecar_path) const;
         [[nodiscard]] bool is_ppisp_frozen() const {
-            return params_.optimization.use_ppisp &&
-                   params_.optimization.ppisp_freeze_from_sidecar;
+            const auto params = getParams();
+            return params.optimization.use_ppisp &&
+                   params.optimization.ppisp_freeze_from_sidecar;
         }
         [[nodiscard]] bool should_apply_ppisp_sidecar_on_init() const {
-            return is_ppisp_frozen() &&
-                   !params_.resume_checkpoint.has_value() &&
-                   !params_.optimization.ppisp_sidecar_path.empty();
+            const auto params = getParams();
+            return params.optimization.use_ppisp &&
+                   params.optimization.ppisp_freeze_from_sidecar &&
+                   !params.resume_checkpoint.has_value() &&
+                   !params.optimization.ppisp_sidecar_path.empty();
         }
         [[nodiscard]] PPISPControllerPool* controller_pool_for_save(int iteration) const;
         [[nodiscard]] lfs::core::param::TrainingParameters params_for_checkpoint_save() const;
@@ -376,6 +388,10 @@ namespace lfs::training {
 
         // Handle control requests
         void handle_control_requests(int iter, std::stop_token stop_token = {});
+        void apply_pending_params_at_safe_point();
+        void apply_param_side_effects(
+            const lfs::core::param::TrainingParameters& params,
+            bool background_image_path_changed);
 
         std::expected<void, std::string> save_ply(const std::filesystem::path& save_path,
                                                   const std::string& filename,
@@ -416,7 +432,11 @@ namespace lfs::training {
         std::shared_ptr<CameraDataset> val_dataset_;
         std::shared_ptr<lfs::io::PipelinedImageLoader> active_image_loader_;
         std::unique_ptr<IStrategy> strategy_;
+        // Hot-loop reads use params_ without locking. Active updates therefore
+        // coalesce here and are installed only by the worker at safe boundaries.
+        mutable std::mutex params_mutex_;
         lfs::core::param::TrainingParameters params_;
+        std::optional<lfs::core::param::TrainingParameters> pending_params_;
         lfs::core::SplatTensorAllocator splat_tensor_allocator_;
         std::optional<std::tuple<std::vector<std::string>, std::vector<std::string>>> provided_splits_;
 

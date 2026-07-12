@@ -43,7 +43,7 @@ namespace lfs::python {
         [[nodiscard]] nb::dict get_all_properties() const;
 
         core::param::DatasetConfig& params();
-        [[nodiscard]] const core::param::DatasetConfig& params() const;
+        [[nodiscard]] core::param::DatasetConfig params() const;
 
         [[nodiscard]] bool has_params() const;
         [[nodiscard]] bool can_edit() const;
