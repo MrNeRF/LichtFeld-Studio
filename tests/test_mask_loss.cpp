@@ -283,7 +283,8 @@ TEST_F(MaskLossTest, MaskModeEnum) {
     EXPECT_EQ(static_cast<int>(MaskMode::None), 0);
     EXPECT_EQ(static_cast<int>(MaskMode::Segment), 1);
     EXPECT_EQ(static_cast<int>(MaskMode::Ignore), 2);
-    EXPECT_EQ(static_cast<int>(MaskMode::AlphaConsistent), 3);
+    EXPECT_EQ(static_cast<int>(MaskMode::SegmentAndIgnore), 3);
+    EXPECT_EQ(static_cast<int>(MaskMode::AlphaConsistent), 4);
 }
 
 // Test optimization parameters for masks
