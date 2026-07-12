@@ -1111,3 +1111,123 @@ CUDA breadcrumbs (most recent first):
   each exited 0 under `--version` and printed the expected one-line state/path notice.
   `clang-format --dry-run --Werror`, `git diff --check`, the legacy-helper grep, and the
   debug-macro syntax probes passed. No push or PR was created.
+
+## Final branch review
+
+### Scope and disposition
+
+This was a fresh review of the complete `vulkan-hardening` delta after its rebase onto
+`origin/master`, with the conflict notes in `.codex_tmp/claude-vulkan/rebase-log.md` and
+`rebase-attempt-1-lessons.md` treated as an audit map rather than proof. The current tree was
+checked at every named weave, the five incident-hardening commits were reviewed together with
+their pressure/diagnostics/stream seams, and the deferred lists were rescreened for small safe
+work. There are only three workspace files matching `docs/*_2026_07.md`, not four: the two
+tracked analyses and the pre-existing untracked `docs/stability_bughunt_2026_07.md`. The related
+tracked design documents were also screened. The user-owned untracked stability report was not
+modified.
+
+The review confirmed ten code/contract defects and three stale/dead-code cleanup issues, all
+fixed in nine source commits below. The highest-risk hypotheses that did not reproduce on the
+current tree are recorded explicitly so they are not reopened from the old conflict transcript.
+
+### Rebase weave verdicts
+
+- **GT comparison:** the settings weave is correct. `renderVulkanFrame` takes exactly one
+  `settings_` read while holding `settings_mutex_` and uses the immutable `frame_settings`
+  thereafter (`rendering_manager_vulkan.cpp:996-1000`). RGB cache consumption and publication
+  are both inside the `GTComparisonMode::RGB` branch (`1780-1831`); depth and normal do not use
+  it. The residual defect was the misleading max-dimension cache key: the cache owns an exact
+  resized tensor, so it now keys on exact `image_size` (`1792-1831`).
+- **Skipped `009e81130` -- refuted on the current tree.** The sidecar-aware completion helper
+  first detaches all tensor/event ownership from `pending_pairs_`, erases the pair, explicitly
+  unlocks `pending_pairs_mutex_`, and only then calls the potentially blocking
+  `push_output_ready` (`pipelined_image_loader.cpp:1247-1279`). Every image/mask/depth/normal
+  completion route reaches this helper. Master commit `cc33af57c6` already carried the
+  publish-outside-pairing-lock behavior while adding sidecars, so reapplying the skipped commit
+  would duplicate it. A stale statistics comment that still claimed publication was under the
+  pairing lock was corrected.
+- **Loader union/stats/teardown:** the `ReadyImage` union contains image, mask, depth, normal,
+  both sidecar events, stream, and error (`pipelined_image_loader.hpp:97-109`). No field was lost
+  in the weave. Success and failure construction was nevertheless positional/implicit enough to
+  hide future union drift; both constructors now designate every field
+  (`pipelined_image_loader.cpp:1182-1193`, `1264-1274`). Teardown ordering remains correct:
+  workers stop before queues/pairs are cleared and sidecar streams are destroyed.
+- **Trainer tuner supersede:** master's sidecar thread and prefetch increases occur before the
+  memory tuner and the tuner does not reduce `cold_process_threads`
+  (`trainer.cpp:5875-5897`). The missing part was normal-sidecar pricing: cached normal decode can
+  retain float HWC input beside float CHW output, now budgeted as 24 B/pixel
+  (`trainer.cpp:1300-1322`).
+- **Lanczos:** the merged templated grayscale calls pass the per-axis coefficient strides and
+  select `uint8_t` or `float` with the correct scale. The new CHW path had retained raw
+  allocation/error handling, unchecked layout arithmetic, a debug abort before a recoverable
+  channel check, and output stream metadata unrelated to its explicit execution stream. It now
+  validates dimensions/layout, uses checked RAII coefficient storage, checks every CUDA stage,
+  returns an error for non-RGB input, and binds RGB/grayscale/CHW outputs to `cuda_stream`
+  (`lanczos_resize.cu:317-374`, `416-504`, `506-588`).
+- **Fast rasterizer:** image/alpha/depth rebind and normal invalidation on stream/shape change
+  survived the weave. The normal allocation alone failed to treat stream mismatch as cache
+  invalidation and could remain tagged to a fallback stream; it now invalidates and binds to
+  `raster_stream` (`fast_rasterizer.cpp:319-349`).
+- **Sidecar release contracts:** master's depth/normal cache publication depended on debug-only
+  shape assertions. Invalid transforms could therefore abort debug builds but reach cache
+  encoding in release. Depth/mask and normal outputs now have always-on worker-boundary checks
+  before shape access and publication (`pipelined_image_loader.cpp:2091-2099`, `2234-2255`).
+
+### Incident and cross-round verdicts
+
+- The CUDA-unavailable latch is atomic, and the failure-report dedup table is protected by one
+  mutex, capped at 64 entries, and updates LRU/count state while locked
+  (`cuda_error.cpp:48-115`, `348-391`). The suspected dedup data race is **refuted**.
+- The latch originally stopped the reporting path but not all allocation paths. Cached pool
+  blocks, direct pool callers, pinned allocations, empty CUDA tensor sentinels, and pressure
+  retry queries could still touch CUDA after terminal loss. Allocation now fails closed before
+  the pool and after the coordinator race window; pinned allocation falls back to ordinary host
+  memory; pressure episodes/retries stop on the latch (`memory_pool.hpp:76-86`,
+  `pinned_memory_allocator.cpp:187-205`, `tensor_unified_ops.cpp:69-123`,
+  `memory_pressure.cpp:255-269`, `356-362`, `419-420`).
+- Pressure accounting used unchecked `size_t` addition for episode targets, preflight peaks,
+  reclaimable estimates, effective free memory, and hysteresis. All now use saturating addition,
+  including the environment MiB conversion (`memory_pressure.cpp:48-58`, `269`, `361`,
+  `378-405`, `432`). This closes the pressure-coordinator/diagnostics seam without weakening
+  reports or inventing retry capacity.
+- The runtime failure-injection hook has no compile-time enable residue, sticky-state sampling is
+  uniform through `sample_cuda_pre_call_state`, and the generated version header is an `ALL`
+  dependency of application/test consumers. These incident pieces were **confirmed correct**;
+  no fix was needed (`cuda_error.cpp:419-438`, `CMakeLists.txt:145-168`, `565-573`).
+- The assert-vocabulary seam exposed the Lanczos and sidecar debug-only checks above. The
+  branch-wide added-line audit has no newly introduced raw `assert`, no legacy CUDA check macro,
+  and no conflict marker in source or tests.
+
+### Cheap deferred work completed
+
+- Deleted `DeferredFreeQueue`: no production caller invoked `defer_free`, but empty trim/shutdown
+  consumers still performed redundant device synchronization. Removing the unused queue and its
+  three memory-pool hooks eliminates 206 lines and the false synchronization surface.
+- Removed the unused `RenderingEngine*` parameter from viewport depth sampling. Depth sampling
+  is entirely an artifact/metadata operation (`viewport_artifact_service.hpp:58-61`;
+  `rendering_manager_viewport.cpp:1118-1123`, `1268`), so keeping the dependency obscured the
+  service boundary without providing a fallback.
+
+The remaining documented deferrals are not cheap: checkpoint/save chunking, adaptive/exportable
+storage, training-finished ownership, loss-workspace unioning, pageable archival storage, slab
+retirement, lazy-IR lifetime, profiler snapshot redesign, overlay clipping, Mesh2Splat lighting,
+device-finite gates, cooperative decoder cancellation, detached model retirement, and replacing
+global CUDA drains all require ownership, compatibility, numerical, performance, or interactive
+contracts. No local workaround was substituted for them.
+
+### Source commits and per-commit gates
+
+- `d24b3b3cf` — `fix(training): reconcile normal sidecar hardening`
+- `55ba4c428` — `fix(rendering): tighten woven cache and lock contracts`
+- `87e14f1f9` — `fix(io): make ready image union explicit`
+- `a70117d94` — `fix(core): stop allocation after CUDA loss`
+- `9b5d79426` — `refactor(core): remove dormant deferred free queue`
+- `6dc6bb460` — `refactor(viewport): remove stale depth sampler dependency`
+- `f1253f4eb` — `fix(training): reject invalid Lanczos channels without abort`
+- `8f6569b27` — `fix(core): bind Lanczos outputs to execution stream`
+- `343590161` — `fix(io): enforce sidecar tensor contracts in release`
+
+After every source commit, `cmake --build build -j6` passed, the mandated cross-round filter
+passed 292/292, and `test_async_plugin_loading.py` passed 10/10 under the build's Python 3.12.
+The final headless/GUI evidence is reported with the final branch handoff after rebuilding the
+version-stamped binary from the documentation commit.
