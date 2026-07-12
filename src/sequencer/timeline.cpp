@@ -5,6 +5,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "interpolation.hpp"
+#include "io/atomic_output.hpp"
 #include "rendering/render_constants.hpp"
 #include <algorithm>
 #include <fstream>
@@ -217,12 +218,29 @@ namespace lfs::sequencer {
                 j["animation_clip"] = clip_->toJson();
             }
 
+            if (auto result = lfs::io::ensure_output_parent_directory(path_fs); !result) {
+                LOG_ERROR("Failed to prepare timeline output '{}': {}", path, result.error().format());
+                return false;
+            }
+            lfs::io::ScopedAtomicOutputFile atomic_output(
+                path_fs,
+                lfs::io::AtomicOutputTempName::AppendSuffix,
+                lfs::io::AtomicOutputDurability::Durable);
             std::ofstream file;
-            if (!lfs::core::open_file_for_write(path_fs, file)) {
+            if (!lfs::core::open_file_for_write(atomic_output.temp_path(), file)) {
                 LOG_ERROR("Failed to open timeline file: {}", path);
                 return false;
             }
             file << j.dump(2);
+            file.close();
+            if (!file) {
+                LOG_ERROR("Failed to write complete timeline file: {}", path);
+                return false;
+            }
+            if (auto result = atomic_output.commit(); !result) {
+                LOG_ERROR("Failed to publish timeline file '{}': {}", path, result.error().format());
+                return false;
+            }
             LOG_INFO("Saved {} keyframes to {}", realKeyframeCount(), path);
             return true;
         } catch (const std::exception& e) {

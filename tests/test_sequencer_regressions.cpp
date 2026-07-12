@@ -70,6 +70,12 @@ namespace {
         ASSERT_EQ(json["keyframes"].size(), 2u);
         EXPECT_FLOAT_EQ(json["keyframes"][0]["time"].get<float>(), 0.0f);
         EXPECT_FLOAT_EQ(json["keyframes"][1]["time"].get<float>(), 2.0f);
+
+        const std::string temp_prefix = file.path.filename().string() + ".";
+        for (const auto& entry : std::filesystem::directory_iterator(file.path.parent_path())) {
+            const std::string name = entry.path().filename().string();
+            EXPECT_FALSE(name.starts_with(temp_prefix) && name.ends_with(".tmp"));
+        }
     }
 
     TEST(SequencerTimelineRegressionTest, LoadReplacesStateAndClearsAbsentClip) {
