@@ -3,6 +3,7 @@
 
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/pinned_memory_allocator.hpp"
 #include "core/tensor_trace.hpp"
 #include "internal/cuda_stream_context.hpp"
@@ -29,6 +30,78 @@
 namespace lfs::core {
 
     namespace {
+
+        // Registers the allocator-owned immediate reclaim clients the first time
+        // a CUDA tensor allocation fails. The tensor CUDA pool trims device caches;
+        // the pinned allocator trims host caches. Both are safe from any thread.
+        void ensure_core_pressure_clients_registered() {
+            static std::once_flag once;
+            std::call_once(once, []() {
+                auto& coordinator = MemoryPressureCoordinator::instance();
+                coordinator.register_client(PressureClient{
+                    .name = "tensor-cuda-pool",
+                    .priority = 10,
+                    .domain = MemoryDomain::CudaDevice,
+                    .affinity = PressureAffinity::ImmediateThreadSafe,
+                    .estimate = nullptr,
+                    .shrink = [](const PressureRequest&) {
+                        CudaMemoryPool::instance().trim_cached_memory();
+                        return ReclaimResult{};
+                    },
+                });
+                coordinator.register_client(PressureClient{
+                    .name = "pinned-host-cache",
+                    .priority = 10,
+                    .domain = MemoryDomain::PinnedHost,
+                    .affinity = PressureAffinity::ImmediateThreadSafe,
+                    .estimate = [](const PressureRequest&) -> size_t {
+                        return PinnedMemoryAllocator::instance().get_stats().cached_bytes;
+                    },
+                    .shrink = [](const PressureRequest&) {
+                        auto& allocator = PinnedMemoryAllocator::instance();
+                        const size_t before = allocator.get_stats().cached_bytes;
+                        allocator.empty_cache();
+                        return ReclaimResult{.logical_bytes_released = before}; },
+                });
+            });
+        }
+
+        // Allocates CUDA tensor storage, routing an allocation shortage through
+        // the pressure coordinator (immediate cache reclaim + one retry) before
+        // surfacing a typed failure. Never returns null.
+        void* allocate_cuda_storage(size_t bytes, cudaStream_t stream) {
+            auto& coordinator = MemoryPressureCoordinator::instance();
+            const auto try_alloc = [&]() -> void* {
+                if (coordinator.probe_should_fail(MemoryDomain::CudaDevice, bytes)) {
+                    return nullptr;
+                }
+                return CudaMemoryPool::instance().allocate(bytes, stream);
+            };
+            void* ptr = try_alloc();
+            if (ptr) {
+                return ptr;
+            }
+            ensure_core_pressure_clients_registered();
+            int device = 0;
+            cudaGetDevice(&device);
+            const AllocationFailure failure{
+                .domain = MemoryDomain::CudaDevice,
+                .requested_bytes = bytes,
+                .alignment = 0,
+                .device = device,
+                .stream = reinterpret_cast<uintptr_t>(stream),
+                .label = "tensor.storage",
+                .operation = "tensor.allocate",
+                .native_error = cudaErrorMemoryAllocation,
+            };
+            if (coordinator.relieve_and_should_retry(failure)) {
+                ptr = try_alloc();
+            }
+            if (!ptr) {
+                throw MemoryAllocationError(failure);
+            }
+            return ptr;
+        }
 
         cudaStream_t resolve_cuda_execution_stream(const Tensor& tensor) {
             cudaStream_t execution_stream = getCurrentCUDAStream();
@@ -185,13 +258,7 @@ namespace lfs::core {
 
             if (result.device_ == Device::CUDA) {
                 cudaStream_t s = result.stream();
-                void* ptr = CudaMemoryPool::instance().allocate(bytes, s);
-                if (!ptr) {
-                    throw std::runtime_error(std::format(
-                        "CUDA out of memory: failed to allocate {} bytes ({:.2f} GB). "
-                        "Try reducing max_cap, sh_degree, or image resolution.",
-                        bytes, bytes / (1024.0 * 1024.0 * 1024.0)));
-                }
+                void* ptr = allocate_cuda_storage(bytes, s);
                 result.data_owner_ = std::shared_ptr<void>(ptr, [s](void* p) {
                     CudaMemoryPool::instance().deallocate(p, s);
                 });
@@ -446,13 +513,7 @@ namespace lfs::core {
 
             if (result.device_ == Device::CUDA) {
                 cudaStream_t s = result.stream();
-                void* ptr = CudaMemoryPool::instance().allocate(bytes, s);
-                if (!ptr) {
-                    throw std::runtime_error(std::format(
-                        "CUDA out of memory: failed to allocate {} bytes ({:.2f} GB). "
-                        "Try reducing max_cap, sh_degree, or image resolution.",
-                        bytes, bytes / (1024.0 * 1024.0 * 1024.0)));
-                }
+                void* ptr = allocate_cuda_storage(bytes, s);
                 result.data_owner_ = std::shared_ptr<void>(ptr, [s](void* p) {
                     CudaMemoryPool::instance().deallocate(p, s);
                 });
