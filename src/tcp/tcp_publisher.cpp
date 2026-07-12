@@ -49,6 +49,7 @@ namespace lfs::core::events::state {
 
     // CUDA version check
     ENABLE_TO_JSON(CudaVersionUnsupported, major, minor, min_major, min_minor);
+    ENABLE_TO_JSON(CudaUnavailable, message);
 } // namespace lfs::core::events::state
 #undef ENABLE_TO_JSON
 
@@ -204,6 +205,7 @@ namespace lfs::tcp {
             SUBSCRIBE_EVENT(MemoryUsage);
             SUBSCRIBE_EVENT(FrameRendered);
             SUBSCRIBE_EVENT(CudaVersionUnsupported);
+            SUBSCRIBE_EVENT(CudaUnavailable);
             SUBSCRIBE_EVENT(KeyframeListChanged);
             SUBSCRIBE_EVENT(ExportCompleted);
             SUBSCRIBE_EVENT(ExportFailed);

@@ -5,6 +5,7 @@
 #include "gui/gui_manager.hpp"
 #include "control/command_api.hpp"
 #include "core/camera.hpp"
+#include "core/cuda_error.hpp"
 #include "core/cuda_version.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
@@ -5415,6 +5416,13 @@ namespace lfs::vis::gui {
                 .min_minor = MIN_MINOR}
                 .emit();
             pending_cuda_warning_.reset();
+        }
+
+        if (!cuda_unavailable_notified_ && lfs::core::cuda_is_unavailable()) {
+            cuda_unavailable_notified_ = true;
+            lfs::core::events::state::CudaUnavailable{
+                .message = "CUDA unavailable — GPU features disabled. A driver restart may be required."}
+                .emit();
         }
 
         promptFileAssociation();

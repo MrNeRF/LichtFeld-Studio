@@ -67,6 +67,11 @@ namespace lfs::python {
                 MessageStyle::Warning);
         });
 
+        state::CudaUnavailable::when([](const auto& e) {
+            PyModalRegistry::instance().show_message(
+                "CUDA Unavailable", e.message, MessageStyle::Error);
+        });
+
         state::ConfigLoadFailed::when([](const auto& e) {
             PyModalRegistry::instance().show_message(
                 "Invalid Config File",

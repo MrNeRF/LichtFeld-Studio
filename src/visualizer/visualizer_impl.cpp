@@ -4,6 +4,7 @@
 
 #include "visualizer_impl.hpp"
 #include "core/animatable_property.hpp"
+#include "core/cuda_error.hpp"
 #include "core/data_loading_service.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/logger.hpp"
@@ -809,6 +810,9 @@ namespace lfs::vis {
         try {
             std::rethrow_exception(eptr);
         } catch (const lfs::core::MemoryAllocationError& e) {
+            if (lfs::core::cuda_is_unavailable()) {
+                return;
+            }
             // GPU memory shortage reached the frame loop. Reclaim render-safe
             // caches once and keep running; the next frame is the retry.
             auto& coordinator = lfs::core::MemoryPressureCoordinator::instance();

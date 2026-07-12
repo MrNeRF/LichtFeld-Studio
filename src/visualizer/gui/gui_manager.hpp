@@ -347,6 +347,7 @@ namespace lfs::vis {
 
             // Deferred CUDA version warning (emitted on first drawFrame)
             std::optional<lfs::core::CudaVersionInfo> pending_cuda_warning_;
+            bool cuda_unavailable_notified_ = false;
 
             // File association prompt (Windows only, one-shot)
             bool file_association_checked_ = false;

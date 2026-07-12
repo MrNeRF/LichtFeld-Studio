@@ -251,6 +251,7 @@ namespace lfs::core {
 
             // CUDA version check
             EVENT(CudaVersionUnsupported, int major; int minor; int min_major; int min_minor;);
+            EVENT(CudaUnavailable, std::string message;);
         } // namespace state
 
         // ============================================================================
