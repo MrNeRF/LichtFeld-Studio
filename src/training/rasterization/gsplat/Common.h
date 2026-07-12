@@ -86,19 +86,12 @@ namespace gsplat_lfs {
     }
 
     void set_cuda_allocation_failure_for_testing(bool fail);
-
-#ifdef LFS_ENABLE_CUDA_FAILURE_INJECTION
     bool cuda_allocation_failure_is_forced();
-#endif
 
     inline void maybe_inject_cuda_allocation_failure(const std::string_view label) {
-#ifdef LFS_ENABLE_CUDA_FAILURE_INJECTION
-        if (cuda_allocation_failure_is_forced()) {
+        if (cuda_allocation_failure_is_forced()) [[unlikely]] {
             LFS_ASSERT_MSG(false, std::format("CUDA allocation for '{}' failed (injected)", label));
         }
-#else
-        (void)label;
-#endif
     }
 
     inline void checked_cuda_malloc(void** ptr,

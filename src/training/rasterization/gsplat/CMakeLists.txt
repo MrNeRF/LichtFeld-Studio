@@ -92,11 +92,7 @@ target_compile_definitions(gsplat_backend_lfs PRIVATE
     GLM_FORCE_CUDA
 )
 
-if(BUILD_TESTS)
-    # Common.h contains inline allocation helpers, so every consumer must see
-    # the same test-hook definition to preserve the C++ one-definition rule.
-    target_compile_definitions(gsplat_backend_lfs PUBLIC LFS_ENABLE_CUDA_FAILURE_INJECTION=1)
-endif()
+# CUDA allocation failure injection is a runtime hook armed only by tests.
 
 # Print debug info
 message(STATUS "gsplat_backend_lfs configuration:")
