@@ -157,7 +157,6 @@ namespace lfs::vis {
         const int x,
         const int y,
         const glm::ivec2& fallback_viewport_size,
-        const lfs::rendering::RenderingEngine* const engine,
         const std::optional<SplitViewPanelId> panel) const {
         int viewport_width = rendered_size_.x;
         int viewport_height = rendered_size_.y;
@@ -263,7 +262,6 @@ namespace lfs::vis {
         if (splat_depth > 0.0f) {
             return splat_depth;
         }
-        (void)engine;
         return -1.0f;
     }
 

@@ -1119,7 +1119,6 @@ namespace lfs::vis {
             x,
             y,
             frame_lifecycle_service_.lastViewportSize(),
-            engine_.get(),
             panel);
         if (cached_depth > 0.0f) {
             return cached_depth;
@@ -1266,7 +1265,7 @@ namespace lfs::vis {
 
         ViewportArtifactService artifacts;
         artifacts.updateFromImageOutput({}, metadata, render_size, true);
-        return artifacts.sampleLinearDepthAt(x, y, render_size, engine_.get(), std::nullopt);
+        return artifacts.sampleLinearDepthAt(x, y, render_size, std::nullopt);
     }
 
 } // namespace lfs::vis

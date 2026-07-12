@@ -1002,7 +1002,7 @@ namespace lfs::vis {
         artifacts.updateFromFrameResources(resources, false);
 
         EXPECT_FLOAT_EQ(
-            artifacts.sampleLinearDepthAt(256, 0, {1024, 1}, nullptr, SplitViewPanelId::Right),
+            artifacts.sampleLinearDepthAt(256, 0, {1024, 1}, SplitViewPanelId::Right),
             42.0f);
     }
 
