@@ -1185,6 +1185,9 @@ namespace lfs::io {
             .mask = std::nullopt,
             .stream = nullptr,
             .depth = std::nullopt,
+            .normal = std::nullopt,
+            .depth_ready_event = nullptr,
+            .normal_ready_event = nullptr,
             .error = "Failed to load training image '" + lfs::core::path_to_utf8(path) +
                      "': " + std::move(message),
         };
@@ -1258,14 +1261,17 @@ namespace lfs::io {
             return;
         }
 
-        ReadyImage ready{sequence_id,
-                         std::move(*pair.image),
-                         mask_has_value ? std::optional(std::move(*pair.mask)) : std::nullopt,
-                         pair.stream,
-                         depth_has_value ? std::optional(std::move(*pair.depth)) : std::nullopt,
-                         normal_has_value ? std::optional(std::move(*pair.normal)) : std::nullopt,
-                         pair.depth_ready_event,
-                         pair.normal_ready_event};
+        ReadyImage ready{
+            .sequence_id = sequence_id,
+            .tensor = std::move(*pair.image),
+            .mask = mask_has_value ? std::optional(std::move(*pair.mask)) : std::nullopt,
+            .stream = pair.stream,
+            .depth = depth_has_value ? std::optional(std::move(*pair.depth)) : std::nullopt,
+            .normal = normal_has_value ? std::optional(std::move(*pair.normal)) : std::nullopt,
+            .depth_ready_event = pair.depth_ready_event,
+            .normal_ready_event = pair.normal_ready_event,
+            .error = {},
+        };
         pair.depth_ready_event = nullptr;
         pair.normal_ready_event = nullptr;
         erase_pending_pair_locked(it);
