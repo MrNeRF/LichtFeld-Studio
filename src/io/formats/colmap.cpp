@@ -7,8 +7,10 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "io/atomic_output.hpp"
 #include "io/filesystem_utils.hpp"
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <charconv>
@@ -34,6 +36,13 @@
 #include <unordered_set>
 #include <vector>
 
+#ifdef __linux__
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#endif
+
 namespace lfs::io {
 
     // Import types from lfs::core for convenience
@@ -50,6 +59,141 @@ namespace lfs::io {
         constexpr size_t IMAGE_METADATA_PROBE_LIMIT = 8192;
         constexpr size_t POINTS3D_PARALLEL_MIN_BYTES = 16ull * 1024ull * 1024ull;
         constexpr size_t POINTS3D_TARGET_CHUNK_BYTES = 8ull * 1024ull * 1024ull;
+
+        class ScopedStagingDirectory {
+        public:
+            explicit ScopedStagingDirectory(fs::path path)
+                : path_(std::move(path)) {}
+
+            ~ScopedStagingDirectory() {
+                std::error_code ec;
+                fs::remove_all(path_, ec);
+            }
+
+            ScopedStagingDirectory(const ScopedStagingDirectory&) = delete;
+            ScopedStagingDirectory& operator=(const ScopedStagingDirectory&) = delete;
+
+        private:
+            fs::path path_;
+        };
+
+        void clone_sparse_directory_for_staging(const fs::path& source, const fs::path& staging) {
+            std::error_code ec;
+            fs::create_directory(staging, ec);
+            if (ec) {
+                throw std::runtime_error(std::format(
+                    "Failed to create COLMAP staging directory '{}': {}",
+                    lfs::core::path_to_utf8(staging), ec.message()));
+            }
+
+            if (!fs::exists(source)) {
+                return;
+            }
+            if (!fs::is_directory(source)) {
+                throw std::runtime_error("COLMAP output path is not a directory: " +
+                                         lfs::core::path_to_utf8(source));
+            }
+
+            constexpr auto copy_options = fs::copy_options::recursive |
+                                          fs::copy_options::copy_symlinks |
+                                          fs::copy_options::overwrite_existing;
+            for (const auto& entry : fs::directory_iterator(source)) {
+                fs::copy(entry.path(), staging / entry.path().filename(), copy_options, ec);
+                if (ec) {
+                    throw std::runtime_error(std::format(
+                        "Failed to stage COLMAP entry '{}': {}",
+                        lfs::core::path_to_utf8(entry.path()), ec.message()));
+                }
+            }
+        }
+
+        void sync_colmap_generation(const fs::path& staging, const bool binary) {
+            const std::array<const char*, 3> names = binary
+                                                         ? std::array{"cameras.bin", "images.bin", "points3D.bin"}
+                                                         : std::array{"cameras.txt", "images.txt", "points3D.txt"};
+            for (const char* name : names) {
+                if (auto result = detail::sync_file_for_durable_replace(staging / name); !result) {
+                    throw std::runtime_error(result.error().format());
+                }
+            }
+            if (auto result = detail::sync_parent_directory(staging / names.front()); !result) {
+                throw std::runtime_error(result.error().format());
+            }
+        }
+
+        void publish_staged_colmap_generation(const fs::path& staging, const fs::path& output) {
+            const bool replacing = fs::exists(output);
+            std::error_code ec;
+
+            if (!replacing) {
+                fs::rename(staging, output, ec);
+                if (ec) {
+                    throw std::runtime_error(std::format(
+                        "Failed to publish COLMAP staging directory '{}': {}",
+                        lfs::core::path_to_utf8(staging), ec.message()));
+                }
+            } else {
+#ifdef __linux__
+                // renameat2(RENAME_EXCHANGE) is the only Linux namespace operation
+                // that swaps two non-empty directories atomically. After it returns,
+                // readers see the complete old or complete new reconstruction; the
+                // old generation is left at `staging` for post-commit cleanup.
+                if (::syscall(SYS_renameat2,
+                              AT_FDCWD,
+                              staging.c_str(),
+                              AT_FDCWD,
+                              output.c_str(),
+                              RENAME_EXCHANGE) != 0) {
+                    throw std::runtime_error(std::format(
+                        "Failed to atomically exchange COLMAP generation '{}': {}",
+                        lfs::core::path_to_utf8(output), std::strerror(errno)));
+                }
+#else
+                // Standard C++ and Win32 do not expose a non-empty directory
+                // exchange primitive. Keep rollback ownership explicit rather than
+                // truncating live files; a durable manifest indirection is required
+                // to make this fallback power-loss atomic on those platforms.
+                const auto backup = make_atomic_temp_output_path(output);
+                fs::rename(output, backup, ec);
+                if (ec) {
+                    throw std::runtime_error(std::format(
+                        "Failed to preserve previous COLMAP generation '{}': {}",
+                        lfs::core::path_to_utf8(output), ec.message()));
+                }
+                fs::rename(staging, output, ec);
+                if (ec) {
+                    std::error_code rollback_ec;
+                    fs::rename(backup, output, rollback_ec);
+                    throw std::runtime_error(std::format(
+                        "Failed to publish COLMAP generation '{}': {}{}",
+                        lfs::core::path_to_utf8(output), ec.message(),
+                        rollback_ec ? std::format("; rollback failed: {}", rollback_ec.message()) : ""));
+                }
+                fs::remove_all(backup, ec);
+                if (ec) {
+                    LOG_WARN("Failed to remove previous COLMAP generation '{}': {}",
+                             lfs::core::path_to_utf8(backup), ec.message());
+                }
+#endif
+            }
+
+            if (auto result = detail::sync_parent_directory(output); !result) {
+                throw std::runtime_error(result.error().format());
+            }
+
+#ifdef __linux__
+            if (replacing) {
+                fs::remove_all(staging, ec);
+                if (ec) {
+                    LOG_WARN("Failed to remove previous COLMAP generation '{}': {}",
+                             lfs::core::path_to_utf8(staging), ec.message());
+                } else if (auto result = detail::sync_parent_directory(output); !result) {
+                    LOG_WARN("Failed to durably record COLMAP generation cleanup: {}",
+                             result.error().format());
+                }
+            }
+#endif
+        }
 
         [[nodiscard]] bool should_poll_cancel(const size_t index) {
             return (index % CANCEL_POLL_INTERVAL) == 0;
@@ -2851,7 +2995,6 @@ namespace lfs::io {
         }
     }
 
-#ifndef NDEBUG
     void validate_colmap_round_trip(const fs::path& output_sparse_path,
                                     const bool binary,
                                     const ColmapSparseModelData& expected) {
@@ -2975,8 +3118,6 @@ namespace lfs::io {
             }
         }
     }
-#endif
-
     void finalize_colmap_output(std::ofstream& stream, const fs::path& path) {
         stream.flush();
         LFS_ASSERT_MSG(stream.good(),
@@ -3615,10 +3756,13 @@ namespace lfs::io {
             }
 
             std::error_code ec;
-            fs::create_directories(output_sparse_path, ec);
+            const auto output_parent = output_sparse_path.parent_path().empty()
+                                           ? fs::path{"."}
+                                           : output_sparse_path.parent_path();
+            fs::create_directories(output_parent, ec);
             if (ec) {
                 return make_error(ErrorCode::PERMISSION_DENIED,
-                                  std::format("Cannot create COLMAP output directory: {}", ec.message()),
+                                  std::format("Cannot create COLMAP output parent directory: {}", ec.message()),
                                   output_sparse_path);
             }
 
@@ -3626,19 +3770,23 @@ namespace lfs::io {
                                       (options.format == ColmapWriteFormat::Auto && model.source_binary);
             validate_colmap_model_for_write(model, write_binary);
 
+            const auto staging_path = make_atomic_temp_output_path(output_sparse_path);
+            ScopedStagingDirectory staging_cleanup(staging_path);
+            clone_sparse_directory_for_staging(output_sparse_path, staging_path);
+
             if (write_binary) {
-                write_cameras_binary_file(output_sparse_path / "cameras.bin", model.cameras);
-                write_images_binary_file(output_sparse_path / "images.bin", model.images);
-                write_points3D_binary_file(output_sparse_path / "points3D.bin", model.points3D);
+                write_cameras_binary_file(staging_path / "cameras.bin", model.cameras);
+                write_images_binary_file(staging_path / "images.bin", model.images);
+                write_points3D_binary_file(staging_path / "points3D.bin", model.points3D);
             } else {
-                write_cameras_text_file(output_sparse_path / "cameras.txt", model.cameras);
-                write_images_text_file(output_sparse_path / "images.txt", model.images);
-                write_points3D_text_file(output_sparse_path / "points3D.txt", model.points3D);
+                write_cameras_text_file(staging_path / "cameras.txt", model.cameras);
+                write_images_text_file(staging_path / "images.txt", model.images);
+                write_points3D_text_file(staging_path / "points3D.txt", model.points3D);
             }
-#ifndef NDEBUG
-            validate_colmap_round_trip(output_sparse_path, write_binary, model);
-#endif
-            remove_obsolete_sparse_files(output_sparse_path, write_binary);
+            remove_obsolete_sparse_files(staging_path, write_binary);
+            validate_colmap_round_trip(staging_path, write_binary, model);
+            sync_colmap_generation(staging_path, write_binary);
+            publish_staged_colmap_generation(staging_path, output_sparse_path);
 
             LOG_INFO("Wrote COLMAP {} reconstruction to '{}' ({} cameras, {} images, {} points)",
                      write_binary ? "binary" : "text",
