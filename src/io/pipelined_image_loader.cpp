@@ -2088,6 +2088,11 @@ namespace lfs::io {
                         }
                     }
 
+                    if (!aux_tensor.is_valid() || aux_tensor.ndim() != 2) {
+                        throw std::runtime_error(
+                            item.is_mask ? "Mask preprocessing produced an invalid tensor"
+                                         : "Depth preprocessing produced an invalid tensor");
+                    }
                     const size_t H = aux_tensor.shape()[0];
                     const size_t W = aux_tensor.shape()[1];
 
@@ -2142,7 +2147,6 @@ namespace lfs::io {
                     if (item.is_mask) {
                         try_complete_pair(item.sequence_id, std::nullopt, std::move(aux_tensor), nullptr);
                     } else {
-                        assert(aux_tensor.ndim() == 2);
                         write_sidecar_cache(*nvcodec, aux_tensor, item, SidecarKind::Depth, sidecar_stream);
                         auto ready_event = record_sidecar_ready_event(sidecar_stream);
                         try_complete_pair(
@@ -2227,6 +2231,9 @@ namespace lfs::io {
                         normal_tensor = lfs::core::lanczos_resize_float_chw(normal_tensor, target_h, target_w, 2, sidecar_stream);
                     }
 
+                    if (!normal_tensor.is_valid() || normal_tensor.ndim() != 3 || normal_tensor.shape()[0] != 3) {
+                        throw std::runtime_error("Normal preprocessing produced an invalid tensor");
+                    }
                     if (item.undistort) {
                         const auto scaled = lfs::core::scale_undistort_params(
                             *item.undistort,
@@ -2243,8 +2250,9 @@ namespace lfs::io {
                             normal_tensor, item.aux_target_height, item.aux_target_width, 2, sidecar_stream);
                     }
                     normal_tensor = normal_tensor.contiguous();
-                    assert(normal_tensor.ndim() == 3);
-                    assert(normal_tensor.shape()[0] == 3);
+                    if (!normal_tensor.is_valid() || normal_tensor.ndim() != 3 || normal_tensor.shape()[0] != 3) {
+                        throw std::runtime_error("Normal preprocessing produced an invalid tensor");
+                    }
                     write_sidecar_cache(*nvcodec, normal_tensor, item, SidecarKind::Normal, sidecar_stream);
                     auto ready_event = record_sidecar_ready_event(sidecar_stream);
 
