@@ -10,6 +10,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #include "core/cuda/sh_layout.cuh"
@@ -435,6 +436,24 @@ namespace lfs::python {
         selection.selectNode(7);
 
         EXPECT_EQ(lfs::vis::app_store().selection_generation.get(), selection.generation());
+    }
+
+    TEST_F(SceneValidityTest, SelectionNodeMaskQueriesReturnOwnedSnapshots) {
+        const auto first_id = dummy_scene_.addSplat("first", make_test_splat(1));
+        const auto second_id = dummy_scene_.addSplat("second", make_test_splat(1));
+        lfs::vis::SelectionState selection;
+        static_assert(std::is_same_v<decltype(selection.getNodeMask(dummy_scene_)), std::vector<bool>>);
+
+        selection.selectNode(first_id);
+        const auto first_snapshot = selection.getNodeMask(dummy_scene_);
+        ASSERT_EQ(first_snapshot.size(), 2u);
+        EXPECT_TRUE(first_snapshot[0]);
+        EXPECT_FALSE(first_snapshot[1]);
+
+        selection.selectNode(second_id);
+        const auto second_snapshot = selection.getNodeMask(dummy_scene_);
+        EXPECT_EQ(first_snapshot, (std::vector<bool>{true, false}));
+        EXPECT_EQ(second_snapshot, (std::vector<bool>{false, true}));
     }
 
     TEST_F(SceneValidityTest, ClearResetsDatasetMetadata) {

@@ -5,7 +5,7 @@
 #include "visualizer_impl.hpp"
 #include "core/animatable_property.hpp"
 #include "core/data_loading_service.hpp"
-#include "core/event_bus.hpp"
+#include "core/event_bridge/event_bridge.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/services.hpp"
@@ -194,7 +194,7 @@ namespace lfs::vis {
 
     VisualizerImpl::~VisualizerImpl() {
         // Clear event handlers before destroying components to prevent use-after-free
-        lfs::core::event::bus().clear_all();
+        lfs::event::EventBridge::instance().clear_all();
         services().clear();
 
         // Clear operator system
