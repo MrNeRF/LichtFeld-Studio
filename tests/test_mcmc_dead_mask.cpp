@@ -251,8 +251,8 @@ TEST_F(MCMCDeadMaskTest, Consistency) {
         auto dead_mask1 = (opacities <= min_opacity).logical_or(rot_mag_sq < rot_threshold);
         auto dead_mask2 = (opacities <= min_opacity).logical_or(rot_mag_sq < rot_threshold);
 
-        auto diff = (dead_mask1 - dead_mask2).abs().sum().item();
-        EXPECT_EQ(diff, 0) << "Dead mask should be deterministic (iteration " << i << ")";
+        auto mismatches = dead_mask1.logical_xor(dead_mask2).sum().item();
+        EXPECT_EQ(mismatches, 0) << "Dead mask should be deterministic (iteration " << i << ")";
     }
 }
 
