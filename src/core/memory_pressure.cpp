@@ -242,6 +242,9 @@ namespace lfs::core {
         if (impl_->is_disabled() || Impl::in_episode) {
             return 0; // kill-switch, or a shrink callback that re-entered reclaim
         }
+        if (cuda_is_unavailable()) {
+            return 0;
+        }
         Impl::in_episode = true;
         struct Guard {
             ~Guard() { Impl::in_episode = false; }
@@ -395,6 +398,9 @@ namespace lfs::core {
     }
 
     void MemoryPressureCoordinator::maybe_recover() {
+        if (cuda_is_unavailable()) {
+            return;
+        }
         if (!impl_->pressure_active.load()) {
             return;
         }

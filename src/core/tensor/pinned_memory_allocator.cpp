@@ -236,11 +236,12 @@ namespace lfs::core {
         void* ptr = nullptr;
         Backend backend = Backend::MallocFallback;
         if (use_pinned) {
+            const auto pre_call_state = sample_cuda_pre_call_state();
             const cudaError_t status = cudaHostAlloc(&ptr, allocation_size, cudaHostAllocDefault);
             if (status == cudaSuccess) {
                 backend = Backend::CudaHost;
             } else {
-                ensure_cuda_success(status, "cudaHostAlloc(pinned block)",
+                ensure_cuda_success(status, pre_call_state, "cudaHostAlloc(pinned block)",
                                     std::format("bytes={}, fallback=malloc", allocation_size),
                                     std::source_location::current(),
                                     CudaFailureDisposition::LogOnly);

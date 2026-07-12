@@ -56,9 +56,27 @@ namespace lfs::core {
 
     LFS_CORE_API bool cuda_sync_debug_enabled() noexcept;
     LFS_CORE_API void initialize_cuda_diagnostics() noexcept;
+
+    // Unavailable-family errors are terminal for CUDA use in this process.
+    LFS_CORE_API bool is_cuda_unavailable_error(cudaError_t error) noexcept;
+    LFS_CORE_API bool cuda_is_unavailable() noexcept;
+    LFS_CORE_API bool latch_cuda_unavailable(cudaError_t error) noexcept;
+
+    // Resets only the unavailable latch and failure-report deduplication state.
+    LFS_CORE_API void reset_cuda_diagnostics_for_testing() noexcept;
+    LFS_CORE_API void reset_failure_report_dedup_for_testing() noexcept;
+    LFS_CORE_API bool decide_failure_report_for_testing(
+        std::string_view family,
+        long long code,
+        std::string_view site,
+        uint64_t& out_count);
     LFS_CORE_API CudaCheckState prepare_cuda_check(
         const char* expression,
         const std::source_location& location,
+        cudaStream_t stream = nullptr) noexcept;
+
+    // This sample must be taken before the guarded call for valid attribution.
+    LFS_CORE_API CudaCheckState sample_cuda_pre_call_state(
         cudaStream_t stream = nullptr) noexcept;
     LFS_CORE_API CudaCheckCompletion complete_cuda_check(
         cudaError_t result,
@@ -74,6 +92,13 @@ namespace lfs::core {
                                         const char* expression,
                                         std::string_view message,
                                         const std::source_location& location);
+    LFS_CORE_API void ensure_cuda_success(
+        cudaError_t result,
+        const CudaCheckState& state,
+        std::string_view expression,
+        std::string_view message = {},
+        const std::source_location& location = std::source_location::current(),
+        CudaFailureDisposition disposition = CudaFailureDisposition::Throw);
     LFS_CORE_API void ensure_cuda_success(
         cudaError_t result,
         std::string_view expression,

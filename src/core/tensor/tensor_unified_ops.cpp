@@ -81,6 +81,20 @@ namespace lfs::core {
             if (ptr) {
                 return ptr;
             }
+            if (cuda_is_unavailable()) {
+                int device = 0;
+                cudaGetDevice(&device);
+                throw MemoryAllocationError(AllocationFailure{
+                    .domain = MemoryDomain::CudaDevice,
+                    .requested_bytes = bytes,
+                    .alignment = 0,
+                    .device = device,
+                    .stream = reinterpret_cast<uintptr_t>(stream),
+                    .label = "tensor.storage",
+                    .operation = "tensor.allocate",
+                    .native_error = cudaErrorInitializationError,
+                });
+            }
             ensure_core_pressure_clients_registered();
             int device = 0;
             cudaGetDevice(&device);

@@ -8,10 +8,12 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <format>
+#include <list>
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
@@ -43,6 +45,75 @@ namespace lfs::core {
         std::array<BreadcrumbSlot, CUDA_BREADCRUMB_CAPACITY> g_breadcrumbs;
         std::atomic<uint64_t> g_breadcrumb_sequence{0};
         std::once_flag g_sync_debug_log_once;
+        std::atomic<bool> g_cuda_unavailable{false};
+
+        struct DedupDecision {
+            bool emit_full;
+            uint64_t count;
+        };
+
+        struct FailureReportEntry {
+            std::string family;
+            long long code;
+            std::string site;
+            uint64_t count;
+            std::chrono::steady_clock::time_point last_full_time;
+            uint64_t count_at_last_full;
+        };
+
+        constexpr size_t FAILURE_REPORT_DEDUP_CAPACITY = 64;
+        std::mutex g_dedup_mutex;
+        std::list<FailureReportEntry> g_dedup_entries;
+
+        [[nodiscard]] DedupDecision decide_failure_report(
+            const std::string_view family,
+            const long long code,
+            const std::string_view site) {
+            const auto now = std::chrono::steady_clock::now();
+            std::lock_guard lock(g_dedup_mutex);
+            const auto entry = std::find_if(
+                g_dedup_entries.begin(), g_dedup_entries.end(),
+                [family, code, site](const FailureReportEntry& candidate) {
+                    return candidate.code == code && candidate.family == family && candidate.site == site;
+                });
+            if (entry == g_dedup_entries.end()) {
+                if (g_dedup_entries.size() == FAILURE_REPORT_DEDUP_CAPACITY) {
+                    g_dedup_entries.pop_back();
+                }
+                g_dedup_entries.push_front(FailureReportEntry{
+                    .family = std::string(family),
+                    .code = code,
+                    .site = std::string(site),
+                    .count = 1,
+                    .last_full_time = now,
+                    .count_at_last_full = 1,
+                });
+                return {.emit_full = true, .count = 1};
+            }
+
+            ++entry->count;
+            const bool emit_full =
+                now - entry->last_full_time >= std::chrono::seconds(30) ||
+                entry->count - entry->count_at_last_full + 1 >= 100;
+            if (emit_full) {
+                entry->last_full_time = now;
+                entry->count_at_last_full = entry->count;
+            }
+            const uint64_t count = entry->count;
+            g_dedup_entries.splice(g_dedup_entries.begin(), g_dedup_entries, entry);
+            return {.emit_full = emit_full, .count = count};
+        }
+
+        [[nodiscard]] std::string detection_site(const std::source_location& location) {
+            return std::format("{}:{}", location.file_name(), location.line());
+        }
+
+        void emit_failure_repeat_notice(const DedupDecision& decision,
+                                        const std::source_location& location) {
+            Logger::get().log_internal(
+                LogLevel::Error, location,
+                std::format("LFS failure repeated x{} (same as above)", decision.count));
+        }
 
         [[nodiscard]] uint64_t current_thread_id() noexcept {
             static thread_local const uint64_t id =
@@ -168,6 +239,41 @@ namespace lfs::core {
             return out.str();
         }
 
+        void emit_cuda_failure_report(const cudaError_t effective_error,
+                                      const CudaCheckState& state,
+                                      const char* expression,
+                                      const std::string_view message,
+                                      const std::source_location& location,
+                                      const cudaError_t post_sync_error,
+                                      const cudaError_t post_peek_error) noexcept {
+            try {
+                if (is_cuda_unavailable_error(effective_error)) {
+                    if (latch_cuda_unavailable(effective_error)) {
+                        Logger::get().log_internal(
+                            LogLevel::Error, location,
+                            format_cuda_failure_report(
+                                effective_error, state, expression, message, location,
+                                post_sync_error, post_peek_error));
+                    }
+                    return;
+                }
+
+                const DedupDecision decision = decide_failure_report(
+                    "CUDA runtime error", static_cast<long long>(effective_error),
+                    detection_site(location));
+                if (decision.emit_full) {
+                    Logger::get().log_internal(
+                        LogLevel::Error, location,
+                        format_cuda_failure_report(
+                            effective_error, state, expression, message, location,
+                            post_sync_error, post_peek_error));
+                } else {
+                    emit_failure_repeat_notice(decision, location);
+                }
+            } catch (...) {
+            }
+        }
+
     } // namespace
 
     void record_cuda_breadcrumb(const char* tag,
@@ -239,6 +345,61 @@ namespace lfs::core {
         }
     }
 
+    bool is_cuda_unavailable_error(const cudaError_t error) noexcept {
+        switch (error) {
+        case cudaErrorInitializationError:
+        case cudaErrorInsufficientDriver:
+        case cudaErrorNoDevice:
+        case cudaErrorDevicesUnavailable:
+        case cudaErrorSystemNotReady:
+        case cudaErrorSystemDriverMismatch:
+        case cudaErrorCompatNotSupportedOnDevice:
+        case cudaErrorStartupFailure:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    bool cuda_is_unavailable() noexcept {
+        return g_cuda_unavailable.load(std::memory_order_relaxed);
+    }
+
+    bool latch_cuda_unavailable(const cudaError_t error) noexcept {
+        bool expected = false;
+        if (!g_cuda_unavailable.compare_exchange_strong(expected, true)) {
+            return false;
+        }
+        try {
+            Logger::get().log_internal(
+                LogLevel::Error, std::source_location::current(),
+                std::format(
+                    "CUDA unavailable — GPU features disabled. A driver restart may be required. ({})",
+                    cuda_error_text(error)));
+        } catch (...) {
+        }
+        return true;
+    }
+
+    void reset_cuda_diagnostics_for_testing() noexcept {
+        g_cuda_unavailable.store(false, std::memory_order_relaxed);
+        reset_failure_report_dedup_for_testing();
+    }
+
+    void reset_failure_report_dedup_for_testing() noexcept {
+        std::lock_guard lock(g_dedup_mutex);
+        g_dedup_entries.clear();
+    }
+
+    bool decide_failure_report_for_testing(const std::string_view family,
+                                           const long long code,
+                                           const std::string_view site,
+                                           uint64_t& out_count) {
+        const DedupDecision decision = decide_failure_report(family, code, site);
+        out_count = decision.count;
+        return decision.emit_full;
+    }
+
     CudaCheckState prepare_cuda_check(const char*,
                                       const std::source_location&,
                                       const cudaStream_t stream) noexcept {
@@ -253,6 +414,10 @@ namespace lfs::core {
         // sticky predecessor from an error produced by the expression itself.
         state.pre_call_error = cudaPeekAtLastError();
         return state;
+    }
+
+    CudaCheckState sample_cuda_pre_call_state(const cudaStream_t stream) noexcept {
+        return prepare_cuda_check("", std::source_location::current(), stream);
     }
 
     CudaCheckCompletion complete_cuda_check(
@@ -281,10 +446,9 @@ namespace lfs::core {
         const char* expression,
         const std::string_view message,
         const std::source_location& location) {
-        const std::string report = format_cuda_failure_report(
+        emit_cuda_failure_report(
             completion.effective_error, state, expression, message, location,
             completion.post_sync_error, completion.post_peek_error);
-        Logger::get().log_internal(LogLevel::Error, location, report);
         throw std::runtime_error(std::format(
             "CUDA call failed: {} at {}:{}", expression, location.file_name(), location.line()));
     }
@@ -302,6 +466,7 @@ namespace lfs::core {
     }
 
     void ensure_cuda_success(const cudaError_t result,
+                             const CudaCheckState& state,
                              const std::string_view expression,
                              const std::string_view message,
                              const std::source_location& location,
@@ -311,19 +476,27 @@ namespace lfs::core {
         }
         if (disposition == CudaFailureDisposition::Throw) {
             const std::string expression_copy(expression);
-            finish_cuda_check(result, CudaCheckState{}, expression_copy.c_str(), message, location);
+            finish_cuda_check(result, state, expression_copy.c_str(), message, location);
             return;
         }
         try {
             const std::string expression_copy(expression);
-            const std::string report = format_cuda_failure_report(
-                result, CudaCheckState{}, expression_copy.c_str(), message, location,
+            emit_cuda_failure_report(
+                result, state, expression_copy.c_str(), message, location,
                 cudaSuccess, cudaSuccess);
-            Logger::get().log_internal(LogLevel::Error, location, report);
         } catch (...) {
             // Recovery, teardown, and allocator fallback paths use LogOnly and
             // must never acquire a new failure mode from diagnostics themselves.
         }
+    }
+
+    void ensure_cuda_success(const cudaError_t result,
+                             const std::string_view expression,
+                             const std::string_view message,
+                             const std::source_location& location,
+                             const CudaFailureDisposition disposition) {
+        ensure_cuda_success(
+            result, CudaCheckState{}, expression, message, location, disposition);
     }
 
     void validate_cuda_device_pointer(const void* pointer,
@@ -432,9 +605,15 @@ namespace lfs::core {
 
     void report_tensor_exception(const std::string_view message,
                                  const std::source_location& location) {
-        const std::string report = format_contract_failure_report(
-            "Tensor exception", "throw TensorError", message, location, capture_host_stacktrace(1));
-        Logger::get().log_internal(LogLevel::Error, location, report);
+        const DedupDecision decision = decide_failure_report(
+            "Tensor exception", 0, detection_site(location));
+        if (decision.emit_full) {
+            const std::string report = format_contract_failure_report(
+                "Tensor exception", "throw TensorError", message, location, capture_host_stacktrace(1));
+            Logger::get().log_internal(LogLevel::Error, location, report);
+        } else {
+            emit_failure_repeat_notice(decision, location);
+        }
     }
 
     namespace detail {
@@ -444,9 +623,15 @@ namespace lfs::core {
             const std::string_view expression,
             const std::string_view message,
             const std::source_location location) {
-            const std::string report = format_contract_failure_report(
-                contract, expression, message, location, capture_host_stacktrace(1));
-            Logger::get().log_internal(LogLevel::Error, location, report);
+            const DedupDecision decision = decide_failure_report(
+                contract, 0, detection_site(location));
+            if (decision.emit_full) {
+                const std::string report = format_contract_failure_report(
+                    contract, expression, message, location, capture_host_stacktrace(1));
+                Logger::get().log_internal(LogLevel::Error, location, report);
+            } else {
+                emit_failure_repeat_notice(decision, location);
+            }
 
             std::string error = std::format("{} failed: {}", contract, expression);
             if (!message.empty()) {

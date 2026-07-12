@@ -114,6 +114,7 @@ namespace lfs::core {
                 const size_t bucket_size = SizeBucketedPool::get_bucket_size(bytes);
 
 #if CUDART_VERSION >= 12080
+                const auto pre_call_state = sample_cuda_pre_call_state(stream);
                 cudaError_t err = cudaMallocAsync(&ptr, bucket_size, stream);
                 if (err == cudaSuccess) {
                     stats_.bucket_allocs.fetch_add(1, std::memory_order_relaxed);
@@ -132,7 +133,7 @@ namespace lfs::core {
                     log_stats_periodically();
                     return ptr;
                 }
-                ensure_cuda_success(err, "cudaMallocAsync(bucket)",
+                ensure_cuda_success(err, pre_call_state, "cudaMallocAsync(bucket)",
                                     std::format("bucket_bytes={}", bucket_size),
                                     std::source_location::current(),
                                     CudaFailureDisposition::LogOnly);
@@ -141,6 +142,7 @@ namespace lfs::core {
 
 #if CUDART_VERSION >= 12080
             {
+                const auto pre_call_state = sample_cuda_pre_call_state(stream);
                 cudaError_t err = cudaMallocAsync(&ptr, bytes, stream);
                 if (err == cudaSuccess) {
                     stats_.async_allocs.fetch_add(1, std::memory_order_relaxed);
@@ -151,7 +153,7 @@ namespace lfs::core {
                     }
                     return ptr;
                 }
-                ensure_cuda_success(err, "cudaMallocAsync(direct async tier)",
+                ensure_cuda_success(err, pre_call_state, "cudaMallocAsync(direct async tier)",
                                     std::format("requested_bytes={}", bytes),
                                     std::source_location::current(),
                                     CudaFailureDisposition::LogOnly);
@@ -278,10 +280,11 @@ namespace lfs::core {
 
         void configure() {
 #if CUDART_VERSION >= 12080
+            const auto pre_call_state = sample_cuda_pre_call_state();
             int device;
             cudaError_t err = cudaGetDevice(&device);
             if (err != cudaSuccess) {
-                ensure_cuda_success(err, "cudaGetDevice(memory pool configuration)", {},
+                ensure_cuda_success(err, pre_call_state, "cudaGetDevice(memory pool configuration)", {},
                                     std::source_location::current(),
                                     CudaFailureDisposition::LogOnly);
                 return;
@@ -290,7 +293,8 @@ namespace lfs::core {
             cudaMemPool_t pool;
             err = cudaDeviceGetDefaultMemPool(&pool, device);
             if (err != cudaSuccess) {
-                ensure_cuda_success(err, "cudaDeviceGetDefaultMemPool(memory pool configuration)",
+                ensure_cuda_success(err, pre_call_state,
+                                    "cudaDeviceGetDefaultMemPool(memory pool configuration)",
                                     std::format("device={}", device),
                                     std::source_location::current(),
                                     CudaFailureDisposition::LogOnly);
@@ -305,7 +309,7 @@ namespace lfs::core {
             const cudaError_t attribute_status =
                 cudaMemPoolSetAttribute(pool, cudaMemPoolAttrReleaseThreshold, &threshold);
             if (attribute_status != cudaSuccess) {
-                ensure_cuda_success(attribute_status,
+                ensure_cuda_success(attribute_status, pre_call_state,
                                     "cudaMemPoolSetAttribute(release threshold)",
                                     std::format("device={}, threshold_bytes={}", device, threshold),
                                     std::source_location::current(),
@@ -447,9 +451,10 @@ namespace lfs::core {
         void* allocate_direct(size_t bytes) {
             void* ptr = nullptr;
 
+            const auto pre_call_state = sample_cuda_pre_call_state();
             cudaError_t err = cudaMalloc(&ptr, bytes);
             if (err != cudaSuccess) {
-                ensure_cuda_success(err, "cudaMalloc(direct tier)",
+                ensure_cuda_success(err, pre_call_state, "cudaMalloc(direct tier)",
                                     std::format("requested_bytes={}, recovery=trim-and-retry", bytes),
                                     std::source_location::current(),
                                     CudaFailureDisposition::LogOnly);
@@ -467,7 +472,7 @@ namespace lfs::core {
 #endif
                 err = cudaMalloc(&ptr, bytes);
                 if (err != cudaSuccess) {
-                    ensure_cuda_success(err, "cudaMalloc(direct tier retry)",
+                    ensure_cuda_success(err, pre_call_state, "cudaMalloc(direct tier retry)",
                                         std::format("requested_bytes={}", bytes),
                                         std::source_location::current(),
                                         CudaFailureDisposition::LogOnly);
