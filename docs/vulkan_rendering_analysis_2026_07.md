@@ -996,3 +996,118 @@ before/after number.
   skip. `clang-format --dry-run --Werror` and `git diff --check` passed.
 - No temporary PLY copies were created. The test plugin environment was deleted after each
   cold run and the original 11 GiB environment and `.deps_installed` stamp were restored.
+
+## CUDA error diagnostics
+
+Marker: `CUDA-ERROR-DIAGNOSTICS-2026-07-12`.
+
+### Facility and failure attribution
+
+Commits `8b9534be2` (`feat(core): add unified CUDA failure diagnostics`) and
+`ee71ea396` (`refactor(core): complete CUDA failure diagnostics`) replace the fragmented
+CUDA/tensor failure surface with `core/cuda_error.hpp` and `core/cuda_error.cpp`:
+
+- `LFS_CUDA_CHECK` and `LFS_CUDA_CHECK_MSG` accept only `cudaError_t`, record a lock-free
+  breadcrumb, sample the non-clearing CUDA error state before the call, and emit one
+  consolidated report before preserving the call site's established throw or recovery flow;
+- every report includes the error/contract, expression, detection site, attribution, thread,
+  current device and device count, guarded VRAM snapshot, host stack, and the newest entries
+  from the fixed 64-slot breadcrumb ring;
+- `LFS_CUDA_SYNC_DEBUG=1` synchronizes and peeks before and after each central check, with one
+  startup notice. `LFS_NO_CRASH_HANDLER=1` leaves crash handling to a debugger or sanitizer;
+- the tensor assertion path uses the same reporter, so the public caller remains visible for
+  shape, dtype, device, and state violations rather than only naming the internal throw site;
+- startup installs `std::terminate` reporting plus a pre-opened crash log. POSIX fatal signals
+  use the pre-opened descriptor, `backtrace_symbols_fd`, restored default disposition, and
+  re-raise; Windows has a guarded `SetUnhandledExceptionFilter` address trace;
+- `docs/docs/development/assertions.md` is the single developer reference for macro vocabulary,
+  cost/release behavior, annotated output, environment flags, and the new-check recipe.
+
+The legacy-source inventory at `8b9534be2` contained 221 runtime-status invocations and 53
+pointer-validation macro invocations. All 274 invocations now use the central facility:
+
+| Module | Runtime status | Pointer validation | Total |
+|---|---:|---:|---:|
+| Core tensor | 138 | 0 | 138 |
+| FastGS | 24 | 48 | 72 |
+| Edge compute | 14 | 5 | 19 |
+| gsplat | 16 | 0 | 16 |
+| Training scratch | 3 | 0 | 3 |
+| MCMC kernels | 2 | 0 | 2 |
+| MRNF kernels | 6 | 0 | 6 |
+| Adam optimizer | 16 | 0 | 16 |
+| Viewport artifact readback | 2 | 0 | 2 |
+| **Total** | **221** | **53** | **274** |
+
+The allocator migration additionally routes 46 memory-arena, 20 `CudaMemoryPool`, 9 pinned
+allocator, 7 size-bucketed-pool, 3 slab-allocator, and 9 event/stream-context status sites
+through the central reporter. There are 22 explicit high-value breadcrumbs across arena
+frame/grow/allocation, pool/slab/bucket/pinned allocation and free, tensor copy/convert/clone/
+reserve/mask/index/gather/reduce/cat boundaries; every check macro also records its expression.
+Both duplicated rasterizer `cuda_utils.h` files and every local `CHECK_CUDA`, `CUDA_CHECK`,
+pointer-check macro, and status helper were deleted. A final source grep found none remaining.
+
+### Forced-report evidence
+
+The forced invalid-device test produced this CUDA-family structure (breadcrumb list shortened):
+
+```text
+========== LFS FAILURE REPORT ==========
+Family: CUDA runtime error
+Error: cudaErrorInvalidDevice (101): invalid device ordinal
+Failed expression: cudaSetDevice(-1)
+Detection site: .../tests/test_cuda_error.cpp:123 (...ForcedCudaErrorReportHasExpectedSections...)
+Attribution: no pre-existing CUDA error was visible before this call.
+Thread: <thread-id>
+CUDA device: 0 / device count: 1
+VRAM: free=<free> MiB, used=<used> MiB, total=<total> MiB
+Host stack trace:
+  #0 ...ForcedCudaErrorReportHasExpectedSections...::TestBody()
+CUDA breadcrumbs (most recent first):
+  #... cudaSetDevice(-1) at .../tests/test_cuda_error.cpp:123 thread=... stream=0x0
+Hint: CUDA reports async errors at the next sync point. Set LFS_CUDA_SYNC_DEBUG=1 ...
+========================================
+```
+
+The deliberate public `masked_select` dtype mismatch proved end-to-end caller attribution:
+
+```text
+========== LFS FAILURE REPORT ==========
+Family: tensor contract violation
+Contract: LFS boundary contract
+Failed expression: is_bool_like(mask.dtype())
+Detection site: .../tensor_masking_ops.cpp:161 (Tensor::masked_select(...))
+Context: masked_select mask must be Bool or UInt8 (mask_dtype=float32(0))
+Host stack trace:
+  #0 Tensor::masked_select(...)
+  #1 ...ContractReportNamesTensorCallerInStack...::TestBody()
+CUDA breadcrumbs (most recent first):
+  #... tensor.masked_select at .../tensor_masking_ops.cpp:156 thread=... stream=0x0
+========================================
+```
+
+### Gates
+
+- `cmake --build build -j6` passed in the committed source state; the final incremental run
+  completed all five resource-staging steps with no compilation pending.
+- The tensor/basic/masking/move/reduction plus diagnostic filter passed **197/197**. This
+  includes 64-entry wrap ordering, an 8-thread/4,096-write ring smoke, shared report sections,
+  lazy failure-message formatting, a forced CUDA error, and the tensor caller-stack contract.
+- `*AssertHardening*` passed **19/19**. The focused Vulkan baseline remained **52/55**; only
+  `ResizeActiveDefersFullRefreshUntilDebounceCompletes`,
+  `PassiveWindowResizeDefersFullRefreshUntilDebounceCompletes`, and
+  `ExplicitRefreshDeferralCompletesAfterStableFrames` failed with their established signatures.
+- The exact bicycle MCMC smoke completed 1,000 iterations in **4.306 s** at **232.3 iter/s**,
+  saved iteration 1,000 with **69,267 splats**, reported 1,000 arena frames, exited 0, and emitted
+  no assertion, validation, or error noise.
+- `./build/LichtFeld-Studio --view splat_64400.ply` loaded 3,000,000 Gaussians in a **0.400 s**
+  batch. MCP confirmed the node/count and completed the discovered Select action in **0.8 ms**.
+  The direct in-app shutdown path exited 0 with no error/assertion/validation lines.
+- `./build/LichtFeld-Studio -v /media/paja/T7/lcc_images/results/sharpen_ab/plys/` loaded all
+  three files in **0.867 s** and MCP confirmed three visible nodes and **9,000,000** aggregate
+  Gaussians. Select/restore completed in **0.7/11.1 ms**, comfortably inside the two-second
+  interaction gate; shutdown exited 0 with no error/assertion/validation lines.
+- Crash-handler default, `LFS_NO_CRASH_HANDLER=1`, and `LFS_CUDA_SYNC_DEBUG=1` startup paths
+  each exited 0 under `--version` and printed the expected one-line state/path notice.
+  `clang-format --dry-run --Werror`, `git diff --check`, the legacy-helper grep, and the
+  debug-macro syntax probes passed. No push or PR was created.
