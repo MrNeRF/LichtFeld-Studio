@@ -7,6 +7,7 @@
 #include "core/data_loading_service.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/logger.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/path_utils.hpp"
 #include "core/services.hpp"
 #include "gui/panel_registry.hpp"
@@ -798,6 +799,47 @@ namespace lfs::vis {
         main_loop_->setRenderCallback([this]() { render(); });
         main_loop_->setShutdownCallback([this]() { shutdown(); });
         main_loop_->setShouldCloseCallback([this]() { return allowclose(); });
+        main_loop_->setFrameErrorCallback([this](std::exception_ptr eptr) {
+            handleFrameException(std::move(eptr));
+        });
+        main_loop_->setFrameCompletedCallback([this]() { onFrameCompleted(); });
+    }
+
+    void VisualizerImpl::handleFrameException(std::exception_ptr eptr) noexcept {
+        try {
+            std::rethrow_exception(eptr);
+        } catch (const lfs::core::MemoryAllocationError& e) {
+            // GPU memory shortage reached the frame loop. Reclaim render-safe
+            // caches once and keep running; the next frame is the retry.
+            auto& coordinator = lfs::core::MemoryPressureCoordinator::instance();
+            const size_t freed = coordinator.run_episode(
+                e.failure(), lfs::core::PressureContext::RenderThread);
+            ++consecutive_oom_frames_;
+            LOG_ERROR("GPU memory pressure during frame (attempt {}): {}. Freed {:.1f} MiB; "
+                      "reducing preview quality and retrying.",
+                      consecutive_oom_frames_, e.what(),
+                      static_cast<double>(freed) / (1024.0 * 1024.0));
+        } catch (const std::exception& e) {
+            const auto now = std::chrono::steady_clock::now();
+            if (last_frame_error_log_.time_since_epoch().count() == 0 ||
+                now - last_frame_error_log_ >= std::chrono::seconds(5)) {
+                LOG_ERROR("Frame failed: {}{}", e.what(),
+                          suppressed_frame_errors_ > 0
+                              ? std::format(" ({} similar errors suppressed)", suppressed_frame_errors_)
+                              : std::string{});
+                last_frame_error_log_ = now;
+                suppressed_frame_errors_ = 0;
+            } else {
+                ++suppressed_frame_errors_;
+            }
+        } catch (...) {
+            LOG_ERROR("Frame failed with an unknown error");
+        }
+    }
+
+    void VisualizerImpl::onFrameCompleted() noexcept {
+        consecutive_oom_frames_ = 0;
+        lfs::core::MemoryPressureCoordinator::instance().maybe_recover();
     }
 
     void VisualizerImpl::beginShutdown([[maybe_unused]] const std::string_view reason) {

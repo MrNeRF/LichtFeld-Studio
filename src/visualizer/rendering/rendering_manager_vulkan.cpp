@@ -5,6 +5,7 @@
 #include "core/camera.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/logger.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "model_renderability.hpp"
@@ -1128,6 +1129,12 @@ namespace lfs::vis {
         float scale = std::clamp(frame_settings.render_scale, 0.25f, 1.0f);
         if (resize_result.render_interactive_frame) {
             scale = std::min(scale, kInteractiveResizeRenderScale);
+        }
+        // Under an active VRAM pressure lease, halve the viewer render resolution
+        // to shrink per-frame output allocation. Restored automatically once the
+        // coordinator observes sustained headroom. Does not affect training.
+        if (lfs::core::MemoryPressureCoordinator::instance().pressure_active()) {
+            scale = std::clamp(scale * 0.5f, 0.25f, 1.0f);
         }
         glm::ivec2 render_size(
             std::max(static_cast<int>(std::lround(static_cast<float>(current_size.x) * scale)), 1),
