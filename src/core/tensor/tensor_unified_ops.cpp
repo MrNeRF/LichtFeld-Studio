@@ -66,10 +66,29 @@ namespace lfs::core {
             });
         }
 
+        [[noreturn]] void throw_cuda_unavailable_allocation(
+            const size_t bytes,
+            const cudaStream_t stream) {
+            throw MemoryAllocationError(AllocationFailure{
+                .domain = MemoryDomain::CudaDevice,
+                .requested_bytes = bytes,
+                .alignment = 0,
+                .device = -1,
+                .stream = reinterpret_cast<uintptr_t>(stream),
+                .label = "tensor.storage",
+                .operation = "tensor.allocate",
+                .native_error = cudaErrorInitializationError,
+            });
+        }
+
         // Allocates CUDA tensor storage, routing an allocation shortage through
         // the pressure coordinator (immediate cache reclaim + one retry) before
         // surfacing a typed failure. Never returns null.
         void* allocate_cuda_storage(size_t bytes, cudaStream_t stream) {
+            if (cuda_is_unavailable()) [[unlikely]] {
+                throw_cuda_unavailable_allocation(bytes, stream);
+            }
+
             auto& coordinator = MemoryPressureCoordinator::instance();
             const auto try_alloc = [&]() -> void* {
                 if (coordinator.probe_should_fail(MemoryDomain::CudaDevice, bytes)) {
@@ -82,18 +101,7 @@ namespace lfs::core {
                 return ptr;
             }
             if (cuda_is_unavailable()) {
-                int device = 0;
-                cudaGetDevice(&device);
-                throw MemoryAllocationError(AllocationFailure{
-                    .domain = MemoryDomain::CudaDevice,
-                    .requested_bytes = bytes,
-                    .alignment = 0,
-                    .device = device,
-                    .stream = reinterpret_cast<uintptr_t>(stream),
-                    .label = "tensor.storage",
-                    .operation = "tensor.allocate",
-                    .native_error = cudaErrorInitializationError,
-                });
+                throw_cuda_unavailable_allocation(bytes, stream);
             }
             ensure_core_pressure_clients_registered();
             int device = 0;
@@ -227,7 +235,7 @@ namespace lfs::core {
             if (bytes == 0) {
                 if (result.device_ == Device::CUDA) {
                     cudaStream_t s = result.stream();
-                    void* dummy = CudaMemoryPool::instance().allocate(1, s);
+                    void* dummy = allocate_cuda_storage(1, s);
                     LFS_ASSERT_MSG(dummy != nullptr,
                                    std::format("empty CUDA tensor requires one-byte sentinel storage "
                                                "(allocated_pointer={}, requested_bytes=1, shape={}, "

@@ -82,6 +82,9 @@ namespace lfs::core {
                 LOG_ERROR("Attempted to allocate CUDA memory after shutdown!");
                 return nullptr;
             }
+            if (cuda_is_unavailable()) [[unlikely]] {
+                return nullptr;
+            }
 
             void* ptr = nullptr;
 

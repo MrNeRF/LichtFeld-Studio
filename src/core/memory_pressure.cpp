@@ -14,6 +14,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <format>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -42,6 +43,12 @@ namespace lfs::core {
         std::string format_bytes(size_t bytes) {
             constexpr double mib = 1024.0 * 1024.0;
             return std::format("{:.1f} MiB", static_cast<double>(bytes) / mib);
+        }
+
+        constexpr size_t saturating_add(const size_t left, const size_t right) noexcept {
+            return right > std::numeric_limits<size_t>::max() - left
+                       ? std::numeric_limits<size_t>::max()
+                       : left + right;
         }
 
         // Consumes only a sticky OOM before querying so an unrelated asynchronous
@@ -209,7 +216,10 @@ namespace lfs::core {
                 char* end = nullptr;
                 const unsigned long long mb = std::strtoull(value, &end, 10);
                 if (end != value && mb > 0) {
-                    reserve = static_cast<size_t>(mb) * 1024 * 1024;
+                    constexpr size_t MIB = size_t{1024} * 1024;
+                    reserve = mb > std::numeric_limits<size_t>::max() / MIB
+                                  ? std::numeric_limits<size_t>::max()
+                                  : static_cast<size_t>(mb) * MIB;
                 }
             }
             const size_t total = query_device_total_bytes();
@@ -251,9 +261,12 @@ namespace lfs::core {
         } guard;
 
         std::lock_guard<std::mutex> episode_lock(impl_->episode_mutex);
+        if (cuda_is_unavailable()) {
+            return 0;
+        }
 
         const size_t reserve = reserve_bytes();
-        const size_t target = failure.requested_bytes + reserve;
+        const size_t target = saturating_add(failure.requested_bytes, reserve);
         const size_t free_before = impl_->query_free(failure.domain);
 
         // A concurrent episode may already have relieved the pressure.
@@ -278,7 +291,6 @@ namespace lfs::core {
         std::vector<Impl::LedgerEntry> ledger;
         ledger.reserve(clients.size());
 
-        size_t total_logical = 0;
         size_t free_now = free_before;
         for (const auto& client : clients) {
             if (is_device_heap(failure.domain) && free_now >= target) {
@@ -296,7 +308,6 @@ namespace lfs::core {
                 LOG_WARN("Pressure client '{}' failed during reclaim", client.name);
                 continue;
             }
-            total_logical += result.logical_bytes_released;
             free_now = impl_->query_free(failure.domain);
             ledger.push_back({client.name, client.priority, result.logical_bytes_released, free_now});
         }
@@ -344,7 +355,10 @@ namespace lfs::core {
 
     bool MemoryPressureCoordinator::relieve_and_should_retry(const AllocationFailure& failure,
                                                              PressureContext context) {
-        const size_t target = failure.requested_bytes + reserve_bytes();
+        if (cuda_is_unavailable()) {
+            return false;
+        }
+        const size_t target = saturating_add(failure.requested_bytes, reserve_bytes());
         const size_t freed = run_episode(failure, context);
         if (freed > 0) {
             return true;
@@ -361,13 +375,17 @@ namespace lfs::core {
                                                          MemoryDomain domain) const {
         PreflightResult result;
         result.safety_reserve_bytes = reserve_bytes();
-        result.required_peak_bytes = plan.persistent_device_bytes + plan.temporary_device_bytes +
-                                     plan.old_new_overlap_bytes + result.safety_reserve_bytes;
+        result.required_peak_bytes = saturating_add(
+            saturating_add(
+                saturating_add(plan.persistent_device_bytes, plan.temporary_device_bytes),
+                plan.old_new_overlap_bytes),
+            result.safety_reserve_bytes);
 
         size_t reclaimable = 0;
         PressureRequest request{
             .domain = domain,
-            .requested_bytes = plan.persistent_device_bytes + plan.temporary_device_bytes,
+            .requested_bytes = saturating_add(
+                plan.persistent_device_bytes, plan.temporary_device_bytes),
             .target_free_bytes = result.required_peak_bytes,
             .device = 0,
             .episode_id = 0,
@@ -379,12 +397,12 @@ namespace lfs::core {
                     continue;
                 }
                 if (registered.client.estimate) {
-                    reclaimable += registered.client.estimate(request);
+                    reclaimable = saturating_add(reclaimable, registered.client.estimate(request));
                 }
             }
         }
         result.reclaimable_bytes = reclaimable;
-        result.effective_free_bytes = impl_->query_free(domain) + reclaimable;
+        result.effective_free_bytes = saturating_add(impl_->query_free(domain), reclaimable);
         result.ok = result.effective_free_bytes >= result.required_peak_bytes;
         return result;
     }
@@ -411,7 +429,7 @@ namespace lfs::core {
         impl_->last_recover_check = now;
 
         const size_t target = impl_->last_target_free.load();
-        const size_t hysteresis = target + target / 5; // require 20% headroom to restore
+        const size_t hysteresis = saturating_add(target, target / 5); // require 20% headroom to restore
         if (impl_->query_free(MemoryDomain::CudaDevice) >= hysteresis) {
             impl_->pressure_active.store(false);
             impl_->generation.fetch_add(1);

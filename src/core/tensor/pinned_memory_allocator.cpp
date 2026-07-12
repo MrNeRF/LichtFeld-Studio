@@ -191,7 +191,8 @@ namespace lfs::core {
 
         const bool use_pinned =
             enabled_.load(std::memory_order_acquire) &&
-            !force_fallback_for_testing_.load(std::memory_order_acquire);
+            !force_fallback_for_testing_.load(std::memory_order_acquire) &&
+            !cuda_is_unavailable();
         const size_t allocation_size = use_pinned ? round_size(bytes) : bytes;
 
         std::lock_guard lock(mutex_);
