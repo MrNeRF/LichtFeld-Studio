@@ -334,6 +334,9 @@ namespace lfs::core {
                              static_cast<size_t>(output_h),
                              static_cast<size_t>(output_w)}),
                 Device::CUDA, DataType::Float32);
+            if (output.stream() != cuda_stream) {
+                output.set_stream(cuda_stream);
+            }
 
             LFS_CUDA_CHECK_MSG(
                 cudaMemsetAsync(output.data_ptr(), 0, output.bytes(), cuda_stream),
@@ -452,6 +455,9 @@ namespace lfs::core {
             TensorShape({static_cast<size_t>(output_h), static_cast<size_t>(output_w)}),
             Device::CUDA,
             DataType::Float32);
+        if (output.stream() != cuda_stream) {
+            output.set_stream(cuda_stream);
+        }
 
         LFS_CUDA_CHECK_MSG(
             cudaMemsetAsync(output.data_ptr(), 0, output.bytes(), cuda_stream),
@@ -540,6 +546,9 @@ namespace lfs::core {
                          static_cast<size_t>(output_h),
                          static_cast<size_t>(output_w)}),
             Device::CUDA, DataType::Float32);
+        if (output.stream() != cuda_stream) {
+            output.set_stream(cuda_stream);
+        }
 
         LFS_CUDA_CHECK_MSG(
             cudaMemsetAsync(output.data_ptr(), 0, output.bytes(), cuda_stream),
