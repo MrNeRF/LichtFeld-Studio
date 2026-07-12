@@ -95,6 +95,21 @@ namespace lfs::python {
         writer.join();
     }
 
+    TEST(TrainerConstructionTest, InitializeRejectsInvalidIntervalsBeforeTraining) {
+        core::Scene scene;
+        const core::NodeId cameras = scene.addGroup("Cameras");
+        scene.addCamera("camera.png", cameras, std::make_shared<core::Camera>());
+        training::Trainer trainer(scene);
+
+        core::param::TrainingParameters params;
+        params.optimization.refine_every = 0;
+        const auto result = trainer.initialize(params);
+
+        ASSERT_FALSE(result);
+        EXPECT_NE(result.error().find("refine_every"), std::string::npos);
+        EXPECT_FALSE(trainer.isInitialized());
+    }
+
     TEST(TrainerConstructionTest, ManagerClearReleasesTrainerResourcesAndPoolCache) {
         core::Scene scene;
         const core::NodeId cameras = scene.addGroup("Cameras");

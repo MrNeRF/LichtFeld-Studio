@@ -2847,6 +2847,10 @@ namespace lfs::training {
     }
 
     std::expected<void, std::string> Trainer::initialize(const lfs::core::param::TrainingParameters& params) {
+        if (const auto validation_error = params.validate(); !validation_error.empty()) {
+            return std::unexpected("Invalid training parameters: " + validation_error);
+        }
+
         // Thread-safe initialization using mutex
         std::lock_guard<std::mutex> lock(init_mutex_);
 
@@ -3560,6 +3564,11 @@ namespace lfs::training {
     }
 
     void Trainer::setParams(const lfs::core::param::TrainingParameters& params) {
+        if (const auto validation_error = params.validate(); !validation_error.empty()) {
+            LOG_ERROR("Rejected invalid training parameter update: {}", validation_error);
+            return;
+        }
+
         bool bg_image_path_changed = false;
         {
             std::lock_guard<std::mutex> lock(params_mutex_);

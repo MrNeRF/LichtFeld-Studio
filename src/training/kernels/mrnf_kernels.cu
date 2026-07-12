@@ -6,6 +6,7 @@
 #include "lfs/cuda_scratch.hpp"
 #include "mrnf_kernels.hpp"
 #include <algorithm>
+#include <cmath>
 #include <cub/cub.cuh>
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
@@ -197,6 +198,8 @@ namespace lfs::training::mrnf_strategy {
 
         LFS_ASSERT(N > 0);
         LFS_ASSERT(bounds != nullptr);
+        LFS_ASSERT_MSG(std::isfinite(percentile) && percentile >= 0.0f && percentile <= 1.0f,
+                       "MRNF bounds percentile must be finite and within [0, 1]");
         LFS_ASSERT_MSG(N <= static_cast<size_t>(std::numeric_limits<int>::max()),
                        "MRNF percentile input exceeds CUB's int item-count limit");
 

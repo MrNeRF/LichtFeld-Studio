@@ -345,6 +345,8 @@ namespace lfs::training {
             }
             if (const auto parameter_error = loaded_params.optimization.validate(); !parameter_error.empty())
                 return std::unexpected("Invalid checkpoint parameters: " + parameter_error);
+            if (const auto parameter_error = loaded_params.dataset.validate(); !parameter_error.empty())
+                return std::unexpected("Invalid checkpoint dataset parameters: " + parameter_error);
 
             file.clear();
             file.seekg(strategy_state_pos);

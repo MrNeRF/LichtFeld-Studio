@@ -256,6 +256,7 @@ namespace lfs::core {
 
             nlohmann::json to_json() const;
             static DatasetConfig from_json(const nlohmann::json& j);
+            [[nodiscard]] std::string validate() const;
         };
 
         struct LFS_CORE_API ServerConfig {

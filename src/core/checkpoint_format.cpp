@@ -184,6 +184,8 @@ namespace lfs::core {
                 return std::unexpected("Invalid checkpoint parameters: max_cap exceeds checkpoint limit");
             if (const auto validation_error = params.optimization.validate(); !validation_error.empty())
                 return std::unexpected("Invalid checkpoint parameters: " + validation_error);
+            if (const auto validation_error = params.dataset.validate(); !validation_error.empty())
+                return std::unexpected("Invalid checkpoint dataset parameters: " + validation_error);
 
             LOG_DEBUG("Params loaded from checkpoint: {}", path_to_utf8(params.dataset.data_path));
             return params;
