@@ -1362,7 +1362,7 @@ namespace lfs::vis {
         return true;
     }
 
-    std::expected<VulkanContext::WindowCapture, std::string> VulkanContext::captureActiveFrameRgba() {
+    std::expected<VulkanContext::WindowCapture, std::string> VulkanContext::captureAndEndActiveFrameRgba() {
         auto fail_capture = [this](std::string message) -> std::expected<WindowCapture, std::string> {
             fail(std::move(message));
             return std::unexpected(last_error_);

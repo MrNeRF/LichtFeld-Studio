@@ -184,7 +184,8 @@ namespace lfs::vis {
 
         [[nodiscard]] bool beginFrame(const VkClearValue& clear_value, Frame& frame);
         [[nodiscard]] bool endFrame();
-        [[nodiscard]] LFS_VIS_API std::expected<WindowCapture, std::string> captureActiveFrameRgba();
+        [[nodiscard]] bool hasActiveFrame() const noexcept { return frame_active_; }
+        [[nodiscard]] LFS_VIS_API std::expected<WindowCapture, std::string> captureAndEndActiveFrameRgba();
         [[nodiscard]] bool waitForCurrentFrameSlot();
         [[nodiscard]] bool waitForSubmittedFrames();
         [[nodiscard]] bool waitForImmediateSubmits();

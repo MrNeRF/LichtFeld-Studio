@@ -6554,7 +6554,9 @@ namespace lfs::vis::gui {
                 if (viewer_) {
                     viewer_->processRenderWorkQueue();
                 }
-                {
+                // Synchronous full-window capture explicitly submits and consumes
+                // the active frame before returning its readback.
+                if (vulkan_context->hasActiveFrame()) {
                     LOG_TIMER("frame_pacing.vulkan_endFrame_present");
                     if (!vulkan_context->endFrame()) {
                         LOG_WARN("Vulkan GUI frame present failed: {}", vulkan_context->lastError());

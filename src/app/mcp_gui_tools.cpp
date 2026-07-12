@@ -197,7 +197,7 @@ namespace lfs::app {
             if (!vulkan_context)
                 return std::unexpected("Full-window capture requires a Vulkan window");
 
-            auto capture = vulkan_context->captureActiveFrameRgba();
+            auto capture = vulkan_context->captureAndEndActiveFrameRgba();
             if (!capture)
                 return std::unexpected(capture.error());
 
