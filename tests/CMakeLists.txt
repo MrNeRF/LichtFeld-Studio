@@ -210,6 +210,7 @@ set(TEST_FILES
     test_checkpoint_resume.cpp
     test_atomic_output.cpp
     test_training_terminal_state.cpp
+    test_headless_run_coordinator.cpp
     test_argument_parser.cpp
     test_logger.cpp
     test_parameter_manager.cpp
