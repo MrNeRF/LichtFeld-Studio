@@ -4225,7 +4225,7 @@ namespace lfs::training {
 
                                 LOG_ERROR("OUT OF MEMORY in 3DGS/FastGS training.");
                                 LOG_ERROR("Arena error: {}", error);
-                                return std::unexpected(error);
+                                return StepResult::RetryAfterOom;
                             }
                             // Non-OOM error - propagate
                             nvtxRangePop();
@@ -6003,32 +6003,35 @@ namespace lfs::training {
 
                 auto step_result = train_step(iter, cam, gt_image, render_mode, stop_token);
                 if (!step_result) {
-                    // Check if this is an OOM_RETRY signal
-                    if (step_result.error() == "OOM_RETRY") {
-                        cudaDeviceSynchronize();
-                        cudaGetLastError();
+                    terminal_error = step_result.error();
+                    break;
+                }
 
-                        // Device is drained — consume completed loss readbacks
-                        // before the retry resubmits into the ring.
-                        if (auto harvested = harvestLossReadbacks(true, false); !harvested) {
-                            terminal_error = harvested.error();
-                            break;
-                        }
+                if (*step_result == StepResult::RetryAfterOom) {
+                    cudaDeviceSynchronize();
+                    cudaGetLastError();
 
-                        lfs::core::GlobalArenaManager::instance().get_arena().full_reset();
-                        lfs::core::Tensor::trim_memory_pool();
+                    // Device is drained — consume completed loss readbacks
+                    // before the retry resubmits into the ring.
+                    if (auto harvested = harvestLossReadbacks(true, false); !harvested) {
+                        terminal_error = harvested.error();
+                        break;
+                    }
 
-                        cudaDeviceSynchronize();
-                        cudaGetLastError();
+                    lfs::core::GlobalArenaManager::instance().get_arena().full_reset();
+                    lfs::core::Tensor::trim_memory_pool();
 
-                        LOG_INFO("OOM recovery: retrying iteration {}", iter);
-                        step_result = train_step(iter, cam, gt_image, render_mode, stop_token);
-                        if (!step_result) {
-                            terminal_error = step_result.error();
-                            break;
-                        }
-                    } else {
+                    cudaDeviceSynchronize();
+                    cudaGetLastError();
+
+                    LOG_INFO("OOM recovery: retrying iteration {}", iter);
+                    step_result = train_step(iter, cam, gt_image, render_mode, stop_token);
+                    if (!step_result) {
                         terminal_error = step_result.error();
+                        break;
+                    }
+                    if (*step_result == StepResult::RetryAfterOom) {
+                        terminal_error = "CUDA out of memory after one recovery attempt";
                         break;
                     }
                 }

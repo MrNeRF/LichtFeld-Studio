@@ -266,7 +266,7 @@ namespace lfs::training {
         enum class StepResult {
             Continue,
             Stop,
-            Error
+            RetryAfterOom
         };
 
         // Returns the background color to use at a given iteration
