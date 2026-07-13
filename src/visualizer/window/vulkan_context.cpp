@@ -3341,6 +3341,29 @@ namespace lfs::vis {
                 vkImageLayoutToString(new_layout),
                 static_cast<int>(new_layout)));
         }
+
+        // Imported CUDA timeline operations are opaque to Vulkan validation.
+        // Observe CUDA's signal before submitting its corresponding Vulkan wait
+        // so the layer sees the external half of the ownership handoff. Keep the
+        // queue wait below: unlike a host wait, it supplies the external-memory
+        // acquire needed before Vulkan accesses CUDA-written image contents.
+        if (validation_enabled_ && wait_semaphore != VK_NULL_HANDLE) {
+            VkSemaphoreWaitInfo wait_info{};
+            wait_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
+            wait_info.semaphoreCount = 1;
+            wait_info.pSemaphores = &wait_semaphore;
+            wait_info.pValues = &wait_value;
+            const VkResult wait_result = vkWaitSemaphores(device_, &wait_info, UINT64_MAX);
+            if (wait_result != VK_SUCCESS) {
+                return fail(std::format(
+                    "vkWaitSemaphores failed while observing an external timeline for validation (semaphore={:#x}, value={}, image={:#x}, result={}({}))",
+                    vkHandleValue(wait_semaphore),
+                    wait_value,
+                    vkHandleValue(image),
+                    vkResultToString(wait_result),
+                    static_cast<int>(wait_result)));
+            }
+        }
         // Reap any prior fire-and-forget submits that have completed. Bound
         // the backlog under a stalled GPU so command buffers and fences cannot
         // grow without limit; this path only blocks once 64 submits are live.
@@ -3457,10 +3480,9 @@ namespace lfs::vis {
         VkPipelineStageFlags resolved_wait_stage = wait_stage == 0
                                                        ? static_cast<VkPipelineStageFlags>(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)
                                                        : wait_stage;
-        // CPU-side vkWaitSemaphores removed — the submit-time wait below
-        // already gates the GPU on the external (CUDA) timeline. Blocking the
-        // CPU here doubled the cost of every CUDA→Vulkan handoff (3-9ms/frame
-        // observed). The submit's pWaitSemaphores entry is sufficient.
+        // The submit-time wait gates the GPU on the external (CUDA) timeline.
+        // The validation-only host observation above is solely for a layer that
+        // cannot otherwise see CUDA's signal; normal rendering remains async.
         if (wait_semaphore != VK_NULL_HANDLE) {
             timeline_submit_info.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
             timeline_submit_info.waitSemaphoreValueCount = 1;
@@ -3522,6 +3544,28 @@ namespace lfs::vis {
         // FIFO per VkQueue, so subsequent submits on graphics_queue_ correctly
         // observe the layout transition without any CPU-side wait.
         pending_immediate_submits_.push_back({command_buffer, submit_fence});
+        if (validation_enabled_ && signal_semaphore != VK_NULL_HANDLE) {
+            // Finish Vulkan's half before CUDA is allowed to advance this same
+            // imported timeline. Without this observation, validation may see
+            // CUDA's later value while the preceding Vulkan signal is still
+            // pending and diagnose a false non-monotonic signal. The production
+            // path remains fire-and-forget.
+            VkSemaphoreWaitInfo wait_info{};
+            wait_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
+            wait_info.semaphoreCount = 1;
+            wait_info.pSemaphores = &signal_semaphore;
+            wait_info.pValues = &signal_value;
+            const VkResult wait_result = vkWaitSemaphores(device_, &wait_info, UINT64_MAX);
+            if (wait_result != VK_SUCCESS) {
+                return fail(std::format(
+                    "vkWaitSemaphores failed while publishing a Vulkan timeline signal for validation (semaphore={:#x}, value={}, image={:#x}, result={}({}))",
+                    vkHandleValue(signal_semaphore),
+                    signal_value,
+                    vkHandleValue(image),
+                    vkResultToString(wait_result),
+                    static_cast<int>(wait_result)));
+            }
+        }
         last_error_.clear();
         return true;
     }

@@ -4173,6 +4173,16 @@ namespace lfs::vis::gui {
                 target->destroy(context);
                 fail_required_interop(error);
             }
+            // Complete the one-time Vulkan initialization before exporting the
+            // timeline to CUDA. Later handoffs remain asynchronous, but no
+            // external producer may advance this semaphore past the pending
+            // Vulkan signal that establishes its initial image ownership.
+            if (!context.waitForImmediateSubmits()) {
+                const std::string error = std::format(
+                    "image initialization handoff failed: {}", context.lastError());
+                target->destroy(context);
+                fail_required_interop(error);
+            }
 
             const auto memory_handle = context.releaseExternalImageNativeHandle(target->image);
             const auto semaphore_handle = context.releaseExternalSemaphoreNativeHandle(target->semaphore);
@@ -4421,6 +4431,12 @@ namespace lfs::vis::gui {
                 target->destroy(context);
                 fail_required_interop(error);
             }
+            if (!context.waitForImmediateSubmits()) {
+                const std::string error = std::format(
+                    "image initialization handoff failed: {}", context.lastError());
+                target->destroy(context);
+                fail_required_interop(error);
+            }
 
             const auto memory_handle = context.releaseExternalImageNativeHandle(target->image);
             const auto semaphore_handle = context.releaseExternalSemaphoreNativeHandle(target->semaphore);
@@ -4658,6 +4674,12 @@ namespace lfs::vis::gui {
                                                         target->semaphore.semaphore,
                                                         vulkan_ready_value)) {
                 const std::string error = std::format("image initialization failed: {}", context.lastError());
+                target->destroy(context);
+                fail_required_interop(error);
+            }
+            if (!context.waitForImmediateSubmits()) {
+                const std::string error = std::format(
+                    "image initialization handoff failed: {}", context.lastError());
                 target->destroy(context);
                 fail_required_interop(error);
             }

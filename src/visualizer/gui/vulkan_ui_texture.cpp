@@ -584,6 +584,16 @@ namespace lfs::vis::gui {
                 interop_disabled = true;
                 return false;
             }
+            // Retire the initial Vulkan signal before CUDA can advance the
+            // exported timeline. Per-upload ownership transfers below stay
+            // asynchronous; this is the one-time cross-API handoff boundary.
+            if (!context->waitForImmediateSubmits()) {
+                LOG_WARN("Vulkan UI texture interop initialization handoff failed: {}",
+                         context->lastError());
+                destroyImage();
+                interop_disabled = true;
+                return false;
+            }
 
             const auto memory_handle = context->releaseExternalImageNativeHandle(interop_image);
             const auto semaphore_handle = context->releaseExternalSemaphoreNativeHandle(interop_semaphore);
