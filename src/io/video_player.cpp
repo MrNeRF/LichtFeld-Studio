@@ -163,10 +163,10 @@ namespace lfs::io {
 
                 if (has_dovi) {
                     is_hdr_ = true;
-                    hdr_info_ = (trc == AVCOL_TRC_ARIB_STD_B67) ? "Dolby Vision HLG" : "Dolby Vision";
+                    hdr_info_ = "Dolby Vision";
                 } else if (bit10_or_higher && trc == AVCOL_TRC_ARIB_STD_B67) {
                     is_hdr_ = true;
-                    hdr_info_ = "HDR HLG";
+                    hdr_info_ = "HLG";
                 } else if (bit10_or_higher && trc == AVCOL_TRC_SMPTE2084) {
                     is_hdr_ = true;
                     hdr_info_ = "HDR10";

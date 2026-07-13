@@ -434,15 +434,22 @@ namespace lfs::gui {
         rotation_deg_ = player_->rotation();
         if (rotation_value_el_)
             rotation_value_el_->SetInnerRML(std::to_string(rotation_deg_) + "°");
-        if (hdr_badge_el_) {
+
+        // Update HDR/SDR badge
+        if (hdr_badge_el_ && hdr_badge_label_el_ && hdr_badge_type_el_) {
             if (player_->isHdr()) {
                 hdr_badge_el_->SetClass("hdr-badge--hdr", true);
                 hdr_badge_el_->SetClass("hdr-badge--sdr", false);
-                hdr_badge_el_->SetInnerRML(player_->hdrInfo());
+                hdr_badge_el_->SetProperty("display", "inline-flex");
+                hdr_badge_label_el_->SetInnerRML("HDR");
+                hdr_badge_type_el_->SetInnerRML(player_->hdrInfo());
+                hdr_badge_type_el_->SetProperty("display", "inline");
             } else {
                 hdr_badge_el_->SetClass("hdr-badge--sdr", true);
                 hdr_badge_el_->SetClass("hdr-badge--hdr", false);
-                hdr_badge_el_->SetInnerRML("SDR");
+                hdr_badge_el_->SetProperty("display", "inline-flex");
+                hdr_badge_label_el_->SetInnerRML("SDR");
+                hdr_badge_type_el_->SetProperty("display", "none");
             }
         }
         texture_needs_update_ = true;
@@ -739,6 +746,8 @@ namespace lfs::gui {
         rotation_ccw_btn_el_ = document_->GetElementById("btn-rotation-ccw");
         rotation_value_el_ = document_->GetElementById("rotation-value");
         hdr_badge_el_ = document_->GetElementById("hdr-badge");
+        hdr_badge_type_el_ = document_->GetElementById("hdr-badge-type");
+        hdr_badge_label_el_ = document_->GetElementById("hdr-badge-label");
 
         bindEventListeners();
         controls_dirty_ = true;

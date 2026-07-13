@@ -112,7 +112,9 @@ body {
 
 .hdr-badge {
     margin-left: auto;
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    gap: 4dp;
     padding: 2dp 8dp;
     border-radius: 4dp;
     font-size: 10dp;
@@ -131,9 +133,26 @@ body {
 }
 
 .hdr-badge--hdr {
-    background-color: rgba(249, 226, 175, 0.18);
+    background-color: #5a4a2a;
     color: #f9e2af;
-    border: 1dp solid rgba(249, 226, 175, 0.35);
+}
+
+#hdr-badge-type {
+    font-weight: 500;
+    letter-spacing: 0.1dp;
+}
+
+#hdr-badge-label {
+    font-weight: 700;
+    letter-spacing: 0.3dp;
+}
+
+.hdr-badge--sdr #hdr-badge-label {
+    color: #bac2de;
+}
+
+.hdr-badge--hdr #hdr-badge-label {
+    color: #f9e2af;
 }
 
 #timeline {

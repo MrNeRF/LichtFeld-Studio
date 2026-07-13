@@ -284,6 +284,8 @@ namespace lfs::gui {
         Rml::Element* rotation_ccw_btn_el_ = nullptr;
         Rml::Element* rotation_value_el_ = nullptr;
         Rml::Element* hdr_badge_el_ = nullptr;
+        Rml::Element* hdr_badge_type_el_ = nullptr;
+        Rml::Element* hdr_badge_label_el_ = nullptr;
         VideoExtractionParams pending_params_;
         bool pending_params_set_ = false;
     };

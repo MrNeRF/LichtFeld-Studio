@@ -34,7 +34,10 @@
           <button id="btn-rotation-cw" class="transport-btn" type="button" title="@tr:video_extractor.rotate_cw">
             <img src="../icon/sequencer/rotate-cw.png" />
           </button>
-          <span id="hdr-badge" class="hdr-badge hdr-badge--sdr">SDR</span>
+          <span id="hdr-badge" class="hdr-badge" style="display:none">
+            <span id="hdr-badge-type"></span>
+            <span id="hdr-badge-label"></span>
+          </span>
         </div>
 
         <div id="timeline">
