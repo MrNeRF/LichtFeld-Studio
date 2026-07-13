@@ -68,6 +68,25 @@ static void SetDebugUtilsObjectName(VkDevice device,
     SetDebugUtilsObjectName(device, name_info);
 }
 
+static bool SupportsHostImageCopyDestinationLayout(VkPhysicalDevice physical_device,
+                                                   VkImageLayout layout) {
+    VkPhysicalDeviceHostImageCopyPropertiesEXT host_copy_properties{};
+    host_copy_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_PROPERTIES_EXT;
+
+    VkPhysicalDeviceProperties2 properties{};
+    properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    properties.pNext = &host_copy_properties;
+    vkGetPhysicalDeviceProperties2(physical_device, &properties);
+
+    std::vector<VkImageLayout> destination_layouts(host_copy_properties.copyDstLayoutCount);
+    host_copy_properties.pCopyDstLayouts = destination_layouts.data();
+    vkGetPhysicalDeviceProperties2(physical_device, &properties);
+    destination_layouts.resize(host_copy_properties.copyDstLayoutCount);
+
+    return std::find(destination_layouts.begin(), destination_layouts.end(), layout) !=
+           destination_layouts.end();
+}
+
 #ifdef RMLUI_VK_DEBUG
 static Rml::String FormatByteSize(VkDeviceSize size) noexcept {
     constexpr VkDeviceSize K = VkDeviceSize(1024);
@@ -1332,19 +1351,19 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
 #endif
 
     if (use_host_image_copy) {
-        VkHostImageLayoutTransitionInfoEXT to_dst{};
-        to_dst.sType = VK_STRUCTURE_TYPE_HOST_IMAGE_LAYOUT_TRANSITION_INFO_EXT;
-        to_dst.image = p_image;
-        to_dst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        to_dst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        to_dst.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        to_dst.subresourceRange.baseMipLevel = 0;
-        to_dst.subresourceRange.levelCount = 1;
-        to_dst.subresourceRange.baseArrayLayer = 0;
-        to_dst.subresourceRange.layerCount = 1;
-        status = m_pfn_transition_image_layout(m_p_device, 1, &to_dst);
+        VkHostImageLayoutTransitionInfoEXT to_sampled{};
+        to_sampled.sType = VK_STRUCTURE_TYPE_HOST_IMAGE_LAYOUT_TRANSITION_INFO_EXT;
+        to_sampled.image = p_image;
+        to_sampled.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        to_sampled.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        to_sampled.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        to_sampled.subresourceRange.baseMipLevel = 0;
+        to_sampled.subresourceRange.levelCount = 1;
+        to_sampled.subresourceRange.baseArrayLayer = 0;
+        to_sampled.subresourceRange.layerCount = 1;
+        status = m_pfn_transition_image_layout(m_p_device, 1, &to_sampled);
         if (status != VK_SUCCESS)
-            return fail_texture("transition host image to transfer destination", status);
+            return fail_texture("transition host image for shader reads", status);
 
         VkMemoryToImageCopyEXT region{};
         region.sType = VK_STRUCTURE_TYPE_MEMORY_TO_IMAGE_COPY_EXT;
@@ -1358,26 +1377,12 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
         VkCopyMemoryToImageInfoEXT copy_info{};
         copy_info.sType = VK_STRUCTURE_TYPE_COPY_MEMORY_TO_IMAGE_INFO_EXT;
         copy_info.dstImage = p_image;
-        copy_info.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        copy_info.dstImageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         copy_info.regionCount = 1;
         copy_info.pRegions = &region;
         status = m_pfn_copy_memory_to_image(m_p_device, &copy_info);
         if (status != VK_SUCCESS)
             return fail_texture("copy host memory to image", status);
-
-        VkHostImageLayoutTransitionInfoEXT to_read{};
-        to_read.sType = VK_STRUCTURE_TYPE_HOST_IMAGE_LAYOUT_TRANSITION_INFO_EXT;
-        to_read.image = p_image;
-        to_read.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        to_read.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        to_read.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        to_read.subresourceRange.baseMipLevel = 0;
-        to_read.subresourceRange.levelCount = 1;
-        to_read.subresourceRange.baseArrayLayer = 0;
-        to_read.subresourceRange.layerCount = 1;
-        status = m_pfn_transition_image_layout(m_p_device, 1, &to_read);
-        if (status != VK_SUCCESS)
-            return fail_texture("transition host image for shader reads", status);
     } else {
         buffer_data_t cpu_buffer = CreateResource_StagingBuffer(image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
         if (cpu_buffer.m_p_vk_buffer == VK_NULL_HANDLE ||
@@ -1736,11 +1741,16 @@ bool RenderInterface_VK::InitializeExternal(const ExternalContext& context) {
     // On Vulkan 1.4 drivers these core-promoted entry points resolve even when
     // the hostImageCopy feature was not enabled on the device; calling them then
     // is UB. Only look them up when the owning context enabled the feature.
-    if (context.host_image_copy) {
+    if (context.host_image_copy &&
+        SupportsHostImageCopyDestinationLayout(m_p_physical_device,
+                                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)) {
         m_pfn_copy_memory_to_image = reinterpret_cast<PFN_vkCopyMemoryToImageEXT>(
             vkGetDeviceProcAddr(m_p_device, "vkCopyMemoryToImageEXT"));
         m_pfn_transition_image_layout = reinterpret_cast<PFN_vkTransitionImageLayoutEXT>(
             vkGetDeviceProcAddr(m_p_device, "vkTransitionImageLayoutEXT"));
+    } else if (context.host_image_copy) {
+        Rml::Log::Message(Rml::Log::LT_INFO,
+                          "[Vulkan] Host image copies do not support the RmlUi shader-read layout; using staging uploads.");
     }
     m_p_queue_graphics = context.graphics_queue;
     m_p_queue_present = context.graphics_queue;
