@@ -4,6 +4,7 @@
 
 #include "tcp_publisher.hpp"
 #include "core/include/core/events.hpp"
+#include "core/include/core/json_utils.hpp"
 #include "core/include/core/logger.hpp"
 
 #include <algorithm>
@@ -57,38 +58,6 @@ namespace {
     constexpr size_t MAX_PUBLISH_QUEUE_EVENTS = 1024;
     constexpr size_t MAX_PUBLISH_EVENT_BYTES = 256 * 1024;
     constexpr size_t MAX_PUBLISH_QUEUE_BYTES = 4 * 1024 * 1024;
-
-    bool add_bounded_json_cost(const nlohmann::json& value, size_t& cost, const size_t limit) {
-        constexpr size_t NODE_OVERHEAD = 64;
-        if (cost > limit || NODE_OVERHEAD > limit - cost)
-            return false;
-        cost += NODE_OVERHEAD;
-
-        if (value.is_string()) {
-            const auto& text = value.get_ref<const std::string&>();
-            if (text.size() > limit - cost)
-                return false;
-            cost += text.size();
-            return true;
-        }
-        if (value.is_array()) {
-            for (const auto& item : value) {
-                if (!add_bounded_json_cost(item, cost, limit))
-                    return false;
-            }
-            return true;
-        }
-        if (value.is_object()) {
-            for (const auto& [key, item] : value.items()) {
-                if (key.size() > limit - cost)
-                    return false;
-                cost += key.size();
-                if (!add_bounded_json_cost(item, cost, limit))
-                    return false;
-            }
-        }
-        return true;
-    }
 
     [[nodiscard]] bool is_lossy_event(const std::string_view event_type) {
         return event_type == "log" ||
@@ -261,7 +230,8 @@ namespace lfs::tcp {
                 .event_type = std::move(event_type),
             };
             event.lossy = is_lossy_event(event.event_type);
-            if (!add_bounded_json_cost(event.message, event.estimated_bytes, MAX_PUBLISH_EVENT_BYTES)) {
+            if (!lfs::core::add_bounded_json_cost(
+                    event.message, event.estimated_bytes, MAX_PUBLISH_EVENT_BYTES)) {
                 state->dropped.fetch_add(1, std::memory_order_relaxed);
                 return;
             }

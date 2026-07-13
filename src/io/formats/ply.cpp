@@ -1297,8 +1297,6 @@ namespace lfs::io {
             return *this;
         }
 
-        [[nodiscard]] size_t bytes() const { return count * sizeof(float); }
-
     private:
         void swap(HostBuffer& other) noexcept {
             std::swap(ptr, other.ptr);
@@ -1313,20 +1311,6 @@ namespace lfs::io {
         HostBuffer opacity;
         HostBuffer scaling;
         HostBuffer rotation;
-
-        PlyHostStaging() = default;
-        PlyHostStaging(const size_t means_count,
-                       const size_t sh0_count,
-                       const size_t shN_swizzled_count,
-                       const size_t opacity_count,
-                       const size_t scaling_count,
-                       const size_t rotation_count)
-            : means(means_count),
-              sh0(sh0_count),
-              shN_swizzled(shN_swizzled_count, true),
-              opacity(opacity_count),
-              scaling(scaling_count),
-              rotation(rotation_count) {}
 
         [[nodiscard]] bool valid() const {
             return means.ptr && sh0.ptr && opacity.ptr && scaling.ptr && rotation.ptr &&
@@ -1579,18 +1563,22 @@ namespace lfs::io {
             };
 
             const auto make_staging = [&](const size_t gaussian_count) {
-                return PlyHostStaging(
-                    checked_float_count(gaussian_count, 3, "SplatData.means"),
-                    checked_float_count(
+                return PlyHostStaging{
+                    .means = HostBuffer(checked_float_count(
+                        gaussian_count, 3, "SplatData.means")),
+                    .sh0 = HostBuffer(checked_float_count(
                         checked_float_count(gaussian_count,
                                             static_cast<size_t>(sh0_dim1),
                                             "SplatData.sh0"),
                         static_cast<size_t>(sh0_dim2),
-                        "SplatData.sh0"),
-                    shN_count_for(gaussian_count),
-                    gaussian_count,
-                    checked_float_count(gaussian_count, 3, "SplatData.scaling"),
-                    checked_float_count(gaussian_count, 4, "SplatData.rotation"));
+                        "SplatData.sh0")),
+                    .shN_swizzled = HostBuffer(shN_count_for(gaussian_count), true),
+                    .opacity = HostBuffer(gaussian_count),
+                    .scaling = HostBuffer(checked_float_count(
+                        gaussian_count, 3, "SplatData.scaling")),
+                    .rotation = HostBuffer(checked_float_count(
+                        gaussian_count, 4, "SplatData.rotation")),
+                };
             };
 
             const auto header_ready_at = std::chrono::steady_clock::now();

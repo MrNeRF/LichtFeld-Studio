@@ -1568,10 +1568,6 @@ NB_MODULE(lichtfeld, m) {
                 context != nullptr && context->hasFillModeNonSolid();
             capabilities["wide_lines"] =
                 context != nullptr && context->hasWideLines();
-            capabilities["line_width_min"] =
-                context != nullptr ? context->minLineWidth() : 1.0f;
-            capabilities["line_width_max"] =
-                context != nullptr ? context->maxLineWidth() : 1.0f;
             return capabilities;
         },
         "Return Vulkan device capabilities used to gate rendering controls");

@@ -58,10 +58,7 @@ namespace lfs::io {
         // SH coefficient counts per degree
         constexpr int SH_COEFFS[] = {0, 3, 8, 15};
 
-        // SOG is a compact interchange format, but all of its dimensions and entry
-        // sizes are input-controlled. These ceilings are deliberately above practical
-        // project sizes while preventing a malformed bundle from becoming an
-        // unbounded allocation request.
+        // Bound allocations derived from untrusted SOG metadata.
         constexpr size_t MAX_SOG_SPLATS = 100'000'000;
         constexpr size_t MAX_METADATA_BYTES = 16ULL * 1024 * 1024;
         constexpr size_t MAX_ENCODED_IMAGE_BYTES = 512ULL * 1024 * 1024;

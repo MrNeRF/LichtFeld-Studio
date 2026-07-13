@@ -30,9 +30,9 @@ target_include_directories(fastlfs_backend
         ${CMAKE_CURRENT_SOURCE_DIR}/utils
         ${CMAKE_SOURCE_DIR}/include
         ${CMAKE_SOURCE_DIR}/src/core/include
-        ${CMAKE_SOURCE_DIR}/src/training/include
         ${CUDAToolkit_INCLUDE_DIRS}
         PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/training/include
 )
 
 # Pure CUDA libraries only
