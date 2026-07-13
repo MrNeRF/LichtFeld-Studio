@@ -1017,10 +1017,23 @@ namespace lfs::vis {
 
         const VkExtent2D render_extent = framebufferExtent();
         VkCommandBuffer command_buffer = command_buffers_[current_frame];
-        image_barriers_.transitionImage(command_buffer,
-                                        swapchain_images_[image_index],
-                                        VK_IMAGE_ASPECT_COLOR_BIT,
-                                        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        // The acquire wait below is scoped to COLOR_ATTACHMENT_OUTPUT. Match
+        // both sides of this first-use transition to that stage even when a
+        // newly-created swapchain image still has UNDEFINED layout: discarding
+        // its contents removes the source access, not the need to wait until
+        // presentation has released the image.
+        image_barriers_.transitionImage(
+            command_buffer,
+            swapchain_images_[image_index],
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            VulkanImageBarrierTracker::AccessScope{
+                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                VK_ACCESS_2_NONE},
+            VulkanImageBarrierTracker::AccessScope{
+                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
+                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT});
 
         if (current_frame >= depth_stencil_resources_.size() ||
             depth_stencil_resources_[current_frame].image == VK_NULL_HANDLE ||

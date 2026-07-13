@@ -1865,6 +1865,7 @@ void VulkanGSRenderer::executeSortIndirectCountImpl(
 
     {
         [[maybe_unused]] auto cpu_timer = timeCpuStage(timer_name(".resize_buffers"));
+        resizeDeviceBuffer(globalHistogram, num_passes * RADIX);
         resizeDeviceBuffer(partitionHistogram, num_parts_capacity * RADIX);
         resizeDeviceBuffer(buffers.sorted_keys(), capacity);
         resizeDeviceBuffer(buffers.sorted_gauss_idx(), capacity);
@@ -1873,6 +1874,14 @@ void VulkanGSRenderer::executeSortIndirectCountImpl(
     DEVICE_GUARD;
     {
         [[maybe_unused]] auto cpu_timer = timeCpuStage(timer_name(".clear_histogram"));
+        // The primitive-depth and tile-key radix passes reuse these workspaces
+        // inside one command buffer. Finish the earlier pass before resetting
+        // its global histogram and before the next upsweep overwrites the
+        // partition histogram.
+        bufferMemoryBarrier({{globalHistogram.deviceBuffer, COMPUTE_SHADER_READ_WRITE}},
+                            TRANSFER_WRITE);
+        bufferMemoryBarrier({{partitionHistogram.deviceBuffer, COMPUTE_SHADER_READ_WRITE}},
+                            COMPUTE_SHADER_READ_WRITE);
         clearDeviceBuffer(globalHistogram, num_passes * RADIX);
         bufferMemoryBarrier({
                                 {globalHistogram.deviceBuffer, TRANSFER_WRITE},

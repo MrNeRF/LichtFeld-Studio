@@ -353,6 +353,53 @@ namespace lfs::vis {
                 location.line());
         }
 
+        struct TimelineSubmitWait {
+            VkTimelineSemaphoreSubmitInfo timeline_info{};
+            VkSemaphore semaphore = VK_NULL_HANDLE;
+            std::uint64_t value = 0;
+            VkPipelineStageFlags stage = 0;
+
+            void attach(VkSubmitInfo& submit_info,
+                        const VkSemaphore wait_semaphore,
+                        const std::uint64_t wait_value,
+                        const VkPipelineStageFlags wait_stage) {
+                semaphore = wait_semaphore;
+                value = wait_value;
+                stage = wait_stage;
+                timeline_info.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
+                timeline_info.waitSemaphoreValueCount = 1;
+                timeline_info.pWaitSemaphoreValues = &value;
+                submit_info.pNext = &timeline_info;
+                submit_info.waitSemaphoreCount = 1;
+                submit_info.pWaitSemaphores = &semaphore;
+                submit_info.pWaitDstStageMask = &stage;
+            }
+        };
+
+        constexpr VkPipelineStageFlags kOutputImageReadbackWaitStage =
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+
+        void acquireOutputImageForReadback(VulkanContext& context,
+                                           const VkCommandBuffer command_buffer,
+                                           const VkImage image) {
+            using AccessScope = VulkanImageBarrierTracker::AccessScope;
+            constexpr AccessScope external_producer{};
+            constexpr AccessScope transfer_read{
+                VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                VK_ACCESS_2_TRANSFER_READ_BIT,
+            };
+            // This is the acquire half of the compute-to-graphics semaphore
+            // dependency. TOP_OF_PIPE on the submit wait prevents this leading
+            // layout transition from executing early; the barrier therefore has
+            // no queue-local source scope and only describes its transfer use.
+            context.imageBarriers().transitionImage(command_buffer,
+                                                    image,
+                                                    VK_IMAGE_ASPECT_COLOR_BIT,
+                                                    VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                                    external_producer,
+                                                    transfer_read);
+        }
+
         void recordUpdateBufferChunks(
             VkCommandBuffer command_buffer,
             const _VulkanBuffer& dst,
@@ -1925,9 +1972,13 @@ namespace lfs::vis {
             } else if (render_complete_timeline_ != VK_NULL_HANDLE) {
                 vkDestroySemaphore(context_->device(), render_complete_timeline_, nullptr);
             }
+            if (vulkan_render_complete_timeline_ != VK_NULL_HANDLE) {
+                vkDestroySemaphore(context_->device(), vulkan_render_complete_timeline_, nullptr);
+            }
         }
         render_complete_external_ = {};
         render_complete_timeline_ = VK_NULL_HANDLE;
+        vulkan_render_complete_timeline_ = VK_NULL_HANDLE;
         render_complete_value_ = 0;
         // The fresh timeline restarts at 0; clear the published value too, else
         // renderCompleteValue() would hand the trainer a stale value from the old
@@ -4126,6 +4177,26 @@ namespace lfs::vis {
             context.setDebugObjectName(VK_OBJECT_TYPE_SEMAPHORE,
                                        render_complete_timeline_,
                                        "interop.timeline.render");
+            VkSemaphoreTypeCreateInfo vulkan_timeline_type{};
+            vulkan_timeline_type.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
+            vulkan_timeline_type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+            vulkan_timeline_type.initialValue = 0;
+            VkSemaphoreCreateInfo vulkan_timeline_info{};
+            vulkan_timeline_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+            vulkan_timeline_info.pNext = &vulkan_timeline_type;
+            const VkResult vulkan_timeline_result =
+                vkCreateSemaphore(context.device(),
+                                  &vulkan_timeline_info,
+                                  nullptr,
+                                  &vulkan_render_complete_timeline_);
+            if (vulkan_timeline_result != VK_SUCCESS) {
+                return std::unexpected(vkError(
+                    "vkCreateSemaphore(VkSplat Vulkan render completion timeline)",
+                    vulkan_timeline_result));
+            }
+            context.setDebugObjectName(VK_OBJECT_TYPE_SEMAPHORE,
+                                       vulkan_render_complete_timeline_,
+                                       "vksplat.timeline.render.vulkan");
             render_complete_value_ = 0;
         } catch (const std::exception& e) {
             return std::unexpected(std::format("VkSplat initialization failed: {}", e.what()));
@@ -4252,12 +4323,14 @@ namespace lfs::vis {
 
     std::expected<std::uint64_t, std::string>
     VksplatViewportRenderer::nextRenderCompletionValue(const std::string_view pass) const {
-        if (render_complete_timeline_ == VK_NULL_HANDLE) {
+        if (render_complete_timeline_ == VK_NULL_HANDLE ||
+            vulkan_render_complete_timeline_ == VK_NULL_HANDLE) {
             return std::unexpected(std::format(
-                "VkSplat {} cannot choose a completion value without a render timeline "
-                "(timeline={:#x}, last_submitted_value={})",
+                "VkSplat {} cannot choose a completion value without both render timelines "
+                "(external_timeline={:#x}, vulkan_timeline={:#x}, last_submitted_value={})",
                 pass,
                 vkHandleValue(render_complete_timeline_),
+                vkHandleValue(vulkan_render_complete_timeline_),
                 render_complete_value_));
         }
         if (render_complete_value_ == std::numeric_limits<std::uint64_t>::max()) {
@@ -4837,6 +4910,7 @@ namespace lfs::vis {
         slot.size = {0, 0};
         slot.layout = VK_IMAGE_LAYOUT_UNDEFINED;
         slot.depth_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        slot.completion_value = 0;
         const VkExtent2D extent{
             .width = static_cast<std::uint32_t>(size.x),
             .height = static_cast<std::uint32_t>(size.y),
@@ -5063,6 +5137,11 @@ namespace lfs::vis {
                 __FILE__,
                 __LINE__));
         }
+        // Do not let a failed recording/submission expose the value belonging to
+        // this ring image's previous use. The caller publishes the new value only
+        // after vkQueueSubmit has accepted its signal operation.
+        output.completion_value = 0;
+
         using AccessScope = VulkanImageBarrierTracker::AccessScope;
         const bool cross_queue_output = context.hasDedicatedComputeQueue();
         const AccessScope fragment_sample{
@@ -5579,6 +5658,14 @@ namespace lfs::vis {
             return std::unexpected(context.lastError());
         }
 
+        const auto& output = output_slots_[outputSlotIndex(output_slot)][latestOutputRingSlot(output_slot)];
+        const std::uint64_t completion_value =
+            std::max(output.completion_value, last_signaled_render_value_);
+        if (vulkan_render_complete_timeline_ == VK_NULL_HANDLE || completion_value == 0) {
+            return std::unexpected(
+                "VkSplat depth readback has no submitted render completion to wait on");
+        }
+
         const auto& depth_buffer = buffers_.pixel_depth.deviceBuffer;
         const std::size_t pixel_count =
             static_cast<std::size_t>(size->x) * static_cast<std::size_t>(size->y);
@@ -5622,21 +5709,25 @@ namespace lfs::vis {
             return std::unexpected(vkError("vkBeginCommandBuffer(VkSplat depth readback)", result));
         }
 
-        // pixel_depth was written by the render's compute pass, completed by the
-        // waits above; this barrier makes those writes visible to the transfer copy.
-        VkBufferMemoryBarrier depth_barrier{};
-        depth_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-        depth_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-        depth_barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        // The timeline wait on this submit acquires the async-compute write.
+        // Keep the queue-local barrier's source scope empty so it does not claim
+        // that a graphics-family command buffer can synchronize the other queue.
+        VkBufferMemoryBarrier2 depth_barrier{};
+        depth_barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+        depth_barrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+        depth_barrier.srcAccessMask = VK_ACCESS_2_NONE;
+        depth_barrier.dstStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
+        depth_barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_READ_BIT;
         depth_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         depth_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         depth_barrier.buffer = depth_buffer.buffer;
         depth_barrier.offset = depth_buffer.offset;
         depth_barrier.size = byte_count;
-        vkCmdPipelineBarrier(command_buffer,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             0, 0, nullptr, 1, &depth_barrier, 0, nullptr);
+        VkDependencyInfo depth_dependency{};
+        depth_dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        depth_dependency.bufferMemoryBarrierCount = 1;
+        depth_dependency.pBufferMemoryBarriers = &depth_barrier;
+        vkCmdPipelineBarrier2(command_buffer, &depth_dependency);
 
         VkBufferCopy copy_region{};
         copy_region.srcOffset = depth_buffer.offset;
@@ -5652,6 +5743,11 @@ namespace lfs::vis {
         submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         submit_info.commandBufferCount = 1;
         submit_info.pCommandBuffers = &command_buffer;
+        TimelineSubmitWait render_wait{};
+        render_wait.attach(submit_info,
+                           vulkan_render_complete_timeline_,
+                           completion_value,
+                           VK_PIPELINE_STAGE_TRANSFER_BIT);
         const VkQueue submit_queue = context.graphicsQueue();
         if (auto error = validateQueueSubmit("VkSplat depth readback submit",
                                              submit_queue,
@@ -5721,6 +5817,10 @@ namespace lfs::vis {
         if (output.depth_image.format != VK_FORMAT_R32_SFLOAT) {
             return std::unexpected("VkSplat output depth readback only supports R32F depth images");
         }
+        if (vulkan_render_complete_timeline_ == VK_NULL_HANDLE || output.completion_value == 0) {
+            return std::unexpected(
+                "VkSplat output depth readback has no submitted image producer to wait on");
+        }
 
         const VkDevice device = context.device();
         const std::size_t pixel_count =
@@ -5783,11 +5883,9 @@ namespace lfs::vis {
             output.depth_layout != VK_IMAGE_LAYOUT_UNDEFINED
                 ? output.depth_layout
                 : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        context.imageBarriers().transitionImage(
-            command_buffer,
-            output.depth_image.image,
-            VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        acquireOutputImageForReadback(context,
+                                      command_buffer,
+                                      output.depth_image.image);
 
         VkBufferImageCopy copy_region{};
         copy_region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -5823,7 +5921,20 @@ namespace lfs::vis {
         submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         submit_info.commandBufferCount = 1;
         submit_info.pCommandBuffers = &command_buffer;
-        result = vkQueueSubmit(context.graphicsQueue(), 1, &submit_info, readback_fence_);
+        TimelineSubmitWait render_wait{};
+        render_wait.attach(submit_info,
+                           vulkan_render_complete_timeline_,
+                           output.completion_value,
+                           kOutputImageReadbackWaitStage);
+        const VkQueue submit_queue = context.graphicsQueue();
+        if (auto error = validateQueueSubmit("VkSplat output depth readback submit",
+                                             submit_queue,
+                                             submit_info,
+                                             readback_fence_,
+                                             true)) {
+            return std::unexpected(std::move(*error));
+        }
+        result = vkQueueSubmit(submit_queue, 1, &submit_info, readback_fence_);
         if (result != VK_SUCCESS) {
             return std::unexpected(vkError("vkQueueSubmit(VkSplat output depth readback)", result));
         }
@@ -5895,6 +6006,10 @@ namespace lfs::vis {
         if (output.image.format != VK_FORMAT_R8G8B8A8_UNORM) {
             return std::unexpected("VkSplat output readback only supports RGBA8 output images");
         }
+        if (vulkan_render_complete_timeline_ == VK_NULL_HANDLE || output.completion_value == 0) {
+            return std::unexpected(
+                "VkSplat output readback has no submitted image producer to wait on");
+        }
         const int destination_width = static_cast<int>(destination.size(1));
         const int destination_height = static_cast<int>(destination.size(0));
         if (destination_x > destination_width ||
@@ -5944,11 +6059,9 @@ namespace lfs::vis {
             output.layout != VK_IMAGE_LAYOUT_UNDEFINED
                 ? output.layout
                 : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        context.imageBarriers().transitionImage(
-            command_buffer,
-            output.image.image,
-            VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        acquireOutputImageForReadback(context,
+                                      command_buffer,
+                                      output.image.image);
 
         VkBufferImageCopy copy_region{};
         copy_region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -5979,6 +6092,11 @@ namespace lfs::vis {
         submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         submit_info.commandBufferCount = 1;
         submit_info.pCommandBuffers = &command_buffer;
+        TimelineSubmitWait render_wait{};
+        render_wait.attach(submit_info,
+                           vulkan_render_complete_timeline_,
+                           output.completion_value,
+                           kOutputImageReadbackWaitStage);
         const VkQueue submit_queue = context.graphicsQueue();
         if (auto error = validateQueueSubmit("VkSplat color readback submit",
                                              submit_queue,
@@ -6085,6 +6203,10 @@ namespace lfs::vis {
         if (output.depth_image.format != VK_FORMAT_R32_SFLOAT) {
             return std::unexpected("VkSplat depth sample only supports R32F depth images");
         }
+        if (vulkan_render_complete_timeline_ == VK_NULL_HANDLE || output.completion_value == 0) {
+            return std::unexpected(
+                "VkSplat depth sample has no submitted image producer to wait on");
+        }
         int x = request.pixel.x;
         int y = request.pixel.y;
         if (request.source_size.x > 0 && request.source_size.y > 0) {
@@ -6100,6 +6222,11 @@ namespace lfs::vis {
         }
         if (x < 0 || y < 0 || x >= output.size.x || y >= output.size.y) {
             return -1.0f;
+        }
+        // Retire any earlier fragment sampling before the readback submission;
+        // the producer timeline below handles the independent compute queue.
+        if (!context.waitForSubmittedFrames()) {
+            return std::unexpected(context.lastError());
         }
 
         const VkDevice device = context.device();
@@ -6131,11 +6258,9 @@ namespace lfs::vis {
             output.depth_layout != VK_IMAGE_LAYOUT_UNDEFINED
                 ? output.depth_layout
                 : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        context.imageBarriers().transitionImage(
-            command_buffer,
-            output.depth_image.image,
-            VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        acquireOutputImageForReadback(context,
+                                      command_buffer,
+                                      output.depth_image.image);
 
         VkBufferImageCopy copy_region{};
         copy_region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -6164,6 +6289,11 @@ namespace lfs::vis {
         submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         submit_info.commandBufferCount = 1;
         submit_info.pCommandBuffers = &command_buffer;
+        TimelineSubmitWait render_wait{};
+        render_wait.attach(submit_info,
+                           vulkan_render_complete_timeline_,
+                           output.completion_value,
+                           kOutputImageReadbackWaitStage);
         const VkQueue submit_queue = context.graphicsQueue();
         if (auto error = validateQueueSubmit("VkSplat depth-sample submit",
                                              submit_queue,
@@ -6921,6 +7051,8 @@ namespace lfs::vis {
             auto batch = DeviceGuard(&renderer_,
                                      /*use_fence=*/false,
                                      render_complete_timeline_,
+                                     completion_value,
+                                     vulkan_render_complete_timeline_,
                                      completion_value);
             {
                 LOG_TIMER("vksplat.selection_overlay.record");
@@ -7002,7 +7134,8 @@ namespace lfs::vis {
         }
 
         ring_completion_values_[ring_slot] = completion_value;
-        const auto& updated_output = output_slots_[outputSlotIndex(output_slot)][ring_slot];
+        auto& updated_output = output_slots_[outputSlotIndex(output_slot)][ring_slot];
+        updated_output.completion_value = completion_value;
         return RenderResult{
             .image = updated_output.image.image,
             .image_view = updated_output.image.view,
@@ -7826,6 +7959,8 @@ namespace lfs::vis {
             auto batch = DeviceGuard(&renderer_,
                                      /*use_fence=*/false,
                                      render_complete_timeline_,
+                                     completion_value,
+                                     vulkan_render_complete_timeline_,
                                      completion_value);
             {
                 LOG_TIMER("vksplat.render.record");
@@ -8172,7 +8307,8 @@ namespace lfs::vis {
             macro_chain_warmup_pending_ = false;
         }
         ring_completion_values_[ring_slot] = completion_value;
-        const auto& output = output_slots_[outputSlotIndex(output_slot)][ring_slot];
+        auto& output = output_slots_[outputSlotIndex(output_slot)][ring_slot];
+        output.completion_value = completion_value;
         const std::uint64_t lod_page_generation =
             lod_request_active && lod_page_cache_.configured()
                 ? lod_page_cache_.snapshot().generation

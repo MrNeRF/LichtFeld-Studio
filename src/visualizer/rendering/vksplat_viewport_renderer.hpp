@@ -573,12 +573,20 @@ namespace lfs::vis {
             VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
             VkImageLayout depth_layout = VK_IMAGE_LAYOUT_UNDEFINED;
             std::uint64_t generation = 0;
+            // Timeline value signalled by the compute submission that produced
+            // this exact ring image. Graphics-queue readbacks wait this value;
+            // a host wait alone is not a Vulkan cross-queue memory dependency.
+            std::uint64_t completion_value = 0;
         };
         static constexpr std::size_t kOutputSlotCount = 4;
         static constexpr std::size_t kFrameRingSize = 3;
         std::array<std::array<OutputImageSlot, kFrameRingSize>, kOutputSlotCount> output_slots_{};
         std::array<std::size_t, kOutputSlotCount> latest_output_ring_slot_{};
         std::array<std::uint64_t, kOutputSlotCount> output_generations_{};
+        // Vulkan-only completion counter for queue-to-queue dependencies. Keep
+        // this separate from the externally shared CUDA payload below so Vulkan
+        // readbacks never depend on external-payload tracking semantics.
+        VkSemaphore vulkan_render_complete_timeline_ = VK_NULL_HANDLE;
         VkSemaphore render_complete_timeline_ = VK_NULL_HANDLE;
         // Last value whose signal operation was accepted by vkQueueSubmit.
         // Failed recording/cancel paths leave it unchanged, so the next attempt

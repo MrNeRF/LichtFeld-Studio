@@ -42,10 +42,16 @@ namespace lfs::vis {
                     VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
                 };
             case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
-                // Intentionally empty. Swapchain acquire is an external dependency: endFrame's
-                // submit waits the acquire semaphore at COLOR_ATTACHMENT_OUTPUT, which matches
-                // the first-use transition's destination stage in that same submit. Inventing a
-                // source access here would not represent work performed by this queue.
+                // The acquire semaphore wait and the first-use layout transition form a
+                // COLOR_ATTACHMENT_OUTPUT -> COLOR_ATTACHMENT_OUTPUT dependency chain. There
+                // is no source access to make available, but the source stage must match the
+                // wait stage so the transition itself cannot run ahead of image acquisition.
+                // A transition *to* PRESENT needs no destination scope; presentation supplies
+                // its own visibility operation after waiting on render_finished_.
+                return source
+                           ? LayoutAccess{VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                          VK_ACCESS_2_NONE}
+                           : LayoutAccess{};
             case VK_IMAGE_LAYOUT_UNDEFINED:
                 // Contents are discarded, so there is no prior access to make available.
             default:

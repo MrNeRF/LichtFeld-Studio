@@ -677,6 +677,43 @@ void VulkanGSPipeline::beginCommandBatch() {
             static_cast<int>(begin_result)));
     }
 
+    // Command buffers rotate, but the VkSplat scratch, indirect, output, and
+    // readback storage is shared across slots. Queue submission order alone
+    // does not prevent adjacent batches from overlapping those accesses. A
+    // queue-local dependency at the batch boundary covers precisely the stages
+    // used by this compute rasterizer; CUDA/Vulkan ownership edges remain on
+    // their dedicated external semaphores.
+    constexpr VkPipelineStageFlags2 kRasterizerStages =
+        VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT |
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+        VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+    constexpr VkAccessFlags2 kRasterizerAccesses =
+        VK_ACCESS_2_TRANSFER_READ_BIT |
+        VK_ACCESS_2_TRANSFER_WRITE_BIT |
+        VK_ACCESS_2_SHADER_READ_BIT |
+        VK_ACCESS_2_SHADER_WRITE_BIT |
+        VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+    const VkMemoryBarrier2 reuse_barrier{
+        .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+        .pNext = nullptr,
+        .srcStageMask = kRasterizerStages,
+        .srcAccessMask = kRasterizerAccesses,
+        .dstStageMask = kRasterizerStages,
+        .dstAccessMask = kRasterizerAccesses,
+    };
+    const VkDependencyInfo reuse_dependency{
+        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+        .pNext = nullptr,
+        .dependencyFlags = 0,
+        .memoryBarrierCount = 1,
+        .pMemoryBarriers = &reuse_barrier,
+        .bufferMemoryBarrierCount = 0,
+        .pBufferMemoryBarriers = nullptr,
+        .imageMemoryBarrierCount = 0,
+        .pImageMemoryBarriers = nullptr,
+    };
+    vkCmdPipelineBarrier2(command_buffer, &reuse_dependency);
+
     commandBatchInProgress = true;
     try {
         PerfTimer::hostToc();
@@ -850,7 +887,9 @@ void VulkanGSPipeline::addTimelineWait(
 
 void VulkanGSPipeline::endCommandBatch(bool use_fence,
                                        VkSemaphore signal_semaphore,
-                                       std::uint64_t signal_value) {
+                                       std::uint64_t signal_value,
+                                       VkSemaphore secondary_signal_semaphore,
+                                       std::uint64_t secondary_signal_value) {
     if (!commandBatchInProgress) {
         _THROW_ERROR(std::format(
             "endCommandBatch called with no active batch (batch_active={}, active_slot={}, next_slot={}, command_buffer={:#x})",
@@ -881,6 +920,24 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence,
             use_fence,
             active_command_batch_slot_));
     }
+    if ((secondary_signal_semaphore == VK_NULL_HANDLE) != (secondary_signal_value == 0)) {
+        _THROW_ERROR(std::format(
+            "endCommandBatch secondary timeline signal handle/value must be supplied together (semaphore={:#x}, value={}, use_fence={}, active_slot={})",
+            lfsVkHandleValue(secondary_signal_semaphore),
+            secondary_signal_value,
+            use_fence,
+            active_command_batch_slot_));
+    }
+    if (signal_semaphore != VK_NULL_HANDLE &&
+        signal_semaphore == secondary_signal_semaphore) {
+        _THROW_ERROR(std::format(
+            "endCommandBatch timeline signal handles must be distinct (primary={:#x}, secondary={:#x}, primary_value={}, secondary_value={}, active_slot={})",
+            lfsVkHandleValue(signal_semaphore),
+            lfsVkHandleValue(secondary_signal_semaphore),
+            signal_value,
+            secondary_signal_value,
+            active_command_batch_slot_));
+    }
     if (use_fence && fence == VK_NULL_HANDLE) {
         _THROW_ERROR(std::format(
             "endCommandBatch requested fence completion with a null fence (use_fence={}, fence={:#x}, active_slot={})",
@@ -895,6 +952,18 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence,
                 "VkSplat Vulkan timeline signals must increase strictly (semaphore={:#x}, signal_value={}, previous_value={}, active_slot={})",
                 lfsVkHandleValue(signal_semaphore),
                 signal_value,
+                previous,
+                active_command_batch_slot_));
+        }
+    }
+    if (secondary_signal_semaphore != VK_NULL_HANDLE) {
+        const std::uint64_t previous =
+            last_timeline_signal_values_[secondary_signal_semaphore];
+        if (secondary_signal_value <= previous) {
+            _THROW_ERROR(std::format(
+                "VkSplat secondary Vulkan timeline signals must increase strictly (semaphore={:#x}, signal_value={}, previous_value={}, active_slot={})",
+                lfsVkHandleValue(secondary_signal_semaphore),
+                secondary_signal_value,
                 previous,
                 active_command_batch_slot_));
         }
@@ -934,6 +1003,10 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence,
     if (signal_semaphore != VK_NULL_HANDLE && signal_value != 0) {
         signal_semaphores.push_back(signal_semaphore);
         signal_values.push_back(signal_value);
+    }
+    if (secondary_signal_semaphore != VK_NULL_HANDLE && secondary_signal_value != 0) {
+        signal_semaphores.push_back(secondary_signal_semaphore);
+        signal_values.push_back(secondary_signal_value);
     }
 
     VkTimelineSemaphoreSubmitInfo timeline_submit_info{};
@@ -1004,6 +1077,9 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence,
     }
     if (signal_semaphore != VK_NULL_HANDLE) {
         last_timeline_signal_values_[signal_semaphore] = signal_value;
+    }
+    if (secondary_signal_semaphore != VK_NULL_HANDLE) {
+        last_timeline_signal_values_[secondary_signal_semaphore] = secondary_signal_value;
     }
     pending_timeline_waits_.clear();
 

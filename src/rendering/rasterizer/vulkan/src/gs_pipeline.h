@@ -52,7 +52,9 @@ public:
     void beginCommandBatch();
     void endCommandBatch(bool use_fence = true,
                          VkSemaphore signal_semaphore = VK_NULL_HANDLE,
-                         std::uint64_t signal_value = 0);
+                         std::uint64_t signal_value = 0,
+                         VkSemaphore secondary_signal_semaphore = VK_NULL_HANDLE,
+                         std::uint64_t secondary_signal_value = 0);
     void cancelCommandBatch() noexcept;
     void waitForPendingBatch();
     [[nodiscard]] bool timelineValueComplete(VkSemaphore semaphore, std::uint64_t value) const;
@@ -288,6 +290,8 @@ class [[nodiscard]] DeviceGuard {
     bool use_fence = true;
     VkSemaphore signal_semaphore = VK_NULL_HANDLE;
     std::uint64_t signal_value = 0;
+    VkSemaphore secondary_signal_semaphore = VK_NULL_HANDLE;
+    std::uint64_t secondary_signal_value = 0;
     const char* debugInfo1 = nullptr;
     int debugInfo2 = -1;
     int uncaught_exceptions = 0;
@@ -310,12 +314,16 @@ public:
                 const bool use_fence,
                 const VkSemaphore signal_semaphore,
                 const std::uint64_t signal_value,
+                const VkSemaphore secondary_signal_semaphore = VK_NULL_HANDLE,
+                const std::uint64_t secondary_signal_value = 0,
                 const char* debugInfo1 = nullptr,
                 const int debugInfo2 = -1)
         : DeviceGuard(pipeline, debugInfo1, debugInfo2) {
         this->use_fence = use_fence;
         this->signal_semaphore = signal_semaphore;
         this->signal_value = signal_value;
+        this->secondary_signal_semaphore = secondary_signal_semaphore;
+        this->secondary_signal_value = secondary_signal_value;
     }
     ~DeviceGuard() noexcept(false) {
         if (std::uncaught_exceptions() > uncaught_exceptions) {
@@ -323,7 +331,11 @@ public:
             return;
         }
         if (!cbip) {
-            pipeline->endCommandBatch(use_fence, signal_semaphore, signal_value);
+            pipeline->endCommandBatch(use_fence,
+                                      signal_semaphore,
+                                      signal_value,
+                                      secondary_signal_semaphore,
+                                      secondary_signal_value);
             if (debugInfo1) {
                 printf("DeviceGuard freed: %s:%d\n", debugInfo1, debugInfo2);
             }
