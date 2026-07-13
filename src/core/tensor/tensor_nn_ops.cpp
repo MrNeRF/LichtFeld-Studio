@@ -20,22 +20,19 @@ namespace lfs::core {
         void assert_float32_same_device(const Tensor& reference,
                                         const std::string_view operation,
                                         const std::initializer_list<NamedTensorOperand> tensors = {}) {
-            LFS_ASSERT_MSG(reference.is_valid(),
-                           std::string(operation) + ": invalid input tensor");
-            LFS_ASSERT_MSG(reference.dtype() == DataType::Float32,
-                           std::string(operation) + ": input must be Float32");
+            tensor_contract::require_valid(reference, operation, "input");
+            tensor_contract::require_dtype(
+                reference, DataType::Float32, operation, "input");
             for (const auto& [name, tensor] : tensors) {
                 LFS_ASSERT_MSG(tensor != nullptr,
                                std::format("{} requires a non-null {} tensor pointer "
                                            "(operand={}, pointer=null)",
                                            operation, name, name));
-                LFS_ASSERT_MSG(tensor->is_valid(),
-                               std::format("{} requires a valid {} tensor ({}={})",
-                                           operation, name, name, tensor->str()));
-                LFS_ASSERT_MSG(tensor->dtype() == DataType::Float32,
-                               std::string(operation) + ": all tensors must be Float32");
-                LFS_ASSERT_MSG(tensor->device() == reference.device(),
-                               std::string(operation) + ": all tensors must be on the same device");
+                tensor_contract::require_valid(*tensor, operation, name);
+                tensor_contract::require_dtype(
+                    *tensor, DataType::Float32, operation, name);
+                tensor_contract::require_same_device(
+                    reference, *tensor, operation, "input", name);
             }
         }
 

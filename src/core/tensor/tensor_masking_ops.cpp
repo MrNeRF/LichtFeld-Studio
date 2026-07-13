@@ -132,14 +132,12 @@ namespace lfs::core {
     // ============= Masking Operations =============
     Tensor Tensor::masked_select(const Tensor& mask) const {
         LFS_CUDA_BREADCRUMB_STREAM("tensor.masked_select", stream());
-        LFS_ASSERT_MSG(is_valid() && mask.is_valid(),
-                       "masked_select requires valid tensors");
-        LFS_ASSERT_MSG(is_bool_like(mask.dtype()),
-                       "masked_select mask must be Bool or UInt8");
-        LFS_ASSERT_MSG(mask.shape() == shape_,
-                       "masked_select mask shape must match the input");
-        LFS_ASSERT_MSG(mask.device() == device_,
-                       "masked_select mask must be on the input device");
+        tensor_contract::require_valid(*this, "masked_select", "input");
+        tensor_contract::require_valid(mask, "masked_select", "mask");
+        tensor_contract::require_dtype(
+            mask, {DataType::Bool, DataType::UInt8}, "masked_select", "mask");
+        tensor_contract::require_shape(*this, mask, "masked_select", "input", "mask");
+        tensor_contract::require_same_device(*this, mask, "masked_select", "input", "mask");
 
         // Count TRUE values in mask
         size_t output_size = mask.count_nonzero();
@@ -210,14 +208,12 @@ namespace lfs::core {
     }
 
     Tensor& Tensor::masked_fill_(const Tensor& mask, float value) {
-        LFS_ASSERT_MSG(is_valid() && mask.is_valid(),
-                       "masked_fill_ requires valid tensors");
-        LFS_ASSERT_MSG(is_bool_like(mask.dtype()),
-                       "masked_fill_ mask must be Bool or UInt8");
-        LFS_ASSERT_MSG(mask.shape() == shape_,
-                       "masked_fill_ mask shape must match the input");
-        LFS_ASSERT_MSG(mask.device() == device_,
-                       "masked_fill_ mask must be on the input device");
+        tensor_contract::require_valid(*this, "masked_fill_", "destination");
+        tensor_contract::require_valid(mask, "masked_fill_", "mask");
+        tensor_contract::require_dtype(
+            mask, {DataType::Bool, DataType::UInt8}, "masked_fill_", "mask");
+        tensor_contract::require_shape(*this, mask, "masked_fill_", "destination", "mask");
+        tensor_contract::require_same_device(*this, mask, "masked_fill_", "destination", "mask");
         LFS_ASSERT_MSG(std::isfinite(value),
                        "masked_fill_ value must be finite");
         assert_masked_fill_value_representable(dtype_, value);

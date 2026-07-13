@@ -1899,12 +1899,12 @@ namespace lfs::core {
     }
 
     Tensor Tensor::where(const Tensor& condition, const Tensor& x, const Tensor& y) {
-        LFS_ASSERT_MSG(condition.is_valid() && x.is_valid() && y.is_valid(),
-                       "where requires valid tensors");
-        LFS_ASSERT_MSG(condition.dtype() == DataType::Bool,
-                       "where condition must have Bool dtype");
-        LFS_ASSERT_MSG(condition.device() == x.device() && x.device() == y.device(),
-                       "where tensors must be on the same device");
+        tensor_contract::require_valid(condition, "where", "condition");
+        tensor_contract::require_valid(x, "where", "true value");
+        tensor_contract::require_valid(y, "where", "false value");
+        tensor_contract::require_dtype(condition, DataType::Bool, "where", "condition");
+        tensor_contract::require_same_device(condition, x, "where", "condition", "true value");
+        tensor_contract::require_same_device(condition, y, "where", "condition", "false value");
         return condition.ternary(x, y);
     }
 
@@ -2022,10 +2022,8 @@ namespace lfs::core {
         if (tensors.empty()) {
             throw std::invalid_argument("Cannot concatenate empty vector of tensors");
         }
-        for (size_t index = 0; index < tensors.size(); ++index) {
-            const auto& tensor = tensors[index];
-            LFS_ASSERT_MSG(tensor.is_valid(),
-                           "cat requires valid tensors");
+        for (const auto& tensor : tensors) {
+            tensor_contract::require_valid(tensor, "cat", "input");
         }
 
         if (tensors.size() == 1) {
@@ -2343,8 +2341,7 @@ namespace lfs::core {
     Tensor Tensor::stack(const std::vector<Tensor>& tensors, int dim) {
         LFS_ASSERT_MSG(!tensors.empty(),
                        "stack requires at least one tensor");
-        LFS_ASSERT_MSG(tensors[0].is_valid(),
-                       "stack requires valid tensors");
+        tensor_contract::require_valid(tensors[0], "stack", "reference");
 
         const auto& first_shape = tensors[0].shape();
         const auto first_device = tensors[0].device();
@@ -2352,14 +2349,10 @@ namespace lfs::core {
 
         // Validate all tensors have same shape, device, and dtype
         for (size_t i = 1; i < tensors.size(); ++i) {
-            LFS_ASSERT_MSG(tensors[i].is_valid(),
-                           "stack requires valid tensors");
-            LFS_ASSERT_MSG(tensors[i].shape() == first_shape,
-                           "stack tensor shapes must match");
-            LFS_ASSERT_MSG(tensors[i].device() == first_device,
-                           "stack tensors must share a device");
-            LFS_ASSERT_MSG(tensors[i].dtype() == first_dtype,
-                           "stack tensor dtypes must match");
+            tensor_contract::require_valid(tensors[i], "stack", "input");
+            tensor_contract::require_shape(tensors[0], tensors[i], "stack", "reference", "input");
+            tensor_contract::require_same_device(tensors[0], tensors[i], "stack", "reference", "input");
+            tensor_contract::require_dtype(tensors[i], first_dtype, "stack", "input");
         }
 
         // Build output shape with new dimension inserted at 'dim'

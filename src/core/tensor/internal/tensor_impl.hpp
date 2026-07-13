@@ -241,6 +241,53 @@ namespace lfs::core {
         }
     };
 
+    namespace tensor_contract {
+
+        LFS_CORE_API void require_valid(
+            const Tensor& tensor,
+            std::string_view operation,
+            std::string_view role = "tensor",
+            std::source_location location = std::source_location::current());
+
+        LFS_CORE_API void require_same_device(
+            const Tensor& reference,
+            const Tensor& other,
+            std::string_view operation,
+            std::string_view reference_role = "input",
+            std::string_view other_role = "other",
+            std::source_location location = std::source_location::current());
+
+        LFS_CORE_API void require_dtype(
+            const Tensor& tensor,
+            DataType expected,
+            std::string_view operation,
+            std::string_view role = "tensor",
+            std::source_location location = std::source_location::current());
+
+        LFS_CORE_API void require_dtype(
+            const Tensor& tensor,
+            std::initializer_list<DataType> expected,
+            std::string_view operation,
+            std::string_view role = "tensor",
+            std::source_location location = std::source_location::current());
+
+        LFS_CORE_API void require_shape(
+            const Tensor& reference,
+            const Tensor& other,
+            std::string_view operation,
+            std::string_view reference_role = "input",
+            std::string_view other_role = "other",
+            std::source_location location = std::source_location::current());
+
+        LFS_CORE_API void require_shape(
+            const Tensor& tensor,
+            const TensorShape& expected,
+            std::string_view operation,
+            std::string_view role = "tensor",
+            std::source_location location = std::source_location::current());
+
+    } // namespace tensor_contract
+
     struct MovementArgs {
         std::variant<
             std::monostate,
@@ -517,8 +564,8 @@ namespace lfs::core {
         template <typename Op>
         Tensor scalar_op_generic(float scalar, Op op, DataType out_dtype = DataType::Float32) const {
             validate_unary_op();
-            LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32,
-                           "scalar operation supports only Float32 and Int32 inputs");
+            tensor_contract::require_dtype(
+                *this, {DataType::Float32, DataType::Int32}, "scalar operation", "input");
             LFS_ASSERT_MSG(out_dtype == DataType::Float32 || out_dtype == DataType::Int32 ||
                                out_dtype == DataType::Bool,
                            "scalar operation requested an unsupported output dtype");
@@ -587,8 +634,8 @@ namespace lfs::core {
         template <typename Op>
         Tensor& scalar_op_inplace_generic(float scalar, Op op) {
             validate_unary_op();
-            LFS_ASSERT_MSG(dtype_ == DataType::Float32,
-                           "in-place scalar operations currently support only Float32");
+            tensor_contract::require_dtype(
+                *this, DataType::Float32, "in-place scalar operation", "input");
 
             if (device_ == Device::CUDA) {
                 tensor_ops::launch_scalar_op_generic(
@@ -624,10 +671,10 @@ namespace lfs::core {
                     (device_ == Device::CUDA ? "CUDA" : "CPU") + " vs " +
                     (other.device() == Device::CUDA ? "CUDA" : "CPU"));
             }
-            LFS_ASSERT_MSG(dtype_ == other.dtype(),
-                           "in-place binary operations require matching dtypes");
-            LFS_ASSERT_MSG(dtype_ == DataType::Float32,
-                           "in-place binary operations currently support only Float32");
+            tensor_contract::require_dtype(
+                other, dtype_, "in-place binary operation", "source");
+            tensor_contract::require_dtype(
+                *this, DataType::Float32, "in-place binary operation", "destination");
 
             if (device_ == Device::CUDA) {
                 tensor_ops::launch_binary_op_generic(
@@ -985,46 +1032,39 @@ namespace lfs::core {
 
         // ============= LIKE OPERATIONS =============
         static Tensor zeros_like(const Tensor& other) {
-            LFS_ASSERT_MSG(other.is_valid(),
-                           "zeros_like requires a valid tensor");
+            tensor_contract::require_valid(other, "zeros_like", "template");
             return zeros(other.shape(), other.device(), other.dtype());
         }
 
         static Tensor ones_like(const Tensor& other) {
-            LFS_ASSERT_MSG(other.is_valid(),
-                           "ones_like requires a valid tensor");
+            tensor_contract::require_valid(other, "ones_like", "template");
             return ones(other.shape(), other.device(), other.dtype());
         }
 
         static Tensor ones_like(const Tensor& other, DataType dtype) {
-            LFS_ASSERT_MSG(other.is_valid(),
-                           "ones_like requires a valid tensor");
+            tensor_contract::require_valid(other, "ones_like", "template");
             return ones(other.shape(), other.device(), dtype);
         }
 
         static Tensor rand_like(const Tensor& other) {
-            LFS_ASSERT_MSG(other.is_valid(),
-                           "rand_like requires a valid tensor");
+            tensor_contract::require_valid(other, "rand_like", "template");
             return rand(other.shape(), other.device(), other.dtype());
         }
 
         static Tensor randn_like(const Tensor& other) {
-            LFS_ASSERT_MSG(other.is_valid(),
-                           "randn_like requires a valid tensor");
+            tensor_contract::require_valid(other, "randn_like", "template");
             return randn(other.shape(), other.device(), other.dtype());
         }
 
         static Tensor empty_like(const Tensor& other) {
-            LFS_ASSERT_MSG(other.is_valid(),
-                           "empty_like requires a valid tensor");
+            tensor_contract::require_valid(other, "empty_like", "template");
             auto result = empty(other.shape(), other.device(), other.dtype());
             result.set_stream(other.stream());
             return result;
         }
 
         static Tensor full_like(const Tensor& other, float value) {
-            LFS_ASSERT_MSG(other.is_valid(),
-                           "full_like requires a valid tensor");
+            tensor_contract::require_valid(other, "full_like", "template");
             auto result = full(other.shape(), value, other.device(), other.dtype());
             result.set_stream(other.stream());
             return result;
@@ -1063,37 +1103,15 @@ namespace lfs::core {
         void set_bool(std::span<const size_t> indices, bool value);
         bool get_bool(std::span<const size_t> indices) const;
 
-        // Data access - FIXED: Handle invalid tensors safely
         template <typename T>
         T* ptr() {
-            materialize_if_deferred();
-            LFS_ASSERT_MSG(is_valid(),
-                           "ptr<T>() called on an invalid tensor");
-            using Value = std::remove_cv_t<T>;
-            if constexpr (!std::is_void_v<Value>) {
-                const bool dtype_matches =
-                    (std::is_same_v<Value, float> && dtype_ == DataType::Float32) ||
-                    (std::is_same_v<Value, __half> && dtype_ == DataType::Float16) ||
-                    ((std::is_same_v<Value, int> || std::is_same_v<Value, int32_t> ||
-                      std::is_same_v<Value, uint32_t>)&&dtype_ == DataType::Int32) ||
-                    (std::is_same_v<Value, int64_t> && dtype_ == DataType::Int64) ||
-                    ((std::is_same_v<Value, bool> || std::is_same_v<Value, unsigned char> ||
-                      std::is_same_v<Value, uint8_t>)&&(dtype_ == DataType::Bool || dtype_ == DataType::UInt8));
-                LFS_ASSERT_MSG(dtype_matches,
-                               "ptr<T>() type does not match tensor dtype");
-            }
-            assert_view_not_stale();
-            LFS_ASSERT_MSG(data_ != nullptr || numel() == 0,
-                           "ptr<T>() found null storage for a non-empty tensor");
-            char* data_ptr = static_cast<char*>(data_) + storage_offset_ * dtype_size(dtype_);
-            return static_cast<T*>(static_cast<void*>(data_ptr));
+            return const_cast<T*>(std::as_const(*this).template ptr<T>());
         }
 
         template <typename T>
         const T* ptr() const {
             materialize_if_deferred();
-            LFS_ASSERT_MSG(is_valid(),
-                           "ptr<T>() called on an invalid tensor");
+            tensor_contract::require_valid(*this, "ptr<T>");
             using Value = std::remove_cv_t<T>;
             if constexpr (!std::is_void_v<Value>) {
                 const bool dtype_matches =
@@ -1116,8 +1134,7 @@ namespace lfs::core {
 
         void* data_ptr() {
             materialize_if_deferred();
-            LFS_ASSERT_MSG(is_valid(),
-                           "data_ptr() called on an invalid tensor");
+            tensor_contract::require_valid(*this, "data_ptr");
             assert_view_not_stale();
             LFS_ASSERT_MSG(data_ != nullptr || numel() == 0,
                            "data_ptr() found null storage for a non-empty tensor");
@@ -1125,8 +1142,7 @@ namespace lfs::core {
         }
         const void* data_ptr() const {
             materialize_if_deferred();
-            LFS_ASSERT_MSG(is_valid(),
-                           "data_ptr() called on an invalid tensor");
+            tensor_contract::require_valid(*this, "data_ptr");
             assert_view_not_stale();
             LFS_ASSERT_MSG(data_ != nullptr || numel() == 0,
                            "data_ptr() found null storage for a non-empty tensor");
@@ -1136,14 +1152,12 @@ namespace lfs::core {
         // Base of allocation (for memory management only)
         void* storage_ptr() {
             materialize_if_deferred();
-            LFS_ASSERT_MSG(is_valid(),
-                           "storage_ptr() called on an invalid tensor");
+            tensor_contract::require_valid(*this, "storage_ptr");
             return data_;
         }
         const void* storage_ptr() const {
             materialize_if_deferred();
-            LFS_ASSERT_MSG(is_valid(),
-                           "storage_ptr() called on an invalid tensor");
+            tensor_contract::require_valid(*this, "storage_ptr");
             return data_;
         }
 
@@ -1514,15 +1528,27 @@ namespace lfs::core {
             return binary_op_with_promotion(other, ops::minimum_op{});
         }
 
+    private:
+        template <typename T>
+        float validated_scalar_operand(
+            const T& value,
+            const std::string_view operation,
+            const std::initializer_list<DataType> allowed_dtypes) const {
+            validate_unary_op();
+            tensor_contract::require_dtype(*this, allowed_dtypes, operation, "input");
+            const float scalar = static_cast<float>(value);
+            LFS_ASSERT_MSG(std::isfinite(scalar),
+                           std::string(operation) + " scalar must be finite");
+            return scalar;
+        }
+
+    public:
         // Macro for scalar binary operations (lazy evaluation with scalar_right_op)
 #define LFS_DEFINE_SCALAR_BINARY_OP_FUSABLE(name, op_type, fusion_kind)                   \
     template <typename T, typename = std::enable_if_t<std::is_arithmetic_v<T>>>           \
     Tensor name(const T& other) const {                                                   \
-        validate_unary_op();                                                              \
-        const float scalar_value = static_cast<float>(other);                             \
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32,          \
-                       #name " scalar operation supports only Float32 and Int32");        \
-        LFS_ASSERT_MSG(std::isfinite(scalar_value), #name " scalar must be finite");      \
+        const float scalar_value = validated_scalar_operand(                              \
+            other, #name, {DataType::Float32, DataType::Int32});                          \
         if (numel() == 0) {                                                               \
             return Tensor::empty(shape_, device_, dtype_);                                \
         }                                                                                 \
@@ -1549,11 +1575,8 @@ namespace lfs::core {
 #define LFS_DEFINE_SCALAR_BINARY_OP(name, op_type)                                        \
     template <typename T, typename = std::enable_if_t<std::is_arithmetic_v<T>>>           \
     Tensor name(const T& other) const {                                                   \
-        validate_unary_op();                                                              \
-        const float scalar_value = static_cast<float>(other);                             \
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32,          \
-                       #name " scalar operation supports only Float32 and Int32");        \
-        LFS_ASSERT_MSG(std::isfinite(scalar_value), #name " scalar must be finite");      \
+        const float scalar_value = validated_scalar_operand(                              \
+            other, #name, {DataType::Float32, DataType::Int32});                          \
         if (numel() == 0) {                                                               \
             return Tensor::empty(shape_, device_, dtype_);                                \
         }                                                                                 \
@@ -1607,12 +1630,9 @@ namespace lfs::core {
 #define LFS_DEFINE_SCALAR_CMP_OP(name, op_type)                                         \
     template <typename T, typename = std::enable_if_t<std::is_arithmetic_v<T>>>         \
     Tensor name(const T& other) const {                                                 \
-        validate_unary_op();                                                            \
-        const float scalar_value = static_cast<float>(other);                           \
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32 ||      \
-                           dtype_ == DataType::UInt8 || dtype_ == DataType::Bool,       \
-                       #name " scalar comparison encountered an unsupported dtype");    \
-        LFS_ASSERT_MSG(std::isfinite(scalar_value), #name " scalar must be finite");    \
+        const float scalar_value = validated_scalar_operand(                            \
+            other, #name,                                                               \
+            {DataType::Float32, DataType::Int32, DataType::UInt8, DataType::Bool});     \
         if (numel() == 0) {                                                             \
             return Tensor::empty(shape_, device_, DataType::Bool);                      \
         }                                                                               \

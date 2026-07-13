@@ -28,17 +28,16 @@ namespace lfs::core {
     } // namespace
 
     Tensor Tensor::mm(const Tensor& other) const {
-        LFS_ASSERT_MSG(is_valid() && other.is_valid(),
-                       "mm requires valid tensors");
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32 && other.dtype_ == DataType::Float32,
-                       "mm currently supports only Float32 tensors");
+        tensor_contract::require_valid(*this, "mm", "left");
+        tensor_contract::require_valid(other, "mm", "right");
+        tensor_contract::require_dtype(*this, DataType::Float32, "mm", "left");
+        tensor_contract::require_dtype(other, DataType::Float32, "mm", "right");
         LFS_ASSERT_MSG(shape_.rank() == 2 && other.shape_.rank() == 2,
                        "mm requires rank-2 tensors");
         LFS_ASSERT_MSG(shape_[1] == other.shape_[0],
                        std::format("mm dimension mismatch: {}x{} @ {}x{}",
                                    shape_[0], shape_[1], other.shape_[0], other.shape_[1]));
-        LFS_ASSERT_MSG(device_ == other.device_,
-                       "mm requires tensors on the same device");
+        tensor_contract::require_same_device(*this, other, "mm", "left", "right");
 
         const size_t m = shape_[0];
         const size_t k = shape_[1];
@@ -61,10 +60,10 @@ namespace lfs::core {
     }
 
     Tensor Tensor::bmm(const Tensor& other) const {
-        LFS_ASSERT_MSG(is_valid() && other.is_valid(),
-                       "bmm requires valid tensors");
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32 && other.dtype_ == DataType::Float32,
-                       "bmm currently supports only Float32 tensors");
+        tensor_contract::require_valid(*this, "bmm", "left");
+        tensor_contract::require_valid(other, "bmm", "right");
+        tensor_contract::require_dtype(*this, DataType::Float32, "bmm", "left");
+        tensor_contract::require_dtype(other, DataType::Float32, "bmm", "right");
         LFS_ASSERT_MSG(shape_.rank() == 3 && other.shape_.rank() == 3,
                        "bmm requires rank-3 tensors");
         LFS_ASSERT_MSG(shape_[0] == other.shape_[0],
@@ -72,8 +71,7 @@ namespace lfs::core {
         LFS_ASSERT_MSG(shape_[2] == other.shape_[1],
                        std::format("bmm dimension mismatch: {}x{} @ {}x{}",
                                    shape_[1], shape_[2], other.shape_[1], other.shape_[2]));
-        LFS_ASSERT_MSG(device_ == other.device_,
-                       "bmm requires tensors on the same device");
+        tensor_contract::require_same_device(*this, other, "bmm", "left", "right");
 
         const size_t batch_size = shape_[0];
         const size_t m = shape_[1];

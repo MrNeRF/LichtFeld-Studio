@@ -97,7 +97,138 @@ namespace lfs::core {
             return dtype_size(dtype) != 0;
         }
 
+        struct NamedTensorContractOperand {
+            std::string_view role;
+            const Tensor* tensor;
+        };
+
+        std::string format_tensor_contract(
+            const std::string_view operation,
+            const std::string_view requirement,
+            const std::initializer_list<NamedTensorContractOperand> tensors,
+            const std::string_view context = {}) {
+            std::string message(operation);
+            message += ": ";
+            message += requirement;
+            if (!context.empty()) {
+                message += " [";
+                message += context;
+                message += ']';
+            }
+            message += " (";
+            bool first = true;
+            for (const auto& [role, tensor] : tensors) {
+                if (!first) {
+                    message += ", ";
+                }
+                first = false;
+                message += role;
+                message += '=';
+                message += tensor->str();
+            }
+            message += ')';
+            return message;
+        }
+
+        std::string expected_dtypes(const std::initializer_list<DataType> expected) {
+            std::string result = "expected=";
+            bool first = true;
+            for (const DataType dtype : expected) {
+                if (!first) {
+                    result += '|';
+                }
+                first = false;
+                result += dtype_name(dtype);
+            }
+            return result;
+        }
+
     } // namespace
+
+    namespace tensor_contract {
+
+        void require_valid(const Tensor& tensor,
+                           const std::string_view operation,
+                           const std::string_view role,
+                           const std::source_location location) {
+            if (!tensor.is_valid()) [[unlikely]] {
+                detail::assertion_failed(
+                    "LFS boundary contract", "tensor.is_valid()",
+                    format_tensor_contract(operation, "invalid tensor", {{role, &tensor}}),
+                    location);
+            }
+        }
+
+        void require_same_device(const Tensor& reference,
+                                 const Tensor& other,
+                                 const std::string_view operation,
+                                 const std::string_view reference_role,
+                                 const std::string_view other_role,
+                                 const std::source_location location) {
+            if (reference.device() != other.device()) [[unlikely]] {
+                detail::assertion_failed(
+                    "LFS boundary contract", "tensor devices match",
+                    format_tensor_contract(
+                        operation, "device mismatch",
+                        {{reference_role, &reference}, {other_role, &other}}),
+                    location);
+            }
+        }
+
+        void require_dtype(const Tensor& tensor,
+                           const DataType expected,
+                           const std::string_view operation,
+                           const std::string_view role,
+                           const std::source_location location) {
+            require_dtype(tensor, {expected}, operation, role, location);
+        }
+
+        void require_dtype(const Tensor& tensor,
+                           const std::initializer_list<DataType> expected,
+                           const std::string_view operation,
+                           const std::string_view role,
+                           const std::source_location location) {
+            if (std::find(expected.begin(), expected.end(), tensor.dtype()) == expected.end()) [[unlikely]] {
+                detail::assertion_failed(
+                    "LFS boundary contract", "tensor dtype is allowed",
+                    format_tensor_contract(
+                        operation, "dtype mismatch", {{role, &tensor}}, expected_dtypes(expected)),
+                    location);
+            }
+        }
+
+        void require_shape(const Tensor& reference,
+                           const Tensor& other,
+                           const std::string_view operation,
+                           const std::string_view reference_role,
+                           const std::string_view other_role,
+                           const std::source_location location) {
+            if (reference.shape() != other.shape()) [[unlikely]] {
+                detail::assertion_failed(
+                    "LFS boundary contract", "tensor shapes match",
+                    format_tensor_contract(
+                        operation, "shape mismatch",
+                        {{reference_role, &reference}, {other_role, &other}}),
+                    location);
+            }
+        }
+
+        void require_shape(const Tensor& tensor,
+                           const TensorShape& expected,
+                           const std::string_view operation,
+                           const std::string_view role,
+                           const std::source_location location) {
+            if (tensor.shape() != expected) [[unlikely]] {
+                const std::string context = "expected=" + expected.str();
+                detail::assertion_failed(
+                    "LFS boundary contract", "tensor shape matches expected shape",
+                    format_tensor_contract(
+                        operation, "shape mismatch", {{role, &tensor}}, context),
+                    location);
+            }
+        }
+
+    } // namespace tensor_contract
 
     size_t Tensor::storage_allocation_bytes(const TensorShape& shape,
                                             const size_t capacity,
