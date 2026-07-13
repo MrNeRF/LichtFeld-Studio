@@ -1622,30 +1622,28 @@ namespace lfs::training {
     }
 
     void MRNF::adopt_checkpoint_state(IStrategy& loaded) noexcept {
-        auto* source = dynamic_cast<MRNF*>(&loaded);
-        if (!source || !can_adopt_checkpoint_state(*source))
-            return;
+        auto& source = checked_checkpoint_source<MRNF>(loaded);
         if (_optimizer)
-            _optimizer->adopt_checkpoint_state(*source->_optimizer);
+            _optimizer->adopt_checkpoint_state(*source._optimizer);
         if (_scheduler)
-            _scheduler->adopt_checkpoint_state(*source->_scheduler);
-        _params.swap(source->_params);
-        std::swap(_refine_weight_max, source->_refine_weight_max);
-        std::swap(_vis_count, source->_vis_count);
-        std::swap(_precomputed_edge_scores, source->_precomputed_edge_scores);
-        std::swap(_edge_precompute_valid, source->_edge_precompute_valid);
-        std::swap(_edge_score_sum, source->_edge_score_sum);
-        std::swap(_edge_canny_nms_output, source->_edge_canny_nms_output);
-        std::swap(_edge_sample_count, source->_edge_sample_count);
-        std::swap(_edge_last_sample_iter, source->_edge_last_sample_iter);
-        std::swap(_free_mask, source->_free_mask);
-        std::swap(_bounds, source->_bounds);
-        std::swap(_bounds_valid, source->_bounds_valid);
-        std::swap(_refine_windows_since_bounds, source->_refine_windows_since_bounds);
-        std::swap(_mean_lr_unscaled, source->_mean_lr_unscaled);
-        std::swap(_scale_lr_current, source->_scale_lr_current);
-        std::swap(_mean_lr_gamma, source->_mean_lr_gamma);
-        std::swap(_scale_lr_gamma, source->_scale_lr_gamma);
+            _scheduler->adopt_checkpoint_state(*source._scheduler);
+        _params.swap(source._params);
+        std::swap(_refine_weight_max, source._refine_weight_max);
+        std::swap(_vis_count, source._vis_count);
+        std::swap(_precomputed_edge_scores, source._precomputed_edge_scores);
+        std::swap(_edge_precompute_valid, source._edge_precompute_valid);
+        std::swap(_edge_score_sum, source._edge_score_sum);
+        std::swap(_edge_canny_nms_output, source._edge_canny_nms_output);
+        std::swap(_edge_sample_count, source._edge_sample_count);
+        std::swap(_edge_last_sample_iter, source._edge_last_sample_iter);
+        std::swap(_free_mask, source._free_mask);
+        std::swap(_bounds, source._bounds);
+        std::swap(_bounds_valid, source._bounds_valid);
+        std::swap(_refine_windows_since_bounds, source._refine_windows_since_bounds);
+        std::swap(_mean_lr_unscaled, source._mean_lr_unscaled);
+        std::swap(_scale_lr_current, source._scale_lr_current);
+        std::swap(_mean_lr_gamma, source._mean_lr_gamma);
+        std::swap(_scale_lr_gamma, source._scale_lr_gamma);
     }
 
     void MRNF::reserve_optimizer_capacity(size_t capacity) {

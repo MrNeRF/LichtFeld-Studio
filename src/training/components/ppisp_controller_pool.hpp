@@ -73,6 +73,9 @@ namespace lfs::training {
         /// Deserialize all controller states.
         void deserialize(std::istream& is);
 
+        /// Validate and consume a serialized controller state without retaining it.
+        static void consume_checkpoint(std::istream& is);
+
         /// Transfer a fully validated persistent checkpoint state. Transient
         /// inference buffers and the synchronization primitive stay owned here.
         void adopt_checkpoint_state(PPISPControllerPool& loaded) noexcept;
@@ -90,6 +93,8 @@ namespace lfs::training {
             const std::vector<int>& source_camera_indices);
 
     private:
+        static void parse_checkpoint(std::istream& is, PPISPControllerPool* destination);
+
         void adam_update(lfs::core::Tensor& param, lfs::core::Tensor& exp_avg,
                          lfs::core::Tensor& exp_avg_sq, const lfs::core::Tensor& grad);
         void compute_bias_corrections(float& bc1_rcp, float& bc2_sqrt_rcp) const;

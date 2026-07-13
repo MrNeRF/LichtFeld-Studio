@@ -31,6 +31,7 @@ namespace lfs::training {
         constexpr int CNN_FLAT_DIM = 1600;
         constexpr int POOL2_SIZE = 5;
         constexpr int POOL_STRIDE = 3;
+        constexpr int MAX_CHECKPOINT_CAMERAS = 100'000;
 
         lfs::core::Tensor kaiming_uniform(const size_t fan_in, const size_t fan_out) {
             const float bound = std::sqrt(6.0f / static_cast<float>(fan_in));
@@ -380,7 +381,16 @@ namespace lfs::training {
     }
 
     void PPISPControllerPool::deserialize(std::istream& is) {
-        uint32_t magic = 0, version = 0;
+        parse_checkpoint(is, this);
+    }
+
+    void PPISPControllerPool::consume_checkpoint(std::istream& is) {
+        parse_checkpoint(is, nullptr);
+    }
+
+    void PPISPControllerPool::parse_checkpoint(std::istream& is, PPISPControllerPool* destination) {
+        uint32_t magic = 0;
+        uint32_t version = 0;
         lfs::core::serialization_detail::read_exact(is, &magic, sizeof(magic), "PPISP controller magic");
         lfs::core::serialization_detail::read_exact(is, &version, sizeof(version), "PPISP controller version");
 
@@ -392,7 +402,9 @@ namespace lfs::training {
         int saved_num_cameras = 0;
         lfs::core::serialization_detail::read_exact(
             is, &saved_num_cameras, sizeof(saved_num_cameras), "PPISP controller camera count");
-        if (saved_num_cameras != num_cameras_)
+        if (saved_num_cameras <= 0 || saved_num_cameras > MAX_CHECKPOINT_CAMERAS)
+            throw std::runtime_error("Invalid PPISPControllerPool checkpoint camera count");
+        if (destination && saved_num_cameras != destination->num_cameras_)
             throw std::runtime_error("Camera count mismatch in checkpoint");
 
         int total_iterations = 0;
@@ -420,99 +432,71 @@ namespace lfs::training {
             throw std::runtime_error("Invalid PPISPControllerPool checkpoint state");
         }
 
-        const auto require_shape = [](const lfs::core::Tensor& tensor,
-                                      const lfs::core::TensorShape& shape,
-                                      const std::string_view name) {
+        const auto read_tensor = [&is](lfs::core::Tensor* output,
+                                       const lfs::core::TensorShape& shape,
+                                       const std::string_view name) {
+            lfs::core::Tensor tensor;
+            is >> tensor;
             if (!tensor.is_valid() || tensor.dtype() != lfs::core::DataType::Float32 || tensor.shape() != shape)
                 throw std::runtime_error("Invalid PPISPControllerPool tensor: " + std::string(name));
+            if (output)
+                *output = tensor.cuda();
         };
 
-        // Shared CNN
-        is >> conv1_w_ >> conv1_b_ >> conv2_w_ >> conv2_b_ >> conv3_w_ >> conv3_b_;
-        require_shape(conv1_w_, {CNN_CH1, 3}, "conv1 weights");
-        require_shape(conv1_b_, {CNN_CH1}, "conv1 bias");
-        require_shape(conv2_w_, {CNN_CH2, CNN_CH1}, "conv2 weights");
-        require_shape(conv2_b_, {CNN_CH2}, "conv2 bias");
-        require_shape(conv3_w_, {CNN_CH3, CNN_CH2}, "conv3 weights");
-        require_shape(conv3_b_, {CNN_CH3}, "conv3 bias");
-        conv1_w_ = conv1_w_.cuda();
-        conv1_b_ = conv1_b_.cuda();
-        conv2_w_ = conv2_w_.cuda();
-        conv2_b_ = conv2_b_.cuda();
-        conv3_w_ = conv3_w_.cuda();
-        conv3_b_ = conv3_b_.cuda();
+        read_tensor(destination ? &destination->conv1_w_ : nullptr, {CNN_CH1, 3}, "conv1 weights");
+        read_tensor(destination ? &destination->conv1_b_ : nullptr, {CNN_CH1}, "conv1 bias");
+        read_tensor(destination ? &destination->conv2_w_ : nullptr, {CNN_CH2, CNN_CH1}, "conv2 weights");
+        read_tensor(destination ? &destination->conv2_b_ : nullptr, {CNN_CH2}, "conv2 bias");
+        read_tensor(destination ? &destination->conv3_w_ : nullptr, {CNN_CH3, CNN_CH2}, "conv3 weights");
+        read_tensor(destination ? &destination->conv3_b_ : nullptr, {CNN_CH3}, "conv3 bias");
 
-        // Per-camera FC weights
-        for (int i = 0; i < num_cameras_; ++i) {
-            is >> fc1_w_[i] >> fc1_b_[i];
-            is >> fc2_w_[i] >> fc2_b_[i];
-            is >> fc3_w_[i] >> fc3_b_[i];
-            is >> fc4_w_[i] >> fc4_b_[i];
-
-            require_shape(fc1_w_[i], {FC_HIDDEN_DIM, FC1_INPUT_DIM}, "fc1 weights");
-            require_shape(fc1_b_[i], {FC_HIDDEN_DIM}, "fc1 bias");
-            require_shape(fc2_w_[i], {FC_HIDDEN_DIM, FC_HIDDEN_DIM}, "fc2 weights");
-            require_shape(fc2_b_[i], {FC_HIDDEN_DIM}, "fc2 bias");
-            require_shape(fc3_w_[i], {FC_HIDDEN_DIM, FC_HIDDEN_DIM}, "fc3 weights");
-            require_shape(fc3_b_[i], {FC_HIDDEN_DIM}, "fc3 bias");
-            require_shape(fc4_w_[i], {FC_OUTPUT_DIM, FC_HIDDEN_DIM}, "fc4 weights");
-            require_shape(fc4_b_[i], {FC_OUTPUT_DIM}, "fc4 bias");
-
-            fc1_w_[i] = fc1_w_[i].cuda();
-            fc1_b_[i] = fc1_b_[i].cuda();
-            fc2_w_[i] = fc2_w_[i].cuda();
-            fc2_b_[i] = fc2_b_[i].cuda();
-            fc3_w_[i] = fc3_w_[i].cuda();
-            fc3_b_[i] = fc3_b_[i].cuda();
-            fc4_w_[i] = fc4_w_[i].cuda();
-            fc4_b_[i] = fc4_b_[i].cuda();
+        for (int camera = 0; camera < saved_num_cameras; ++camera) {
+            read_tensor(destination ? &destination->fc1_w_[camera] : nullptr,
+                        {FC_HIDDEN_DIM, FC1_INPUT_DIM}, "fc1 weights");
+            read_tensor(destination ? &destination->fc1_b_[camera] : nullptr, {FC_HIDDEN_DIM}, "fc1 bias");
+            read_tensor(destination ? &destination->fc2_w_[camera] : nullptr,
+                        {FC_HIDDEN_DIM, FC_HIDDEN_DIM}, "fc2 weights");
+            read_tensor(destination ? &destination->fc2_b_[camera] : nullptr, {FC_HIDDEN_DIM}, "fc2 bias");
+            read_tensor(destination ? &destination->fc3_w_[camera] : nullptr,
+                        {FC_HIDDEN_DIM, FC_HIDDEN_DIM}, "fc3 weights");
+            read_tensor(destination ? &destination->fc3_b_[camera] : nullptr, {FC_HIDDEN_DIM}, "fc3 bias");
+            read_tensor(destination ? &destination->fc4_w_[camera] : nullptr,
+                        {FC_OUTPUT_DIM, FC_HIDDEN_DIM}, "fc4 weights");
+            read_tensor(destination ? &destination->fc4_b_[camera] : nullptr, {FC_OUTPUT_DIM}, "fc4 bias");
         }
 
-        // Shared Adam state
-        is >> fc1_w_m_ >> fc1_w_v_ >> fc1_b_m_ >> fc1_b_v_;
-        is >> fc2_w_m_ >> fc2_w_v_ >> fc2_b_m_ >> fc2_b_v_;
-        is >> fc3_w_m_ >> fc3_w_v_ >> fc3_b_m_ >> fc3_b_v_;
-        is >> fc4_w_m_ >> fc4_w_v_ >> fc4_b_m_ >> fc4_b_v_;
+        read_tensor(destination ? &destination->fc1_w_m_ : nullptr,
+                    {FC_HIDDEN_DIM, FC1_INPUT_DIM}, "fc1 first moment");
+        read_tensor(destination ? &destination->fc1_w_v_ : nullptr,
+                    {FC_HIDDEN_DIM, FC1_INPUT_DIM}, "fc1 second moment");
+        read_tensor(destination ? &destination->fc1_b_m_ : nullptr, {FC_HIDDEN_DIM}, "fc1 bias first moment");
+        read_tensor(destination ? &destination->fc1_b_v_ : nullptr, {FC_HIDDEN_DIM}, "fc1 bias second moment");
+        read_tensor(destination ? &destination->fc2_w_m_ : nullptr,
+                    {FC_HIDDEN_DIM, FC_HIDDEN_DIM}, "fc2 first moment");
+        read_tensor(destination ? &destination->fc2_w_v_ : nullptr,
+                    {FC_HIDDEN_DIM, FC_HIDDEN_DIM}, "fc2 second moment");
+        read_tensor(destination ? &destination->fc2_b_m_ : nullptr, {FC_HIDDEN_DIM}, "fc2 bias first moment");
+        read_tensor(destination ? &destination->fc2_b_v_ : nullptr, {FC_HIDDEN_DIM}, "fc2 bias second moment");
+        read_tensor(destination ? &destination->fc3_w_m_ : nullptr,
+                    {FC_HIDDEN_DIM, FC_HIDDEN_DIM}, "fc3 first moment");
+        read_tensor(destination ? &destination->fc3_w_v_ : nullptr,
+                    {FC_HIDDEN_DIM, FC_HIDDEN_DIM}, "fc3 second moment");
+        read_tensor(destination ? &destination->fc3_b_m_ : nullptr, {FC_HIDDEN_DIM}, "fc3 bias first moment");
+        read_tensor(destination ? &destination->fc3_b_v_ : nullptr, {FC_HIDDEN_DIM}, "fc3 bias second moment");
+        read_tensor(destination ? &destination->fc4_w_m_ : nullptr,
+                    {FC_OUTPUT_DIM, FC_HIDDEN_DIM}, "fc4 first moment");
+        read_tensor(destination ? &destination->fc4_w_v_ : nullptr,
+                    {FC_OUTPUT_DIM, FC_HIDDEN_DIM}, "fc4 second moment");
+        read_tensor(destination ? &destination->fc4_b_m_ : nullptr, {FC_OUTPUT_DIM}, "fc4 bias first moment");
+        read_tensor(destination ? &destination->fc4_b_v_ : nullptr, {FC_OUTPUT_DIM}, "fc4 bias second moment");
 
-        require_shape(fc1_w_m_, {FC_HIDDEN_DIM, FC1_INPUT_DIM}, "fc1 first moment");
-        require_shape(fc1_w_v_, {FC_HIDDEN_DIM, FC1_INPUT_DIM}, "fc1 second moment");
-        require_shape(fc1_b_m_, {FC_HIDDEN_DIM}, "fc1 bias first moment");
-        require_shape(fc1_b_v_, {FC_HIDDEN_DIM}, "fc1 bias second moment");
-        require_shape(fc2_w_m_, {FC_HIDDEN_DIM, FC_HIDDEN_DIM}, "fc2 first moment");
-        require_shape(fc2_w_v_, {FC_HIDDEN_DIM, FC_HIDDEN_DIM}, "fc2 second moment");
-        require_shape(fc2_b_m_, {FC_HIDDEN_DIM}, "fc2 bias first moment");
-        require_shape(fc2_b_v_, {FC_HIDDEN_DIM}, "fc2 bias second moment");
-        require_shape(fc3_w_m_, {FC_HIDDEN_DIM, FC_HIDDEN_DIM}, "fc3 first moment");
-        require_shape(fc3_w_v_, {FC_HIDDEN_DIM, FC_HIDDEN_DIM}, "fc3 second moment");
-        require_shape(fc3_b_m_, {FC_HIDDEN_DIM}, "fc3 bias first moment");
-        require_shape(fc3_b_v_, {FC_HIDDEN_DIM}, "fc3 bias second moment");
-        require_shape(fc4_w_m_, {FC_OUTPUT_DIM, FC_HIDDEN_DIM}, "fc4 first moment");
-        require_shape(fc4_w_v_, {FC_OUTPUT_DIM, FC_HIDDEN_DIM}, "fc4 second moment");
-        require_shape(fc4_b_m_, {FC_OUTPUT_DIM}, "fc4 bias first moment");
-        require_shape(fc4_b_v_, {FC_OUTPUT_DIM}, "fc4 bias second moment");
-
-        fc1_w_m_ = fc1_w_m_.cuda();
-        fc1_w_v_ = fc1_w_v_.cuda();
-        fc1_b_m_ = fc1_b_m_.cuda();
-        fc1_b_v_ = fc1_b_v_.cuda();
-        fc2_w_m_ = fc2_w_m_.cuda();
-        fc2_w_v_ = fc2_w_v_.cuda();
-        fc2_b_m_ = fc2_b_m_.cuda();
-        fc2_b_v_ = fc2_b_v_.cuda();
-        fc3_w_m_ = fc3_w_m_.cuda();
-        fc3_w_v_ = fc3_w_v_.cuda();
-        fc3_b_m_ = fc3_b_m_.cuda();
-        fc3_b_v_ = fc3_b_v_.cuda();
-        fc4_w_m_ = fc4_w_m_.cuda();
-        fc4_w_v_ = fc4_w_v_.cuda();
-        fc4_b_m_ = fc4_b_m_.cuda();
-        fc4_b_v_ = fc4_b_v_.cuda();
-
-        total_iterations_ = total_iterations;
-        config_ = config;
-        step_ = step;
-        current_lr_ = current_lr;
-        initial_lr_ = initial_lr;
+        if (destination) {
+            destination->total_iterations_ = total_iterations;
+            destination->config_ = std::move(config);
+            destination->step_ = step;
+            destination->current_lr_ = current_lr;
+            destination->initial_lr_ = initial_lr;
+        }
     }
 
     void PPISPControllerPool::adopt_checkpoint_state(PPISPControllerPool& loaded) noexcept {

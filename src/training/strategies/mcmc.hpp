@@ -14,7 +14,7 @@
 namespace lfs::training {
 
     /// MCMC-based optimization strategy. SplatData owned by Scene.
-    class MCMC : public IStrategy {
+    class MCMC : public IStrategy, public ICheckpointStateAdopter {
     public:
         MCMC() = delete;
         /// SplatData must be owned by Scene

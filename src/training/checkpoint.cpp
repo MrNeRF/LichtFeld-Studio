@@ -12,7 +12,6 @@
 #include "io/error.hpp"
 #include "strategies/istrategy.hpp"
 #include "strategies/strategy_factory.hpp"
-#include <cmath>
 #include <fstream>
 #include <memory>
 #include <nlohmann/json.hpp>
@@ -374,12 +373,13 @@ namespace lfs::training {
             if (!loaded_strategy_result)
                 throw std::runtime_error("Cannot construct checkpoint strategy: " + loaded_strategy_result.error());
             auto loaded_strategy = std::move(*loaded_strategy_result);
-            if (strategy.has_checkpoint_runtime_state())
+            auto* checkpoint_adopter = dynamic_cast<ICheckpointStateAdopter*>(&strategy);
+            if (checkpoint_adopter && checkpoint_adopter->has_checkpoint_runtime_state())
                 loaded_strategy->initialize(loaded_params.optimization);
             else
                 loaded_strategy->set_optimization_params(loaded_params.optimization);
             loaded_strategy->deserialize(file);
-            if (!strategy.can_adopt_checkpoint_state(*loaded_strategy)) {
+            if (!checkpoint_adopter || !checkpoint_adopter->can_adopt_checkpoint_state(*loaded_strategy)) {
                 throw std::runtime_error(
                     "Strategy does not support transactional checkpoint state adoption");
             }
@@ -420,42 +420,7 @@ namespace lfs::training {
                     loaded_ppisp_controller_pool->deserialize(file);
                 } else {
                     LOG_WARN("Checkpoint has PPISP controller pool but none provided - skipping");
-                    uint32_t magic = 0, version = 0;
-                    int num_cameras = 0;
-                    file.read(reinterpret_cast<char*>(&magic), sizeof(magic));
-                    file.read(reinterpret_cast<char*>(&version), sizeof(version));
-                    file.read(reinterpret_cast<char*>(&num_cameras), sizeof(num_cameras));
-                    if (!file || magic != 0x4C465043 || version != 1 ||
-                        num_cameras <= 0 || num_cameras > 100'000)
-                        throw std::runtime_error("Invalid PPISP controller pool camera count");
-
-                    int total_iterations = 0;
-                    PPISPControllerPool::Config config{};
-                    int64_t step = 0;
-                    double current_lr = 0.0;
-                    double initial_lr = 0.0;
-                    file.read(reinterpret_cast<char*>(&total_iterations), sizeof(total_iterations));
-                    file.read(reinterpret_cast<char*>(&config), sizeof(config));
-                    file.read(reinterpret_cast<char*>(&step), sizeof(step));
-                    file.read(reinterpret_cast<char*>(&current_lr), sizeof(current_lr));
-                    file.read(reinterpret_cast<char*>(&initial_lr), sizeof(initial_lr));
-                    if (!file || total_iterations <= 0 || step < 0 ||
-                        !std::isfinite(current_lr) || current_lr < 0.0 ||
-                        !std::isfinite(initial_lr) || initial_lr < 0.0)
-                        throw std::runtime_error("Invalid PPISP controller pool state");
-
-                    const auto discard_tensor = [&file]() {
-                        lfs::core::Tensor discarded;
-                        file >> discarded;
-                    };
-                    for (int i = 0; i < 6; ++i)
-                        discard_tensor();
-                    for (int camera = 0; camera < num_cameras; ++camera) {
-                        for (int i = 0; i < 8; ++i)
-                            discard_tensor();
-                    }
-                    for (int i = 0; i < 16; ++i)
-                        discard_tensor();
+                    PPISPControllerPool::consume_checkpoint(file);
                 }
             } else if (ppisp_controller_pool) {
                 LOG_WARN("PPISP controller pool requested but not in checkpoint - using fresh state");
@@ -487,7 +452,7 @@ namespace lfs::training {
             // allocate. The live state therefore changes as one commit boundary.
             std::swap(params, loaded_params);
             strategy.get_model() = std::move(loaded_model);
-            strategy.adopt_checkpoint_state(*loaded_strategy);
+            checkpoint_adopter->adopt_checkpoint_state(*loaded_strategy);
             if (loaded_bilateral_grid) {
                 bilateral_grid->adopt_checkpoint_state(*loaded_bilateral_grid);
                 LOG_INFO("Bilateral grid restored (step={}, lr={:.2e})",
