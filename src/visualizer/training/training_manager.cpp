@@ -141,10 +141,6 @@ namespace lfs::vis {
     }
 
     void TrainerManager::setupStateMachineCallbacks() {
-        state_machine_.setCleanupCallback([this](const TrainingResources& resources) {
-            cleanupTrainingResources(resources);
-        });
-
         state_machine_.setStateChangeCallback([this](TrainingState, TrainingState new_state) {
             // Emit events on state changes
             if (new_state == TrainingState::Idle) {
@@ -156,36 +152,6 @@ namespace lfs::vis {
                 last_error_.clear();
             }
         });
-    }
-
-    void TrainerManager::cleanupTrainingResources(const TrainingResources& /*resources*/) {
-        LOG_DEBUG("Cleaning up training resources");
-
-        if (training_thread_ && training_thread_->joinable()) {
-            training_thread_->request_stop();
-            if (!waitForCompletion()) {
-                LOG_ERROR("Training resource cleanup deferred because the worker still owns the trainer");
-                return;
-            }
-        }
-
-        if (trainer_) {
-            std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
-            trainer_->shutdown();
-            trainer_.reset();
-        }
-    }
-
-    void TrainerManager::updateResourceTracking() {
-        TrainingResources resources;
-        resources.has_trainer = trainer_ != nullptr;
-        resources.has_training_thread = training_thread_ != nullptr && training_thread_->joinable();
-        resources.has_scene_data = scene_ != nullptr;
-        resources.has_gpu_tensors = trainer_ && trainer_->isInitialized();
-        if (scene_) {
-            resources.training_node_name = scene_->getTrainingModelNodeName();
-        }
-        state_machine_.setResources(resources);
     }
 
     TrainerManager::~TrainerManager() {
@@ -221,8 +187,6 @@ namespace lfs::vis {
 
             std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
             trainer_ = std::move(trainer);
-            updateResourceTracking();
-
             if (!state_machine_.transitionTo(TrainingState::Ready)) {
                 LOG_WARN("Failed to transition to Ready");
             }
@@ -246,7 +210,6 @@ namespace lfs::vis {
 
             std::lock_guard<std::mutex> lock(trainer_lifetime_mutex_);
             trainer_ = std::move(trainer);
-            updateResourceTracking();
             internal::TrainerReady{}.emit();
 
             if (!state_machine_.transitionTo(TrainingState::Paused)) {
@@ -297,8 +260,6 @@ namespace lfs::vis {
         // Trainer::shutdown() trims before Tensor-valued members are destroyed.
         // Trim again after destruction so those returned blocks do not survive clear.
         lfs::core::Tensor::trim_memory_pool();
-
-        updateResourceTracking();
 
         if (getState() != TrainingState::Idle && !state_machine_.transitionTo(TrainingState::Idle)) {
             LOG_WARN("Failed to transition to Idle");
@@ -461,8 +422,6 @@ namespace lfs::vis {
             training_complete_ = false;
         }
 
-        updateResourceTracking();
-
         if (!state_machine_.transitionTo(TrainingState::Running)) {
             LOG_WARN("Failed to transition to Running");
         }
@@ -522,8 +481,6 @@ namespace lfs::vis {
         }
 
         training_start_time_ = std::chrono::steady_clock::now();
-        updateResourceTracking();
-
         if (!state_machine_.transitionTo(TrainingState::Running)) {
             LOG_WARN("Failed to transition to Running");
         }
@@ -692,8 +649,6 @@ namespace lfs::vis {
         }
 
         LOG_DEBUG("Requesting training stop");
-        updateResourceTracking();
-
         if (!state_machine_.transitionTo(TrainingState::Stopping)) {
             LOG_WARN("Failed to transition to Stopping");
         }
@@ -959,7 +914,6 @@ namespace lfs::vis {
         const float final_loss = getCurrentLoss();
         const bool user_stopped = (getState() == TrainingState::Stopping);
 
-        updateResourceTracking();
         if (!user_stopped) {
             if (!state_machine_.transitionTo(TrainingState::Stopping)) {
                 LOG_WARN("Failed to transition to Stopping");

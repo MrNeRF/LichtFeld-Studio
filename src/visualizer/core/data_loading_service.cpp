@@ -210,7 +210,7 @@ namespace lfs::vis {
         }
     }
 
-    std::expected<DataLoadingService::SplatBatchLoadSummary, std::string>
+    std::expected<void, std::string>
     DataLoadingService::loadSplatFiles(const std::vector<std::filesystem::path>& paths) {
         if (paths.empty()) {
             return std::unexpected("No splat files were provided");
@@ -218,7 +218,8 @@ namespace lfs::vis {
 
         const auto started_at = std::chrono::steady_clock::now();
 
-        SplatBatchLoadSummary summary;
+        size_t loaded = 0;
+        size_t failed = 0;
         std::vector<std::string> failures;
         failures.reserve(paths.size());
 
@@ -228,7 +229,7 @@ namespace lfs::vis {
         // large host staging footprint.
         for (size_t index = 0; index < paths.size(); ++index) {
             std::string load_error;
-            if (summary.loaded == 0) {
+            if (loaded == 0) {
                 if (auto result = loadSplatFile(paths[index]); !result) {
                     load_error = result.error();
                 }
@@ -241,11 +242,11 @@ namespace lfs::vis {
             }
 
             if (load_error.empty()) {
-                ++summary.loaded;
+                ++loaded;
                 continue;
             }
 
-            ++summary.failed;
+            ++failed;
             failures.emplace_back(std::format("{}: {}",
                                               lfs::core::path_to_utf8(paths[index].filename()),
                                               load_error));
@@ -257,7 +258,7 @@ namespace lfs::vis {
                 .emit();
         }
 
-        if (summary.loaded > 1) {
+        if (loaded > 1) {
             scene_manager_->consolidateNodeModels();
         }
 
@@ -265,9 +266,9 @@ namespace lfs::vis {
                                            std::chrono::steady_clock::now() - started_at)
                                            .count();
         LOG_INFO("Splat batch loaded {}/{} files in {:.3f}s ({} failed)",
-                 summary.loaded, paths.size(), elapsed_seconds, summary.failed);
+                 loaded, paths.size(), elapsed_seconds, failed);
 
-        if (summary.loaded == 0) {
+        if (loaded == 0) {
             std::string error = "No splat files could be loaded";
             if (!failures.empty()) {
                 error += ": ";
@@ -280,7 +281,7 @@ namespace lfs::vis {
             }
             return std::unexpected(std::move(error));
         }
-        return summary;
+        return {};
     }
 
     void DataLoadingService::addPLYToScene(const std::filesystem::path& path) {

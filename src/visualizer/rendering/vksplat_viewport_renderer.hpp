@@ -151,7 +151,7 @@ namespace lfs::vis {
         [[nodiscard]] cudaExternalSemaphore_t renderCompleteFence() const {
             return render_complete_cuda_.handle();
         }
-        [[nodiscard]] std::uint64_t renderCompleteValue() const { return last_signaled_render_value_; }
+        [[nodiscard]] std::uint64_t renderCompleteValue() const { return last_submitted_render_value_; }
 
         // Eagerly create the render stream + completion fence so the trainer↔viewer
         // handshake can be installed before the first live frame submits (covers
@@ -589,14 +589,9 @@ namespace lfs::vis {
         VkSemaphore vulkan_render_complete_timeline_ = VK_NULL_HANDLE;
         VkSemaphore render_complete_timeline_ = VK_NULL_HANDLE;
         // Last value whose signal operation was accepted by vkQueueSubmit.
-        // Failed recording/cancel paths leave it unchanged, so the next attempt
-        // safely reuses the same candidate instead of creating an unsignaled gap.
-        std::uint64_t render_complete_value_ = 0;
-        // The latest completion value a submit actually signaled (or is guaranteed
-        // to signal). renderCompleteValue() returns this — never an uncommitted
-        // candidate — so the trainer/arena never wait a value a failed frame left
-        // unsignaled.
-        std::uint64_t last_signaled_render_value_ = 0;
+        // Failed recording leaves it unchanged, so no consumer waits on an
+        // unsignaled candidate.
+        std::uint64_t last_submitted_render_value_ = 0;
         // When set, render() takes the legacy per-pixel chain so the depth
         // readback captures per-pixel depth (see setDepthCaptureMode).
         bool depth_capture_mode_ = false;

@@ -1979,11 +1979,7 @@ namespace lfs::vis {
         render_complete_external_ = {};
         render_complete_timeline_ = VK_NULL_HANDLE;
         vulkan_render_complete_timeline_ = VK_NULL_HANDLE;
-        render_complete_value_ = 0;
-        // The fresh timeline restarts at 0; clear the published value too, else
-        // renderCompleteValue() would hand the trainer a stale value from the old
-        // timeline that the new CUDA semaphore will never signal.
-        last_signaled_render_value_ = 0;
+        last_submitted_render_value_ = 0;
         last_lod_page_borrow_value_ = 0;
         retired_input_storages_.clear();
         latest_output_ring_slot_ = {};
@@ -3631,16 +3627,16 @@ namespace lfs::vis {
             old = {};
             return;
         }
-        // render_complete_value_ is the value the most recently submitted batch
+        // last_submitted_render_value_ is the value the most recently submitted batch
         // signals; that batch is the last one that could reference this buffer
         // (the current frame rebinds to the new import before recording). When no
         // frame has been submitted, the buffer was never seen by the GPU.
-        if (render_complete_timeline_ == VK_NULL_HANDLE || render_complete_value_ == 0) {
+        if (render_complete_timeline_ == VK_NULL_HANDLE || last_submitted_render_value_ == 0) {
             context_->destroyExternalBuffer(old);
             old = {};
             return;
         }
-        retired_scratch_buffers_.emplace_back(render_complete_value_, std::move(old));
+        retired_scratch_buffers_.emplace_back(last_submitted_render_value_, std::move(old));
         old = {};
     }
 
@@ -3687,8 +3683,8 @@ namespace lfs::vis {
         // confirmed value down to it: the unsubmitted batch never read those
         // storages, so reclaiming them when the last real frame completes is safe.
         for (auto& entry : retired_input_storages_) {
-            if (entry.first > last_signaled_render_value_) {
-                entry.first = last_signaled_render_value_;
+            if (entry.first > last_submitted_render_value_) {
+                entry.first = last_submitted_render_value_;
             }
         }
     }
@@ -4197,7 +4193,7 @@ namespace lfs::vis {
             context.setDebugObjectName(VK_OBJECT_TYPE_SEMAPHORE,
                                        vulkan_render_complete_timeline_,
                                        "vksplat.timeline.render.vulkan");
-            render_complete_value_ = 0;
+            last_submitted_render_value_ = 0;
         } catch (const std::exception& e) {
             return std::unexpected(std::format("VkSplat initialization failed: {}", e.what()));
         }
@@ -4331,22 +4327,22 @@ namespace lfs::vis {
                 pass,
                 vkHandleValue(render_complete_timeline_),
                 vkHandleValue(vulkan_render_complete_timeline_),
-                render_complete_value_));
+                last_submitted_render_value_));
         }
-        if (render_complete_value_ == std::numeric_limits<std::uint64_t>::max()) {
+        if (last_submitted_render_value_ == std::numeric_limits<std::uint64_t>::max()) {
             return std::unexpected(std::format(
                 "VkSplat {} completion timeline exhausted uint64 values "
                 "(timeline={:#x}, last_submitted_value={}, uint64_max={})",
                 pass,
                 vkHandleValue(render_complete_timeline_),
-                render_complete_value_,
+                last_submitted_render_value_,
                 std::numeric_limits<std::uint64_t>::max()));
         }
 
-        // Failed recording leaves render_complete_value_ unchanged. The caller
+        // Failed recording leaves last_submitted_render_value_ unchanged. The caller
         // commits only after vkQueueSubmit accepts the timeline signal; a host
         // cancellation signal could overtake an outstanding queue signal.
-        return render_complete_value_ + 1;
+        return last_submitted_render_value_ + 1;
     }
 
     std::expected<void, std::string> VksplatViewportRenderer::waitForRingSlot(
@@ -5657,7 +5653,7 @@ namespace lfs::vis {
 
         const auto& output = output_slots_[outputSlotIndex(output_slot)][latestOutputRingSlot(output_slot)];
         const std::uint64_t completion_value =
-            std::max(output.completion_value, last_signaled_render_value_);
+            std::max(output.completion_value, last_submitted_render_value_);
         if (vulkan_render_complete_timeline_ == VK_NULL_HANDLE || completion_value == 0) {
             return std::unexpected(
                 "VkSplat depth readback has no submitted render completion to wait on");
@@ -7102,8 +7098,7 @@ namespace lfs::vis {
             // proves that vkQueueSubmit accepted the signal; no completion wait
             // is needed on either path.
             if (renderer_.wasTimelineSignalSubmitted(render_complete_timeline_, completion_value)) {
-                render_complete_value_ = completion_value;
-                last_signaled_render_value_ = completion_value;
+                last_submitted_render_value_ = completion_value;
                 if (overlay_arena_guard) {
                     overlay_arena_guard->noteVulkanRelease(render_complete_cuda_.handle(), completion_value);
                 }
@@ -7116,10 +7111,9 @@ namespace lfs::vis {
                 "(timeline={:#x}, candidate_value={}, last_submitted_value={})",
                 vkHandleValue(render_complete_timeline_),
                 completion_value,
-                render_complete_value_));
+                last_submitted_render_value_));
         }
-        render_complete_value_ = completion_value;
-        last_signaled_render_value_ = completion_value;
+        last_submitted_render_value_ = completion_value;
         if (overlay_arena_guard) {
             overlay_arena_guard->noteVulkanRelease(render_complete_cuda_.handle(), completion_value);
         }
@@ -8249,8 +8243,7 @@ namespace lfs::vis {
             // post-submit bookkeeping failure is distinguished by the pipeline's
             // host-side submission record, so neither path waits on the GPU.
             if (renderer_.wasTimelineSignalSubmitted(render_complete_timeline_, completion_value)) {
-                render_complete_value_ = completion_value;
-                last_signaled_render_value_ = completion_value;
+                last_submitted_render_value_ = completion_value;
                 if (shared_arena_guard) {
                     shared_arena_guard->noteVulkanRelease(render_complete_cuda_.handle(), completion_value);
                 }
@@ -8266,13 +8259,12 @@ namespace lfs::vis {
                 "(timeline={:#x}, candidate_value={}, last_submitted_value={})",
                 vkHandleValue(render_complete_timeline_),
                 completion_value,
-                render_complete_value_));
+                last_submitted_render_value_));
         }
         // The batch (and its timeline signal) is submitted; hand the release to
         // the arena and the trainer before the guard/locks let them reuse the
         // scratch this batch still reads.
-        render_complete_value_ = completion_value;
-        last_signaled_render_value_ = completion_value;
+        last_submitted_render_value_ = completion_value;
         last_render_used_macro_chain_ = higs_active;
         resident_sort_capacity_ = shared_sort_capacity;
         if (shared_arena_guard) {

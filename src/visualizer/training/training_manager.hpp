@@ -174,9 +174,6 @@ namespace lfs::vis {
         void setupEventHandlers();
         void setupStateMachineCallbacks();
 
-        // Resource cleanup (called by state machine)
-        void cleanupTrainingResources(const TrainingResources& resources);
-        void updateResourceTracking();
         [[nodiscard]] lfs::core::SplatTensorAllocator createTrainingSplatTensorAllocator(
             const lfs::core::param::TrainingParameters& params,
             std::size_t min_capacity = 0);

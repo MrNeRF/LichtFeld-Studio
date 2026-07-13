@@ -11,7 +11,6 @@
 #include <functional>
 #include <mutex>
 #include <optional>
-#include <string>
 #include <string_view>
 
 namespace lfs::vis {
@@ -49,22 +48,11 @@ namespace lfs::vis {
         Error        // Error occurred
     };
 
-    // Resources that need cleanup
-    struct TrainingResources {
-        bool has_trainer = false;
-        bool has_training_thread = false;
-        bool has_scene_data = false;
-        bool has_gpu_tensors = false;
-        std::string training_node_name;
-        std::string dataset_path;
-    };
-
     // State machine configuration
     class LFS_VIS_API TrainingStateMachine {
     public:
         // State transition callback signatures
         using StateChangeCallback = std::function<void(TrainingState old_state, TrainingState new_state)>;
-        using CleanupCallback = std::function<void(const TrainingResources& resources)>;
 
         TrainingStateMachine();
 
@@ -82,14 +70,8 @@ namespace lfs::vis {
         [[nodiscard]] bool transitionTo(TrainingState new_state);
         [[nodiscard]] bool transitionToFinished(FinishReason reason);
 
-        // Resource tracking
-        void setResources(const TrainingResources& resources);
-        [[nodiscard]] TrainingResources getResources() const;
-        void clearResourceTracking();
-
         // Callbacks
         void setStateChangeCallback(StateChangeCallback callback);
-        void setCleanupCallback(CleanupCallback callback);
 
         // Utility
         [[nodiscard]] static std::string_view stateName(TrainingState state);
@@ -97,19 +79,13 @@ namespace lfs::vis {
 
     private:
         [[nodiscard]] bool isValidTransition(TrainingState from, TrainingState to) const;
-        [[nodiscard]] bool transitionToLocked(TrainingState new_state, FinishReason finish_reason);
-        void executeExitActions(TrainingState old_state);
-        void executeEntryActions(TrainingState new_state);
+        [[nodiscard]] bool transitionToImpl(TrainingState new_state, FinishReason finish_reason);
 
         std::atomic<TrainingState> state_{TrainingState::Idle};
-        // Transition callbacks are part of the transaction and may query the
-        // machine again, so re-entrant locking is intentional here.
-        mutable std::recursive_mutex mutex_;
+        mutable std::mutex mutex_;
         FinishReason finish_reason_{FinishReason::None};
-        TrainingResources resources_;
 
         StateChangeCallback on_state_change_;
-        CleanupCallback on_cleanup_;
 
         // Transition table: [from][to] = allowed
         static constexpr size_t STATE_COUNT = 6;
