@@ -14,6 +14,7 @@
 #include <limits>
 #include <mutex>
 #include <optional>
+#include <source_location>
 #include <stdexcept>
 #include <utility>
 
@@ -55,6 +56,31 @@ namespace lfs::rendering {
                                std::move(message),
                                location.file_name(),
                                location.line());
+        }
+
+        [[nodiscard]] bool setFailure(
+            std::string& last_error,
+            std::string message,
+            const std::source_location location = std::source_location::current()) {
+            last_error = withSourceLocation(std::move(message), location);
+            return false;
+        }
+
+        [[nodiscard]] bool setCudaFailure(
+            std::string& last_error,
+            const char* const operation,
+            const cudaError_t status,
+            const std::source_location location = std::source_location::current()) {
+            if (status == cudaSuccess) {
+                return true;
+            }
+            return setFailure(
+                last_error,
+                std::format("{} failed: {} ({})",
+                            operation,
+                            cudaGetErrorName(status),
+                            cudaGetErrorString(status)),
+                location);
         }
 
         [[nodiscard]] std::string nativeHandleString(const CudaVulkanExternalHandle handle) {
@@ -154,7 +180,7 @@ namespace lfs::rendering {
         cudaStream_t created_stream = nullptr;
         const cudaError_t status =
             cudaStreamCreateWithFlags(&created_stream, cudaStreamNonBlocking);
-        if (!failCuda("cudaStreamCreateWithFlags(cudaStreamNonBlocking)", status)) {
+        if (!setCudaFailure(last_error_, "cudaStreamCreateWithFlags(cudaStreamNonBlocking)", status)) {
             return false;
         }
         stream_ = created_stream;
@@ -166,8 +192,9 @@ namespace lfs::rendering {
         if (stream_ == nullptr) {
             return true;
         }
-        return failCuda("cudaStreamSynchronize(CUDA/Vulkan upload)",
-                        cudaStreamSynchronize(stream_));
+        return setCudaFailure(last_error_,
+                              "cudaStreamSynchronize(CUDA/Vulkan upload)",
+                              cudaStreamSynchronize(stream_));
     }
 
     void CudaVulkanUploadStream::reset() noexcept {
@@ -181,21 +208,6 @@ namespace lfs::rendering {
             stream_ = nullptr;
         }
         last_error_.clear();
-    }
-
-    bool CudaVulkanUploadStream::failCuda(const char* const operation,
-                                          const cudaError_t status,
-                                          const std::source_location location) {
-        if (status == cudaSuccess) {
-            return true;
-        }
-        last_error_ = withSourceLocation(
-            std::format("{} failed: {} ({})",
-                        operation,
-                        cudaGetErrorName(status),
-                        cudaGetErrorString(status)),
-            location);
-        return false;
     }
 
     namespace {
@@ -413,75 +425,79 @@ namespace lfs::rendering {
         last_error_.clear();
 
         if (auto err = verifyCudaMatchesVulkanDevice(); err) {
-            return fail(*err);
+            return setFailure(last_error_, *err);
         }
         if (!nativeHandleValid(image.memory_handle)) {
-            return fail(std::format(
-                "CUDA/Vulkan external image import requires a valid memory handle (memory_handle={}, allocation_size={}, extent={}x{}, format={})",
-                nativeHandleString(image.memory_handle),
-                image.allocation_size,
-                image.extent.width,
-                image.extent.height,
-                formatName(image.format)));
+            return setFailure(last_error_, std::format(
+                                               "CUDA/Vulkan external image import requires a valid memory handle (memory_handle={}, allocation_size={}, extent={}x{}, format={})",
+                                               nativeHandleString(image.memory_handle),
+                                               image.allocation_size,
+                                               image.extent.width,
+                                               image.extent.height,
+                                               formatName(image.format)));
         }
         if (!nativeHandleValid(semaphore.semaphore_handle)) {
-            return fail(std::format(
-                "CUDA/Vulkan external image import requires a valid timeline handle (semaphore_handle={}, initial_value={})",
-                nativeHandleString(semaphore.semaphore_handle),
-                semaphore.initial_value));
+            return setFailure(last_error_, std::format(
+                                               "CUDA/Vulkan external image import requires a valid timeline handle (semaphore_handle={}, initial_value={})",
+                                               nativeHandleString(semaphore.semaphore_handle),
+                                               semaphore.initial_value));
         }
         if (image.allocation_size == 0 || image.extent.width == 0 || image.extent.height == 0) {
-            return fail(std::format(
-                "CUDA/Vulkan external image import requires a non-zero allocation and extent (allocation_size={}, extent={}x{}, format={})",
-                image.allocation_size,
-                image.extent.width,
-                image.extent.height,
-                formatName(image.format)));
+            return setFailure(last_error_, std::format(
+                                               "CUDA/Vulkan external image import requires a non-zero allocation and extent (allocation_size={}, extent={}x{}, format={})",
+                                               image.allocation_size,
+                                               image.extent.width,
+                                               image.extent.height,
+                                               formatName(image.format)));
         }
         if (!formatSupported(image.format)) {
-            return fail(std::format("CUDA/Vulkan external image format {} is unsupported",
-                                    formatName(image.format)));
+            return setFailure(last_error_,
+                              std::format("CUDA/Vulkan external image format {} is unsupported",
+                                          formatName(image.format)));
         }
         const std::size_t bytes_per_pixel = imageBytesPerPixel(image.format);
         const std::size_t width = image.extent.width;
         const std::size_t height = image.extent.height;
         if (bytes_per_pixel == 0 || width > std::numeric_limits<std::size_t>::max() / height ||
             width * height > std::numeric_limits<std::size_t>::max() / bytes_per_pixel) {
-            return fail(std::format(
-                "CUDA-visible image byte size overflows host sizing (extent={}x{}, bytes_per_pixel={}, allocation_size={})",
-                width,
-                height,
-                bytes_per_pixel,
-                image.allocation_size));
+            return setFailure(last_error_, std::format(
+                                               "CUDA-visible image byte size overflows host sizing (extent={}x{}, bytes_per_pixel={}, allocation_size={})",
+                                               width,
+                                               height,
+                                               bytes_per_pixel,
+                                               image.allocation_size));
         }
         const std::size_t cuda_visible_size = width * height * bytes_per_pixel;
         if (image.allocation_size < cuda_visible_size) {
-            return fail(std::format(
-                "Vulkan image allocation is smaller than the CUDA-visible payload (vulkan_allocation_size={}, cuda_visible_size={}, extent={}x{}, bytes_per_pixel={}, format={})",
-                image.allocation_size,
-                cuda_visible_size,
-                width,
-                height,
-                bytes_per_pixel,
-                formatName(image.format)));
+            return setFailure(last_error_, std::format(
+                                               "Vulkan image allocation is smaller than the CUDA-visible payload (vulkan_allocation_size={}, cuda_visible_size={}, extent={}x{}, bytes_per_pixel={}, format={})",
+                                               image.allocation_size,
+                                               cuda_visible_size,
+                                               width,
+                                               height,
+                                               bytes_per_pixel,
+                                               formatName(image.format)));
         }
         int cuda_device = 0;
         cudaError_t status = cudaGetDevice(&cuda_device);
         if (status != cudaSuccess) {
-            return failCuda("cudaGetDevice", status);
+            return setCudaFailure(last_error_, "cudaGetDevice", status);
         }
         int timeline_interop_supported = 0;
         status = cudaDeviceGetAttribute(&timeline_interop_supported,
                                         cudaDevAttrTimelineSemaphoreInteropSupported,
                                         cuda_device);
         if (status != cudaSuccess) {
-            return failCuda("cudaDeviceGetAttribute(cudaDevAttrTimelineSemaphoreInteropSupported)", status);
+            return setCudaFailure(
+                last_error_,
+                "cudaDeviceGetAttribute(cudaDevAttrTimelineSemaphoreInteropSupported)",
+                status);
         }
         if (timeline_interop_supported == 0) {
-            return fail(std::format(
-                "CUDA device does not support external timeline semaphore interop (cuda_device={}, timeline_interop_supported={})",
-                cuda_device,
-                timeline_interop_supported));
+            return setFailure(last_error_, std::format(
+                                               "CUDA device does not support external timeline semaphore interop (cuda_device={}, timeline_interop_supported={})",
+                                               cuda_device,
+                                               timeline_interop_supported));
         }
 
         NativeHandleOwner memory_handle(image.memory_handle);
@@ -502,7 +518,7 @@ namespace lfs::rendering {
         status = cudaImportExternalMemory(&cuda_mem_, &memory_desc);
         if (status != cudaSuccess) {
             reset();
-            return failCuda("cudaImportExternalMemory", status);
+            return setCudaFailure(last_error_, "cudaImportExternalMemory", status);
         }
 #ifndef _WIN32
         memory_handle.release();
@@ -518,13 +534,13 @@ namespace lfs::rendering {
         status = cudaExternalMemoryGetMappedMipmappedArray(&cuda_mip_, cuda_mem_, &array_desc);
         if (status != cudaSuccess) {
             reset();
-            return failCuda("cudaExternalMemoryGetMappedMipmappedArray", status);
+            return setCudaFailure(last_error_, "cudaExternalMemoryGetMappedMipmappedArray", status);
         }
 
         status = cudaGetMipmappedArrayLevel(&cuda_array_, cuda_mip_, 0);
         if (status != cudaSuccess) {
             reset();
-            return failCuda("cudaGetMipmappedArrayLevel", status);
+            return setCudaFailure(last_error_, "cudaGetMipmappedArrayLevel", status);
         }
 
         cudaResourceDesc resource_desc{};
@@ -533,17 +549,17 @@ namespace lfs::rendering {
         status = cudaCreateSurfaceObject(&surface_, &resource_desc);
         if (status != cudaSuccess) {
             reset();
-            return failCuda("cudaCreateSurfaceObject", status);
+            return setCudaFailure(last_error_, "cudaCreateSurfaceObject", status);
         }
 
         // cudaExternalSemaphoreHandleDesc has no initialValue field, so CUDA cannot validate or
         // communicate a non-zero Vulkan initial value during import.
         if (semaphore.initial_value != 0) {
             reset();
-            return fail(std::format(
-                "CUDA/Vulkan timeline import requires Vulkan initialValue == 0 because CUDA cannot import it (initial_value={}, semaphore_handle={})",
-                semaphore.initial_value,
-                nativeHandleString(semaphore.semaphore_handle)));
+            return setFailure(last_error_, std::format(
+                                               "CUDA/Vulkan timeline import requires Vulkan initialValue == 0 because CUDA cannot import it (initial_value={}, semaphore_handle={})",
+                                               semaphore.initial_value,
+                                               nativeHandleString(semaphore.semaphore_handle)));
         }
 
         cudaExternalSemaphoreHandleDesc semaphore_desc{};
@@ -557,7 +573,7 @@ namespace lfs::rendering {
         status = cudaImportExternalSemaphore(&cuda_timeline_, &semaphore_desc);
         if (status != cudaSuccess) {
             reset();
-            return failCuda("cudaImportExternalSemaphore", status);
+            return setCudaFailure(last_error_, "cudaImportExternalSemaphore", status);
         }
 #ifndef _WIN32
         semaphore_handle.release();
@@ -614,27 +630,27 @@ namespace lfs::rendering {
                                                 const bool flip_y) const {
         last_error_.clear();
         if (!valid()) {
-            return fail(std::format(
-                "CUDA/Vulkan image copy requires a complete imported target (cuda_memory={:#x}, mipmapped_array={:#x}, array={:#x}, surface={:#x}, timeline={:#x}, extent={}x{}, allocation_size={}, cuda_visible_size={})",
-                reinterpret_cast<std::uintptr_t>(cuda_mem_),
-                reinterpret_cast<std::uintptr_t>(cuda_mip_),
-                reinterpret_cast<std::uintptr_t>(cuda_array_),
-                static_cast<std::uint64_t>(surface_),
-                reinterpret_cast<std::uintptr_t>(cuda_timeline_),
-                extent_.width,
-                extent_.height,
-                allocation_size_,
-                cuda_visible_size_));
+            return setFailure(last_error_, std::format(
+                                               "CUDA/Vulkan image copy requires a complete imported target (cuda_memory={:#x}, mipmapped_array={:#x}, array={:#x}, surface={:#x}, timeline={:#x}, extent={}x{}, allocation_size={}, cuda_visible_size={})",
+                                               reinterpret_cast<std::uintptr_t>(cuda_mem_),
+                                               reinterpret_cast<std::uintptr_t>(cuda_mip_),
+                                               reinterpret_cast<std::uintptr_t>(cuda_array_),
+                                               static_cast<std::uint64_t>(surface_),
+                                               reinterpret_cast<std::uintptr_t>(cuda_timeline_),
+                                               extent_.width,
+                                               extent_.height,
+                                               allocation_size_,
+                                               cuda_visible_size_));
         }
         if (stream == nullptr) {
-            return fail(std::format(
-                "CUDA/Vulkan image copy requires an explicit non-default CUDA stream (stream={:#x}, extent={}x{}, format={}, allocation_size={}, cuda_visible_size={})",
-                reinterpret_cast<std::uintptr_t>(stream),
-                extent_.width,
-                extent_.height,
-                formatName(format_),
-                allocation_size_,
-                cuda_visible_size_));
+            return setFailure(last_error_, std::format(
+                                               "CUDA/Vulkan image copy requires an explicit non-default CUDA stream (stream={:#x}, extent={}x{}, format={}, allocation_size={}, cuda_visible_size={})",
+                                               reinterpret_cast<std::uintptr_t>(stream),
+                                               extent_.width,
+                                               extent_.height,
+                                               formatName(format_),
+                                               allocation_size_,
+                                               cuda_visible_size_));
         }
         PreparedCudaImageTensor prepared{};
         if (!prepareCudaImageTensor(tensor, extent_, stream, prepared, last_error_)) {
@@ -644,27 +660,27 @@ namespace lfs::rendering {
 
         const void* data = upload_source_.data_ptr();
         if (data == nullptr) {
-            return fail(std::format(
-                "CUDA/Vulkan image copy received a tensor with null storage (data={:#x}, tensor_bytes={}, tensor_rank={}, target_extent={}x{}, target_visible_bytes={})",
-                reinterpret_cast<std::uintptr_t>(data),
-                upload_source_.bytes(),
-                upload_source_.shape().rank(),
-                extent_.width,
-                extent_.height,
-                cuda_visible_size_));
+            return setFailure(last_error_, std::format(
+                                               "CUDA/Vulkan image copy received a tensor with null storage (data={:#x}, tensor_bytes={}, tensor_rank={}, target_extent={}x{}, target_visible_bytes={})",
+                                               reinterpret_cast<std::uintptr_t>(data),
+                                               upload_source_.bytes(),
+                                               upload_source_.shape().rank(),
+                                               extent_.width,
+                                               extent_.height,
+                                               cuda_visible_size_));
         }
 
         upload_source_.sync_to_stream(stream);
         cudaError_t status = cudaSuccess;
         if (format_ == CudaVulkanImageFormat::R32Sfloat) {
             if (prepared.element_type != detail::CudaVulkanTensorElementType::Float32) {
-                return fail(std::format(
-                    "CUDA/Vulkan R32_SFLOAT surface requires Float32 tensor elements (observed_element_type={}, required_element_type={}, channels={}, extent={}x{})",
-                    static_cast<int>(prepared.element_type),
-                    static_cast<int>(detail::CudaVulkanTensorElementType::Float32),
-                    prepared.channels,
-                    extent_.width,
-                    extent_.height));
+                return setFailure(last_error_, std::format(
+                                                   "CUDA/Vulkan R32_SFLOAT surface requires Float32 tensor elements (observed_element_type={}, required_element_type={}, channels={}, extent={}x{})",
+                                                   static_cast<int>(prepared.element_type),
+                                                   static_cast<int>(detail::CudaVulkanTensorElementType::Float32),
+                                                   prepared.channels,
+                                                   extent_.width,
+                                                   extent_.height));
             }
             status = detail::launchCudaVulkanCopyTensorToSurfaceR32f(
                 surface_,
@@ -687,41 +703,41 @@ namespace lfs::rendering {
                 flip_y,
                 stream);
         }
-        return failCuda("copy tensor to CUDA surface", status);
+        return setCudaFailure(last_error_, "copy tensor to CUDA surface", status);
     }
 
     bool CudaVulkanInterop::wait(const std::uint64_t value, const cudaStream_t stream) const {
         last_error_.clear();
         if (cuda_timeline_ == nullptr) {
-            return fail(std::format(
-                "CUDA/Vulkan timeline wait requires an imported semaphore (timeline={:#x}, requested_value={}, previous_wait_value={}, stream={:#x})",
-                reinterpret_cast<std::uintptr_t>(cuda_timeline_),
-                value,
-                last_waited_,
-                reinterpret_cast<std::uintptr_t>(stream)));
+            return setFailure(last_error_, std::format(
+                                               "CUDA/Vulkan timeline wait requires an imported semaphore (timeline={:#x}, requested_value={}, previous_wait_value={}, stream={:#x})",
+                                               reinterpret_cast<std::uintptr_t>(cuda_timeline_),
+                                               value,
+                                               last_waited_,
+                                               reinterpret_cast<std::uintptr_t>(stream)));
         }
         if (stream == nullptr) {
-            return fail(std::format(
-                "CUDA/Vulkan timeline wait requires an explicit non-default CUDA stream (timeline={:#x}, requested_value={}, previous_wait_value={}, stream={:#x})",
-                reinterpret_cast<std::uintptr_t>(cuda_timeline_),
-                value,
-                last_waited_,
-                reinterpret_cast<std::uintptr_t>(stream)));
+            return setFailure(last_error_, std::format(
+                                               "CUDA/Vulkan timeline wait requires an explicit non-default CUDA stream (timeline={:#x}, requested_value={}, previous_wait_value={}, stream={:#x})",
+                                               reinterpret_cast<std::uintptr_t>(cuda_timeline_),
+                                               value,
+                                               last_waited_,
+                                               reinterpret_cast<std::uintptr_t>(stream)));
         }
         if (value == 0 || value <= last_waited_) {
-            return fail(std::format(
-                "CUDA/Vulkan timeline waits must increase strictly and remain non-zero (timeline={:#x}, requested_value={}, previous_wait_value={}, stream={:#x})",
-                reinterpret_cast<std::uintptr_t>(cuda_timeline_),
-                value,
-                last_waited_,
-                reinterpret_cast<std::uintptr_t>(stream)));
+            return setFailure(last_error_, std::format(
+                                               "CUDA/Vulkan timeline waits must increase strictly and remain non-zero (timeline={:#x}, requested_value={}, previous_wait_value={}, stream={:#x})",
+                                               reinterpret_cast<std::uintptr_t>(cuda_timeline_),
+                                               value,
+                                               last_waited_,
+                                               reinterpret_cast<std::uintptr_t>(stream)));
         }
 
         cudaExternalSemaphoreWaitParams params{};
         params.params.fence.value = value;
         const cudaError_t status =
             cudaWaitExternalSemaphoresAsync(&cuda_timeline_, &params, 1, stream);
-        if (!failCuda("cudaWaitExternalSemaphoresAsync", status)) {
+        if (!setCudaFailure(last_error_, "cudaWaitExternalSemaphoresAsync", status)) {
             return false;
         }
         last_waited_ = value;
@@ -731,60 +747,39 @@ namespace lfs::rendering {
     bool CudaVulkanInterop::signal(const std::uint64_t value, const cudaStream_t stream) const {
         last_error_.clear();
         if (cuda_timeline_ == nullptr) {
-            return fail(std::format(
-                "CUDA/Vulkan timeline signal requires an imported semaphore (timeline={:#x}, requested_value={}, previous_signal_value={}, stream={:#x})",
-                reinterpret_cast<std::uintptr_t>(cuda_timeline_),
-                value,
-                last_signaled_,
-                reinterpret_cast<std::uintptr_t>(stream)));
+            return setFailure(last_error_, std::format(
+                                               "CUDA/Vulkan timeline signal requires an imported semaphore (timeline={:#x}, requested_value={}, previous_signal_value={}, stream={:#x})",
+                                               reinterpret_cast<std::uintptr_t>(cuda_timeline_),
+                                               value,
+                                               last_signaled_,
+                                               reinterpret_cast<std::uintptr_t>(stream)));
         }
         if (stream == nullptr) {
-            return fail(std::format(
-                "CUDA/Vulkan timeline signal requires an explicit non-default CUDA stream (timeline={:#x}, requested_value={}, previous_signal_value={}, stream={:#x})",
-                reinterpret_cast<std::uintptr_t>(cuda_timeline_),
-                value,
-                last_signaled_,
-                reinterpret_cast<std::uintptr_t>(stream)));
+            return setFailure(last_error_, std::format(
+                                               "CUDA/Vulkan timeline signal requires an explicit non-default CUDA stream (timeline={:#x}, requested_value={}, previous_signal_value={}, stream={:#x})",
+                                               reinterpret_cast<std::uintptr_t>(cuda_timeline_),
+                                               value,
+                                               last_signaled_,
+                                               reinterpret_cast<std::uintptr_t>(stream)));
         }
 
         if (value <= last_signaled_) {
-            return fail(std::format(
-                "CUDA/Vulkan timeline signals must increase strictly (timeline={:#x}, requested_value={}, previous_signal_value={}, stream={:#x})",
-                reinterpret_cast<std::uintptr_t>(cuda_timeline_),
-                value,
-                last_signaled_,
-                reinterpret_cast<std::uintptr_t>(stream)));
+            return setFailure(last_error_, std::format(
+                                               "CUDA/Vulkan timeline signals must increase strictly (timeline={:#x}, requested_value={}, previous_signal_value={}, stream={:#x})",
+                                               reinterpret_cast<std::uintptr_t>(cuda_timeline_),
+                                               value,
+                                               last_signaled_,
+                                               reinterpret_cast<std::uintptr_t>(stream)));
         }
 
         cudaExternalSemaphoreSignalParams params{};
         params.params.fence.value = value;
         const cudaError_t status = cudaSignalExternalSemaphoresAsync(&cuda_timeline_, &params, 1, stream);
-        if (!failCuda("cudaSignalExternalSemaphoresAsync", status)) {
+        if (!setCudaFailure(last_error_, "cudaSignalExternalSemaphoresAsync", status)) {
             return false;
         }
         last_signaled_ = value;
         return true;
-    }
-
-    bool CudaVulkanInterop::fail(std::string message,
-                                 const std::source_location location) const {
-        last_error_ = withSourceLocation(std::move(message), location);
-        return false;
-    }
-
-    bool CudaVulkanInterop::failCuda(const char* const operation,
-                                     const cudaError_t status,
-                                     const std::source_location location) const {
-        if (status == cudaSuccess) {
-            return true;
-        }
-        last_error_ = withSourceLocation(
-            std::format("{} failed: {} ({})",
-                        operation,
-                        cudaGetErrorName(status),
-                        cudaGetErrorString(status)),
-            location);
-        return false;
     }
 
     // ===== CudaTimelineSemaphore =================================================
@@ -814,23 +809,23 @@ namespace lfs::rendering {
         last_error_.clear();
 
         if (auto err = verifyCudaMatchesVulkanDevice(); err) {
-            return fail(*err);
+            return setFailure(last_error_, *err);
         }
         if (!nativeHandleValid(semaphore.semaphore_handle)) {
-            return fail(std::format(
-                "CUDA timeline semaphore import requires a valid external handle (semaphore_handle={}, initial_value={})",
-                nativeHandleString(semaphore.semaphore_handle),
-                semaphore.initial_value));
+            return setFailure(last_error_, std::format(
+                                               "CUDA timeline semaphore import requires a valid external handle (semaphore_handle={}, initial_value={})",
+                                               nativeHandleString(semaphore.semaphore_handle),
+                                               semaphore.initial_value));
         }
 
         NativeHandleOwner semaphore_handle(semaphore.semaphore_handle);
         // cudaExternalSemaphoreHandleDesc has no initialValue field, so CUDA cannot validate or
         // communicate a non-zero Vulkan initial value during import.
         if (semaphore.initial_value != 0) {
-            return fail(std::format(
-                "CUDA timeline semaphore import requires Vulkan initialValue == 0 because CUDA cannot import it (initial_value={}, semaphore_handle={})",
-                semaphore.initial_value,
-                nativeHandleString(semaphore.semaphore_handle)));
+            return setFailure(last_error_, std::format(
+                                               "CUDA timeline semaphore import requires Vulkan initialValue == 0 because CUDA cannot import it (initial_value={}, semaphore_handle={})",
+                                               semaphore.initial_value,
+                                               nativeHandleString(semaphore.semaphore_handle)));
         }
 
         cudaExternalSemaphoreHandleDesc semaphore_desc{};
@@ -843,7 +838,7 @@ namespace lfs::rendering {
 
         cudaError_t status = cudaImportExternalSemaphore(&cuda_timeline_, &semaphore_desc);
         if (status != cudaSuccess) {
-            return failCuda("cudaImportExternalSemaphore", status);
+            return setCudaFailure(last_error_, "cudaImportExternalSemaphore", status);
         }
 #ifndef _WIN32
         semaphore_handle.release();
@@ -865,35 +860,35 @@ namespace lfs::rendering {
     bool CudaTimelineSemaphore::cudaSignal(const std::uint64_t value, const cudaStream_t stream) const {
         last_error_.clear();
         if (cuda_timeline_ == nullptr) {
-            return fail(std::format(
-                "CUDA timeline signal requires an imported semaphore (timeline={:#x}, requested_value={}, previous_signal_value={}, stream={:#x})",
-                reinterpret_cast<std::uintptr_t>(cuda_timeline_),
-                value,
-                last_signaled_,
-                reinterpret_cast<std::uintptr_t>(stream)));
+            return setFailure(last_error_, std::format(
+                                               "CUDA timeline signal requires an imported semaphore (timeline={:#x}, requested_value={}, previous_signal_value={}, stream={:#x})",
+                                               reinterpret_cast<std::uintptr_t>(cuda_timeline_),
+                                               value,
+                                               last_signaled_,
+                                               reinterpret_cast<std::uintptr_t>(stream)));
         }
         if (stream == nullptr) {
-            return fail(std::format(
-                "CUDA timeline signal requires an explicit non-default stream (timeline={:#x}, requested_value={}, previous_signal_value={}, stream={:#x})",
-                reinterpret_cast<std::uintptr_t>(cuda_timeline_),
-                value,
-                last_signaled_,
-                reinterpret_cast<std::uintptr_t>(stream)));
+            return setFailure(last_error_, std::format(
+                                               "CUDA timeline signal requires an explicit non-default stream (timeline={:#x}, requested_value={}, previous_signal_value={}, stream={:#x})",
+                                               reinterpret_cast<std::uintptr_t>(cuda_timeline_),
+                                               value,
+                                               last_signaled_,
+                                               reinterpret_cast<std::uintptr_t>(stream)));
         }
         if (value <= last_signaled_) {
-            return fail(std::format(
-                "CUDA timeline signals must increase strictly (timeline={:#x}, requested_value={}, previous_signal_value={}, stream={:#x})",
-                reinterpret_cast<std::uintptr_t>(cuda_timeline_),
-                value,
-                last_signaled_,
-                reinterpret_cast<std::uintptr_t>(stream)));
+            return setFailure(last_error_, std::format(
+                                               "CUDA timeline signals must increase strictly (timeline={:#x}, requested_value={}, previous_signal_value={}, stream={:#x})",
+                                               reinterpret_cast<std::uintptr_t>(cuda_timeline_),
+                                               value,
+                                               last_signaled_,
+                                               reinterpret_cast<std::uintptr_t>(stream)));
         }
 
         cudaExternalSemaphoreSignalParams params{};
         params.params.fence.value = value;
         const cudaError_t status =
             cudaSignalExternalSemaphoresAsync(&cuda_timeline_, &params, 1, stream);
-        if (!failCuda("cudaSignalExternalSemaphoresAsync", status)) {
+        if (!setCudaFailure(last_error_, "cudaSignalExternalSemaphoresAsync", status)) {
             return false;
         }
         last_signaled_ = value;
@@ -903,59 +898,38 @@ namespace lfs::rendering {
     bool CudaTimelineSemaphore::cudaWait(const std::uint64_t value, const cudaStream_t stream) const {
         last_error_.clear();
         if (cuda_timeline_ == nullptr) {
-            return fail(std::format(
-                "CUDA timeline wait requires an imported semaphore (timeline={:#x}, requested_value={}, previous_wait_value={}, stream={:#x})",
-                reinterpret_cast<std::uintptr_t>(cuda_timeline_),
-                value,
-                last_waited_,
-                reinterpret_cast<std::uintptr_t>(stream)));
+            return setFailure(last_error_, std::format(
+                                               "CUDA timeline wait requires an imported semaphore (timeline={:#x}, requested_value={}, previous_wait_value={}, stream={:#x})",
+                                               reinterpret_cast<std::uintptr_t>(cuda_timeline_),
+                                               value,
+                                               last_waited_,
+                                               reinterpret_cast<std::uintptr_t>(stream)));
         }
         if (stream == nullptr) {
-            return fail(std::format(
-                "CUDA timeline wait requires an explicit non-default stream (timeline={:#x}, requested_value={}, previous_wait_value={}, stream={:#x})",
-                reinterpret_cast<std::uintptr_t>(cuda_timeline_),
-                value,
-                last_waited_,
-                reinterpret_cast<std::uintptr_t>(stream)));
+            return setFailure(last_error_, std::format(
+                                               "CUDA timeline wait requires an explicit non-default stream (timeline={:#x}, requested_value={}, previous_wait_value={}, stream={:#x})",
+                                               reinterpret_cast<std::uintptr_t>(cuda_timeline_),
+                                               value,
+                                               last_waited_,
+                                               reinterpret_cast<std::uintptr_t>(stream)));
         }
         if (value == 0 || value <= last_waited_) {
-            return fail(std::format(
-                "CUDA timeline waits must increase strictly and remain non-zero (timeline={:#x}, requested_value={}, previous_wait_value={}, stream={:#x})",
-                reinterpret_cast<std::uintptr_t>(cuda_timeline_),
-                value,
-                last_waited_,
-                reinterpret_cast<std::uintptr_t>(stream)));
+            return setFailure(last_error_, std::format(
+                                               "CUDA timeline waits must increase strictly and remain non-zero (timeline={:#x}, requested_value={}, previous_wait_value={}, stream={:#x})",
+                                               reinterpret_cast<std::uintptr_t>(cuda_timeline_),
+                                               value,
+                                               last_waited_,
+                                               reinterpret_cast<std::uintptr_t>(stream)));
         }
         cudaExternalSemaphoreWaitParams params{};
         params.params.fence.value = value;
         const cudaError_t status =
             cudaWaitExternalSemaphoresAsync(&cuda_timeline_, &params, 1, stream);
-        if (!failCuda("cudaWaitExternalSemaphoresAsync", status)) {
+        if (!setCudaFailure(last_error_, "cudaWaitExternalSemaphoresAsync", status)) {
             return false;
         }
         last_waited_ = value;
         return true;
-    }
-
-    bool CudaTimelineSemaphore::fail(std::string message,
-                                     const std::source_location location) const {
-        last_error_ = withSourceLocation(std::move(message), location);
-        return false;
-    }
-
-    bool CudaTimelineSemaphore::failCuda(const char* const operation,
-                                         const cudaError_t status,
-                                         const std::source_location location) const {
-        if (status == cudaSuccess) {
-            return true;
-        }
-        last_error_ = withSourceLocation(
-            std::format("{} failed: {} ({})",
-                        operation,
-                        cudaGetErrorName(status),
-                        cudaGetErrorString(status)),
-            location);
-        return false;
     }
 
     // ===== CudaVulkanBufferInterop ===============================================
@@ -993,23 +967,23 @@ namespace lfs::rendering {
         last_error_.clear();
 
         if (auto err = verifyCudaMatchesVulkanDevice(); err) {
-            return fail(*err);
+            return setFailure(last_error_, *err);
         }
         if (!nativeHandleValid(buffer.memory_handle)) {
-            return fail(std::format(
-                "CUDA/Vulkan external buffer import requires a valid memory handle (memory_handle={}, allocation_size={}, cuda_visible_size={}, dedicated={})",
-                nativeHandleString(buffer.memory_handle),
-                buffer.allocation_size,
-                buffer.size,
-                buffer.dedicated_allocation));
+            return setFailure(last_error_, std::format(
+                                               "CUDA/Vulkan external buffer import requires a valid memory handle (memory_handle={}, allocation_size={}, cuda_visible_size={}, dedicated={})",
+                                               nativeHandleString(buffer.memory_handle),
+                                               buffer.allocation_size,
+                                               buffer.size,
+                                               buffer.dedicated_allocation));
         }
         if (buffer.allocation_size == 0 || buffer.size == 0 || buffer.size > buffer.allocation_size) {
-            return fail(std::format(
-                "CUDA/Vulkan external buffer import requires a non-zero CUDA-visible size within the Vulkan allocation (vulkan_allocation_size={}, cuda_visible_size={}, memory_handle={}, dedicated={})",
-                buffer.allocation_size,
-                buffer.size,
-                nativeHandleString(buffer.memory_handle),
-                buffer.dedicated_allocation));
+            return setFailure(last_error_, std::format(
+                                               "CUDA/Vulkan external buffer import requires a non-zero CUDA-visible size within the Vulkan allocation (vulkan_allocation_size={}, cuda_visible_size={}, memory_handle={}, dedicated={})",
+                                               buffer.allocation_size,
+                                               buffer.size,
+                                               nativeHandleString(buffer.memory_handle),
+                                               buffer.dedicated_allocation));
         }
 
         NativeHandleOwner memory_handle(buffer.memory_handle);
@@ -1029,7 +1003,7 @@ namespace lfs::rendering {
         cudaError_t status = cudaImportExternalMemory(&cuda_mem_, &memory_desc);
         if (status != cudaSuccess) {
             reset();
-            return failCuda("cudaImportExternalMemory(buffer)", status);
+            return setCudaFailure(last_error_, "cudaImportExternalMemory(buffer)", status);
         }
 #ifndef _WIN32
         memory_handle.release();
@@ -1041,7 +1015,7 @@ namespace lfs::rendering {
         status = cudaExternalMemoryGetMappedBuffer(&device_ptr_, cuda_mem_, &buffer_desc);
         if (status != cudaSuccess) {
             reset();
-            return failCuda("cudaExternalMemoryGetMappedBuffer", status);
+            return setCudaFailure(last_error_, "cudaExternalMemoryGetMappedBuffer", status);
         }
 
         allocation_size_ = buffer.allocation_size;
@@ -1079,43 +1053,43 @@ namespace lfs::rendering {
                                                  const cudaStream_t stream) const {
         last_error_.clear();
         if (!valid()) {
-            return fail(std::format(
-                "CUDA/Vulkan buffer copy requires a complete imported buffer (cuda_memory={:#x}, device_pointer={:#x}, cuda_visible_size={}, vulkan_allocation_size={}, requested_bytes={}, dst_offset={})",
-                reinterpret_cast<std::uintptr_t>(cuda_mem_),
-                reinterpret_cast<std::uintptr_t>(device_ptr_),
-                size_,
-                allocation_size_,
-                byte_count,
-                dst_offset));
+            return setFailure(last_error_, std::format(
+                                               "CUDA/Vulkan buffer copy requires a complete imported buffer (cuda_memory={:#x}, device_pointer={:#x}, cuda_visible_size={}, vulkan_allocation_size={}, requested_bytes={}, dst_offset={})",
+                                               reinterpret_cast<std::uintptr_t>(cuda_mem_),
+                                               reinterpret_cast<std::uintptr_t>(device_ptr_),
+                                               size_,
+                                               allocation_size_,
+                                               byte_count,
+                                               dst_offset));
         }
         if (stream == nullptr) {
-            return fail(std::format(
-                "CUDA/Vulkan buffer copy requires an explicit non-default stream (stream={:#x}, requested_bytes={}, dst_offset={}, cuda_visible_size={}, vulkan_allocation_size={})",
-                reinterpret_cast<std::uintptr_t>(stream),
-                byte_count,
-                dst_offset,
-                size_,
-                allocation_size_));
+            return setFailure(last_error_, std::format(
+                                               "CUDA/Vulkan buffer copy requires an explicit non-default stream (stream={:#x}, requested_bytes={}, dst_offset={}, cuda_visible_size={}, vulkan_allocation_size={})",
+                                               reinterpret_cast<std::uintptr_t>(stream),
+                                               byte_count,
+                                               dst_offset,
+                                               size_,
+                                               allocation_size_));
         }
         if (byte_count == 0 || dst_offset > size_ || byte_count > size_ - dst_offset) {
-            return fail(std::format(
-                "CUDA/Vulkan buffer copy range exceeds the CUDA-visible import (dst_offset={}, requested_bytes={}, range_end={}, cuda_visible_size={}, vulkan_allocation_size={})",
-                dst_offset,
-                byte_count,
-                dst_offset <= std::numeric_limits<std::size_t>::max() - byte_count
-                    ? dst_offset + byte_count
-                    : std::numeric_limits<std::size_t>::max(),
-                size_,
-                allocation_size_));
+            return setFailure(last_error_, std::format(
+                                               "CUDA/Vulkan buffer copy range exceeds the CUDA-visible import (dst_offset={}, requested_bytes={}, range_end={}, cuda_visible_size={}, vulkan_allocation_size={})",
+                                               dst_offset,
+                                               byte_count,
+                                               dst_offset <= std::numeric_limits<std::size_t>::max() - byte_count
+                                                   ? dst_offset + byte_count
+                                                   : std::numeric_limits<std::size_t>::max(),
+                                               size_,
+                                               allocation_size_));
         }
         if (!tensor.is_valid() || tensor.data_ptr() == nullptr) {
-            return fail(std::format(
-                "CUDA/Vulkan buffer copy requires valid tensor storage (tensor_valid={}, tensor_pointer={:#x}, tensor_bytes={}, requested_bytes={}, dst_offset={})",
-                tensor.is_valid(),
-                reinterpret_cast<std::uintptr_t>(tensor.data_ptr()),
-                tensor.is_valid() ? tensor.bytes() : 0,
-                byte_count,
-                dst_offset));
+            return setFailure(last_error_, std::format(
+                                               "CUDA/Vulkan buffer copy requires valid tensor storage (tensor_valid={}, tensor_pointer={:#x}, tensor_bytes={}, requested_bytes={}, dst_offset={})",
+                                               tensor.is_valid(),
+                                               reinterpret_cast<std::uintptr_t>(tensor.data_ptr()),
+                                               tensor.is_valid() ? tensor.bytes() : 0,
+                                               byte_count,
+                                               dst_offset));
         }
 
         upload_source_ = tensor;
@@ -1126,37 +1100,19 @@ namespace lfs::rendering {
             upload_source_ = upload_source_.contiguous();
         }
         if (byte_count > upload_source_.bytes()) {
-            return fail(std::format("CUDA/Vulkan buffer copy requested {} bytes from {} byte tensor",
-                                    byte_count,
-                                    upload_source_.bytes()));
+            return setFailure(
+                last_error_,
+                std::format("CUDA/Vulkan buffer copy requested {} bytes from {} byte tensor",
+                            byte_count,
+                            upload_source_.bytes()));
         }
 
         upload_source_.sync_to_stream(stream);
         auto* const dst = static_cast<std::uint8_t*>(device_ptr_) + dst_offset;
         const cudaError_t status = cudaMemcpyAsync(
             dst, upload_source_.data_ptr(), byte_count, cudaMemcpyDeviceToDevice, stream);
-        return failCuda("cudaMemcpyAsync(CUDA tensor -> Vulkan buffer)", status);
-    }
-
-    bool CudaVulkanBufferInterop::fail(std::string message,
-                                       const std::source_location location) const {
-        last_error_ = withSourceLocation(std::move(message), location);
-        return false;
-    }
-
-    bool CudaVulkanBufferInterop::failCuda(const char* const operation,
-                                           const cudaError_t status,
-                                           const std::source_location location) const {
-        if (status == cudaSuccess) {
-            return true;
-        }
-        last_error_ = withSourceLocation(
-            std::format("{} failed: {} ({})",
-                        operation,
-                        cudaGetErrorName(status),
-                        cudaGetErrorString(status)),
-            location);
-        return false;
+        return setCudaFailure(
+            last_error_, "cudaMemcpyAsync(CUDA tensor -> Vulkan buffer)", status);
     }
 
 } // namespace lfs::rendering
