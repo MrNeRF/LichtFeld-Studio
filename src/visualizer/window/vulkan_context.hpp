@@ -113,6 +113,45 @@ namespace lfs::vis {
             ExternalNativeHandle native_handle = kInvalidExternalNativeHandle;
         };
 
+        struct TimelinePoint {
+            TimelinePoint(VkSemaphore semaphore, std::uint64_t value) noexcept
+                : semaphore(semaphore),
+                  value(value) {}
+
+            VkSemaphore semaphore;
+            std::uint64_t value;
+        };
+
+        struct ImmediateTransitionOptions {
+            VkImageAspectFlags aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT;
+            std::optional<TimelinePoint> wait;
+            VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+            std::optional<TimelinePoint> signal;
+
+            [[nodiscard]] static ImmediateTransitionOptions waitOn(
+                TimelinePoint point,
+                VkPipelineStageFlags stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT) noexcept {
+                return {
+                    .aspect_mask = aspect,
+                    .wait = point,
+                    .wait_stage = stage,
+                    .signal = std::nullopt,
+                };
+            }
+
+            [[nodiscard]] static ImmediateTransitionOptions signalAt(
+                TimelinePoint point,
+                VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT) noexcept {
+                return {
+                    .aspect_mask = aspect,
+                    .wait = std::nullopt,
+                    .wait_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                    .signal = point,
+                };
+            }
+        };
+
         [[nodiscard]] VkInstance instance() const { return instance_; }
         [[nodiscard]] VkPhysicalDevice physicalDevice() const { return physical_device_; }
         [[nodiscard]] VkDevice device() const { return device_; }
@@ -233,12 +272,7 @@ namespace lfs::vis {
         [[nodiscard]] bool transitionImageLayoutImmediate(VkImage image,
                                                           VkImageLayout old_layout,
                                                           VkImageLayout new_layout,
-                                                          VkImageAspectFlags aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT,
-                                                          VkSemaphore wait_semaphore = VK_NULL_HANDLE,
-                                                          std::uint64_t wait_value = 0,
-                                                          VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                                                          VkSemaphore signal_semaphore = VK_NULL_HANDLE,
-                                                          std::uint64_t signal_value = 0);
+                                                          const ImmediateTransitionOptions& options);
 
     private:
         bool fail(std::string message,
