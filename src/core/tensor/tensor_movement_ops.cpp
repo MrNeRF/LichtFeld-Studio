@@ -316,7 +316,7 @@ namespace lfs::core {
                         const cudaError_t self_status =
                             cudaMemcpy(result.data_ptr(), data_ptr(), self_bytes,
                                        cudaMemcpyDeviceToDevice);
-                        ensure_cuda_success(
+                        LFS_ENSURE_CUDA_SUCCESS_MSG(
                             self_status, "cudaMemcpy(cat movement destination)",
                             std::format("bytes={}, destination_shape={}, result_shape={}",
                                         self_bytes, shape_.str(), result.shape().str()));
@@ -326,7 +326,7 @@ namespace lfs::core {
                             cudaMemcpy(static_cast<char*>(result.data_ptr()) + self_bytes,
                                        other.data_ptr(), other_bytes,
                                        cudaMemcpyDeviceToDevice);
-                        ensure_cuda_success(
+                        LFS_ENSURE_CUDA_SUCCESS_MSG(
                             other_status, "cudaMemcpy(cat movement source)",
                             std::format("bytes={}, source_shape={}, result_shape={}, "
                                         "destination_offset={}",

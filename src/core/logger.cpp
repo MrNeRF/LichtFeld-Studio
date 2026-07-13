@@ -440,6 +440,24 @@ namespace lfs::core {
         return instance;
     }
 
+    void Logger::init() {
+        init(LogLevel::Info, std::string{}, std::string{}, false);
+    }
+
+    void Logger::init(const LogLevel console_level) {
+        init(console_level, std::string{}, std::string{}, false);
+    }
+
+    void Logger::init(const LogLevel console_level, const std::string& log_file) {
+        init(console_level, log_file, std::string{}, false);
+    }
+
+    void Logger::init(const LogLevel console_level,
+                      const std::string& log_file,
+                      const std::string& filter_pattern) {
+        init(console_level, log_file, filter_pattern, false);
+    }
+
     void Logger::init(const LogLevel console_level, const std::string& log_file,
                       const std::string& filter_pattern, const bool use_stderr) {
         std::lock_guard lock(impl_->mutex);

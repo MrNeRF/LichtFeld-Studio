@@ -80,9 +80,20 @@ namespace lfs::core {
 
         UniqueCudaAllocation(const size_t bytes,
                              const cudaStream_t stream,
+                             const std::string_view label)
+            : UniqueCudaAllocation(bytes, stream, label, Allocator{}, Hooks{}) {}
+
+        UniqueCudaAllocation(const size_t bytes,
+                             const cudaStream_t stream,
                              const std::string_view label,
-                             Allocator allocator = {},
-                             Hooks hooks = {})
+                             Allocator allocator)
+            : UniqueCudaAllocation(bytes, stream, label, std::move(allocator), Hooks{}) {}
+
+        UniqueCudaAllocation(const size_t bytes,
+                             const cudaStream_t stream,
+                             const std::string_view label,
+                             Allocator allocator,
+                             Hooks hooks)
             : allocator_(std::move(allocator)),
               hooks_(std::move(hooks)) {
             allocate(bytes, stream, label);

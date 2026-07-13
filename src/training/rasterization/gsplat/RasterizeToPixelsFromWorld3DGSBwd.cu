@@ -4,10 +4,10 @@
 
 #include <cooperative_groups.h>
 #include <cuda_runtime.h>
-#include <format>
 
 #include "Cameras.cuh"
 #include "Common.h"
+#include "core/cuda_safe_format.hpp"
 #include "Rasterization.h"
 #include "Utils.cuh"
 
@@ -508,7 +508,8 @@ namespace gsplat_lfs {
         if (err != cudaSuccess) {
             lfs::core::ensure_cuda_success(
                 err, "cudaFuncSetAttribute(gsplat backward shared memory)",
-                std::format("requested_bytes={}, try lowering tile_size", shmem_size),
+                lfs::core::detail::format_cuda_safe(
+                    "requested_bytes={}, try lowering tile_size", shmem_size),
                 LFS_SOURCE_SITE_CURRENT(),
                 lfs::core::CudaFailureDisposition::LogOnly);
             return;

@@ -300,7 +300,7 @@ namespace lfs::core {
     }
 
     CudaCheckState prepare_cuda_check(const char*,
-                                      const SourceSite&,
+                                      const SourceSite,
                                       const cudaStream_t stream) noexcept {
         initialize_cuda_diagnostics();
         CudaCheckState state;
@@ -344,7 +344,7 @@ namespace lfs::core {
         const CudaCheckState& state,
         const char* expression,
         const std::string_view message,
-        const SourceSite& location) {
+        const SourceSite location) {
         emit_cuda_failure_report(
             completion.effective_error, state, expression, message, location,
             completion.post_sync_error, completion.post_peek_error);
@@ -356,7 +356,7 @@ namespace lfs::core {
                            const CudaCheckState& state,
                            const char* expression,
                            const std::string_view message,
-                           const SourceSite& location) {
+                           const SourceSite location) {
         const CudaCheckCompletion completion = complete_cuda_check(result, state);
         if (completion.effective_error == cudaSuccess) [[likely]] {
             return;
@@ -368,7 +368,7 @@ namespace lfs::core {
                              const CudaCheckState& state,
                              const std::string_view expression,
                              const std::string_view message,
-                             const SourceSite& location,
+                             const SourceSite location,
                              const CudaFailureDisposition disposition) {
         if (result == cudaSuccess) [[likely]] {
             return;
@@ -392,7 +392,7 @@ namespace lfs::core {
     void ensure_cuda_success(const cudaError_t result,
                              const std::string_view expression,
                              const std::string_view message,
-                             const SourceSite& location,
+                             const SourceSite location,
                              const CudaFailureDisposition disposition) {
         ensure_cuda_success(
             result, CudaCheckState{}, expression, message, location, disposition);
@@ -400,7 +400,7 @@ namespace lfs::core {
 
     void validate_cuda_device_pointer(const void* pointer,
                                       const std::string_view name,
-                                      const SourceSite& location) {
+                                      const SourceSite location) {
         if (!pointer) {
             detail::assertion_failed(
                 "LFS boundary contract", "pointer != nullptr",
@@ -425,7 +425,7 @@ namespace lfs::core {
 
     void validate_cuda_device_pointer_optional(const void* pointer,
                                                const std::string_view name,
-                                               const SourceSite& location) {
+                                               const SourceSite location) {
         if (pointer) {
             validate_cuda_device_pointer(pointer, name, location);
         }

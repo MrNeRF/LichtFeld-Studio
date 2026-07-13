@@ -6,6 +6,7 @@
 
 #include "core/export.hpp"
 
+#include "core/cuda_safe_format.hpp"
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
 #include <chrono>
@@ -148,11 +149,11 @@ namespace lfs::core::debug {
         }
 
         static std::string format_location(const std::string& file, const int line) {
-            return file.empty() ? "" : std::format(" @ {}:{}", file, line);
+            return file.empty() ? "" : detail::format_cuda_safe(" @ {}:{}", file, line);
         }
 
         static std::string format_name_tag(const std::string& name) {
-            return name.empty() ? "" : std::format(" [{}]", name);
+            return name.empty() ? "" : detail::format_cuda_safe(" [{}]", name);
         }
 
         bool enabled_ = false;
@@ -165,8 +166,7 @@ namespace lfs::core::debug {
     // RAII guard - traces if global enabled OR tensor tracked
     class OpTraceGuard {
     public:
-        OpTraceGuard(const char* op, const Tensor& input,
-                     const SourceSite loc = LFS_SOURCE_SITE_CURRENT())
+        OpTraceGuard(const char* op, const Tensor& input, const SourceSite loc)
             : tracer_(TensorOpTracer::instance()),
               active_(tracer_.should_trace(input)) {
             if (active_)
@@ -174,15 +174,14 @@ namespace lfs::core::debug {
         }
 
         OpTraceGuard(const char* op, const Tensor& in1, const Tensor& in2,
-                     const SourceSite loc = LFS_SOURCE_SITE_CURRENT())
+                     const SourceSite loc)
             : tracer_(TensorOpTracer::instance()),
               active_(tracer_.should_trace(in1, in2)) {
             if (active_)
                 tracer_.push(op, in1, in2, loc);
         }
 
-        OpTraceGuard(const char* op, const TensorShape& shape,
-                     const SourceSite loc = LFS_SOURCE_SITE_CURRENT())
+        OpTraceGuard(const char* op, const TensorShape& shape, const SourceSite loc)
             : tracer_(TensorOpTracer::instance()),
               active_(tracer_.is_enabled()) {
             if (active_)
@@ -190,7 +189,7 @@ namespace lfs::core::debug {
         }
 
         OpTraceGuard(const char* op, const TensorShape& in1, const TensorShape& in2,
-                     const SourceSite loc = LFS_SOURCE_SITE_CURRENT())
+                     const SourceSite loc)
             : tracer_(TensorOpTracer::instance()),
               active_(tracer_.is_enabled()) {
             if (active_)
@@ -220,8 +219,12 @@ namespace lfs::core::debug {
 } // namespace lfs::core::debug
 
 #ifdef TENSOR_OP_TRACING
-#define TRACE_OP(name, shape)   lfs::core::debug::OpTraceGuard _trace_guard_##__LINE__(name, shape)
-#define TRACE_OP2(name, s1, s2) lfs::core::debug::OpTraceGuard _trace_guard_##__LINE__(name, s1, s2)
+#define TRACE_OP(name, shape)                                                        \
+    lfs::core::debug::OpTraceGuard _trace_guard_##__LINE__(                         \
+        (name), (shape), LFS_SOURCE_SITE_CURRENT())
+#define TRACE_OP2(name, s1, s2)                                                     \
+    lfs::core::debug::OpTraceGuard _trace_guard_##__LINE__(                         \
+        (name), (s1), (s2), LFS_SOURCE_SITE_CURRENT())
 #define TRACE_OP_OUTPUT(shape)  _trace_guard_##__LINE__.set_output(shape)
 #define TRACE_PRINT_STACK()     lfs::core::debug::TensorOpTracer::instance().print_stack()
 #define TRACE_PRINT_HISTORY(n)  lfs::core::debug::TensorOpTracer::instance().print_history(n)

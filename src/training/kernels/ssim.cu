@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/cuda_safe_format.hpp"
 #include "lfs/kernels/loss_tensor_contract.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include "lfs/kernels/ssim_reduction.cuh"
@@ -1434,7 +1435,8 @@ namespace lfs::training::kernels {
                 LFS_ASSERT_MSG(tensor.is_valid() && tensor.device() == lfs::core::Device::CUDA &&
                                    tensor.dtype() == lfs::core::DataType::Float32 &&
                                    tensor.is_contiguous() && tensor.shape() == ctx.img1.shape(),
-                               std::format("{} must be a contiguous Float32 CUDA tensor matching {} (shape={})",
+                               lfs::core::detail::format_cuda_safe(
+                                   "{} must be a contiguous Float32 CUDA tensor matching {} (shape={})",
                                            name, ctx.img1.shape().str(), tensor.shape().str()));
             };
             validate_derivative(ctx.dm_dmu1, "SSIM dmu derivative");
@@ -1451,7 +1453,9 @@ namespace lfs::training::kernels {
         const float C1 = 0.01f * 0.01f;
         const float C2 = 0.03f * 0.03f;
 
-        auto [img1, img2] = prepare_loss_images(img1_input, img2_input);
+        auto prepared_images = prepare_loss_images(img1_input, img2_input);
+        auto& img1 = prepared_images.prediction;
+        auto& img2 = prepared_images.target;
 
         int N = static_cast<int>(img1.shape()[0]);
         int C = static_cast<int>(img1.shape()[1]);
@@ -1521,7 +1525,9 @@ namespace lfs::training::kernels {
         constexpr float C1 = 0.01f * 0.01f;
         constexpr float C2 = 0.03f * 0.03f;
 
-        auto [img1, img2] = prepare_loss_images(img1_input, img2_input);
+        auto prepared_images = prepare_loss_images(img1_input, img2_input);
+        auto& img1 = prepared_images.prediction;
+        auto& img2 = prepared_images.target;
 
         const int N = static_cast<int>(img1.shape()[0]);
         const int C = static_cast<int>(img1.shape()[1]);
@@ -1573,9 +1579,12 @@ namespace lfs::training::kernels {
         constexpr float C1 = 0.01f * 0.01f;
         constexpr float C2 = 0.03f * 0.03f;
 
-        auto [img1, img2] = prepare_loss_images(img1_input, img2_input);
+        auto prepared_images = prepare_loss_images(img1_input, img2_input);
+        auto& img1 = prepared_images.prediction;
+        auto& img2 = prepared_images.target;
         LFS_ASSERT_MSG(img1.shape()[0] == 1,
-                       std::format("SSIM error maps require a single-image batch (shape={})",
+                       lfs::core::detail::format_cuda_safe(
+                           "SSIM error maps require a single-image batch (shape={})",
                                    img1.shape().str()));
 
         const int N = static_cast<int>(img1.shape()[0]);
@@ -1683,7 +1692,8 @@ namespace lfs::training::kernels {
         validate_ssim_context(ctx);
         auto gradient_map = prepare_loss_prediction(dL_dmap, "SSIM gradient map");
         LFS_ASSERT_MSG(gradient_map.shape() == ctx.img1.shape(),
-                       std::format("SSIM gradient map must match the context image (gradient={}, image={})",
+                       lfs::core::detail::format_cuda_safe(
+                           "SSIM gradient map must match the context image (gradient={}, image={})",
                                    gradient_map.shape().str(), ctx.img1.shape().str()));
 
         constexpr float C1 = 0.01f * 0.01f;
@@ -1718,7 +1728,9 @@ namespace lfs::training::kernels {
         const float C1 = 0.01f * 0.01f;
         const float C2 = 0.03f * 0.03f;
 
-        auto [img1, img2] = prepare_loss_images(img1_input, img2_input);
+        auto prepared_images = prepare_loss_images(img1_input, img2_input);
+        auto& img1 = prepared_images.prediction;
+        auto& img2 = prepared_images.target;
 
         int N = static_cast<int>(img1.shape()[0]);
         int C = static_cast<int>(img1.shape()[1]);
@@ -1857,7 +1869,9 @@ namespace lfs::training::kernels {
         constexpr float C2 = 0.03f * 0.03f;
 
         validate_loss_weight(ssim_weight);
-        auto [img1, img2] = prepare_loss_images(img1_input, img2_input);
+        auto prepared_images = prepare_loss_images(img1_input, img2_input);
+        auto& img1 = prepared_images.prediction;
+        auto& img2 = prepared_images.target;
 
         const int N = static_cast<int>(img1.shape()[0]);
         const int C = static_cast<int>(img1.shape()[1]);
@@ -1969,7 +1983,8 @@ namespace lfs::training::kernels {
         auto raw = prepare_loss_prediction(raw_input, "Raw loss image");
         auto gt = prepare_loss_target(gt_input, "Loss target");
         LFS_ASSERT_MSG(corrected.shape() == raw.shape() && corrected.shape() == gt.shape(),
-                       std::format("Decoupled loss image shapes must match (corrected={}, raw={}, target={})",
+                       lfs::core::detail::format_cuda_safe(
+                           "Decoupled loss image shapes must match (corrected={}, raw={}, target={})",
                                    corrected.shape().str(), raw.shape().str(), gt.shape().str()));
 
         const int N = static_cast<int>(corrected.shape()[0]);
@@ -2092,7 +2107,9 @@ namespace lfs::training::kernels {
         constexpr float C2 = 0.03f * 0.03f;
 
         validate_loss_weight(ssim_weight);
-        auto [img1, img2] = prepare_loss_images(img1_input, img2_input);
+        auto prepared_images = prepare_loss_images(img1_input, img2_input);
+        auto& img1 = prepared_images.prediction;
+        auto& img2 = prepared_images.target;
         auto mask_2d = prepare_loss_mask(mask_input, img1);
 
         const int N = static_cast<int>(img1.shape()[0]);
@@ -2204,7 +2221,8 @@ namespace lfs::training::kernels {
         auto raw = prepare_loss_prediction(raw_input, "Raw loss image");
         auto gt = prepare_loss_target(gt_input, "Loss target");
         LFS_ASSERT_MSG(corrected.shape() == raw.shape() && corrected.shape() == gt.shape(),
-                       std::format("Masked decoupled loss image shapes must match "
+                       lfs::core::detail::format_cuda_safe(
+                           "Masked decoupled loss image shapes must match "
                                    "(corrected={}, raw={}, target={})",
                                    corrected.shape().str(), raw.shape().str(), gt.shape().str()));
         auto mask_2d = prepare_loss_mask(mask_input, corrected);
@@ -2349,7 +2367,8 @@ namespace lfs::training::kernels {
                            ssim_map.is_contiguous() && ssim_map.ndim() == 4 &&
                            ssim_map.shape()[0] == 1 && ssim_map.shape()[1] > 0 &&
                            ssim_map.shape()[2] > 0 && ssim_map.shape()[3] > 0,
-                       std::format("SSIM map must be contiguous Float32 CUDA [1,C,H,W] (shape={})",
+                       lfs::core::detail::format_cuda_safe(
+                           "SSIM map must be contiguous Float32 CUDA [1,C,H,W] (shape={})",
                                    ssim_map.shape().str()));
 
         const int C = static_cast<int>(ssim_map.shape()[1]);
@@ -2362,7 +2381,8 @@ namespace lfs::training::kernels {
                            error_map.is_contiguous() && error_map.ndim() == 2 &&
                            error_map.shape()[0] == static_cast<size_t>(H) &&
                            error_map.shape()[1] == static_cast<size_t>(W),
-                       std::format("SSIM error map must be contiguous Float32 CUDA [H,W] "
+                       lfs::core::detail::format_cuda_safe(
+                           "SSIM error map must be contiguous Float32 CUDA [H,W] "
                                    "(map={}, expected=[{}, {}])",
                                    error_map.shape().str(), H, W));
 

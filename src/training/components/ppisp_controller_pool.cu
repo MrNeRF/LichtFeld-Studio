@@ -85,6 +85,9 @@ namespace lfs::training {
 
     } // namespace
 
+    PPISPControllerPool::PPISPControllerPool(const int num_cameras, const int total_iterations)
+        : PPISPControllerPool(num_cameras, total_iterations, Config{}) {}
+
     PPISPControllerPool::PPISPControllerPool(const int num_cameras, const int total_iterations, Config config)
         : num_cameras_(num_cameras),
           total_iterations_(total_iterations),

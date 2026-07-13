@@ -801,6 +801,10 @@ namespace lfs::core {
         return load(LoadOp::Multinomial, args);
     }
 
+    Tensor Tensor::reduce(const ReduceOp op) const {
+        return reduce(op, ReduceArgs{});
+    }
+
     Tensor Tensor::reduce(ReduceOp op, const ReduceArgs& args) const {
         LFS_CUDA_BREADCRUMB_STREAM("tensor.reduce", stream());
         constexpr std::array op_names = {
@@ -811,7 +815,7 @@ namespace lfs::core {
                            op_value <= static_cast<int>(ReduceOp::Norm),
                        "reduce received an unknown operation");
         const char* op_name = op_names[static_cast<size_t>(op_value)];
-        debug::OpTraceGuard trace(op_name, *this);
+        debug::OpTraceGuard trace(op_name, *this, LFS_SOURCE_SITE_CURRENT());
 
         validate_unary_op();
         LFS_ASSERT_MSG(op != ReduceOp::Argmax && op != ReduceOp::Argmin,
@@ -1804,12 +1808,18 @@ namespace lfs::core {
     }
 
     Tensor Tensor::where(const Tensor& condition, const Tensor& x, const Tensor& y) {
-        tensor_contract::require_valid(condition, "where", "condition");
-        tensor_contract::require_valid(x, "where", "true value");
-        tensor_contract::require_valid(y, "where", "false value");
-        tensor_contract::require_dtype(condition, DataType::Bool, "where", "condition");
-        tensor_contract::require_same_device(condition, x, "where", "condition", "true value");
-        tensor_contract::require_same_device(condition, y, "where", "condition", "false value");
+        tensor_contract::require_valid(
+            condition, "where", "condition", LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_valid(
+            x, "where", "true value", LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_valid(
+            y, "where", "false value", LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_dtype(
+            condition, DataType::Bool, "where", "condition", LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_same_device(
+            condition, x, "where", "condition", "true value", LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_same_device(
+            condition, y, "where", "condition", "false value", LFS_SOURCE_SITE_CURRENT());
         return condition.ternary(x, y);
     }
 
@@ -1928,7 +1938,8 @@ namespace lfs::core {
             throw std::invalid_argument("Cannot concatenate empty vector of tensors");
         }
         for (const auto& tensor : tensors) {
-            tensor_contract::require_valid(tensor, "cat", "input");
+            tensor_contract::require_valid(
+                tensor, "cat", "input", LFS_SOURCE_SITE_CURRENT());
         }
 
         if (tensors.size() == 1) {
@@ -2078,7 +2089,7 @@ namespace lfs::core {
                 LOG_DEBUG("  Starting CUDA memcpy for {} additional tensors, initial offset={} bytes",
                           tensors.size() - 1, offset);
 
-                validate_cuda_device_pointer(result.data_, "in-place cat destination");
+                LFS_VALIDATE_CUDA_DEVICE_POINTER(result.data_, "in-place cat destination");
 
                 for (size_t i = 1; i < tensors.size(); ++i) {
                     const size_t bytes = tensors[i].bytes();
@@ -2087,7 +2098,7 @@ namespace lfs::core {
                     LOG_DEBUG("  Copying tensor[{}]: shape_[0]={}, numel={}, {} bytes from src={} at offset {}",
                               i, tensor_rows, tensors[i].numel(), bytes, src_ptr, offset);
 
-                    validate_cuda_device_pointer(src_ptr, "in-place cat source");
+                    LFS_VALIDATE_CUDA_DEVICE_POINTER(src_ptr, "in-place cat source");
 
                     LFS_CUDA_CHECK_MSG(
                         cudaMemcpy(static_cast<char*>(result.data_) + offset, src_ptr, bytes,
@@ -2246,7 +2257,8 @@ namespace lfs::core {
     Tensor Tensor::stack(const std::vector<Tensor>& tensors, int dim) {
         LFS_ASSERT_MSG(!tensors.empty(),
                        "stack requires at least one tensor");
-        tensor_contract::require_valid(tensors[0], "stack", "reference");
+        tensor_contract::require_valid(
+            tensors[0], "stack", "reference", LFS_SOURCE_SITE_CURRENT());
 
         const auto& first_shape = tensors[0].shape();
         const auto first_device = tensors[0].device();
@@ -2254,10 +2266,16 @@ namespace lfs::core {
 
         // Validate all tensors have same shape, device, and dtype
         for (size_t i = 1; i < tensors.size(); ++i) {
-            tensor_contract::require_valid(tensors[i], "stack", "input");
-            tensor_contract::require_shape(tensors[0], tensors[i], "stack", "reference", "input");
-            tensor_contract::require_same_device(tensors[0], tensors[i], "stack", "reference", "input");
-            tensor_contract::require_dtype(tensors[i], first_dtype, "stack", "input");
+            tensor_contract::require_valid(
+                tensors[i], "stack", "input", LFS_SOURCE_SITE_CURRENT());
+            tensor_contract::require_shape(
+                tensors[0], tensors[i], "stack", "reference", "input",
+                LFS_SOURCE_SITE_CURRENT());
+            tensor_contract::require_same_device(
+                tensors[0], tensors[i], "stack", "reference", "input",
+                LFS_SOURCE_SITE_CURRENT());
+            tensor_contract::require_dtype(
+                tensors[i], first_dtype, "stack", "input", LFS_SOURCE_SITE_CURRENT());
         }
 
         // Build output shape with new dimension inserted at 'dim'

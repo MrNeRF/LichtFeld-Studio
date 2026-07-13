@@ -755,6 +755,57 @@ namespace lfs::rendering {
         const float pixel_focal_x,
         const float pixel_focal_y,
         const bool orthographic,
+        const float ortho_scale) {
+        return project_screen_positions_tensor(
+            means, width, height, view_rotation_rows, translation,
+            pixel_focal_x, pixel_focal_y, orthographic, ortho_scale,
+            nullptr, nullptr, {});
+    }
+
+    Tensor project_screen_positions_tensor(
+        const Tensor& means,
+        const int width,
+        const int height,
+        const std::array<float, 9>& view_rotation_rows,
+        const std::array<float, 3>& translation,
+        const float pixel_focal_x,
+        const float pixel_focal_y,
+        const bool orthographic,
+        const float ortho_scale,
+        const Tensor* const model_transforms) {
+        return project_screen_positions_tensor(
+            means, width, height, view_rotation_rows, translation,
+            pixel_focal_x, pixel_focal_y, orthographic, ortho_scale,
+            model_transforms, nullptr, {});
+    }
+
+    Tensor project_screen_positions_tensor(
+        const Tensor& means,
+        const int width,
+        const int height,
+        const std::array<float, 9>& view_rotation_rows,
+        const std::array<float, 3>& translation,
+        const float pixel_focal_x,
+        const float pixel_focal_y,
+        const bool orthographic,
+        const float ortho_scale,
+        const Tensor* const model_transforms,
+        const Tensor* const transform_indices) {
+        return project_screen_positions_tensor(
+            means, width, height, view_rotation_rows, translation,
+            pixel_focal_x, pixel_focal_y, orthographic, ortho_scale,
+            model_transforms, transform_indices, {});
+    }
+
+    Tensor project_screen_positions_tensor(
+        const Tensor& means,
+        const int width,
+        const int height,
+        const std::array<float, 9>& view_rotation_rows,
+        const std::array<float, 3>& translation,
+        const float pixel_focal_x,
+        const float pixel_focal_y,
+        const bool orthographic,
         const float ortho_scale,
         const Tensor* const model_transforms,
         const Tensor* const transform_indices,

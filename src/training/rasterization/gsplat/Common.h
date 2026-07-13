@@ -67,7 +67,7 @@ namespace gsplat_lfs {
 // established by the caller before this low-level backend boundary.
 #ifdef DEBUG_BUILD
     inline void debug_validate_cuda_pointer(const void* pointer, const std::string_view name) {
-        lfs::core::validate_cuda_device_pointer(pointer, name);
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(pointer, name);
     }
 #else
     inline void debug_validate_cuda_pointer(const void*, std::string_view) {}

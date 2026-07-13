@@ -333,7 +333,9 @@ namespace lfs::core {
             printf("%s\n", std::string(160, '-').c_str());
 
             int count = 0;
-            for (const auto& [location, site] : sites_vec) {
+            for (const auto& entry : sites_vec) {
+                const auto& location = entry.first;
+                const auto& site = entry.second;
                 if (count++ >= top_n)
                     break;
 
@@ -359,7 +361,9 @@ namespace lfs::core {
                     }
 
                     // Print tensor details
-                    for (const auto& [shape_dtype, tensors] : shape_groups) {
+                    for (const auto& entry : shape_groups) {
+                        const auto& shape_dtype = entry.first;
+                        const auto& tensors = entry.second;
                         double total_tensor_mb = 0;
                         for (const auto* t : tensors) {
                             total_tensor_mb += t->mb();
@@ -401,7 +405,9 @@ namespace lfs::core {
 
             std::map<std::string, TensorGroup> groups;
 
-            for (const auto& [location, site] : sites_) {
+            for (const auto& entry : sites_) {
+                const auto& location = entry.first;
+                const auto& site = entry.second;
                 for (const auto& tensor : site.tensors) {
                     // Use the full location string - NO truncation
                     std::string origin = location;
@@ -422,8 +428,8 @@ namespace lfs::core {
 
             // Convert to vector for sorting
             std::vector<TensorGroup> sorted_groups;
-            for (const auto& [key, group] : groups) {
-                sorted_groups.push_back(group);
+            for (const auto& entry : groups) {
+                sorted_groups.push_back(entry.second);
             }
 
             // Sort by total bytes
@@ -480,7 +486,9 @@ namespace lfs::core {
             };
 
             std::vector<LifetimeSummary> summaries;
-            for (const auto& [key, lifetimes] : lifetime_stats_) {
+            for (const auto& entry : lifetime_stats_) {
+                const auto& key = entry.first;
+                const auto& lifetimes = entry.second;
                 if (lifetimes.empty())
                     continue;
 
@@ -550,7 +558,9 @@ namespace lfs::core {
             };
 
             std::vector<OriginSummary> summaries;
-            for (const auto& [detailed_key, lifetimes] : lifetime_stats_by_origin_) {
+            for (const auto& entry : lifetime_stats_by_origin_) {
+                const auto& detailed_key = entry.first;
+                const auto& lifetimes = entry.second;
                 if (lifetimes.empty())
                     continue;
 
@@ -630,7 +640,8 @@ namespace lfs::core {
             std::map<std::string, ActiveGroup> groups;
             size_t total_active_bytes = 0;
 
-            for (const auto& [ptr, meta] : active_allocations_) {
+            for (const auto& entry : active_allocations_) {
+                const auto& meta = entry.second;
                 std::string key = meta.shape_str() + "|" + meta.dtype + "|" + meta.location;
                 auto& g = groups[key];
                 if (g.count == 0) {
@@ -648,8 +659,8 @@ namespace lfs::core {
             }
 
             std::vector<ActiveGroup> sorted;
-            for (const auto& [k, g] : groups)
-                sorted.push_back(g);
+            for (const auto& entry : groups)
+                sorted.push_back(entry.second);
             std::sort(sorted.begin(), sorted.end(),
                       [](const auto& a, const auto& b) { return a.total_bytes > b.total_bytes; });
 

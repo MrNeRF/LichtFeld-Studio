@@ -263,8 +263,11 @@ namespace lfs::diagnostics {
 
         void recordAllocation(void* ptr,
                               std::size_t bytes,
+                              VramAllocationMethod method);
+        void recordAllocation(void* ptr,
+                              std::size_t bytes,
                               VramAllocationMethod method,
-                              std::string_view label = {});
+                              std::string_view label);
         void recordDeallocation(void* ptr);
         void relabelAllocation(void* ptr, std::string_view label);
         void recordBytes(std::string_view scope,

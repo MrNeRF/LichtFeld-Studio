@@ -246,45 +246,45 @@ namespace lfs::core {
         LFS_CORE_API void require_valid(
             const Tensor& tensor,
             std::string_view operation,
-            std::string_view role = "tensor",
-            SourceSite location = LFS_SOURCE_SITE_CURRENT());
+            std::string_view role,
+            SourceSite location);
 
         LFS_CORE_API void require_same_device(
             const Tensor& reference,
             const Tensor& other,
             std::string_view operation,
-            std::string_view reference_role = "input",
-            std::string_view other_role = "other",
-            SourceSite location = LFS_SOURCE_SITE_CURRENT());
+            std::string_view reference_role,
+            std::string_view other_role,
+            SourceSite location);
 
         LFS_CORE_API void require_dtype(
             const Tensor& tensor,
             DataType expected,
             std::string_view operation,
-            std::string_view role = "tensor",
-            SourceSite location = LFS_SOURCE_SITE_CURRENT());
+            std::string_view role,
+            SourceSite location);
 
         LFS_CORE_API void require_dtype(
             const Tensor& tensor,
             std::initializer_list<DataType> expected,
             std::string_view operation,
-            std::string_view role = "tensor",
-            SourceSite location = LFS_SOURCE_SITE_CURRENT());
+            std::string_view role,
+            SourceSite location);
 
         LFS_CORE_API void require_shape(
             const Tensor& reference,
             const Tensor& other,
             std::string_view operation,
-            std::string_view reference_role = "input",
-            std::string_view other_role = "other",
-            SourceSite location = LFS_SOURCE_SITE_CURRENT());
+            std::string_view reference_role,
+            std::string_view other_role,
+            SourceSite location);
 
         LFS_CORE_API void require_shape(
             const Tensor& tensor,
             const TensorShape& expected,
             std::string_view operation,
-            std::string_view role = "tensor",
-            SourceSite location = LFS_SOURCE_SITE_CURRENT());
+            std::string_view role,
+            SourceSite location);
 
     } // namespace tensor_contract
 
@@ -440,8 +440,12 @@ namespace lfs::core {
         static Tensor make_deferred_expr_tensor(TensorShape shape,
                                                 Device device,
                                                 DataType dtype,
+                                                std::function<Tensor()> materializer);
+        static Tensor make_deferred_expr_tensor(TensorShape shape,
+                                                Device device,
+                                                DataType dtype,
                                                 std::function<Tensor()> materializer,
-                                                std::vector<uint64_t> lazy_input_ids = {});
+                                                std::vector<uint64_t> lazy_input_ids);
 
         // Compute alignment flags for vectorization
         void compute_alignment() {
@@ -565,7 +569,8 @@ namespace lfs::core {
         Tensor scalar_op_generic(float scalar, Op op, DataType out_dtype = DataType::Float32) const {
             validate_unary_op();
             tensor_contract::require_dtype(
-                *this, {DataType::Float32, DataType::Int32}, "scalar operation", "input");
+                *this, {DataType::Float32, DataType::Int32}, "scalar operation", "input",
+                LFS_SOURCE_SITE_CURRENT());
             LFS_ASSERT_MSG(out_dtype == DataType::Float32 || out_dtype == DataType::Int32 ||
                                out_dtype == DataType::Bool,
                            "scalar operation requested an unsupported output dtype");
@@ -635,7 +640,8 @@ namespace lfs::core {
         Tensor& scalar_op_inplace_generic(float scalar, Op op) {
             validate_unary_op();
             tensor_contract::require_dtype(
-                *this, DataType::Float32, "in-place scalar operation", "input");
+                *this, DataType::Float32, "in-place scalar operation", "input",
+                LFS_SOURCE_SITE_CURRENT());
 
             if (device_ == Device::CUDA) {
                 tensor_ops::launch_scalar_op_generic(
@@ -672,9 +678,11 @@ namespace lfs::core {
                     (other.device() == Device::CUDA ? "CUDA" : "CPU"));
             }
             tensor_contract::require_dtype(
-                other, dtype_, "in-place binary operation", "source");
+                other, dtype_, "in-place binary operation", "source",
+                LFS_SOURCE_SITE_CURRENT());
             tensor_contract::require_dtype(
-                *this, DataType::Float32, "in-place binary operation", "destination");
+                *this, DataType::Float32, "in-place binary operation", "destination",
+                LFS_SOURCE_SITE_CURRENT());
 
             if (device_ == Device::CUDA) {
                 tensor_ops::launch_binary_op_generic(
@@ -953,7 +961,8 @@ namespace lfs::core {
         // ============= CORE UNIFIED OPERATIONS =============
         static Tensor load(LoadOp op, const LoadArgs& args);
         Tensor movement(MovementOp op, const MovementArgs& args) const;
-        Tensor reduce(ReduceOp op, const ReduceArgs& args = {}) const;
+        Tensor reduce(ReduceOp op) const;
+        Tensor reduce(ReduceOp op, const ReduceArgs& args) const;
         // Internal helper for where() operation
         Tensor ternary(const Tensor& b, const Tensor& c) const;
 
@@ -1002,10 +1011,28 @@ namespace lfs::core {
                                           TensorShape shape,
                                           Device device,
                                           DataType dtype,
+                                          std::shared_ptr<void> owner);
+        static Tensor from_external_owner(void* data,
+                                          TensorShape shape,
+                                          Device device,
+                                          DataType dtype,
                                           std::shared_ptr<void> owner,
-                                          size_t capacity = 0,
-                                          cudaStream_t stream = nullptr,
-                                          std::string external_kind = {});
+                                          size_t capacity);
+        static Tensor from_external_owner(void* data,
+                                          TensorShape shape,
+                                          Device device,
+                                          DataType dtype,
+                                          std::shared_ptr<void> owner,
+                                          size_t capacity,
+                                          cudaStream_t stream);
+        static Tensor from_external_owner(void* data,
+                                          TensorShape shape,
+                                          Device device,
+                                          DataType dtype,
+                                          std::shared_ptr<void> owner,
+                                          size_t capacity,
+                                          cudaStream_t stream,
+                                          std::string external_kind);
 
         static Tensor from_vector(const std::vector<float>& data, TensorShape shape,
                                   Device device = Device::CUDA);
@@ -1032,39 +1059,46 @@ namespace lfs::core {
 
         // ============= LIKE OPERATIONS =============
         static Tensor zeros_like(const Tensor& other) {
-            tensor_contract::require_valid(other, "zeros_like", "template");
+            tensor_contract::require_valid(
+                other, "zeros_like", "template", LFS_SOURCE_SITE_CURRENT());
             return zeros(other.shape(), other.device(), other.dtype());
         }
 
         static Tensor ones_like(const Tensor& other) {
-            tensor_contract::require_valid(other, "ones_like", "template");
+            tensor_contract::require_valid(
+                other, "ones_like", "template", LFS_SOURCE_SITE_CURRENT());
             return ones(other.shape(), other.device(), other.dtype());
         }
 
         static Tensor ones_like(const Tensor& other, DataType dtype) {
-            tensor_contract::require_valid(other, "ones_like", "template");
+            tensor_contract::require_valid(
+                other, "ones_like", "template", LFS_SOURCE_SITE_CURRENT());
             return ones(other.shape(), other.device(), dtype);
         }
 
         static Tensor rand_like(const Tensor& other) {
-            tensor_contract::require_valid(other, "rand_like", "template");
+            tensor_contract::require_valid(
+                other, "rand_like", "template", LFS_SOURCE_SITE_CURRENT());
             return rand(other.shape(), other.device(), other.dtype());
         }
 
         static Tensor randn_like(const Tensor& other) {
-            tensor_contract::require_valid(other, "randn_like", "template");
+            tensor_contract::require_valid(
+                other, "randn_like", "template", LFS_SOURCE_SITE_CURRENT());
             return randn(other.shape(), other.device(), other.dtype());
         }
 
         static Tensor empty_like(const Tensor& other) {
-            tensor_contract::require_valid(other, "empty_like", "template");
+            tensor_contract::require_valid(
+                other, "empty_like", "template", LFS_SOURCE_SITE_CURRENT());
             auto result = empty(other.shape(), other.device(), other.dtype());
             result.set_stream(other.stream());
             return result;
         }
 
         static Tensor full_like(const Tensor& other, float value) {
-            tensor_contract::require_valid(other, "full_like", "template");
+            tensor_contract::require_valid(
+                other, "full_like", "template", LFS_SOURCE_SITE_CURRENT());
             auto result = full(other.shape(), value, other.device(), other.dtype());
             result.set_stream(other.stream());
             return result;
@@ -1111,7 +1145,8 @@ namespace lfs::core {
         template <typename T>
         const T* ptr() const {
             materialize_if_deferred();
-            tensor_contract::require_valid(*this, "ptr<T>");
+            tensor_contract::require_valid(
+                *this, "ptr<T>", "tensor", LFS_SOURCE_SITE_CURRENT());
             using Value = std::remove_cv_t<T>;
             if constexpr (!std::is_void_v<Value>) {
                 const bool dtype_matches =
@@ -1134,7 +1169,8 @@ namespace lfs::core {
 
         void* data_ptr() {
             materialize_if_deferred();
-            tensor_contract::require_valid(*this, "data_ptr");
+            tensor_contract::require_valid(
+                *this, "data_ptr", "tensor", LFS_SOURCE_SITE_CURRENT());
             assert_view_not_stale();
             LFS_ASSERT_MSG(data_ != nullptr || numel() == 0,
                            "data_ptr() found null storage for a non-empty tensor");
@@ -1142,7 +1178,8 @@ namespace lfs::core {
         }
         const void* data_ptr() const {
             materialize_if_deferred();
-            tensor_contract::require_valid(*this, "data_ptr");
+            tensor_contract::require_valid(
+                *this, "data_ptr", "tensor", LFS_SOURCE_SITE_CURRENT());
             assert_view_not_stale();
             LFS_ASSERT_MSG(data_ != nullptr || numel() == 0,
                            "data_ptr() found null storage for a non-empty tensor");
@@ -1152,12 +1189,14 @@ namespace lfs::core {
         // Base of allocation (for memory management only)
         void* storage_ptr() {
             materialize_if_deferred();
-            tensor_contract::require_valid(*this, "storage_ptr");
+            tensor_contract::require_valid(
+                *this, "storage_ptr", "tensor", LFS_SOURCE_SITE_CURRENT());
             return data_;
         }
         const void* storage_ptr() const {
             materialize_if_deferred();
-            tensor_contract::require_valid(*this, "storage_ptr");
+            tensor_contract::require_valid(
+                *this, "storage_ptr", "tensor", LFS_SOURCE_SITE_CURRENT());
             return data_;
         }
 
@@ -1268,7 +1307,8 @@ namespace lfs::core {
             return storage_meta_ ? storage_meta_->external_owner : nullptr;
         }
         static std::string storage_memory_summary();
-        static void log_storage_memory(std::string_view label = {});
+        static void log_storage_memory();
+        static void log_storage_memory(std::string_view label);
 
         // reserve() pre-allocates memory for future growth along dimension 0
         // Supports multi-dimensional tensors: [N, D1, D2, ...] reserves N "rows"
@@ -1310,7 +1350,11 @@ namespace lfs::core {
         Tensor view(std::initializer_list<int> sizes) const { return reshape(sizes); }
         Tensor view(TensorShape new_shape) const { return reshape(new_shape); }
 
-        Tensor squeeze(std::optional<int> dim = std::nullopt) const {
+        Tensor squeeze() const {
+            return squeeze(std::optional<int>{});
+        }
+
+        Tensor squeeze(std::optional<int> dim) const {
             MovementArgs args;
             args.args = dim.value_or(std::numeric_limits<int>::min());
             return movement(MovementOp::Squeeze, args);
@@ -1535,7 +1579,8 @@ namespace lfs::core {
             const std::string_view operation,
             const std::initializer_list<DataType> allowed_dtypes) const {
             validate_unary_op();
-            tensor_contract::require_dtype(*this, allowed_dtypes, operation, "input");
+            tensor_contract::require_dtype(
+                *this, allowed_dtypes, operation, "input", LFS_SOURCE_SITE_CURRENT());
             const float scalar = static_cast<float>(value);
             LFS_ASSERT_MSG(std::isfinite(scalar),
                            std::string(operation) + " scalar must be finite");
@@ -1670,7 +1715,11 @@ namespace lfs::core {
         }
 
         // ============= REDUCE OPERATIONS =============
-        Tensor sum(std::span<const int> axes = {}, bool keepdim = false) const {
+        Tensor sum() const {
+            return sum(std::span<const int>{}, false);
+        }
+
+        Tensor sum(std::span<const int> axes, bool keepdim = false) const {
             ReduceArgs args;
             args.axes = std::vector<int>(axes.begin(), axes.end());
             args.keepdim = keepdim;
@@ -1686,7 +1735,11 @@ namespace lfs::core {
             return sum(std::span<const int>(axes), keepdim);
         }
 
-        Tensor mean(std::span<const int> axes = {}, bool keepdim = false) const {
+        Tensor mean() const {
+            return mean(std::span<const int>{}, false);
+        }
+
+        Tensor mean(std::span<const int> axes, bool keepdim = false) const {
             ReduceArgs args;
             args.axes = std::vector<int>(axes.begin(), axes.end());
             args.keepdim = keepdim;
@@ -1702,7 +1755,11 @@ namespace lfs::core {
             return mean(std::span<const int>(axes), keepdim);
         }
 
-        Tensor max(std::span<const int> axes = {}, bool keepdim = false) const {
+        Tensor max() const {
+            return max(std::span<const int>{}, false);
+        }
+
+        Tensor max(std::span<const int> axes, bool keepdim = false) const {
             ReduceArgs args;
             args.axes = std::vector<int>(axes.begin(), axes.end());
             args.keepdim = keepdim;
@@ -1718,7 +1775,11 @@ namespace lfs::core {
             return max(std::span<const int>(axes), keepdim);
         }
 
-        Tensor min(std::span<const int> axes = {}, bool keepdim = false) const {
+        Tensor min() const {
+            return min(std::span<const int>{}, false);
+        }
+
+        Tensor min(std::span<const int> axes, bool keepdim = false) const {
             ReduceArgs args;
             args.axes = std::vector<int>(axes.begin(), axes.end());
             args.keepdim = keepdim;
@@ -1734,7 +1795,11 @@ namespace lfs::core {
             return min(std::span<const int>(axes), keepdim);
         }
 
-        Tensor prod(std::span<const int> axes = {}, bool keepdim = false) const {
+        Tensor prod() const {
+            return prod(std::span<const int>{}, false);
+        }
+
+        Tensor prod(std::span<const int> axes, bool keepdim = false) const {
             ReduceArgs args;
             args.axes = std::vector<int>(axes.begin(), axes.end());
             args.keepdim = keepdim;
@@ -1750,7 +1815,11 @@ namespace lfs::core {
             return prod(std::span<const int>(axes), keepdim);
         }
 
-        Tensor any(std::span<const int> axes = {}, bool keepdim = false) const {
+        Tensor any() const {
+            return any(std::span<const int>{}, false);
+        }
+
+        Tensor any(std::span<const int> axes, bool keepdim = false) const {
             ReduceArgs args;
             args.axes = std::vector<int>(axes.begin(), axes.end());
             args.keepdim = keepdim;
@@ -1762,7 +1831,11 @@ namespace lfs::core {
             return any(std::span<const int>(axes), keepdim);
         }
 
-        Tensor all(std::span<const int> axes = {}, bool keepdim = false) const {
+        Tensor all() const {
+            return all(std::span<const int>{}, false);
+        }
+
+        Tensor all(std::span<const int> axes, bool keepdim = false) const {
             ReduceArgs args;
             args.axes = std::vector<int>(axes.begin(), axes.end());
             args.keepdim = keepdim;
@@ -1774,7 +1847,11 @@ namespace lfs::core {
             return all(std::span<const int>(axes), keepdim);
         }
 
-        Tensor std(std::span<const int> axes = {}, bool keepdim = false, bool unbiased = true) const {
+        Tensor std() const {
+            return std(std::span<const int>{}, false, true);
+        }
+
+        Tensor std(std::span<const int> axes, bool keepdim = false, bool unbiased = true) const {
             ReduceArgs args;
             args.axes = std::vector<int>(axes.begin(), axes.end());
             args.keepdim = keepdim;
@@ -1791,7 +1868,11 @@ namespace lfs::core {
             return std(std::span<const int>(axes), keepdim, unbiased);
         }
 
-        Tensor var(std::span<const int> axes = {}, bool keepdim = false, bool unbiased = true) const {
+        Tensor var() const {
+            return var(std::span<const int>{}, false, true);
+        }
+
+        Tensor var(std::span<const int> axes, bool keepdim = false, bool unbiased = true) const {
             ReduceArgs args;
             args.axes = std::vector<int>(axes.begin(), axes.end());
             args.keepdim = keepdim;
@@ -1808,14 +1889,22 @@ namespace lfs::core {
             return var(std::span<const int>(axes), keepdim, unbiased);
         }
 
-        Tensor argmax(std::span<const int> axes = {}, bool keepdim = false) const {
+        Tensor argmax() const {
+            return argmax(std::span<const int>{}, false);
+        }
+
+        Tensor argmax(std::span<const int> axes, bool keepdim = false) const {
             ReduceArgs args;
             args.axes = std::vector<int>(axes.begin(), axes.end());
             args.keepdim = keepdim;
             return reduce(ReduceOp::Argmax, args);
         }
 
-        Tensor argmin(std::span<const int> axes = {}, bool keepdim = false) const {
+        Tensor argmin() const {
+            return argmin(std::span<const int>{}, false);
+        }
+
+        Tensor argmin(std::span<const int> axes, bool keepdim = false) const {
             ReduceArgs args;
             args.axes = std::vector<int>(axes.begin(), axes.end());
             args.keepdim = keepdim;
@@ -2127,7 +2216,9 @@ namespace lfs::core {
          *
          * Example:
          *   auto t = Tensor::from_vector({3.0f, 1.0f, 2.0f}, {3}, Device::CPU);
-         *   auto [sorted_vals, sorted_idx] = t.sort(0, false);
+         *   auto sorted = t.sort(0, false);
+         *   auto& sorted_vals = sorted.first;
+         *   auto& sorted_idx = sorted.second;
          *   // sorted_vals: [1.0, 2.0, 3.0] (Float32)
          *   // sorted_idx:  [1, 0, 2]       (Int64)
          *
@@ -2233,7 +2324,8 @@ namespace lfs::core {
         }
 
         // Validation & assertions
-        Tensor& assert_shape(TensorShape expected, const std::string& msg = "");
+        Tensor& assert_shape(TensorShape expected);
+        Tensor& assert_shape(TensorShape expected, const std::string& msg);
         Tensor& assert_device(Device expected);
         Tensor& assert_dtype(DataType expected);
         Tensor& assert_finite();
@@ -2254,8 +2346,10 @@ namespace lfs::core {
         std::vector<float> debug_values(size_t max_values = 100) const;
 
         void dump_diagnostic(const std::string& filename) const;
-        void log_info(const std::string& name = "") const;
-        void print_formatted(const std::string& name = "", size_t max_per_dim = 10) const;
+        void log_info() const;
+        void log_info(const std::string& name) const;
+        void print_formatted() const;
+        void print_formatted(const std::string& name, size_t max_per_dim = 10) const;
 
         // ============= TENSOR OPTIONS =============
         struct TensorOptions {

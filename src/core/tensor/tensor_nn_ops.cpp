@@ -20,19 +20,24 @@ namespace lfs::core {
         void assert_float32_same_device(const Tensor& reference,
                                         const std::string_view operation,
                                         const std::initializer_list<NamedTensorOperand> tensors = {}) {
-            tensor_contract::require_valid(reference, operation, "input");
+            tensor_contract::require_valid(
+                reference, operation, "input", LFS_SOURCE_SITE_CURRENT());
             tensor_contract::require_dtype(
-                reference, DataType::Float32, operation, "input");
+                reference, DataType::Float32, operation, "input",
+                LFS_SOURCE_SITE_CURRENT());
             for (const auto& [name, tensor] : tensors) {
                 LFS_ASSERT_MSG(tensor != nullptr,
                                std::format("{} requires a non-null {} tensor pointer "
                                            "(operand={}, pointer=null)",
                                            operation, name, name));
-                tensor_contract::require_valid(*tensor, operation, name);
+                tensor_contract::require_valid(
+                    *tensor, operation, name, LFS_SOURCE_SITE_CURRENT());
                 tensor_contract::require_dtype(
-                    *tensor, DataType::Float32, operation, name);
+                    *tensor, DataType::Float32, operation, name,
+                    LFS_SOURCE_SITE_CURRENT());
                 tensor_contract::require_same_device(
-                    reference, *tensor, operation, "input", name);
+                    reference, *tensor, operation, "input", name,
+                    LFS_SOURCE_SITE_CURRENT());
             }
         }
 
