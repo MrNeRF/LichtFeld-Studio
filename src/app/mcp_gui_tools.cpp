@@ -1681,10 +1681,10 @@ namespace lfs::app {
                 return registry;
             }
 
-            std::expected<int64_t, std::string> subscribe(const std::vector<std::string>& types, const size_t max_queue) {
+            std::expected<int64_t, std::string> subscribe(const std::vector<std::string>& types, const int64_t max_queue) {
                 if (types.size() > MAX_MCP_EVENT_TYPES_PER_SUBSCRIPTION)
-                    return std::unexpected("Too many event types requested");
-                if (max_queue == 0 || max_queue > MAX_MCP_EVENT_QUEUE)
+                    return std::unexpected("Field 'types' exceeds the supported item limit");
+                if (max_queue < 1 || max_queue > static_cast<int64_t>(MAX_MCP_EVENT_QUEUE))
                     return std::unexpected("max_queue must be between 1 and " +
                                            std::to_string(MAX_MCP_EVENT_QUEUE));
 
@@ -1708,7 +1708,7 @@ namespace lfs::app {
 
                 const int64_t id = next_id_++;
                 Subscription sub;
-                sub.max_queue = max_queue;
+                sub.max_queue = static_cast<size_t>(max_queue);
                 sub.last_access = now;
                 for (const auto& type : types)
                     sub.types.insert(type);
@@ -1716,8 +1716,8 @@ namespace lfs::app {
                 return id;
             }
 
-            json poll(const int64_t id, const size_t max_events, const bool clear) {
-                if (max_events == 0 || max_events > MAX_MCP_EVENT_POLL)
+            json poll(const int64_t id, const int64_t max_events, const bool clear) {
+                if (max_events < 1 || max_events > static_cast<int64_t>(MAX_MCP_EVENT_POLL))
                     return json{{"error", "max_events must be between 1 and " +
                                               std::to_string(MAX_MCP_EVENT_POLL)}};
 
@@ -1730,7 +1730,7 @@ namespace lfs::app {
 
                 auto& sub = it->second;
                 sub.last_access = now;
-                const size_t count = std::min(max_events, sub.queue.size());
+                const size_t count = std::min(static_cast<size_t>(max_events), sub.queue.size());
                 json events = json::array();
                 for (size_t i = 0; i < count; ++i)
                     events.push_back(*sub.queue[i].payload);
@@ -4104,8 +4104,6 @@ namespace lfs::app {
                     const auto& value = args["types"];
                     if (!value.is_array())
                         return json{{"error", "Field 'types' must be an array of strings"}};
-                    if (value.size() > MAX_MCP_EVENT_TYPES_PER_SUBSCRIPTION)
-                        return json{{"error", "Field 'types' exceeds the supported item limit"}};
                     types.reserve(value.size());
                     for (const auto& item : value) {
                         if (!item.is_string())
@@ -4117,13 +4115,7 @@ namespace lfs::app {
                     types.push_back("*");
 
                 const int64_t requested_max_queue = args.value("max_queue", int64_t{256});
-                if (requested_max_queue < 1 ||
-                    requested_max_queue > static_cast<int64_t>(MAX_MCP_EVENT_QUEUE)) {
-                    return json{{"error", "max_queue must be between 1 and " +
-                                              std::to_string(MAX_MCP_EVENT_QUEUE)}};
-                }
-                const auto max_queue = static_cast<size_t>(requested_max_queue);
-                auto subscription_id = EventSubscriptionRegistry::instance().subscribe(types, max_queue);
+                auto subscription_id = EventSubscriptionRegistry::instance().subscribe(types, requested_max_queue);
                 if (!subscription_id)
                     return json{{"error", subscription_id.error()}};
 
@@ -4131,7 +4123,7 @@ namespace lfs::app {
                     {"success", true},
                     {"subscription_id", *subscription_id},
                     {"types", types},
-                    {"max_queue", static_cast<int64_t>(max_queue)},
+                    {"max_queue", requested_max_queue},
                     {"supported_types", mcp_subscription_event_types_json()},
                 };
             });
@@ -4150,14 +4142,8 @@ namespace lfs::app {
             [](const json& args) -> json {
                 const int64_t subscription_id = args["subscription_id"].get<int64_t>();
                 const int64_t requested_max_events = args.value("max_events", int64_t{100});
-                if (requested_max_events < 1 ||
-                    requested_max_events > static_cast<int64_t>(MAX_MCP_EVENT_POLL)) {
-                    return json{{"error", "max_events must be between 1 and " +
-                                              std::to_string(MAX_MCP_EVENT_POLL)}};
-                }
-                const auto max_events = static_cast<size_t>(requested_max_events);
                 const bool clear = args.value("clear", true);
-                return EventSubscriptionRegistry::instance().poll(subscription_id, max_events, clear);
+                return EventSubscriptionRegistry::instance().poll(subscription_id, requested_max_events, clear);
             });
 
         registry.register_tool(
