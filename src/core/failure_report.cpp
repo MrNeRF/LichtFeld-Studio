@@ -95,12 +95,12 @@ namespace lfs::core {
             return {.emit_full = emit_full, .count = count};
         }
 
-        [[nodiscard]] std::string detection_site(const std::source_location& location) {
+        [[nodiscard]] std::string detection_site(const SourceSite& location) {
             return std::format("{}:{}", location.file_name(), location.line());
         }
 
         void emit_failure_repeat_notice(const DedupDecision& decision,
-                                        const std::source_location& location,
+                                        const SourceSite& location,
                                         const LogLevel level) {
             Logger::get().log_internal(
                 level, location,
@@ -213,7 +213,7 @@ namespace lfs::core {
         const std::string_view contract,
         const std::string_view expression,
         const std::string_view message,
-        const std::source_location& location,
+        const SourceSite& location,
         const std::string_view stacktrace) {
         return format_failure_report(
             FailureReport{
@@ -230,7 +230,7 @@ namespace lfs::core {
         const std::string_view contract,
         const std::string_view expression,
         const std::string_view message,
-        const std::source_location& location,
+        const SourceSite& location,
         const std::string_view stacktrace) {
         return format_failure_report(
             "tensor contract violation", contract, expression, message, location, stacktrace);
@@ -273,7 +273,7 @@ namespace lfs::core {
             const std::string_view contract,
             const std::string_view expression,
             const std::string_view message,
-            const std::source_location location) {
+            const SourceSite location) {
             emit_failure_report(FailureReport{
                 .family = "tensor contract violation",
                 .contract = contract,

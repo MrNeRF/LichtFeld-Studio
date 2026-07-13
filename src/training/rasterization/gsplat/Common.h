@@ -11,7 +11,6 @@
 
 #include <cstdint>
 #include <cstdio>
-#include <format>
 #include <string_view>
 #include <utility>
 
@@ -92,7 +91,10 @@ namespace gsplat_lfs {
 
     inline void maybe_inject_cuda_allocation_failure(const std::string_view label) {
         if (cuda_allocation_failure_is_forced()) [[unlikely]] {
-            LFS_ASSERT_MSG(false, std::format("CUDA allocation for '{}' failed (injected)", label));
+            LFS_ASSERT_MSG(
+                false,
+                lfs::core::detail::format_cuda_safe(
+                    "CUDA allocation for '{}' failed (injected)", label));
         }
     }
 #else

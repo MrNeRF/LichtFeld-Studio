@@ -10,7 +10,6 @@
 #include "core/tensor.hpp"
 #include <chrono>
 #include <mutex>
-#include <source_location>
 #include <string>
 #include <vector>
 
@@ -42,7 +41,7 @@ namespace lfs::core::debug {
             return enabled_ || t1.is_tracked() || t2.is_tracked();
         }
 
-        void push(const char* op, const Tensor& input, const std::source_location& loc) {
+        void push(const char* op, const Tensor& input, const SourceSite& loc) {
             if (!should_trace(input))
                 return;
             std::lock_guard lock(mutex_);
@@ -52,7 +51,7 @@ namespace lfs::core::debug {
             start_times_.push_back(clock::now());
         }
 
-        void push(const char* op, const Tensor& in1, const Tensor& in2, const std::source_location& loc) {
+        void push(const char* op, const Tensor& in1, const Tensor& in2, const SourceSite& loc) {
             if (!should_trace(in1, in2))
                 return;
             std::lock_guard lock(mutex_);
@@ -64,7 +63,7 @@ namespace lfs::core::debug {
             start_times_.push_back(clock::now());
         }
 
-        void push(const char* op, const TensorShape& shape, const std::source_location& loc) {
+        void push(const char* op, const TensorShape& shape, const SourceSite& loc) {
             if (!enabled_)
                 return;
             std::lock_guard lock(mutex_);
@@ -74,7 +73,7 @@ namespace lfs::core::debug {
             start_times_.push_back(clock::now());
         }
 
-        void push(const char* op, const TensorShape& in1, const TensorShape& in2, const std::source_location& loc) {
+        void push(const char* op, const TensorShape& in1, const TensorShape& in2, const SourceSite& loc) {
             if (!enabled_)
                 return;
             std::lock_guard lock(mutex_);
@@ -167,7 +166,7 @@ namespace lfs::core::debug {
     class OpTraceGuard {
     public:
         OpTraceGuard(const char* op, const Tensor& input,
-                     const std::source_location loc = std::source_location::current())
+                     const SourceSite loc = LFS_SOURCE_SITE_CURRENT())
             : tracer_(TensorOpTracer::instance()),
               active_(tracer_.should_trace(input)) {
             if (active_)
@@ -175,7 +174,7 @@ namespace lfs::core::debug {
         }
 
         OpTraceGuard(const char* op, const Tensor& in1, const Tensor& in2,
-                     const std::source_location loc = std::source_location::current())
+                     const SourceSite loc = LFS_SOURCE_SITE_CURRENT())
             : tracer_(TensorOpTracer::instance()),
               active_(tracer_.should_trace(in1, in2)) {
             if (active_)
@@ -183,7 +182,7 @@ namespace lfs::core::debug {
         }
 
         OpTraceGuard(const char* op, const TensorShape& shape,
-                     const std::source_location loc = std::source_location::current())
+                     const SourceSite loc = LFS_SOURCE_SITE_CURRENT())
             : tracer_(TensorOpTracer::instance()),
               active_(tracer_.is_enabled()) {
             if (active_)
@@ -191,7 +190,7 @@ namespace lfs::core::debug {
         }
 
         OpTraceGuard(const char* op, const TensorShape& in1, const TensorShape& in2,
-                     const std::source_location loc = std::source_location::current())
+                     const SourceSite loc = LFS_SOURCE_SITE_CURRENT())
             : tracer_(TensorOpTracer::instance()),
               active_(tracer_.is_enabled()) {
             if (active_)

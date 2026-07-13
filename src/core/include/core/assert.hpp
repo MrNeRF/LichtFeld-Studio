@@ -5,25 +5,24 @@
 #include "core/failure_report.hpp"
 
 #include <cassert>
-#include <source_location>
 #include <string_view>
 
 // Public/API-boundary contract. This remains enabled in every build type and
 // throws before invalid state reaches an implementation or kernel.
-#define LFS_ASSERT(condition)                                                              \
-    do {                                                                                   \
-        if (!(condition)) [[unlikely]] {                                                   \
-            ::lfs::core::detail::assertion_failed(                                         \
-                "LFS boundary contract", #condition, {}, std::source_location::current()); \
-        }                                                                                  \
+#define LFS_ASSERT(condition)                                                        \
+    do {                                                                             \
+        if (!(condition)) [[unlikely]] {                                             \
+            ::lfs::core::detail::assertion_failed(                                   \
+                "LFS boundary contract", #condition, {}, LFS_SOURCE_SITE_CURRENT()); \
+        }                                                                            \
     } while (false)
 
-#define LFS_ASSERT_MSG(condition, message)                                                        \
-    do {                                                                                          \
-        if (!(condition)) [[unlikely]] {                                                          \
-            ::lfs::core::detail::assertion_failed(                                                \
-                "LFS boundary contract", #condition, (message), std::source_location::current()); \
-        }                                                                                         \
+#define LFS_ASSERT_MSG(condition, message)                                                  \
+    do {                                                                                    \
+        if (!(condition)) [[unlikely]] {                                                    \
+            ::lfs::core::detail::assertion_failed(                                          \
+                "LFS boundary contract", #condition, (message), LFS_SOURCE_SITE_CURRENT()); \
+        }                                                                                   \
     } while (false)
 
 // Internal hot-loop/kernel invariant. This compiles to no code when NDEBUG is
@@ -35,12 +34,12 @@
 // evaluated in the device hot path.
 #define LFS_DEBUG_ASSERT_MSG(condition, message) assert(condition)
 #else
-#define LFS_DEBUG_ASSERT_MSG(condition, message)                                                \
-    do {                                                                                        \
-        if (!(condition)) [[unlikely]] {                                                        \
-            ::lfs::core::detail::assertion_failed(                                              \
-                "LFS debug invariant", #condition, (message), std::source_location::current()); \
-        }                                                                                       \
+#define LFS_DEBUG_ASSERT_MSG(condition, message)                                          \
+    do {                                                                                  \
+        if (!(condition)) [[unlikely]] {                                                  \
+            ::lfs::core::detail::assertion_failed(                                        \
+                "LFS debug invariant", #condition, (message), LFS_SOURCE_SITE_CURRENT()); \
+        }                                                                                 \
     } while (false)
 #endif
 #define LFS_DEBUG_ASSERT(condition) LFS_DEBUG_ASSERT_MSG(condition, std::string_view{})

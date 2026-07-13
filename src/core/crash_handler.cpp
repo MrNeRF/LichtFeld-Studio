@@ -154,7 +154,7 @@ namespace lfs::core {
             }
 
             try {
-                const auto location = std::source_location::current();
+                const auto location = LFS_SOURCE_SITE_CURRENT();
                 const std::string message = std::format(
                     "active_exception_type={}, what={}", exception_type,
                     what.empty() ? "<unavailable>" : what);

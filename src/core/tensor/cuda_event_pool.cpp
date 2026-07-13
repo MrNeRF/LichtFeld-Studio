@@ -30,7 +30,7 @@ namespace lfs::core {
         if (create_status != cudaSuccess) {
             ensure_cuda_success(
                 create_status, "cudaEventCreateWithFlags(tensor event pool)",
-                "fallback=stream synchronization", std::source_location::current(),
+                "fallback=stream synchronization", LFS_SOURCE_SITE_CURRENT(),
                 CudaFailureDisposition::LogOnly);
             return nullptr;
         }
@@ -52,7 +52,7 @@ namespace lfs::core {
         if (destroy_status != cudaSuccess) {
             ensure_cuda_success(
                 destroy_status, "cudaEventDestroy(tensor event pool release)", {},
-                std::source_location::current(), CudaFailureDisposition::LogOnly);
+                LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
         }
     }
 
@@ -66,7 +66,7 @@ namespace lfs::core {
             if (destroy_status != cudaSuccess) {
                 ensure_cuda_success(
                     destroy_status, "cudaEventDestroy(tensor event pool shutdown)", {},
-                    std::source_location::current(), CudaFailureDisposition::LogOnly);
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
             }
         }
         pool_.clear();
@@ -91,14 +91,14 @@ namespace lfs::core {
                     record_status, "cudaEventRecord(tensor stream bridge)",
                     std::format("from_stream={}, to_stream={}; fallback=stream sync",
                                 static_cast<void*>(from), static_cast<void*>(to)),
-                    std::source_location::current(), CudaFailureDisposition::LogOnly);
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
             }
             if (record_status == cudaSuccess && wait_status != cudaSuccess) {
                 ensure_cuda_success(
                     wait_status, "cudaStreamWaitEvent(tensor stream bridge)",
                     std::format("from_stream={}, to_stream={}; fallback=stream sync",
                                 static_cast<void*>(from), static_cast<void*>(to)),
-                    std::source_location::current(), CudaFailureDisposition::LogOnly);
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
             }
             CudaEventPool::instance().release(edge);
             if (record_status == cudaSuccess && wait_status == cudaSuccess) {
@@ -112,7 +112,7 @@ namespace lfs::core {
                 sync_status, "cudaStreamSynchronize(tensor stream bridge fallback)",
                 std::format("from_stream={}, to_stream={}; event edge also failed",
                             static_cast<void*>(from), static_cast<void*>(to)),
-                std::source_location::current(), CudaFailureDisposition::LogOnly);
+                LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
         }
     }
 

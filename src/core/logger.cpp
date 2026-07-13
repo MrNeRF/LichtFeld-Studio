@@ -489,7 +489,7 @@ namespace lfs::core {
             handlers.end());
     }
 
-    void Logger::log(const LogLevel level, const std::source_location& loc, const std::string_view msg) {
+    void Logger::log(const LogLevel level, const SourceSite& loc, const std::string_view msg) {
         if (!impl_->logger)
             return;
 
@@ -576,7 +576,7 @@ namespace lfs::core {
         return impl_->memory_sink ? impl_->memory_sink->text() : std::string{};
     }
 
-    ScopedTimer::ScopedTimer(std::string name, const LogLevel level, const std::source_location loc)
+    ScopedTimer::ScopedTimer(std::string name, const LogLevel level, const SourceSite loc)
         : start_(std::chrono::high_resolution_clock::now()),
           name_(std::move(name)),
           level_(level),
@@ -592,7 +592,7 @@ namespace lfs::core {
     }
 
     ScopedTimer::ScopedTimer(std::string name, const double min_log_ms,
-                             const LogLevel level, const std::source_location loc)
+                             const LogLevel level, const SourceSite loc)
         : ScopedTimer(std::move(name), level, loc) {
         min_log_ms_ = min_log_ms;
     }

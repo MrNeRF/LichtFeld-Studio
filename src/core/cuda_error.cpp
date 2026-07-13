@@ -158,7 +158,7 @@ namespace lfs::core {
                                       const CudaCheckState& state,
                                       const char* expression,
                                       const std::string_view message,
-                                      const std::source_location& location,
+                                      const SourceSite& location,
                                       const cudaError_t post_sync_error,
                                       const cudaError_t post_peek_error) noexcept {
             try {
@@ -285,7 +285,7 @@ namespace lfs::core {
         }
         try {
             Logger::get().log_internal(
-                LogLevel::Error, std::source_location::current(),
+                LogLevel::Error, LFS_SOURCE_SITE_CURRENT(),
                 std::format(
                     "CUDA unavailable — GPU features disabled. A driver restart may be required. ({})",
                     cuda_error_text(error)));
@@ -300,7 +300,7 @@ namespace lfs::core {
     }
 
     CudaCheckState prepare_cuda_check(const char*,
-                                      const std::source_location&,
+                                      const SourceSite&,
                                       const cudaStream_t stream) noexcept {
         initialize_cuda_diagnostics();
         CudaCheckState state;
@@ -316,7 +316,7 @@ namespace lfs::core {
     }
 
     CudaCheckState sample_cuda_pre_call_state(const cudaStream_t stream) noexcept {
-        return prepare_cuda_check("", std::source_location::current(), stream);
+        return prepare_cuda_check("", LFS_SOURCE_SITE_CURRENT(), stream);
     }
 
     CudaCheckCompletion complete_cuda_check(
@@ -344,7 +344,7 @@ namespace lfs::core {
         const CudaCheckState& state,
         const char* expression,
         const std::string_view message,
-        const std::source_location& location) {
+        const SourceSite& location) {
         emit_cuda_failure_report(
             completion.effective_error, state, expression, message, location,
             completion.post_sync_error, completion.post_peek_error);
@@ -356,7 +356,7 @@ namespace lfs::core {
                            const CudaCheckState& state,
                            const char* expression,
                            const std::string_view message,
-                           const std::source_location& location) {
+                           const SourceSite& location) {
         const CudaCheckCompletion completion = complete_cuda_check(result, state);
         if (completion.effective_error == cudaSuccess) [[likely]] {
             return;
@@ -368,7 +368,7 @@ namespace lfs::core {
                              const CudaCheckState& state,
                              const std::string_view expression,
                              const std::string_view message,
-                             const std::source_location& location,
+                             const SourceSite& location,
                              const CudaFailureDisposition disposition) {
         if (result == cudaSuccess) [[likely]] {
             return;
@@ -392,7 +392,7 @@ namespace lfs::core {
     void ensure_cuda_success(const cudaError_t result,
                              const std::string_view expression,
                              const std::string_view message,
-                             const std::source_location& location,
+                             const SourceSite& location,
                              const CudaFailureDisposition disposition) {
         ensure_cuda_success(
             result, CudaCheckState{}, expression, message, location, disposition);
@@ -400,7 +400,7 @@ namespace lfs::core {
 
     void validate_cuda_device_pointer(const void* pointer,
                                       const std::string_view name,
-                                      const std::source_location& location) {
+                                      const SourceSite& location) {
         if (!pointer) {
             detail::assertion_failed(
                 "LFS boundary contract", "pointer != nullptr",
@@ -425,7 +425,7 @@ namespace lfs::core {
 
     void validate_cuda_device_pointer_optional(const void* pointer,
                                                const std::string_view name,
-                                               const std::source_location& location) {
+                                               const SourceSite& location) {
         if (pointer) {
             validate_cuda_device_pointer(pointer, name, location);
         }

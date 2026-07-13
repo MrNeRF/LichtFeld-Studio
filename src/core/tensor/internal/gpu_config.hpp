@@ -43,7 +43,7 @@ namespace lfs::core {
                     ensure_cuda_success(
                         err, "cudaGetDeviceProperties(tensor GPU configuration)",
                         "device=0, fallback=conservative defaults",
-                        std::source_location::current(), CudaFailureDisposition::LogOnly);
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                     // Fallback to safe defaults
                     cfg.sm_count = 108; // Assume A100/H100 for safety
                     cfg.max_threads_per_sm = 2048;

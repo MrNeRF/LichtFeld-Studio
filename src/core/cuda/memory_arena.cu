@@ -53,7 +53,7 @@ namespace lfs::core {
                 if (destroy_status != cudaSuccess) {
                     ensure_cuda_success(
                         destroy_status, "cudaEventDestroy(arena frame completion)",
-                        "context=arena destruction", std::source_location::current(),
+                        "context=arena destruction", LFS_SOURCE_SITE_CURRENT(),
                         CudaFailureDisposition::LogOnly);
                 }
                 last_frame_event_ = nullptr;
@@ -122,7 +122,7 @@ namespace lfs::core {
                 if (destroy_status != cudaSuccess) {
                     ensure_cuda_success(
                         destroy_status, "cudaEventDestroy(arena frame completion)",
-                        "context=arena move assignment", std::source_location::current(),
+                        "context=arena move assignment", LFS_SOURCE_SITE_CURRENT(),
                         CudaFailureDisposition::LogOnly);
                 }
             }
@@ -147,7 +147,7 @@ namespace lfs::core {
             ensure_cuda_success(
                 major_status, "cudaDeviceGetAttribute(compute capability major)",
                 std::format("device={}, fallback=disable VMM", device),
-                std::source_location::current(), CudaFailureDisposition::LogOnly);
+                LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
             return false;
         }
         const cudaError_t minor_status =
@@ -156,7 +156,7 @@ namespace lfs::core {
             ensure_cuda_success(
                 minor_status, "cudaDeviceGetAttribute(compute capability minor)",
                 std::format("device={}, fallback=disable VMM", device),
-                std::source_location::current(), CudaFailureDisposition::LogOnly);
+                LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
             return false;
         }
 
@@ -252,7 +252,7 @@ namespace lfs::core {
             ensure_cuda_success(
                 wait_status, "cudaWaitExternalSemaphoresAsync(arena drain)",
                 std::format("release_value={}, fallback=device sync", release_value),
-                std::source_location::current(), CudaFailureDisposition::LogOnly);
+                LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
             // The GPU-side fence wait couldn't be enqueued; fall back to a full
             // device sync so the caller doesn't free/replace the backing under
             // in-flight CUDA work (the Vulkan batch can't be observed here).
@@ -261,7 +261,7 @@ namespace lfs::core {
                 ensure_cuda_success(
                     sync_status, "cudaDeviceSynchronize(arena drain fallback)",
                     std::format("release_value={}", release_value),
-                    std::source_location::current(), CudaFailureDisposition::LogOnly);
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
             }
             return;
         }
@@ -270,7 +270,7 @@ namespace lfs::core {
             ensure_cuda_success(
                 sync_status, "cudaStreamSynchronize(arena drain)",
                 std::format("release_value={}", release_value),
-                std::source_location::current(), CudaFailureDisposition::LogOnly);
+                LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
         }
     }
 
@@ -297,7 +297,7 @@ namespace lfs::core {
                     if (!chain_ok) {
                         ensure_cuda_success(
                             chain_status, "cudaStreamWaitEvent(arena frame chain)",
-                            "fallback=device sync", std::source_location::current(),
+                            "fallback=device sync", LFS_SOURCE_SITE_CURRENT(),
                             CudaFailureDisposition::LogOnly);
                     }
                 }
@@ -316,7 +316,7 @@ namespace lfs::core {
                 ensure_cuda_success(
                     wait_status, "cudaWaitExternalSemaphoresAsync(arena frame)",
                     std::format("release_value={}, fallback=default stream", release_value),
-                    std::source_location::current(), CudaFailureDisposition::LogOnly);
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                 // The GPU-side wait wasn't enqueued; host-block on the fence so the
                 // arena isn't reset/reused while the Vulkan batch still reads it
                 // (the device-sync fallback below only covers in-flight CUDA work).
@@ -433,7 +433,7 @@ namespace lfs::core {
                         ensure_cuda_success(
                             create_status, "cudaEventCreateWithFlags(arena frame completion)",
                             std::format("frame_id={}", frame_id),
-                            std::source_location::current(), CudaFailureDisposition::LogOnly);
+                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                         last_frame_event_ = nullptr;
                     }
                 }
@@ -445,7 +445,7 @@ namespace lfs::core {
                             record_status, "cudaEventRecord(arena frame completion)",
                             std::format("frame_id={}, stream={}", frame_id,
                                         static_cast<void*>(stream)),
-                            std::source_location::current(), CudaFailureDisposition::LogOnly);
+                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                     }
                 } else {
                     last_frame_event_valid_ = false;
@@ -483,7 +483,7 @@ namespace lfs::core {
         } else {
             ensure_cuda_success(
                 err, "cudaGetDevice(arena end frame)",
-                std::format("frame_id={}", frame_id), std::source_location::current(),
+                std::format("frame_id={}", frame_id), LFS_SOURCE_SITE_CURRENT(),
                 CudaFailureDisposition::LogOnly);
         }
 
@@ -522,7 +522,7 @@ namespace lfs::core {
         if (err != cudaSuccess) {
             ensure_cuda_success(
                 err, "cudaGetDevice(arena memory status)",
-                std::format("frame_id={}", frame_id), std::source_location::current(),
+                std::format("frame_id={}", frame_id), LFS_SOURCE_SITE_CURRENT(),
                 CudaFailureDisposition::LogOnly);
             return;
         }
@@ -652,7 +652,7 @@ namespace lfs::core {
         if (sync_status != cudaSuccess) {
             ensure_cuda_success(
                 sync_status, "cudaDeviceSynchronize(arena cache trim)", {},
-                std::source_location::current(), CudaFailureDisposition::LogOnly);
+                LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
             return;
         }
 
@@ -662,14 +662,14 @@ namespace lfs::core {
         if (allocation_status != cudaSuccess) {
             ensure_cuda_success(
                 allocation_status, "cudaMalloc(arena cache trim probe)", {},
-                std::source_location::current(), CudaFailureDisposition::LogOnly);
+                LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
             return;
         }
         const cudaError_t free_status = cudaFree(dummy);
         if (free_status != cudaSuccess) {
             ensure_cuda_success(
                 free_status, "cudaFree(arena cache trim probe)", {},
-                std::source_location::current(), CudaFailureDisposition::LogOnly);
+                LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
         }
     }
 
@@ -701,7 +701,7 @@ namespace lfs::core {
                 ensure_cuda_success(
                     free_status, "cudaFree(arena backing)",
                     std::format("capacity_bytes={}", arena.capacity),
-                    std::source_location::current(), CudaFailureDisposition::LogOnly);
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
             }
         }
         arena.fallback_buffer = nullptr;
@@ -787,7 +787,7 @@ namespace lfs::core {
         if (set_device_status != cudaSuccess) {
             ensure_cuda_success(
                 set_device_status, "cudaSetDevice(external arena install)",
-                std::format("device={}", backing.device), std::source_location::current(),
+                std::format("device={}", backing.device), LFS_SOURCE_SITE_CURRENT(),
                 CudaFailureDisposition::LogOnly);
             return false;
         }
@@ -795,7 +795,7 @@ namespace lfs::core {
         if (sync_status != cudaSuccess) {
             ensure_cuda_success(
                 sync_status, "cudaDeviceSynchronize(external arena install)",
-                std::format("device={}", backing.device), std::source_location::current(),
+                std::format("device={}", backing.device), LFS_SOURCE_SITE_CURRENT(),
                 CudaFailureDisposition::LogOnly);
             return false;
         }
@@ -890,7 +890,7 @@ namespace lfs::core {
             ensure_cuda_success(
                 sync_status, "cudaDeviceSynchronize(external arena growth)",
                 std::format("requested_bytes={}", new_size),
-                std::source_location::current(), CudaFailureDisposition::LogOnly);
+                LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
             return false;
         }
 
@@ -1048,7 +1048,7 @@ namespace lfs::core {
                         ensure_cuda_success(
                             memory_status, "cudaMemGetInfo(arena initialization statistics)",
                             std::format("device={}, allocation_bytes={}", device, initial_size),
-                            std::source_location::current(), CudaFailureDisposition::LogOnly);
+                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                         LOG_INFO("Traditional allocation: device=%d, size=%zu MB",
                                  device, initial_size >> 20);
                     }
@@ -1103,7 +1103,7 @@ namespace lfs::core {
             ensure_cuda_success(
                 memory_status, "cudaMemGetInfo(arena VMM commit)",
                 std::format("device={}, requested_bytes={}", arena.device, commit_size),
-                std::source_location::current(), CudaFailureDisposition::LogOnly);
+                LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
             return false;
         }
 
@@ -1118,7 +1118,7 @@ namespace lfs::core {
                 ensure_cuda_success(
                     memory_status, "cudaMemGetInfo(arena VMM commit retry)",
                     std::format("device={}, requested_bytes={}", arena.device, commit_size),
-                    std::source_location::current(), CudaFailureDisposition::LogOnly);
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                 return false;
             }
 
@@ -1468,7 +1468,7 @@ namespace lfs::core {
                         ensure_cuda_success(
                             sync_status, "cudaDeviceSynchronize(arena VMM growth)",
                             std::format("growth_bytes={}, retry={}", growth_amount, retry),
-                            std::source_location::current(), CudaFailureDisposition::LogOnly);
+                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                     }
                 }
             } else {
@@ -1487,7 +1487,7 @@ namespace lfs::core {
                         ensure_cuda_success(
                             sync_status, "cudaDeviceSynchronize(arena growth retry)",
                             std::format("retry={}, requested_bytes={}", retry + 1, aligned_size),
-                            std::source_location::current(), CudaFailureDisposition::LogOnly);
+                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                     }
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                     continue;
@@ -1527,7 +1527,7 @@ namespace lfs::core {
         if (err != cudaSuccess) {
             ensure_cuda_success(err, "cudaMemGetInfo(arena growth)",
                                 std::format("required_bytes={}", required_size),
-                                std::source_location::current(),
+                                LFS_SOURCE_SITE_CURRENT(),
                                 CudaFailureDisposition::LogOnly);
             return false;
         }
@@ -1546,7 +1546,7 @@ namespace lfs::core {
                 ensure_cuda_success(
                     err, "cudaMemGetInfo(arena growth retry)",
                     std::format("required_bytes={}", required_size),
-                    std::source_location::current(), CudaFailureDisposition::LogOnly);
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                 return false;
             }
 
@@ -1563,7 +1563,7 @@ namespace lfs::core {
             ensure_cuda_success(err, "cudaMalloc(arena growth)",
                                 std::format("old_capacity={}, new_capacity={}, required={}",
                                             old_capacity, new_capacity, required_size),
-                                std::source_location::current(),
+                                LFS_SOURCE_SITE_CURRENT(),
                                 CudaFailureDisposition::LogOnly);
             return false;
         }
@@ -1581,7 +1581,7 @@ namespace lfs::core {
                 ensure_cuda_success(err, "cudaMemcpy(arena growth)",
                                     std::format("copy_bytes={}, old_capacity={}, new_capacity={}",
                                                 copy_size, old_capacity, new_capacity),
-                                    std::source_location::current(),
+                                    LFS_SOURCE_SITE_CURRENT(),
                                     CudaFailureDisposition::LogOnly);
                 lfs::diagnostics::VramProfiler::instance().recordDeallocation(new_buffer);
                 const cudaError_t free_status = cudaFree(new_buffer);
@@ -1589,7 +1589,7 @@ namespace lfs::core {
                     ensure_cuda_success(
                         free_status, "cudaFree(failed arena growth buffer)",
                         std::format("ptr={}, bytes={}", new_buffer, new_capacity),
-                        std::source_location::current(), CudaFailureDisposition::LogOnly);
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                 }
                 return false;
             }
@@ -1602,7 +1602,7 @@ namespace lfs::core {
                 ensure_cuda_success(
                     free_status, "cudaFree(previous arena backing)",
                     std::format("ptr={}, bytes={}", arena.fallback_buffer, old_capacity),
-                    std::source_location::current(), CudaFailureDisposition::LogOnly);
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
             }
         }
         arena.fallback_buffer = new_buffer;
@@ -1618,7 +1618,7 @@ namespace lfs::core {
         } else {
             ensure_cuda_success(
                 memory_status, "cudaMemGetInfo(arena post-growth statistics)",
-                std::format("new_capacity={}", new_capacity), std::source_location::current(),
+                std::format("new_capacity={}", new_capacity), LFS_SOURCE_SITE_CURRENT(),
                 CudaFailureDisposition::LogOnly);
             LOG_DEBUG("Growth successful: new capacity=%zu MB", new_capacity >> 20);
         }
@@ -1678,14 +1678,14 @@ namespace lfs::core {
             }
         } else {
             ensure_cuda_success(err, "cudaGetDevice(arena memory info)", {},
-                                std::source_location::current(),
+                                LFS_SOURCE_SITE_CURRENT(),
                                 CudaFailureDisposition::LogOnly);
         }
 
         const cudaError_t memory_status = cudaMemGetInfo(&info.gpu_free, &info.gpu_total);
         if (memory_status != cudaSuccess) {
             ensure_cuda_success(memory_status, "cudaMemGetInfo(arena memory info)", {},
-                                std::source_location::current(),
+                                LFS_SOURCE_SITE_CURRENT(),
                                 CudaFailureDisposition::LogOnly);
         }
         return info;
@@ -1711,7 +1711,7 @@ namespace lfs::core {
         cudaError_t err = cudaMemGetInfo(&free_memory, &total_memory);
         if (err != cudaSuccess) {
             ensure_cuda_success(err, "cudaMemGetInfo(arena memory pressure)",
-                                "fallback=maximum pressure", std::source_location::current(),
+                                "fallback=maximum pressure", LFS_SOURCE_SITE_CURRENT(),
                                 CudaFailureDisposition::LogOnly);
             return 1.0f;
         }

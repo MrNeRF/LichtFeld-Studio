@@ -405,7 +405,7 @@ namespace gsplat_lfs {
             lfs::core::ensure_cuda_success(
                 err, "cudaFuncSetAttribute(gsplat forward shared memory)",
                 std::format("requested_bytes={}, try lowering tile_size", shmem_size),
-                std::source_location::current(),
+                LFS_SOURCE_SITE_CURRENT(),
                 lfs::core::CudaFailureDisposition::LogOnly);
             return;
         }

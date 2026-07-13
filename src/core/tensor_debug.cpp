@@ -6,9 +6,33 @@
 #include "core/tensor_trace.hpp"
 #include <algorithm>
 #include <cmath>
+#include <format>
 #include <numeric>
 
 namespace lfs::core::debug {
+
+    std::string TensorValidation::to_string() const {
+        if (is_valid()) {
+            return std::format("valid (min={:.6f}, max={:.6f}, mean={:.6f})",
+                               min_val, max_val, mean_val);
+        }
+        return std::format("INVALID (nan={}, inf={}, min={:.6f}, max={:.6f})",
+                           nan_count, inf_count, min_val, max_val);
+    }
+
+    std::string TensorDiff::to_string() const {
+        if (!shapes_match)
+            return "shape mismatch";
+        if (!dtypes_match)
+            return "dtype mismatch";
+        return std::format("max_diff={:.6e}, mean_diff={:.6e}, diff_count={}/{}",
+                           max_abs_diff, mean_abs_diff, num_different, total_elements);
+    }
+
+    std::string TensorStats::to_string() const {
+        return std::format("shape={}, dtype={}, device={}, min={:.4f}, max={:.4f}, mean={:.4f}, std={:.4f}",
+                           shape.str(), dtype_name(dtype), is_cuda ? "cuda" : "cpu", min, max, mean, std);
+    }
 
     TensorOpTracer& TensorOpTracer::instance() {
         static TensorOpTracer inst;

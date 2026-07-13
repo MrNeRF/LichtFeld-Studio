@@ -6,7 +6,6 @@
 #include "core/cuda_error.hpp"
 
 #include <cuda_runtime.h>
-#include <format>
 #include <memory>
 
 namespace lfs::core {
@@ -27,9 +26,10 @@ namespace lfs::core {
                 if (err != cudaSuccess) {
                     ensure_cuda_success(
                         err, "cudaMalloc(CudaDeviceMemory)",
-                        std::format("element_count={}, element_bytes={}, requested_bytes={}",
-                                    count, sizeof(T), count * sizeof(T)),
-                        std::source_location::current(), CudaFailureDisposition::LogOnly);
+                        detail::format_cuda_safe(
+                            "element_count={}, element_bytes={}, requested_bytes={}",
+                            count, sizeof(T), count * sizeof(T)),
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                     ptr_ = nullptr;
                     size_ = 0;
                 }
@@ -42,7 +42,7 @@ namespace lfs::core {
                 if (status != cudaSuccess) {
                     ensure_cuda_success(
                         status, "cudaFree(CudaDeviceMemory destruction)", {},
-                        std::source_location::current(), CudaFailureDisposition::LogOnly);
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                 }
             }
         }
@@ -67,7 +67,7 @@ namespace lfs::core {
                     if (status != cudaSuccess) {
                         ensure_cuda_success(
                             status, "cudaFree(CudaDeviceMemory move assignment)", {},
-                            std::source_location::current(), CudaFailureDisposition::LogOnly);
+                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                     }
                 }
                 ptr_ = other.ptr_;
@@ -96,7 +96,7 @@ namespace lfs::core {
                 if (status != cudaSuccess) {
                     ensure_cuda_success(
                         status, "cudaFree(CudaDeviceMemory reset)", {},
-                        std::source_location::current(), CudaFailureDisposition::LogOnly);
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                 }
             }
             ptr_ = ptr;

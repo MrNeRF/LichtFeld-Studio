@@ -3,11 +3,11 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "core/source_site.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <iosfwd>
-#include <source_location>
 #include <string>
 #include <string_view>
 
@@ -36,7 +36,7 @@ namespace lfs::core {
         std::string_view expression;
         std::string_view message;
         std::string_view detail_sections;
-        std::source_location location;
+        SourceSite location;
         std::string_view deduplication_family;
         long long deduplication_code = 0;
         size_t stacktrace_skip_frames = 0;
@@ -55,13 +55,13 @@ namespace lfs::core {
         std::string_view contract,
         std::string_view expression,
         std::string_view message,
-        const std::source_location& location,
+        const SourceSite& location,
         std::string_view stacktrace);
     LFS_CORE_API std::string format_contract_failure_report(
         std::string_view contract,
         std::string_view expression,
         std::string_view message,
-        const std::source_location& location,
+        const SourceSite& location,
         std::string_view stacktrace);
     LFS_CORE_API void emit_failure_report(
         const FailureReport& report,
@@ -80,7 +80,7 @@ namespace lfs::core {
             std::string_view contract,
             std::string_view expression,
             std::string_view message,
-            std::source_location location);
+            SourceSite location);
 
     } // namespace detail
 

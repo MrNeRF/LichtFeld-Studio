@@ -5397,7 +5397,7 @@ namespace lfs::vis::gui {
         if (vulkan_gui_) {
             cpu_ui_before_vulkan_timer.emplace("gui_render.cpu_ui_before_vulkan_begin",
                                                ::lfs::core::LogLevel::Performance,
-                                               std::source_location::current());
+                                               LFS_SOURCE_SITE_CURRENT());
         }
 
         if (pending_cuda_warning_) {
@@ -5457,7 +5457,7 @@ namespace lfs::vis::gui {
         std::optional<::lfs::core::ScopedTimer> panel_setup_timer;
         panel_setup_timer.emplace("gui_render.panel_setup",
                                   ::lfs::core::LogLevel::Performance,
-                                  std::source_location::current());
+                                  LFS_SOURCE_SITE_CURRENT());
 
         {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.focus_state", 0.25);

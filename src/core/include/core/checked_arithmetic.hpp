@@ -4,9 +4,9 @@
 #pragma once
 
 #include "core/assert.hpp"
+#include "core/cuda_safe_format.hpp"
 
 #include <cstddef>
-#include <format>
 #include <limits>
 #include <string_view>
 
@@ -17,7 +17,8 @@ namespace lfs::core {
                                                 const std::string_view context) {
         LFS_ASSERT_MSG(
             left == 0 || right <= std::numeric_limits<size_t>::max() / left,
-            std::format("{} size overflow (left={}, right={})", context, left, right));
+            detail::format_cuda_safe(
+                "{} size overflow (left={}, right={})", context, left, right));
         return left * right;
     }
 

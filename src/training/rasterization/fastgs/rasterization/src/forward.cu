@@ -88,7 +88,7 @@ namespace {
                     status, "FastGS sort-buffer free",
                     std::format("ptr={}, bytes={}, label={}", ptr_, size_,
                                 label_ ? label_ : "rasterizer.fastgs.scratch"),
-                    std::source_location::current(),
+                    LFS_SOURCE_SITE_CURRENT(),
                     lfs::core::CudaFailureDisposition::LogOnly);
             }
             ptr_ = nullptr;

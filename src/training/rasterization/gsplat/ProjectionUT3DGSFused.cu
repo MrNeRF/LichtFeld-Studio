@@ -176,7 +176,9 @@ namespace gsplat_lfs {
             return;
         }
 
-        auto [mean2d, covar2d, valid_ut] = image_gaussian_return;
+        const glm::fvec2 mean2d = image_gaussian_return.mean;
+        glm::fmat2 covar2d = image_gaussian_return.covariance;
+        const bool valid_ut = image_gaussian_return.valid;
         if (!valid_ut) {
             radii[idx * 2] = 0;
             radii[idx * 2 + 1] = 0;

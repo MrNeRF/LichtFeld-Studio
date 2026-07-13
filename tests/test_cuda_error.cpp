@@ -21,7 +21,7 @@ namespace {
         ErrorLogCapture()
             : token_(lfs::core::Logger::get().add_log_handler(
                   [this](const lfs::core::LogLevel level,
-                         const std::source_location&,
+                         const lfs::core::SourceSite&,
                          const std::string_view message) {
                       if (level != lfs::core::LogLevel::Error) {
                           return;
@@ -133,7 +133,7 @@ namespace {
     TEST_F(CudaErrorDiagnostics, ContractReportFormattingExcludesCudaSections) {
         const std::string report = lfs::core::format_contract_failure_report(
             "test contract", "lhs.dtype() == rhs.dtype()", "dtype mismatch",
-            std::source_location::current(), "  #0 formatting_test\n");
+            LFS_SOURCE_SITE_CURRENT(), "  #0 formatting_test\n");
 
         EXPECT_NE(report.find("========== LFS FAILURE REPORT =========="), std::string::npos);
         EXPECT_NE(report.find("Family: tensor contract violation"), std::string::npos);

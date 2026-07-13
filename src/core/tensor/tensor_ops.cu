@@ -2884,13 +2884,13 @@ namespace lfs::core::tensor_ops {
                     if (device_status != cudaSuccess) {
                         ensure_cuda_success(
                             device_status, "cudaFree(NaN-check device buffer)", {},
-                            std::source_location::current(), CudaFailureDisposition::LogOnly);
+                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                     }
                     const cudaError_t host_status = cudaFreeHost(h_result_pinned);
                     if (host_status != cudaSuccess) {
                         ensure_cuda_success(
                             host_status, "cudaFreeHost(NaN-check pinned buffer)", {},
-                            std::source_location::current(), CudaFailureDisposition::LogOnly);
+                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                     }
                 }
             }

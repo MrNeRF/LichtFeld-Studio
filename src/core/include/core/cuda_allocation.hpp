@@ -9,7 +9,6 @@
 #include <cuda_runtime.h>
 
 #include <cstddef>
-#include <format>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -32,7 +31,7 @@ namespace lfs::core {
             if (status != cudaSuccess) {
                 ensure_cuda_success(
                     status, "direct CUDA allocation free", {},
-                    std::source_location::current(), CudaFailureDisposition::LogOnly);
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                 cudaGetLastError();
             }
         }
@@ -62,7 +61,7 @@ namespace lfs::core {
             if (status != cudaSuccess) {
                 ensure_cuda_success(
                     status, "stream-ordered CUDA allocation free", {},
-                    std::source_location::current(), CudaFailureDisposition::LogOnly);
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                 cudaGetLastError();
             }
         }
@@ -129,7 +128,7 @@ namespace lfs::core {
             ptr_ = allocator_.allocate(bytes, stream, label);
             LFS_ASSERT_MSG(
                 ptr_ != nullptr,
-                std::format("CUDA allocation for '{}' returned null ({} bytes)", label, bytes));
+                ::lfs::core::detail::format_cuda_safe("CUDA allocation for '{}' returned null ({} bytes)", label, bytes));
             bytes_ = bytes;
             stream_ = stream;
             try {

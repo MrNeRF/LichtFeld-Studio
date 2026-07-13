@@ -150,7 +150,7 @@ namespace lfs::core {
         void require_valid(const Tensor& tensor,
                            const std::string_view operation,
                            const std::string_view role,
-                           const std::source_location location) {
+                           const SourceSite location) {
             if (!tensor.is_valid()) [[unlikely]] {
                 detail::assertion_failed(
                     "LFS boundary contract", "tensor.is_valid()",
@@ -164,7 +164,7 @@ namespace lfs::core {
                                  const std::string_view operation,
                                  const std::string_view reference_role,
                                  const std::string_view other_role,
-                                 const std::source_location location) {
+                                 const SourceSite location) {
             if (reference.device() != other.device()) [[unlikely]] {
                 detail::assertion_failed(
                     "LFS boundary contract", "tensor devices match",
@@ -179,7 +179,7 @@ namespace lfs::core {
                            const DataType expected,
                            const std::string_view operation,
                            const std::string_view role,
-                           const std::source_location location) {
+                           const SourceSite location) {
             require_dtype(tensor, {expected}, operation, role, location);
         }
 
@@ -187,7 +187,7 @@ namespace lfs::core {
                            const std::initializer_list<DataType> expected,
                            const std::string_view operation,
                            const std::string_view role,
-                           const std::source_location location) {
+                           const SourceSite location) {
             if (std::find(expected.begin(), expected.end(), tensor.dtype()) == expected.end()) [[unlikely]] {
                 detail::assertion_failed(
                     "LFS boundary contract", "tensor dtype is allowed",
@@ -202,7 +202,7 @@ namespace lfs::core {
                            const std::string_view operation,
                            const std::string_view reference_role,
                            const std::string_view other_role,
-                           const std::source_location location) {
+                           const SourceSite location) {
             if (reference.shape() != other.shape()) [[unlikely]] {
                 detail::assertion_failed(
                     "LFS boundary contract", "tensor shapes match",
@@ -217,7 +217,7 @@ namespace lfs::core {
                            const TensorShape& expected,
                            const std::string_view operation,
                            const std::string_view role,
-                           const std::source_location location) {
+                           const SourceSite location) {
             if (tensor.shape() != expected) [[unlikely]] {
                 const std::string context = "expected=" + expected.str();
                 detail::assertion_failed(
@@ -2911,7 +2911,7 @@ namespace lfs::core {
                 if (status != cudaSuccess) {
                     ensure_cuda_success(
                         status, "cudaFree(tensor reserve storage)", {},
-                        std::source_location::current(), CudaFailureDisposition::LogOnly);
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                 }
                 Tensor::record_storage_deallocation(StorageAccountingKind::CudaDirect, bytes);
             });
@@ -2935,7 +2935,7 @@ namespace lfs::core {
                         std::format("bytes={}, source_pointer={}, destination_pointer={}, "
                                     "tensor_shape={}, requested_capacity={}",
                                     copy_bytes, old_data, new_data, shape_.str(), new_capacity),
-                        std::source_location::current(), CudaFailureDisposition::LogOnly);
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                     (void)cudaGetLastError();
                     throw std::runtime_error("Tensor reserve CUDA copy failed");
                 }
@@ -3012,7 +3012,7 @@ namespace lfs::core {
             if (cleanup_status != cudaSuccess) {
                 ensure_cuda_success(
                     cleanup_status, "cudaFree(failed zeros_direct allocation)", {},
-                    std::source_location::current(), CudaFailureDisposition::LogOnly);
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
             }
             ensure_cuda_success(
                 err, "cudaMemset(zeros_direct)", std::format("bytes={}", total_bytes));
@@ -3028,7 +3028,7 @@ namespace lfs::core {
                 if (status != cudaSuccess) {
                     ensure_cuda_success(
                         status, "cudaFree(zeros_direct storage)", {},
-                        std::source_location::current(), CudaFailureDisposition::LogOnly);
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                 }
                 Tensor::record_storage_deallocation(StorageAccountingKind::CudaDirect, bytes);
             }

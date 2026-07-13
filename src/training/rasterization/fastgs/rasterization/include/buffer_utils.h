@@ -5,13 +5,13 @@
 #pragma once
 
 #include "core/assert.hpp"
+#include "core/cuda_error.hpp"
 #include "helper_math.h"
 #include "rasterization_config.h"
 #include "utils.h"
 #include <cstdint>
 #include <cub/cub.cuh>
 #include <cuda_fp16.h>
-#include <format>
 #include <stdexcept>
 #include <string>
 
@@ -128,7 +128,7 @@ namespace fast_lfs::rasterization {
         if (err != cudaSuccess) {
             lfs::core::ensure_cuda_success(
                 err, "cudaMemcpy(FastGS forward status)", {},
-                std::source_location::current(),
+                LFS_SOURCE_SITE_CURRENT(),
                 lfs::core::CudaFailureDisposition::LogOnly);
             cudaGetLastError();
             return false;
@@ -168,7 +168,7 @@ namespace fast_lfs::rasterization {
             message = format_fastgs_forward_status(status, phase, n_primitives, n_tiles);
         }
         if (message.empty()) {
-            message = std::format(
+            message = lfs::core::detail::format_cuda_safe(
                 "FastGS phase={} (n_primitives={}, n_tiles={})",
                 phase ? phase : "<unknown>", n_primitives, n_tiles);
         }

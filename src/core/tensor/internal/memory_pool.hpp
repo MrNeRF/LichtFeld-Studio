@@ -14,7 +14,6 @@
 #include "size_bucketed_pool.hpp"
 #include <algorithm>
 #include <cuda_runtime.h>
-#include <format>
 #include <iomanip>
 #include <memory>
 #include <mutex>
@@ -91,7 +90,7 @@ namespace lfs::core {
             } else {
                 ensure_cuda_success(
                     sync_status, "cudaDeviceSynchronize(memory-pool shutdown)", {},
-                    std::source_location::current(), CudaFailureDisposition::LogOnly);
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
             }
             SizeBucketedPool::instance().shutdown();
             GPUSlabAllocator::instance().shutdown();
@@ -178,8 +177,8 @@ namespace lfs::core {
                     return ptr;
                 }
                 ensure_cuda_success(err, pre_call_state, "cudaMallocAsync(bucket)",
-                                    std::format("bucket_bytes={}", bucket_size),
-                                    std::source_location::current(),
+                                    ::lfs::core::detail::format_cuda_safe("bucket_bytes={}", bucket_size),
+                                    LFS_SOURCE_SITE_CURRENT(),
                                     CudaFailureDisposition::LogOnly);
 #endif
             }
@@ -198,8 +197,8 @@ namespace lfs::core {
                     return ptr;
                 }
                 ensure_cuda_success(err, pre_call_state, "cudaMallocAsync(direct async tier)",
-                                    std::format("requested_bytes={}", bytes),
-                                    std::source_location::current(),
+                                    ::lfs::core::detail::format_cuda_safe("requested_bytes={}", bytes),
+                                    LFS_SOURCE_SITE_CURRENT(),
                                     CudaFailureDisposition::LogOnly);
             }
 #endif
@@ -311,8 +310,8 @@ namespace lfs::core {
             if (free_status != cudaSuccess) {
                 ensure_cuda_success(
                     free_status, "CUDA memory-pool untracked free",
-                    std::format("ptr={}, stream={}", ptr, static_cast<void*>(stream)),
-                    std::source_location::current(), CudaFailureDisposition::LogOnly);
+                    ::lfs::core::detail::format_cuda_safe("ptr={}, stream={}", ptr, static_cast<void*>(stream)),
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
             }
         }
 
@@ -339,7 +338,7 @@ namespace lfs::core {
             cudaError_t err = cudaGetDevice(&device);
             if (err != cudaSuccess) {
                 ensure_cuda_success(err, pre_call_state, "cudaGetDevice(memory pool configuration)", {},
-                                    std::source_location::current(),
+                                    LFS_SOURCE_SITE_CURRENT(),
                                     CudaFailureDisposition::LogOnly);
                 return;
             }
@@ -349,8 +348,8 @@ namespace lfs::core {
             if (err != cudaSuccess) {
                 ensure_cuda_success(err, pre_call_state,
                                     "cudaDeviceGetDefaultMemPool(memory pool configuration)",
-                                    std::format("device={}", device),
-                                    std::source_location::current(),
+                                    ::lfs::core::detail::format_cuda_safe("device={}", device),
+                                    LFS_SOURCE_SITE_CURRENT(),
                                     CudaFailureDisposition::LogOnly);
                 return;
             }
@@ -365,8 +364,8 @@ namespace lfs::core {
             if (attribute_status != cudaSuccess) {
                 ensure_cuda_success(attribute_status, pre_call_state,
                                     "cudaMemPoolSetAttribute(release threshold)",
-                                    std::format("device={}, threshold_bytes={}", device, threshold),
-                                    std::source_location::current(),
+                                    ::lfs::core::detail::format_cuda_safe("device={}, threshold_bytes={}", device, threshold),
+                                    LFS_SOURCE_SITE_CURRENT(),
                                     CudaFailureDisposition::LogOnly);
                 return;
             }
@@ -406,8 +405,8 @@ namespace lfs::core {
                 if (used_status != cudaSuccess) {
                     ensure_cuda_success(
                         used_status, "cudaMemPoolGetAttribute(used memory)",
-                        std::format("device={}, context=memory-pool statistics", device),
-                        std::source_location::current(), CudaFailureDisposition::LogOnly);
+                        ::lfs::core::detail::format_cuda_safe("device={}, context=memory-pool statistics", device),
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                     oss << "  CUDA Pool: unavailable\n";
                 } else {
                     const cudaError_t reserved_status =
@@ -415,8 +414,8 @@ namespace lfs::core {
                     if (reserved_status != cudaSuccess) {
                         ensure_cuda_success(
                             reserved_status, "cudaMemPoolGetAttribute(reserved memory)",
-                            std::format("device={}, context=memory-pool statistics", device),
-                            std::source_location::current(), CudaFailureDisposition::LogOnly);
+                            ::lfs::core::detail::format_cuda_safe("device={}, context=memory-pool statistics", device),
+                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                         oss << "  CUDA Pool: unavailable\n";
                     } else {
                         oss << "  CUDA Pool: " << (used / 1024.0 / 1024.0) << " / "
@@ -445,7 +444,7 @@ namespace lfs::core {
             if (sync_status != cudaSuccess) {
                 ensure_cuda_success(
                     sync_status, "cudaDeviceSynchronize(memory-pool trim)", {},
-                    std::source_location::current(), CudaFailureDisposition::LogOnly);
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                 return;
             }
             {
@@ -511,8 +510,8 @@ namespace lfs::core {
                     *failure_status = err;
                 }
                 ensure_cuda_success(err, pre_call_state, "cudaMalloc(direct tier)",
-                                    std::format("requested_bytes={}", bytes),
-                                    std::source_location::current(),
+                                    ::lfs::core::detail::format_cuda_safe("requested_bytes={}", bytes),
+                                    LFS_SOURCE_SITE_CURRENT(),
                                     CudaFailureDisposition::LogOnly);
                 return nullptr;
             }
@@ -575,8 +574,8 @@ namespace lfs::core {
                 if (const cudaError_t status = cudaFree(ptr); status != cudaSuccess) {
                     ensure_cuda_success(
                         status, "cudaFree(memory-pool direct tier)",
-                        std::format("ptr={}, bytes={}", ptr, info.size),
-                        std::source_location::current(), CudaFailureDisposition::LogOnly);
+                        ::lfs::core::detail::format_cuda_safe("ptr={}, bytes={}", ptr, info.size),
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                 }
                 direct_alloc_count_.fetch_sub(1, std::memory_order_release);
                 return;
@@ -592,9 +591,9 @@ namespace lfs::core {
             if (free_status != cudaSuccess) {
                 ensure_cuda_success(
                     free_status, "CUDA memory-pool async-tier free",
-                    std::format("ptr={}, bytes={}, stream={}", ptr, info.size,
-                                static_cast<void*>(info.home_stream)),
-                    std::source_location::current(), CudaFailureDisposition::LogOnly);
+                    ::lfs::core::detail::format_cuda_safe("ptr={}, bytes={}, stream={}", ptr, info.size,
+                                                          static_cast<void*>(info.home_stream)),
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
             }
         }
 
@@ -631,8 +630,8 @@ namespace lfs::core {
                 if (used_status != cudaSuccess) {
                     ensure_cuda_success(
                         used_status, "cudaMemPoolGetAttribute(used memory)",
-                        std::format("device={}, context=periodic memory-pool statistics", device),
-                        std::source_location::current(), CudaFailureDisposition::LogOnly);
+                        ::lfs::core::detail::format_cuda_safe("device={}, context=periodic memory-pool statistics", device),
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                     return;
                 }
                 const cudaError_t reserved_status =
@@ -640,8 +639,8 @@ namespace lfs::core {
                 if (reserved_status != cudaSuccess) {
                     ensure_cuda_success(
                         reserved_status, "cudaMemPoolGetAttribute(reserved memory)",
-                        std::format("device={}, context=periodic memory-pool statistics", device),
-                        std::source_location::current(), CudaFailureDisposition::LogOnly);
+                        ::lfs::core::detail::format_cuda_safe("device={}, context=periodic memory-pool statistics", device),
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                     return;
                 }
 
@@ -666,7 +665,7 @@ namespace lfs::core {
             if (device_status != cudaSuccess) {
                 ensure_cuda_success(
                     device_status, "cudaGetDevice(default memory pool)",
-                    std::format("context={}", context), std::source_location::current(),
+                    ::lfs::core::detail::format_cuda_safe("context={}", context), LFS_SOURCE_SITE_CURRENT(),
                     CudaFailureDisposition::LogOnly);
                 return false;
             }
@@ -675,8 +674,8 @@ namespace lfs::core {
             if (pool_status != cudaSuccess) {
                 ensure_cuda_success(
                     pool_status, "cudaDeviceGetDefaultMemPool",
-                    std::format("device={}, context={}", device, context),
-                    std::source_location::current(), CudaFailureDisposition::LogOnly);
+                    ::lfs::core::detail::format_cuda_safe("device={}, context={}", device, context),
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                 return false;
             }
             return true;
@@ -692,8 +691,8 @@ namespace lfs::core {
             if (trim_status != cudaSuccess) {
                 ensure_cuda_success(
                     trim_status, "cudaMemPoolTrimTo",
-                    std::format("device={}, context={}", device, context),
-                    std::source_location::current(), CudaFailureDisposition::LogOnly);
+                    ::lfs::core::detail::format_cuda_safe("device={}, context={}", device, context),
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
             }
         }
 #endif

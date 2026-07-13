@@ -14,7 +14,6 @@
 #include <limits>
 #include <mutex>
 #include <optional>
-#include <source_location>
 #include <stdexcept>
 #include <utility>
 
@@ -51,7 +50,7 @@ namespace lfs::rendering {
 
         [[nodiscard]] std::string withSourceLocation(
             std::string message,
-            const std::source_location location) {
+            const core::SourceSite location) {
             return std::format("{} ({}:{})",
                                std::move(message),
                                location.file_name(),
@@ -61,7 +60,7 @@ namespace lfs::rendering {
         [[nodiscard]] bool setFailure(
             std::string& last_error,
             std::string message,
-            const std::source_location location = std::source_location::current()) {
+            const core::SourceSite location = LFS_SOURCE_SITE_CURRENT()) {
             last_error = withSourceLocation(std::move(message), location);
             return false;
         }
@@ -70,7 +69,7 @@ namespace lfs::rendering {
             std::string& last_error,
             const char* const operation,
             const cudaError_t status,
-            const std::source_location location = std::source_location::current()) {
+            const core::SourceSite location = LFS_SOURCE_SITE_CURRENT()) {
             if (status == cudaSuccess) {
                 return true;
             }

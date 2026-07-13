@@ -11,7 +11,6 @@
 #include <cstdint>
 #include <cub/cub.cuh>
 #include <cuda_fp16.h>
-#include <format>
 #include <string>
 #include <string_view>
 

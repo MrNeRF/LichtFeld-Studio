@@ -43,7 +43,7 @@ namespace fast_lfs::rasterization {
                 lfs::core::ensure_cuda_success(
                     status, "FastGS sorted-index buffer free",
                     std::format("ptr={}, stream={}", ptr, static_cast<void*>(stream)),
-                    std::source_location::current(),
+                    LFS_SOURCE_SITE_CURRENT(),
                     lfs::core::CudaFailureDisposition::LogOnly);
             }
         }

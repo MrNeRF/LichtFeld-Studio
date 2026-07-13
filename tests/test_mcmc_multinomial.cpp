@@ -13,8 +13,6 @@
 #include "kernels/mcmc_kernels.hpp"
 #include "lfs/cuda_scratch.hpp"
 
-#include <source_location>
-
 using namespace lfs::core;
 
 namespace {
@@ -85,7 +83,7 @@ TEST_F(McmcMultinomialTest, ScratchAllocationFailureAbortsAndRecovers) {
     // call correctly reports it as a pre-existing error.
     ensure_cuda_success(cudaGetLastError(),
                         "recover from injected scratch allocation failure", {},
-                        std::source_location::current(),
+                        LFS_SOURCE_SITE_CURRENT(),
                         CudaFailureDisposition::LogOnly);
 
     EXPECT_NO_THROW(lfs::training::mcmc::launch_multinomial_sample_all(

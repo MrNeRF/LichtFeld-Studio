@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cuda_runtime.h>
+#include <format>
 #include <limits>
 #include <string_view>
 #include <utility>
@@ -86,7 +87,7 @@ namespace gsplat_lfs {
                     if (sync_status != cudaSuccess) {
                         lfs::core::ensure_cuda_success(
                             sync_status, "cudaStreamSynchronize(gsplat sort-cache fallback)", {},
-                            std::source_location::current(),
+                            LFS_SOURCE_SITE_CURRENT(),
                             lfs::core::CudaFailureDisposition::LogOnly);
                     }
                     lfs::core::ensure_cuda_success(
@@ -105,7 +106,7 @@ namespace gsplat_lfs {
                     if (status != cudaSuccess) {
                         lfs::core::ensure_cuda_success(
                             status, "cudaEventDestroy(gsplat sort cache)", {},
-                            std::source_location::current(),
+                            LFS_SOURCE_SITE_CURRENT(),
                             lfs::core::CudaFailureDisposition::LogOnly);
                     }
                 }

@@ -38,7 +38,7 @@ namespace lfs::core {
                         std::format("dependency_stream={}, execution_stream={}; fallback=stream sync",
                                     static_cast<void*>(dependency_stream),
                                     static_cast<void*>(execution_stream)),
-                        std::source_location::current(), CudaFailureDisposition::LogOnly);
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                 }
             } else {
                 ensure_cuda_success(
@@ -46,7 +46,7 @@ namespace lfs::core {
                     std::format("dependency_stream={}, execution_stream={}; fallback=stream sync",
                                 static_cast<void*>(dependency_stream),
                                 static_cast<void*>(execution_stream)),
-                    std::source_location::current(), CudaFailureDisposition::LogOnly);
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
             }
             CudaEventPool::instance().release(ready);
         }

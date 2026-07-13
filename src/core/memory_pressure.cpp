@@ -107,13 +107,13 @@ namespace lfs::core {
             ensure_cuda_success(
                 status, pre_call_state, "cudaMalloc(direct tensor storage)",
                 std::format("requested_bytes={}", bytes),
-                std::source_location::current(), CudaFailureDisposition::LogOnly);
+                LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
             if (ptr != nullptr) {
                 const cudaError_t cleanup_status = cudaFree(ptr);
                 if (cleanup_status != cudaSuccess) {
                     ensure_cuda_success(
                         cleanup_status, "cudaFree(failed direct tensor storage allocation)", {},
-                        std::source_location::current(), CudaFailureDisposition::LogOnly);
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                 }
             }
             return nullptr;

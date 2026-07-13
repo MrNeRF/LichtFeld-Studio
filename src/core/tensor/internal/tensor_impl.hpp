@@ -20,7 +20,6 @@
 #include <memory>
 #include <optional>
 #include <random>
-#include <source_location>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -43,7 +42,7 @@ namespace lfs::core {
 
     namespace detail {
         template <typename T>
-        consteval std::string_view tensor_cpp_type_name() {
+        constexpr const char* tensor_cpp_type_name() {
             using Value = std::remove_cv_t<T>;
             if constexpr (std::is_void_v<Value>)
                 return "void";
@@ -248,7 +247,7 @@ namespace lfs::core {
             const Tensor& tensor,
             std::string_view operation,
             std::string_view role = "tensor",
-            std::source_location location = std::source_location::current());
+            SourceSite location = LFS_SOURCE_SITE_CURRENT());
 
         LFS_CORE_API void require_same_device(
             const Tensor& reference,
@@ -256,21 +255,21 @@ namespace lfs::core {
             std::string_view operation,
             std::string_view reference_role = "input",
             std::string_view other_role = "other",
-            std::source_location location = std::source_location::current());
+            SourceSite location = LFS_SOURCE_SITE_CURRENT());
 
         LFS_CORE_API void require_dtype(
             const Tensor& tensor,
             DataType expected,
             std::string_view operation,
             std::string_view role = "tensor",
-            std::source_location location = std::source_location::current());
+            SourceSite location = LFS_SOURCE_SITE_CURRENT());
 
         LFS_CORE_API void require_dtype(
             const Tensor& tensor,
             std::initializer_list<DataType> expected,
             std::string_view operation,
             std::string_view role = "tensor",
-            std::source_location location = std::source_location::current());
+            SourceSite location = LFS_SOURCE_SITE_CURRENT());
 
         LFS_CORE_API void require_shape(
             const Tensor& reference,
@@ -278,14 +277,14 @@ namespace lfs::core {
             std::string_view operation,
             std::string_view reference_role = "input",
             std::string_view other_role = "other",
-            std::source_location location = std::source_location::current());
+            SourceSite location = LFS_SOURCE_SITE_CURRENT());
 
         LFS_CORE_API void require_shape(
             const Tensor& tensor,
             const TensorShape& expected,
             std::string_view operation,
             std::string_view role = "tensor",
-            std::source_location location = std::source_location::current());
+            SourceSite location = LFS_SOURCE_SITE_CURRENT());
 
     } // namespace tensor_contract
 
@@ -1372,23 +1371,23 @@ namespace lfs::core {
 
         // ============= UNARY OPERATIONS (LAZY EVALUATION) =============
         // Macro to define unary operations with lazy evaluation via expression templates
-#define LFS_DEFINE_UNARY_OP(name, op_type)                                               \
-    Tensor name() const {                                                                \
-        validate_unary_op();                                                             \
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32,         \
-                       std::format("{} requires Float32 or Int32 input "                 \
-                                   "(operation={}, input_dtype={}({}), input_shape={}, " \
-                                   "input_device={})",                                   \
-                                   #name, #name, dtype_name(dtype_),                     \
-                                   static_cast<int>(dtype_), shape_.str(),               \
-                                   device_name(device_)));                               \
-        if (numel() == 0) {                                                              \
-            return Tensor::empty(shape_, device_, dtype_);                               \
-        }                                                                                \
-        Tensor result = UnaryExpr<TensorLeaf, ops::op_type>(                             \
-            TensorLeaf(*this), ops::op_type{}, shape_, device_, dtype_);                 \
-        link_deferred_result_to_inputs(result, {lazy_expr_id()});                        \
-        return result;                                                                   \
+#define LFS_DEFINE_UNARY_OP(name, op_type)                                                                         \
+    Tensor name() const {                                                                                          \
+        validate_unary_op();                                                                                       \
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32,                                   \
+                       ::lfs::core::detail::format_cuda_safe("{} requires Float32 or Int32 input "                 \
+                                                             "(operation={}, input_dtype={}({}), input_shape={}, " \
+                                                             "input_device={})",                                   \
+                                                             #name, #name, dtype_name(dtype_),                     \
+                                                             static_cast<int>(dtype_), shape_.str(),               \
+                                                             device_name(device_)));                               \
+        if (numel() == 0) {                                                                                        \
+            return Tensor::empty(shape_, device_, dtype_);                                                         \
+        }                                                                                                          \
+        Tensor result = UnaryExpr<TensorLeaf, ops::op_type>(                                                       \
+            TensorLeaf(*this), ops::op_type{}, shape_, device_, dtype_);                                           \
+        link_deferred_result_to_inputs(result, {lazy_expr_id()});                                                  \
+        return result;                                                                                             \
     }
 
 #define LFS_DEFINE_UNARY_OP_FUSABLE(name, op_type, fusion_kind)                           \

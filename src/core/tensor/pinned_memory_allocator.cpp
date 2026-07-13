@@ -53,7 +53,7 @@ namespace lfs::core {
             if (status != cudaSuccess) {
                 ensure_cuda_success(
                     status, "cudaEventDestroy(pinned static teardown)", {},
-                    std::source_location::current(), CudaFailureDisposition::LogOnly);
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                 cudaGetLastError();
             }
         }
@@ -99,7 +99,7 @@ namespace lfs::core {
             }
             if (status != cudaSuccess) {
                 ensure_cuda_success(status, "cudaEventQuery(pinned block)", {},
-                                    std::source_location::current(),
+                                    LFS_SOURCE_SITE_CURRENT(),
                                     CudaFailureDisposition::LogOnly);
                 cudaGetLastError();
                 return false;
@@ -242,7 +242,7 @@ namespace lfs::core {
             } else {
                 ensure_cuda_success(status, pre_call_state, "cudaHostAlloc(pinned block)",
                                     std::format("bytes={}, fallback=malloc", allocation_size),
-                                    std::source_location::current(),
+                                    LFS_SOURCE_SITE_CURRENT(),
                                     CudaFailureDisposition::LogOnly);
                 cudaGetLastError();
             }
@@ -291,7 +291,7 @@ namespace lfs::core {
                 CudaEventPool::instance().release(event);
                 ensure_cuda_success(record_status, "cudaEventRecord(pinned block)",
                                     std::format("stream={}", static_cast<void*>(stream)),
-                                    std::source_location::current(),
+                                    LFS_SOURCE_SITE_CURRENT(),
                                     CudaFailureDisposition::LogOnly);
                 cudaGetLastError();
             }
@@ -300,7 +300,7 @@ namespace lfs::core {
             if (sync_status != cudaSuccess && !is_cuda_shutdown(sync_status)) {
                 ensure_cuda_success(sync_status, "cudaStreamSynchronize(pinned quarantine)",
                                     std::format("stream={}", static_cast<void*>(stream)),
-                                    std::source_location::current(),
+                                    LFS_SOURCE_SITE_CURRENT(),
                                     CudaFailureDisposition::LogOnly);
                 cudaGetLastError();
                 all_streams_safe = false;
@@ -319,7 +319,7 @@ namespace lfs::core {
             return true;
         }
         ensure_cuda_success(device_status, "cudaDeviceSynchronize(pinned quarantine)", {},
-                            std::source_location::current(),
+                            LFS_SOURCE_SITE_CURRENT(),
                             CudaFailureDisposition::LogOnly);
         cudaGetLastError();
         return false;
@@ -365,7 +365,7 @@ namespace lfs::core {
                 const cudaError_t status = cudaEventSynchronize(event);
                 if (status != cudaSuccess && !is_cuda_shutdown(status)) {
                     ensure_cuda_success(status, "cudaEventSynchronize(pinned release)", {},
-                                        std::source_location::current(),
+                                        LFS_SOURCE_SITE_CURRENT(),
                                         CudaFailureDisposition::LogOnly);
                     cudaGetLastError();
                     safe_to_release = false;
@@ -393,7 +393,7 @@ namespace lfs::core {
                 } else {
                     ensure_cuda_success(status, "cudaFreeHost(pinned block)",
                                         std::format("bytes={}", block.size),
-                                        std::source_location::current(),
+                                        LFS_SOURCE_SITE_CURRENT(),
                                         CudaFailureDisposition::LogOnly);
                     cudaGetLastError();
                 }
@@ -516,7 +516,7 @@ namespace lfs::core {
         if (status != cudaSuccess && !is_cuda_shutdown(status)) {
             ensure_cuda_success(status, "cudaStreamSynchronize(pinned release_stream)",
                                 std::format("stream={}", static_cast<void*>(stream)),
-                                std::source_location::current(),
+                                LFS_SOURCE_SITE_CURRENT(),
                                 CudaFailureDisposition::LogOnly);
             cudaGetLastError();
             return;

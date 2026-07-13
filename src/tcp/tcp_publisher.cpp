@@ -133,7 +133,7 @@ namespace lfs::tcp {
             const std::weak_ptr<QueueState> weak_state = state;
             log_handler_token_ = core::Logger::get().add_log_handler(
                 [weak_state, level = level_](core::LogLevel in_level,
-                                             const std::source_location&,
+                                             const core::SourceSite&,
                                              std::string_view msg) {
                     if (in_level < level) {
                         return;

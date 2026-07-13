@@ -13,7 +13,6 @@
 #include <atomic>
 #include <cstdint>
 #include <cuda_runtime.h>
-#include <format>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
@@ -210,7 +209,7 @@ namespace lfs::core {
             if (err != cudaSuccess) {
                 ensure_cuda_success(
                     err, "cudaGetDeviceCount(GPU slab allocator)",
-                    "fallback=disable slab allocator", std::source_location::current(),
+                    "fallback=disable slab allocator", LFS_SOURCE_SITE_CURRENT(),
                     CudaFailureDisposition::LogOnly);
                 enabled_.store(false, std::memory_order_release);
                 return;
@@ -243,8 +242,8 @@ namespace lfs::core {
             const cudaError_t status = cudaMalloc(&slab_base, slab_size);
             if (status != cudaSuccess) {
                 ensure_cuda_success(status, "cudaMalloc(GPU slab)",
-                                    std::format("slab_bytes={}, size_class={}", slab_size, size_class),
-                                    std::source_location::current(),
+                                    ::lfs::core::detail::format_cuda_safe("slab_bytes={}, size_class={}", slab_size, size_class),
+                                    LFS_SOURCE_SITE_CURRENT(),
                                     CudaFailureDisposition::LogOnly);
                 return false;
             }
@@ -288,9 +287,9 @@ namespace lfs::core {
                 if (free_status != cudaSuccess) {
                     ensure_cuda_success(
                         free_status, "cudaFree(GPU slab)",
-                        std::format("ptr={}, bytes={}, size_class={}", slab.base, slab.size,
-                                    slab.size_class),
-                        std::source_location::current(), CudaFailureDisposition::LogOnly);
+                        ::lfs::core::detail::format_cuda_safe("ptr={}, bytes={}, size_class={}", slab.base, slab.size,
+                                                              slab.size_class),
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                 }
             }
             slabs_.clear();

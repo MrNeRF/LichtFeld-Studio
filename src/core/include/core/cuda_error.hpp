@@ -2,19 +2,16 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 
+#include "core/cuda_safe_format.hpp"
 #include "core/export.hpp"
-#include "core/failure_report.hpp"
+#include "core/source_site.hpp"
 
 #include <cuda_runtime_api.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <format>
-#include <source_location>
-#include <string>
 #include <string_view>
 #include <type_traits>
-#include <utility>
 #include <vector>
 
 namespace lfs::core {
@@ -67,7 +64,7 @@ namespace lfs::core {
     LFS_CORE_API void reset_cuda_diagnostics_for_testing() noexcept;
     LFS_CORE_API CudaCheckState prepare_cuda_check(
         const char* expression,
-        const std::source_location& location,
+        const SourceSite& location,
         cudaStream_t stream = nullptr) noexcept;
 
     // This sample must be taken before the guarded call for valid attribution.
@@ -81,44 +78,33 @@ namespace lfs::core {
         const CudaCheckState& state,
         const char* expression,
         std::string_view message,
-        const std::source_location& location);
+        const SourceSite& location);
     LFS_CORE_API void finish_cuda_check(cudaError_t result,
                                         const CudaCheckState& state,
                                         const char* expression,
                                         std::string_view message,
-                                        const std::source_location& location);
+                                        const SourceSite& location);
     LFS_CORE_API void ensure_cuda_success(
         cudaError_t result,
         const CudaCheckState& state,
         std::string_view expression,
         std::string_view message = {},
-        const std::source_location& location = std::source_location::current(),
+        const SourceSite& location = LFS_SOURCE_SITE_CURRENT(),
         CudaFailureDisposition disposition = CudaFailureDisposition::Throw);
     LFS_CORE_API void ensure_cuda_success(
         cudaError_t result,
         std::string_view expression,
         std::string_view message = {},
-        const std::source_location& location = std::source_location::current(),
+        const SourceSite& location = LFS_SOURCE_SITE_CURRENT(),
         CudaFailureDisposition disposition = CudaFailureDisposition::Throw);
     LFS_CORE_API void validate_cuda_device_pointer(
         const void* pointer,
         std::string_view name,
-        const std::source_location& location = std::source_location::current());
+        const SourceSite& location = LFS_SOURCE_SITE_CURRENT());
     LFS_CORE_API void validate_cuda_device_pointer_optional(
         const void* pointer,
         std::string_view name,
-        const std::source_location& location = std::source_location::current());
-
-    namespace detail {
-
-        template <typename... Args>
-        [[nodiscard]] std::string format_cuda_check_message(
-            std::format_string<Args...> format,
-            Args&&... args) {
-            return std::format(format, std::forward<Args>(args)...);
-        }
-
-    } // namespace detail
+        const SourceSite& location = LFS_SOURCE_SITE_CURRENT());
 
 } // namespace lfs::core
 
@@ -126,7 +112,7 @@ namespace lfs::core {
     do {                                                                              \
         ::lfs::core::record_cuda_breadcrumb(#call, __FILE__, __LINE__);               \
         const auto _lfs_cuda_state = ::lfs::core::prepare_cuda_check(                 \
-            #call, std::source_location::current());                                  \
+            #call, LFS_SOURCE_SITE_CURRENT());                                        \
         const auto _lfs_cuda_result = (call);                                         \
         static_assert(std::is_same_v<std::remove_cv_t<decltype(_lfs_cuda_result)>,    \
                                      cudaError_t>,                                    \
@@ -138,7 +124,7 @@ namespace lfs::core {
             if (_lfs_cuda_completion.effective_error != cudaSuccess) [[unlikely]] {   \
                 ::lfs::core::report_cuda_check_failure(                               \
                     _lfs_cuda_completion, _lfs_cuda_state, #call, (message),          \
-                    std::source_location::current());                                 \
+                    LFS_SOURCE_SITE_CURRENT());                                       \
             }                                                                         \
         }                                                                             \
     } while (false)
@@ -148,7 +134,7 @@ namespace lfs::core {
 #define LFS_CUDA_CHECK_MSG(call, format, ...) \
     LFS_CUDA_DETAIL_CHECK_IMPL(               \
         call,                                 \
-        ::lfs::core::detail::format_cuda_check_message((format)__VA_OPT__(, ) __VA_ARGS__))
+        ::lfs::core::detail::format_cuda_safe((format)__VA_OPT__(, ) __VA_ARGS__))
 
 #define LFS_CUDA_BREADCRUMB(tag)                                                  \
     do {                                                                          \
