@@ -5063,6 +5063,46 @@ namespace lfs::vis {
                 __FILE__,
                 __LINE__));
         }
+        using AccessScope = VulkanImageBarrierTracker::AccessScope;
+        const bool cross_queue_output = context.hasDedicatedComputeQueue();
+        const AccessScope fragment_sample{
+            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+            VK_ACCESS_2_SHADER_READ_BIT,
+        };
+        const AccessScope external_dependency{};
+        const auto transitionToProducer = [&](const VkImage image,
+                                              const VkImageLayout layout,
+                                              const AccessScope producer) {
+            // Dedicated-compute slots are reused only after the three-slot output
+            // ring has passed the two submitted graphics-frame fences. That host
+            // wait retires the previous fragment read; it is not work performed by
+            // this queue and therefore has an empty source scope here.
+            const bool has_previous_contents =
+                context.imageBarriers().imageLayout(image) != VK_IMAGE_LAYOUT_UNDEFINED;
+            const AccessScope source = has_previous_contents && !cross_queue_output
+                                           ? fragment_sample
+                                           : external_dependency;
+            context.imageBarriers().transitionImage(cmd,
+                                                    image,
+                                                    VK_IMAGE_ASPECT_COLOR_BIT,
+                                                    layout,
+                                                    source,
+                                                    producer);
+        };
+        const auto releaseToFragmentSampling = [&](const VkImage image,
+                                                   const AccessScope producer) {
+            // On the async-compute path the batch's timeline signal and the GUI
+            // submit's FRAGMENT_SHADER wait form the consumer dependency. A
+            // fragment destination stage in this compute-family command buffer is
+            // both invalid and unable to synchronize the other queue.
+            context.imageBarriers().transitionImage(
+                cmd,
+                image,
+                VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                producer,
+                cross_queue_output ? external_dependency : fragment_sample);
+        };
 
         const bool has_pixel_state = uniforms.sort_capacity > 0 &&
                                      buffers_.pixel_state.deviceBuffer.buffer != VK_NULL_HANDLE &&
@@ -5070,14 +5110,16 @@ namespace lfs::vis {
                                      buffers_.pixel_depth.deviceBuffer.buffer != VK_NULL_HANDLE &&
                                      buffers_.pixel_depth.deviceBuffer.size > 0;
         if (!has_pixel_state) {
-            context.imageBarriers().transitionImage(cmd,
-                                                    output.image.image,
-                                                    VK_IMAGE_ASPECT_COLOR_BIT,
-                                                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-            context.imageBarriers().transitionImage(cmd,
-                                                    output.depth_image.image,
-                                                    VK_IMAGE_ASPECT_COLOR_BIT,
-                                                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            constexpr AccessScope transfer_write{
+                VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            };
+            transitionToProducer(output.image.image,
+                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                 transfer_write);
+            transitionToProducer(output.depth_image.image,
+                                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                 transfer_write);
             VkClearColorValue clear = transparent_background
                                           ? VkClearColorValue{{0.0f, 0.0f, 0.0f, 0.0f}}
                                           : VkClearColorValue{{background.r, background.g, background.b, 1.0f}};
@@ -5098,14 +5140,8 @@ namespace lfs::vis {
                                  &depth_clear,
                                  1,
                                  &range);
-            context.imageBarriers().transitionImage(cmd,
-                                                    output.image.image,
-                                                    VK_IMAGE_ASPECT_COLOR_BIT,
-                                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            context.imageBarriers().transitionImage(cmd,
-                                                    output.depth_image.image,
-                                                    VK_IMAGE_ASPECT_COLOR_BIT,
-                                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            releaseToFragmentSampling(output.image.image, transfer_write);
+            releaseToFragmentSampling(output.depth_image.image, transfer_write);
             output.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             output.depth_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             output.generation = ++output_generations_[output_index];
@@ -5188,14 +5224,16 @@ namespace lfs::vis {
         pixel_dep.pBufferMemoryBarriers = pixel_barriers.data();
         vkCmdPipelineBarrier2(cmd, &pixel_dep);
 
-        context.imageBarriers().transitionImage(cmd,
-                                                output.image.image,
-                                                VK_IMAGE_ASPECT_COLOR_BIT,
-                                                VK_IMAGE_LAYOUT_GENERAL);
-        context.imageBarriers().transitionImage(cmd,
-                                                output.depth_image.image,
-                                                VK_IMAGE_ASPECT_COLOR_BIT,
-                                                VK_IMAGE_LAYOUT_GENERAL);
+        constexpr AccessScope compute_storage_write{
+            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+        };
+        transitionToProducer(output.image.image,
+                             VK_IMAGE_LAYOUT_GENERAL,
+                             compute_storage_write);
+        transitionToProducer(output.depth_image.image,
+                             VK_IMAGE_LAYOUT_GENERAL,
+                             compute_storage_write);
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, compose_->pipeline);
         context.vkCmdPushDescriptorSet()(cmd,
@@ -5241,14 +5279,8 @@ namespace lfs::vis {
                 __LINE__));
         }
         vkCmdDispatch(cmd, group_x, group_y, group_z);
-        context.imageBarriers().transitionImage(cmd,
-                                                output.image.image,
-                                                VK_IMAGE_ASPECT_COLOR_BIT,
-                                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        context.imageBarriers().transitionImage(cmd,
-                                                output.depth_image.image,
-                                                VK_IMAGE_ASPECT_COLOR_BIT,
-                                                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        releaseToFragmentSampling(output.image.image, compute_storage_write);
+        releaseToFragmentSampling(output.depth_image.image, compute_storage_write);
         output.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         output.depth_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         output.generation = ++output_generations_[output_index];

@@ -141,12 +141,55 @@ namespace lfs::vis {
                 : layoutAccess(state.layout, true);
         const LayoutAccess dst = layoutAccess(new_layout, false);
 
+        transitionImage(command_buffer,
+                        image,
+                        aspect_mask,
+                        new_layout,
+                        AccessScope{src.stage, src.access},
+                        AccessScope{dst.stage, dst.access});
+    }
+
+    void VulkanImageBarrierTracker::transitionImage(const VkCommandBuffer command_buffer,
+                                                    const VkImage image,
+                                                    const VkImageAspectFlags aspect_mask,
+                                                    const VkImageLayout new_layout,
+                                                    const AccessScope source,
+                                                    const AccessScope destination) {
+        if (command_buffer == VK_NULL_HANDLE || image == VK_NULL_HANDLE) {
+            throw std::logic_error(std::format(
+                "Image barrier transition requires non-null handles (command_buffer={:#x}, image={:#x}, aspect_mask={:#x}, requested_layout={}({})) ({}:{})",
+                vkHandleValue(command_buffer),
+                vkHandleValue(image),
+                static_cast<std::uint32_t>(aspect_mask),
+                vkImageLayoutToString(new_layout),
+                static_cast<int>(new_layout),
+                __FILE__,
+                __LINE__));
+        }
+
+        [[maybe_unused]] const auto tracked = images_.find(image);
+        LFS_VK_DEBUG_ASSERT(
+            tracked != images_.end(),
+            "Image barrier tracker does not know the explicitly transitioned image (image={:#x}, requested_layout={}({}), aspect_mask={:#x}, tracked_images={})",
+            vkHandleValue(image),
+            vkImageLayoutToString(new_layout),
+            static_cast<int>(new_layout),
+            static_cast<std::uint32_t>(aspect_mask),
+            images_.size());
+        auto& state = images_[image];
+        if (state.aspect_mask == 0) {
+            state.aspect_mask = aspect_mask;
+        }
+        if (state.layout == new_layout) {
+            return;
+        }
+
         VkImageMemoryBarrier2 barrier{};
         barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
-        barrier.srcStageMask = src.stage;
-        barrier.srcAccessMask = src.access;
-        barrier.dstStageMask = dst.stage;
-        barrier.dstAccessMask = dst.access;
+        barrier.srcStageMask = source.stage;
+        barrier.srcAccessMask = source.access;
+        barrier.dstStageMask = destination.stage;
+        barrier.dstAccessMask = destination.access;
         barrier.oldLayout = state.layout;
         barrier.newLayout = new_layout;
         barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -166,8 +209,8 @@ namespace lfs::vis {
 
         state.aspect_mask = aspect_mask;
         state.layout = new_layout;
-        state.last_stage = dst.stage;
-        state.last_access = dst.access;
+        state.last_stage = destination.stage;
+        state.last_access = destination.access;
     }
 
 } // namespace lfs::vis
