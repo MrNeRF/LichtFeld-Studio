@@ -93,11 +93,6 @@ namespace lfs::core {
           failure_(failure) {}
 
     struct MemoryPressureCoordinator::Impl {
-        struct Registered {
-            PressureClientId id;
-            PressureClient client;
-        };
-
         struct LedgerEntry {
             const char* name;
             int priority;
@@ -106,13 +101,11 @@ namespace lfs::core {
         };
 
         mutable std::mutex registry_mutex;
-        std::vector<Registered> clients;
-        PressureClientId next_id = 1;
+        std::vector<PressureClient> clients;
 
         std::mutex episode_mutex;
         std::atomic<uint64_t> episode_counter{0};
         std::atomic<bool> pressure_active{false};
-        std::atomic<uint64_t> generation{0};
         std::atomic<size_t> last_target_free{0};
         std::chrono::steady_clock::time_point last_recover_check{};
 
@@ -147,14 +140,14 @@ namespace lfs::core {
             {
                 std::lock_guard<std::mutex> lock(registry_mutex);
                 matched.reserve(clients.size());
-                for (const auto& registered : clients) {
-                    if (!client_reclaims_domain(registered.client.domain, domain)) {
+                for (const auto& client : clients) {
+                    if (!client_reclaims_domain(client.domain, domain)) {
                         continue;
                     }
-                    if (!context_allows(context, registered.client.affinity)) {
+                    if (!context_allows(context, client.affinity)) {
                         continue;
                     }
-                    matched.push_back(registered.client);
+                    matched.push_back(client);
                 }
             }
             std::stable_sort(matched.begin(), matched.end(),
@@ -220,17 +213,9 @@ namespace lfs::core {
         return impl_->reserve_bytes;
     }
 
-    PressureClientId MemoryPressureCoordinator::register_client(PressureClient client) {
+    void MemoryPressureCoordinator::register_client(PressureClient client) {
         std::lock_guard<std::mutex> lock(impl_->registry_mutex);
-        const PressureClientId id = impl_->next_id++;
-        impl_->clients.push_back({id, std::move(client)});
-        return id;
-    }
-
-    void MemoryPressureCoordinator::unregister_client(PressureClientId id) {
-        std::lock_guard<std::mutex> lock(impl_->registry_mutex);
-        std::erase_if(impl_->clients,
-                      [id](const Impl::Registered& registered) { return registered.id == id; });
+        impl_->clients.push_back(std::move(client));
     }
 
     size_t MemoryPressureCoordinator::run_episode(const AllocationFailure& failure,
@@ -261,7 +246,6 @@ namespace lfs::core {
         }
 
         const uint64_t episode_id = impl_->episode_counter.fetch_add(1) + 1;
-        impl_->generation.fetch_add(1);
         impl_->pressure_active.store(true);
         impl_->last_target_free.store(target);
 
@@ -349,8 +333,7 @@ namespace lfs::core {
         if (freed > 0) {
             return true;
         }
-        // No observed delta from immediate clients (or a host domain we cannot
-        // measure): retry only if the device now reports enough headroom.
+        // Device retries require reported headroom; host availability is not measured.
         if (is_device_heap(failure.domain)) {
             return impl_->query_free(failure.domain) >= target;
         }
@@ -378,12 +361,12 @@ namespace lfs::core {
         };
         {
             std::lock_guard<std::mutex> lock(impl_->registry_mutex);
-            for (const auto& registered : impl_->clients) {
-                if (!Impl::client_reclaims_domain(registered.client.domain, domain)) {
+            for (const auto& client : impl_->clients) {
+                if (!Impl::client_reclaims_domain(client.domain, domain)) {
                     continue;
                 }
-                if (registered.client.estimate) {
-                    reclaimable = saturating_add(reclaimable, registered.client.estimate(request));
+                if (client.estimate) {
+                    reclaimable = saturating_add(reclaimable, client.estimate(request));
                 }
             }
         }
@@ -395,10 +378,6 @@ namespace lfs::core {
 
     bool MemoryPressureCoordinator::pressure_active() const noexcept {
         return impl_->pressure_active.load();
-    }
-
-    uint64_t MemoryPressureCoordinator::pressure_generation() const noexcept {
-        return impl_->generation.load();
     }
 
     void MemoryPressureCoordinator::maybe_recover() {
@@ -418,7 +397,6 @@ namespace lfs::core {
         const size_t hysteresis = saturating_add(target, target / 5); // require 20% headroom to restore
         if (impl_->query_free(MemoryDomain::CudaDevice) >= hysteresis) {
             impl_->pressure_active.store(false);
-            impl_->generation.fetch_add(1);
             LOG_INFO("VRAM pressure lease released; sustained headroom restored");
         }
     }
@@ -459,7 +437,6 @@ namespace lfs::core {
         {
             std::lock_guard<std::mutex> lock(impl_->registry_mutex);
             impl_->clients.clear();
-            impl_->next_id = 1;
         }
         {
             std::lock_guard<std::mutex> lock(impl_->probe_mutex);
@@ -468,7 +445,6 @@ namespace lfs::core {
             impl_->free_probe = nullptr;
         }
         impl_->episode_counter.store(0);
-        impl_->generation.store(0);
         impl_->pressure_active.store(false);
         impl_->last_target_free.store(0);
         {

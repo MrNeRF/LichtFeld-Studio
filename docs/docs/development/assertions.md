@@ -126,12 +126,12 @@ the central debug primitive.
   always-on failures. `LFS_VK_DEBUG_ASSERT(condition, fmt, ...)` is the
   rasterizer spelling of `LFS_DEBUG_ASSERT_MSG`; use it only for redundant hot
   invariants. Its format arguments have zero release cost.
-- Visualizer `LFS_VK_CHECK(expr)` and
-  `LFS_VK_CHECK_MSG(expr, fmt, ...)` evaluate a `VkResult` expression exactly
-  once. On failure they include the expression, `vkResultToString(result)`, the
-  numeric result, caller context, and source location, then follow the call
-  site's existing `false`/`lastError()` path. They are always-on because Vulkan
-  API failures are runtime failures, not debug-only invariants.
+- Visualizer `LFS_VK_CHECK_MSG(expr, fmt, ...)` evaluates a `VkResult`
+  expression exactly once. On failure it includes the expression,
+  `vkResultToString(result)`, the numeric result, caller context, and source
+  location, then follows the call site's existing `false`/`lastError()` path.
+  It is always-on because Vulkan API failures are runtime failures, not
+  debug-only invariants.
 - Handles in messages use hexadecimal form. Include the actual range, sizes,
   counts, enum names, frame/slot/image indices, semaphore values, and expected
   state whenever they determine why the call failed.

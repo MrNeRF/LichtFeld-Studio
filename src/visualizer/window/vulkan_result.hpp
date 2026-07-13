@@ -121,15 +121,6 @@ namespace lfs::vis {
 
 } // namespace lfs::vis
 
-#define LFS_VK_CHECK(expr)                                             \
-    do {                                                               \
-        const VkResult lfs_vk_check_result_ = (expr);                  \
-        if (lfs_vk_check_result_ != VK_SUCCESS) {                      \
-            return vkCheckFailed(::lfs::vis::formatVkCheckFailure(     \
-                #expr, lfs_vk_check_result_, {}, __FILE__, __LINE__)); \
-        }                                                              \
-    } while (false)
-
 #define LFS_VK_CHECK_MSG(expr, ...)                                                          \
     do {                                                                                     \
         const VkResult lfs_vk_check_result_ = (expr);                                        \

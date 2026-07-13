@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <filesystem>
 #include <format>
 #include <mutex>
 #include <string>
@@ -172,10 +173,6 @@ namespace lfs::core {
         }
 
     } // namespace
-
-    const std::filesystem::path& crash_log_path() {
-        return g_crash_log_path;
-    }
 
     void install_crash_handlers() {
         std::call_once(g_install_once, [] {

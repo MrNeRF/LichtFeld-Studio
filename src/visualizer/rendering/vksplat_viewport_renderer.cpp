@@ -4343,12 +4343,9 @@ namespace lfs::vis {
                 std::numeric_limits<std::uint64_t>::max()));
         }
 
-        // This is a candidate, not a reservation. Failed recording is cancelled
-        // without changing render_complete_value_. We deliberately do not host-
-        // signal cancelled values: Vulkan forbids a host signal from overtaking
-        // outstanding queue signal operations on the same timeline. The caller
-        // commits this value only after wasTimelineSignalSubmitted() proves that
-        // vkQueueSubmit accepted the signal operation.
+        // Failed recording leaves render_complete_value_ unchanged. The caller
+        // commits only after vkQueueSubmit accepts the timeline signal; a host
+        // cancellation signal could overtake an outstanding queue signal.
         return render_complete_value_ + 1;
     }
 
@@ -7757,15 +7754,8 @@ namespace lfs::vis {
             uniforms.lod_enabled |= 2u;
         }
 
-        // The HiGS macro-tile chain is the viewer pipeline. 3DGUT falls back
-        // to the legacy per-render-tile chain (its raster loads model tensors
-        // by sorted id, which compact slots would break), as do devices
-        // without 16-bit storage (the macro raster stores half4 partials).
-        //
-        // Third fallback — a live training model: the compact macro chain has
-        // not been validated against in-place model mutation and previously
-        // flickered. Keep the legacy chain; its ordering now comes from the
-        // explicit CUDA/Vulkan timeline handshake, not a host count readback.
+        // HiGS requires compact-slot-safe indexing, 16-bit storage, and immutable
+        // input. 3DGUT and live training use the legacy per-render-tile chain.
         const bool higs_candidate =
             !request.gut && renderer_.supportsFloat16Storage() && !synchronize_input_upload &&
             !depth_capture_mode_;

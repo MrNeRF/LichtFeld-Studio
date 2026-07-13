@@ -833,7 +833,7 @@ Marker: `ASSERT-CHERRYPICK-UNIFY-2026-07-11`.
 
 - `core/assert.hpp` now owns the host failure formatter, source location, and `NDEBUG` compile-out rule. Always-on `LFS_ASSERT[_MSG]` and debug-only `LFS_DEBUG_ASSERT[_MSG]` therefore report through one primitive.
 - CUDA device assertions retain native `assert` because device code cannot format or throw. Host debug checks use the shared self-describing formatter, and release preprocessing evaluates neither their conditions nor messages.
-- Rasterizer and visualizer keep their established call-site idioms. `LFS_VK_DEBUG_ASSERT` is a domain wrapper over the shared debug primitive; `LFS_VK_CHECK[_MSG]` remains an always-on, single-evaluation `VkResult` adapter into each caller's bool/`lastError()` path.
+- Rasterizer and visualizer keep their established call-site idioms. `LFS_VK_DEBUG_ASSERT` is a domain wrapper over the shared debug primitive; `LFS_VK_CHECK_MSG` remains an always-on, single-evaluation `VkResult` adapter into each caller's bool/`lastError()` path.
 - ABI mismatch checking remains the first application boundary. A null loaded stamp is handled safely, and both the expected and observed stamps are present in the fatal startup message.
 - The canonical policy is now `docs/docs/development/assertions.md`; the Vulkan hardening section links to it instead of maintaining a second vocabulary definition.
 

@@ -74,8 +74,6 @@ namespace lfs::core {
         TrainingThread // trainer safe point: immediate + training-safe clients
     };
 
-    using PressureClientId = uint64_t;
-
     struct PressureRequest {
         MemoryDomain domain = MemoryDomain::CudaDevice;
         size_t requested_bytes = 0;
@@ -86,8 +84,6 @@ namespace lfs::core {
 
     struct ReclaimResult {
         size_t logical_bytes_released = 0; // best-effort; 0 means "unknown, observe"
-        bool changed_preview_quality = false;
-        bool changed_training_semantics = false;
     };
 
     // A registered elasticity owner. `estimate` (optional) reports reclaimable
@@ -103,16 +99,13 @@ namespace lfs::core {
         std::function<ReclaimResult(const PressureRequest&)> shrink;
     };
 
-    // Planned cost of a large operation, used by preflight to refuse before
-    // mutation rather than fail mid-operation. Device and host bytes are tracked
-    // separately; device availability is the conservative min of CUDA free and
-    // any renderer heap budget, never their sum.
+    // Planned device cost of a large operation, used by preflight to refuse
+    // before mutation rather than fail mid-operation.
     struct OperationMemoryPlan {
         const char* operation = "";
         size_t persistent_device_bytes = 0;
         size_t temporary_device_bytes = 0;
         size_t old_new_overlap_bytes = 0;
-        size_t host_peak_bytes = 0;
     };
 
     struct PreflightResult {
@@ -130,8 +123,7 @@ namespace lfs::core {
     public:
         static MemoryPressureCoordinator& instance();
 
-        PressureClientId register_client(PressureClient client);
-        void unregister_client(PressureClientId id);
+        void register_client(PressureClient client);
 
         // Runs one coalesced pressure episode for `failure`, dispatching clients
         // permitted by `context` in ascending priority until the observed free
@@ -154,10 +146,8 @@ namespace lfs::core {
         size_t reserve_bytes() const noexcept;
 
         // Pressure lease: true while the last episode has not been observed to
-        // recover. Degradation clients (e.g. preview scale) stay degraded while
-        // active. `pressure_generation` bumps once per episode.
+        // recover. Degradation clients stay degraded while active.
         bool pressure_active() const noexcept;
-        uint64_t pressure_generation() const noexcept;
 
         // Throttled recovery check for the render thread. Cheap no-op unless a
         // lease is active; when active it samples free memory at most a few times
