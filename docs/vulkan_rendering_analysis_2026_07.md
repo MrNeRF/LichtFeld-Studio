@@ -1643,12 +1643,15 @@ now exposes only capabilities current process-lifetime clients use. The process-
 CUDA-unavailable latch also remains in core; moving either into a renderer or training strategy
 would create a layering violation.
 
-Three CUDA scratch-buffer wrappers were not mechanically unified. Training/MRNF owns a
-non-movable profiler-aware buffer, gsplat owns an injection-aware backend-local buffer without a
-training dependency, and FastGS transfers/relinquishes sorted-index ownership across the forward
-call. A future unification should first introduce a policy-based stream-ordered RAII primitive
-in core CUDA, with explicit move, injection, profiler, and release policies; merging the current
-types directly would widen dependencies or change ownership behavior.
+CUDA tensor storage now has one retry boundary in the memory-pressure module. Pool allocation,
+capacity growth, and direct capacity initialization each make one attempt, let the coordinator
+reclaim registered caches, and retry at most once before surfacing `MemoryAllocationError`.
+
+Training and rasterizer scratch allocation remains outside that retry boundary. Those callers
+use direct or stream-ordered allocation with distinct profiler hooks, failure injection, and
+ownership-release behavior. Migrating them safely requires preserving those policies as adapters
+around the coordinator boundary; it is a separate architecture change rather than a mechanical
+substitution in this round.
 
 Two larger findings are deliberately deferred rather than hidden in a behavior-preserving
 cleanup:
