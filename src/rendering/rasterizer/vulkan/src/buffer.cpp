@@ -260,7 +260,7 @@ void VulkanGSPipeline::createBuffer(size_t size, _VulkanBuffer& buffer) {
             static_cast<int>(result)));
     }
 
-    if (buffer.label && vk_set_debug_utils_object_name_ != nullptr) {
+    if (buffer.label && debug_name_writer_.enabled()) {
         setDebugObjectName(VK_OBJECT_TYPE_BUFFER,
                            buffer.buffer,
                            std::format("vksplat.buffer.{}", buffer.label));

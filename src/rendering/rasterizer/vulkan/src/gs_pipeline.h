@@ -20,6 +20,7 @@
 #include <cassert>
 
 #include "buffer.h"
+#include "rendering/vulkan_result.hpp"
 
 class VulkanGSPipeline {
 public:
@@ -174,7 +175,7 @@ protected:
     // VK_NULL_HANDLE simply skips the cache. Shared with the rest of the app's pipelines.
     VkPipelineCache pipeline_cache = VK_NULL_HANDLE;
     PFN_vkCmdPushDescriptorSetKHR vk_cmd_push_descriptor_set_ = nullptr;
-    PFN_vkSetDebugUtilsObjectNameEXT vk_set_debug_utils_object_name_ = nullptr;
+    lfs::rendering::VulkanDebugNameWriter debug_name_writer_;
 
     struct DeviceInfo {
         uint32_t subgroupSize;

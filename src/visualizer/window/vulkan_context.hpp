@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "rendering/vulkan_result.hpp"
 #include "vulkan_image_barrier_tracker.hpp"
 
 #include <array>
@@ -184,7 +185,7 @@ namespace lfs::vis {
         }
         void setDebugObjectName(VkObjectType object_type, std::uint64_t object_handle, std::string_view name) const;
         [[nodiscard]] bool debugObjectNamingEnabled() const noexcept {
-            return debug_utils_enabled_ && vk_set_debug_utils_object_name_ != nullptr;
+            return debug_utils_enabled_ && debug_name_writer_.enabled();
         }
 
         [[nodiscard]] bool beginFrame(const VkClearValue& clear_value, Frame& frame);
@@ -425,7 +426,7 @@ namespace lfs::vis {
         bool has_fill_mode_non_solid_ = false;
         bool has_wide_lines_ = false;
         std::array<float, 2> line_width_range_{1.0f, 1.0f};
-        PFN_vkSetDebugUtilsObjectNameEXT vk_set_debug_utils_object_name_ = nullptr;
+        lfs::rendering::VulkanDebugNameWriter debug_name_writer_;
         PFN_vkCmdPushDescriptorSetKHR vk_cmd_push_descriptor_set_ = nullptr;
         uint32_t active_image_index_ = 0;
         std::size_t frame_index_ = 0;

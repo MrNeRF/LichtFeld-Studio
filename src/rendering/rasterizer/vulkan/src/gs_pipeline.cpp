@@ -177,8 +177,7 @@ void VulkanGSPipeline::initializeExternal(VkInstance external_instance,
             lfs::rendering::vkHandleValue(device),
             queue_family_index));
     }
-    vk_set_debug_utils_object_name_ = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(
-        vkGetDeviceProcAddr(device, "vkSetDebugUtilsObjectNameEXT"));
+    debug_name_writer_.initialize(device);
 
     populateDeviceInfo(physical_device);
     createCommandPool();
@@ -423,7 +422,7 @@ void VulkanGSPipeline::cleanup() {
     timerCallbacks.clear();
     cpuTimerCallback_ = {};
     vk_cmd_push_descriptor_set_ = nullptr;
-    vk_set_debug_utils_object_name_ = nullptr;
+    debug_name_writer_.reset();
 }
 
 void VulkanGSPipeline::populateDeviceInfo(VkPhysicalDevice selected_physical_device) {
@@ -450,17 +449,7 @@ void VulkanGSPipeline::populateDeviceInfo(VkPhysicalDevice selected_physical_dev
 void VulkanGSPipeline::setDebugObjectName(const VkObjectType type,
                                           const std::uint64_t handle,
                                           const std::string_view name) const {
-    if (vk_set_debug_utils_object_name_ == nullptr || device == VK_NULL_HANDLE ||
-        handle == 0 || name.empty()) {
-        return;
-    }
-
-    VkDebugUtilsObjectNameInfoEXT info{};
-    info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
-    info.objectType = type;
-    info.objectHandle = handle;
-    info.pObjectName = name.data();
-    const VkResult result = vk_set_debug_utils_object_name_(device, &info);
+    const VkResult result = debug_name_writer_.set(type, handle, name);
     if (result != VK_SUCCESS) {
         fprintf(stderr,
                 "vkSetDebugUtilsObjectNameEXT failed for '%.*s' (type=%d, handle=0x%llx, result=%s(%d)) at %s:%d\n",
@@ -551,7 +540,7 @@ void VulkanGSPipeline::createCommandPool() {
     }
     for (std::uint32_t i = 0; i < kCommandBatchSlotCount; ++i) {
         command_batch_slots_[i].command_buffer = command_buffers[i];
-        if (vk_set_debug_utils_object_name_ != nullptr) {
+        if (debug_name_writer_.enabled()) {
             setDebugObjectName(VK_OBJECT_TYPE_COMMAND_BUFFER,
                                command_buffers[i],
                                std::format("vksplat.command[{}]", i));
@@ -595,7 +584,7 @@ void VulkanGSPipeline::createQueryPools() {
                 lfs::rendering::vkResultToString(result),
                 static_cast<int>(result)));
         }
-        if (vk_set_debug_utils_object_name_ != nullptr) {
+        if (debug_name_writer_.enabled()) {
             setDebugObjectName(VK_OBJECT_TYPE_QUERY_POOL,
                                slot.timestamp_query_pool,
                                std::format("vksplat.timestamp_queries[{}]", i));
@@ -1357,7 +1346,7 @@ void VulkanGSPipeline::createComputeDescriptorSetLayout(_ComputePipeline& pipeli
             lfs::rendering::vkResultToString(result),
             static_cast<int>(result)));
     }
-    if (vk_set_debug_utils_object_name_ != nullptr) {
+    if (debug_name_writer_.enabled()) {
         setDebugObjectName(VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT,
                            pipeline.descriptor_set_layout,
                            std::format("vksplat.{}.descriptor_layout", pipeline.diagnostic_name));
@@ -1375,7 +1364,7 @@ void VulkanGSPipeline::createComputePipeline(_ComputePipeline& pipeline, const s
     const auto spirv_code = loadSpirv(spirv_path);
     recordSlangShaderBytecode(spirv_path, spirv_code.size() * sizeof(uint32_t));
     createShaderModule(spirv_code, &pipeline.shader);
-    if (vk_set_debug_utils_object_name_ != nullptr) {
+    if (debug_name_writer_.enabled()) {
         setDebugObjectName(VK_OBJECT_TYPE_SHADER_MODULE,
                            pipeline.shader,
                            std::format("vksplat.{}.shader", pipeline.diagnostic_name));
@@ -1405,7 +1394,7 @@ void VulkanGSPipeline::createComputePipeline(_ComputePipeline& pipeline, const s
             lfs::rendering::vkResultToString(layout_result),
             static_cast<int>(layout_result)));
     }
-    if (vk_set_debug_utils_object_name_ != nullptr) {
+    if (debug_name_writer_.enabled()) {
         setDebugObjectName(VK_OBJECT_TYPE_PIPELINE_LAYOUT,
                            pipeline.pipeline_layout,
                            std::format("vksplat.{}.pipeline_layout", pipeline.diagnostic_name));
@@ -1443,7 +1432,7 @@ void VulkanGSPipeline::createComputePipeline(_ComputePipeline& pipeline, const s
             lfs::rendering::vkResultToString(pipeline_result),
             static_cast<int>(pipeline_result)));
     }
-    if (vk_set_debug_utils_object_name_ != nullptr) {
+    if (debug_name_writer_.enabled()) {
         setDebugObjectName(VK_OBJECT_TYPE_PIPELINE,
                            pipeline.pipeline,
                            std::format("vksplat.{}.pipeline", pipeline.diagnostic_name));

@@ -520,9 +520,9 @@ namespace lfs::vis {
         saveAndDestroyPipelineCache();
         destroyAllocator();
         if (device_ != VK_NULL_HANDLE) {
+            debug_name_writer_.reset();
             vkDestroyDevice(device_, nullptr);
             device_ = VK_NULL_HANDLE;
-            vk_set_debug_utils_object_name_ = nullptr;
         }
         if (surface_ != VK_NULL_HANDLE && instance_ != VK_NULL_HANDLE) {
             SDL_Vulkan_DestroySurface(instance_, surface_, nullptr);
@@ -2306,9 +2306,8 @@ namespace lfs::vis {
         }
 
         if (debug_utils_enabled_) {
-            vk_set_debug_utils_object_name_ = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(
-                vkGetDeviceProcAddr(device_, "vkSetDebugUtilsObjectNameEXT"));
-            if (vk_set_debug_utils_object_name_ == nullptr) {
+            debug_name_writer_.initialize(device_);
+            if (!debug_name_writer_.enabled()) {
                 LOG_WARN("VK_EXT_debug_utils is enabled, but vkSetDebugUtilsObjectNameEXT could not be loaded");
             }
         }
@@ -4072,21 +4071,8 @@ namespace lfs::vis {
     void VulkanContext::setDebugObjectName(const VkObjectType object_type,
                                            const std::uint64_t object_handle,
                                            const std::string_view name) const {
-        if (device_ == VK_NULL_HANDLE ||
-            vk_set_debug_utils_object_name_ == nullptr ||
-            object_handle == 0 ||
-            name.empty()) {
-            return;
-        }
-
         const std::string owned_name{name};
-        VkDebugUtilsObjectNameInfoEXT name_info{};
-        name_info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
-        name_info.objectType = object_type;
-        name_info.objectHandle = object_handle;
-        name_info.pObjectName = owned_name.c_str();
-
-        const VkResult result = vk_set_debug_utils_object_name_(device_, &name_info);
+        const VkResult result = debug_name_writer_.set(object_type, object_handle, owned_name);
         if (result != VK_SUCCESS) {
             LOG_WARN("vkSetDebugUtilsObjectNameEXT failed for '{}': {}", owned_name, vkResultToString(result));
         }

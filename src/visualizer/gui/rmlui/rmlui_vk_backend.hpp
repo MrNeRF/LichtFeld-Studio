@@ -6,6 +6,7 @@
 
 #include <RmlUi/Core/RenderInterface.h>
 
+#include "rendering/vulkan_result.hpp"
 #include "window/vulkan_image_barrier_tracker.hpp"
 
 #ifdef _WIN32
@@ -711,6 +712,7 @@ private:
 
     VkInstance m_p_instance;
     VkDevice m_p_device;
+    lfs::rendering::VulkanDebugNameWriter m_debug_name_writer;
     VkPhysicalDevice m_p_physical_device;
     VkSurfaceKHR m_p_surface;
     VkSwapchainKHR m_p_swapchain;

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string_view>
 #include <type_traits>
 #include <vulkan/vulkan.h>
 
@@ -62,5 +63,38 @@ namespace lfs::rendering {
             return static_cast<std::uint64_t>(handle);
         }
     }
+
+    class VulkanDebugNameWriter {
+    public:
+        void initialize(const VkDevice device) noexcept {
+            device_ = device;
+            set_debug_name_ = device == VK_NULL_HANDLE
+                                  ? nullptr
+                                  : reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(
+                                        vkGetDeviceProcAddr(device, "vkSetDebugUtilsObjectNameEXT"));
+        }
+
+        void reset() noexcept { initialize(VK_NULL_HANDLE); }
+
+        [[nodiscard]] bool enabled() const noexcept { return set_debug_name_ != nullptr; }
+
+        VkResult set(const VkObjectType object_type,
+                     const std::uint64_t object_handle,
+                     const std::string_view object_name) const noexcept {
+            if (!enabled() || object_handle == 0 || object_name.empty()) {
+                return VK_SUCCESS;
+            }
+            VkDebugUtilsObjectNameInfoEXT name_info{};
+            name_info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+            name_info.objectType = object_type;
+            name_info.objectHandle = object_handle;
+            name_info.pObjectName = object_name.data();
+            return set_debug_name_(device_, &name_info);
+        }
+
+    private:
+        VkDevice device_ = VK_NULL_HANDLE;
+        PFN_vkSetDebugUtilsObjectNameEXT set_debug_name_ = nullptr;
+    };
 
 } // namespace lfs::rendering
