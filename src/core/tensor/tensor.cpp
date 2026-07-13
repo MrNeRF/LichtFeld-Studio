@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/checked_arithmetic.hpp"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -96,15 +97,6 @@ namespace lfs::core {
             return dtype_size(dtype) != 0;
         }
 
-        [[nodiscard]] size_t checked_size_product(const size_t lhs,
-                                                  const size_t rhs,
-                                                  const std::string_view context) {
-            LFS_ASSERT_MSG(lhs == 0 || rhs <= std::numeric_limits<size_t>::max() / lhs,
-                           std::format("{} size product must not overflow size_t "
-                                       "(left={}, right={}, size_t_max={})",
-                                       context, lhs, rhs, std::numeric_limits<size_t>::max()));
-            return lhs * rhs;
-        }
     } // namespace
 
     size_t Tensor::storage_allocation_bytes(const TensorShape& shape,
@@ -121,14 +113,13 @@ namespace lfs::core {
                                        "(capacity={}, shape={}, elements={}, dtype={}({}))",
                                        capacity, shape.str(), shape.elements(),
                                        dtype_name(dtype), static_cast<int>(dtype)));
-            return checked_size_product(shape.elements(), dtype_size(dtype),
-                                        "scalar tensor storage");
+            return checked_product(shape.elements(), dtype_size(dtype),
+                                   "scalar tensor storage");
         }
 
         size_t row_elements = 1;
         for (size_t i = 1; i < shape.rank(); ++i) {
-            row_elements = checked_size_product(row_elements, shape[i],
-                                                "tensor row");
+            row_elements = checked_product(row_elements, shape[i], "tensor row");
         }
 
         const size_t rows = capacity == 0 ? shape[0] : capacity;
@@ -136,10 +127,10 @@ namespace lfs::core {
                        std::format("tensor capacity must cover its logical row count "
                                    "(rows={}, capacity={}, logical_rows={}, shape={})",
                                    rows, capacity, shape[0], shape.str()));
-        const size_t elements = checked_size_product(rows, row_elements,
-                                                     "tensor storage element count");
-        return checked_size_product(elements, dtype_size(dtype),
-                                    "tensor storage byte count");
+        const size_t elements = checked_product(rows, row_elements,
+                                                "tensor storage element count");
+        return checked_product(elements, dtype_size(dtype),
+                               "tensor storage byte count");
     }
 
     void Tensor::record_storage_allocation(const StorageAccountingKind kind,
@@ -2916,7 +2907,7 @@ namespace lfs::core {
         // Calculate sizes
         size_t row_size = 1;
         for (size_t i = 1; i < shape_.rank(); ++i) {
-            row_size = checked_size_product(row_size, shape_[i], "reserve row");
+            row_size = checked_product(row_size, shape_[i], "reserve row");
         }
         if (row_size == 0) {
             state_->capacity = new_capacity;
@@ -2924,10 +2915,10 @@ namespace lfs::core {
             return;
         }
         const size_t new_total_elements =
-            checked_size_product(new_capacity, row_size, "reserve element count");
+            checked_product(new_capacity, row_size, "reserve element count");
         const size_t element_size = dtype_size(dtype_);
         const size_t new_bytes =
-            checked_size_product(new_total_elements, element_size, "reserve byte count");
+            checked_product(new_total_elements, element_size, "reserve byte count");
 
         LOG_DEBUG("  Allocating: {} rows × {} elements/row × {} bytes/elem = {} MB",
                   new_capacity, row_size, element_size, new_bytes / (1024.0 * 1024.0));
@@ -2997,7 +2988,7 @@ namespace lfs::core {
         // Copy existing data
         if (old_data && numel() > 0) {
             const size_t copy_bytes =
-                checked_size_product(numel(), element_size, "reserve copy byte count");
+                checked_product(numel(), element_size, "reserve copy byte count");
             if (device_ == Device::CUDA) {
                 const cudaError_t status =
                     cudaMemcpy(new_data, old_data, copy_bytes, cudaMemcpyDeviceToDevice);
@@ -3060,15 +3051,14 @@ namespace lfs::core {
                                    capacity, current_size));
         size_t row_size = 1;
         for (size_t i = 1; i < shape.rank(); i++) {
-            row_size = checked_size_product(row_size, shape[i],
-                                            "zeros_direct row");
+            row_size = checked_product(row_size, shape[i], "zeros_direct row");
         }
 
         const size_t total_elements =
-            checked_size_product(capacity, row_size, "zeros_direct element count");
+            checked_product(capacity, row_size, "zeros_direct element count");
         const size_t total_bytes =
-            checked_size_product(total_elements, dtype_size(dtype),
-                                 "zeros_direct byte count");
+            checked_product(total_elements, dtype_size(dtype),
+                            "zeros_direct byte count");
 
         if (total_bytes == 0) {
             Tensor t;

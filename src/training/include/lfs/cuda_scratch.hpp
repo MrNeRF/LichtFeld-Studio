@@ -4,6 +4,7 @@
 #pragma once
 
 #include "core/assert.hpp"
+#include "core/checked_arithmetic.hpp"
 #include "core/cuda_error.hpp"
 #include "diagnostics/vram_profiler.hpp"
 
@@ -18,10 +19,7 @@ namespace lfs::training::cuda_scratch {
     inline size_t checked_bytes(const size_t count,
                                 const size_t element_size,
                                 const std::string_view allocation) {
-        LFS_ASSERT_MSG(
-            count == 0 || element_size <= std::numeric_limits<size_t>::max() / count,
-            std::format("{} size overflow: {} elements of {} bytes", allocation, count, element_size));
-        return count * element_size;
+        return lfs::core::checked_product(count, element_size, allocation);
     }
 
     class DeviceBuffer {

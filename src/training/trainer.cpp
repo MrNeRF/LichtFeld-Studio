@@ -11,6 +11,7 @@
 #include "control/command_api.hpp"
 #include "control/control_boundary.hpp"
 #include "core/assert.hpp"
+#include "core/checked_arithmetic.hpp"
 #include "core/checkpoint_format.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/cuda/memory_arena.hpp"
@@ -1108,22 +1109,6 @@ namespace lfs::training {
             size_t max_slot_bytes = 0;
         };
 
-        [[nodiscard]] constexpr size_t saturatingSizeMultiply(
-            const size_t left,
-            const size_t right) noexcept {
-            return left != 0 && right > std::numeric_limits<size_t>::max() / left
-                       ? std::numeric_limits<size_t>::max()
-                       : left * right;
-        }
-
-        [[nodiscard]] constexpr size_t saturatingSizeAdd(
-            const size_t left,
-            const size_t right) noexcept {
-            return right > std::numeric_limits<size_t>::max() - left
-                       ? std::numeric_limits<size_t>::max()
-                       : left + right;
-        }
-
         [[nodiscard]] PipelineMemoryEstimate estimatePipelineMemory(
             const std::shared_ptr<CameraDataset>& dataset,
             const lfs::io::PipelinedLoaderConfig& config,
@@ -1153,20 +1138,21 @@ namespace lfs::training {
                     (aux_config.load_masks && cam->has_mask()) ||
                     (aux_config.use_alpha_as_mask && cam->has_alpha());
                 if (loads_mask) {
-                    bytes_per_pixel = saturatingSizeAdd(bytes_per_pixel, sizeof(float));
+                    bytes_per_pixel = lfs::core::saturating_add(bytes_per_pixel, sizeof(float));
                 }
                 if (aux_config.load_depths && cam->has_depth()) {
-                    bytes_per_pixel = saturatingSizeAdd(bytes_per_pixel, sizeof(float));
+                    bytes_per_pixel = lfs::core::saturating_add(bytes_per_pixel, sizeof(float));
                 }
                 if (aux_config.load_normals && cam->has_normal()) {
                     // Cached normal decode retains float HWC input beside float CHW output.
-                    bytes_per_pixel = saturatingSizeAdd(bytes_per_pixel, size_t{6} * sizeof(float));
+                    bytes_per_pixel = lfs::core::saturating_add(
+                        bytes_per_pixel, size_t{6} * sizeof(float));
                 }
 
-                const size_t pixels = saturatingSizeMultiply(width, height);
+                const size_t pixels = lfs::core::saturating_multiply(width, height);
                 estimate.max_slot_bytes = std::max(
                     estimate.max_slot_bytes,
-                    saturatingSizeMultiply(pixels, bytes_per_pixel));
+                    lfs::core::saturating_multiply(pixels, bytes_per_pixel));
             }
 
             return estimate;

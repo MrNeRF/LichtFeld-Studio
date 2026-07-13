@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/assert.hpp"
+#include "core/checked_arithmetic.hpp"
 #include "core/cuda_error.hpp"
 
 #include <algorithm>
@@ -77,16 +78,13 @@ namespace gsplat_lfs {
     inline size_t checked_multiply(const size_t lhs,
                                    const size_t rhs,
                                    const std::string_view quantity) {
-        LFS_ASSERT_MSG(
-            lhs == 0 || rhs <= std::numeric_limits<size_t>::max() / lhs,
-            std::format("{} size overflow: {} * {}", quantity, lhs, rhs));
-        return lhs * rhs;
+        return lfs::core::checked_product(lhs, rhs, quantity);
     }
 
     inline size_t checked_bytes(const size_t count,
                                 const size_t element_size,
                                 const std::string_view allocation) {
-        return checked_multiply(count, element_size, allocation);
+        return lfs::core::checked_product(count, element_size, allocation);
     }
 
 #if LFS_CUDA_FAILURE_INJECTION_ENABLED
