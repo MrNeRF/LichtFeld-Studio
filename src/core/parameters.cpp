@@ -698,6 +698,14 @@ namespace lfs::core {
             }
             if (json.contains("depth_loss_mode")) {
                 params.depth_loss_mode = json["depth_loss_mode"];
+                if (params.depth_loss_mode == "pearson" ||
+                    params.depth_loss_mode == "adaptive-warped-l1") {
+                    LOG_WARN(
+                        "Migrating legacy depth loss mode '{}' to 'ssi'; the current depth "
+                        "pipeline auto-detects whether the prior stores depth or disparity",
+                        params.depth_loss_mode);
+                    params.depth_loss_mode = "ssi";
+                }
             }
             if (json.contains("use_normal_loss")) {
                 params.use_normal_loss = json["use_normal_loss"];
