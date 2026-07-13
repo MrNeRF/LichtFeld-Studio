@@ -3,6 +3,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "core/failure_report.hpp"
 
 #include <cuda_runtime_api.h>
 
@@ -64,12 +65,6 @@ namespace lfs::core {
 
     // Resets only the unavailable latch and failure-report deduplication state.
     LFS_CORE_API void reset_cuda_diagnostics_for_testing() noexcept;
-    LFS_CORE_API void reset_failure_report_dedup_for_testing() noexcept;
-    LFS_CORE_API bool decide_failure_report_for_testing(
-        std::string_view family,
-        long long code,
-        std::string_view site,
-        uint64_t& out_count);
     LFS_CORE_API CudaCheckState prepare_cuda_check(
         const char* expression,
         const std::source_location& location,
@@ -114,31 +109,7 @@ namespace lfs::core {
         std::string_view name,
         const std::source_location& location = std::source_location::current());
 
-    LFS_CORE_API std::string capture_host_stacktrace(size_t skip_frames = 0);
-    LFS_CORE_API std::string format_failure_report(
-        std::string_view family,
-        std::string_view contract,
-        std::string_view expression,
-        std::string_view message,
-        const std::source_location& location,
-        std::string_view stacktrace);
-    LFS_CORE_API std::string format_contract_failure_report(
-        std::string_view contract,
-        std::string_view expression,
-        std::string_view message,
-        const std::source_location& location,
-        std::string_view stacktrace);
-    LFS_CORE_API void report_tensor_exception(
-        std::string_view message,
-        const std::source_location& location = std::source_location::current());
-
     namespace detail {
-
-        [[noreturn]] LFS_CORE_API void assertion_failed(
-            std::string_view contract,
-            std::string_view expression,
-            std::string_view message,
-            std::source_location location);
 
         template <typename... Args>
         [[nodiscard]] std::string format_cuda_check_message(

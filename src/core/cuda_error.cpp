@@ -4,32 +4,18 @@
 #include "core/cuda_error.hpp"
 
 #include "core/environment.hpp"
+#include "core/failure_report.hpp"
 #include "core/logger.hpp"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <chrono>
 #include <cstdio>
-#include <cstdlib>
-#include <exception>
 #include <format>
-#include <list>
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
-
-#if __has_include(<stacktrace>)
-#include <stacktrace>
-#endif
-
-#if defined(__cpp_lib_stacktrace) && __cpp_lib_stacktrace >= 202011L
-#define LFS_HAS_STD_STACKTRACE 1
-#elif defined(__unix__) || defined(__APPLE__)
-#include <execinfo.h>
-#define LFS_HAS_POSIX_BACKTRACE 1
-#endif
 
 namespace lfs::core {
     namespace {
@@ -46,75 +32,8 @@ namespace lfs::core {
         std::array<BreadcrumbSlot, CUDA_BREADCRUMB_CAPACITY> g_breadcrumbs;
         std::atomic<uint64_t> g_breadcrumb_sequence{0};
         std::once_flag g_sync_debug_log_once;
+        std::once_flag g_failure_report_provider_once;
         std::atomic<bool> g_cuda_unavailable{false};
-
-        struct DedupDecision {
-            bool emit_full;
-            uint64_t count;
-        };
-
-        struct FailureReportEntry {
-            std::string family;
-            long long code;
-            std::string site;
-            uint64_t count;
-            std::chrono::steady_clock::time_point last_full_time;
-            uint64_t count_at_last_full;
-        };
-
-        constexpr size_t FAILURE_REPORT_DEDUP_CAPACITY = 64;
-        std::mutex g_dedup_mutex;
-        std::list<FailureReportEntry> g_dedup_entries;
-
-        [[nodiscard]] DedupDecision decide_failure_report(
-            const std::string_view family,
-            const long long code,
-            const std::string_view site) {
-            const auto now = std::chrono::steady_clock::now();
-            std::lock_guard lock(g_dedup_mutex);
-            const auto entry = std::find_if(
-                g_dedup_entries.begin(), g_dedup_entries.end(),
-                [family, code, site](const FailureReportEntry& candidate) {
-                    return candidate.code == code && candidate.family == family && candidate.site == site;
-                });
-            if (entry == g_dedup_entries.end()) {
-                if (g_dedup_entries.size() == FAILURE_REPORT_DEDUP_CAPACITY) {
-                    g_dedup_entries.pop_back();
-                }
-                g_dedup_entries.push_front(FailureReportEntry{
-                    .family = std::string(family),
-                    .code = code,
-                    .site = std::string(site),
-                    .count = 1,
-                    .last_full_time = now,
-                    .count_at_last_full = 1,
-                });
-                return {.emit_full = true, .count = 1};
-            }
-
-            ++entry->count;
-            const bool emit_full =
-                now - entry->last_full_time >= std::chrono::seconds(30) ||
-                entry->count - entry->count_at_last_full + 1 >= 100;
-            if (emit_full) {
-                entry->last_full_time = now;
-                entry->count_at_last_full = entry->count;
-            }
-            const uint64_t count = entry->count;
-            g_dedup_entries.splice(g_dedup_entries.begin(), g_dedup_entries, entry);
-            return {.emit_full = emit_full, .count = count};
-        }
-
-        [[nodiscard]] std::string detection_site(const std::source_location& location) {
-            return std::format("{}:{}", location.file_name(), location.line());
-        }
-
-        void emit_failure_repeat_notice(const DedupDecision& decision,
-                                        const std::source_location& location) {
-            Logger::get().log_internal(
-                LogLevel::Error, location,
-                std::format("LFS failure repeated x{} (same as above)", decision.count));
-        }
 
         [[nodiscard]] uint64_t current_thread_id() noexcept {
             static thread_local const uint64_t id =
@@ -131,7 +50,7 @@ namespace lfs::core {
                                description ? description : "description unavailable");
         }
 
-        void append_runtime_context(std::ostringstream& out) {
+        void append_runtime_context(std::ostream& out) {
             int device = -1;
             int device_count = -1;
             const cudaError_t device_status = cudaGetDevice(&device);
@@ -166,7 +85,7 @@ namespace lfs::core {
             }
         }
 
-        void append_breadcrumbs(std::ostringstream& out) {
+        void append_breadcrumbs(std::ostream& out) {
             out << "CUDA breadcrumbs (most recent first):\n";
             const auto breadcrumbs = cuda_breadcrumbs_most_recent_first();
             if (breadcrumbs.empty()) {
@@ -184,24 +103,31 @@ namespace lfs::core {
             }
         }
 
-        [[nodiscard]] std::string format_cuda_failure_report(
-            const cudaError_t result,
+        void append_cuda_failure_report_sections(
+            std::ostream& out,
+            const FailureReportSectionPosition position,
+            const FailureReport&) {
+            if (position == FailureReportSectionPosition::BeforeStackTrace) {
+                append_runtime_context(out);
+                return;
+            }
+            append_breadcrumbs(out);
+            out << "Hint: CUDA reports async errors at the next sync point. Set "
+                   "LFS_CUDA_SYNC_DEBUG=1 to synchronize after every op and pinpoint the true origin.\n";
+        }
+
+        void ensure_cuda_failure_report_provider_registered() {
+            std::call_once(g_failure_report_provider_once, [] {
+                register_failure_report_section_provider(
+                    "CUDA runtime error", append_cuda_failure_report_sections);
+            });
+        }
+
+        [[nodiscard]] std::string format_cuda_detail_sections(
             const CudaCheckState& state,
-            const char* expression,
-            const std::string_view message,
-            const std::source_location& location,
             const cudaError_t post_sync_error,
             const cudaError_t post_peek_error) {
             std::ostringstream out;
-            out << "========== LFS FAILURE REPORT ==========\n";
-            out << "Family: CUDA runtime error\n";
-            out << "Error: " << cuda_error_text(result) << '\n';
-            out << "Failed expression: " << expression << '\n';
-            out << std::format("Detection site: {}:{} ({})\n",
-                               location.file_name(), location.line(), location.function_name());
-            if (!message.empty()) {
-                out << "Context: " << message << '\n';
-            }
             if (state.stream != 0) {
                 out << std::format("Stream: {:#x}\n", state.stream);
             }
@@ -225,13 +151,6 @@ namespace lfs::core {
             if (post_peek_error != cudaSuccess) {
                 out << "Post-call cudaPeekAtLastError: " << cuda_error_text(post_peek_error) << '\n';
             }
-            append_runtime_context(out);
-            out << "Host stack trace:\n"
-                << capture_host_stacktrace(2);
-            append_breadcrumbs(out);
-            out << "Hint: CUDA reports async errors at the next sync point. Set "
-                   "LFS_CUDA_SYNC_DEBUG=1 to synchronize after every op and pinpoint the true origin.\n";
-            out << "========================================";
             return out.str();
         }
 
@@ -244,28 +163,25 @@ namespace lfs::core {
                                       const cudaError_t post_peek_error) noexcept {
             try {
                 if (is_cuda_unavailable_error(effective_error)) {
-                    if (latch_cuda_unavailable(effective_error)) {
-                        Logger::get().log_internal(
-                            LogLevel::Error, location,
-                            format_cuda_failure_report(
-                                effective_error, state, expression, message, location,
-                                post_sync_error, post_peek_error));
+                    if (!latch_cuda_unavailable(effective_error)) {
+                        return;
                     }
-                    return;
                 }
 
-                const DedupDecision decision = decide_failure_report(
-                    "CUDA runtime error", static_cast<long long>(effective_error),
-                    detection_site(location));
-                if (decision.emit_full) {
-                    Logger::get().log_internal(
-                        LogLevel::Error, location,
-                        format_cuda_failure_report(
-                            effective_error, state, expression, message, location,
-                            post_sync_error, post_peek_error));
-                } else {
-                    emit_failure_repeat_notice(decision, location);
-                }
+                ensure_cuda_failure_report_provider_registered();
+                const std::string error = cuda_error_text(effective_error);
+                const std::string detail_sections = format_cuda_detail_sections(
+                    state, post_sync_error, post_peek_error);
+                emit_failure_report(FailureReport{
+                    .family = "CUDA runtime error",
+                    .error = error,
+                    .expression = expression,
+                    .message = message,
+                    .detail_sections = detail_sections,
+                    .location = location,
+                    .deduplication_code = static_cast<long long>(effective_error),
+                    .stacktrace_skip_frames = 2,
+                });
             } catch (...) {
             }
         }
@@ -328,6 +244,7 @@ namespace lfs::core {
 
     void initialize_cuda_diagnostics() noexcept {
         try {
+            ensure_cuda_failure_report_provider_registered();
             if (cuda_sync_debug_enabled()) {
                 std::call_once(g_sync_debug_log_once, [] {
                     std::fprintf(
@@ -337,7 +254,7 @@ namespace lfs::core {
             }
         } catch (...) {
             // Diagnostic initialization must not turn a checked CUDA call into
-            // a process termination when the logger itself is unavailable.
+            // a process termination.
         }
     }
 
@@ -380,20 +297,6 @@ namespace lfs::core {
     void reset_cuda_diagnostics_for_testing() noexcept {
         g_cuda_unavailable.store(false, std::memory_order_relaxed);
         reset_failure_report_dedup_for_testing();
-    }
-
-    void reset_failure_report_dedup_for_testing() noexcept {
-        std::lock_guard lock(g_dedup_mutex);
-        g_dedup_entries.clear();
-    }
-
-    bool decide_failure_report_for_testing(const std::string_view family,
-                                           const long long code,
-                                           const std::string_view site,
-                                           uint64_t& out_count) {
-        const DedupDecision decision = decide_failure_report(family, code, site);
-        out_count = decision.count;
-        return decision.emit_full;
     }
 
     CudaCheckState prepare_cuda_check(const char*,
@@ -527,117 +430,5 @@ namespace lfs::core {
             validate_cuda_device_pointer(pointer, name, location);
         }
     }
-
-    std::string capture_host_stacktrace(const size_t skip_frames) {
-#if defined(LFS_HAS_STD_STACKTRACE)
-        std::ostringstream out;
-        const auto trace = std::stacktrace::current(skip_frames + 1);
-        if (trace.empty()) {
-            return "  <unavailable>\n";
-        }
-        size_t index = 0;
-        for (const auto& entry : trace) {
-            out << "  #" << index++ << ' ' << entry << '\n';
-        }
-        return out.str();
-#elif defined(LFS_HAS_POSIX_BACKTRACE)
-        std::array<void*, 128> frames{};
-        const int count = ::backtrace(frames.data(), static_cast<int>(frames.size()));
-        if (count <= 0) {
-            return "  <unavailable>\n";
-        }
-        char** symbols = ::backtrace_symbols(frames.data(), count);
-        if (!symbols) {
-            return "  <unavailable>\n";
-        }
-        std::ostringstream out;
-        for (int i = static_cast<int>(skip_frames + 1); i < count; ++i) {
-            out << "  #" << (i - static_cast<int>(skip_frames + 1)) << ' ' << symbols[i] << '\n';
-        }
-        std::free(symbols);
-        return out.str();
-#else
-        (void)skip_frames;
-        return "  <unavailable on this platform>\n";
-#endif
-    }
-
-    std::string format_failure_report(
-        const std::string_view family,
-        const std::string_view contract,
-        const std::string_view expression,
-        const std::string_view message,
-        const std::source_location& location,
-        const std::string_view stacktrace) {
-        std::ostringstream out;
-        out << "========== LFS FAILURE REPORT ==========\n";
-        out << "Family: " << family << '\n';
-        out << "Contract: " << contract << '\n';
-        out << "Failed expression: " << expression << '\n';
-        out << std::format("Detection site: {}:{} ({})\n",
-                           location.file_name(), location.line(), location.function_name());
-        if (!message.empty()) {
-            out << "Context: " << message << '\n';
-        }
-        append_runtime_context(out);
-        out << "Host stack trace:\n"
-            << stacktrace;
-        append_breadcrumbs(out);
-        out << "Hint: CUDA reports async errors at the next sync point. Set "
-               "LFS_CUDA_SYNC_DEBUG=1 to synchronize after every op and pinpoint the true origin.\n";
-        out << "========================================";
-        return out.str();
-    }
-
-    std::string format_contract_failure_report(
-        const std::string_view contract,
-        const std::string_view expression,
-        const std::string_view message,
-        const std::source_location& location,
-        const std::string_view stacktrace) {
-        return format_failure_report(
-            "tensor contract violation", contract, expression, message, location, stacktrace);
-    }
-
-    void report_tensor_exception(const std::string_view message,
-                                 const std::source_location& location) {
-        const DedupDecision decision = decide_failure_report(
-            "Tensor exception", 0, detection_site(location));
-        if (decision.emit_full) {
-            const std::string report = format_contract_failure_report(
-                "Tensor exception", "throw TensorError", message, location, capture_host_stacktrace(1));
-            Logger::get().log_internal(LogLevel::Error, location, report);
-        } else {
-            emit_failure_repeat_notice(decision, location);
-        }
-    }
-
-    namespace detail {
-
-        [[noreturn]] void assertion_failed(
-            const std::string_view contract,
-            const std::string_view expression,
-            const std::string_view message,
-            const std::source_location location) {
-            const DedupDecision decision = decide_failure_report(
-                contract, 0, detection_site(location));
-            if (decision.emit_full) {
-                const std::string report = format_contract_failure_report(
-                    contract, expression, message, location, capture_host_stacktrace(1));
-                Logger::get().log_internal(LogLevel::Error, location, report);
-            } else {
-                emit_failure_repeat_notice(decision, location);
-            }
-
-            std::string error = std::format("{} failed: {}", contract, expression);
-            if (!message.empty()) {
-                error += " — ";
-                error += message;
-            }
-            error += std::format(" ({}:{})", location.file_name(), location.line());
-            throw std::runtime_error(error);
-        }
-
-    } // namespace detail
 
 } // namespace lfs::core

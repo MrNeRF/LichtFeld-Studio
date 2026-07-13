@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/cuda_error.hpp"
+#include "core/failure_report.hpp"
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
 
@@ -129,7 +130,7 @@ namespace {
         }
     }
 
-    TEST_F(CudaErrorDiagnostics, ContractReportFormattingHasSharedSections) {
+    TEST_F(CudaErrorDiagnostics, ContractReportFormattingExcludesCudaSections) {
         const std::string report = lfs::core::format_contract_failure_report(
             "test contract", "lhs.dtype() == rhs.dtype()", "dtype mismatch",
             std::source_location::current(), "  #0 formatting_test\n");
@@ -137,12 +138,12 @@ namespace {
         EXPECT_NE(report.find("========== LFS FAILURE REPORT =========="), std::string::npos);
         EXPECT_NE(report.find("Family: tensor contract violation"), std::string::npos);
         EXPECT_NE(report.find("Failed expression: lhs.dtype() == rhs.dtype()"), std::string::npos);
-        EXPECT_NE(report.find("Thread:"), std::string::npos);
-        EXPECT_NE(report.find("CUDA device:"), std::string::npos);
-        EXPECT_NE(report.find("VRAM:"), std::string::npos);
         EXPECT_NE(report.find("Host stack trace:"), std::string::npos);
-        EXPECT_NE(report.find("CUDA breadcrumbs (most recent first):"), std::string::npos);
-        EXPECT_NE(report.find("LFS_CUDA_SYNC_DEBUG=1"), std::string::npos);
+        EXPECT_EQ(report.find("Thread:"), std::string::npos);
+        EXPECT_EQ(report.find("CUDA device:"), std::string::npos);
+        EXPECT_EQ(report.find("VRAM:"), std::string::npos);
+        EXPECT_EQ(report.find("CUDA breadcrumbs (most recent first):"), std::string::npos);
+        EXPECT_EQ(report.find("LFS_CUDA_SYNC_DEBUG=1"), std::string::npos);
     }
 
     TEST_F(CudaErrorDiagnostics, SuccessfulCheckDoesNotFormatFailureContext) {
@@ -167,6 +168,9 @@ namespace {
         EXPECT_NE(report.find("Failed expression: cudaSetDevice(-1)"), std::string::npos);
         EXPECT_NE(report.find("Detection site:"), std::string::npos);
         EXPECT_NE(report.find("Attribution:"), std::string::npos);
+        EXPECT_NE(report.find("Thread:"), std::string::npos);
+        EXPECT_NE(report.find("CUDA device:"), std::string::npos);
+        EXPECT_NE(report.find("VRAM:"), std::string::npos);
         EXPECT_NE(report.find("Host stack trace:"), std::string::npos);
         EXPECT_NE(report.find("CUDA breadcrumbs (most recent first):"), std::string::npos);
         EXPECT_NE(report.find("LFS_CUDA_SYNC_DEBUG=1"), std::string::npos);
