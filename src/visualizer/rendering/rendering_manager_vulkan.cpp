@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/camera.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/logger.hpp"
 #include "core/splat_data.hpp"
@@ -129,6 +130,392 @@ namespace lfs::vis {
 
         [[nodiscard]] DirtyMask vksplatSharedScratchRetryDirty(const DirtyMask frame_dirty) {
             return frame_dirty != 0 ? frame_dirty : DirtyFlag::SPLATS;
+        }
+
+        [[nodiscard]] std::pair<float, float> robustDepthDisplayRange(const float* src, std::size_t count) {
+            std::vector<float> valid;
+            valid.reserve(count);
+            for (std::size_t i = 0; i < count; ++i) {
+                const float d = src[i];
+                if (std::isfinite(d) && d > 0.0f && d < 1.0e9f) {
+                    valid.push_back(d);
+                }
+            }
+            if (valid.size() < 2) {
+                return {0.0f, 0.0f};
+            }
+
+            constexpr float kLoQuantile = 0.02f;
+            constexpr float kHiQuantile = 0.98f;
+            const auto quantile = [&](float q) {
+                const auto n = static_cast<std::size_t>(q * static_cast<float>(valid.size() - 1));
+                std::nth_element(valid.begin(), valid.begin() + n, valid.end());
+                return valid[n];
+            };
+            return {quantile(kLoQuantile), quantile(kHiQuantile)};
+        }
+
+        [[nodiscard]] glm::vec3 depthPaletteForDisplay(float near_t) {
+            near_t = std::clamp(near_t, 0.0f, 1.0f);
+            const glm::vec3 far_0(0.050f, 0.040f, 0.150f);
+            const glm::vec3 far_1(0.060f, 0.195f, 0.500f);
+            const glm::vec3 mid_0(0.000f, 0.500f, 0.650f);
+            const glm::vec3 mid_1(0.360f, 0.735f, 0.410f);
+            const glm::vec3 near_0(0.965f, 0.820f, 0.300f);
+            const glm::vec3 near_1(0.985f, 0.430f, 0.125f);
+
+            if (near_t < 0.20f) {
+                return glm::mix(far_0, far_1, glm::smoothstep(0.00f, 0.20f, near_t));
+            }
+            if (near_t < 0.43f) {
+                return glm::mix(far_1, mid_0, glm::smoothstep(0.20f, 0.43f, near_t));
+            }
+            if (near_t < 0.67f) {
+                return glm::mix(mid_0, mid_1, glm::smoothstep(0.43f, 0.67f, near_t));
+            }
+            if (near_t < 0.86f) {
+                return glm::mix(mid_1, near_0, glm::smoothstep(0.67f, 0.86f, near_t));
+            }
+            return glm::mix(near_0, near_1, glm::smoothstep(0.86f, 1.00f, near_t));
+        }
+
+        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> makeDepthDisplayTensor(
+            const lfs::core::Tensor& depth,
+            const RenderSettings& settings) {
+            if (!depth.is_valid() || depth.ndim() != 2) {
+                return {};
+            }
+
+            auto depth_cpu = depth.cpu().contiguous();
+            const int height = static_cast<int>(depth_cpu.size(0));
+            const int width = static_cast<int>(depth_cpu.size(1));
+            if (width <= 0 || height <= 0) {
+                return {};
+            }
+
+            const std::size_t pixel_count = static_cast<std::size_t>(width) * height;
+            std::vector<float> output(3 * pixel_count, 0.0f);
+            const float* const src = depth_cpu.ptr<float>();
+            if (!src) {
+                return {};
+            }
+
+            const auto [range_lo, range_hi] = robustDepthDisplayRange(src, pixel_count);
+            const float range_span = range_hi - range_lo;
+
+            const bool grayscale =
+                settings.depth_visualization_mode == lfs::rendering::DepthVisualizationMode::Grayscale;
+            for (std::size_t idx = 0; idx < pixel_count; ++idx) {
+                const float d = src[idx];
+                glm::vec3 color = settings.background_color;
+                if (std::isfinite(d) && d > 0.0f && d < 1.0e9f && range_span > 1.0e-6f) {
+                    const float depth_t = std::clamp((d - range_lo) / range_span, 0.0f, 1.0f);
+                    const float near_t = 1.0f - depth_t;
+                    color = grayscale ? glm::vec3(near_t) : depthPaletteForDisplay(near_t);
+                }
+                output[idx] = color.r;
+                output[pixel_count + idx] = color.g;
+                output[2 * pixel_count + idx] = color.b;
+            }
+
+            auto tensor = lfs::core::Tensor::from_vector(
+                output,
+                {std::size_t{3}, static_cast<std::size_t>(height), static_cast<std::size_t>(width)},
+                lfs::core::Device::CPU);
+            return std::make_shared<lfs::core::Tensor>(std::move(tensor));
+        }
+
+        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> makeNormalDisplayTensor(
+            const lfs::core::Tensor& normal) {
+            if (!normal.is_valid() || normal.ndim() != 3) {
+                return {};
+            }
+            const auto layout = lfs::rendering::detectImageLayout(normal);
+            if (layout == lfs::rendering::ImageLayout::Unknown ||
+                lfs::rendering::imageChannels(normal, layout) < 3) {
+                return {};
+            }
+
+            auto normal_cpu = normal.cpu().contiguous();
+            if (layout == lfs::rendering::ImageLayout::HWC) {
+                normal_cpu = normal_cpu.permute({2, 0, 1}).contiguous();
+            }
+
+            const int height = static_cast<int>(normal_cpu.size(1));
+            const int width = static_cast<int>(normal_cpu.size(2));
+            if (width <= 0 || height <= 0) {
+                return {};
+            }
+
+            const std::size_t pixel_count = static_cast<std::size_t>(width) * height;
+            std::vector<float> output(3 * pixel_count, 0.5f);
+            const float* const src = normal_cpu.ptr<float>();
+            if (!src) {
+                return {};
+            }
+
+            for (std::size_t idx = 0; idx < pixel_count; ++idx) {
+                glm::vec3 n(src[idx], src[pixel_count + idx], src[2 * pixel_count + idx]);
+                const float len = glm::length(n);
+                if (std::isfinite(len) && len > 1.0e-6f) {
+                    n /= len;
+                    const glm::vec3 color = glm::clamp(n * 0.5f + glm::vec3(0.5f),
+                                                       glm::vec3(0.0f),
+                                                       glm::vec3(1.0f));
+                    output[idx] = color.r;
+                    output[pixel_count + idx] = color.g;
+                    output[2 * pixel_count + idx] = color.b;
+                }
+            }
+
+            auto tensor = lfs::core::Tensor::from_vector(
+                output,
+                {std::size_t{3}, static_cast<std::size_t>(height), static_cast<std::size_t>(width)},
+                lfs::core::Device::CPU);
+            return std::make_shared<lfs::core::Tensor>(std::move(tensor));
+        }
+
+        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> makeNormalDisplayFromDepthTensor(
+            const lfs::core::Tensor& depth,
+            const lfs::rendering::CameraIntrinsics& intrinsics) {
+            if (!depth.is_valid() || depth.ndim() != 2 ||
+                intrinsics.focal_x <= 0.0f || intrinsics.focal_y <= 0.0f) {
+                return {};
+            }
+
+            auto depth_cpu = depth.cpu().contiguous();
+            const int height = static_cast<int>(depth_cpu.size(0));
+            const int width = static_cast<int>(depth_cpu.size(1));
+            if (width <= 2 || height <= 2) {
+                return {};
+            }
+
+            constexpr float kMinExpectedDepth = 1.0e-6f;
+            constexpr float kMaxRelativeDepthJump = 0.05f;
+            constexpr float kMinCrossNormSq = 1.0e-24f;
+            const std::size_t pixel_count = static_cast<std::size_t>(width) * height;
+            std::vector<float> output(3 * pixel_count, 0.5f);
+            const float* const src = depth_cpu.ptr<float>();
+            if (!src) {
+                return {};
+            }
+
+            const auto valid_depth = [](const float d) {
+                return std::isfinite(d) && d >= kMinExpectedDepth && d < 1.0e9f;
+            };
+            const auto ray = [&](const int x, const int y) {
+                return glm::vec3(
+                    (static_cast<float>(x) + 0.5f - intrinsics.center_x) / intrinsics.focal_x,
+                    (static_cast<float>(y) + 0.5f - intrinsics.center_y) / intrinsics.focal_y,
+                    1.0f);
+            };
+
+            for (int y = 1; y < height - 1; ++y) {
+                for (int x = 1; x < width - 1; ++x) {
+                    const std::size_t idx = static_cast<std::size_t>(y) * width + x;
+                    const float center = src[idx];
+                    if (!valid_depth(center)) {
+                        continue;
+                    }
+
+                    const float dxp = src[idx + 1];
+                    const float dxm = src[idx - 1];
+                    const float dyp = src[idx + width];
+                    const float dym = src[idx - width];
+                    const float jump_limit = kMaxRelativeDepthJump * center;
+                    if (!valid_depth(dxp) || !valid_depth(dxm) ||
+                        !valid_depth(dyp) || !valid_depth(dym) ||
+                        std::abs(dxp - center) > jump_limit ||
+                        std::abs(dxm - center) > jump_limit ||
+                        std::abs(dyp - center) > jump_limit ||
+                        std::abs(dym - center) > jump_limit) {
+                        continue;
+                    }
+
+                    const glm::vec3 tx = dxp * ray(x + 1, y) - dxm * ray(x - 1, y);
+                    const glm::vec3 ty = dyp * ray(x, y + 1) - dym * ray(x, y - 1);
+                    glm::vec3 n = glm::cross(tx, ty);
+                    const float norm_sq = glm::dot(n, n);
+                    if (!std::isfinite(norm_sq) || norm_sq < kMinCrossNormSq) {
+                        continue;
+                    }
+
+                    if (glm::dot(n, ray(x, y)) > 0.0f) {
+                        n = -n;
+                    }
+                    n = glm::normalize(n);
+                    const glm::vec3 color = glm::clamp(n * 0.5f + glm::vec3(0.5f),
+                                                       glm::vec3(0.0f),
+                                                       glm::vec3(1.0f));
+                    output[idx] = color.r;
+                    output[pixel_count + idx] = color.g;
+                    output[2 * pixel_count + idx] = color.b;
+                }
+            }
+
+            auto tensor = lfs::core::Tensor::from_vector(
+                output,
+                {std::size_t{3}, static_cast<std::size_t>(height), static_cast<std::size_t>(width)},
+                lfs::core::Device::CPU);
+            return std::make_shared<lfs::core::Tensor>(std::move(tensor));
+        }
+
+        [[nodiscard]] glm::ivec2 gtComparisonPreviewSize(
+            const lfs::core::Camera& camera,
+            const glm::ivec2 viewport_size) {
+            int base_width = camera.camera_width();
+            int base_height = camera.camera_height();
+            if (base_width <= 0 || base_height <= 0) {
+                base_width = camera.image_width();
+                base_height = camera.image_height();
+            }
+            if (camera.camera_model_type() != lfs::core::CameraModelType::EQUIRECTANGULAR &&
+                camera.is_undistort_precomputed()) {
+                const auto& undistort = camera.undistort_params();
+                base_width = undistort.dst_width;
+                base_height = undistort.dst_height;
+            }
+
+            base_width = std::max(base_width, 1);
+            base_height = std::max(base_height, 1);
+            const int bound_width = std::max(viewport_size.x, 1);
+            const int bound_height = std::max(viewport_size.y, 1);
+            const double scale = std::min(
+                1.0,
+                std::min(static_cast<double>(bound_width) / static_cast<double>(base_width),
+                         static_cast<double>(bound_height) / static_cast<double>(base_height)));
+            return {
+                std::max(static_cast<int>(std::lround(static_cast<double>(base_width) * scale)), 1),
+                std::max(static_cast<int>(std::lround(static_cast<double>(base_height) * scale)), 1)};
+        }
+
+        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> resizeChwDisplayTensor(
+            const std::shared_ptr<lfs::core::Tensor>& image,
+            const glm::ivec2 target_size) {
+            if (!image || !image->is_valid() || image->ndim() != 3 ||
+                target_size.x <= 0 || target_size.y <= 0) {
+                return {};
+            }
+            const auto layout = lfs::rendering::detectImageLayout(*image);
+            if (layout == lfs::rendering::ImageLayout::Unknown) {
+                return {};
+            }
+
+            lfs::core::Tensor src = *image;
+            if (src.dtype() == lfs::core::DataType::UInt8) {
+                src = src.to(lfs::core::DataType::Float32) / 255.0f;
+            } else if (src.dtype() != lfs::core::DataType::Float32) {
+                src = src.to(lfs::core::DataType::Float32);
+            }
+            if (layout == lfs::rendering::ImageLayout::HWC) {
+                src = src.permute({2, 0, 1}).contiguous();
+            }
+            src = src.cpu().contiguous();
+
+            const int src_channels = static_cast<int>(src.size(0));
+            const int src_height = static_cast<int>(src.size(1));
+            const int src_width = static_cast<int>(src.size(2));
+            if (src_channels <= 0 || src_width <= 0 || src_height <= 0) {
+                return {};
+            }
+            if (src_width == target_size.x && src_height == target_size.y &&
+                src_channels >= 3) {
+                return std::make_shared<lfs::core::Tensor>(std::move(src));
+            }
+
+            const int dst_width = target_size.x;
+            const int dst_height = target_size.y;
+            const std::size_t dst_pixel_count =
+                static_cast<std::size_t>(dst_width) * static_cast<std::size_t>(dst_height);
+            std::vector<float> output(3 * dst_pixel_count, 0.0f);
+            const float* const src_data = src.ptr<float>();
+            if (!src_data) {
+                return {};
+            }
+
+            const auto sample = [&](const int channel, const int x, const int y) {
+                const int c = std::clamp(channel, 0, src_channels - 1);
+                return src_data[(static_cast<std::size_t>(c) * src_height + y) * src_width + x];
+            };
+
+            const float scale_x = static_cast<float>(src_width) / static_cast<float>(dst_width);
+            const float scale_y = static_cast<float>(src_height) / static_cast<float>(dst_height);
+            for (int y = 0; y < dst_height; ++y) {
+                float src_y = (static_cast<float>(y) + 0.5f) * scale_y - 0.5f;
+                int y0 = static_cast<int>(std::floor(src_y));
+                float wy = src_y - static_cast<float>(y0);
+                if (y0 < 0) {
+                    y0 = 0;
+                    wy = 0.0f;
+                }
+                int y1 = y0 + 1;
+                if (y1 >= src_height) {
+                    y1 = y0 = src_height - 1;
+                    wy = 0.0f;
+                }
+
+                for (int x = 0; x < dst_width; ++x) {
+                    float src_x = (static_cast<float>(x) + 0.5f) * scale_x - 0.5f;
+                    int x0 = static_cast<int>(std::floor(src_x));
+                    float wx = src_x - static_cast<float>(x0);
+                    if (x0 < 0) {
+                        x0 = 0;
+                        wx = 0.0f;
+                    }
+                    int x1 = x0 + 1;
+                    if (x1 >= src_width) {
+                        x1 = x0 = src_width - 1;
+                        wx = 0.0f;
+                    }
+
+                    const std::size_t dst_idx = static_cast<std::size_t>(y) * dst_width + x;
+                    for (int c = 0; c < 3; ++c) {
+                        const float top =
+                            glm::mix(sample(c, x0, y0), sample(c, x1, y0), wx);
+                        const float bottom =
+                            glm::mix(sample(c, x0, y1), sample(c, x1, y1), wx);
+                        output[static_cast<std::size_t>(c) * dst_pixel_count + dst_idx] =
+                            glm::mix(top, bottom, wy);
+                    }
+                }
+            }
+
+            auto tensor = lfs::core::Tensor::from_vector(
+                output,
+                {std::size_t{3},
+                 static_cast<std::size_t>(dst_height),
+                 static_cast<std::size_t>(dst_width)},
+                lfs::core::Device::CPU);
+            return std::make_shared<lfs::core::Tensor>(std::move(tensor));
+        }
+
+        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> makeGTComparePlaceholderTensor(
+            glm::ivec2 size,
+            const glm::vec3 tint) {
+            size.x = std::max(size.x, 1);
+            size.y = std::max(size.y, 1);
+            const std::size_t pixel_count =
+                static_cast<std::size_t>(size.x) * static_cast<std::size_t>(size.y);
+            std::vector<float> output(3 * pixel_count, 0.0f);
+            for (int y = 0; y < size.y; ++y) {
+                for (int x = 0; x < size.x; ++x) {
+                    const bool stripe = ((x / 18) + (y / 18)) % 2 == 0;
+                    const glm::vec3 color = glm::clamp(
+                        tint + glm::vec3(stripe ? 0.045f : 0.0f),
+                        glm::vec3(0.0f),
+                        glm::vec3(1.0f));
+                    const std::size_t idx = static_cast<std::size_t>(y) * size.x + x;
+                    output[idx] = color.r;
+                    output[pixel_count + idx] = color.g;
+                    output[2 * pixel_count + idx] = color.b;
+                }
+            }
+
+            auto tensor = lfs::core::Tensor::from_vector(
+                output,
+                {std::size_t{3}, static_cast<std::size_t>(size.y), static_cast<std::size_t>(size.x)},
+                lfs::core::Device::CPU);
+            return std::make_shared<lfs::core::Tensor>(std::move(tensor));
         }
 
         [[nodiscard]] std::optional<std::pair<size_t, size_t>>
@@ -1367,6 +1754,17 @@ namespace lfs::vis {
                     .external_image_generation = panel.external_image_generation,
                 };
             };
+        const auto make_placeholder_panel =
+            [](const glm::ivec2 size, const glm::vec3 tint) {
+                lfs::rendering::FrameMetadata metadata{};
+                metadata.valid = true;
+                metadata.flip_y = false;
+                return RenderedPanel{
+                    .image = makeGTComparePlaceholderTensor(size, tint),
+                    .metadata = std::move(metadata),
+                    .flip_y = false,
+                };
+            };
 
         if (splitViewUsesGTComparison(settings_.split_view_mode) && scene_manager &&
             (has_visible_gaussian_model || has_point_cloud)) {
@@ -1389,38 +1787,127 @@ namespace lfs::vis {
                 }
             }
 
-            if (camera && !camera->image_path().empty()) {
+            if (camera) {
                 try {
-                    // GT comparison loads a viewport-scaled preview. Do not publish that
-                    // transient size on the shared camera; training uses image dimensions
-                    // as its raster target and may be running concurrently.
-                    auto gt_tensor = camera->load_and_get_image(
-                        -1, render_size.x, false, false);
-                    if (gt_tensor.is_valid() && gt_tensor.ndim() == 3) {
-                        const auto gt_layout = lfs::rendering::detectImageLayout(gt_tensor);
-                        if (gt_layout != lfs::rendering::ImageLayout::Unknown) {
-                            const bool undistort_gt =
-                                gt_layout == lfs::rendering::ImageLayout::CHW &&
+                    const GTComparisonMode gt_mode = settings_.gt_comparison_mode;
+                    const glm::ivec2 preview_gt_size = gtComparisonPreviewSize(*camera, render_size);
+                    const int preview_max_dimension = std::max(preview_gt_size.x, preview_gt_size.y);
+                    std::shared_ptr<lfs::core::Tensor> gt_image;
+                    std::string gt_error;
+
+                    if (gt_mode == GTComparisonMode::RGB) {
+                        if (camera->image_path().empty()) {
+                            gt_error = "RGB GT comparison requires a source image";
+                        } else {
+                            // GT comparison loads a viewport-scaled preview. Do not publish that
+                            // transient size on the shared camera; training uses image dimensions
+                            // as its raster target and may be running concurrently.
+                            auto gt_tensor = camera->load_and_get_image(
+                                -1, preview_max_dimension, false, false);
+                            if (gt_tensor.is_valid() && gt_tensor.ndim() == 3) {
+                                const auto gt_layout = lfs::rendering::detectImageLayout(gt_tensor);
+                                if (gt_layout != lfs::rendering::ImageLayout::Unknown) {
+                                    const bool undistort_gt =
+                                        gt_layout == lfs::rendering::ImageLayout::CHW &&
+                                        camera->camera_model_type() != lfs::core::CameraModelType::EQUIRECTANGULAR &&
+                                        camera->is_undistort_precomputed();
+                                    if (undistort_gt) {
+                                        const auto scaled = lfs::core::scale_undistort_params(
+                                            camera->undistort_params(),
+                                            lfs::rendering::imageWidth(gt_tensor, gt_layout),
+                                            lfs::rendering::imageHeight(gt_tensor, gt_layout));
+                                        gt_tensor = lfs::core::undistort_image(gt_tensor, scaled, nullptr);
+                                    }
+                                    // Static GT display images must be decoupled from the CUDA pool
+                                    // while training can recycle device buffers mid-frame.
+                                    gt_tensor = gt_tensor.cpu();
+                                    gt_tensor = lfs::rendering::flipImageVertical(gt_tensor, gt_layout);
+                                    gt_image = std::make_shared<lfs::core::Tensor>(std::move(gt_tensor));
+                                    gt_image = resizeChwDisplayTensor(gt_image, preview_gt_size);
+                                }
+                            }
+                            if (!gt_image) {
+                                gt_error = "RGB GT comparison could not load the source image";
+                            }
+                        }
+                    } else if (gt_mode == GTComparisonMode::Depth) {
+                        if (!camera->has_depth()) {
+                            gt_error = "Depth GT comparison requires a depth map for the selected camera";
+                        } else {
+                            auto depth = camera->load_and_get_depth(-1, preview_max_dimension);
+                            if (depth.is_valid() && depth.ndim() == 2 &&
                                 camera->camera_model_type() != lfs::core::CameraModelType::EQUIRECTANGULAR &&
-                                camera->is_undistort_precomputed();
-                            if (undistort_gt) {
+                                camera->is_undistort_precomputed() &&
+                                !camera->is_undistort_prepared()) {
                                 const auto scaled = lfs::core::scale_undistort_params(
                                     camera->undistort_params(),
-                                    lfs::rendering::imageWidth(gt_tensor, gt_layout),
-                                    lfs::rendering::imageHeight(gt_tensor, gt_layout));
-                                gt_tensor = lfs::core::undistort_image(gt_tensor, scaled, nullptr);
+                                    static_cast<int>(depth.shape()[1]),
+                                    static_cast<int>(depth.shape()[0]));
+                                depth = lfs::core::undistort_mask(depth, scaled, nullptr);
                             }
-                            // The GT photo is a static display image, but on the device its buffer
-                            // belongs to the shared training memory pool, which recycles it and
-                            // overwrites the pixels mid-display (the panel blacks out during
-                            // training). Copy to host now, while the data is valid, so the panel is
-                            // decoupled from device-side churn; the split-view pack reads it back on
-                            // the CPU anyway.
-                            gt_tensor = gt_tensor.cpu();
-                            gt_tensor = lfs::rendering::flipImageVertical(gt_tensor, gt_layout);
+                            gt_image = makeDepthDisplayTensor(depth, settings_);
+                            if (gt_image) {
+                                gt_image = resizeChwDisplayTensor(gt_image, preview_gt_size);
+                            }
+                            if (gt_image) {
+                                auto flipped = lfs::rendering::flipImageVertical(
+                                    *gt_image,
+                                    lfs::rendering::ImageLayout::CHW);
+                                gt_image = std::make_shared<lfs::core::Tensor>(std::move(flipped));
+                            } else {
+                                gt_error = "Depth GT comparison could not load the camera depth map";
+                            }
+                        }
+                    } else {
+                        if (!camera->has_normal()) {
+                            gt_error = "Normal GT comparison requires a normal map for the selected camera";
+                        } else {
+                            auto normal = camera->load_and_get_normal(
+                                -1,
+                                preview_max_dimension,
+                                lfs::core::Camera::NormalPriorDecode{});
+                            if (normal.is_valid() && normal.ndim() == 3 &&
+                                camera->camera_model_type() != lfs::core::CameraModelType::EQUIRECTANGULAR &&
+                                camera->is_undistort_precomputed() &&
+                                !camera->is_undistort_prepared()) {
+                                const auto normal_layout = lfs::rendering::detectImageLayout(normal);
+                                if (normal_layout != lfs::rendering::ImageLayout::Unknown) {
+                                    const auto scaled = lfs::core::scale_undistort_params(
+                                        camera->undistort_params(),
+                                        lfs::rendering::imageWidth(normal, normal_layout),
+                                        lfs::rendering::imageHeight(normal, normal_layout));
+                                    normal = lfs::core::undistort_image(normal, scaled, nullptr);
+                                }
+                            }
+                            gt_image = makeNormalDisplayTensor(normal);
+                            if (gt_image) {
+                                gt_image = resizeChwDisplayTensor(gt_image, preview_gt_size);
+                            }
+                            if (gt_image) {
+                                auto flipped = lfs::rendering::flipImageVertical(
+                                    *gt_image,
+                                    lfs::rendering::ImageLayout::CHW);
+                                gt_image = std::make_shared<lfs::core::Tensor>(std::move(flipped));
+                            } else {
+                                gt_error = "Normal GT comparison could not load the camera normal map";
+                            }
+                        }
+                    }
+
+                    if (!gt_image || !gt_image->is_valid()) {
+                        LOG_DEBUG("{}",
+                                  gt_error.empty() ? "GT comparison could not load ground-truth data" : gt_error);
+                        gt_image = makeGTComparePlaceholderTensor(preview_gt_size, glm::vec3(0.16f, 0.035f, 0.050f));
+                    }
+
+                    if (gt_image && gt_image->is_valid()) {
+                        const auto gt_layout = lfs::rendering::detectImageLayout(*gt_image);
+                        if (gt_layout == lfs::rendering::ImageLayout::Unknown) {
+                            render_error = "GT comparison produced an unsupported ground-truth image layout";
+                        } else {
                             const glm::ivec2 gt_size{
-                                lfs::rendering::imageWidth(gt_tensor, gt_layout),
-                                lfs::rendering::imageHeight(gt_tensor, gt_layout)};
+                                lfs::rendering::imageWidth(*gt_image, gt_layout),
+                                lfs::rendering::imageHeight(*gt_image, gt_layout)};
 
                             auto request = buildViewportRenderRequest(frame_ctx, gt_size);
                             const glm::mat4 scene_transform =
@@ -1439,103 +1926,194 @@ namespace lfs::vis {
                             RenderedPanel compare_panel{};
                             std::string compare_error;
 
-                            const bool use_point_cloud_compare =
-                                settings_.point_cloud_mode || !has_visible_gaussian_model;
-                            if (use_point_cloud_compare && has_visible_gaussian_model) {
-                                auto point_request = buildPointCloudRenderRequest(
-                                    frame_ctx, gt_size, frame_ctx.scene_state.model_transforms);
-                                point_request.frame_view = request.frame_view;
-                                if (auto auxiliary_engine = ensure_auxiliary_rendering_engine(); auxiliary_engine) {
-                                    auto rendered = (*auxiliary_engine)->renderPointCloudImage(*model, point_request);
-                                    if (rendered && rendered->image) {
-                                        const bool flip_y = !rendered->metadata.flip_y;
-                                        compare_panel = RenderedPanel{.image = std::move(rendered->image),
-                                                                      .metadata = std::move(rendered->metadata),
-                                                                      .flip_y = flip_y};
-                                    } else {
-                                        compare_error = rendered ? "Point-cloud GT comparison render returned no image"
-                                                                 : rendered.error();
+                            if (gt_mode != GTComparisonMode::RGB) {
+                                if (!has_visible_gaussian_model || settings_.point_cloud_mode) {
+                                    compare_error =
+                                        "Normal/depth GT comparison requires a visible Gaussian model in splat mode";
+                                } else if (!context.vulkan_context) {
+                                    compare_error = "Normal/depth GT comparison requires an active Vulkan context";
+                                } else if (!render_camera) {
+                                    compare_error = "Normal/depth GT comparison could not build the GT render camera";
+                                } else if (gt_mode == GTComparisonMode::Normal &&
+                                           !request.frame_view.intrinsics_override.has_value()) {
+                                    compare_error = "Normal GT comparison requires pinhole camera intrinsics";
+                                } else {
+                                    request.depth_view = false;
+                                    if (!vksplat_viewport_renderer_) {
+                                        vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
                                     }
-                                } else {
-                                    compare_error = auxiliary_engine.error();
-                                }
-                            } else if (use_point_cloud_compare && has_point_cloud) {
-                                const std::vector<glm::mat4> point_cloud_transforms = {
-                                    frame_ctx.scene_state.point_cloud_transform};
-                                auto point_request = buildPointCloudRenderRequest(
-                                    frame_ctx, gt_size, point_cloud_transforms);
-                                point_request.frame_view = request.frame_view;
-                                if (auto auxiliary_engine = ensure_auxiliary_rendering_engine(); auxiliary_engine) {
-                                    auto rendered = (*auxiliary_engine)->renderPointCloudImage(*frame_ctx.scene_state.point_cloud, point_request);
-                                    if (rendered && rendered->image) {
-                                        const bool flip_y = !rendered->metadata.flip_y;
-                                        compare_panel = RenderedPanel{.image = std::move(rendered->image),
-                                                                      .metadata = std::move(rendered->metadata),
-                                                                      .flip_y = flip_y};
+                                    vksplat_viewport_renderer_->setDepthCaptureMode(true, true);
+                                    struct DepthCaptureModeGuard {
+                                        VksplatViewportRenderer* renderer = nullptr;
+                                        ~DepthCaptureModeGuard() {
+                                            if (renderer) {
+                                                renderer->setDepthCaptureMode(false);
+                                            }
+                                        }
+                                    } depth_capture_guard{vksplat_viewport_renderer_.get()};
+
+                                    auto rendered = render_panel_image(
+                                        context.viewport,
+                                        gt_size,
+                                        std::nullopt,
+                                        std::nullopt,
+                                        nullptr,
+                                        nullptr,
+                                        VksplatViewportRenderer::OutputSlot::Preview,
+                                        &request);
+                                    if (!rendered) {
+                                        compare_error = rendered.error();
                                     } else {
-                                        compare_error = rendered ? "Raw point-cloud GT comparison render returned no image"
-                                                                 : rendered.error();
+                                        auto raw_depth = vksplat_viewport_renderer_->readOutputDepthImage(
+                                            *context.vulkan_context,
+                                            VksplatViewportRenderer::OutputSlot::Preview);
+                                        if (!raw_depth || !*raw_depth) {
+                                            compare_error = raw_depth ? "VkSplat GT comparison depth readback returned no data"
+                                                                      : raw_depth.error();
+                                        } else {
+                                            auto display = gt_mode == GTComparisonMode::Depth
+                                                               ? makeDepthDisplayTensor(**raw_depth, settings_)
+                                                               : makeNormalDisplayFromDepthTensor(
+                                                                     **raw_depth,
+                                                                     *request.frame_view.intrinsics_override);
+                                            if (!display || !display->is_valid()) {
+                                                compare_error =
+                                                    gt_mode == GTComparisonMode::Depth
+                                                        ? "Depth GT comparison could not visualize rendered depth"
+                                                        : "Normal GT comparison could not derive rendered normals";
+                                            } else {
+                                                compare_panel = std::move(*rendered);
+                                                compare_panel.image = std::move(display);
+                                                compare_panel.external_image_view = VK_NULL_HANDLE;
+                                                compare_panel.external_image_generation = 0;
+                                            }
+                                        }
                                     }
-                                } else {
-                                    compare_error = auxiliary_engine.error();
-                                }
-                            } else if (has_visible_gaussian_model) {
-                                auto rendered = render_panel_image(
-                                    context.viewport,
-                                    gt_size,
-                                    std::nullopt,
-                                    std::nullopt,
-                                    nullptr,
-                                    nullptr,
-                                    VksplatViewportRenderer::OutputSlot::SplitRight,
-                                    &request);
-                                if (rendered) {
-                                    compare_panel = std::move(*rendered);
-                                } else {
-                                    compare_error = rendered.error();
                                 }
                             } else {
-                                compare_error = "GT comparison requires a renderable Gaussian model or point cloud";
+                                const bool use_point_cloud_compare =
+                                    settings_.point_cloud_mode || !has_visible_gaussian_model;
+                                if (use_point_cloud_compare && has_visible_gaussian_model) {
+                                    auto point_request = buildPointCloudRenderRequest(
+                                        frame_ctx, gt_size, frame_ctx.scene_state.model_transforms);
+                                    point_request.frame_view = request.frame_view;
+                                    if (auto auxiliary_engine = ensure_auxiliary_rendering_engine(); auxiliary_engine) {
+                                        auto rendered = (*auxiliary_engine)->renderPointCloudImage(*model, point_request);
+                                        if (rendered && rendered->image) {
+                                            const bool flip_y = !rendered->metadata.flip_y;
+                                            compare_panel = RenderedPanel{.image = std::move(rendered->image),
+                                                                          .metadata = std::move(rendered->metadata),
+                                                                          .flip_y = flip_y};
+                                        } else {
+                                            compare_error = rendered ? "Point-cloud GT comparison render returned no image"
+                                                                     : rendered.error();
+                                        }
+                                    } else {
+                                        compare_error = auxiliary_engine.error();
+                                    }
+                                } else if (use_point_cloud_compare && has_point_cloud) {
+                                    const std::vector<glm::mat4> point_cloud_transforms = {
+                                        frame_ctx.scene_state.point_cloud_transform};
+                                    auto point_request = buildPointCloudRenderRequest(
+                                        frame_ctx, gt_size, point_cloud_transforms);
+                                    point_request.frame_view = request.frame_view;
+                                    if (auto auxiliary_engine = ensure_auxiliary_rendering_engine(); auxiliary_engine) {
+                                        auto rendered = (*auxiliary_engine)->renderPointCloudImage(*frame_ctx.scene_state.point_cloud, point_request);
+                                        if (rendered && rendered->image) {
+                                            const bool flip_y = !rendered->metadata.flip_y;
+                                            compare_panel = RenderedPanel{.image = std::move(rendered->image),
+                                                                          .metadata = std::move(rendered->metadata),
+                                                                          .flip_y = flip_y};
+                                        } else {
+                                            compare_error = rendered ? "Raw point-cloud GT comparison render returned no image"
+                                                                     : rendered.error();
+                                        }
+                                    } else {
+                                        compare_error = auxiliary_engine.error();
+                                    }
+                                } else if (has_visible_gaussian_model) {
+                                    auto rendered = render_panel_image(
+                                        context.viewport,
+                                        gt_size,
+                                        std::nullopt,
+                                        std::nullopt,
+                                        nullptr,
+                                        nullptr,
+                                        VksplatViewportRenderer::OutputSlot::SplitRight,
+                                        &request);
+                                    if (rendered) {
+                                        compare_panel = std::move(*rendered);
+                                    } else {
+                                        compare_error = rendered.error();
+                                    }
+                                } else {
+                                    compare_error = "GT comparison requires a renderable Gaussian model or point cloud";
+                                }
+                            }
+
+                            if (!compare_panel.image && compare_panel.external_image_view == VK_NULL_HANDLE &&
+                                !compare_error.empty() &&
+                                !(gt_mode == GTComparisonMode::RGB &&
+                                  isRetryableSharedScratchUnavailable(compare_error))) {
+                                LOG_WARN("GT comparison using placeholder rendered panel: {}", compare_error);
+                                compare_panel = make_placeholder_panel(gt_size, glm::vec3(0.035f, 0.045f, 0.070f));
                             }
 
                             if (compare_panel.image || compare_panel.external_image_view != VK_NULL_HANDLE) {
-                                bool compare_panel_ppisp_applied = false;
-                                if (!compare_panel.image &&
-                                    compare_panel.external_image_view != VK_NULL_HANDLE &&
-                                    settings_.apply_appearance_correction &&
-                                    vksplat_viewport_renderer_ &&
-                                    context.vulkan_context) {
-                                    auto image = vksplat_viewport_renderer_->readOutputImage(
-                                        *context.vulkan_context,
-                                        VksplatViewportRenderer::OutputSlot::SplitRight);
-                                    if (image && *image) {
+                                if (gt_mode == GTComparisonMode::RGB) {
+                                    bool compare_panel_ppisp_applied = false;
+                                    if (!compare_panel.image &&
+                                        compare_panel.external_image_view != VK_NULL_HANDLE &&
+                                        settings_.apply_appearance_correction &&
+                                        vksplat_viewport_renderer_ &&
+                                        context.vulkan_context) {
+                                        auto image = vksplat_viewport_renderer_->readOutputImage(
+                                            *context.vulkan_context,
+                                            VksplatViewportRenderer::OutputSlot::SplitRight);
+                                        if (image && *image) {
+                                            compare_panel.image = applyViewportAppearanceCorrection(
+                                                std::move(*image),
+                                                scene_manager,
+                                                settings_,
+                                                camera->uid());
+                                            compare_panel.image = ensure_cuda_viewport_image(
+                                                std::move(compare_panel.image),
+                                                "VkSplat GT comparison PPISP correction");
+                                            if (compare_panel.image && compare_panel.image->is_valid()) {
+                                                compare_panel.flip_y = compare_panel.metadata.flip_y;
+                                                compare_panel.external_image_view = VK_NULL_HANDLE;
+                                                compare_panel.external_image_generation = 0;
+                                                compare_panel_ppisp_applied = true;
+                                            }
+                                        } else {
+                                            LOG_WARN("VkSplat GT comparison PPISP readback failed: {}",
+                                                     image ? "missing image payload" : image.error());
+                                        }
+                                    }
+                                    if (compare_panel.image && !compare_panel_ppisp_applied) {
                                         compare_panel.image = applyViewportAppearanceCorrection(
-                                            std::move(*image),
+                                            std::move(compare_panel.image),
                                             scene_manager,
                                             settings_,
                                             camera->uid());
-                                        compare_panel.image = ensure_cuda_viewport_image(
-                                            std::move(compare_panel.image),
-                                            "VkSplat GT comparison PPISP correction");
-                                        if (compare_panel.image && compare_panel.image->is_valid()) {
-                                            compare_panel.flip_y = compare_panel.metadata.flip_y;
-                                            compare_panel.external_image_view = VK_NULL_HANDLE;
-                                            compare_panel.external_image_generation = 0;
-                                            compare_panel_ppisp_applied = true;
-                                        }
-                                    } else {
-                                        LOG_WARN("VkSplat GT comparison PPISP readback failed: {}",
-                                                 image ? "missing image payload" : image.error());
                                     }
                                 }
-                                if (compare_panel.image && !compare_panel_ppisp_applied) {
-                                    compare_panel.image = applyViewportAppearanceCorrection(
-                                        std::move(compare_panel.image),
-                                        scene_manager,
-                                        settings_,
-                                        camera->uid());
+
+                                if (gt_image) {
+                                    if (auto cuda_gt = ensure_cuda_viewport_image(
+                                            gt_image,
+                                            "GT comparison ground-truth display")) {
+                                        gt_image = std::move(cuda_gt);
+                                    }
                                 }
-                                auto gt_image = std::make_shared<lfs::core::Tensor>(std::move(gt_tensor));
+                                if (compare_panel.image) {
+                                    if (auto cuda_compare = ensure_cuda_viewport_image(
+                                            compare_panel.image,
+                                            "GT comparison rendered display")) {
+                                        compare_panel.image = std::move(cuda_compare);
+                                    }
+                                }
+
                                 const SplitCompositeContentRect rect =
                                     resolveSplitCompositeContentRect(render_size, true, gt_size);
                                 pending_split_view.enabled = true;
@@ -1548,12 +2126,24 @@ namespace lfs::vis {
                                 rendered_metadata = compare_panel.metadata;
                                 rendered_image_contains_ground_truth = true;
                                 rendered_gt_content_size = gt_size;
+                                const char* mode_label = "GT Compare";
+                                const char* left_name = "Ground Truth";
+                                const char* right_name = "Rendered";
+                                if (gt_mode == GTComparisonMode::Depth) {
+                                    mode_label = "GT Depth Compare";
+                                    left_name = "GT Depth";
+                                    right_name = "Rendered Depth";
+                                } else if (gt_mode == GTComparisonMode::Normal) {
+                                    mode_label = "GT Normal Compare";
+                                    left_name = "GT Normal";
+                                    right_name = "Rendered Normal";
+                                }
                                 rendered_split_info = SplitViewInfo{
                                     .enabled = true,
-                                    .mode_label = "GT Compare",
+                                    .mode_label = mode_label,
                                     .detail_label = camera->image_name(),
-                                    .left_name = "Ground Truth",
-                                    .right_name = "Rendered"};
+                                    .left_name = left_name,
+                                    .right_name = right_name};
                             } else {
                                 render_error = compare_error;
                             }

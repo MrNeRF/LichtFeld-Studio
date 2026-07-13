@@ -340,12 +340,6 @@ namespace lfs::vis::gui {
             return;
 
         drag_hovering_ = hovering;
-
-        if (hovering && on_drag_enter_) {
-            on_drag_enter_({});
-        } else if (!hovering && on_drag_leave_) {
-            on_drag_leave_();
-        }
     }
 
     void NativeDragDrop::handleFileDrop(const std::vector<std::string>& paths) {

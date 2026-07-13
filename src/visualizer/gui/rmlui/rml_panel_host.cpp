@@ -19,6 +19,7 @@
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
+#include <RmlUi/Core/Elements/ElementFormControlSelect.h>
 #include <RmlUi/Core/Input.h>
 #include <SDL3/SDL_keyboard.h>
 #include <algorithm>
@@ -86,6 +87,44 @@ namespace lfs::vis::gui {
 
         float maxCornerRadius(const Rml::CornerSizes& radii) {
             return std::max({radii[0], radii[1], radii[2], radii[3]});
+        }
+
+        bool pointInRmlRect(const RmlRect& rect, const float x, const float y) {
+            return x >= rect.x1 && y >= rect.y1 && x < rect.x2 && y < rect.y2;
+        }
+
+        std::optional<RmlRect> elementBorderRect(Rml::Element* const element) {
+            if (!element)
+                return std::nullopt;
+
+            const auto size = element->GetBox().GetSize(Rml::BoxArea::Border);
+            if (size.x <= 0.0f || size.y <= 0.0f)
+                return std::nullopt;
+
+            const auto pos = element->GetAbsoluteOffset(Rml::BoxArea::Border);
+            return RmlRect{
+                .x1 = pos.x,
+                .y1 = pos.y,
+                .x2 = pos.x + size.x,
+                .y2 = pos.y + size.y,
+            };
+        }
+
+        Rml::Element* selectboxElement(Rml::ElementFormControlSelect* const select) {
+            if (!select)
+                return nullptr;
+
+            for (int i = 0; i < select->GetNumChildren(true); ++i) {
+                auto* const child = select->GetChild(i);
+                if (child && child->GetTagName() == "selectbox")
+                    return child;
+            }
+            return nullptr;
+        }
+
+        Rml::ElementFormControlSelect* asOpenSelect(Rml::Element* const element) {
+            auto* const select = dynamic_cast<Rml::ElementFormControlSelect*>(element);
+            return (select && select->IsSelectBoxVisible()) ? select : nullptr;
         }
 
         std::filesystem::path resolveDocumentPath(const std::string& rml_path) {
@@ -235,6 +274,8 @@ namespace lfs::vis::gui {
         last_forwarded_mx_ = -1;
         last_forwarded_my_ = -1;
         last_hovered_ = false;
+        manual_dropdown_hover_ = nullptr;
+        manual_dropdown_mouse_captured_ = false;
         for (auto& captured : mouse_captured_)
             captured = false;
 
@@ -535,6 +576,7 @@ namespace lfs::vis::gui {
         applyHoverTooltip(w, pos_y, display_h);
 
         renderIfDirty(w, h, display_h);
+        trackFrame(pos_x, pos_y);
 
         const ImVec2 panel_screen_pos = ImGui::GetCursorScreenPos();
         if (!manager_ || !manager_->getVulkanRenderInterface())
@@ -640,6 +682,7 @@ namespace lfs::vis::gui {
         applyHoverTooltip(pw, y, display_h);
 
         renderIfDirty(pw, ph, display_h);
+        trackFrame(x, y);
         compositeDirectToScreen(x, y, w, display_h);
     }
 
@@ -648,7 +691,7 @@ namespace lfs::vis::gui {
             return false;
         if (!document_ || !rml_context_ || last_fbo_w_ <= 0 || last_fbo_h_ <= 0)
             return false;
-        if (render_needed_ || content_dirty_ || animation_active_ || tooltip_.needsFrame())
+        if (render_needed_ || content_dirty_ || animation_active_ || tooltip_.revealDue())
             return false;
         if (!has_theme_signature_ || rml_theme::currentThemeSignature() != last_theme_signature_)
             return false;
@@ -663,19 +706,34 @@ namespace lfs::vis::gui {
         if (ph <= 0 || display_h <= 0.0f || ph > last_fbo_h_)
             return false;
 
-        if (tooltip_.hasActiveState() && input_) {
+        trackFrame(x, y);
+
+        if (input_ && manager_ &&
+            manager_->activeOverlayOccludesContext(rml_context_, input_->mouse_x, input_->mouse_y)) {
+            compositeDirectToScreen(x, y, w, display_h);
+            return true;
+        }
+
+        const auto dropdown_bounds = openDropdownBounds();
+        if ((tooltip_.hasActiveState() || dropdown_bounds) && input_) {
             const float local_x = input_->mouse_x - x;
             const float local_y = input_->mouse_y - y;
-            bool hovered = hitTestPanelShape(local_x, local_y,
+            const bool dropdown_hovered =
+                dropdown_bounds && pointInRmlRect(*dropdown_bounds, local_x, local_y);
+            bool hovered = dropdown_hovered ||
+                           hitTestPanelShape(local_x, local_y,
                                              static_cast<float>(last_fbo_w_),
                                              static_cast<float>(last_fbo_h_));
 
-            if (hovered && clip_y_min_ >= 0.0f && clip_y_max_ > clip_y_min_) {
+            if (!dropdown_hovered &&
+                hovered && clip_y_min_ >= 0.0f && clip_y_max_ > clip_y_min_) {
                 if (input_->mouse_y < clip_y_min_ || input_->mouse_y > clip_y_max_)
                     hovered = false;
             }
 
-            const bool any_capture = mouse_captured_[0] || mouse_captured_[1] || mouse_captured_[2];
+            const bool any_capture =
+                manual_dropdown_mouse_captured_ ||
+                mouse_captured_[0] || mouse_captured_[1] || mouse_captured_[2];
             const bool effective_hovered = hovered || any_capture;
             const int rml_mx = static_cast<int>(local_x);
             const int rml_my = static_cast<int>(local_y);
@@ -694,6 +752,84 @@ namespace lfs::vis::gui {
 
         compositeDirectToScreen(x, y, w, display_h);
         return true;
+    }
+
+    std::optional<RmlRect> RmlPanelHost::openDropdownBounds() const {
+        if (!document_)
+            return std::nullopt;
+
+        Rml::ElementList selects;
+        document_->GetElementsByTagName(selects, "select");
+        for (auto* const element : selects) {
+            auto* const select = asOpenSelect(element);
+            if (!select)
+                continue;
+
+            if (auto bounds = elementBorderRect(selectboxElement(select)))
+                return bounds;
+        }
+
+        return std::nullopt;
+    }
+
+    bool RmlPanelHost::openDropdownContainsPoint(const float local_x,
+                                                 const float local_y) const {
+        const auto bounds = openDropdownBounds();
+        return bounds && pointInRmlRect(*bounds, local_x, local_y);
+    }
+
+    Rml::Element* RmlPanelHost::openDropdownOptionAtPoint(const float local_x,
+                                                          const float local_y) const {
+        if (!document_)
+            return nullptr;
+
+        Rml::ElementList selects;
+        document_->GetElementsByTagName(selects, "select");
+        for (auto* const element : selects) {
+            auto* const select = asOpenSelect(element);
+            if (!select)
+                continue;
+
+            auto* const selectbox = selectboxElement(select);
+            const auto box_rect = elementBorderRect(selectbox);
+            if (!box_rect || !pointInRmlRect(*box_rect, local_x, local_y))
+                continue;
+
+            for (int i = select->GetNumOptions() - 1; i >= 0; --i) {
+                auto* const option = select->GetOption(i);
+                const auto option_rect = elementBorderRect(option);
+                if (!option_rect)
+                    continue;
+
+                if (pointInRmlRect(*option_rect, local_x, local_y))
+                    return option;
+            }
+
+            return selectbox;
+        }
+
+        return nullptr;
+    }
+
+    void RmlPanelHost::setManualDropdownHover(Rml::Element* const option) {
+        if (manual_dropdown_hover_ == option)
+            return;
+
+        if (manual_dropdown_hover_)
+            manual_dropdown_hover_->SetPseudoClass("hover", false);
+        manual_dropdown_hover_ = option;
+        if (manual_dropdown_hover_)
+            manual_dropdown_hover_->SetPseudoClass("hover", true);
+    }
+
+    void RmlPanelHost::trackFrame(const float panel_x, const float panel_y) {
+        if (!manager_ || !rml_context_ || !input_)
+            return;
+
+        manager_->trackContextFrame(rml_context_,
+                                    static_cast<int>(panel_x - input_->screen_x),
+                                    static_cast<int>(panel_y - input_->screen_y),
+                                    openDropdownBounds());
     }
 
     std::optional<RmlPanelHost::ShadowRect> RmlPanelHost::collectVisibleColorPickerPopupShadow(
@@ -775,9 +911,11 @@ namespace lfs::vis::gui {
                                                             tooltip_.hasActiveState());
         if (tooltip_.apply(body, last_forwarded_mx_, last_forwarded_my_, pw, clamp_h))
             render_needed_ = true;
-        if (manager_)
+        if (manager_) {
             manager_->setContextNeedsPassiveMouseMoveFrames(rml_context_,
                                                             tooltip_.hasActiveState());
+            manager_->setContextTooltipRevealDeadline(rml_context_, tooltip_.revealDeadline());
+        }
     }
 
     void RmlPanelHost::compositeDirectToScreen(const float x, const float y,
@@ -878,11 +1016,7 @@ namespace lfs::vis::gui {
         bool had_input = false;
         const auto& input = *input_;
         auto* const text_input_handler = manager_ ? manager_->getTextInputHandler() : nullptr;
-        if (manager_) {
-            manager_->trackContextFrame(rml_context_,
-                                        static_cast<int>(panel_x - input.screen_x),
-                                        static_cast<int>(panel_y - input.screen_y));
-        }
+        trackFrame(panel_x, panel_y);
         const float mouse_x = input.mouse_x;
         const float mouse_y = input.mouse_y;
         const auto sync_text_focus = [&]() {
@@ -943,16 +1077,24 @@ namespace lfs::vis::gui {
         const float logical_w = static_cast<float>(last_fbo_w_);
         const float logical_h = static_cast<float>(last_fbo_h_);
 
-        bool hovered = hitTestPanelShape(local_x, local_y, logical_w, logical_h);
+        const bool blocked_by_other_overlay =
+            manager_ && manager_->activeOverlayOccludesContext(rml_context_, mouse_x, mouse_y);
+        const bool dropdown_hovered =
+            !blocked_by_other_overlay && openDropdownContainsPoint(local_x, local_y);
+        bool hovered =
+            !blocked_by_other_overlay &&
+            (dropdown_hovered || hitTestPanelShape(local_x, local_y, logical_w, logical_h));
 
-        if (hovered && clip_y_min_ >= 0 && clip_y_max_ > clip_y_min_) {
+        if (!dropdown_hovered && hovered && clip_y_min_ >= 0 && clip_y_max_ > clip_y_min_) {
             if (mouse_y < clip_y_min_ || mouse_y > clip_y_max_)
                 hovered = false;
         }
 
         // While a button is captured the panel stays active for input
         // forwarding so an in-progress drag survives the cursor leaving.
-        const bool any_capture = mouse_captured_[0] || mouse_captured_[1] || mouse_captured_[2];
+        const bool any_capture =
+            manual_dropdown_mouse_captured_ ||
+            mouse_captured_[0] || mouse_captured_[1] || mouse_captured_[2];
         const bool effective_hovered = hovered || any_capture;
 
         const bool hover_changed = (effective_hovered != last_hovered_);
@@ -962,6 +1104,8 @@ namespace lfs::vis::gui {
             if (!effective_hovered) {
                 last_forwarded_mx_ = -1;
                 last_forwarded_my_ = -1;
+                setManualDropdownHover(nullptr);
+                manual_dropdown_mouse_captured_ = false;
                 rml_context_->ProcessMouseLeave();
             }
         }
@@ -984,14 +1128,53 @@ namespace lfs::vis::gui {
         const int mods = sdlModsToRml(input.key_ctrl, input.key_shift,
                                       input.key_alt, input.key_super);
 
+        const bool manual_dropdown_route = dropdown_hovered || manual_dropdown_mouse_captured_;
+        Rml::Element* manual_dropdown_target =
+            manual_dropdown_route ? openDropdownOptionAtPoint(local_x, local_y) : nullptr;
+        Rml::Element* manual_dropdown_option =
+            (manual_dropdown_target && manual_dropdown_target->GetTagName() == "option")
+                ? manual_dropdown_target
+                : nullptr;
+        Rml::Element* manual_dropdown_box = nullptr;
+        if (manual_dropdown_target) {
+            if (manual_dropdown_target->GetTagName() == "selectbox")
+                manual_dropdown_box = manual_dropdown_target;
+            else if (auto* const parent = manual_dropdown_target->GetParentNode();
+                     parent && parent->GetTagName() == "selectbox") {
+                manual_dropdown_box = parent;
+            }
+        }
+        const bool manual_dropdown_option_route =
+            manual_dropdown_option != nullptr || manual_dropdown_mouse_captured_;
+
         if (mouse_moved) {
-            auto* const prev_hover = rml_context_->GetHoverElement();
             last_forwarded_mx_ = rml_mx;
             last_forwarded_my_ = rml_my;
-            rml_context_->ProcessMouseMove(rml_mx, rml_my, mods);
-            auto* const next_hover = rml_context_->GetHoverElement();
-            if (pointer_active || next_hover != prev_hover)
+            if (manual_dropdown_option_route) {
+                if (rml_context_->GetHoverElement())
+                    rml_context_->ProcessMouseLeave();
+                setManualDropdownHover(manual_dropdown_option);
                 had_input = true;
+            } else {
+                auto* const prev_hover = rml_context_->GetHoverElement();
+                rml_context_->ProcessMouseMove(rml_mx, rml_my, mods);
+                auto* const next_hover = rml_context_->GetHoverElement();
+                if (pointer_active || next_hover != prev_hover)
+                    had_input = true;
+            }
+        } else if (manual_dropdown_option_route) {
+            if (rml_context_->GetHoverElement())
+                rml_context_->ProcessMouseLeave();
+            setManualDropdownHover(manual_dropdown_option);
+            if (pointer_active)
+                had_input = true;
+        }
+
+        if (manual_dropdown_option_route) {
+            setManualDropdownHover(manual_dropdown_option);
+            had_input = true;
+        } else {
+            setManualDropdownHover(nullptr);
         }
 
         const auto deliver_button_down = [&](const int button) {
@@ -1004,7 +1187,26 @@ namespace lfs::vis::gui {
             had_input = true;
         };
 
-        if (hovered) {
+        if (manual_dropdown_option_route) {
+            if (input.mouse_clicked[0]) {
+                manual_dropdown_mouse_captured_ = true;
+                had_input = true;
+            }
+            if (input.mouse_clicked[1])
+                had_input = true;
+            if (input.mouse_wheel != 0.0f) {
+                if (manual_dropdown_box) {
+                    const float max_scroll = std::max(
+                        0.0f,
+                        manual_dropdown_box->GetScrollHeight() - manual_dropdown_box->GetClientHeight());
+                    manual_dropdown_box->SetScrollTop(std::clamp(
+                        manual_dropdown_box->GetScrollTop() - input.mouse_wheel * 30.0f,
+                        0.0f,
+                        max_scroll));
+                }
+                had_input = true;
+            }
+        } else if (hovered) {
             if (input.mouse_clicked[0])
                 deliver_button_down(0);
             if (input.mouse_clicked[1])
@@ -1020,6 +1222,22 @@ namespace lfs::vis::gui {
                 sync_text_focus();
         } else if (input.mouse_clicked[0]) {
             had_input |= blur_focused_element();
+        }
+
+        if (manual_dropdown_mouse_captured_ &&
+            (input.mouse_released[0] || !input.mouse_down[0])) {
+            auto* click_option = manual_dropdown_option;
+            if (!click_option) {
+                auto* const target = openDropdownOptionAtPoint(local_x, local_y);
+                if (target && target->GetTagName() == "option")
+                    click_option = target;
+            }
+            if (click_option)
+                click_option->Click();
+            manual_dropdown_mouse_captured_ = false;
+            setManualDropdownHover(nullptr);
+            sync_text_focus();
+            had_input = true;
         }
 
         // Forward release regardless of hover so a drag begun on the scrollbar

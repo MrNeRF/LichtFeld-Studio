@@ -49,10 +49,6 @@ namespace lfs::vis::gui {
                                   int expected_width,
                                   int expected_height,
                                   bool flip_y = false);
-        [[nodiscard]] bool uploadCudaTensor(const lfs::core::Tensor& image,
-                                            int expected_width,
-                                            int expected_height,
-                                            bool flip_y = false);
         [[nodiscard]] std::uintptr_t textureId() const;
         [[nodiscard]] bool valid() const;
         // Build a Rml::Image src URL referencing this texture's image view and sampler.

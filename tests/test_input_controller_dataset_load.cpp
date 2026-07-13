@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/event_bridge/event_bridge.hpp"
 #include "core/events.hpp"
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
@@ -23,6 +24,7 @@ namespace lfs::vis {
         class InputControllerDatasetLoadTest : public ::testing::Test {
         protected:
             void SetUp() override {
+                lfs::event::EventBridge::instance().clear_all();
                 services().clear();
                 gui::guiFocusState().reset();
 
@@ -35,6 +37,7 @@ namespace lfs::vis {
 
                 gui::guiFocusState().reset();
                 services().clear();
+                lfs::event::EventBridge::instance().clear_all();
             }
         };
 
@@ -105,6 +108,102 @@ namespace lfs::vis {
         const auto settings = rendering_manager.getSettings();
         EXPECT_EQ(settings.environment_mode, EnvironmentBackgroundMode::Equirectangular);
         EXPECT_EQ(lfs::core::utf8_to_path(settings.environment_map_path), drop_path);
+    }
+
+    TEST_F(InputControllerDatasetLoadTest, SingleDroppedVideoShowsVideoExtractor) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+
+        std::optional<std::filesystem::path> requested_video_path;
+        core::events::cmd::ShowVideoExtractor::when([&](const auto& e) {
+            requested_video_path = e.video_path;
+        });
+
+        const auto drop_path = std::filesystem::temp_directory_path() / "drag_drop_video.mp4";
+        controller.handleFileDrop({lfs::core::path_to_utf8(drop_path)});
+
+        ASSERT_TRUE(requested_video_path.has_value());
+        EXPECT_EQ(*requested_video_path, drop_path);
+    }
+
+    TEST_F(InputControllerDatasetLoadTest, SingleDroppedVideoExtensionIsCaseInsensitive) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+
+        std::optional<std::filesystem::path> requested_video_path;
+        core::events::cmd::ShowVideoExtractor::when([&](const auto& e) {
+            requested_video_path = e.video_path;
+        });
+
+        const auto drop_path = std::filesystem::temp_directory_path() / "drag_drop_video.MP4";
+        controller.handleFileDrop({lfs::core::path_to_utf8(drop_path)});
+
+        ASSERT_TRUE(requested_video_path.has_value());
+        EXPECT_EQ(*requested_video_path, drop_path);
+    }
+
+    TEST_F(InputControllerDatasetLoadTest, VideoMixedWithOtherDropDoesNotShowVideoExtractor) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        RenderingManager rendering_manager;
+        services().set(&rendering_manager);
+
+        bool video_extractor_requested = false;
+        core::events::cmd::ShowVideoExtractor::when([&](const auto&) {
+            video_extractor_requested = true;
+        });
+
+        const auto video_path = std::filesystem::temp_directory_path() / "drag_drop_video.mp4";
+        const auto hdr_path = std::filesystem::temp_directory_path() / "drag_drop_environment.hdr";
+        controller.handleFileDrop({
+            lfs::core::path_to_utf8(video_path),
+            lfs::core::path_to_utf8(hdr_path),
+        });
+
+        EXPECT_FALSE(video_extractor_requested);
+        const auto settings = rendering_manager.getSettings();
+        EXPECT_EQ(settings.environment_mode, EnvironmentBackgroundMode::Equirectangular);
+        EXPECT_EQ(lfs::core::utf8_to_path(settings.environment_map_path), hdr_path);
+    }
+
+    TEST_F(InputControllerDatasetLoadTest, SingleDroppedPlyStillUsesSplatLoader) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+
+        std::optional<core::events::cmd::LoadFile> load_file;
+        bool video_extractor_requested = false;
+        core::events::cmd::LoadFile::when([&](const auto& e) {
+            load_file = e;
+        });
+        core::events::cmd::ShowVideoExtractor::when([&](const auto&) {
+            video_extractor_requested = true;
+        });
+
+        const auto drop_path = std::filesystem::temp_directory_path() / "drag_drop_splat.ply";
+        controller.handleFileDrop({lfs::core::path_to_utf8(drop_path)});
+
+        ASSERT_TRUE(load_file.has_value());
+        EXPECT_EQ(load_file->path, drop_path);
+        EXPECT_FALSE(load_file->is_dataset);
+        EXPECT_FALSE(video_extractor_requested);
+    }
+
+    TEST_F(InputControllerDatasetLoadTest, UnrecognizedSingleDropStillReportsFailure) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+
+        std::optional<core::events::state::FileDropFailed> failure;
+        core::events::state::FileDropFailed::when([&](const auto& e) {
+            failure = e;
+        });
+
+        const auto drop_path = std::filesystem::temp_directory_path() / "drag_drop_unknown.not_video";
+        controller.handleFileDrop({lfs::core::path_to_utf8(drop_path)});
+
+        ASSERT_TRUE(failure.has_value());
+        ASSERT_EQ(failure->files.size(), 1u);
+        EXPECT_EQ(failure->files.front(), lfs::core::path_to_utf8(drop_path));
+        EXPECT_NE(failure->error.find(".mp4"), std::string::npos);
     }
 
 } // namespace lfs::vis

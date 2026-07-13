@@ -141,6 +141,7 @@ namespace lfs::io {
             std::filesystem::path base_path = transforms_file.parent_path();
             MaskDirCache mask_cache(base_path, options.cancel_requested);
             DepthDirCache depth_cache(base_path, options.cancel_requested);
+            NormalDirCache normal_cache(base_path, options.cancel_requested);
 
             for (size_t i = 0; i < camera_infos.size(); ++i) {
                 if ((i % 64) == 0) {
@@ -169,6 +170,18 @@ namespace lfs::io {
                             ErrorCode::INVALID_DATASET,
                             std::format("Depth map for image '{}' is ambiguous across the dataset depth folders. "
                                         "Keep depth maps in the same relative subdirectories as the images or rename them uniquely.",
+                                        info._image_name),
+                            base_path);
+                    }
+
+                    std::filesystem::path normal_path;
+                    if (auto normal_lookup = normal_cache.lookup(info._image_name); normal_lookup.found()) {
+                        normal_path = std::move(normal_lookup.path);
+                    } else if (normal_lookup.ambiguous()) {
+                        return make_error(
+                            ErrorCode::INVALID_DATASET,
+                            std::format("Normal map for image '{}' is ambiguous across the dataset normal folders. "
+                                        "Keep normal maps in the same relative subdirectories as the images or rename them uniquely.",
                                         info._image_name),
                             base_path);
                     }
@@ -203,6 +216,17 @@ namespace lfs::io {
                                               depth_path);
                         }
                     }
+                    if (!normal_path.empty()) {
+                        auto [img_w, img_h, img_c] = get_image_info_cached();
+                        auto [normal_w, normal_h, normal_c] = lfs::core::get_image_info(normal_path);
+                        if (img_w != normal_w || img_h != normal_h) {
+                            return make_error(ErrorCode::NORMAL_SIZE_MISMATCH,
+                                              std::format("Normal map '{}' is {}x{} but image '{}' is {}x{}",
+                                                          lfs::core::path_to_utf8(normal_path.filename()), normal_w, normal_h,
+                                                          info._image_name, img_w, img_h),
+                                              normal_path);
+                        }
+                    }
 
                     auto cam = std::make_shared<lfs::core::Camera>(
                         info._R,
@@ -221,7 +245,8 @@ namespace lfs::io {
                         info._height,
                         static_cast<int>(i),
                         0,
-                        depth_path);
+                        depth_path,
+                        normal_path);
 
                     cameras.push_back(cam);
                 } catch (const std::exception& e) {

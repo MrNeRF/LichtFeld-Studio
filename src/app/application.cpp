@@ -24,13 +24,18 @@
 #include "visualizer/visualizer.hpp"
 
 #include "app/mcp_gui_tools.hpp"
+#include "io/loader.hpp"
 #include "io/video/video_encoder.hpp"
 #include "mcp/mcp_http_server.hpp"
 #include "mcp/mcp_tools.hpp"
 #include "python/runner.hpp"
+#include "rendering/coordinate_conventions.hpp"
+#include "sequencer/timeline.hpp"
+#include "training/rasterization/fast_rasterizer.hpp"
 #include "visualizer/gui/panels/python_scripts_panel.hpp"
 #include "visualizer/gui/video_widget_interface.hpp"
 #include "visualizer/gui/windows/video_extractor_dialog.hpp"
+#include <cmath>
 #include <cstdlib>
 #include <cuda_runtime.h>
 #include <future>
@@ -263,6 +268,8 @@ namespace lfs::app {
                         }
                         return 1;
                     }
+                    trainer->shutdown();
+                    static_cast<void>(trainer.release());
                 } else {
                     LOG_INFO("Starting headless training...");
 
@@ -300,9 +307,13 @@ namespace lfs::app {
                         }
                         return 1;
                     }
+                    trainer->shutdown();
+                    static_cast<void>(trainer.release());
                 }
 
                 LOG_INFO("Headless training completed");
+                core::Logger::get().flush();
+                std::_Exit(0);
             }
 
             core::Tensor::shutdown_memory_pool();
@@ -312,6 +323,135 @@ namespace lfs::app {
                 python::finalize();
                 std::_Exit(0);
             }
+            return 0;
+        }
+
+        // Renders a sequencer camera path against a trained scene to a video file, headless.
+        int runHeadlessRender(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
+            const auto& cfg = *params->render_path;
+
+            checkCudaDriverVersion();
+
+            // Load the trained scene.
+            std::shared_ptr<core::SplatData> model;
+            const auto load_ext = cfg.load_path.extension().string();
+            if (load_ext == ".resume") {
+                auto splat_result = core::load_checkpoint_splat_data(cfg.load_path);
+                if (!splat_result) {
+                    LOG_ERROR("Failed to load checkpoint: {}", splat_result.error());
+                    return 1;
+                }
+                model = std::make_shared<core::SplatData>(std::move(*splat_result));
+            } else {
+                auto loader = lfs::io::Loader::create();
+                auto load_result = loader->load(cfg.load_path);
+                if (!load_result) {
+                    LOG_ERROR("Failed to load scene: {}", load_result.error().message);
+                    return 1;
+                }
+                if (auto* const splat = std::get_if<std::shared_ptr<core::SplatData>>(&load_result->data)) {
+                    model = *splat;
+                } else {
+                    LOG_ERROR("--render-load is not a Gaussian splat scene: {}", core::path_to_utf8(cfg.load_path));
+                    return 1;
+                }
+            }
+            if (!model || model->size() == 0) {
+                LOG_ERROR("Loaded scene has no Gaussians: {}", core::path_to_utf8(cfg.load_path));
+                return 1;
+            }
+
+            lfs::sequencer::Timeline timeline;
+            if (!timeline.loadFromJson(core::path_to_utf8(cfg.camera_path)) || timeline.empty()) {
+                LOG_ERROR("Failed to load camera path (or it has no keyframes): {}", core::path_to_utf8(cfg.camera_path));
+                return 1;
+            }
+
+            // Solid black background, matching Trainer's default bg_color init.
+            auto background = core::Tensor::empty({3}, core::Device::CPU, core::DataType::Float32);
+            {
+                auto* const bg_ptr = background.ptr<float>();
+                bg_ptr[0] = bg_ptr[1] = bg_ptr[2] = 0.0f;
+            }
+            background = background.to(core::Device::CUDA);
+
+            lfs::io::video::VideoEncoder encoder;
+            lfs::io::video::VideoExportOptions options;
+            options.preset = lfs::io::video::VideoPreset::CUSTOM;
+            options.width = cfg.width;
+            options.height = cfg.height;
+            options.framerate = cfg.fps;
+            options.crf = cfg.crf;
+            if (const auto open_result = encoder.open(cfg.output_path, options); !open_result) {
+                LOG_ERROR("Failed to open video encoder: {}", open_result.error());
+                return 1;
+            }
+
+            const float duration = timeline.duration();
+            const int total_frames = static_cast<int>(std::ceil(duration * cfg.fps)) + 1;
+            LOG_INFO("Rendering {} frame(s) ({:.2f}s @ {}fps) from {} to {}",
+                     total_frames, duration, cfg.fps,
+                     core::path_to_utf8(cfg.camera_path), core::path_to_utf8(cfg.output_path));
+
+            for (int frame = 0; frame < total_frames; ++frame) {
+                const float t = std::min(static_cast<float>(frame) / static_cast<float>(cfg.fps), duration);
+                const auto cam_state = timeline.evaluate(t);
+
+                // CameraState is camera-to-world; Camera's R/T are world-to-camera, so invert.
+                const glm::mat3 r_c2w = glm::mat3_cast(cam_state.rotation);
+                const glm::mat3 r_w2c = glm::transpose(r_c2w);
+                const glm::vec3 t_w2c = -(r_w2c * cam_state.position);
+
+                std::vector<float> r_flat(9);
+                for (int row = 0; row < 3; ++row) {
+                    for (int col = 0; col < 3; ++col) {
+                        r_flat[row * 3 + col] = r_w2c[col][row]; // glm is column-major
+                    }
+                }
+                auto R = core::Tensor::from_vector(r_flat, {3, 3}, core::Device::CPU);
+                auto T = core::Tensor::from_vector(
+                    std::vector<float>{t_w2c.x, t_w2c.y, t_w2c.z}, {3}, core::Device::CPU);
+
+                const auto [focal_x, focal_y] = rendering::computePixelFocalLengths(
+                    {cfg.width, cfg.height}, cam_state.focal_length_mm);
+
+                core::Camera camera(
+                    R, T,
+                    focal_x, focal_y,
+                    static_cast<float>(cfg.width) * 0.5f, static_cast<float>(cfg.height) * 0.5f,
+                    core::Tensor::empty({0}, core::Device::CPU),
+                    core::Tensor::empty({0}, core::Device::CPU),
+                    core::CameraModelType::PINHOLE,
+                    std::format("frame_{:06d}", frame),
+                    {}, {},
+                    cfg.width, cfg.height,
+                    frame);
+
+                auto render_output = training::fast_rasterize(camera, *model, background);
+                auto image = render_output.image;
+                if (image.dtype() != core::DataType::Float32) {
+                    image = image.to(core::DataType::Float32);
+                }
+                if (image.device() != core::Device::CUDA) {
+                    image = image.cuda();
+                }
+                auto image_hwc = image.permute({1, 2, 0}).contiguous();
+
+                const auto write_result = encoder.writeFrameGpu(image_hwc.data_ptr(), cfg.width, cfg.height, nullptr);
+                if (!write_result) {
+                    LOG_ERROR("Failed to encode frame {}: {}", frame, write_result.error());
+                    encoder.close();
+                    return 1;
+                }
+                LOG_INFO("Encoded frame {}/{}", frame + 1, total_frames);
+            }
+
+            if (const auto close_result = encoder.close(); !close_result) {
+                LOG_ERROR("Failed to finalize video: {}", close_result.error());
+                return 1;
+            }
+
+            LOG_INFO("Wrote {} frame(s) to {}", total_frames, core::path_to_utf8(cfg.output_path));
             return 0;
         }
 
@@ -492,6 +632,10 @@ namespace lfs::app {
                  .cuda_stream = p.stream,
                  .output_uint8 = p.output_uint8});
         });
+
+        if (params->render_path) {
+            return runHeadlessRender(std::move(params));
+        }
 
         if (params->optimization.headless && params->server.tcp_connection) {
             return runHeadlessWithTCP(std::move(params));

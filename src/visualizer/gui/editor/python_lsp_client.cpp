@@ -587,11 +587,6 @@ namespace lfs::vis::editor {
             return state != State::Failed;
         }
 
-        std::string statusText() const {
-            std::scoped_lock lock(mutex);
-            return status;
-        }
-
         std::chrono::milliseconds workerWaitDurationLocked() const {
             const bool waiting_on_server =
                 !initialized || document_dirty || queued_completion.has_value() ||
@@ -1355,10 +1350,6 @@ namespace lfs::vis::editor {
 
     bool PythonLspClient::isAvailable() const {
         return impl_->isAvailable();
-    }
-
-    std::string PythonLspClient::statusText() const {
-        return impl_->statusText();
     }
 
 } // namespace lfs::vis::editor

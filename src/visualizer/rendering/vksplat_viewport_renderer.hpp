@@ -195,6 +195,9 @@ namespace lfs::vis {
         [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readPreviewDepth(
             VulkanContext& context,
             OutputSlot output_slot = OutputSlot::Preview) const;
+        [[nodiscard]] std::expected<std::shared_ptr<lfs::core::Tensor>, std::string> readOutputDepthImage(
+            VulkanContext& context,
+            OutputSlot output_slot = OutputSlot::Preview) const;
         // Forces the non-batched per-pixel rasterizer chain (not the macro-tile
         // HiGS chain, whose depth is one median per macro-tile, nor the batched
         // compose, which covers only a subset of pixels) so readPreviewDepth gets

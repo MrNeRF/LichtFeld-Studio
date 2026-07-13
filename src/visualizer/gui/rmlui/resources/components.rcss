@@ -243,6 +243,8 @@ selectbox {
     background-color: #313244;
     border-width: 1dp;
     border-color: #45475a;
+    position: absolute;
+    z-index: 10000;
 }
 
 selectbox option {
@@ -250,6 +252,10 @@ selectbox option {
     padding: 2dp 6dp;
     font-size: 12dp;
     transition: background-color 0.1s quadratic-out;
+}
+
+selectbox option:checked {
+    background-color: #45475a;
 }
 
 selectbox option:hover {

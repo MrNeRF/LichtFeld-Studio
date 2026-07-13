@@ -56,7 +56,6 @@ namespace lfs::vis::gui {
         static bool consumeFrameWantsTextInput();
 
         void setHeightMode(PanelHeightMode mode) { height_mode_ = mode; }
-        PanelHeightMode getHeightMode() const { return height_mode_; }
         float getContentHeight() const { return last_content_height_; }
         void setForcedHeight(float h) { forced_height_ = h; }
         void markContentDirty() {
@@ -69,7 +68,7 @@ namespace lfs::vis::gui {
             clip_y_max_ = y_max;
         }
         bool needsAnimationFrame() const {
-            return render_needed_ || content_dirty_ || animation_active_ || tooltip_.needsFrame();
+            return render_needed_ || content_dirty_ || animation_active_ || tooltip_.revealDue();
         }
 
         Rml::ElementDocument* getDocument() { return document_; }
@@ -87,6 +86,11 @@ namespace lfs::vis::gui {
 
         std::optional<ShadowRect> collectVisibleColorPickerPopupShadow(float panel_screen_x,
                                                                        float panel_screen_y) const;
+        std::optional<RmlRect> openDropdownBounds() const;
+        bool openDropdownContainsPoint(float local_x, float local_y) const;
+        Rml::Element* openDropdownOptionAtPoint(float local_x, float local_y) const;
+        void setManualDropdownHover(Rml::Element* option);
+        void trackFrame(float panel_x, float panel_y);
         void applyHoverTooltip(int pw, float panel_y, float display_h);
         bool hitTestPanelShape(float local_x, float local_y, float logical_w, float logical_h) const;
         bool forwardInput(float panel_x, float panel_y);
@@ -143,6 +147,8 @@ namespace lfs::vis::gui {
         int last_forwarded_mx_ = -1;
         int last_forwarded_my_ = -1;
         bool last_hovered_ = false;
+        Rml::Element* manual_dropdown_hover_ = nullptr;
+        bool manual_dropdown_mouse_captured_ = false;
         // Per-button capture so scrollbar drags continue when the cursor
         // leaves the panel and the matching Up always reaches RmlUI.
         bool mouse_captured_[3] = {false, false, false};

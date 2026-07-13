@@ -26,6 +26,16 @@ namespace {
         bool animation_ = false;
     };
 
+    class RecordingPanel final : public lfs::vis::gui::IPanel {
+    public:
+        void draw(const lfs::vis::gui::PanelDrawContext&) override {}
+
+        bool supportsDirectDraw() const override { return true; }
+
+        void drawDirect(float, float, float, float,
+                        const lfs::vis::gui::PanelDrawContext&) override {}
+    };
+
     class PanelRegistryAnimationDemandTest : public ::testing::Test {
     protected:
         void SetUp() override {
@@ -47,6 +57,16 @@ namespace {
             info.parent_id = std::move(parent_id);
             info.is_native = false;
             info.panel = std::make_shared<TestPanel>(animation);
+            ASSERT_TRUE(lfs::vis::gui::PanelRegistry::instance().register_panel(std::move(info)));
+        }
+
+        static void registerRecordingPanel(std::string id) {
+            lfs::vis::gui::PanelInfo info;
+            info.id = std::move(id);
+            info.label = info.id;
+            info.space = lfs::vis::gui::PanelSpace::Floating;
+            info.is_native = false;
+            info.panel = std::make_shared<RecordingPanel>();
             ASSERT_TRUE(lfs::vis::gui::PanelRegistry::instance().register_panel(std::move(info)));
         }
     };
@@ -111,4 +131,39 @@ TEST_F(PanelRegistryAnimationDemandTest, RightPanelDemandOnlyTracksVisibleRightP
     });
     EXPECT_TRUE(bottom_hidden.rightPanel());
     EXPECT_FALSE(bottom_hidden.bottom_dock);
+}
+
+TEST_F(PanelRegistryAnimationDemandTest, BringPanelToFrontRaisesEnabledFloatingPanel) {
+    using namespace lfs::vis::gui;
+
+    registerRecordingPanel("test.first");
+    registerRecordingPanel("test.second");
+
+    const auto first_before = PanelRegistry::instance().get_panel("test.first");
+    const auto second_before = PanelRegistry::instance().get_panel("test.second");
+    ASSERT_TRUE(first_before.has_value());
+    ASSERT_TRUE(second_before.has_value());
+    EXPECT_LT(first_before->float_stack_order, second_before->float_stack_order);
+
+    EXPECT_TRUE(PanelRegistry::instance().bring_panel_to_front("test.first"));
+
+    const auto first_after = PanelRegistry::instance().get_panel("test.first");
+    const auto second_after = PanelRegistry::instance().get_panel("test.second");
+    ASSERT_TRUE(first_after.has_value());
+    ASSERT_TRUE(second_after.has_value());
+    EXPECT_GT(first_after->float_stack_order, second_after->float_stack_order);
+}
+
+TEST_F(PanelRegistryAnimationDemandTest, BringPanelToFrontIgnoresDisabledFloatingPanel) {
+    using namespace lfs::vis::gui;
+
+    registerRecordingPanel("test.first");
+    registerRecordingPanel("test.second");
+    PanelRegistry::instance().set_panel_enabled("test.first", false);
+
+    EXPECT_FALSE(PanelRegistry::instance().bring_panel_to_front("test.first"));
+
+    auto panels = PanelRegistry::instance().get_panels_for_space(PanelSpace::Floating);
+    ASSERT_EQ(panels.size(), 1u);
+    EXPECT_EQ(panels.front().id, "test.second");
 }

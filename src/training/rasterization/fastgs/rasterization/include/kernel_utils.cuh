@@ -239,6 +239,27 @@ namespace fast_lfs::rasterization::kernels {
                static_cast<float>(param.n_elements);
     }
 
+    // L = weight * mean_over_primitives(exp(min raw scale)): flattens splats
+    // along their thinnest axis so the min-axis normal is well-defined
+    // (PGSR-style). The argmin is treated as a constant.
+    __device__ inline void add_flatten_regularization_grads(
+        const FusedAdamSettings& fused_adam,
+        const FusedAdamParam& param,
+        const uint scale_base,
+        float (&grads)[3]) {
+        if (fused_adam.flatten_reg_weight <= 0.0f || param.n_elements <= 0)
+            return;
+        const float s0 = param.param[scale_base];
+        const float s1 = param.param[scale_base + 1];
+        const float s2 = param.param[scale_base + 2];
+        const uint min_axis = (s0 <= s1 && s0 <= s2) ? 0u : (s1 <= s2) ? 1u
+                                                                       : 2u;
+        const float s_min = min_axis == 0u ? s0 : (min_axis == 1u ? s1 : s2);
+        // n_elements counts all three scale channels per primitive.
+        grads[min_axis] += 3.0f * fused_adam.flatten_reg_weight * expf(s_min) /
+                           static_cast<float>(param.n_elements);
+    }
+
     __device__ inline float opacity_extra_grad(
         const FusedAdamSettings& fused_adam,
         const FusedAdamParam& param,

@@ -439,7 +439,6 @@ protected:
         _ComputePipeline spine = _ComputePipeline(std::vector<int>{0, 1, 2});
         _ComputePipeline downsweep = _ComputePipeline(std::vector<int>{0, 1, 2, 3, 4, 5, 6});
     } pipeline_sorting_indirect_1, pipeline_sorting_indirect_2;
-    _ComputePipeline pipeline_null = _ComputePipeline(0);
 
     bool invalidateReadbackBuffer(_VulkanBuffer& buffer, VkDeviceSize size);
 

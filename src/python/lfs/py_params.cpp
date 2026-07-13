@@ -140,8 +140,23 @@ namespace lfs::python {
                         "depth_loss_weight", "Depth Loss Weight", 2.0f, 0.0f, 100.0f,
                         "Weight for depth supervision")
             .string_prop(&OptimizationParameters::depth_loss_mode,
-                         "depth_loss_mode", "Depth Loss Mode", "adaptive-warped-l1",
-                         "Depth supervision mode: pearson or adaptive-warped-l1")
+                         "depth_loss_mode", "Depth Loss Mode", "ssi",
+                         "Depth prior convention: ssi (auto-detect), ssi-disparity, or ssi-depth")
+            .bool_prop(&OptimizationParameters::use_normal_loss,
+                       "use_normal_loss", "Use Normal Loss", false,
+                       "Use dataset normal maps for normal supervision")
+            .float_prop(&OptimizationParameters::normal_loss_weight,
+                        "normal_loss_weight", "Normal Loss Weight", 0.05f, 0.0f, 100.0f,
+                        "Weight for prior normal supervision")
+            .float_prop(&OptimizationParameters::normal_consistency_weight,
+                        "normal_consistency_weight", "Normal Consistency Weight", 0.05f, 0.0f, 100.0f,
+                        "Weight for depth-normal consistency")
+            .float_prop(&OptimizationParameters::normal_flatten_weight,
+                        "normal_flatten_weight", "Normal Flatten Weight", 1.0f, 0.0f, 1000.0f,
+                        "Min-axis scale flattening weight while normal supervision is active")
+            .string_prop(&OptimizationParameters::normal_loss_space,
+                         "normal_loss_space", "Normal Loss Space", "auto",
+                         "Normal prior coordinate space: auto, camera-opencv, camera-opengl, or world")
 
             // Bilateral grid
             .bool_prop(&OptimizationParameters::use_bilateral_grid,
@@ -1264,7 +1279,32 @@ namespace lfs::python {
                 "depth_loss_mode",
                 [](PyOptimizationParams& self) { return self.params().depth_loss_mode; },
                 [](PyOptimizationParams&, const std::string& v) { modify_params([v](auto& p) { p.depth_loss_mode = v; }); },
-                "Depth supervision mode: 'pearson' or 'adaptive-warped-l1'")
+                "Depth prior convention: 'ssi' (auto-detect), 'ssi-disparity', or 'ssi-depth'")
+            .def_prop_rw(
+                "use_normal_loss",
+                [](PyOptimizationParams& self) { return self.params().use_normal_loss; },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.use_normal_loss = v; }); },
+                "Load normal maps and use normal-map supervision during training")
+            .def_prop_rw(
+                "normal_loss_weight",
+                [](PyOptimizationParams& self) { return self.params().normal_loss_weight; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.normal_loss_weight = std::max(0.0f, v); }); },
+                "Weight for prior normal supervision")
+            .def_prop_rw(
+                "normal_consistency_weight",
+                [](PyOptimizationParams& self) { return self.params().normal_consistency_weight; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.normal_consistency_weight = std::max(0.0f, v); }); },
+                "Weight for depth-normal consistency supervision")
+            .def_prop_rw(
+                "normal_flatten_weight",
+                [](PyOptimizationParams& self) { return self.params().normal_flatten_weight; },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.normal_flatten_weight = std::max(0.0f, v); }); },
+                "Min-axis scale flattening weight while normal supervision is active")
+            .def_prop_rw(
+                "normal_loss_space",
+                [](PyOptimizationParams& self) { return self.params().normal_loss_space; },
+                [](PyOptimizationParams&, const std::string& v) { modify_params([v](auto& p) { p.normal_loss_space = v; }); },
+                "Normal prior coordinate space: 'auto', 'camera-opencv', 'camera-opengl', or 'world'")
             .def_prop_rw(
                 "undistort",
                 [](PyOptimizationParams& self) { return self.params().undistort; },

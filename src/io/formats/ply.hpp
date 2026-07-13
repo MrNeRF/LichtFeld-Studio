@@ -27,7 +27,7 @@ namespace lfs::io {
     std::expected<SplatData, std::string> load_ply(const std::filesystem::path& filepath,
                                                    const LoadOptions& options = {});
 
-    // Load PLY as simple point cloud (xyz + optional colors)
+    // Load PLY as simple point cloud (xyz + optional colors and normals)
     std::expected<lfs::core::PointCloud, std::string> load_ply_point_cloud(const std::filesystem::path& filepath,
                                                                            const LoadOptions& options);
 

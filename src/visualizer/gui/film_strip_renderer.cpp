@@ -310,25 +310,11 @@ namespace lfs::vis::gui {
         }
     }
 
-    std::uintptr_t FilmStripRenderer::textureIdForSlot(const int slot_idx) const {
-        if (slot_idx < 0 || slot_idx >= MAX_SLOTS)
-            return 0;
-        const auto& slot = slots_[slot_idx];
-        return slot.valid ? slot.texture.textureId() : 0;
-    }
-
     std::string FilmStripRenderer::srcUrlForSlot(const int slot_idx) const {
         if (slot_idx < 0 || slot_idx >= MAX_SLOTS)
             return {};
         const auto& slot = slots_[slot_idx];
         return slot.valid ? slot.texture.rmlSrcUrl(THUMB_WIDTH, THUMB_HEIGHT) : std::string{};
-    }
-
-    bool FilmStripRenderer::slotIsCurrentGeneration(const int slot_idx) const {
-        if (slot_idx < 0 || slot_idx >= MAX_SLOTS)
-            return false;
-        const auto& slot = slots_[slot_idx];
-        return slot.valid && slot.generation == generation_;
     }
 
     void FilmStripRenderer::invalidateAll() {

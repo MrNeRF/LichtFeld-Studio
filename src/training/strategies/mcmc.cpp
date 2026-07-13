@@ -510,6 +510,9 @@ namespace lfs::training {
         }
 
         append_live_deleted_rows(*_splat_data, n_new);
+        if (_splat_data->has_frozen_ranges()) {
+            apply_frozen_ranges_to_optimizer(*_splat_data, *_optimizer);
+        }
 
         return n_new;
     }
@@ -531,7 +534,7 @@ namespace lfs::training {
         if (auto frozen_mask = make_frozen_mask(*_splat_data, required, sampled_idxs_i64.device());
             frozen_mask.is_valid()) {
             auto trainable = frozen_mask.index_select(0, sampled_idxs_i64).logical_not();
-            sampled_idxs_i64 = sampled_idxs_i64.masked_select(trainable);
+            sampled_idxs_i64 = sampled_idxs_i64.index_select(0, trainable.nonzero().squeeze(-1));
         }
 
         const int n_new = sampled_idxs_i64.numel();

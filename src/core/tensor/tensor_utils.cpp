@@ -9,15 +9,12 @@
 #include <functional>
 #include <numeric>
 
-#define CHECK_CUDA(call)                              \
-    do {                                              \
-        cudaError_t error = call;                     \
-        if (error != cudaSuccess) {                   \
-            LOG_ERROR("CUDA error at {}:{} - {}: {}", \
-                      __FILE__, __LINE__,             \
-                      cudaGetErrorName(error),        \
-                      cudaGetErrorString(error));     \
-        }                                             \
+#define CHECK_CUDA(call)                                        \
+    do {                                                        \
+        const cudaError_t error = (call);                       \
+        LFS_ASSERT_MSG(error == cudaSuccess,                    \
+                       std::string("CUDA operation failed: ") + \
+                           cudaGetErrorString(error));          \
     } while (0)
 
 namespace lfs::core {
@@ -25,10 +22,11 @@ namespace lfs::core {
     // ============= Tensor Static Factory Methods =============
 
     Tensor Tensor::linspace(float start, float end, size_t steps, Device device) {
-        if (steps == 0) {
-            LOG_ERROR("Steps must be > 0");
-            return Tensor();
-        }
+        LFS_ASSERT_MSG(steps > 0, "linspace steps must be positive");
+        LFS_ASSERT_MSG(device == Device::CPU || device == Device::CUDA,
+                       "linspace received an invalid device");
+        LFS_ASSERT_MSG(std::isfinite(start) && std::isfinite(end),
+                       "linspace endpoints must be finite");
 
         if (steps == 1) {
             return Tensor::full({1}, start, device);
@@ -54,16 +52,21 @@ namespace lfs::core {
     }
 
     Tensor Tensor::diag(const Tensor& diagonal) {
-        if (diagonal.ndim() != 1) {
-            LOG_ERROR("diag requires 1D tensor");
-            return Tensor();
-        }
+        LFS_ASSERT_MSG(diagonal.is_valid(), "diag requires a valid tensor");
+        LFS_ASSERT_MSG(diagonal.ndim() == 1, "diag requires a rank-1 tensor");
+        LFS_ASSERT_MSG(diagonal.dtype() == DataType::Float32,
+                       "diag currently supports only Float32");
 
         size_t n = diagonal.numel();
         auto result = Tensor::zeros({n, n}, diagonal.device());
+        if (n == 0) {
+            return result;
+        }
 
         if (diagonal.device() == Device::CUDA) {
+            CHECK_CUDA(cudaGetLastError());
             tensor_ops::launch_diag(diagonal.ptr<float>(), result.ptr<float>(), n, result.stream());
+            CHECK_CUDA(cudaGetLastError());
             // No sync - returns tensor
         } else {
             const float* diag_data = diagonal.ptr<float>();
@@ -85,7 +88,7 @@ namespace lfs::core {
         MemoryInfo info;
 
         size_t free_bytes, total_bytes;
-        cudaMemGetInfo(&free_bytes, &total_bytes);
+        CHECK_CUDA(cudaMemGetInfo(&free_bytes, &total_bytes));
 
         info.free_bytes = free_bytes;
         info.total_bytes = total_bytes;
@@ -118,6 +121,10 @@ namespace lfs::core {
 namespace lfs::core::functional {
 
     Tensor map(const Tensor& input, std::function<float(float)> func) {
+        LFS_ASSERT_MSG(input.is_valid(), "functional::map requires a valid tensor");
+        LFS_ASSERT_MSG(input.dtype() == DataType::Float32,
+                       "functional::map currently supports only Float32");
+        LFS_ASSERT_MSG(static_cast<bool>(func), "functional::map requires a callable");
         auto result = Tensor::empty(input.shape(), input.device());
 
         if (input.device() == Device::CUDA) {
@@ -129,8 +136,10 @@ namespace lfs::core::functional {
                 dst_data[i] = func(src[i]);
             }
 
-            cudaMemcpy(result.ptr<float>(), dst_data.data(),
-                       dst_data.size() * sizeof(float), cudaMemcpyHostToDevice);
+            if (!dst_data.empty()) {
+                CHECK_CUDA(cudaMemcpy(result.ptr<float>(), dst_data.data(),
+                                      dst_data.size() * sizeof(float), cudaMemcpyHostToDevice));
+            }
         } else {
             const float* src = input.ptr<float>();
             float* dst = result.ptr<float>();
@@ -144,6 +153,11 @@ namespace lfs::core::functional {
     }
 
     float reduce(const Tensor& input, float init, std::function<float(float, float)> func) {
+        LFS_ASSERT_MSG(input.is_valid(), "functional::reduce requires a valid tensor");
+        LFS_ASSERT_MSG(input.dtype() == DataType::Float32,
+                       "functional::reduce currently supports only Float32");
+        LFS_ASSERT_MSG(std::isfinite(init), "functional::reduce initial value must be finite");
+        LFS_ASSERT_MSG(static_cast<bool>(func), "functional::reduce requires a callable");
         auto values = input.to_vector();
         float result = init;
 
@@ -155,6 +169,10 @@ namespace lfs::core::functional {
     }
 
     Tensor filter(const Tensor& input, std::function<bool(float)> predicate) {
+        LFS_ASSERT_MSG(input.is_valid(), "functional::filter requires a valid tensor");
+        LFS_ASSERT_MSG(input.dtype() == DataType::Float32,
+                       "functional::filter currently supports only Float32");
+        LFS_ASSERT_MSG(static_cast<bool>(predicate), "functional::filter requires a callable");
         auto result = Tensor::empty(input.shape(), input.device());
 
         if (input.device() == Device::CUDA) {
@@ -166,8 +184,10 @@ namespace lfs::core::functional {
                 dst_data[i] = predicate(src[i]) ? 1.0f : 0.0f;
             }
 
-            cudaMemcpy(result.ptr<float>(), dst_data.data(),
-                       dst_data.size() * sizeof(float), cudaMemcpyHostToDevice);
+            if (!dst_data.empty()) {
+                CHECK_CUDA(cudaMemcpy(result.ptr<float>(), dst_data.data(),
+                                      dst_data.size() * sizeof(float), cudaMemcpyHostToDevice));
+            }
         } else {
             const float* src = input.ptr<float>();
             float* dst = result.ptr<float>();

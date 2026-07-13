@@ -13,14 +13,18 @@ namespace lfs::core {
                                        size_t capacity,
                                        cudaStream_t stream,
                                        std::string external_kind) {
-        if (!owner) {
-            throw TensorError("from_external_owner requires a valid owner");
-        }
-        if (data == nullptr && shape.elements() > 0) {
-            throw TensorError("from_external_owner received null data for a non-empty tensor");
-        }
+        LFS_ASSERT_MSG(owner != nullptr,
+                       "from_external_owner requires a valid owner");
+        LFS_ASSERT_MSG(data != nullptr || shape.elements() == 0,
+                       "from_external_owner received null data for a non-empty tensor");
+        LFS_ASSERT_MSG(device == Device::CPU || device == Device::CUDA,
+                       "from_external_owner received an invalid device");
+        LFS_ASSERT_MSG(dtype_size(dtype) != 0,
+                       "from_external_owner received an invalid dtype");
 
         const size_t effective_capacity = capacity == 0 && shape.rank() > 0 ? shape[0] : capacity;
+        LFS_ASSERT_MSG(shape.rank() == 0 || effective_capacity >= shape[0],
+                       "from_external_owner capacity is smaller than the logical row count");
         const size_t allocation_bytes = storage_allocation_bytes(shape, effective_capacity, dtype);
         auto external_owner = owner;
         auto owner_box = std::make_shared<std::shared_ptr<void>>(std::move(owner));

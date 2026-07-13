@@ -270,6 +270,14 @@ namespace lfs::core::tensor_ops {
     // ============= Masking Operations =============
     LFS_CORE_API void launch_masked_select(const float* input, const unsigned char* mask,
                                            float* output, size_t n, size_t output_size, cudaStream_t stream);
+    LFS_CORE_API void launch_masked_select(const __half* input, const unsigned char* mask,
+                                           __half* output, size_t n, size_t output_size, cudaStream_t stream);
+    LFS_CORE_API void launch_masked_select(const int32_t* input, const unsigned char* mask,
+                                           int32_t* output, size_t n, size_t output_size, cudaStream_t stream);
+    LFS_CORE_API void launch_masked_select(const int64_t* input, const unsigned char* mask,
+                                           int64_t* output, size_t n, size_t output_size, cudaStream_t stream);
+    LFS_CORE_API void launch_masked_select(const uint8_t* input, const unsigned char* mask,
+                                           uint8_t* output, size_t n, size_t output_size, cudaStream_t stream);
 
     LFS_CORE_API void launch_masked_fill(float* data, const unsigned char* mask,
                                          float value, size_t n, cudaStream_t stream);

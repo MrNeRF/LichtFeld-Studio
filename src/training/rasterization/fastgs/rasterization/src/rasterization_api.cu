@@ -192,6 +192,7 @@ namespace fast_lfs::rasterization {
         float* image_ptr,
         float* alpha_ptr,
         float* depth_ptr,
+        float* normal_ptr,
         int n_primitives,
         int active_sh_bases,
         int sh_layout_bases,
@@ -293,6 +294,17 @@ namespace fast_lfs::rasterization {
                 return fail("OUT_OF_MEMORY: Failed to allocate backward helper buffers from arena");
             }
 
+            float3* primitive_normals = nullptr;
+            if (normal_ptr != nullptr) {
+                checked_device_pointer_on_current_device(normal_ptr, "normal_ptr",
+                                                         checked_current_cuda_device("FastGS forward preflight"));
+                primitive_normals = reinterpret_cast<float3*>(
+                    arena_allocator(static_cast<size_t>(n_primitives) * sizeof(float3)));
+                if (!primitive_normals) {
+                    return fail("OUT_OF_MEMORY: Failed to allocate primitive normal buffer from arena");
+                }
+            }
+
             // Create allocation wrappers
             std::function<char*(size_t)> per_primitive_buffers_func =
                 [&per_primitive_buffers_blob](size_t size) -> char* {
@@ -319,6 +331,8 @@ namespace fast_lfs::rasterization {
                                                    image_ptr,
                                                    alpha_ptr,
                                                    depth_ptr,
+                                                   normal_ptr,
+                                                   primitive_normals,
                                                    n_primitives,
                                                    active_sh_bases,
                                                    sh_layout_bases,
@@ -356,6 +370,7 @@ namespace fast_lfs::rasterization {
             ctx.grad_depth_helper = grad_depth_helper;
             ctx.grad_opacity_helper = nullptr;
             ctx.grad_color_helper = nullptr;
+            ctx.primitive_normals = primitive_normals;
             ctx.success = true;
             ctx.error_message = nullptr;
 
@@ -393,6 +408,7 @@ namespace fast_lfs::rasterization {
         const float* grad_image_ptr,
         const float* grad_alpha_ptr,
         const float* grad_depth_ptr,
+        const float* grad_normal_ptr,
         const float* image_ptr,
         const float* alpha_ptr,
         const float* means_ptr,
@@ -415,8 +431,7 @@ namespace fast_lfs::rasterization {
         float center_y,
         bool mip_filter,
         DensificationType densification_type,
-        const FusedAdamSettings* fused_adam,
-        bool detach_depth_weights) {
+        const FusedAdamSettings* fused_adam) {
 
         // The forward chose the stream and chained the arena frame on it; the
         // backward shares the same context/arena frame and must match.
@@ -452,6 +467,7 @@ namespace fast_lfs::rasterization {
             CHECK_CUDA_PTR(grad_image_ptr, "grad_image_ptr");
             CHECK_CUDA_PTR(grad_alpha_ptr, "grad_alpha_ptr");
             CHECK_CUDA_PTR_OPTIONAL(grad_depth_ptr, "grad_depth_ptr");
+            CHECK_CUDA_PTR_OPTIONAL(grad_normal_ptr, "grad_normal_ptr");
             CHECK_CUDA_PTR(image_ptr, "image_ptr");
             CHECK_CUDA_PTR(alpha_ptr, "alpha_ptr");
             CHECK_CUDA_PTR(means_ptr, "means_ptr");
@@ -499,6 +515,8 @@ namespace fast_lfs::rasterization {
         float* grad_depth_helper = static_cast<float*>(forward_ctx.grad_depth_helper);
         float* grad_opacity_helper = nullptr;
         float* grad_color_helper = nullptr;
+        float3* grad_normal_helper = nullptr;
+        const float3* primitive_normals = nullptr;
 
         try {
             grad_opacity_helper = static_cast<float*>(forward_ctx.grad_opacity_helper);
@@ -511,6 +529,21 @@ namespace fast_lfs::rasterization {
                 if (!grad_opacity_helper || !grad_color_helper) {
                     throw std::runtime_error("OUT_OF_MEMORY: Failed to allocate fused Adam helper buffers from arena");
                 }
+            }
+            if (grad_normal_ptr != nullptr) {
+                primitive_normals = static_cast<const float3*>(forward_ctx.primitive_normals);
+                if (!primitive_normals) {
+                    throw std::runtime_error("Missing primitive normal buffer in forward context");
+                }
+                auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
+                auto arena_allocator = arena.get_allocator(forward_ctx.frame_id);
+                grad_normal_helper = reinterpret_cast<float3*>(
+                    arena_allocator(static_cast<size_t>(n_primitives) * sizeof(float3)));
+                if (!grad_normal_helper) {
+                    throw std::runtime_error("OUT_OF_MEMORY: Failed to allocate normal gradient helper buffer from arena");
+                }
+                CUDA_CHECK(cudaMemsetAsync(grad_normal_helper, 0, static_cast<size_t>(n_primitives) * sizeof(float3), stream),
+                           "cudaMemsetAsync(grad_normal_helper)");
             }
 
             // Zero out helper buffers
@@ -539,6 +572,7 @@ namespace fast_lfs::rasterization {
                 grad_image_ptr,
                 grad_alpha_ptr,
                 grad_depth_ptr,
+                grad_normal_ptr,
                 image_ptr,
                 alpha_ptr,
                 reinterpret_cast<const float3*>(means_ptr),
@@ -548,6 +582,7 @@ namespace fast_lfs::rasterization {
                 reinterpret_cast<const float4*>(sh_coefficients_rest_ptr),
                 reinterpret_cast<const float4*>(w2c_ptr),
                 reinterpret_cast<const float3*>(cam_position_ptr),
+                primitive_normals,
                 static_cast<char*>(forward_ctx.per_primitive_buffers),
                 static_cast<char*>(forward_ctx.per_tile_buffers),
                 static_cast<const uint*>(forward_ctx.sorted_primitive_indices),
@@ -556,6 +591,7 @@ namespace fast_lfs::rasterization {
                 reinterpret_cast<float2*>(grad_mean2d_helper),
                 grad_conic_helper,
                 grad_depth_helper,
+                grad_normal_helper,
                 grad_w2c_ptr ? reinterpret_cast<float4*>(grad_w2c_ptr) : nullptr,
                 densification_info_ptr,
                 n_primitives,
@@ -571,7 +607,6 @@ namespace fast_lfs::rasterization {
                 mip_filter,
                 densification_type,
                 *fused_adam,
-                detach_depth_weights,
                 stream);
 
             // Mark frame as complete
@@ -638,7 +673,7 @@ namespace fast_lfs::rasterization {
         // Forward pass compiles forward kernels
         const auto ctx = forward_raw(
             means, scales, rotations, opacities, sh0, nullptr,
-            w2c, cam_pos, image, alpha, depth,
+            w2c, cam_pos, image, alpha, depth, nullptr,
             NUM_GAUSSIANS, 1, 1,
             IMG_WIDTH, IMG_HEIGHT,
             FOCAL, FOCAL, CENTER_X, CENTER_Y,
@@ -692,12 +727,12 @@ namespace fast_lfs::rasterization {
 
             // Backward pass compiles backward kernels (also releases arena)
             backward_raw(
-                nullptr, nullptr, grad_image, grad_alpha, nullptr, image, alpha,
+                nullptr, nullptr, grad_image, grad_alpha, nullptr, nullptr, image, alpha,
                 means, scales, rotations, opacities, nullptr, w2c, cam_pos, ctx,
                 nullptr,
                 NUM_GAUSSIANS, 1, 1,
                 IMG_WIDTH, IMG_HEIGHT, FOCAL, FOCAL, CENTER_X, CENTER_Y, true,
-                DensificationType::None, &warmup_adam, false);
+                DensificationType::None, &warmup_adam);
 
             cudaFree(grad_buffer);
         } else {

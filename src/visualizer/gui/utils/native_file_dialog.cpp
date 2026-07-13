@@ -7,6 +7,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "io/formats/colmap.hpp"
+#include "io/video/video_extensions.hpp"
 
 #include <SDL3/SDL_keyboard.h>
 #include <SDL3/SDL_video.h>
@@ -468,7 +469,11 @@ namespace lfs::vis::gui {
         }
 
         [[nodiscard]] std::vector<DialogFilter> videoFilters() {
-            return {makeFilter("Video Files", {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"})};
+            std::vector<std::string> extensions;
+            extensions.reserve(lfs::io::video::kSupportedVideoExtensions.size());
+            for (const std::string_view ext : lfs::io::video::kSupportedVideoExtensions)
+                extensions.emplace_back(ext);
+            return {makeFilter("Video Files", std::move(extensions))};
         }
 
         [[nodiscard]] std::vector<DialogFilter> pythonFilters() {

@@ -5222,6 +5222,164 @@ namespace lfs::vis {
         return std::make_shared<lfs::core::Tensor>(std::move(tensor));
     }
 
+    std::expected<std::shared_ptr<lfs::core::Tensor>, std::string>
+    VksplatViewportRenderer::readOutputDepthImage(VulkanContext& context, const OutputSlot output_slot) const {
+        std::lock_guard<std::mutex> readback_lock(readback_mutex_);
+        if (!context_) {
+            return std::unexpected("VkSplat output depth readback requested before renderer initialization");
+        }
+        if (&context != context_) {
+            return std::unexpected("VkSplat output depth readback received a different Vulkan context");
+        }
+        try {
+            const_cast<VulkanGSRenderer&>(renderer_).waitForPendingBatch();
+        } catch (const std::exception& e) {
+            return std::unexpected(std::format("VkSplat output depth readback pending-batch wait failed: {}", e.what()));
+        }
+        if (!context.waitForSubmittedFrames()) {
+            return std::unexpected(context.lastError());
+        }
+
+        const auto& output = output_slots_[outputSlotIndex(output_slot)][latestOutputRingSlot(output_slot)];
+        if (output.depth_image.image == VK_NULL_HANDLE ||
+            output.size.x <= 0 ||
+            output.size.y <= 0) {
+            return std::unexpected("VkSplat output depth readback requested for an empty output slot");
+        }
+        if (output.depth_image.format != VK_FORMAT_R32_SFLOAT) {
+            return std::unexpected("VkSplat output depth readback only supports R32F depth images");
+        }
+
+        const VkDevice device = context.device();
+        const std::size_t pixel_count =
+            static_cast<std::size_t>(output.size.x) * static_cast<std::size_t>(output.size.y);
+        const VkDeviceSize byte_count = static_cast<VkDeviceSize>(pixel_count * sizeof(float));
+        if (byte_count == 0) {
+            return std::unexpected("VkSplat output depth readback received an empty image");
+        }
+
+        ScopedStagingBuffer staging{};
+        staging.allocator = context.allocator();
+        VkBufferCreateInfo buffer_info{};
+        buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        buffer_info.size = byte_count;
+        buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        VmaAllocationCreateInfo alloc_info{};
+        alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+        alloc_info.flags =
+            VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+            VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        VkResult result = vmaCreateBuffer(
+            staging.allocator,
+            &buffer_info,
+            &alloc_info,
+            &staging.buffer,
+            &staging.allocation,
+            &staging.allocation_info);
+        if (result != VK_SUCCESS || staging.buffer == VK_NULL_HANDLE) {
+            return std::unexpected(vkError("vmaCreateBuffer(VkSplat output depth readback)", result));
+        }
+        staging.vram_scope = "vulkan.vksplat.depth_readback_buffer";
+        staging.vram_label = std::format("output_depth:{}x{}", output.size.x, output.size.y);
+        lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+            staging.vram_scope,
+            staging.vram_label,
+            static_cast<std::size_t>(staging.allocation_info.size));
+        if (staging.allocation_info.pMappedData == nullptr) {
+            return std::unexpected("VkSplat output depth readback staging buffer is not host-mapped");
+        }
+
+        if (const auto ready = ensureReadbackContext(); !ready) {
+            return std::unexpected(ready.error());
+        }
+        const VkCommandBuffer command_buffer = readback_cmd_;
+        result = vkResetCommandBuffer(command_buffer, 0);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(vkError("vkResetCommandBuffer(VkSplat output depth readback)", result));
+        }
+
+        VkCommandBufferBeginInfo begin_info{};
+        begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        result = vkBeginCommandBuffer(command_buffer, &begin_info);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(vkError("vkBeginCommandBuffer(VkSplat output depth readback)", result));
+        }
+
+        const VkImageLayout restore_layout =
+            output.depth_layout != VK_IMAGE_LAYOUT_UNDEFINED
+                ? output.depth_layout
+                : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        context.imageBarriers().transitionImage(
+            command_buffer,
+            output.depth_image.image,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+        VkBufferImageCopy copy_region{};
+        copy_region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        copy_region.imageSubresource.layerCount = 1;
+        copy_region.imageExtent = {
+            static_cast<std::uint32_t>(output.size.x),
+            static_cast<std::uint32_t>(output.size.y),
+            1,
+        };
+        vkCmdCopyImageToBuffer(command_buffer,
+                               output.depth_image.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               staging.buffer,
+                               1,
+                               &copy_region);
+
+        context.imageBarriers().transitionImage(
+            command_buffer,
+            output.depth_image.image,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            restore_layout);
+
+        result = vkEndCommandBuffer(command_buffer);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(vkError("vkEndCommandBuffer(VkSplat output depth readback)", result));
+        }
+        result = vkResetFences(device, 1, &readback_fence_);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(vkError("vkResetFences(VkSplat output depth readback)", result));
+        }
+
+        VkSubmitInfo submit_info{};
+        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submit_info.commandBufferCount = 1;
+        submit_info.pCommandBuffers = &command_buffer;
+        result = vkQueueSubmit(context.graphicsQueue(), 1, &submit_info, readback_fence_);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(vkError("vkQueueSubmit(VkSplat output depth readback)", result));
+        }
+        result = vkWaitForFences(device, 1, &readback_fence_, VK_TRUE, UINT64_MAX);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(vkError("vkWaitForFences(VkSplat output depth readback)", result));
+        }
+        result = vmaInvalidateAllocation(staging.allocator, staging.allocation, 0, byte_count);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(vkError("vmaInvalidateAllocation(VkSplat output depth readback)", result));
+        }
+
+        auto tensor = lfs::core::Tensor::empty(
+            {static_cast<std::size_t>(output.size.y), static_cast<std::size_t>(output.size.x)},
+            lfs::core::Device::CPU,
+            lfs::core::DataType::Float32);
+        if (!tensor.is_valid()) {
+            return std::unexpected("VkSplat output depth readback failed to allocate CPU tensor");
+        }
+        const auto* const src = static_cast<const float*>(staging.allocation_info.pMappedData);
+        auto* const dst = tensor.ptr<float>();
+        if (src == nullptr || dst == nullptr) {
+            return std::unexpected("VkSplat output depth readback has null mapped data");
+        }
+        std::memcpy(dst, src, static_cast<std::size_t>(byte_count));
+        return std::make_shared<lfs::core::Tensor>(std::move(tensor));
+    }
+
     std::expected<void, std::string> VksplatViewportRenderer::readOutputImageIntoCpuHwc(
         VulkanContext& context,
         const OutputSlot output_slot,

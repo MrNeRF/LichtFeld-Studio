@@ -20,34 +20,6 @@
 #include <unistd.h>
 #endif
 
-namespace {
-
-    std::filesystem::path getVenvSitePackages() {
-#ifdef _WIN32
-        const char* const home = std::getenv("USERPROFILE");
-        const auto venv_dir = std::filesystem::path(home ? home : "C:\\") / ".lichtfeld" / "venv";
-        return venv_dir / "Lib" / "site-packages";
-#else
-        const char* const home = std::getenv("HOME");
-        const auto venv_dir = std::filesystem::path(home ? home : "/tmp") / ".lichtfeld" / "venv";
-        const auto lib_dir = venv_dir / "lib";
-
-        if (std::filesystem::exists(lib_dir)) {
-            for (const auto& entry : std::filesystem::directory_iterator(lib_dir)) {
-                if (entry.is_directory()) {
-                    const auto name = entry.path().filename().string();
-                    if (name.starts_with("python")) {
-                        return entry.path() / "site-packages";
-                    }
-                }
-            }
-        }
-        return venv_dir / "lib" / "python3" / "site-packages";
-#endif
-    }
-
-} // namespace
-
 namespace lfs::vis::terminal {
 
     PtyProcess::~PtyProcess() {
@@ -108,81 +80,6 @@ namespace lfs::vis::terminal {
     }
 
 #ifdef _WIN32
-
-    bool PtyProcess::spawn(const std::string& shell, int cols, int rows) {
-        close();
-
-        const COORD size = {static_cast<SHORT>(cols), static_cast<SHORT>(rows)};
-
-        HANDLE pipe_pty_in = INVALID_HANDLE_VALUE;
-        HANDLE pipe_pty_out = INVALID_HANDLE_VALUE;
-
-        if (!CreatePipe(&pipe_in_, &pipe_pty_in, nullptr, 0)) {
-            LOG_ERROR("CreatePipe for input failed");
-            return false;
-        }
-
-        if (!CreatePipe(&pipe_pty_out, &pipe_out_, nullptr, 0)) {
-            LOG_ERROR("CreatePipe for output failed");
-            CloseHandle(pipe_in_);
-            CloseHandle(pipe_pty_in);
-            pipe_in_ = INVALID_HANDLE_VALUE;
-            return false;
-        }
-
-        const HRESULT hr = CreatePseudoConsole(size, pipe_pty_in, pipe_pty_out, 0, &hpc_);
-        CloseHandle(pipe_pty_in);
-        CloseHandle(pipe_pty_out);
-
-        if (FAILED(hr)) {
-            LOG_ERROR("CreatePseudoConsole failed: {}", hr);
-            CloseHandle(pipe_in_);
-            CloseHandle(pipe_out_);
-            pipe_in_ = INVALID_HANDLE_VALUE;
-            pipe_out_ = INVALID_HANDLE_VALUE;
-            return false;
-        }
-
-        STARTUPINFOEXW si = {};
-        si.StartupInfo.cb = sizeof(si);
-
-        SIZE_T attr_size = 0;
-        InitializeProcThreadAttributeList(nullptr, 1, 0, &attr_size);
-        si.lpAttributeList = static_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(HeapAlloc(GetProcessHeap(), 0, attr_size));
-
-        if (!si.lpAttributeList ||
-            !InitializeProcThreadAttributeList(si.lpAttributeList, 1, 0, &attr_size) ||
-            !UpdateProcThreadAttribute(si.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
-                                       hpc_, sizeof(hpc_), nullptr, nullptr)) {
-            LOG_ERROR("Failed to setup process attributes");
-            if (si.lpAttributeList)
-                HeapFree(GetProcessHeap(), 0, si.lpAttributeList);
-            cleanup();
-            return false;
-        }
-
-        std::wstring cmd = shell.empty() ? L"cmd.exe" : std::wstring(shell.begin(), shell.end());
-
-        PROCESS_INFORMATION pi = {};
-        const BOOL success = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE,
-                                            EXTENDED_STARTUPINFO_PRESENT, nullptr, nullptr,
-                                            &si.StartupInfo, &pi);
-
-        DeleteProcThreadAttributeList(si.lpAttributeList);
-        HeapFree(GetProcessHeap(), 0, si.lpAttributeList);
-
-        if (!success) {
-            LOG_ERROR("CreateProcess failed: {}", GetLastError());
-            cleanup();
-            return false;
-        }
-
-        process_ = pi.hProcess;
-        thread_ = pi.hThread;
-
-        LOG_INFO("PTY spawned: {}", shell.empty() ? "cmd.exe" : shell);
-        return true;
-    }
 
     bool PtyProcess::attachPipes(HANDLE read_handle, HANDLE write_handle) {
         close();
@@ -278,71 +175,7 @@ namespace lfs::vis::terminal {
         }
     }
 
-    int PtyProcess::fd() const {
-        return -1;
-    }
-
 #else // POSIX
-
-    bool PtyProcess::spawn(const std::string& shell, int cols, int rows) {
-        close();
-
-        struct winsize ws = {};
-        ws.ws_col = static_cast<unsigned short>(cols);
-        ws.ws_row = static_cast<unsigned short>(rows);
-
-        // Resolve paths before fork (requires /proc/self/exe)
-        std::string python_module_dir;
-        if (const auto path = lfs::core::getPythonModuleDir(); !path.empty()) {
-            python_module_dir = path.string();
-        }
-
-        std::string venv_site_packages;
-        if (const auto path = getVenvSitePackages(); std::filesystem::exists(path)) {
-            venv_site_packages = path.string();
-        }
-
-        child_pid_ = forkpty(&master_fd_, nullptr, nullptr, &ws);
-        if (child_pid_ < 0) {
-            LOG_ERROR("forkpty failed: {}", strerror(errno));
-            return false;
-        }
-
-        if (child_pid_ == 0) {
-            const char* sh = shell.empty() ? getenv("SHELL") : shell.c_str();
-            if (!sh || sh[0] == '\0')
-                sh = "/bin/bash";
-
-            setenv("TERM", "xterm-256color", 1);
-
-            // Build PYTHONPATH: venv + lichtfeld module + existing
-            std::string pythonpath;
-            if (!venv_site_packages.empty()) {
-                pythonpath = venv_site_packages;
-            }
-            if (!python_module_dir.empty()) {
-                if (!pythonpath.empty())
-                    pythonpath += ":";
-                pythonpath += python_module_dir;
-            }
-            if (!pythonpath.empty()) {
-                if (const char* existing = getenv("PYTHONPATH"); existing && existing[0] != '\0') {
-                    pythonpath += ":";
-                    pythonpath += existing;
-                }
-                setenv("PYTHONPATH", pythonpath.c_str(), 1);
-            }
-
-            execlp(sh, sh, nullptr);
-            _exit(127);
-        }
-
-        const int flags = fcntl(master_fd_, F_GETFL, 0);
-        fcntl(master_fd_, F_SETFL, flags | O_NONBLOCK);
-
-        LOG_INFO("PTY spawned: {} (pid {})", shell.empty() ? getenv("SHELL") : shell.c_str(), child_pid_);
-        return true;
-    }
 
     bool PtyProcess::attach(int fd) {
         close();
@@ -421,10 +254,6 @@ namespace lfs::vis::terminal {
                 }
             }
         }
-    }
-
-    int PtyProcess::fd() const {
-        return master_fd_;
     }
 
 #endif

@@ -47,14 +47,6 @@ namespace PerfTimer {
     std::chrono::time_point<std::chrono::high_resolution_clock> hostStartTime;
     double hostTimeDelta = -1.0;
 
-    // reset timing and counts
-    void reset() {
-        for (int i = 0; i < int(TrainStage::END); i++) {
-            stages[i] = {0, 0.0};
-        }
-        marks.clear();
-    }
-
     void hostTic() {
         if (hostHold)
             _THROW_ERROR("hostTic");
@@ -83,16 +75,10 @@ namespace PerfTimer {
 
     template <TrainStage stage>
     Timer<stage>::~Timer() {
-        // std::lock_guard<std::mutex> lock(mutex);
         PerfTimer::stages[int(stage)].count += 1;
 
         if (module->writeTimestampNoExcept(-1))
             marks.emplace_back(stage, -1);
-
-        // auto now = std::chrono::high_resolution_clock::now();
-        // double dt = std::chrono::duration<double>(now - then).count();
-
-        // PerfTimer::stages[int(stage)].total_time += dt;
     }
 
     void pushMarker(VulkanGSPipeline* module) {
@@ -129,11 +115,6 @@ namespace PerfTimer {
         std::vector<Marker> result;
         result.swap(marks);
         return result;
-    }
-
-    std::vector<std::pair<size_t, double>> update(std::vector<double> times) {
-        auto batch_marks = takeMarkers();
-        return update(std::move(times), batch_marks);
     }
 
     std::vector<std::pair<size_t, double>> update(std::vector<double> times,
@@ -179,16 +160,6 @@ namespace PerfTimer {
         return results;
     }
 
-    // return a summary of timing
-    std::map<std::string, std::tuple<size_t, double>> get_summary() {
-        std::map<std::string, std::tuple<size_t, double>> summary;
-        for (int i = 0; i < int(TrainStage::END); i++) {
-            std::string name = _TrainStageNames[i];
-            summary[name] = {stages[i].count, stages[i].total_time};
-        }
-        return summary;
-    }
-
     const char* stage_name(const size_t stage) {
         if (stage >= static_cast<size_t>(TrainStage::END))
             return "Unknown";
@@ -203,7 +174,5 @@ namespace PerfTimer {
 #define _(name) template struct Timer<name>;
     PERF_TIMER_TRAIN_STAGES
 #undef _
-    // template <TrainStage name> Timer<name>::Timer();
-    // template <TrainStage name> Timer<name>::~Timer();
 
 }; // namespace PerfTimer

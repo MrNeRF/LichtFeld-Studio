@@ -217,6 +217,10 @@ namespace lfs::gui {
         return player_ && player_->isPlaying();
     }
 
+    bool VideoExtractorDialog::openVideoPath(const std::filesystem::path& path) {
+        return openVideo(path);
+    }
+
     void VideoExtractorDialog::preloadDirect(const float w, const float h,
                                              const lfs::vis::gui::PanelDrawContext& ctx,
                                              const float clip_y_min,
@@ -421,6 +425,7 @@ namespace lfs::gui {
             return false;
         }
 
+        const bool video_path_changed = path != video_path_;
         video_path_ = path;
         trim_start_ = 0.0f;
         trim_end_ = static_cast<float>(player_->duration());
@@ -432,7 +437,7 @@ namespace lfs::gui {
         texture_needs_update_ = true;
         preview_src_.clear();
 
-        if (output_dir_.empty()) {
+        if (video_path_changed || output_dir_.empty()) {
             std::filesystem::path output_name = video_path_.stem();
             output_name += "_frames";
             output_dir_ = video_path_.parent_path() / output_name;
@@ -491,8 +496,8 @@ namespace lfs::gui {
                     for (int x = 0; x < width; ++x) {
                         const int si = (y * width + x) * 3;
                         const int di = (rotation_deg_ == 90)
-                            ? (x * height + (height - 1 - y)) * 3       // CW
-                            : ((width - 1 - x) * height + y) * 3;      // CCW
+                                           ? (x * height + (height - 1 - y)) * 3 // CW
+                                           : ((width - 1 - x) * height + y) * 3; // CCW
                         rotated_buf[di + 0] = data[si + 0];
                         rotated_buf[di + 1] = data[si + 1];
                         rotated_buf[di + 2] = data[si + 2];
@@ -762,9 +767,11 @@ namespace lfs::gui {
         // Overwrite confirmation buttons
         {
             auto* no = document_->GetElementById("overwrite-no");
-            if (no) no->AddEventListener(Rml::EventId::Click, &listener_);
+            if (no)
+                no->AddEventListener(Rml::EventId::Click, &listener_);
             auto* yes = document_->GetElementById("overwrite-yes");
-            if (yes) yes->AddEventListener(Rml::EventId::Click, &listener_);
+            if (yes)
+                yes->AddEventListener(Rml::EventId::Click, &listener_);
         }
 
         listen_change(mode_select_el_);
@@ -1012,7 +1019,7 @@ namespace lfs::gui {
 
         // Show threshold slider only in threshold mode (hidden in window mode)
         const bool window_mode = sharpness_mode_select_el_ &&
-            sharpness_mode_select_el_->GetSelection() == 1;
+                                 sharpness_mode_select_el_->GetSelection() == 1;
         changed |= setCachedProperty(sharpness_threshold_row_el_, "display",
                                      (sharpness_on && !window_mode) ? "flex" : "none");
         changed |= setCachedProperty(sharpness_window_row_el_, "display",
@@ -1032,8 +1039,8 @@ namespace lfs::gui {
                 est_window = frame_interval_;
 
             std::string opt = window_candidates_select_el_
-                ? window_candidates_select_el_->GetAttribute<Rml::String>("value", "10")
-                : "10";
+                                  ? window_candidates_select_el_->GetAttribute<Rml::String>("value", "10")
+                                  : "10";
             int candidates = 0;
             if (window_candidates_target_ < 0) {
                 // Auto mode: sqrt-based
@@ -1091,8 +1098,8 @@ namespace lfs::gui {
             if (total > 0) {
                 const int discarded = discarded_frames_.load();
                 const std::string discard_str = discarded > 0
-                    ? localizedFormat(VideoExtractor::DISCARDED_FORMAT, discarded)
-                    : "";
+                                                    ? localizedFormat(VideoExtractor::DISCARDED_FORMAT, discarded)
+                                                    : "";
                 changed |= setCachedText(progress_text_el_,
                                          std::format("{}/{}{}", current, total, discard_str));
             } else {
@@ -1109,8 +1116,8 @@ namespace lfs::gui {
             const int saved = current - discarded_frames_.load();
             const int discarded = discarded_frames_.load();
             std::string complete_msg = std::format("{} {}",
-                LOC(VideoExtractor::COMPLETE),
-                localizedFormat(VideoExtractor::EXTRACTED, saved));
+                                                   LOC(VideoExtractor::COMPLETE),
+                                                   localizedFormat(VideoExtractor::EXTRACTED, saved));
             if (discarded > 0)
                 complete_msg += localizedFormat(VideoExtractor::DISCARDED_FORMAT, discarded);
             changed |= setCachedText(complete_text_el_, complete_msg);

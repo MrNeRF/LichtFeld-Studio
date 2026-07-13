@@ -108,6 +108,7 @@ pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
 add_library(lfs_video STATIC
         include/io/video/video_encoder_interface.hpp
         include/io/video/video_export_options.hpp
+        include/io/video/video_extensions.hpp
         video/video_encoder.hpp
         video/video_encoder.cpp
         video/color_convert.cuh

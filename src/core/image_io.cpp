@@ -12,6 +12,7 @@
 #include "core/path_utils.hpp"
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <condition_variable>
 #include <filesystem>
 #include <iostream>
@@ -586,6 +587,180 @@ namespace lfs::core {
     }
 
     void free_image(void* img) { std::free(img); }
+
+    std::tuple<float*, int, int> load_image_gray_high_bitdepth(std::filesystem::path p) {
+        init_oiio();
+
+        const std::string path_utf8 = lfs::core::path_to_utf8(p);
+        ImageInputPtr in = open_image_input(path_utf8);
+        if (!in) {
+            return {nullptr, 0, 0};
+        }
+
+        const OIIO::ImageSpec& spec = in->spec();
+        if (spec.format == OIIO::TypeDesc::UINT8) {
+            return {nullptr, 0, 0};
+        }
+
+        const int w = spec.width;
+        const int h = spec.height;
+        auto* out = static_cast<float*>(std::malloc(sizeof(float) * static_cast<size_t>(w) * h));
+        if (!out) {
+            throw std::bad_alloc();
+        }
+
+        if (!in->read_image(0, 0, 0, 1, OIIO::TypeDesc::FLOAT, out)) {
+            std::free(out);
+            LOG_ERROR("load_image_gray_high_bitdepth: read failed for {}: {}", path_utf8, in->geterror());
+            return {nullptr, 0, 0};
+        }
+
+        return {out, w, h};
+    }
+
+    std::tuple<float*, int, int> load_image_rgb_high_bitdepth(std::filesystem::path p) {
+        init_oiio();
+
+        const std::string path_utf8 = lfs::core::path_to_utf8(p);
+        ImageInputPtr in = open_image_input(path_utf8);
+        if (!in) {
+            return {nullptr, 0, 0};
+        }
+
+        const OIIO::ImageSpec& spec = in->spec();
+        if (spec.format == OIIO::TypeDesc::UINT8 || spec.nchannels < 3) {
+            return {nullptr, 0, 0};
+        }
+
+        const int w = spec.width;
+        const int h = spec.height;
+        auto* out = static_cast<float*>(std::malloc(sizeof(float) * static_cast<size_t>(w) * h * 3));
+        if (!out) {
+            throw std::bad_alloc();
+        }
+
+        if (!in->read_image(0, 0, 0, 3, OIIO::TypeDesc::FLOAT, out)) {
+            std::free(out);
+            LOG_ERROR("load_image_rgb_high_bitdepth: read failed for {}: {}", path_utf8, in->geterror());
+            return {nullptr, 0, 0};
+        }
+
+        return {out, w, h};
+    }
+
+    void free_image_float(float* img) { std::free(img); }
+
+    float image_quantization_step(const std::filesystem::path& p) {
+        init_oiio();
+
+        ImageInputPtr in = open_image_input(lfs::core::path_to_utf8(p));
+        if (!in) {
+            return 0.0f;
+        }
+        const OIIO::TypeDesc format = in->spec().format;
+        if (format == OIIO::TypeDesc::UINT8 || format == OIIO::TypeDesc::INT8) {
+            return 1.0f / 255.0f;
+        }
+        if (format == OIIO::TypeDesc::UINT16 || format == OIIO::TypeDesc::INT16) {
+            return 1.0f / 65535.0f;
+        }
+        return 0.0f;
+    }
+
+    namespace {
+        void flip_normal_prior_yz(float* ys, float* zs,
+                                  const size_t pixel_count, const size_t stride) {
+            for (size_t i = 0; i < pixel_count; ++i) {
+                ys[i * stride] = -ys[i * stride];
+                zs[i * stride] = -zs[i * stride];
+            }
+        }
+
+        void transform_normal_world_to_camera(float& x, float& y, float& z, const std::array<float, 9>& w2c) {
+            const float wx = x;
+            const float wy = y;
+            const float wz = z;
+            x = w2c[0] * wx + w2c[1] * wy + w2c[2] * wz;
+            y = w2c[3] * wx + w2c[4] * wy + w2c[5] * wz;
+            z = w2c[6] * wx + w2c[7] * wy + w2c[8] * wz;
+        }
+    } // namespace
+
+    void flip_normal_prior_yz_hwc(float* data, const size_t pixel_count) {
+        flip_normal_prior_yz(data + 1, data + 2, pixel_count, 3);
+    }
+
+    void flip_normal_prior_yz_chw(float* data, const size_t pixel_count) {
+        flip_normal_prior_yz(data + pixel_count, data + 2 * pixel_count, pixel_count, 1);
+    }
+
+    void transform_normal_prior_world_to_camera_hwc(
+        float* data, const size_t pixel_count, const std::array<float, 9>& w2c) {
+        for (size_t i = 0; i < pixel_count; ++i) {
+            transform_normal_world_to_camera(data[i * 3], data[i * 3 + 1], data[i * 3 + 2], w2c);
+        }
+    }
+
+    void transform_normal_prior_world_to_camera_chw(
+        float* data, const size_t pixel_count, const std::array<float, 9>& w2c) {
+        float* const xs = data;
+        float* const ys = data + pixel_count;
+        float* const zs = data + 2 * pixel_count;
+        for (size_t i = 0; i < pixel_count; ++i) {
+            transform_normal_world_to_camera(xs[i], ys[i], zs[i], w2c);
+        }
+    }
+
+    float srgb_encoding_to_linear(const float v) {
+        if (v <= 0.04045f) {
+            return v / 12.92f;
+        }
+        return std::pow((v + 0.055f) / 1.055f, 2.4f);
+    }
+
+    void srgb_normal_prior_to_linear_chw(float* data, const size_t value_count) {
+        for (size_t i = 0; i < value_count; ++i) {
+            const float encoded = data[i] * 0.5f + 0.5f;
+            data[i] = srgb_encoding_to_linear(encoded) * 2.0f - 1.0f;
+        }
+    }
+
+    std::vector<NormalPriorSample> sample_normal_prior_pixels(
+        const std::filesystem::path& p, const size_t max_samples) {
+        init_oiio();
+
+        ImageInputPtr in = open_image_input(lfs::core::path_to_utf8(p));
+        if (!in) {
+            return {};
+        }
+        const OIIO::ImageSpec& spec = in->spec();
+        if (spec.nchannels < 3 || spec.width <= 0 || spec.height <= 0 || max_samples == 0) {
+            return {};
+        }
+
+        const size_t pixel_count = static_cast<size_t>(spec.width) * spec.height;
+        std::vector<float> hwc(pixel_count * 3);
+        if (!in->read_image(0, 0, 0, 3, OIIO::TypeDesc::FLOAT, hwc.data())) {
+            return {};
+        }
+
+        const size_t stride = std::max<size_t>(1, pixel_count / max_samples);
+        const float inv_width = 1.0f / static_cast<float>(spec.width);
+        const float inv_height = 1.0f / static_cast<float>(spec.height);
+        std::vector<NormalPriorSample> samples;
+        samples.reserve(pixel_count / stride + 1);
+        for (size_t i = 0; i < pixel_count; i += stride) {
+            const size_t x = i % static_cast<size_t>(spec.width);
+            const size_t y = i / static_cast<size_t>(spec.width);
+            samples.push_back(NormalPriorSample{
+                (static_cast<float>(x) + 0.5f) * inv_width,
+                (static_cast<float>(y) + 0.5f) * inv_height,
+                hwc[i * 3],
+                hwc[i * 3 + 1],
+                hwc[i * 3 + 2]});
+        }
+        return samples;
+    }
 
     bool save_img_data(const std::filesystem::path& p, const std::tuple<unsigned char*, int, int, int>& image_data) {
         init_oiio(); // Assuming this initializes OIIO like in your load_image

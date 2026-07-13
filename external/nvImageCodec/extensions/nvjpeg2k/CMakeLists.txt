@@ -50,8 +50,10 @@ if(NOT WITH_DYNAMIC_NVJPEG2K)
 else()
   target_link_libraries(${EXT_LIBRARY_NAME}
     PRIVATE dynlink_nvjpeg2k)
-  target_link_libraries(${EXT_LIBRARY_NAME}
-    PRIVATE "-Wl,--exclude-libs,$<TARGET_FILE_NAME:dynlink_nvjpeg2k>")
+  if(UNIX)
+    target_link_libraries(${EXT_LIBRARY_NAME}
+      PRIVATE "-Wl,--exclude-libs,$<TARGET_FILE_NAME:dynlink_nvjpeg2k>")
+  endif()
 endif()
 
 target_link_libraries(${EXT_LIBRARY_NAME} PUBLIC
@@ -65,6 +67,8 @@ if(UNIX)
   set_target_properties(${EXT_LIBRARY_NAME} ${EXT_LIBRARY_NAME}_static PROPERTIES
     POSITION_INDEPENDENT_CODE ON
     VERSION ${PROJECT_VERSION}
+    BUILD_RPATH "$ORIGIN;$ORIGIN/.."
+    INSTALL_RPATH "$ORIGIN;$ORIGIN/.."
     NO_SONAME OFF)
 else()
   # Windows: set explicit output directories for multi-config generators

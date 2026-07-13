@@ -52,11 +52,18 @@ namespace lfs::core {
 
         static std::string_view current_label() noexcept;
 
+        void suspend_deallocations_for_process_exit() {
+            suspend_deallocations_.store(true, std::memory_order_release);
+        }
+
         void shutdown() {
             bool expected = false;
             if (!shutdown_.compare_exchange_strong(expected, true))
                 return;
             LOG_INFO("Shutting down CudaMemoryPool...");
+            if (suspend_deallocations_.load(std::memory_order_acquire)) {
+                return;
+            }
             DeferredFreeQueue::instance().shutdown();
             SizeBucketedPool::instance().shutdown();
             GPUSlabAllocator::instance().shutdown();
@@ -210,6 +217,11 @@ namespace lfs::core {
                 return;
             if (shutdown_.load(std::memory_order_acquire))
                 return;
+            if (suspend_deallocations_.load(std::memory_order_acquire)) {
+                AllocationInfo info;
+                take_allocation(ptr, info);
+                return;
+            }
 
             if constexpr (ENABLE_ALLOCATION_PROFILING) {
                 AllocationProfiler::instance().record_deallocation(ptr);
@@ -319,6 +331,9 @@ namespace lfs::core {
         }
 
         void trim_cached_memory() {
+            if (suspend_deallocations_.load(std::memory_order_acquire)) {
+                return;
+            }
             cudaDeviceSynchronize();
             DeferredFreeQueue::instance().flush();
             {
@@ -518,6 +533,7 @@ namespace lfs::core {
         std::atomic<size_t> direct_alloc_count_{0};
         bool slab_enabled_{false};
         std::atomic<bool> shutdown_{false};
+        std::atomic<bool> suspend_deallocations_{false};
         Stats stats_;
     };
 

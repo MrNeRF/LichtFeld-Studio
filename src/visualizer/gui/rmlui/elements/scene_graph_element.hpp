@@ -129,8 +129,6 @@ namespace lfs::vis::gui {
         bool syncCameraFrustumVisibility();
         void appendSnapshotRows(core::NodeId node_id, int depth, std::vector<FlatRow>& rows,
                                 const std::string& filter_text_lower) const;
-        void appendVisibleSubtreeRows(core::NodeId node_id, int depth,
-                                      std::vector<FlatRow>& rows) const;
         void rebuildIndex();
         void syncVisibleRows(bool force);
         void bindRow(RowSlot& slot, const FlatRow& row, size_t absolute_index);

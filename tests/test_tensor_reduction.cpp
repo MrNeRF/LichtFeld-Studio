@@ -306,10 +306,7 @@ TEST_F(TensorReductionTest, ItemMultiElement) {
     std::vector<float> vec_data = {1.0f, 2.0f, 3.0f};
     auto custom_tensor = Tensor::from_vector(vec_data, {3}, Device::CUDA);
 
-    // Should return 0 or fail gracefully
-    float value = custom_tensor.item();
-    // Just verify it doesn't crash - implementation defined behavior
-    EXPECT_TRUE(true);
+    EXPECT_THROW((void)custom_tensor.item(), std::runtime_error);
 }
 
 // ============= Dimensional Reductions =============

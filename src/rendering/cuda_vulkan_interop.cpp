@@ -301,7 +301,6 @@ namespace lfs::rendering {
         last_signaled_ = std::exchange(other.last_signaled_, 0);
         extent_ = std::exchange(other.extent_, {});
         format_ = std::exchange(other.format_, CudaVulkanImageFormat::Rgba8Unorm);
-        staging_tensor_ = std::move(other.staging_tensor_);
         upload_source_ = std::move(other.upload_source_);
         last_error_ = std::move(other.last_error_);
         return *this;
@@ -426,7 +425,6 @@ namespace lfs::rendering {
     }
 
     void CudaVulkanInterop::reset() {
-        staging_tensor_ = {};
         upload_source_ = {};
         if (surface_ != 0) {
             cudaDestroySurfaceObject(surface_);
@@ -458,33 +456,6 @@ namespace lfs::rendering {
                cuda_timeline_ != nullptr &&
                extent_.width > 0 &&
                extent_.height > 0;
-    }
-
-    lfs::core::Tensor CudaVulkanInterop::view_as_tensor() const {
-        if (!valid()) {
-            last_error_ = "CUDA/Vulkan interop target is not initialized";
-            return {};
-        }
-        const lfs::core::TensorShape shape{
-            static_cast<std::size_t>(extent_.height),
-            static_cast<std::size_t>(extent_.width),
-            std::size_t{4},
-        };
-        if (!staging_tensor_.is_valid() ||
-            staging_tensor_.shape() != shape ||
-            staging_tensor_.dtype() != lfs::core::DataType::UInt8 ||
-            staging_tensor_.device() != lfs::core::Device::CUDA) {
-            staging_tensor_ = lfs::core::Tensor::empty(shape, lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
-            staging_tensor_.set_name("cuda_vulkan_interop_staging");
-        }
-        return staging_tensor_;
-    }
-
-    bool CudaVulkanInterop::copyViewToSurface(const cudaStream_t stream, const bool flip_y) const {
-        if (!staging_tensor_.is_valid()) {
-            return fail("CUDA/Vulkan interop staging tensor has not been requested");
-        }
-        return copyTensorToSurface(staging_tensor_, stream, flip_y);
     }
 
     bool CudaVulkanInterop::copyTensorToSurface(const lfs::core::Tensor& tensor,
@@ -533,18 +504,6 @@ namespace lfs::rendering {
                 stream);
         }
         return failCuda("copy tensor to CUDA surface", status);
-    }
-
-    bool CudaVulkanInterop::wait(const std::uint64_t value, const cudaStream_t stream) const {
-        last_error_.clear();
-        if (cuda_timeline_ == nullptr) {
-            return fail("CUDA/Vulkan timeline semaphore is not initialized");
-        }
-
-        cudaExternalSemaphoreWaitParams params{};
-        params.params.fence.value = value;
-        const cudaError_t status = cudaWaitExternalSemaphoresAsync(&cuda_timeline_, &params, 1, stream);
-        return failCuda("cudaWaitExternalSemaphoresAsync", status);
     }
 
     bool CudaVulkanInterop::signal(const std::uint64_t value, const cudaStream_t stream) const {
@@ -825,47 +784,6 @@ namespace lfs::rendering {
         const cudaError_t status = cudaMemcpyAsync(
             dst, upload_source_.data_ptr(), byte_count, cudaMemcpyDeviceToDevice, stream);
         return failCuda("cudaMemcpyAsync(CUDA tensor -> Vulkan buffer)", status);
-    }
-
-    bool CudaVulkanBufferInterop::copyToTensor(lfs::core::Tensor& tensor,
-                                               const std::size_t byte_count,
-                                               const cudaStream_t stream) const {
-        return copyToTensor(tensor, byte_count, 0, stream);
-    }
-
-    bool CudaVulkanBufferInterop::copyToTensor(lfs::core::Tensor& tensor,
-                                               const std::size_t byte_count,
-                                               const std::size_t src_offset,
-                                               const cudaStream_t stream) const {
-        last_error_.clear();
-        if (!valid()) {
-            return fail("CUDA/Vulkan external buffer is not initialized");
-        }
-        if (byte_count == 0 || src_offset > size_ || byte_count > size_ - src_offset) {
-            return fail(std::format(
-                "CUDA/Vulkan buffer copy [{}, {}+{}) exceeds source {}",
-                src_offset, src_offset, byte_count, size_));
-        }
-        if (!tensor.is_valid() || tensor.data_ptr() == nullptr) {
-            return fail("CUDA/Vulkan buffer copy received an invalid destination tensor");
-        }
-        if (tensor.device() != lfs::core::Device::CUDA) {
-            return fail("CUDA/Vulkan buffer copy destination must be a CUDA tensor");
-        }
-        if (!tensor.is_contiguous()) {
-            return fail("CUDA/Vulkan buffer copy destination must be contiguous");
-        }
-        if (byte_count > tensor.bytes()) {
-            return fail(std::format("CUDA/Vulkan buffer copy requested {} bytes into {} byte tensor",
-                                    byte_count,
-                                    tensor.bytes()));
-        }
-
-        const cudaStream_t copy_stream = stream ? stream : tensor.stream();
-        auto* const src = static_cast<std::uint8_t*>(device_ptr_) + src_offset;
-        const cudaError_t status = cudaMemcpyAsync(
-            tensor.data_ptr(), src, byte_count, cudaMemcpyDeviceToDevice, copy_stream);
-        return failCuda("cudaMemcpyAsync(Vulkan buffer -> CUDA tensor)", status);
     }
 
     bool CudaVulkanBufferInterop::fail(std::string message) const {

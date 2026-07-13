@@ -6,6 +6,7 @@
 
 #include "core/export.hpp"
 #include "core/tensor.hpp"
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <filesystem>
@@ -41,6 +42,55 @@ namespace lfs::core {
     LFS_CORE_API bool save_img_data(const std::filesystem::path& p, const std::tuple<unsigned char*, int, int, int>& image_data);
 
     LFS_CORE_API void free_image(void* image);
+
+    // Loads channel 0 of a >8-bit image (16-bit PNG, float TIFF/EXR) at native
+    // resolution as float32; integer formats are normalized to [0,1].
+    // Returns {nullptr, 0, 0} for 8-bit files so callers use the uint8 path.
+    LFS_CORE_API std::tuple<float*, int, int>
+    load_image_gray_high_bitdepth(std::filesystem::path p);
+
+    // Loads the first three channels of a >8-bit image at native resolution as
+    // interleaved HWC float32; integer formats are normalized to [0,1].
+    // Returns {nullptr, 0, 0} for 8-bit or <3-channel files.
+    LFS_CORE_API std::tuple<float*, int, int>
+    load_image_rgb_high_bitdepth(std::filesystem::path p);
+    LFS_CORE_API void free_image_float(float* image);
+
+    // Quantization step of the file's pixel encoding in normalized [0,1] units:
+    // 1/255 for 8-bit, 1/65535 for 16-bit, 0 for float formats or on failure.
+    // Header-only probe, does not decode pixels.
+    LFS_CORE_API float image_quantization_step(const std::filesystem::path& p);
+
+    // Converts a decoded normal-map prior (n in [-1,1]) between the OpenGL
+    // camera convention (y up, z toward the viewer) and the OpenCV one used by
+    // the rasterizer (y down, z forward) by flipping y and z in place.
+    LFS_CORE_API void flip_normal_prior_yz_hwc(float* data, size_t pixel_count);
+    LFS_CORE_API void flip_normal_prior_yz_chw(float* data, size_t pixel_count);
+    LFS_CORE_API void transform_normal_prior_world_to_camera_hwc(
+        float* data, size_t pixel_count, const std::array<float, 9>& w2c);
+    LFS_CORE_API void transform_normal_prior_world_to_camera_chw(
+        float* data, size_t pixel_count, const std::array<float, 9>& w2c);
+
+    // Inverse of the sRGB display transform for [0,1] encodings. Renderers
+    // (e.g. Blender's default view transform) often save normal passes through
+    // it; decoding those linearly skews every normal by tens of degrees.
+    LFS_CORE_API float srgb_encoding_to_linear(float v);
+    // In-place sRGB->linear on already-decoded normals (n in [-1,1]).
+    LFS_CORE_API void srgb_normal_prior_to_linear_chw(float* data, size_t value_count);
+
+    struct NormalPriorSample {
+        float u = 0.0f; // normalized pixel-center image coordinates in [0,1]
+        float v = 0.0f;
+        float r = 0.0f; // raw file-encoded channel values in [0,1]
+        float g = 0.0f;
+        float b = 0.0f;
+    };
+
+    // Stride-sampled pixels of a normal-map file with raw [0,1] encodings and
+    // normalized coordinates; empty on failure. Dataset-level convention
+    // probing decodes these under multiple gamma/frame hypotheses.
+    LFS_CORE_API std::vector<NormalPriorSample> sample_normal_prior_pixels(
+        const std::filesystem::path& p, size_t max_samples);
 
 } // namespace lfs::core
 

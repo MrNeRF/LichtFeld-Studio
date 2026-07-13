@@ -153,9 +153,9 @@ namespace lfs::io {
         }
 
         [[nodiscard]] double computeSharpnessScore(const uint8_t* rgb,
-                                                     const int w,
-                                                     const int h,
-                                                     const SharpnessAlgorithm algo) {
+                                                   const int w,
+                                                   const int h,
+                                                   const SharpnessAlgorithm algo) {
             const long long total_pixels = static_cast<long long>(w) * h;
             // Laplacian threshold: pixel needs Laplacian > 10 to count as edge
             // Tenengrad threshold: pixel needs Sobel energy > 40 to count as edge (4x)
@@ -168,26 +168,22 @@ namespace lfs::io {
                 for (int y = 1; y < h - 1; ++y) {
                     for (int x = 1; x < w - 1; ++x) {
                         const uint8_t* const p = rgb + (y * w + x) * 3 + 1;
-                        const int lap = std::abs(static_cast<int>(p[0] * 4)
-                                                - p[-w * 3] - p[3] - p[-3] - p[w * 3]);
+                        const int lap = std::abs(static_cast<int>(p[0] * 4) - p[-w * 3] - p[3] - p[-3] - p[w * 3]);
                         if (lap > lap_threshold) {
                             ++edge_count;
                             continue;
                         }
-                        const int gx = -p[-w * 3 - 3] + p[-w * 3 + 3]
-                                       - p[-3] * 2 + p[3] * 2
-                                       - p[+w * 3 - 3] + p[+w * 3 + 3];
-                        const int gy = -p[-w * 3 - 3] - p[-w * 3] * 2 - p[-w * 3 + 3]
-                                       + p[+w * 3 - 3] + p[+w * 3] * 2 + p[+w * 3 + 3];
-                        if (std::abs(gx) + std::abs(gy) > ten_threshold) ++edge_count;
+                        const int gx = -p[-w * 3 - 3] + p[-w * 3 + 3] - p[-3] * 2 + p[3] * 2 - p[+w * 3 - 3] + p[+w * 3 + 3];
+                        const int gy = -p[-w * 3 - 3] - p[-w * 3] * 2 - p[-w * 3 + 3] + p[+w * 3 - 3] + p[+w * 3] * 2 + p[+w * 3 + 3];
+                        if (std::abs(gx) + std::abs(gy) > ten_threshold)
+                            ++edge_count;
                     }
                 }
             } else if (algo == SharpnessAlgorithm::LAPLACIAN) {
                 for (int y = 1; y < h - 1; ++y) {
                     for (int x = 1; x < w - 1; ++x) {
                         const uint8_t* const p = rgb + (y * w + x) * 3 + 1;
-                        if (std::abs(static_cast<int>(p[0] * 4)
-                                    - p[-w * 3] - p[3] - p[-3] - p[w * 3]) > lap_threshold)
+                        if (std::abs(static_cast<int>(p[0] * 4) - p[-w * 3] - p[3] - p[-3] - p[w * 3]) > lap_threshold)
                             ++edge_count;
                     }
                 }
@@ -195,12 +191,10 @@ namespace lfs::io {
                 for (int y = 1; y < h - 1; ++y) {
                     for (int x = 1; x < w - 1; ++x) {
                         const uint8_t* const p = rgb + (y * w + x) * 3 + 1;
-                        const int gx = -p[-w * 3 - 3] + p[-w * 3 + 3]
-                                       - p[-3] * 2 + p[3] * 2
-                                       - p[+w * 3 - 3] + p[+w * 3 + 3];
-                        const int gy = -p[-w * 3 - 3] - p[-w * 3] * 2 - p[-w * 3 + 3]
-                                       + p[+w * 3 - 3] + p[+w * 3] * 2 + p[+w * 3 + 3];
-                        if (std::abs(gx) + std::abs(gy) > ten_threshold) ++edge_count;
+                        const int gx = -p[-w * 3 - 3] + p[-w * 3 + 3] - p[-3] * 2 + p[3] * 2 - p[+w * 3 - 3] + p[+w * 3 + 3];
+                        const int gy = -p[-w * 3 - 3] - p[-w * 3] * 2 - p[-w * 3 + 3] + p[+w * 3 - 3] + p[+w * 3] * 2 + p[+w * 3 + 3];
+                        if (std::abs(gx) + std::abs(gy) > ten_threshold)
+                            ++edge_count;
                     }
                 }
             }
@@ -590,12 +584,10 @@ namespace lfs::io {
                             write_jpeg_to_file(batch_filenames[i], encoded[i]);
                             ++written_count;
                             if (params.generate_metadata && i < batch_meta.size()) {
-                                saved_frames.push_back({
-                                    lfs::core::path_to_utf8(batch_filenames[i].filename()),
-                                    batch_meta[i].timestamp,
-                                    batch_meta[i].source_frame,
-                                    batch_meta[i].sharpness_score
-                                });
+                                saved_frames.push_back({lfs::core::path_to_utf8(batch_filenames[i].filename()),
+                                                        batch_meta[i].timestamp,
+                                                        batch_meta[i].source_frame,
+                                                        batch_meta[i].sharpness_score});
                             }
                         }
                     }
@@ -662,8 +654,8 @@ namespace lfs::io {
                                 for (int x = 0; x < out_width; ++x) {
                                     const int si = (y * out_width + x) * 3;
                                     const int di = (params.rotation == 90)
-                                        ? (x * out_height + (out_height - 1 - y)) * 3
-                                        : ((out_width - 1 - x) * out_height + y) * 3;
+                                                       ? (x * out_height + (out_height - 1 - y)) * 3
+                                                       : ((out_width - 1 - x) * out_height + y) * 3;
                                     rot_buf[di + 0] = best->rgb[si + 0];
                                     rot_buf[di + 1] = best->rgb[si + 1];
                                     rot_buf[di + 2] = best->rgb[si + 2];
@@ -681,12 +673,10 @@ namespace lfs::io {
                     } else {
                         ++written_count;
                         if (params.generate_metadata) {
-                            saved_frames.push_back({
-                                lfs::core::path_to_utf8(fname.filename()),
-                                best->timestamp,
-                                best->source_frame,
-                                best->score
-                            });
+                            saved_frames.push_back({lfs::core::path_to_utf8(fname.filename()),
+                                                    best->timestamp,
+                                                    best->source_frame,
+                                                    best->score});
                         }
                     }
                     ++saved_count;
@@ -880,8 +870,8 @@ namespace lfs::io {
                                     for (int x = 0; x < out_width; ++x) {
                                         const int si = (y * out_width + x) * 3;
                                         const int di = (params.rotation == 90)
-                                            ? (x * out_height + (out_height - 1 - y)) * 3       // CW
-                                            : ((out_width - 1 - x) * out_height + y) * 3;       // CCW
+                                                           ? (x * out_height + (out_height - 1 - y)) * 3 // CW
+                                                           : ((out_width - 1 - x) * out_height + y) * 3; // CCW
                                         rot_buf[di + 0] = cpu_contiguous_buffer[si + 0];
                                         rot_buf[di + 1] = cpu_contiguous_buffer[si + 1];
                                         rot_buf[di + 2] = cpu_contiguous_buffer[si + 2];
@@ -912,16 +902,14 @@ namespace lfs::io {
                                 flush_jpeg_batch();
                             }
                         } else if (write_image_file(filename, hw_rot_w, hw_rot_h,
-                                                     cpu_contiguous_buffer, params.format,
-                                                     params.jpg_quality)) {
+                                                    cpu_contiguous_buffer, params.format,
+                                                    params.jpg_quality)) {
                             ++written_count;
                             if (params.generate_metadata) {
-                                saved_frames.push_back({
-                                    lfs::core::path_to_utf8(filename.filename()),
-                                    current_frame_time,
-                                    current_src_frame,
-                                    frame_score
-                                });
+                                saved_frames.push_back({lfs::core::path_to_utf8(filename.filename()),
+                                                        current_frame_time,
+                                                        current_src_frame,
+                                                        frame_score});
                             }
                         } else {
                             LOG_WARN("Failed to write extracted frame: {}", lfs::core::path_to_utf8(filename));
@@ -991,8 +979,8 @@ namespace lfs::io {
                                 for (int x = 0; x < out_width; ++x) {
                                     const int si = (y * out_width + x) * 3;
                                     const int di = (params.rotation == 90)
-                                        ? (x * out_height + (out_height - 1 - y)) * 3       // CW
-                                        : ((out_width - 1 - x) * out_height + y) * 3;       // CCW
+                                                       ? (x * out_height + (out_height - 1 - y)) * 3 // CW
+                                                       : ((out_width - 1 - x) * out_height + y) * 3; // CCW
                                     rot_buf[di + 0] = cpu_contiguous_buffer[si + 0];
                                     rot_buf[di + 1] = cpu_contiguous_buffer[si + 1];
                                     rot_buf[di + 2] = cpu_contiguous_buffer[si + 2];
@@ -1025,16 +1013,14 @@ namespace lfs::io {
                             flush_jpeg_batch();
                         }
                     } else if (write_image_file(filename, sw_rot_w, sw_rot_h,
-                                                 cpu_contiguous_buffer, params.format,
-                                                 params.jpg_quality)) {
+                                                cpu_contiguous_buffer, params.format,
+                                                params.jpg_quality)) {
                         ++written_count;
                         if (params.generate_metadata) {
-                            saved_frames.push_back({
-                                lfs::core::path_to_utf8(filename.filename()),
-                                current_frame_time,
-                                current_src_frame,
-                                frame_score
-                            });
+                            saved_frames.push_back({lfs::core::path_to_utf8(filename.filename()),
+                                                    current_frame_time,
+                                                    current_src_frame,
+                                                    frame_score});
                         }
                     } else {
                         LOG_WARN("Failed to write extracted frame: {}", lfs::core::path_to_utf8(filename));
@@ -1197,8 +1183,8 @@ namespace lfs::io {
                         root["source_size"] = {src_width, src_height};
                         root["rotation"] = params.rotation;
                         root["output_size"] = (params.rotation == 90 || params.rotation == 270)
-                            ? nlohmann::json{out_height, out_width}
-                            : nlohmann::json{out_width, out_height};
+                                                  ? nlohmann::json{out_height, out_width}
+                                                  : nlohmann::json{out_width, out_height};
                         root["output_format"] = params.format == ImageFormat::PNG ? "png" : "jpg";
                         root["output_quality"] = params.jpg_quality;
                         root["filename_pattern"] = params.filename_pattern;
@@ -1212,9 +1198,9 @@ namespace lfs::io {
                         if (params.sharpness.enabled) {
                             std::string algo;
                             switch (params.sharpness.algorithm) {
-                                case SharpnessAlgorithm::LAPLACIAN: algo = "laplacian"; break;
-                                case SharpnessAlgorithm::TENENGRAD: algo = "tenengrad"; break;
-                                case SharpnessAlgorithm::COMBINED: algo = "combined"; break;
+                            case SharpnessAlgorithm::LAPLACIAN: algo = "laplacian"; break;
+                            case SharpnessAlgorithm::TENENGRAD: algo = "tenengrad"; break;
+                            case SharpnessAlgorithm::COMBINED: algo = "combined"; break;
                             }
                             root["sharpness"]["algorithm"] = algo;
                             root["sharpness"]["threshold"] = params.sharpness.threshold;
@@ -1232,7 +1218,9 @@ namespace lfs::io {
                             int eff = window_est_frames;
                             if (params.sharpness.window_candidates_target < 0)
                                 eff = std::min(std::clamp(static_cast<int>(
-                                    std::round(std::sqrt(static_cast<double>(window_est_frames))) * 2), 5, 20), window_est_frames);
+                                                              std::round(std::sqrt(static_cast<double>(window_est_frames))) * 2),
+                                                          5, 20),
+                                               window_est_frames);
                             else if (params.sharpness.window_candidates_target > 0)
                                 eff = std::min(params.sharpness.window_candidates_target, window_est_frames);
                             root["sharpness"]["effective_candidates_per_window"] = eff;

@@ -398,50 +398,107 @@ TEST(FastGSDepthGradientTest, BackwardDepthMatchesLibtorchAutogradForOverlapping
     }
 }
 
-TEST(FastGSDepthGradientTest, DetachedDepthWeightsMoveDepthButNotOpacity) {
+namespace {
+    struct NormalChannelScene {
+        std::vector<float> means_data{0.0f, 0.0f, 1.0f};
+        // Distinct raw log-scales with z clearly smallest so the normal axis
+        // (argmin variance) is stable under the perturbations below.
+        std::vector<float> scaling_data{-1.0f, -1.5f, -3.0f};
+        float opacity_value = 0.3f;
+        std::vector<float> t_data{0.0f, 0.0f, 4.0f};
+
+        SplatData make_splat(const std::vector<float>& rotation_data) const {
+            auto means = Tensor::from_blob(const_cast<float*>(means_data.data()), {1, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+            auto sh0 = Tensor::zeros({1, 1, 3}, Device::CUDA);
+            auto shN = Tensor::zeros({1, 0, 3}, Device::CUDA);
+            auto scaling = Tensor::from_blob(const_cast<float*>(scaling_data.data()), {1, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+            auto rotation = Tensor::from_blob(const_cast<float*>(rotation_data.data()), {1, 4}, Device::CPU, DataType::Float32).to(Device::CUDA);
+            const float raw_opacity = std::log(opacity_value / (1.0f - opacity_value));
+            auto opacity = Tensor::full({1}, raw_opacity, Device::CUDA);
+            return SplatData(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
+        }
+
+        Camera make_camera() const {
+            auto R = Tensor::eye(3, Device::CUDA);
+            auto T = Tensor::from_blob(const_cast<float*>(t_data.data()), {3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+            return Camera(R, T, 1.0f, 1.0f, 0.5f, 0.5f,
+                          Tensor(), Tensor(), CameraModelType::PINHOLE,
+                          "normal_grad", "", std::filesystem::path{}, 1, 1, 0);
+        }
+    };
+} // namespace
+
+TEST(FastGSNormalChannelTest, RendersCameraSpaceNormalForCenteredSplat) {
     if (!torch::cuda::is_available()) {
         GTEST_SKIP() << "CUDA not available";
     }
 
-    std::vector<float> means_data{
-        0.0f, 0.0f, 0.5f,
-        0.0f, 0.0f, 1.5f};
-    auto means = Tensor::from_blob(means_data.data(), {2, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-    auto sh0 = Tensor::zeros({2, 1, 3}, Device::CUDA);
-    auto shN = Tensor::zeros({2, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({2, 3}, -1.5f, Device::CUDA);
-    std::vector<float> rotation_data{
-        1.0f, 0.0f, 0.0f, 0.0f,
-        1.0f, 0.0f, 0.0f, 0.0f};
-    auto rotation = Tensor::from_blob(rotation_data.data(), {2, 4}, Device::CPU, DataType::Float32).to(Device::CUDA);
-
-    const std::vector<float> opacity_values{0.25f, 0.4f};
-    std::vector<float> raw_opacity_values{
-        std::log(opacity_values[0] / (1.0f - opacity_values[0])),
-        std::log(opacity_values[1] / (1.0f - opacity_values[1]))};
-    auto opacity = Tensor::from_blob(raw_opacity_values.data(), {2}, Device::CPU, DataType::Float32).to(Device::CUDA);
-    auto splat = SplatData(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
-
-    auto R = Tensor::eye(3, Device::CUDA);
-    std::vector<float> t_data{0.0f, 0.0f, 4.0f};
-    auto T = Tensor::from_blob(t_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-    auto camera = Camera(R, T, 1.0f, 1.0f, 0.5f, 0.5f,
-                         Tensor(), Tensor(), CameraModelType::PINHOLE,
-                         "depth_grad_detached", "", std::filesystem::path{}, 1, 1, 0);
+    NormalChannelScene scene;
+    const std::vector<float> identity_quat{1.0f, 0.0f, 0.0f, 0.0f};
+    auto splat = scene.make_splat(identity_quat);
+    auto camera = scene.make_camera();
     auto bg = Tensor::zeros({3}, Device::CUDA);
 
-    auto forward = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false);
+    auto without_normal = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false);
+    ASSERT_TRUE(without_normal.has_value()) << without_normal.error();
+    EXPECT_FALSE(without_normal->first.normal.is_valid())
+        << "normal channel must stay off unless requested";
+    without_normal->second.release_forward_context();
+
+    auto forward = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false, Tensor{}, true);
     ASSERT_TRUE(forward.has_value()) << forward.error();
-    ASSERT_EQ(forward->first.depth.numel(), 1);
+    ASSERT_TRUE(forward->first.normal.is_valid());
+    ASSERT_EQ(forward->first.normal.numel(), 3);
+
+    // Identity rotation, z the smallest axis: world normal is -z (oriented
+    // toward the camera at -4z), identity w2c keeps it in place, and the
+    // pixel-centered splat blends with weight alpha.
+    const auto normal_cpu = forward->first.normal.to(Device::CPU);
+    const float* n = normal_cpu.ptr<float>();
+    EXPECT_NEAR(n[0], 0.0f, 1.0e-5f);
+    EXPECT_NEAR(n[1], 0.0f, 1.0e-5f);
+    EXPECT_NEAR(n[2], -scene.opacity_value, 1.0e-4f);
+    forward->second.release_forward_context();
+}
+
+TEST(FastGSNormalChannelTest, BackwardNormalRotationGradientMatchesFiniteDifferences) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+
+    NormalChannelScene scene;
+    // Generic quaternion away from symmetry; keeps the smallest-axis column
+    // pointed toward the camera so the orientation sign stays fixed.
+    const std::vector<float> base_quat{0.95f, 0.15f, -0.1f, 0.05f};
+    const std::vector<float> upstream{0.7f, -0.4f, 1.1f};
+    auto camera = scene.make_camera();
+    auto bg = Tensor::zeros({3}, Device::CUDA);
+
+    const auto render_loss = [&](const std::vector<float>& quat) {
+        auto splat = scene.make_splat(quat);
+        auto forward = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false, Tensor{}, true);
+        if (!forward.has_value()) {
+            throw std::runtime_error(forward.error());
+        }
+        const auto normal_cpu = forward->first.normal.to(Device::CPU);
+        const float* n = normal_cpu.ptr<float>();
+        const float loss = upstream[0] * n[0] + upstream[1] * n[1] + upstream[2] * n[2];
+        forward->second.release_forward_context();
+        return loss;
+    };
+
+    auto splat = scene.make_splat(base_quat);
+    auto forward = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false, Tensor{}, true);
+    ASSERT_TRUE(forward.has_value()) << forward.error();
 
     AdamConfig cfg{.lr = 0.001f, .beta1 = 0.9, .beta2 = 0.999, .eps = 1e-15};
     AdamOptimizer opt(splat, cfg);
     opt.allocate_gradients();
     opt.zero_grad(0);
 
-    const float upstream_depth_grad = 1.3f;
+    std::vector<float> upstream_data = upstream;
     auto grad_image = Tensor::zeros_like(forward->first.image);
-    auto grad_depth = Tensor::full({1, 1}, upstream_depth_grad, Device::CUDA);
+    auto grad_normal = Tensor::from_blob(upstream_data.data(), {3, 1, 1}, Device::CPU, DataType::Float32).to(Device::CUDA);
     fast_rasterize_backward(
         forward->second,
         grad_image,
@@ -452,29 +509,25 @@ TEST(FastGSDepthGradientTest, DetachedDepthWeightsMoveDepthButNotOpacity) {
         DensificationType::None,
         1,
         {},
-        grad_depth,
-        true);
+        {},
+        grad_normal);
 
-    const auto mean_grad = recovered_fused_grad(opt, ParamType::Means).to(Device::CPU);
-    const auto opacity_grad = recovered_fused_grad(opt, ParamType::Opacity).to(Device::CPU);
+    const auto rotation_grad = recovered_fused_grad(opt, ParamType::Rotation).to(Device::CPU);
+    const float* actual = rotation_grad.ptr<float>();
 
-    const float expected_depth_grad0 = opacity_values[0] * upstream_depth_grad;
-    const float expected_depth_grad1 = (1.0f - opacity_values[0]) * opacity_values[1] * upstream_depth_grad;
-    const float* actual_mean_grad = mean_grad.ptr<float>();
-    EXPECT_NEAR(actual_mean_grad[2], expected_depth_grad0, 1.0e-4f)
-        << "detached depth-weight path should keep the front splat z gradient";
-    EXPECT_NEAR(actual_mean_grad[5], expected_depth_grad1, 1.0e-4f)
-        << "detached depth-weight path should keep the rear splat z gradient";
-    EXPECT_NEAR(actual_mean_grad[0], 0.0f, 1.0e-5f);
-    EXPECT_NEAR(actual_mean_grad[1], 0.0f, 1.0e-5f);
-    EXPECT_NEAR(actual_mean_grad[3], 0.0f, 1.0e-5f);
-    EXPECT_NEAR(actual_mean_grad[4], 0.0f, 1.0e-5f);
-
-    const float* actual_opacity_grad = opacity_grad.ptr<float>();
-    EXPECT_NEAR(actual_opacity_grad[0], 0.0f, 1.0e-5f)
-        << "depth loss must not directly train front opacity when depth weights are detached";
-    EXPECT_NEAR(actual_opacity_grad[1], 0.0f, 1.0e-5f)
-        << "depth loss must not directly train rear opacity when depth weights are detached";
+    // The splat sits exactly on the pixel center, so the blend weight has zero
+    // derivative w.r.t. rotation there and central differences through the full
+    // forward isolate exactly the detached-weight value path the kernel emits.
+    const float h = 2.0e-2f;
+    for (int c = 0; c < 4; ++c) {
+        std::vector<float> plus = base_quat;
+        std::vector<float> minus = base_quat;
+        plus[c] += h;
+        minus[c] -= h;
+        const float expected = (render_loss(plus) - render_loss(minus)) / (2.0f * h);
+        EXPECT_NEAR(actual[c], expected, std::max(2.0e-3f, std::abs(expected) * 2.0e-2f))
+            << "rotation gradient mismatch for quaternion component " << c;
+    }
 }
 
 TEST_F(FastGSKernelTest, Backward_Preprocess) {

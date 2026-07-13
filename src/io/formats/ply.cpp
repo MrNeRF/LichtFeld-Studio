@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "ply.hpp"
+#include "core/assert.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -12,8 +13,8 @@
 #include "io/ply_export_internal.hpp"
 #include "tinyply.hpp"
 #include <algorithm>
+#include <array>
 #include <atomic>
-#include <cassert>
 #include <cctype>
 #include <charconv>
 #include <chrono>
@@ -22,7 +23,10 @@
 #include <format>
 #include <fstream>
 #include <future>
+#include <limits>
 #include <mutex>
+#include <numeric>
+#include <optional>
 #include <ranges>
 #include <span>
 #include <string_view>
@@ -76,6 +80,8 @@ namespace lfs::io {
         constexpr size_t BLOCK_SIZE_LARGE = 2048;
         constexpr size_t PLY_MIN_SIZE = 10;
         constexpr size_t FILE_SIZE_THRESHOLD_MB = 50;
+        constexpr size_t VALIDATION_CANCEL_INTERVAL = 65536;
+        constexpr float MIN_ROTATION_NORM_SQUARED = 1.0e-12f;
 
         // SIMD constants
         constexpr int SIMD_WIDTH = 8;
@@ -112,6 +118,95 @@ namespace lfs::io {
             return name == POS_X || name == POS_Y || name == POS_Z || name == "nx" || name == "ny" || name == "nz" || name == "red" || name == "green" || name == "blue" || name == OPACITY || name.starts_with(DC_PREFIX) || name.starts_with(REST_PREFIX) || name.starts_with(SCALE_PREFIX) || name.starts_with(ROT_PREFIX);
         }
 
+        [[nodiscard]] std::string_view trim_ascii_whitespace(std::string_view value) {
+            while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) {
+                value.remove_prefix(1);
+            }
+            while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back()))) {
+                value.remove_suffix(1);
+            }
+            return value;
+        }
+
+        [[nodiscard]] bool parse_size_token(std::string_view token, size_t& value) {
+            token = trim_ascii_whitespace(token);
+            if (token.empty() || token.front() == '-') {
+                return false;
+            }
+
+            size_t parsed = 0;
+            const auto* const begin = token.data();
+            const auto* const end = begin + token.size();
+            const auto [ptr, ec] = std::from_chars(begin, end, parsed);
+            if (ec != std::errc{} || ptr != end) {
+                return false;
+            }
+
+            value = parsed;
+            return true;
+        }
+
+        [[nodiscard]] bool parse_property_index(const std::string_view name,
+                                                const std::string_view prefix,
+                                                const int max_exclusive,
+                                                int& index) {
+            if (!name.starts_with(prefix) || name.size() == prefix.size()) {
+                return false;
+            }
+
+            const std::string_view suffix = name.substr(prefix.size());
+            if (suffix.front() == '-') {
+                return false;
+            }
+
+            int parsed = 0;
+            const auto* const begin = suffix.data();
+            const auto* const end = begin + suffix.size();
+            const auto [ptr, ec] = std::from_chars(begin, end, parsed);
+            if (ec != std::errc{} || ptr != end || parsed < 0 || parsed >= max_exclusive) {
+                return false;
+            }
+
+            index = parsed;
+            return true;
+        }
+
+        [[nodiscard]] bool checked_mul_size(const size_t a, const size_t b, size_t& result) {
+            if (a != 0 && b > std::numeric_limits<size_t>::max() / a) {
+                return false;
+            }
+            result = a * b;
+            return true;
+        }
+
+        [[nodiscard]] bool ply_scalar_property_size(const std::string_view type, size_t& size) {
+            if (type == "char" || type == "uchar" ||
+                type == "int8" || type == "uint8") {
+                size = 1;
+                return true;
+            }
+            if (type == "short" || type == "ushort" ||
+                type == "int16" || type == "uint16") {
+                size = 2;
+                return true;
+            }
+            if (type == "int" || type == "uint" ||
+                type == "int32" || type == "uint32" ||
+                type == "float" || type == "float32") {
+                size = 4;
+                return true;
+            }
+            if (type == "double" || type == "float64") {
+                size = 8;
+                return true;
+            }
+            return false;
+        }
+
+        [[nodiscard]] bool is_float32_ply_type(const std::string_view type) {
+            return type == "float" || type == "float32";
+        }
+
     } // namespace
 
     std::vector<std::string> make_ply_extra_attribute_names(const std::string_view base_name,
@@ -146,8 +241,9 @@ namespace lfs::io {
     }
 
     struct FastPropertyLayout {
-        size_t vertex_count;
-        size_t vertex_stride;
+        size_t vertex_count = 0;
+        size_t vertex_stride = 0;
+        size_t vertex_property_count = 0;
 
         // Pre-computed offsets for zero-copy access
         size_t pos_x_offset = SIZE_MAX, pos_y_offset = SIZE_MAX, pos_z_offset = SIZE_MAX;
@@ -163,10 +259,45 @@ namespace lfs::io {
             std::fill(std::begin(rest_offsets), std::end(rest_offsets), SIZE_MAX);
         }
 
-        [[nodiscard]] bool has_positions() const { return pos_x_offset != SIZE_MAX; }
+        [[nodiscard]] bool has_positions() const {
+            return pos_x_offset != SIZE_MAX &&
+                   pos_y_offset != SIZE_MAX &&
+                   pos_z_offset != SIZE_MAX;
+        }
         [[nodiscard]] bool has_opacity() const { return opacity_offset != SIZE_MAX; }
-        [[nodiscard]] bool has_scaling() const { return scale_offsets[0] != SIZE_MAX; }
-        [[nodiscard]] bool has_rotation() const { return rot_offsets[0] != SIZE_MAX; }
+        [[nodiscard]] bool has_any_scaling() const {
+            return scale_offsets[0] != SIZE_MAX ||
+                   scale_offsets[1] != SIZE_MAX ||
+                   scale_offsets[2] != SIZE_MAX;
+        }
+        [[nodiscard]] bool has_scaling() const {
+            return scale_offsets[0] != SIZE_MAX &&
+                   scale_offsets[1] != SIZE_MAX &&
+                   scale_offsets[2] != SIZE_MAX;
+        }
+        [[nodiscard]] bool has_any_rotation() const {
+            return rot_offsets[0] != SIZE_MAX ||
+                   rot_offsets[1] != SIZE_MAX ||
+                   rot_offsets[2] != SIZE_MAX ||
+                   rot_offsets[3] != SIZE_MAX;
+        }
+        [[nodiscard]] bool has_rotation() const {
+            return rot_offsets[0] != SIZE_MAX &&
+                   rot_offsets[1] != SIZE_MAX &&
+                   rot_offsets[2] != SIZE_MAX &&
+                   rot_offsets[3] != SIZE_MAX;
+        }
+    };
+
+    struct PlyImportValidation {
+        std::vector<size_t> valid_rows;
+        size_t invalid_count = 0;
+        size_t non_finite_value_count = 0;
+        size_t zero_rotation_count = 0;
+
+        [[nodiscard]] size_t output_count(const size_t vertex_count) const {
+            return valid_rows.empty() ? vertex_count : valid_rows.size();
+        }
     };
 
     struct MMappedFile {
@@ -286,6 +417,8 @@ namespace lfs::io {
     parse_header(const char* data, size_t file_size) {
         LOG_TIMER_TRACE("PLY header parsing");
 
+        LFS_ASSERT_MSG(data != nullptr, "PLY parser received a null buffer");
+
         // Check for PLY magic with both Unix and Windows line endings
         if (file_size < ply_constants::PLY_MIN_SIZE) {
             LOG_ERROR("File too small to be valid PLY: {} bytes", file_size);
@@ -305,8 +438,10 @@ namespace lfs::io {
 
         FastPropertyLayout layout = {};
         bool is_binary = false;
+        bool has_format = false;
         bool has_vertex_element = false;
         bool parsing_vertex = false;
+        std::unordered_set<std::string> vertex_property_names;
         size_t lines_parsed = 0;
         constexpr size_t MAX_HEADER_LINES = 10000;
 
@@ -342,65 +477,124 @@ namespace lfs::io {
             }
 
             // Line parsing
-            if (line_len >= 27 && std::strncmp(line_start, "format binary_little_endian", 27) == 0) {
+            const std::string_view line(line_start, line_len);
+            if (line.starts_with("format ")) {
+                LFS_ASSERT_MSG(!has_format, "PLY header must contain exactly one format line");
+                LFS_ASSERT_MSG(line == "format binary_little_endian 1.0",
+                               "Only PLY format binary_little_endian 1.0 is supported");
                 is_binary = true;
+                has_format = true;
             } else if (line_len >= 8 && std::strncmp(line_start, "element ", 8) == 0) {
+                LFS_ASSERT_MSG(has_format, "PLY format line must precede element declarations");
                 if (line_len >= 15 && std::strncmp(line_start, "element vertex ", 15) == 0) {
-                    layout.vertex_count = std::strtoull(line_start + 15, nullptr, 10);
+                    LFS_ASSERT_MSG(!has_vertex_element,
+                                   "PLY header must not declare the vertex element more than once");
+                    const std::string_view count_token(line_start + 15, line_len - 15);
+                    if (!parse_size_token(count_token, layout.vertex_count)) {
+                        throw std::runtime_error("Invalid PLY vertex count");
+                    }
                     layout.vertex_stride = 0;
                     has_vertex_element = true;
                     parsing_vertex = true;
                 } else {
                     parsing_vertex = false;
                 }
-            } else if (line_len >= 15 && std::strncmp(line_start, "property float ", 15) == 0 && parsing_vertex) {
-                const char* prop_name = line_start + 15;
-                size_t name_len = line_len - 15;
-
-                // Remove trailing whitespace/CR
-                while (name_len > 0 && (prop_name[name_len - 1] == ' ' ||
-                                        prop_name[name_len - 1] == '\t' ||
-                                        prop_name[name_len - 1] == '\r')) {
-                    name_len--;
+            } else if (line_len >= 9 && std::strncmp(line_start, "property ", 9) == 0 && parsing_vertex) {
+                std::string_view property_line(line_start + 9, line_len - 9);
+                property_line = trim_ascii_whitespace(property_line);
+                if (property_line.starts_with("list ")) {
+                    throw std::runtime_error("PLY vertex list properties are not supported");
                 }
 
-                // Property recognition using first character + length
-                if (name_len == 1) {
-                    switch (*prop_name) {
-                    case 'x': layout.pos_x_offset = layout.vertex_stride; break;
-                    case 'y': layout.pos_y_offset = layout.vertex_stride; break;
-                    case 'z': layout.pos_z_offset = layout.vertex_stride; break;
-                    default: break;
-                    }
-                } else if (name_len == 7 && std::strncmp(prop_name, "opacity", 7) == 0) {
-                    layout.opacity_offset = layout.vertex_stride;
-                } else if (name_len >= 5 && std::strncmp(prop_name, "f_dc_", 5) == 0) {
-                    int idx = std::atoi(prop_name + 5);
-                    if (idx >= 0 && idx < ply_constants::MAX_DC_COMPONENTS) {
+                const size_t type_end = property_line.find_first_of(" \t\r");
+                if (type_end == std::string_view::npos) {
+                    throw std::runtime_error("Malformed PLY property line");
+                }
+
+                const std::string_view type = property_line.substr(0, type_end);
+                std::string_view prop_name = trim_ascii_whitespace(property_line.substr(type_end));
+                const size_t name_end = prop_name.find_first_of(" \t\r");
+                if (name_end != std::string_view::npos) {
+                    LFS_ASSERT_MSG(trim_ascii_whitespace(prop_name.substr(name_end)).empty(),
+                                   "PLY property declarations must contain exactly a type and name");
+                    prop_name = prop_name.substr(0, name_end);
+                }
+                if (prop_name.empty()) {
+                    throw std::runtime_error("Malformed PLY property line");
+                }
+                LFS_ASSERT_MSG(is_valid_ply_property_name_token(prop_name),
+                               "PLY vertex property names must be non-empty tokens");
+                LFS_ASSERT_MSG(vertex_property_names.emplace(prop_name).second,
+                               std::format("Duplicate PLY vertex property '{}'", prop_name));
+                ++layout.vertex_property_count;
+
+                size_t property_size = 0;
+                if (!ply_scalar_property_size(type, property_size)) {
+                    throw std::runtime_error(std::format("Unsupported PLY vertex property type '{}'", type));
+                }
+
+                const bool gaussian_float_property =
+                    prop_name == ply_constants::POS_X ||
+                    prop_name == ply_constants::POS_Y ||
+                    prop_name == ply_constants::POS_Z ||
+                    prop_name == ply_constants::OPACITY ||
+                    prop_name.starts_with(ply_constants::DC_PREFIX) ||
+                    prop_name.starts_with(ply_constants::REST_PREFIX) ||
+                    prop_name.starts_with(ply_constants::SCALE_PREFIX) ||
+                    prop_name.starts_with(ply_constants::ROT_PREFIX);
+                LFS_ASSERT_MSG(!gaussian_float_property || is_float32_ply_type(type),
+                               std::format("PLY Gaussian property '{}' must be float32", prop_name));
+
+                if (is_float32_ply_type(type)) {
+                    // Property recognition using first character + length
+                    if (prop_name.size() == 1) {
+                        switch (prop_name.front()) {
+                        case 'x': layout.pos_x_offset = layout.vertex_stride; break;
+                        case 'y': layout.pos_y_offset = layout.vertex_stride; break;
+                        case 'z': layout.pos_z_offset = layout.vertex_stride; break;
+                        default: break;
+                        }
+                    } else if (prop_name == ply_constants::OPACITY) {
+                        layout.opacity_offset = layout.vertex_stride;
+                    } else if (prop_name.starts_with(ply_constants::DC_PREFIX)) {
+                        int idx = 0;
+                        LFS_ASSERT_MSG(parse_property_index(prop_name,
+                                                            ply_constants::DC_PREFIX,
+                                                            ply_constants::MAX_DC_COMPONENTS,
+                                                            idx),
+                                       std::format("Invalid PLY DC coefficient property '{}'", prop_name));
                         layout.dc_offsets[idx] = layout.vertex_stride;
                         if (idx >= layout.dc_count)
                             layout.dc_count = idx + 1;
-                    }
-                } else if (name_len >= 7 && std::strncmp(prop_name, "f_rest_", 7) == 0) {
-                    int idx = std::atoi(prop_name + 7);
-                    if (idx >= 0 && idx < ply_constants::MAX_REST_COMPONENTS) {
+                    } else if (prop_name.starts_with(ply_constants::REST_PREFIX)) {
+                        int idx = 0;
+                        LFS_ASSERT_MSG(parse_property_index(prop_name,
+                                                            ply_constants::REST_PREFIX,
+                                                            ply_constants::MAX_REST_COMPONENTS,
+                                                            idx),
+                                       std::format("Invalid PLY higher-order coefficient property '{}'", prop_name));
                         layout.rest_offsets[idx] = layout.vertex_stride;
                         if (idx >= layout.rest_count)
                             layout.rest_count = idx + 1;
-                    }
-                } else if (name_len == 7 && std::strncmp(prop_name, "scale_", 6) == 0) {
-                    int idx = prop_name[6] - '0';
-                    if (idx >= 0 && idx < 3)
+                    } else if (prop_name.starts_with(ply_constants::SCALE_PREFIX)) {
+                        int idx = 0;
+                        LFS_ASSERT_MSG(parse_property_index(prop_name, ply_constants::SCALE_PREFIX, 3, idx),
+                                       std::format("Invalid PLY scale property '{}'", prop_name));
                         layout.scale_offsets[idx] = layout.vertex_stride;
-                } else if (name_len == 5 && std::strncmp(prop_name, "rot_", 4) == 0) {
-                    int idx = prop_name[4] - '0';
-                    if (idx >= 0 && idx < 4)
+                    } else if (prop_name.starts_with(ply_constants::ROT_PREFIX)) {
+                        int idx = 0;
+                        LFS_ASSERT_MSG(parse_property_index(prop_name, ply_constants::ROT_PREFIX, 4, idx),
+                                       std::format("Invalid PLY rotation property '{}'", prop_name));
                         layout.rot_offsets[idx] = layout.vertex_stride;
+                    }
                 }
 
-                layout.vertex_stride += 4; // All properties are float32
-            } else if (line_len >= 10 && std::strncmp(line_start, "end_header", 10) == 0) {
-                if (!is_binary || !has_vertex_element) {
+                if (property_size > std::numeric_limits<size_t>::max() - layout.vertex_stride) {
+                    throw std::runtime_error("PLY vertex stride is too large");
+                }
+                layout.vertex_stride += property_size;
+            } else if (line == "end_header") {
+                if (!has_format || !is_binary || !has_vertex_element) {
                     LOG_ERROR("Only binary PLY with vertex element supported");
                     throw std::runtime_error("Only binary PLY with vertex element supported");
                 }
@@ -420,14 +614,206 @@ namespace lfs::io {
         throw std::runtime_error("No end_header found in PLY file");
     }
 
-    // SIMD position extraction to host memory
-    void extract_positions_to_host(const char* vertex_data, const FastPropertyLayout& layout, float* output) {
-        const size_t count = layout.vertex_count;
-        const size_t stride = layout.vertex_stride;
+    [[nodiscard]] float read_unaligned_float32(const char* ptr) {
+        float value = 0.0f;
+        std::memcpy(&value, ptr, sizeof(value));
+        return value;
+    }
 
+    template <typename Fn>
+    void parallel_for_ply_rows(const size_t vertex_count,
+                               const std::span<const size_t> rows,
+                               const size_t block_size,
+                               const Fn& fn) {
+        if (!rows.empty()) {
+            tbb::parallel_for(tbb::blocked_range<size_t>(0, rows.size(), block_size),
+                              [&](const tbb::blocked_range<size_t>& range) {
+                                  for (size_t output_row = range.begin(); output_row < range.end(); ++output_row) {
+                                      fn(output_row, rows[output_row]);
+                                  }
+                              });
+            return;
+        }
+
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, vertex_count, block_size),
+                          [&](const tbb::blocked_range<size_t>& range) {
+                              for (size_t row = range.begin(); row < range.end(); ++row) {
+                                  fn(row, row);
+                              }
+                          });
+    }
+
+    void validate_ply_layout_for_import(const FastPropertyLayout& layout) {
+        if (layout.vertex_count == 0) {
+            throw std::runtime_error("PLY contains no vertices");
+        }
+
+        if (!layout.has_positions()) {
+            throw std::runtime_error("PLY vertex properties must include x, y, and z");
+        }
+
+        if (layout.has_any_scaling() && !layout.has_scaling()) {
+            throw std::runtime_error("PLY scaling properties must include scale_0, scale_1, and scale_2");
+        }
+
+        if (layout.has_any_rotation() && !layout.has_rotation()) {
+            throw std::runtime_error("PLY rotation properties must include rot_0, rot_1, rot_2, and rot_3");
+        }
+        for (int i = 0; i < layout.dc_count; ++i) {
+            LFS_ASSERT_MSG(layout.dc_offsets[i] != SIZE_MAX,
+                           "PLY f_dc coefficient indices must be contiguous from zero");
+        }
+        for (int i = 0; i < layout.rest_count; ++i) {
+            LFS_ASSERT_MSG(layout.rest_offsets[i] != SIZE_MAX,
+                           "PLY f_rest coefficient indices must be contiguous from zero");
+        }
+        LFS_ASSERT_MSG(layout.dc_count == 0 ||
+                           layout.dc_count % ply_constants::COLOR_CHANNELS == 0,
+                       "PLY f_dc coefficient count must be divisible by three color channels");
+        LFS_ASSERT_MSG(layout.rest_count == 0 ||
+                           layout.rest_count % ply_constants::COLOR_CHANNELS == 0,
+                       "PLY f_rest coefficient count must be divisible by three color channels");
+        if (layout.rest_count > 0) {
+            const int coefficients_per_channel =
+                layout.rest_count / ply_constants::COLOR_CHANNELS;
+            const int root = static_cast<int>(std::sqrt(coefficients_per_channel + 1));
+            LFS_ASSERT_MSG(root * root == coefficients_per_channel + 1,
+                           "PLY f_rest coefficient count does not describe a complete SH degree");
+        }
+
+        const auto assert_offset = [&](const size_t offset, const std::string_view property) {
+            if (offset != SIZE_MAX) {
+                LFS_ASSERT_MSG(offset <= layout.vertex_stride &&
+                                   sizeof(float) <= layout.vertex_stride - offset,
+                               std::format("PLY property '{}' extends past the vertex stride", property));
+            }
+        };
+        assert_offset(layout.pos_x_offset, "x");
+        assert_offset(layout.pos_y_offset, "y");
+        assert_offset(layout.pos_z_offset, "z");
+        assert_offset(layout.opacity_offset, "opacity");
+        for (const size_t offset : layout.scale_offsets)
+            assert_offset(offset, "scale");
+        for (const size_t offset : layout.rot_offsets)
+            assert_offset(offset, "rotation");
+        for (const size_t offset : layout.dc_offsets)
+            assert_offset(offset, "f_dc");
+        for (const size_t offset : layout.rest_offsets)
+            assert_offset(offset, "f_rest");
+    }
+
+    [[nodiscard]] PlyImportValidation validate_ply_vertex_payload(const char* vertex_data,
+                                                                  const FastPropertyLayout& layout,
+                                                                  const LoadOptions& options) {
+        LOG_TIMER_TRACE("PLY payload validation");
+
+        PlyImportValidation validation;
+
+        const auto read_field = [&](const char* row, const size_t offset, bool& invalid) {
+            LFS_DEBUG_ASSERT(offset <= layout.vertex_stride &&
+                             sizeof(float) <= layout.vertex_stride - offset);
+            const float value = read_unaligned_float32(row + offset);
+            if (!std::isfinite(value)) {
+                invalid = true;
+                ++validation.non_finite_value_count;
+            }
+            return value;
+        };
+
+        for (size_t i = 0; i < layout.vertex_count; ++i) {
+            if ((i % ply_constants::VALIDATION_CANCEL_INTERVAL) == 0) {
+                throw_if_load_cancel_requested(options, "PLY validation cancelled");
+            }
+
+            const char* const row = vertex_data + i * layout.vertex_stride;
+            bool invalid = false;
+
+            (void)read_field(row, layout.pos_x_offset, invalid);
+            (void)read_field(row, layout.pos_y_offset, invalid);
+            (void)read_field(row, layout.pos_z_offset, invalid);
+
+            if (layout.has_opacity()) {
+                (void)read_field(row, layout.opacity_offset, invalid);
+            }
+
+            if (layout.has_scaling()) {
+                (void)read_field(row, layout.scale_offsets[0], invalid);
+                (void)read_field(row, layout.scale_offsets[1], invalid);
+                (void)read_field(row, layout.scale_offsets[2], invalid);
+            }
+
+            if (layout.has_rotation()) {
+                const float r0 = read_field(row, layout.rot_offsets[0], invalid);
+                const float r1 = read_field(row, layout.rot_offsets[1], invalid);
+                const float r2 = read_field(row, layout.rot_offsets[2], invalid);
+                const float r3 = read_field(row, layout.rot_offsets[3], invalid);
+                if (!invalid) {
+                    const float norm_squared = r0 * r0 + r1 * r1 + r2 * r2 + r3 * r3;
+                    if (!std::isfinite(norm_squared) ||
+                        norm_squared <= ply_constants::MIN_ROTATION_NORM_SQUARED) {
+                        invalid = true;
+                        ++validation.zero_rotation_count;
+                    }
+                }
+            }
+
+            for (int coefficient = 0; coefficient < layout.dc_count; ++coefficient) {
+                (void)read_field(row, layout.dc_offsets[coefficient], invalid);
+            }
+            for (int coefficient = 0; coefficient < layout.rest_count; ++coefficient) {
+                (void)read_field(row, layout.rest_offsets[coefficient], invalid);
+            }
+
+            if (invalid) {
+                if (validation.invalid_count == 0) {
+                    validation.valid_rows.reserve(layout.vertex_count - 1);
+                    for (size_t kept = 0; kept < i; ++kept) {
+                        validation.valid_rows.push_back(kept);
+                    }
+                }
+                ++validation.invalid_count;
+            } else if (validation.invalid_count > 0) {
+                validation.valid_rows.push_back(i);
+            }
+        }
+
+        if (validation.invalid_count == 0) {
+            return validation;
+        }
+
+        if (validation.invalid_count == layout.vertex_count) {
+            throw std::runtime_error(std::format(
+                "PLY contains no valid Gaussian splats after validation ({} invalid rows, {} non-finite values, {} zero-length rotations)",
+                validation.invalid_count,
+                validation.non_finite_value_count,
+                validation.zero_rotation_count));
+        }
+
+        LOG_WARN("PLY validation will discard {} invalid splats before import ({} non-finite values, {} zero-length rotations)",
+                 validation.invalid_count,
+                 validation.non_finite_value_count,
+                 validation.zero_rotation_count);
+        return validation;
+    }
+
+    void extract_positions_to_host(const char* vertex_data,
+                                   const FastPropertyLayout& layout,
+                                   const std::span<const size_t> rows,
+                                   float* output) {
         if (!layout.has_positions())
             return;
 
+        const size_t stride = layout.vertex_stride;
+        if (!rows.empty()) {
+            parallel_for_ply_rows(layout.vertex_count, rows, ply_constants::BLOCK_SIZE_LARGE, [&](const size_t output_row, const size_t source_row) {
+                output[output_row * 3 + 0] = read_unaligned_float32(vertex_data + source_row * stride + layout.pos_x_offset);
+                output[output_row * 3 + 1] = read_unaligned_float32(vertex_data + source_row * stride + layout.pos_y_offset);
+                output[output_row * 3 + 2] = read_unaligned_float32(vertex_data + source_row * stride + layout.pos_z_offset);
+            });
+            return;
+        }
+
+        const size_t count = layout.vertex_count;
         LOG_DEBUG("Position extraction using TBB + SIMD for {} Gaussians", count);
 
 #ifdef HAS_AVX2_SUPPORT
@@ -470,34 +856,34 @@ namespace lfs::io {
 #endif
 
                                       __m256 x_vals = _mm256_set_ps(
-                                          *reinterpret_cast<const float*>(vertex_data + (i + 7) * stride + layout.pos_x_offset),
-                                          *reinterpret_cast<const float*>(vertex_data + (i + 6) * stride + layout.pos_x_offset),
-                                          *reinterpret_cast<const float*>(vertex_data + (i + 5) * stride + layout.pos_x_offset),
-                                          *reinterpret_cast<const float*>(vertex_data + (i + 4) * stride + layout.pos_x_offset),
-                                          *reinterpret_cast<const float*>(vertex_data + (i + 3) * stride + layout.pos_x_offset),
-                                          *reinterpret_cast<const float*>(vertex_data + (i + 2) * stride + layout.pos_x_offset),
-                                          *reinterpret_cast<const float*>(vertex_data + (i + 1) * stride + layout.pos_x_offset),
-                                          *reinterpret_cast<const float*>(vertex_data + i * stride + layout.pos_x_offset));
+                                          read_unaligned_float32(vertex_data + (i + 7) * stride + layout.pos_x_offset),
+                                          read_unaligned_float32(vertex_data + (i + 6) * stride + layout.pos_x_offset),
+                                          read_unaligned_float32(vertex_data + (i + 5) * stride + layout.pos_x_offset),
+                                          read_unaligned_float32(vertex_data + (i + 4) * stride + layout.pos_x_offset),
+                                          read_unaligned_float32(vertex_data + (i + 3) * stride + layout.pos_x_offset),
+                                          read_unaligned_float32(vertex_data + (i + 2) * stride + layout.pos_x_offset),
+                                          read_unaligned_float32(vertex_data + (i + 1) * stride + layout.pos_x_offset),
+                                          read_unaligned_float32(vertex_data + i * stride + layout.pos_x_offset));
 
                                       __m256 y_vals = _mm256_set_ps(
-                                          *reinterpret_cast<const float*>(vertex_data + (i + 7) * stride + layout.pos_y_offset),
-                                          *reinterpret_cast<const float*>(vertex_data + (i + 6) * stride + layout.pos_y_offset),
-                                          *reinterpret_cast<const float*>(vertex_data + (i + 5) * stride + layout.pos_y_offset),
-                                          *reinterpret_cast<const float*>(vertex_data + (i + 4) * stride + layout.pos_y_offset),
-                                          *reinterpret_cast<const float*>(vertex_data + (i + 3) * stride + layout.pos_y_offset),
-                                          *reinterpret_cast<const float*>(vertex_data + (i + 2) * stride + layout.pos_y_offset),
-                                          *reinterpret_cast<const float*>(vertex_data + (i + 1) * stride + layout.pos_y_offset),
-                                          *reinterpret_cast<const float*>(vertex_data + i * stride + layout.pos_y_offset));
+                                          read_unaligned_float32(vertex_data + (i + 7) * stride + layout.pos_y_offset),
+                                          read_unaligned_float32(vertex_data + (i + 6) * stride + layout.pos_y_offset),
+                                          read_unaligned_float32(vertex_data + (i + 5) * stride + layout.pos_y_offset),
+                                          read_unaligned_float32(vertex_data + (i + 4) * stride + layout.pos_y_offset),
+                                          read_unaligned_float32(vertex_data + (i + 3) * stride + layout.pos_y_offset),
+                                          read_unaligned_float32(vertex_data + (i + 2) * stride + layout.pos_y_offset),
+                                          read_unaligned_float32(vertex_data + (i + 1) * stride + layout.pos_y_offset),
+                                          read_unaligned_float32(vertex_data + i * stride + layout.pos_y_offset));
 
                                       __m256 z_vals = _mm256_set_ps(
-                                          *reinterpret_cast<const float*>(vertex_data + (i + 7) * stride + layout.pos_z_offset),
-                                          *reinterpret_cast<const float*>(vertex_data + (i + 6) * stride + layout.pos_z_offset),
-                                          *reinterpret_cast<const float*>(vertex_data + (i + 5) * stride + layout.pos_z_offset),
-                                          *reinterpret_cast<const float*>(vertex_data + (i + 4) * stride + layout.pos_z_offset),
-                                          *reinterpret_cast<const float*>(vertex_data + (i + 3) * stride + layout.pos_z_offset),
-                                          *reinterpret_cast<const float*>(vertex_data + (i + 2) * stride + layout.pos_z_offset),
-                                          *reinterpret_cast<const float*>(vertex_data + (i + 1) * stride + layout.pos_z_offset),
-                                          *reinterpret_cast<const float*>(vertex_data + i * stride + layout.pos_z_offset));
+                                          read_unaligned_float32(vertex_data + (i + 7) * stride + layout.pos_z_offset),
+                                          read_unaligned_float32(vertex_data + (i + 6) * stride + layout.pos_z_offset),
+                                          read_unaligned_float32(vertex_data + (i + 5) * stride + layout.pos_z_offset),
+                                          read_unaligned_float32(vertex_data + (i + 4) * stride + layout.pos_z_offset),
+                                          read_unaligned_float32(vertex_data + (i + 3) * stride + layout.pos_z_offset),
+                                          read_unaligned_float32(vertex_data + (i + 2) * stride + layout.pos_z_offset),
+                                          read_unaligned_float32(vertex_data + (i + 1) * stride + layout.pos_z_offset),
+                                          read_unaligned_float32(vertex_data + i * stride + layout.pos_z_offset));
 
                                       alignas(32) float temp_x[8], temp_y[8], temp_z[8];
                                       _mm256_store_ps(temp_x, x_vals);
@@ -513,9 +899,9 @@ namespace lfs::io {
                                   }
 
                                   for (size_t i = simd_end; i < end; ++i) {
-                                      output[i * 3 + 0] = *reinterpret_cast<const float*>(vertex_data + i * stride + layout.pos_x_offset);
-                                      output[i * 3 + 1] = *reinterpret_cast<const float*>(vertex_data + i * stride + layout.pos_y_offset);
-                                      output[i * 3 + 2] = *reinterpret_cast<const float*>(vertex_data + i * stride + layout.pos_z_offset);
+                                      output[i * 3 + 0] = read_unaligned_float32(vertex_data + i * stride + layout.pos_x_offset);
+                                      output[i * 3 + 1] = read_unaligned_float32(vertex_data + i * stride + layout.pos_y_offset);
+                                      output[i * 3 + 2] = read_unaligned_float32(vertex_data + i * stride + layout.pos_z_offset);
                                   }
                               });
         } else
@@ -526,9 +912,9 @@ namespace lfs::io {
             tbb::parallel_for(tbb::blocked_range<size_t>(0, count, ply_constants::BLOCK_SIZE_LARGE),
                               [&](const tbb::blocked_range<size_t>& range) {
                                   for (size_t i = range.begin(); i < range.end(); ++i) {
-                                      output[i * 3 + 0] = *reinterpret_cast<const float*>(vertex_data + i * stride + layout.pos_x_offset);
-                                      output[i * 3 + 1] = *reinterpret_cast<const float*>(vertex_data + i * stride + layout.pos_y_offset);
-                                      output[i * 3 + 2] = *reinterpret_cast<const float*>(vertex_data + i * stride + layout.pos_z_offset);
+                                      output[i * 3 + 0] = read_unaligned_float32(vertex_data + i * stride + layout.pos_x_offset);
+                                      output[i * 3 + 1] = read_unaligned_float32(vertex_data + i * stride + layout.pos_y_offset);
+                                      output[i * 3 + 2] = read_unaligned_float32(vertex_data + i * stride + layout.pos_z_offset);
                                   }
                               });
         }
@@ -537,36 +923,34 @@ namespace lfs::io {
     // SH coefficient extraction with per-coefficient offsets (handles arbitrary PLY property order)
     void extract_sh_coefficients_to_host(const char* __restrict__ vertex_data,
                                          const FastPropertyLayout& layout,
+                                         const std::span<const size_t> rows,
                                          const size_t* __restrict__ coeff_offsets,
                                          const int coeff_count, const int channels,
                                          float* __restrict__ output) {
         if (coeff_count == 0)
             return;
 
-        const size_t count = layout.vertex_count;
         const size_t stride = layout.vertex_stride;
         const int B = coeff_count / channels;
 
-        tbb::parallel_for(tbb::blocked_range<size_t>(0, count, ply_constants::BLOCK_SIZE_SMALL),
-                          [=](const tbb::blocked_range<size_t>& range) {
-                              for (size_t i = range.begin(); i < range.end(); ++i) {
-                                  const size_t base = i * stride;
-                                  const size_t out_base = i * B * channels;
-                                  for (int j = 0; j < coeff_count; ++j) {
-                                      const size_t offset = coeff_offsets[j];
-                                      const float value = (offset != SIZE_MAX)
-                                                              ? *reinterpret_cast<const float*>(vertex_data + base + offset)
-                                                              : 0.0f;
-                                      const int channel = j / B;
-                                      const int b = j % B;
-                                      output[out_base + b * channels + channel] = value;
-                                  }
-                              }
-                          });
+        parallel_for_ply_rows(layout.vertex_count, rows, ply_constants::BLOCK_SIZE_SMALL, [=](const size_t output_row, const size_t source_row) {
+            const size_t base = source_row * stride;
+            const size_t out_base = output_row * B * channels;
+            for (int j = 0; j < coeff_count; ++j) {
+                const size_t offset = coeff_offsets[j];
+                const float value = (offset != SIZE_MAX)
+                                        ? read_unaligned_float32(vertex_data + base + offset)
+                                        : 0.0f;
+                const int channel = j / B;
+                const int b = j % B;
+                output[out_base + b * channels + channel] = value;
+            }
+        });
     }
 
     void extract_sh_coefficients_to_swizzled_host(const char* __restrict__ vertex_data,
                                                   const FastPropertyLayout& layout,
+                                                  const std::span<const size_t> rows,
                                                   const size_t* __restrict__ coeff_offsets,
                                                   const int coeff_count,
                                                   const int channels,
@@ -575,44 +959,42 @@ namespace lfs::io {
         if (coeff_count == 0 || layout_coeffs_rest == 0)
             return;
 
-        const size_t count = layout.vertex_count;
         const size_t stride = layout.vertex_stride;
         const int B = coeff_count / channels;
         const auto max_component_count =
             static_cast<std::uint32_t>(layout_coeffs_rest * static_cast<std::uint32_t>(channels));
 
-        tbb::parallel_for(tbb::blocked_range<size_t>(0, count, ply_constants::BLOCK_SIZE_SMALL),
-                          [=](const tbb::blocked_range<size_t>& range) {
-                              for (size_t i = range.begin(); i < range.end(); ++i) {
-                                  const size_t base = i * stride;
-                                  for (int j = 0; j < coeff_count; ++j) {
-                                      const size_t offset = coeff_offsets[j];
-                                      if (offset == SIZE_MAX) {
-                                          continue;
-                                      }
+        const auto extract_row = [=](const size_t output_row, const size_t source_row) {
+            const size_t base = source_row * stride;
+            for (int j = 0; j < coeff_count; ++j) {
+                const size_t offset = coeff_offsets[j];
+                if (offset == SIZE_MAX) {
+                    continue;
+                }
 
-                                      const int channel = j / B;
-                                      const int b = j % B;
-                                      const auto canonical_component =
-                                          static_cast<std::uint32_t>(b * channels + channel);
-                                      if (canonical_component >= max_component_count) {
-                                          continue;
-                                      }
+                const int channel = j / B;
+                const int b = j % B;
+                const auto canonical_component =
+                    static_cast<std::uint32_t>(b * channels + channel);
+                if (canonical_component >= max_component_count) {
+                    continue;
+                }
 
-                                      const auto slot = canonical_component / 4u;
-                                      const auto component = canonical_component % 4u;
-                                      const size_t dst_offset =
-                                          static_cast<size_t>(lfs::core::sh_swizzled_index(
-                                              static_cast<std::uint32_t>(i),
-                                              slot,
-                                              layout_coeffs_rest)) *
-                                              4u +
-                                          component;
-                                      output[dst_offset] =
-                                          *reinterpret_cast<const float*>(vertex_data + base + offset);
-                                  }
-                              }
-                          });
+                const auto slot = canonical_component / 4u;
+                const auto component = canonical_component % 4u;
+                const size_t dst_offset =
+                    static_cast<size_t>(lfs::core::sh_swizzled_index(
+                        static_cast<std::uint32_t>(output_row),
+                        slot,
+                        layout_coeffs_rest)) *
+                        4u +
+                    component;
+                output[dst_offset] =
+                    read_unaligned_float32(vertex_data + base + offset);
+            }
+        };
+
+        parallel_for_ply_rows(layout.vertex_count, rows, ply_constants::BLOCK_SIZE_SMALL, extract_row);
     }
 
     [[nodiscard]] Tensor tensor_from_host_floats(std::span<const float> data,
@@ -672,67 +1054,57 @@ namespace lfs::io {
 
     // Single property extraction to host memory
     void extract_property_to_host(const char* vertex_data, const FastPropertyLayout& layout,
+                                  const std::span<const size_t> rows,
                                   size_t property_offset, float* output) {
         if (property_offset == SIZE_MAX)
             return;
 
-        const size_t count = layout.vertex_count;
         const size_t stride = layout.vertex_stride;
-
-        tbb::parallel_for(tbb::blocked_range<size_t>(0, count, ply_constants::BLOCK_SIZE_LARGE),
-                          [&](const tbb::blocked_range<size_t>& range) {
-                              for (size_t i = range.begin(); i < range.end(); ++i) {
-                                  output[i] = *reinterpret_cast<const float*>(vertex_data + i * stride + property_offset);
-                              }
-                          });
+        parallel_for_ply_rows(layout.vertex_count, rows, ply_constants::BLOCK_SIZE_LARGE, [&](const size_t output_row, const size_t source_row) {
+            output[output_row] = read_unaligned_float32(vertex_data + source_row * stride + property_offset);
+        });
     }
 
     void extract_scaling_fused_to_host(const char* __restrict__ vertex_data,
                                        const FastPropertyLayout& layout,
+                                       const std::span<const size_t> rows,
                                        float* __restrict__ output) {
         if (!layout.has_scaling())
             return;
 
-        const size_t count = layout.vertex_count;
         const size_t stride = layout.vertex_stride;
         const size_t s0 = layout.scale_offsets[0];
         const size_t s1 = layout.scale_offsets[1];
         const size_t s2 = layout.scale_offsets[2];
 
-        tbb::parallel_for(tbb::blocked_range<size_t>(0, count, ply_constants::BLOCK_SIZE_LARGE),
-                          [=](const tbb::blocked_range<size_t>& range) {
-                              for (size_t i = range.begin(); i < range.end(); ++i) {
-                                  const char* p = vertex_data + i * stride;
-                                  output[i * 3 + 0] = *reinterpret_cast<const float*>(p + s0);
-                                  output[i * 3 + 1] = *reinterpret_cast<const float*>(p + s1);
-                                  output[i * 3 + 2] = *reinterpret_cast<const float*>(p + s2);
-                              }
-                          });
+        parallel_for_ply_rows(layout.vertex_count, rows, ply_constants::BLOCK_SIZE_LARGE, [=](const size_t output_row, const size_t source_row) {
+            const char* p = vertex_data + source_row * stride;
+            output[output_row * 3 + 0] = read_unaligned_float32(p + s0);
+            output[output_row * 3 + 1] = read_unaligned_float32(p + s1);
+            output[output_row * 3 + 2] = read_unaligned_float32(p + s2);
+        });
     }
 
     void extract_rotation_fused_to_host(const char* __restrict__ vertex_data,
                                         const FastPropertyLayout& layout,
+                                        const std::span<const size_t> rows,
                                         float* __restrict__ output) {
         if (!layout.has_rotation())
             return;
 
-        const size_t count = layout.vertex_count;
         const size_t stride = layout.vertex_stride;
         const size_t r0 = layout.rot_offsets[0];
         const size_t r1 = layout.rot_offsets[1];
         const size_t r2 = layout.rot_offsets[2];
         const size_t r3 = layout.rot_offsets[3];
 
-        tbb::parallel_for(tbb::blocked_range<size_t>(0, count, ply_constants::BLOCK_SIZE_LARGE),
-                          [=](const tbb::blocked_range<size_t>& range) {
-                              for (size_t i = range.begin(); i < range.end(); ++i) {
-                                  const char* p = vertex_data + i * stride;
-                                  output[i * 4 + 0] = *reinterpret_cast<const float*>(p + r0);
-                                  output[i * 4 + 1] = *reinterpret_cast<const float*>(p + r1);
-                                  output[i * 4 + 2] = *reinterpret_cast<const float*>(p + r2);
-                                  output[i * 4 + 3] = *reinterpret_cast<const float*>(p + r3);
-                              }
-                          });
+        parallel_for_ply_rows(layout.vertex_count, rows, ply_constants::BLOCK_SIZE_LARGE, [=](const size_t output_row, const size_t source_row) {
+            const char* p = vertex_data + source_row * stride;
+            output[output_row * 4 + 0] = read_unaligned_float32(p + r0);
+            output[output_row * 4 + 1] = read_unaligned_float32(p + r1);
+            output[output_row * 4 + 2] = read_unaligned_float32(p + r2);
+            output[output_row * 4 + 3] = read_unaligned_float32(p + r3);
+        });
     }
 
     // Pageable, not value-initialized. Pinning ~1.5 GB via cudaHostAlloc cost
@@ -745,6 +1117,11 @@ namespace lfs::io {
         explicit HostBuffer(size_t element_count) : count(element_count) {
             if (count == 0)
                 return;
+            if (count > std::numeric_limits<size_t>::max() / sizeof(float)) {
+                LOG_ERROR("Host buffer allocation size overflow for {} floats", count);
+                count = 0;
+                return;
+            }
             ptr = static_cast<float*>(std::malloc(count * sizeof(float)));
             if (!ptr) {
                 LOG_ERROR("malloc failed for {} MB host buffer", (count * sizeof(float)) / (1024 * 1024));
@@ -793,6 +1170,7 @@ namespace lfs::io {
                 LOG_ERROR("{}", error_msg);
                 throw std::runtime_error(error_msg);
             }
+            throw_if_load_cancel_requested(options, "PLY load cancelled");
 
             // Memory map
             MMappedFile mapped_file;
@@ -815,13 +1193,16 @@ namespace lfs::io {
             const char* vertex_data = data + data_offset;
 
             if (layout.vertex_stride == 0) {
-                std::string error_msg = "PLY header declares no float vertex properties";
+                std::string error_msg = "PLY header declares no vertex properties";
                 LOG_ERROR("{}", error_msg);
                 throw std::runtime_error(error_msg);
             }
 
             const size_t body_bytes_available = file_size - data_offset;
-            const size_t body_bytes_required = layout.vertex_count * layout.vertex_stride;
+            size_t body_bytes_required = 0;
+            if (!checked_mul_size(layout.vertex_count, layout.vertex_stride, body_bytes_required)) {
+                throw std::runtime_error("PLY header declares an impossibly large vertex body");
+            }
             if (body_bytes_required > body_bytes_available) {
                 const size_t missing = body_bytes_required - body_bytes_available;
                 const size_t complete_vertices = body_bytes_available / layout.vertex_stride;
@@ -835,9 +1216,13 @@ namespace lfs::io {
                 throw std::runtime_error(error_msg);
             }
 
-            LOG_INFO("Extracting {} Gaussians from PLY", layout.vertex_count);
+            validate_ply_layout_for_import(layout);
+            const PlyImportValidation validation = validate_ply_vertex_payload(vertex_data, layout, options);
+            throw_if_load_cancel_requested(options, "PLY load cancelled");
 
-            const size_t N = layout.vertex_count;
+            const std::span<const size_t> rows_to_load(validation.valid_rows);
+            const size_t N = validation.output_count(layout.vertex_count);
+            LOG_INFO("Extracting {} Gaussians from PLY", N);
 
             // Determine SH dimensions
             int sh0_dim1 = 1, sh0_dim2 = ply_constants::COLOR_CHANNELS;
@@ -854,15 +1239,41 @@ namespace lfs::io {
                         ply_constants::SH_DEGREE_OFFSET);
             }
 
-            const size_t shN_swizzled_count =
-                layout_rest > 0 ? lfs::core::sh_swizzled_float_count(N, layout_rest) : 0;
+            auto checked_float_count = [](const size_t a,
+                                          const size_t b,
+                                          const std::string_view label) {
+                size_t result = 0;
+                if (!checked_mul_size(a, b, result)) {
+                    throw std::runtime_error(std::format(
+                        "PLY load size overflow while allocating {}", label));
+                }
+                return result;
+            };
 
-            HostBuffer host_means(N * 3);
-            HostBuffer host_sh0(N * static_cast<size_t>(sh0_dim1) * ply_constants::COLOR_CHANNELS);
+            size_t shN_swizzled_count = 0;
+            if (layout_rest > 0) {
+                const size_t block_count = lfs::core::sh_swizzled_block_count(N);
+                const size_t slot_floats =
+                    static_cast<size_t>(lfs::core::sh_float4_slots_for_rest(layout_rest)) *
+                    static_cast<size_t>(lfs::core::kShReorderSize) * 4u;
+                shN_swizzled_count = checked_float_count(block_count, slot_floats, "SplatData.shN");
+            }
+
+            const size_t means_count = checked_float_count(N, 3, "SplatData.means");
+            const size_t sh0_count = checked_float_count(
+                checked_float_count(N, static_cast<size_t>(sh0_dim1), "SplatData.sh0"),
+                static_cast<size_t>(sh0_dim2),
+                "SplatData.sh0");
+            const size_t opacity_count = N;
+            const size_t scaling_count = checked_float_count(N, 3, "SplatData.scaling");
+            const size_t rotation_count = checked_float_count(N, 4, "SplatData.rotation");
+
+            HostBuffer host_means(means_count);
+            HostBuffer host_sh0(sh0_count);
             HostBuffer host_shN_swizzled(shN_swizzled_count);
-            HostBuffer host_opacity(N);
-            HostBuffer host_scaling(N * 3);
-            HostBuffer host_rotation(N * 4);
+            HostBuffer host_opacity(opacity_count);
+            HostBuffer host_scaling(scaling_count);
+            HostBuffer host_rotation(rotation_count);
 
             if (!host_means.ptr || !host_sh0.ptr || !host_scaling.ptr ||
                 !host_rotation.ptr || !host_opacity.ptr ||
@@ -870,11 +1281,12 @@ namespace lfs::io {
                 throw std::runtime_error("Failed to allocate host staging buffers for PLY load");
             }
 
-            extract_positions_to_host(vertex_data, layout, host_means.ptr);
+            extract_positions_to_host(vertex_data, layout, rows_to_load, host_means.ptr);
 
             if (layout.dc_count > 0 && layout.dc_count % ply_constants::COLOR_CHANNELS == 0) {
                 extract_sh_coefficients_to_host(vertex_data,
                                                 layout,
+                                                rows_to_load,
                                                 layout.dc_offsets,
                                                 layout.dc_count,
                                                 ply_constants::COLOR_CHANNELS,
@@ -889,6 +1301,7 @@ namespace lfs::io {
                           0.0f);
                 extract_sh_coefficients_to_swizzled_host(vertex_data,
                                                          layout,
+                                                         rows_to_load,
                                                          layout.rest_offsets,
                                                          layout.rest_count,
                                                          ply_constants::COLOR_CHANNELS,
@@ -897,13 +1310,13 @@ namespace lfs::io {
             }
 
             if (layout.has_opacity()) {
-                extract_property_to_host(vertex_data, layout, layout.opacity_offset, host_opacity.ptr);
+                extract_property_to_host(vertex_data, layout, rows_to_load, layout.opacity_offset, host_opacity.ptr);
             } else {
                 std::fill(host_opacity.ptr, host_opacity.ptr + host_opacity.count, 0.0f);
             }
 
             if (layout.has_scaling()) {
-                extract_scaling_fused_to_host(vertex_data, layout, host_scaling.ptr);
+                extract_scaling_fused_to_host(vertex_data, layout, rows_to_load, host_scaling.ptr);
             } else {
                 std::fill(host_scaling.ptr,
                           host_scaling.ptr + host_scaling.count,
@@ -911,7 +1324,7 @@ namespace lfs::io {
             }
 
             if (layout.has_rotation()) {
-                extract_rotation_fused_to_host(vertex_data, layout, host_rotation.ptr);
+                extract_rotation_fused_to_host(vertex_data, layout, rows_to_load, host_rotation.ptr);
             } else {
                 tbb::parallel_for(tbb::blocked_range<size_t>(0, N, ply_constants::BLOCK_SIZE_LARGE),
                                   [&](const tbb::blocked_range<size_t>& range) {
@@ -961,15 +1374,14 @@ namespace lfs::io {
                 ply_constants::SCENE_SCALE_FACTOR,
                 SplatData::ShNLayout::Swizzled);
 
-            // Retain the allocator so later edits (apply_deleted) keep tensors in
-            // the same backing storage (e.g. Vulkan-external interop).
             splat_data.set_tensor_allocator(options.splat_tensor_allocator);
 
             auto end_time = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
 
-            LOG_INFO("PLY loaded: {} MB, {} Gaussians with SH degree {} in {}ms",
-                     file_size / (1024 * 1024), N, sh_degree, duration.count());
+            LOG_INFO("PLY loaded: {} MB, {} Gaussians with SH degree {} in {}ms ({} discarded)",
+                     file_size / (1024 * 1024), splat_data.size(), sh_degree, duration.count(),
+                     validation.invalid_count);
 
             return splat_data;
 
@@ -989,6 +1401,155 @@ namespace lfs::io {
         std::mutex g_save_mutex;
         std::vector<std::future<void>> g_save_futures;
         using TensorWithNames = std::pair<Tensor, std::vector<std::string>>;
+
+        [[nodiscard]] bool float_tensor_values_are_finite(const Tensor& values) {
+            LFS_ASSERT(values.is_valid());
+            LFS_ASSERT(values.dtype() == DataType::Float32);
+            const Tensor cpu = values.cpu().contiguous();
+            const float* const data = cpu.ptr<float>();
+            for (size_t i = 0; i < cpu.numel(); ++i) {
+                if (!std::isfinite(data[i])) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        Result<void> validate_float_export_tensor(const Tensor& values,
+                                                  const std::string_view label,
+                                                  const size_t expected_rows,
+                                                  const std::span<const int> allowed_ranks,
+                                                  const std::optional<size_t> expected_columns,
+                                                  const bool allow_empty_payload,
+                                                  const std::filesystem::path& output_path) {
+            if (!values.is_valid() || values.dtype() != DataType::Float32) {
+                return make_error(ErrorCode::INTERNAL_ERROR,
+                                  std::format("{} must be a valid float32 tensor", label),
+                                  output_path);
+            }
+            if (std::ranges::find(allowed_ranks, values.ndim()) == allowed_ranks.end()) {
+                return make_error(ErrorCode::INTERNAL_ERROR,
+                                  std::format("{} has unsupported rank {}", label, values.ndim()),
+                                  output_path);
+            }
+            if (static_cast<size_t>(values.size(0)) != expected_rows) {
+                return make_error(ErrorCode::INTERNAL_ERROR,
+                                  std::format("{} row count {} does not match point count {}",
+                                              label, values.size(0), expected_rows),
+                                  output_path);
+            }
+            if (expected_columns &&
+                (values.ndim() != 2 || static_cast<size_t>(values.size(1)) != *expected_columns)) {
+                return make_error(ErrorCode::INTERNAL_ERROR,
+                                  std::format("{} must be shaped [N,{}]", label, *expected_columns),
+                                  output_path);
+            }
+            for (size_t dim = 1; dim < values.ndim(); ++dim) {
+                if (values.size(dim) == 0 && !allow_empty_payload) {
+                    return make_error(ErrorCode::INTERNAL_ERROR,
+                                      std::format("{} dimensions must be non-empty", label),
+                                      output_path);
+                }
+            }
+            if (!float_tensor_values_are_finite(values)) {
+                return make_error(ErrorCode::INTERNAL_ERROR,
+                                  std::format("{} contains NaN or infinity", label),
+                                  output_path);
+            }
+            return {};
+        }
+
+        Result<void> validate_point_cloud_for_ply_write(const PointCloud& pc,
+                                                        const std::filesystem::path& output_path) {
+            if (!pc.means.is_valid() || pc.means.ndim() != 2 || pc.means.size(1) != 3 ||
+                pc.means.size(0) <= 0) {
+                return make_error(ErrorCode::INTERNAL_ERROR,
+                                  "PointCloud.means must be a non-empty [N,3] tensor",
+                                  output_path);
+            }
+
+            const size_t rows = static_cast<size_t>(pc.means.size(0));
+            constexpr std::array rank2{2};
+            constexpr std::array rank2_or_3{2, 3};
+            if (auto result = validate_float_export_tensor(
+                    pc.means, "PointCloud.means", rows, rank2, 3, false, output_path);
+                !result) {
+                return result;
+            }
+
+            const auto validate_optional = [&](const Tensor& values,
+                                               const std::string_view label,
+                                               const std::span<const int> ranks,
+                                               const std::optional<size_t> columns,
+                                               const bool allow_empty_payload = false) -> Result<void> {
+                if (!values.is_valid()) {
+                    return {};
+                }
+                return validate_float_export_tensor(
+                    values, label, rows, ranks, columns, allow_empty_payload, output_path);
+            };
+
+            if (auto result = validate_optional(pc.normals, "PointCloud.normals", rank2, 3); !result)
+                return result;
+            if (auto result = validate_optional(pc.sh0, "PointCloud.sh0", rank2_or_3, std::nullopt); !result)
+                return result;
+            if (auto result = validate_optional(
+                    pc.shN, "PointCloud.shN", rank2_or_3, std::nullopt, true);
+                !result)
+                return result;
+            if (auto result = validate_optional(pc.opacity, "PointCloud.opacity", rank2, 1); !result)
+                return result;
+            if (auto result = validate_optional(pc.scaling, "PointCloud.scaling", rank2, 3); !result)
+                return result;
+            if (auto result = validate_optional(pc.rotation, "PointCloud.rotation", rank2, 4); !result)
+                return result;
+
+            if (pc.rotation.is_valid()) {
+                const Tensor rotation = pc.rotation.cpu().contiguous();
+                const float* const data = rotation.ptr<float>();
+                for (size_t row = 0; row < rows; ++row) {
+                    const float norm_squared = data[row * 4 + 0] * data[row * 4 + 0] +
+                                               data[row * 4 + 1] * data[row * 4 + 1] +
+                                               data[row * 4 + 2] * data[row * 4 + 2] +
+                                               data[row * 4 + 3] * data[row * 4 + 3];
+                    if (!std::isfinite(norm_squared) ||
+                        norm_squared <= ply_constants::MIN_ROTATION_NORM_SQUARED) {
+                        return make_error(ErrorCode::INTERNAL_ERROR,
+                                          std::format("PointCloud.rotation row {} has a zero-length quaternion", row),
+                                          output_path);
+                    }
+                }
+            }
+
+            if (pc.colors.is_valid()) {
+                if (pc.colors.ndim() != 2 || pc.colors.size(0) != rows ||
+                    pc.colors.size(1) != 3 ||
+                    (pc.colors.dtype() != DataType::UInt8 && pc.colors.dtype() != DataType::Float32)) {
+                    return make_error(ErrorCode::INTERNAL_ERROR,
+                                      "PointCloud.colors must be [N,3] uint8 or float32",
+                                      output_path);
+                }
+                if (pc.colors.dtype() == DataType::Float32 &&
+                    !float_tensor_values_are_finite(pc.colors)) {
+                    return make_error(ErrorCode::INTERNAL_ERROR,
+                                      "PointCloud.colors contains NaN or infinity",
+                                      output_path);
+                }
+                if (pc.colors.dtype() == DataType::Float32) {
+                    const Tensor colors = pc.colors.cpu().contiguous();
+                    const float* const data = colors.ptr<float>();
+                    for (size_t i = 0; i < colors.numel(); ++i) {
+                        if (data[i] < 0.0f || data[i] > 1.0f) {
+                            return make_error(ErrorCode::INTERNAL_ERROR,
+                                              "PointCloud float colors must be in [0,1]",
+                                              output_path);
+                        }
+                    }
+                }
+            }
+
+            return {};
+        }
 
         void cleanup_finished_saves() {
             std::lock_guard lock(g_save_mutex);
@@ -1020,6 +1581,11 @@ namespace lfs::io {
             if (values.ndim() != 1 && values.ndim() != 2) {
                 return make_error(ErrorCode::INTERNAL_ERROR,
                                   "Extra PLY attribute tensors must be shaped [N] or [N,C]",
+                                  output_path);
+            }
+            if (values.dtype() == DataType::Bool) {
+                return make_error(ErrorCode::INTERNAL_ERROR,
+                                  "Extra PLY attribute tensors must have a numeric dtype",
                                   output_path);
             }
 
@@ -1111,7 +1677,14 @@ namespace lfs::io {
                                   output_path);
             }
 
-            return TensorWithNames{prepared.to(DataType::Float32).cpu().contiguous(), block.names};
+            prepared = prepared.to(DataType::Float32).cpu().contiguous();
+            if (!float_tensor_values_are_finite(prepared)) {
+                return make_error(
+                    ErrorCode::INTERNAL_ERROR,
+                    "Extra PLY attribute tensor contains NaN or infinity",
+                    output_path);
+            }
+            return TensorWithNames{std::move(prepared), block.names};
         }
 
         Result<std::vector<PlyAttributeBlock>> filter_extra_attributes_for_splat_export(
@@ -1293,12 +1866,112 @@ namespace lfs::io {
             return {};
         }
 
+        Result<void> validate_written_ply_file(const std::filesystem::path& path,
+                                               const bool binary,
+                                               const size_t expected_vertices,
+                                               const size_t expected_properties,
+                                               const size_t expected_binary_stride) {
+            try {
+                if (binary) {
+                    MMappedFile mapped_file;
+                    LFS_ASSERT_MSG(mapped_file.map(path),
+                                   "Could not reopen temporary PLY output for verification");
+                    const auto parsed = parse_header(
+                        static_cast<const char*>(mapped_file.data), mapped_file.size);
+                    LFS_ASSERT_MSG(parsed.has_value(), "Could not parse temporary PLY output");
+                    const auto& [body_offset, layout] = *parsed;
+                    LFS_ASSERT_MSG(layout.vertex_count == expected_vertices,
+                                   "PLY writer round-trip changed the vertex count");
+                    LFS_ASSERT_MSG(layout.vertex_stride == expected_binary_stride,
+                                   "PLY writer round-trip changed the vertex stride");
+                    LFS_ASSERT_MSG(layout.vertex_property_count == expected_properties,
+                                   "PLY writer round-trip changed the property count");
+                    size_t body_size = 0;
+                    LFS_ASSERT_MSG(checked_mul_size(expected_vertices, expected_binary_stride, body_size),
+                                   "PLY writer verification size overflow");
+                    LFS_ASSERT_MSG(body_offset <= mapped_file.size &&
+                                       body_size == mapped_file.size - body_offset,
+                                   "PLY writer emitted a body size inconsistent with its header");
+                    return {};
+                }
+
+                std::ifstream stream(path);
+                LFS_ASSERT_MSG(stream.is_open(),
+                               "Could not reopen temporary ASCII PLY output for verification");
+                bool saw_magic = false;
+                bool saw_format = false;
+                bool saw_vertex = false;
+                bool parsing_vertex = false;
+                bool saw_end_header = false;
+                size_t property_count = 0;
+                std::string line;
+                while (std::getline(stream, line)) {
+                    if (!line.empty() && line.back() == '\r')
+                        line.pop_back();
+                    if (!saw_magic) {
+                        LFS_ASSERT_MSG(line == "ply", "ASCII PLY output has invalid magic");
+                        saw_magic = true;
+                        continue;
+                    }
+                    if (line == "format ascii 1.0") {
+                        LFS_ASSERT_MSG(!saw_format, "ASCII PLY output has duplicate format lines");
+                        saw_format = true;
+                    } else if (line.starts_with("element vertex ")) {
+                        LFS_ASSERT_MSG(!saw_vertex, "ASCII PLY output has duplicate vertex elements");
+                        size_t count = 0;
+                        LFS_ASSERT_MSG(parse_size_token(line.substr(15), count) &&
+                                           count == expected_vertices,
+                                       "ASCII PLY writer round-trip changed the vertex count");
+                        saw_vertex = true;
+                        parsing_vertex = true;
+                    } else if (line.starts_with("element ")) {
+                        parsing_vertex = false;
+                    } else if (parsing_vertex && line.starts_with("property ")) {
+                        ++property_count;
+                    } else if (line == "end_header") {
+                        saw_end_header = true;
+                        break;
+                    }
+                }
+                LFS_ASSERT_MSG(saw_magic && saw_format && saw_vertex && saw_end_header,
+                               "ASCII PLY output has an incomplete header");
+                LFS_ASSERT_MSG(property_count == expected_properties,
+                               "ASCII PLY writer round-trip changed the property count");
+
+                size_t rows = 0;
+                while (std::getline(stream, line)) {
+                    if (trim_ascii_whitespace(line).empty())
+                        continue;
+                    size_t tokens = 0;
+                    bool inside_token = false;
+                    for (const char ch : line) {
+                        if (std::isspace(static_cast<unsigned char>(ch))) {
+                            inside_token = false;
+                        } else if (!inside_token) {
+                            inside_token = true;
+                            ++tokens;
+                        }
+                    }
+                    LFS_ASSERT_MSG(tokens == expected_properties,
+                                   "ASCII PLY writer emitted a row with the wrong property count");
+                    ++rows;
+                }
+                LFS_ASSERT_MSG(rows == expected_vertices,
+                               "ASCII PLY writer emitted a row count inconsistent with its header");
+                return {};
+            } catch (const std::exception& e) {
+                return make_error(ErrorCode::WRITE_FAILURE,
+                                  std::format("PLY writer round-trip verification failed: {}", e.what()),
+                                  path);
+            }
+        }
+
         Result<void> write_ply_binary(const PointCloud& pc, const std::filesystem::path& output_path,
                                       bool binary = true,
                                       std::span<const PlyAttributeBlock> extra_attributes = {},
                                       ExportProgressCallback progress_callback = nullptr) {
-            if (!pc.means.is_valid() || pc.means.ndim() != 2 || pc.means.size(1) != 3) {
-                return make_error(ErrorCode::INTERNAL_ERROR, "PointCloud.means must be [N,3]", output_path);
+            if (auto result = validate_point_cloud_for_ply_write(pc, output_path); !result) {
+                return result;
             }
 
             // Write using tinyply
@@ -1397,7 +2070,8 @@ namespace lfs::io {
             }
 
             for (auto& [t, attrs] : float_blocks) {
-                assert(attrs.size() == static_cast<size_t>(t.size(1)));
+                LFS_ASSERT_MSG(attrs.size() == static_cast<size_t>(t.size(1)),
+                               "PLY property names must match their tensor columns");
 
                 estimated_write_bytes += static_cast<size_t>(t.size(0)) *
                                          static_cast<size_t>(t.size(1)) *
@@ -1408,6 +2082,16 @@ namespace lfs::io {
                     reinterpret_cast<uint8_t*>(const_cast<float*>(t.ptr<float>())),
                     tinyply::Type::INVALID, 0);
             }
+
+            const size_t expected_properties =
+                (colors_u8.is_valid() ? 3 : 0) +
+                std::accumulate(float_blocks.begin(), float_blocks.end(), size_t{0},
+                                [](const size_t total, const TensorWithNames& block) {
+                                    return total + block.second.size();
+                                });
+            const size_t expected_binary_stride =
+                (colors_u8.is_valid() ? 3 : 0) +
+                (expected_properties - (colors_u8.is_valid() ? 3 : 0)) * sizeof(float);
 
             const auto temp_path = make_temp_output_path(output_path);
             ScopedTempOutputFile temp_file{temp_path};
@@ -1447,6 +2131,12 @@ namespace lfs::io {
                 if (!out_stream.good() || !close_ok) {
                     return make_error(ErrorCode::WRITE_FAILURE, "Write failed", output_path);
                 }
+            }
+
+            if (auto result = validate_written_ply_file(
+                    temp_path, binary, N, expected_properties, expected_binary_stride);
+                !result) {
+                return result;
             }
 
             if (auto result = replace_output_file(temp_path, output_path); !result) {
@@ -1656,6 +2346,10 @@ namespace lfs::io {
     }
 
     Result<void> save_ply(const PointCloud& point_cloud, const PlySaveOptions& options) {
+        if (auto result = validate_point_cloud_for_ply_write(point_cloud, options.output_path); !result) {
+            return result;
+        }
+
         // Calculate estimated file size for disk space check
         // PLY binary: header (~500 bytes) + vertex_count * stride (floats)
         const size_t vertex_count = point_cloud.means.size(0);
@@ -1827,11 +2521,19 @@ namespace lfs::io {
                 has_colors = true;
             } catch (...) {}
 
+            std::shared_ptr<tinyply::PlyData> normals;
+            bool has_normals = false;
+            try {
+                normals = ply.request_properties_from_element("vertex", {"nx", "ny", "nz"});
+                has_normals = true;
+            } catch (...) {}
+
             throw_if_load_cancel_requested(options, "PLY read cancelled");
             ply.read(file);
             throw_if_load_cancel_requested(options, "PLY read cancelled");
 
             const size_t N = vertices->count;
+            LFS_ASSERT_MSG(N > 0, "PLY point cloud contains no vertices");
             LOG_DEBUG("Point cloud: {} points", N);
 
             using namespace lfs::core;
@@ -1839,8 +2541,12 @@ namespace lfs::io {
             float* const pos_ptr = positions.ptr<float>();
 
             if (vertices->t == tinyply::Type::FLOAT32) {
+                LFS_ASSERT_MSG(vertices->buffer.size_bytes() == N * 3 * sizeof(float),
+                               "PLY vertex buffer size is inconsistent with its count");
                 std::memcpy(pos_ptr, vertices->buffer.get(), N * 3 * sizeof(float));
             } else if (vertices->t == tinyply::Type::FLOAT64) {
+                LFS_ASSERT_MSG(vertices->buffer.size_bytes() == N * 3 * sizeof(double),
+                               "PLY vertex buffer size is inconsistent with its count");
                 const auto* src = reinterpret_cast<const double*>(vertices->buffer.get());
                 for (size_t i = 0; i < N * 3; ++i) {
                     if ((i % 4096) == 0) {
@@ -1851,15 +2557,25 @@ namespace lfs::io {
             } else {
                 return std::unexpected("Unsupported vertex type");
             }
+            LFS_ASSERT_MSG(float_tensor_values_are_finite(positions),
+                           "PLY point positions must be finite");
 
             Tensor color_tensor;
-            if (has_colors && colors && colors->count == N) {
+            if (has_colors && colors) {
+                LFS_ASSERT_MSG(colors->count == N,
+                               "PLY color count must match the vertex count");
                 if (colors->t == tinyply::Type::UINT8) {
+                    LFS_ASSERT_MSG(colors->buffer.size_bytes() == N * 3,
+                                   "PLY color buffer size is inconsistent with its count");
                     color_tensor = Tensor::zeros({N, 3}, Device::CPU, DataType::UInt8);
                     std::memcpy(color_tensor.ptr<uint8_t>(), colors->buffer.get(), N * 3);
                 } else if (colors->t == tinyply::Type::FLOAT32) {
+                    LFS_ASSERT_MSG(colors->buffer.size_bytes() == N * 3 * sizeof(float),
+                                   "PLY color buffer size is inconsistent with its count");
                     Tensor float_colors = Tensor::zeros({N, 3}, Device::CPU, DataType::Float32);
                     std::memcpy(float_colors.ptr<float>(), colors->buffer.get(), N * 3 * sizeof(float));
+                    LFS_ASSERT_MSG(float_tensor_values_are_finite(float_colors),
+                                   "PLY float colors must be finite");
                     color_tensor = (float_colors * 255.0f).clamp(0, 255).to(DataType::UInt8);
                 } else {
                     color_tensor = Tensor::full({N, 3}, DEFAULT_COLOR, Device::CPU, DataType::UInt8);
@@ -1868,8 +2584,37 @@ namespace lfs::io {
                 color_tensor = Tensor::full({N, 3}, DEFAULT_COLOR, Device::CPU, DataType::UInt8);
             }
 
+            Tensor normal_tensor;
+            if (has_normals && normals) {
+                LFS_ASSERT_MSG(normals->count == N,
+                               "PLY normal count must match the vertex count");
+                normal_tensor = Tensor::zeros({N, 3}, Device::CPU, DataType::Float32);
+                float* const normal_ptr = normal_tensor.ptr<float>();
+                if (normals->t == tinyply::Type::FLOAT32) {
+                    LFS_ASSERT_MSG(normals->buffer.size_bytes() == N * 3 * sizeof(float),
+                                   "PLY normal buffer size is inconsistent with its count");
+                    std::memcpy(normal_ptr, normals->buffer.get(), N * 3 * sizeof(float));
+                } else if (normals->t == tinyply::Type::FLOAT64) {
+                    LFS_ASSERT_MSG(normals->buffer.size_bytes() == N * 3 * sizeof(double),
+                                   "PLY normal buffer size is inconsistent with its count");
+                    const auto* src = reinterpret_cast<const double*>(normals->buffer.get());
+                    for (size_t i = 0; i < N * 3; ++i) {
+                        if ((i % 4096) == 0) {
+                            throw_if_load_cancel_requested(options, "PLY normal conversion cancelled");
+                        }
+                        normal_ptr[i] = static_cast<float>(src[i]);
+                    }
+                } else {
+                    normal_tensor = Tensor();
+                }
+                LFS_ASSERT_MSG(!normal_tensor.is_valid() || float_tensor_values_are_finite(normal_tensor),
+                               "PLY normals must be finite");
+            }
+
             throw_if_load_cancel_requested(options, "PLY point cloud load cancelled");
-            return PointCloud(std::move(positions), std::move(color_tensor));
+            PointCloud point_cloud(std::move(positions), std::move(color_tensor));
+            point_cloud.normals = std::move(normal_tensor);
+            return point_cloud;
         } catch (const LoadCancelledError& e) {
             return std::unexpected(std::string(e.what()));
         } catch (const std::exception& e) {

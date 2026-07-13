@@ -90,16 +90,6 @@ namespace lfs::rendering {
         const Tensor& polygon_vertices,
         Tensor& selection_out);
 
-    void apply_selection_group_tensor(
-        const Tensor& cumulative_selection,
-        const Tensor& existing_mask,
-        Tensor& output_mask,
-        uint8_t group_id,
-        const uint32_t* locked_groups,
-        bool add_mode,
-        const Tensor* transform_indices = nullptr,
-        int target_node_index = -1);
-
     void apply_selection_group_tensor_mask(
         const Tensor& cumulative_selection,
         const Tensor& existing_mask,
@@ -127,7 +117,6 @@ namespace lfs::rendering {
     [[nodiscard]] std::array<size_t, 256> count_selection_groups(
         const Tensor& selection_mask,
         Tensor& counts_scratch);
-    void prepare_selection_group_counts_scratch(Tensor& counts_scratch);
     [[nodiscard]] SelectionGroupCountResult read_selection_group_count_result(
         const Tensor& counts_scratch);
     [[nodiscard]] SelectionGroupDeltaResult read_selection_group_delta_result(
@@ -136,11 +125,6 @@ namespace lfs::rendering {
         const Tensor& counts_scratch);
 
     void merge_selection_mask_or(Tensor& accumulated_mask, const Tensor& delta_mask);
-
-    void filter_selection_by_node(
-        Tensor& selection,
-        const Tensor& transform_indices,
-        int target_node_index);
 
     void filter_selection_by_node_mask(
         Tensor& selection,

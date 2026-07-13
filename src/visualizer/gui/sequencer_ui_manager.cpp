@@ -563,12 +563,6 @@ namespace lfs::vis::gui {
                !ply_stream_completed_.empty();
     }
 
-    bool SequencerUIManager::isPlySequenceFrameResident(const size_t frame_index) const {
-        std::lock_guard lock(ply_stream_mutex_);
-        return frame_index < ply_stream_states_.size() &&
-               ply_stream_states_[frame_index] == PlyStreamFrameState::Resident;
-    }
-
     size_t SequencerUIManager::plySequenceFrameDistance(const size_t lhs,
                                                         const size_t rhs,
                                                         const size_t frame_count) const {

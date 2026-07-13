@@ -95,6 +95,39 @@ namespace lfs::training {
                        ? mask.to(lfs::core::DataType::Float32)
                        : mask;
         }
+
+        struct FreeImageBuffer {
+            void operator()(unsigned char* p) const noexcept {
+                if (p) {
+                    lfs::core::free_image(p);
+                }
+            }
+        };
+
+        lfs::core::Tensor load_eval_gt_image_cpu(lfs::core::Camera& cam,
+                                                 const int resize_factor,
+                                                 const int max_width) {
+            auto [data, width, height, channels] =
+                lfs::core::load_image(cam.image_path(), resize_factor, max_width);
+            std::unique_ptr<unsigned char, FreeImageBuffer> image_data(data);
+            if (!image_data || width <= 0 || height <= 0 || channels <= 0) {
+                throw std::runtime_error("failed to load image");
+            }
+
+            const auto H = static_cast<size_t>(height);
+            const auto W = static_cast<size_t>(width);
+            const auto C = static_cast<size_t>(channels);
+            auto hwc = lfs::core::Tensor::from_blob(
+                image_data.get(),
+                lfs::core::TensorShape({H, W, C}),
+                lfs::core::Device::CPU,
+                lfs::core::DataType::UInt8);
+            auto chw = hwc.permute({2, 0, 1}).contiguous();
+            image_data.reset();
+
+            cam.set_image_dimensions(width, height);
+            return chw.to(lfs::core::Device::CUDA);
+        }
     } // namespace
 
     float PSNR::compute(const lfs::core::Tensor& pred, const lfs::core::Tensor& target,
@@ -433,10 +466,6 @@ namespace lfs::training {
         return mask.ge(0.5f).to(lfs::core::DataType::UInt8).contiguous();
     }
 
-    auto MetricsEvaluator::make_dataloader(std::shared_ptr<CameraDataset> dataset, const int workers) const {
-        return create_dataloader_from_dataset(dataset, workers);
-    }
-
     EvalMetrics MetricsEvaluator::evaluate(const int iteration,
                                            const lfs::core::SplatData& splatData,
                                            std::shared_ptr<CameraDataset> val_dataset,
@@ -449,8 +478,6 @@ namespace lfs::training {
         result.num_gaussians = static_cast<int>(splatData.size());
         result.iteration = iteration;
 
-        const auto val_dataloader = make_dataloader(val_dataset);
-
         std::vector<float> psnr_values, ssim_values;
         const auto start_time = std::chrono::steady_clock::now();
 
@@ -461,10 +488,10 @@ namespace lfs::training {
             std::filesystem::create_directories(eval_dir);
         }
 
-        int image_idx = 0;
         const size_t val_dataset_size = val_dataset->size();
         size_t skipped_images = 0;
         size_t evaluated_images = 0;
+        size_t saved_images = 0;
 
         const auto mask_mode = _params.optimization.mask_mode;
         const bool use_masking =
@@ -472,14 +499,18 @@ namespace lfs::training {
             mask_mode == lfs::core::param::MaskMode::Ignore ||
             mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore;
 
-        while (auto batch_opt = val_dataloader->next()) {
-            auto& batch = *batch_opt;
-            auto camera_with_image = batch[0].data;
-            lfs::core::Camera* cam = camera_with_image.camera;
-            lfs::core::Tensor gt_image = std::move(camera_with_image.image);
-
-            if (gt_image.device() != lfs::core::Device::CUDA) {
-                gt_image = gt_image.to(lfs::core::Device::CUDA);
+        for (size_t image_idx = 0; image_idx < val_dataset_size; ++image_idx) {
+            lfs::core::Camera* cam = val_dataset->get_camera(image_idx);
+            lfs::core::Tensor gt_image;
+            try {
+                gt_image = load_eval_gt_image_cpu(
+                    *cam,
+                    _params.dataset.resize_factor,
+                    _params.dataset.max_width);
+            } catch (const std::exception& e) {
+                LOG_WARN("Eval: skipping camera '{}' (failed to load GT image: {})", cam->image_name(), e.what());
+                skipped_images++;
+                continue;
             }
 
             lfs::core::Tensor mask;
@@ -549,9 +580,8 @@ namespace lfs::training {
                     rgb_images,
                     true, // horizontal
                     4);   // separator width
+                saved_images++;
             }
-
-            image_idx++;
         }
 
         // Wait for all images to be saved before computing final timing
@@ -597,7 +627,7 @@ namespace lfs::training {
         _reporter->add_metrics(result);
 
         if (_params.optimization.enable_save_eval_images) {
-            std::cout << "Saved " << image_idx << " evaluation images to: " << lfs::core::path_to_utf8(eval_dir) << std::endl;
+            std::cout << "Saved " << saved_images << " evaluation images to: " << lfs::core::path_to_utf8(eval_dir) << std::endl;
         }
 
         return result;

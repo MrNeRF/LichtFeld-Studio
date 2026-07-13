@@ -10,10 +10,17 @@
 namespace lfs::core {
 
     Tensor broadcast_to(const Tensor& src, const TensorShape& target) {
+        LFS_ASSERT_MSG(src.is_valid(), "Cannot broadcast an invalid tensor");
+        const bool supported_dtype =
+            src.dtype() == DataType::Float32 || src.dtype() == DataType::Bool ||
+            (src.device() == Device::CPU && src.dtype() == DataType::Int32);
+        LFS_ASSERT_MSG(supported_dtype,
+                       std::format("broadcast_to does not support {} on {}",
+                                   dtype_name(src.dtype()), device_name(src.device())));
 
-        if (!src.is_valid()) {
-            LOG_ERROR("Cannot broadcast invalid tensor");
-            return Tensor();
+        // An empty dimension vector represents a scalar, not an incompatibility.
+        if (src.shape() == target) {
+            return src.clone();
         }
 
         if (src.numel() == 0 || target.elements() == 0) {
@@ -26,21 +33,8 @@ namespace lfs::core {
 
         // Validate broadcasting rules
         auto broadcast_shape = broadcast::shape(src_dims, target_dims);
-        if (broadcast_shape.empty()) {
-            LOG_ERROR("Cannot broadcast shape {} to {}", src.shape().str(), target.str());
-            return Tensor();
-        }
-
-        if (broadcast_shape != target_dims) {
-            LOG_ERROR("Broadcast shape mismatch: expected {}, got {}",
-                      target.str(), TensorShape(broadcast_shape).str());
-            return Tensor();
-        }
-
-        // If shapes match, just clone
-        if (src.shape() == target) {
-            return src.clone();
-        }
+        LFS_ASSERT_MSG(!broadcast_shape.empty() && broadcast_shape == target_dims,
+                       std::format("Cannot broadcast shape {} to {}", src.shape().str(), target.str()));
 
         Tensor result;
         if (src.device() == Device::CUDA) {
@@ -82,8 +76,7 @@ namespace lfs::core {
                         src_dims.size(), target_dims.size(), result.numel(), result.stream());
                 }
             } else {
-                LOG_ERROR("Unsupported dtype for CUDA broadcast: {}", dtype_name(src.dtype()));
-                return Tensor();
+                LFS_ASSERT_MSG(false, "Unsupported dtype reached CUDA broadcast dispatch");
             }
         } else {
             if (!src.is_contiguous())
@@ -93,6 +86,7 @@ namespace lfs::core {
                 unsigned char* dst_data = result.ptr<unsigned char>();
                 for (size_t i = 0; i < result.numel(); ++i) {
                     size_t src_idx = broadcast::index(i, target_dims, src_dims);
+                    LFS_DEBUG_ASSERT(src_idx < src.numel());
                     dst_data[i] = src_data[src_idx];
                 }
             } else if (src.dtype() == DataType::Float32) {
@@ -100,6 +94,7 @@ namespace lfs::core {
                 float* dst_data = result.ptr<float>();
                 for (size_t i = 0; i < result.numel(); ++i) {
                     size_t src_idx = broadcast::index(i, target_dims, src_dims);
+                    LFS_DEBUG_ASSERT(src_idx < src.numel());
                     dst_data[i] = src_data[src_idx];
                 }
             } else if (src.dtype() == DataType::Int32) {
@@ -107,11 +102,11 @@ namespace lfs::core {
                 int* dst_data = result.ptr<int>();
                 for (size_t i = 0; i < result.numel(); ++i) {
                     size_t src_idx = broadcast::index(i, target_dims, src_dims);
+                    LFS_DEBUG_ASSERT(src_idx < src.numel());
                     dst_data[i] = src_data[src_idx];
                 }
             } else {
-                LOG_ERROR("Unsupported dtype for CPU broadcasting: {}", dtype_name(src.dtype()));
-                return Tensor();
+                LFS_ASSERT_MSG(false, "Unsupported dtype reached CPU broadcast dispatch");
             }
         }
 

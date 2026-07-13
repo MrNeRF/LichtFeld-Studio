@@ -28,6 +28,8 @@ set(LFS_TRAINING_KERNEL_SOURCES
     kernels/densification_kernels.cu
     kernels/grad_alpha.cu
     kernels/depth_loss.cu
+    kernels/normal_loss.cu
+    kernels/normal_consistency_loss.cu
     kernels/image_kernels.cu
     components/sparsity_optimizer_kernels.cu
 )
@@ -70,6 +72,10 @@ if(MSVC)
             $<$<COMPILE_LANGUAGE:CUDA>:FMT_UNICODE=0>
     )
 endif()
+
+# Shared depth-anchor fit + sidecar cache (reused by the preprocess CLI)
+add_subdirectory(depth_anchor)
+
 # Optimizer sources
 set(TRAINING_NEW_SOURCES
     optimizer/adam_optimizer.cpp
@@ -133,6 +139,7 @@ target_link_libraries(lfs_training
         gsplat_backend_lfs      # LibTorch-free gsplat rasterization backend
 	edge_compute_backend    # For igs+ edge score rasterization
     PRIVATE
+        lfs_depth_anchor        # Shared depth-anchor fit + sidecar cache
         lfs_python_utils
 )
 

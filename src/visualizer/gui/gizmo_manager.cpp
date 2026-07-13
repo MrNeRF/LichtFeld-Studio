@@ -110,11 +110,8 @@ namespace lfs::vis::gui {
 
         struct ViewportGizmoMarker {
             int encoded_axis = -1;
-            int axis = 0;
-            bool negative = false;
             glm::vec2 screen_pos{0.0f};
             float radius = 0.0f;
-            float depth = 0.0f;
             bool visible = false;
         };
 
@@ -164,8 +161,6 @@ namespace lfs::vis::gui {
 
             const auto project_marker = [&](const int axis, const bool negative) {
                 ViewportGizmoMarker marker;
-                marker.axis = axis;
-                marker.negative = negative;
                 marker.encoded_axis = axis + (negative ? 3 : 0);
 
                 glm::vec3 position(0.0f);
@@ -181,7 +176,6 @@ namespace lfs::vis::gui {
                 const float local_y = (1.0f - (ndc.y * 0.5f + 0.5f)) * size;
                 marker.screen_pos = layout.top_left + glm::vec2(local_x, local_y);
                 marker.radius = projected_marker_radius;
-                marker.depth = clip.z / clip.w;
                 marker.visible = true;
                 return marker;
             };

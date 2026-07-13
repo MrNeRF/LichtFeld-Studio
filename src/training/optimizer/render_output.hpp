@@ -17,6 +17,7 @@ namespace lfs::training {
         lfs::core::Tensor target_image; // Current GT image [C, H, W], when available
         lfs::core::Tensor alpha;        // [..., C, H, W, 1]
         lfs::core::Tensor depth;        // [..., C, H, W, 1] - accumulated or expected depth
+        lfs::core::Tensor normal;       // [3, H, W] - accumulated camera-space normals, empty unless rendered
         lfs::core::Tensor means2d;      // [..., C, N, 2]
         lfs::core::Tensor depths;       // [..., N] - per-gaussian depths
         lfs::core::Tensor radii;        // [..., N]

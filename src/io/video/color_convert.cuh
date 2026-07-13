@@ -49,11 +49,11 @@ namespace lfs::io::video {
     // For 90/270: dst must be [width * height * 3] (swapped dimensions)
     // For 180: dst must be [height * width * 3] (same as src)
     void rotateRgbCuda(
-        const uint8_t* src,   // GPU pointer, RGB uint8 packed
-        uint8_t* dst,         // GPU pointer, rotated output
-        int width,            // source width
-        int height,           // source height
-        int angle,            // rotation angle: 90, 180, or 270
+        const uint8_t* src, // GPU pointer, RGB uint8 packed
+        uint8_t* dst,       // GPU pointer, rotated output
+        int width,          // source width
+        int height,         // source height
+        int angle,          // rotation angle: 90, 180, or 270
         cudaStream_t stream = nullptr);
 
 } // namespace lfs::io::video

@@ -263,7 +263,8 @@ namespace lfs::training {
         int tile_width,
         int tile_height,
         bool mip_filter,
-        const core::Tensor& bg_image) {
+        const core::Tensor& bg_image,
+        bool render_normal) {
         // Get camera parameters
         const int full_width = viewpoint_camera.image_width();
         const int full_height = viewpoint_camera.image_height();
@@ -308,6 +309,7 @@ namespace lfs::training {
         thread_local core::Tensor image;
         thread_local core::Tensor alpha;
         thread_local core::Tensor depth;
+        thread_local core::Tensor normal;
         thread_local int last_width = -1;
         thread_local int last_height = -1;
 
@@ -316,8 +318,13 @@ namespace lfs::training {
             image = core::Tensor::empty({3, static_cast<size_t>(height), static_cast<size_t>(width)});
             alpha = core::Tensor::empty({1, static_cast<size_t>(height), static_cast<size_t>(width)});
             depth = core::Tensor::empty({1, static_cast<size_t>(height), static_cast<size_t>(width)});
+            normal = core::Tensor();
             last_width = width;
             last_height = height;
+        }
+        if (render_normal && (!normal.is_valid() ||
+                              normal.shape() != core::TensorShape({3, static_cast<size_t>(height), static_cast<size_t>(width)}))) {
+            normal = core::Tensor::empty({3, static_cast<size_t>(height), static_cast<size_t>(width)});
         }
 
         // Call forward_raw with raw pointers (no PyTorch wrappers)
@@ -339,6 +346,7 @@ namespace lfs::training {
                 image.ptr<float>(),
                 alpha.ptr<float>(),
                 depth.ptr<float>(),
+                render_normal ? normal.ptr<float>() : nullptr,
                 n_primitives,
                 active_sh_bases,
                 sh_layout_bases,
@@ -419,6 +427,9 @@ namespace lfs::training {
         render_output.image = image;
         render_output.alpha = alpha;
         render_output.depth = depth;
+        if (render_normal) {
+            render_output.normal = normal;
+        }
         render_output.width = width;
         render_output.height = height;
 
@@ -426,6 +437,9 @@ namespace lfs::training {
         ctx.image = image;
         ctx.alpha = alpha;
         ctx.depth = depth;
+        if (render_normal) {
+            ctx.normal = normal;
+        }
         ctx.bg_color = bg_color; // Save bg_color for alpha gradient
         ctx.bg_image = bg_image; // Save bg_image for alpha gradient
 
@@ -471,7 +485,7 @@ namespace lfs::training {
         int iteration,
         const FastGSFusedExtraGradients& fused_extra_gradients,
         const core::Tensor& grad_depth,
-        bool detach_depth_weights) {
+        const core::Tensor& grad_normal) {
 
         // Compute grad_alpha from background blending: output = image + (1 - alpha) * bg
         int H, W;
@@ -545,6 +559,24 @@ namespace lfs::training {
             grad_depth_ptr = grad_depth_2d.ptr<float>();
         }
 
+        core::Tensor grad_normal_chw;
+        const float* grad_normal_ptr = nullptr;
+        if (grad_normal.is_valid() && grad_normal.numel() > 0) {
+            grad_normal_chw = grad_normal;
+            assert(grad_normal_chw.ndim() == 3 &&
+                   grad_normal_chw.shape()[0] == 3 &&
+                   checked_dim_to_int(grad_normal_chw.shape()[1], "grad_normal height") == H &&
+                   checked_dim_to_int(grad_normal_chw.shape()[2], "grad_normal width") == W &&
+                   "grad_normal must have shape [3, H, W]");
+            if (grad_normal_chw.device() != core::Device::CUDA) {
+                grad_normal_chw = grad_normal_chw.cuda();
+            }
+            if (!grad_normal_chw.is_contiguous()) {
+                grad_normal_chw = grad_normal_chw.contiguous();
+            }
+            grad_normal_ptr = grad_normal_chw.ptr<float>();
+        }
+
         const int n_primitives = checked_dim_to_int(ctx.means.shape()[0], "n_primitives");
         // densification_info has shape [2, N]
         const bool update_densification_info = gaussian_model._densification_info.ndim() == 2 &&
@@ -597,6 +629,7 @@ namespace lfs::training {
         fused_adam.beta2 = optimizer_fused.beta2;
         fused_adam.eps = optimizer_fused.eps;
         fused_adam.scale_reg_weight = fused_extra_gradients.scale_reg_weight;
+        fused_adam.flatten_reg_weight = fused_extra_gradients.flatten_reg_weight;
         fused_adam.opacity_reg_weight = fused_extra_gradients.opacity_reg_weight;
         fused_adam.sparsity_opa_sigmoid = fused_extra_gradients.sparsity_opa_sigmoid;
         fused_adam.sparsity_z = fused_extra_gradients.sparsity_z;
@@ -620,6 +653,7 @@ namespace lfs::training {
             grad_image.ptr<float>(),
             grad_alpha.ptr<float>(),
             grad_depth_ptr,
+            grad_normal_ptr,
             raw_image.ptr<float>(),
             ctx.alpha.ptr<float>(),
             ctx.means.ptr<float>(),
@@ -642,8 +676,7 @@ namespace lfs::training {
             ctx.center_y,
             ctx.mip_filter,
             densification_type,
-            &fused_adam,
-            detach_depth_weights);
+            &fused_adam);
 
         ctx.mark_forward_context_released();
 

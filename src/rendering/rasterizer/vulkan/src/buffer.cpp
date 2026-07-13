@@ -389,7 +389,6 @@ T VulkanGSPipeline::readElement(const _VulkanBuffer& buffer, size_t index) {
     // (num_splats * 4 in the hot readback path) wasted a one-time MB-scale allocation.
     allocStagingBuffer(elementSize);
     {
-        // std::lock_guard<std::mutex> lock(stager.mutex);
         {
             DEVICE_GUARD;
 

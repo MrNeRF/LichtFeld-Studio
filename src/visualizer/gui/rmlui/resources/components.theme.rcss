@@ -116,6 +116,10 @@ selectbox {
     border-color: @{border};
 }
 
+selectbox option:checked {
+    background-color: @{alpha(primary,0.16)};
+}
+
 selectbox option:hover {
     background-color: @{primary};
 }

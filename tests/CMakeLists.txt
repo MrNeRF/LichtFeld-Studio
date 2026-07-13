@@ -110,6 +110,7 @@ set(BENCHMARK_FILES
 
 # Regular test sources (unit tests, integration tests)
 set(TEST_FILES
+    test_assert_hardening.cpp
     test_loss_gradients.cpp
     test_regularization_comparison.cpp
     test_gut_rasterizer_gradients.cpp
@@ -267,7 +268,10 @@ set(TEST_FILES
     test_selection_operator_modal.cpp
     test_operator_registry_props.cpp
     test_fastgs_analytical_gradients.cpp
+    test_normal_prior_decode.cpp
     test_background_image.cpp
+    test_nvcodec_jpeg2k_16bit.cpp
+    test_pipelined_loader_sidecar_jpeg2k.cpp
     test_operator_return_value.cpp
     test_sdl_rml_key_mapping.cpp
     test_rml_path_utils.cpp
@@ -561,6 +565,14 @@ if(WIN32)
                     "$<TARGET_FILE_DIR:${TEST_TARGET}>/extensions/"
                 COMMENT "Copying nvjpeg2k extension for ${TEST_TARGET}"
             )
+            if(WITH_DYNAMIC_NVJPEG2K AND DEFINED _lfs_nvjpeg2k_runtime_file AND EXISTS "${_lfs_nvjpeg2k_runtime_file}")
+                add_custom_command(TARGET ${TEST_TARGET} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${_lfs_nvjpeg2k_runtime_file}"
+                        "$<TARGET_FILE_DIR:${TEST_TARGET}>"
+                    COMMENT "Copying nvjpeg2k runtime library for ${TEST_TARGET}"
+                )
+            endif()
         endif()
     endforeach()
 endif()

@@ -124,6 +124,8 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     float* image,
     float* alpha,
     float* depth,
+    float* normal,
+    float3* primitive_normals,
     const int n_primitives,
     const int active_sh_bases,
     const int sh_layout_bases,
@@ -183,6 +185,7 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
         per_primitive_buffers.mean2d,
         per_primitive_buffers.conic_opacity,
         per_primitive_buffers.color,
+        normal != nullptr ? primitive_normals : nullptr,
         n_primitives,
         grid.x,
         grid.y,
@@ -361,21 +364,30 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
     }
 
     // Perform blending
-    kernels::forward::blend_cu<<<grid, block, 0, stream>>>(
-        per_tile_buffers.instance_ranges,
-        sorted_primitive_indices,
-        per_primitive_buffers.mean2d,
-        per_primitive_buffers.conic_opacity,
-        per_primitive_buffers.color,
-        per_primitive_buffers.depths,
-        image,
-        alpha,
-        depth,
-        per_tile_buffers.n_contributions,
-        per_tile_buffers.final_transmittance,
-        width,
-        height,
-        grid.x);
+    auto launch_blend = [&]<bool RENDER_NORMAL>() {
+        kernels::forward::blend_cu<RENDER_NORMAL><<<grid, block, 0, stream>>>(
+            per_tile_buffers.instance_ranges,
+            sorted_primitive_indices,
+            per_primitive_buffers.mean2d,
+            per_primitive_buffers.conic_opacity,
+            per_primitive_buffers.color,
+            per_primitive_buffers.depths,
+            primitive_normals,
+            image,
+            alpha,
+            depth,
+            normal,
+            per_tile_buffers.n_contributions,
+            per_tile_buffers.final_transmittance,
+            width,
+            height,
+            grid.x);
+    };
+    if (normal != nullptr) {
+        launch_blend.template operator()<true>();
+    } else {
+        launch_blend.template operator()<false>();
+    }
     check_cuda_with_fastgs_status(cudaGetLastError(), "blend", forward_status, "blend", static_cast<uint64_t>(n_primitives), n_tiles_u64);
     if constexpr (config::debug) {
         check_cuda_with_fastgs_status(cudaDeviceSynchronize(), "blend", forward_status, "blend", static_cast<uint64_t>(n_primitives), n_tiles_u64);

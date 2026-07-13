@@ -4,13 +4,9 @@
 
 #include "gui/ui_widgets.hpp"
 #include "core/event_bridge/localization_manager.hpp"
-#include "gui/icon_cache.hpp"
 #include "gui/string_keys.hpp"
 #include "python/python_runtime.hpp"
-#include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
-#include "training/training_manager.hpp"
-#include "visualizer_impl.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -23,8 +19,6 @@
 #include <imgui.h>
 
 namespace lfs::vis::gui::widgets {
-
-    using namespace lfs::core::events;
 
     namespace {
         constexpr float CLICK_THRESHOLD_SQ = 5.0f * 5.0f;
@@ -43,10 +37,6 @@ namespace lfs::vis::gui::widgets {
         };
 
         std::unordered_map<ImGuiID, EditSnapshot> g_edit_snapshots;
-
-        ImVec4 getIconTint() {
-            return theme().isLightTheme() ? ImVec4{0.2f, 0.2f, 0.2f, 0.9f} : ImVec4{1.0f, 1.0f, 1.0f, 0.9f};
-        }
 
         void cleanupEditSnapshots() {
             ImGuiContext& g = *GImGui;
@@ -411,237 +401,6 @@ namespace lfs::vis::gui::widgets {
             g_pending_cancel_id = GImGui->ActiveId;
     }
 
-    bool SliderWithReset(const char* label, float* v, float min, float max, float reset_value,
-                         const char* tooltip, const char* format) {
-        bool changed = SliderFloat(label, v, min, max, format);
-        bool slider_hovered = ImGui::IsItemHovered();
-
-        ImGui::SameLine();
-        ImGui::PushID(label);
-
-        const float btn_size = ImGui::GetFrameHeight();
-        const ImVec2 icon_size(btn_size - 4, btn_size - 4);
-        const ImVec4 icon_tint = getIconTint();
-        const ImTextureID reset_icon = static_cast<ImTextureID>(IconCache::instance().getIcon("reset"));
-
-        if (reset_icon) {
-            if (ImGui::ImageButton("##reset", reset_icon, icon_size,
-                                   ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), icon_tint)) {
-                *v = reset_value;
-                changed = true;
-            }
-        } else {
-            if (ImGui::Button("R", ImVec2(btn_size, btn_size))) {
-                *v = reset_value;
-                changed = true;
-            }
-        }
-
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", LOC(lichtfeld::Strings::Common::RESET));
-        }
-        ImGui::PopID();
-
-        if (tooltip && slider_hovered) {
-            ImGui::SetTooltip("%s", tooltip);
-        }
-
-        return changed;
-    }
-
-    bool DragFloat3WithReset(const char* label, float* v, float speed, float reset_value,
-                             const char* tooltip) {
-        bool changed = DragFloat3(label, v, speed);
-        bool drag_hovered = ImGui::IsItemHovered();
-
-        ImGui::SameLine();
-        ImGui::PushID(label);
-
-        const float btn_size = ImGui::GetFrameHeight();
-        const ImVec2 icon_size(btn_size - 4, btn_size - 4);
-        const ImVec4 icon_tint = getIconTint();
-        const ImTextureID reset_icon = static_cast<ImTextureID>(IconCache::instance().getIcon("reset"));
-
-        if (reset_icon) {
-            if (ImGui::ImageButton("##reset", reset_icon, icon_size,
-                                   ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), icon_tint)) {
-                v[0] = v[1] = v[2] = reset_value;
-                changed = true;
-            }
-        } else {
-            if (ImGui::Button("R", ImVec2(btn_size, btn_size))) {
-                v[0] = v[1] = v[2] = reset_value;
-                changed = true;
-            }
-        }
-
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", LOC(lichtfeld::Strings::Common::RESET));
-        }
-        ImGui::PopID();
-
-        if (tooltip && drag_hovered) {
-            ImGui::SetTooltip("%s", tooltip);
-        }
-
-        return changed;
-    }
-
-    void HelpMarker(const char* desc) {
-        ImGui::TextDisabled("(?)");
-        if (ImGui::IsItemHovered()) {
-            ImGui::BeginTooltip();
-            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35.0f);
-            ImGui::TextUnformatted(desc);
-            ImGui::PopTextWrapPos();
-            ImGui::EndTooltip();
-        }
-    }
-
-    void TableRow(const char* label, const char* format, ...) {
-        ImGui::Text("%s:", label);
-        ImGui::SameLine(120 * lfs::python::get_shared_dpi_scale()); // Align values at column 120
-
-        va_list args;
-        va_start(args, format);
-        ImGui::TextV(format, args);
-        va_end(args);
-    }
-
-    void DrawProgressBar(float fraction, const char* overlay_text) {
-        ImGui::ProgressBar(fraction, ImVec2(-1, 0), overlay_text);
-    }
-
-    void DrawLossPlot(const float* values, int count, float min_val, float max_val, const char* label) {
-        if (count <= 0)
-            return;
-
-        // Ensure we have a valid, non-empty label
-        const char* plot_label = (label && strlen(label) > 0) ? label : "Plot##default";
-
-        // Simple line plot using ImGui
-        ImGui::PlotLines(
-            "Plot##default",
-            values,
-            count,
-            0,
-            plot_label,
-            min_val,
-            max_val,
-            ImVec2(ImGui::GetContentRegionAvail().x, 80 * lfs::python::get_shared_dpi_scale()));
-    }
-
-    void DrawModeStatus(const UIContext& ctx) {
-        using namespace lichtfeld::Strings;
-
-        auto* scene_manager = ctx.viewer->getSceneManager();
-        if (!scene_manager) {
-            ImGui::Text("%s %s", LOC(Status::MODE), LOC(Status::UNKNOWN));
-            return;
-        }
-
-        const auto& t = theme();
-        const char* mode_str = LOC(Status::UNKNOWN);
-        ImVec4 mode_color = t.palette.text_dim;
-
-        // Content determines base mode
-        SceneManager::ContentType content = scene_manager->getContentType();
-
-        switch (content) {
-        case SceneManager::ContentType::Empty:
-            mode_str = LOC(Mode::EMPTY);
-            mode_color = t.palette.text_dim;
-            break;
-
-        case SceneManager::ContentType::SplatFiles:
-            mode_str = LOC(Mode::EDIT_MODE);
-            mode_color = t.palette.info;
-            break;
-
-        case SceneManager::ContentType::Dataset: {
-            // For dataset, check training state from TrainerManager
-            auto* trainer_manager = scene_manager->getTrainerManager();
-            if (!trainer_manager || !trainer_manager->hasTrainer()) {
-                mode_str = LOC(Status::DATASET_NO_TRAINER);
-                mode_color = t.palette.text_dim;
-            } else {
-                // Use trainer state for specific mode
-                auto state = trainer_manager->getState();
-                switch (state) {
-                case TrainerManager::State::Ready:
-                    mode_str = LOC(Status::DATASET_READY);
-                    mode_color = t.palette.success;
-                    break;
-                case TrainerManager::State::Running:
-                    mode_str = LOC(Status::TRAINING);
-                    mode_color = t.palette.warning;
-                    break;
-                case TrainerManager::State::Paused:
-                    mode_str = LOC(Status::TRAINING_PAUSED);
-                    mode_color = lighten(t.palette.warning, -0.3f);
-                    break;
-                case TrainerManager::State::Finished: {
-                    const auto reason = trainer_manager->getStateMachine().getFinishReason();
-                    switch (reason) {
-                    case FinishReason::Completed:
-                        mode_str = LOC(Messages::TRAINING_COMPLETE);
-                        mode_color = t.palette.success;
-                        break;
-                    case FinishReason::UserStopped:
-                        mode_str = LOC(Messages::TRAINING_STOPPED);
-                        mode_color = t.palette.text_dim;
-                        break;
-                    case FinishReason::Error:
-                        mode_str = LOC(Messages::TRAINING_ERROR);
-                        mode_color = t.palette.error;
-                        break;
-                    default:
-                        mode_str = LOC(Status::TRAINING_FINISHED);
-                        mode_color = t.palette.text_dim;
-                    }
-                    break;
-                }
-                case TrainerManager::State::Stopping:
-                    mode_str = LOC(Status::STOPPING);
-                    mode_color = darken(t.palette.error, 0.3f);
-                    break;
-                default:
-                    mode_str = LOC(Mode::DATASET);
-                    mode_color = t.palette.text_dim;
-                }
-            }
-            break;
-        }
-        }
-
-        ImGui::TextColored(mode_color, "%s %s", LOC(Status::MODE), mode_str);
-
-        // Display scene info
-        auto info = scene_manager->getSceneInfo();
-        if (info.num_gaussians > 0) {
-            ImGui::Text("%s %zu", LOC(Status::GAUSSIANS), info.num_gaussians);
-        }
-
-        if (info.source_type == "PLY" && info.num_nodes > 0) {
-            ImGui::Text(LOC(Status::PLY_MODELS_COUNT), info.num_nodes);
-        }
-
-        // Display training iteration if actively training
-        if (content == SceneManager::ContentType::Dataset) {
-            auto* trainer_manager = scene_manager->getTrainerManager();
-            if (trainer_manager && trainer_manager->isRunning()) {
-                int iteration = trainer_manager->getCurrentIteration();
-                if (iteration > 0) {
-                    ImGui::Text("%s %d", LOC(Status::ITERATION), iteration);
-                }
-            }
-        }
-    }
-
-    void DrawModeStatusWithContentSwitch(const UIContext& ctx) {
-        DrawModeStatus(ctx);
-    }
-
     void DrawShadowRect(ImDrawList* draw_list, const ImVec2& pos, const ImVec2& size,
                         const float rounding, const float alpha_scale,
                         const float blur_scale, const float offset_scale) {
@@ -752,15 +511,6 @@ namespace lfs::vis::gui::widgets {
         DrawShadowRectOutside(draw_list, pos, size, rounding, 0.46f, 0.92f, 0.72f);
     }
 
-    void DrawModalShadow(ImDrawList* draw_list, const ImVec2& pos, const ImVec2& size,
-                         const float rounding) {
-        DrawShadowRect(draw_list, pos, size, rounding, 0.68f, 1.08f, 0.92f);
-    }
-
-    void DrawWindowShadow(const ImVec2& pos, const ImVec2& size, const float rounding) {
-        DrawFloatingWindowShadow(pos, size, rounding);
-    }
-
     bool IconButton(const char* id, const ImTextureID texture, const ImVec2& size,
                     const bool selected, const char* fallback_label) {
         constexpr float ACTIVE_DARKEN = 0.1f;
@@ -792,16 +542,6 @@ namespace lfs::vis::gui::widgets {
 
         ImGui::PopStyleColor(3);
         return clicked;
-    }
-
-    void SectionHeader(const char* text, const FontSet& fonts) {
-        const auto& t = theme();
-        if (fonts.section)
-            ImGui::PushFont(fonts.section);
-        ImGui::TextColored(t.palette.text_dim, "%s", text);
-        if (fonts.section)
-            ImGui::PopFont();
-        ImGui::Separator();
     }
 
     bool ColoredButton(const char* label, const ButtonStyle style, const ImVec2& size) {
@@ -916,83 +656,6 @@ namespace lfs::vis::gui::widgets {
                 changed = true;
             }
         }
-
-        ImGui::PopID();
-        return changed;
-    }
-
-    bool ChromaticityPicker2D(const char* label, float* x, float* y, const float range,
-                              const ImVec4& color_tint) {
-        constexpr float PICKER_SIZE_BASE = 80.0f;
-        constexpr float POINT_RADIUS_BASE = 5.0f;
-        constexpr float POINT_OUTLINE_WIDTH = 1.5f;
-        constexpr float COLOR_BLEND = 0.8f;
-        constexpr float COLOR_OFFSET = 0.2f;
-
-        const auto& t = theme();
-        const float dpi = lfs::python::get_shared_dpi_scale();
-        const float size = PICKER_SIZE_BASE * dpi;
-
-        ImGui::PushID(label);
-
-        bool changed = false;
-        const ImVec2 cursor_pos = ImGui::GetCursorScreenPos();
-        auto* const draw_list = ImGui::GetWindowDrawList();
-
-        const ImU32 bg_color = t.isLightTheme() ? IM_COL32(240, 240, 240, 255) : IM_COL32(40, 40, 40, 255);
-        const ImU32 grid_color = t.isLightTheme() ? IM_COL32(200, 200, 200, 255) : IM_COL32(70, 70, 70, 255);
-        const ImU32 border_color = ImGui::ColorConvertFloat4ToU32(t.palette.border);
-
-        draw_list->AddRectFilled(cursor_pos, ImVec2(cursor_pos.x + size, cursor_pos.y + size), bg_color);
-
-        const float center = size * 0.5f;
-        draw_list->AddLine(ImVec2(cursor_pos.x + center, cursor_pos.y),
-                           ImVec2(cursor_pos.x + center, cursor_pos.y + size), grid_color);
-        draw_list->AddLine(ImVec2(cursor_pos.x, cursor_pos.y + center),
-                           ImVec2(cursor_pos.x + size, cursor_pos.y + center), grid_color);
-
-        draw_list->AddRect(cursor_pos, ImVec2(cursor_pos.x + size, cursor_pos.y + size), border_color);
-
-        ImGui::InvisibleButton("##picker", ImVec2(size, size));
-        const bool is_active = ImGui::IsItemActive();
-        const bool is_hovered = ImGui::IsItemHovered();
-
-        if (is_active && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-            const ImVec2 mouse = ImGui::GetMousePos();
-            *x = ((mouse.x - cursor_pos.x) / size - 0.5f) * 2.0f * range;
-            *y = -((mouse.y - cursor_pos.y) / size - 0.5f) * 2.0f * range;
-            *x = std::clamp(*x, -range, range);
-            *y = std::clamp(*y, -range, range);
-            changed = true;
-        }
-
-        if (is_hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-            *x = 0.0f;
-            *y = 0.0f;
-            changed = true;
-        }
-
-        const float px = cursor_pos.x + center + (*x / range) * center;
-        const float py = cursor_pos.y + center - (*y / range) * center;
-        const float point_radius = POINT_RADIUS_BASE * dpi;
-
-        const ImU32 point_outline = t.isLightTheme() ? IM_COL32(60, 60, 60, 255) : IM_COL32(255, 255, 255, 255);
-        const ImU32 point_fill = ImGui::ColorConvertFloat4ToU32(ImVec4(
-            color_tint.x * COLOR_BLEND + COLOR_OFFSET, color_tint.y * COLOR_BLEND + COLOR_OFFSET,
-            color_tint.z * COLOR_BLEND + COLOR_OFFSET, 1.0f));
-
-        draw_list->AddCircleFilled(ImVec2(px, py), point_radius, point_fill);
-        draw_list->AddCircle(ImVec2(px, py), point_radius, point_outline, 0, POINT_OUTLINE_WIDTH);
-
-        ImGui::SameLine();
-        ImGui::BeginGroup();
-        ImGui::TextColored(ImVec4(color_tint.x, color_tint.y, color_tint.z, 1.0f), "%s", label);
-        ImGui::Text("X: %.3f", *x);
-        ImGui::Text("Y: %.3f", *y);
-        if (is_hovered) {
-            ImGui::TextDisabled("(%s)", LOC(lichtfeld::Strings::Common::DOUBLE_CLICK_RESET));
-        }
-        ImGui::EndGroup();
 
         ImGui::PopID();
         return changed;

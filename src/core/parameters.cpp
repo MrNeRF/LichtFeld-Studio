@@ -176,6 +176,11 @@ namespace lfs::core {
             opt_json["use_depth_loss"] = use_depth_loss;
             opt_json["depth_loss_weight"] = depth_loss_weight;
             opt_json["depth_loss_mode"] = depth_loss_mode;
+            opt_json["use_normal_loss"] = use_normal_loss;
+            opt_json["normal_loss_weight"] = normal_loss_weight;
+            opt_json["normal_consistency_weight"] = normal_consistency_weight;
+            opt_json["normal_flatten_weight"] = normal_flatten_weight;
+            opt_json["normal_loss_space"] = normal_loss_space;
 
             // MRNF strategy parameters
             opt_json["growth_grad_threshold"] = growth_grad_threshold;
@@ -196,8 +201,13 @@ namespace lfs::core {
                 return "GUT and igs+ strategy cannot be used together";
             if (ppisp_freeze_from_sidecar && !use_ppisp)
                 return "PPISP sidecar freeze requires PPISP enabled";
-            if (depth_loss_mode != "pearson" && depth_loss_mode != "adaptive-warped-l1")
-                return "depth_loss_mode must be 'pearson' or 'adaptive-warped-l1'";
+            if (depth_loss_mode != "ssi" && depth_loss_mode != "ssi-disparity" && depth_loss_mode != "ssi-depth")
+                return "depth_loss_mode must be 'ssi', 'ssi-disparity', or 'ssi-depth'";
+            if (normal_loss_space != "auto" &&
+                normal_loss_space != "camera-opencv" &&
+                normal_loss_space != "camera-opengl" &&
+                normal_loss_space != "world")
+                return "normal_loss_space must be 'auto', 'camera-opencv', 'camera-opengl', or 'world'";
             return {};
         }
 
@@ -524,6 +534,21 @@ namespace lfs::core {
             }
             if (json.contains("depth_loss_mode")) {
                 params.depth_loss_mode = json["depth_loss_mode"];
+            }
+            if (json.contains("use_normal_loss")) {
+                params.use_normal_loss = json["use_normal_loss"];
+            }
+            if (json.contains("normal_loss_weight")) {
+                params.normal_loss_weight = json["normal_loss_weight"];
+            }
+            if (json.contains("normal_consistency_weight")) {
+                params.normal_consistency_weight = json["normal_consistency_weight"];
+            }
+            if (json.contains("normal_flatten_weight")) {
+                params.normal_flatten_weight = json["normal_flatten_weight"];
+            }
+            if (json.contains("normal_loss_space")) {
+                params.normal_loss_space = json["normal_loss_space"];
             }
 
             // MRNF strategy parameters

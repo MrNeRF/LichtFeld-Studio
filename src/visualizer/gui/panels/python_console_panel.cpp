@@ -1431,27 +1431,10 @@ namespace lfs::vis::gui::panels {
         return g_python_console_state;
     }
 
-    void PythonConsoleState::addOutput(const std::string& text, uint32_t /*color*/) {
-        std::lock_guard lock(mutex_);
-        if (output_terminal_) {
-            output_terminal_->write(text);
-            output_terminal_->write("\n");
-        }
-    }
-
     void PythonConsoleState::addError(const std::string& text) {
         std::lock_guard lock(mutex_);
         if (output_terminal_) {
             output_terminal_->write("\033[31m"); // Red
-            output_terminal_->write(text);
-            output_terminal_->write("\033[0m\n"); // Reset + newline
-        }
-    }
-
-    void PythonConsoleState::addInput(const std::string& text) {
-        std::lock_guard lock(mutex_);
-        if (output_terminal_) {
-            output_terminal_->write("\033[32m>>> "); // Green prompt
             output_terminal_->write(text);
             output_terminal_->write("\033[0m\n"); // Reset + newline
         }
@@ -1571,9 +1554,6 @@ namespace lfs::vis::gui::panels {
             command_history_.push_back(cmd);
         }
         history_index_ = -1;
-        if (editor_) {
-            editor_->addToHistory(cmd);
-        }
     }
 
     void PythonConsoleState::historyUp() {

@@ -60,7 +60,6 @@ namespace lfs::vis {
             [[nodiscard]] SequencerController& controller() { return controller_; }
             [[nodiscard]] const SequencerController& controller() const { return controller_; }
             void setFloating(bool floating);
-            [[nodiscard]] float panelTopY() const { return panel_ && !panel_->isFloating() ? panel_->cachedPanelY() : -1.0f; }
             [[nodiscard]] bool blocksPointer(double x, double y) const;
             [[nodiscard]] bool blocksKeyboard() const;
             [[nodiscard]] bool needsAnimationFrame() const;
@@ -87,7 +86,6 @@ namespace lfs::vis {
             void requestPlySequenceWindow(size_t frame_index);
             void prunePlySequenceRequests(size_t frame_index);
             void evictPlySequenceFrames(size_t keep_frame_index);
-            [[nodiscard]] bool isPlySequenceFrameResident(size_t frame_index) const;
             [[nodiscard]] std::optional<size_t> selectPlySequenceDisplayFrame(size_t requested_frame) const;
             [[nodiscard]] bool isPlySequenceFrameInWindow(size_t frame_index, size_t center_frame, size_t frame_count) const;
             [[nodiscard]] bool isPlySequenceFrameInWindow(size_t frame_index,

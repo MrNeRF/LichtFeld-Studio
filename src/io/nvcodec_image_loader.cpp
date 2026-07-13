@@ -82,6 +82,37 @@ namespace lfs::io {
             }
         }
 
+        bool is_fatal_cuda_context_error(const cudaError_t error) noexcept {
+            switch (error) {
+            case cudaErrorIllegalAddress:
+            case cudaErrorLaunchFailure:
+            case cudaErrorAssert:
+            case cudaErrorIllegalInstruction:
+            case cudaErrorMisalignedAddress:
+            case cudaErrorInvalidAddressSpace:
+            case cudaErrorInvalidPc:
+            case cudaErrorLaunchTimeout:
+            case cudaErrorECCUncorrectable:
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        bool cuda_context_poisoned_for_nvcodec_teardown() noexcept {
+            const cudaError_t sync_status = cudaDeviceSynchronize();
+            if (sync_status == cudaSuccess) {
+                return false;
+            }
+            if (!is_fatal_cuda_context_error(sync_status)) {
+                return false;
+            }
+
+            LOG_WARN("[NvCodecImageLoader] Skipping nvImageCodec shutdown because CUDA context is poisoned: {}",
+                     cudaGetErrorString(sync_status));
+            return true;
+        }
+
         // Log comprehensive GPU and driver information
         void log_gpu_diagnostics() {
             int device_count = 0;
@@ -661,6 +692,15 @@ namespace lfs::io {
                 CUcontext current_ctx = nullptr;
                 const CUresult ctx_result = cuCtxGetCurrent(&current_ctx);
                 if (ctx_result == CUDA_SUCCESS && current_ctx != nullptr) {
+                    if (cuda_context_poisoned_for_nvcodec_teardown()) {
+                        encoder = nullptr;
+                        decoder_pool.clear();
+                        decoder_available.clear();
+                        instance = nullptr;
+                        vram_account.unregister();
+                        return;
+                    }
+
                     if (encoder) {
                         nvimgcodecEncoderDestroy(encoder);
                         encoder = nullptr;
@@ -1576,7 +1616,8 @@ namespace lfs::io {
 
     std::vector<uint8_t> NvCodecImageLoader::encode_to_jpeg2k(
         const lfs::core::Tensor& image,
-        void* cuda_stream) {
+        void* cuda_stream,
+        bool high_throughput) {
 
         using namespace lfs::core;
 
@@ -1642,6 +1683,10 @@ namespace lfs::io {
         output_info.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
         output_info.struct_size = sizeof(nvimgcodecImageInfo_t);
         std::snprintf(output_info.codec_name, sizeof(output_info.codec_name), "%s", "jpeg2k");
+        output_info.sample_format = NVIMGCODEC_SAMPLEFORMAT_I_RGB;
+        output_info.color_spec = NVIMGCODEC_COLORSPEC_SRGB;
+        output_info.chroma_subsampling = NVIMGCODEC_SAMPLING_444;
+        output_info.num_planes = 1;
 
         nvimgcodecCodeStream_t code_stream;
         status = nvimgcodecCodeStreamCreateToHostMem(
@@ -1663,10 +1708,12 @@ namespace lfs::io {
         j2k_params.struct_type = NVIMGCODEC_STRUCTURE_TYPE_JPEG2K_ENCODE_PARAMS;
         j2k_params.struct_size = sizeof(nvimgcodecJpeg2kEncodeParams_t);
         j2k_params.struct_next = nullptr;
+        j2k_params.stream_type = NVIMGCODEC_JPEG2K_STREAM_J2K;
+        j2k_params.prog_order = NVIMGCODEC_JPEG2K_PROG_ORDER_RPCL;
         j2k_params.num_resolutions = 6;
         j2k_params.code_block_w = 64;
         j2k_params.code_block_h = 64;
-        j2k_params.prog_order = NVIMGCODEC_JPEG2K_PROG_ORDER_RPCL;
+        j2k_params.ht = high_throughput ? 1 : 0;
 
         nvimgcodecEncodeParams_t encode_params{};
         encode_params.struct_type = NVIMGCODEC_STRUCTURE_TYPE_ENCODE_PARAMS;
@@ -1700,6 +1747,503 @@ namespace lfs::io {
         }
 
         return output_buffer;
+    }
+
+    std::vector<uint8_t> NvCodecImageLoader::encode_grayscale_to_jpeg2k(
+        const lfs::core::Tensor& image,
+        void* cuda_stream,
+        bool high_throughput) {
+
+        using namespace lfs::core;
+
+        if (!impl_->encoder) {
+            throw std::runtime_error("JPEG2000 encoder not available");
+        }
+
+        std::lock_guard<std::mutex> lock(impl_->encoder_mutex);
+
+        const auto& shape = image.shape();
+        if (shape.rank() != 2) {
+            throw std::runtime_error("Expected 2D tensor, got " + std::to_string(shape.rank()) + "D");
+        }
+        if (image.dtype() != DataType::Float32 || image.device() != Device::CUDA) {
+            throw std::runtime_error("encode_grayscale_to_jpeg2k expects a Float32 CUDA tensor");
+        }
+
+        const uint32_t height = static_cast<uint32_t>(shape[0]);
+        const uint32_t width = static_cast<uint32_t>(shape[1]);
+        constexpr uint32_t channels = 1;
+
+        const Tensor hw_float = image.contiguous();
+        Tensor hw_uint16 = Tensor::empty(
+            TensorShape({height, width}), Device::CUDA, DataType::Float16);
+        cuda::launch_float32_hwc_to_uint16_hwc(
+            hw_float.ptr<float>(),
+            reinterpret_cast<uint16_t*>(hw_uint16.data_ptr()),
+            height, width, channels, static_cast<cudaStream_t>(cuda_stream));
+
+        nvimgcodecImageInfo_t image_info{};
+        image_info.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
+        image_info.struct_size = sizeof(nvimgcodecImageInfo_t);
+        image_info.sample_format = NVIMGCODEC_SAMPLEFORMAT_P_Y;
+        image_info.color_spec = NVIMGCODEC_COLORSPEC_GRAY;
+        image_info.chroma_subsampling = NVIMGCODEC_SAMPLING_GRAY;
+        image_info.num_planes = 1;
+        image_info.plane_info[0].height = height;
+        image_info.plane_info[0].width = width;
+        image_info.plane_info[0].row_stride = static_cast<size_t>(width) * sizeof(uint16_t);
+        image_info.plane_info[0].num_channels = 1;
+        image_info.plane_info[0].sample_type = NVIMGCODEC_SAMPLE_DATA_TYPE_UINT16;
+        image_info.plane_info[0].precision = 16;
+        image_info.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
+        image_info.buffer = hw_uint16.data_ptr();
+        image_info.buffer_size = static_cast<size_t>(height) * width * sizeof(uint16_t);
+        image_info.cuda_stream = static_cast<cudaStream_t>(cuda_stream);
+
+        nvimgcodecImage_t nv_image;
+        auto status = nvimgcodecImageCreate(impl_->instance, &nv_image, &image_info);
+        if (status != NVIMGCODEC_STATUS_SUCCESS) {
+            throw std::runtime_error("Failed to create image for grayscale JPEG2000 encoding: " +
+                                     std::string(nvimgcodec_status_to_string(status)));
+        }
+
+        std::vector<uint8_t> output_buffer;
+
+        nvimgcodecImageInfo_t output_info{};
+        output_info.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
+        output_info.struct_size = sizeof(nvimgcodecImageInfo_t);
+        std::snprintf(output_info.codec_name, sizeof(output_info.codec_name), "%s", "jpeg2k");
+        output_info.sample_format = NVIMGCODEC_SAMPLEFORMAT_P_Y;
+        output_info.color_spec = NVIMGCODEC_COLORSPEC_GRAY;
+        output_info.chroma_subsampling = NVIMGCODEC_SAMPLING_GRAY;
+        output_info.num_planes = 1;
+
+        nvimgcodecCodeStream_t code_stream;
+        status = nvimgcodecCodeStreamCreateToHostMem(
+            impl_->instance, &code_stream, &output_buffer,
+            [](void* ctx, size_t req_size) -> unsigned char* {
+                auto* vec = static_cast<std::vector<uint8_t>*>(ctx);
+                vec->resize(req_size);
+                return vec->data();
+            },
+            &output_info);
+
+        if (status != NVIMGCODEC_STATUS_SUCCESS) {
+            nvimgcodecImageDestroy(nv_image);
+            throw std::runtime_error("Failed to create output code stream for grayscale JPEG2000");
+        }
+
+        nvimgcodecJpeg2kEncodeParams_t j2k_params{};
+        j2k_params.struct_type = NVIMGCODEC_STRUCTURE_TYPE_JPEG2K_ENCODE_PARAMS;
+        j2k_params.struct_size = sizeof(nvimgcodecJpeg2kEncodeParams_t);
+        j2k_params.struct_next = nullptr;
+        j2k_params.stream_type = NVIMGCODEC_JPEG2K_STREAM_J2K;
+        j2k_params.prog_order = NVIMGCODEC_JPEG2K_PROG_ORDER_RPCL;
+        j2k_params.num_resolutions = 6;
+        j2k_params.code_block_w = 64;
+        j2k_params.code_block_h = 64;
+        j2k_params.ht = high_throughput ? 1 : 0;
+
+        nvimgcodecEncodeParams_t encode_params{};
+        encode_params.struct_type = NVIMGCODEC_STRUCTURE_TYPE_ENCODE_PARAMS;
+        encode_params.struct_size = sizeof(nvimgcodecEncodeParams_t);
+        encode_params.struct_next = &j2k_params;
+        encode_params.quality_value = 0.0f;
+        encode_params.quality_type = NVIMGCODEC_QUALITY_TYPE_LOSSLESS;
+
+        nvimgcodecFuture_t encode_future;
+        status = nvimgcodecEncoderEncode(
+            impl_->encoder, &nv_image, &code_stream, 1, &encode_params, &encode_future);
+
+        if (status != NVIMGCODEC_STATUS_SUCCESS) {
+            nvimgcodecCodeStreamDestroy(code_stream);
+            nvimgcodecImageDestroy(nv_image);
+            throw std::runtime_error("Grayscale JPEG2000 encode launch failed");
+        }
+
+        nvimgcodecFutureWaitForAll(encode_future);
+
+        nvimgcodecProcessingStatus_t encode_status;
+        size_t status_size;
+        nvimgcodecFutureGetProcessingStatus(encode_future, &encode_status, &status_size);
+        nvimgcodecFutureDestroy(encode_future);
+        nvimgcodecCodeStreamDestroy(code_stream);
+        nvimgcodecImageDestroy(nv_image);
+
+        if (encode_status != NVIMGCODEC_PROCESSING_STATUS_SUCCESS) {
+            throw std::runtime_error("Grayscale JPEG2000 encoding failed: " +
+                                     std::string(processing_status_to_string(encode_status)));
+        }
+
+        return output_buffer;
+    }
+
+    lfs::core::Tensor NvCodecImageLoader::decode_jpeg2k_16bit_from_memory_gpu(
+        const std::vector<uint8_t>& jpeg2k_data,
+        void* cuda_stream,
+        const bool synchronize) {
+
+        using namespace lfs::core;
+
+        const size_t decoder_idx = impl_->acquire_decoder();
+        nvimgcodecDecoder_t decoder = impl_->decoder_pool[decoder_idx];
+
+        struct DecoderGuard {
+            NvCodecImageLoader::Impl* impl;
+            size_t idx;
+            ~DecoderGuard() { impl->release_decoder(idx); }
+        } guard{impl_.get(), decoder_idx};
+
+        nvimgcodecCodeStream_t code_stream;
+        auto status = nvimgcodecCodeStreamCreateFromHostMem(
+            impl_->instance, &code_stream, jpeg2k_data.data(), jpeg2k_data.size());
+        if (status != NVIMGCODEC_STATUS_SUCCESS) {
+            throw std::runtime_error("Failed to create JPEG2000 code stream from memory: " +
+                                     std::string(nvimgcodec_status_to_string(status)));
+        }
+
+        nvimgcodecImageInfo_t image_info{};
+        image_info.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
+        image_info.struct_size = sizeof(nvimgcodecImageInfo_t);
+        image_info.struct_next = nullptr;
+
+        status = nvimgcodecCodeStreamGetImageInfo(code_stream, &image_info);
+        if (status != NVIMGCODEC_STATUS_SUCCESS) {
+            nvimgcodecCodeStreamDestroy(code_stream);
+            throw std::runtime_error("Failed to get JPEG2000 image info: " +
+                                     std::string(nvimgcodec_status_to_string(status)));
+        }
+
+        if (std::string(image_info.codec_name) != "jpeg2k") {
+            nvimgcodecCodeStreamDestroy(code_stream);
+            throw std::runtime_error("decode_jpeg2k_16bit_from_memory_gpu expects JPEG2000 input");
+        }
+
+        const auto sample_type = image_info.plane_info[0].sample_type;
+        if (sample_type != NVIMGCODEC_SAMPLE_DATA_TYPE_UINT16) {
+            nvimgcodecCodeStreamDestroy(code_stream);
+            throw std::runtime_error("Expected UINT16 JPEG2000 input, got sample type " +
+                                     std::to_string(static_cast<int>(sample_type)));
+        }
+
+        const size_t num_components =
+            std::max(static_cast<size_t>(image_info.num_planes),
+                     static_cast<size_t>(image_info.plane_info[0].num_channels));
+        if (num_components != 1 && num_components != 3) {
+            nvimgcodecCodeStreamDestroy(code_stream);
+            throw std::runtime_error("Expected grayscale or RGB JPEG2000 input, got " +
+                                     std::to_string(num_components) + " components");
+        }
+
+        const size_t height = image_info.plane_info[0].height;
+        const size_t width = image_info.plane_info[0].width;
+        const bool is_grayscale = num_components == 1;
+
+        cudaSetDevice(impl_->device_id);
+
+        Tensor uint16_tensor = Tensor::empty(
+            is_grayscale ? TensorShape({height, width})
+                         : TensorShape({height, width, num_components}),
+            Device::CUDA,
+            DataType::Float16);
+        if (cuda_stream) {
+            uint16_tensor.set_stream(static_cast<cudaStream_t>(cuda_stream));
+        }
+
+        nvimgcodecImageInfo_t output_info{};
+        output_info.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
+        output_info.struct_size = sizeof(nvimgcodecImageInfo_t);
+        output_info.struct_next = nullptr;
+        output_info.sample_format = is_grayscale ? NVIMGCODEC_SAMPLEFORMAT_P_Y
+                                                 : NVIMGCODEC_SAMPLEFORMAT_I_RGB;
+        output_info.color_spec = is_grayscale ? NVIMGCODEC_COLORSPEC_GRAY
+                                              : NVIMGCODEC_COLORSPEC_SRGB;
+        output_info.chroma_subsampling = is_grayscale ? NVIMGCODEC_SAMPLING_GRAY
+                                                      : NVIMGCODEC_SAMPLING_444;
+        output_info.num_planes = 1;
+        output_info.plane_info[0].height = height;
+        output_info.plane_info[0].width = width;
+        output_info.plane_info[0].row_stride =
+            width * num_components * sizeof(uint16_t);
+        output_info.plane_info[0].num_channels = num_components;
+        output_info.plane_info[0].sample_type = NVIMGCODEC_SAMPLE_DATA_TYPE_UINT16;
+        output_info.plane_info[0].precision = 16;
+        output_info.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
+        output_info.buffer = uint16_tensor.data_ptr();
+        output_info.buffer_size = height * width * num_components * sizeof(uint16_t);
+        output_info.cuda_stream = static_cast<cudaStream_t>(cuda_stream);
+
+        nvimgcodecImage_t nv_image;
+        {
+            ScopedNvCodecVramProbe vram_probe(impl_->vram_account);
+            status = nvimgcodecImageCreate(impl_->instance, &nv_image, &output_info);
+            if (status != NVIMGCODEC_STATUS_SUCCESS) {
+                nvimgcodecCodeStreamDestroy(code_stream);
+                throw std::runtime_error("Failed to create image descriptor for JPEG2000 decode: " +
+                                         std::string(nvimgcodec_status_to_string(status)));
+            }
+
+            nvimgcodecDecodeParams_t decode_params{};
+            decode_params.struct_type = NVIMGCODEC_STRUCTURE_TYPE_DECODE_PARAMS;
+            decode_params.struct_size = sizeof(nvimgcodecDecodeParams_t);
+            decode_params.struct_next = nullptr;
+            decode_params.apply_exif_orientation = 0;
+
+            nvimgcodecFuture_t decode_future;
+            status = nvimgcodecDecoderDecode(
+                decoder,
+                &code_stream,
+                &nv_image,
+                1,
+                &decode_params,
+                &decode_future);
+
+            if (status != NVIMGCODEC_STATUS_SUCCESS) {
+                nvimgcodecImageDestroy(nv_image);
+                nvimgcodecCodeStreamDestroy(code_stream);
+                throw std::runtime_error("JPEG2000 decode launch failed: " +
+                                         std::string(nvimgcodec_status_to_string(status)));
+            }
+
+            status = nvimgcodecFutureWaitForAll(decode_future);
+            if (status != NVIMGCODEC_STATUS_SUCCESS) {
+                nvimgcodecFutureDestroy(decode_future);
+                nvimgcodecImageDestroy(nv_image);
+                nvimgcodecCodeStreamDestroy(code_stream);
+                throw std::runtime_error("Failed to wait for JPEG2000 decode completion: " +
+                                         std::string(nvimgcodec_status_to_string(status)));
+            }
+
+            nvimgcodecProcessingStatus_t decode_status = NVIMGCODEC_PROCESSING_STATUS_UNKNOWN;
+            size_t status_size = 1;
+            nvimgcodecFutureGetProcessingStatus(decode_future, &decode_status, &status_size);
+            nvimgcodecFutureDestroy(decode_future);
+            nvimgcodecImageDestroy(nv_image);
+            nvimgcodecCodeStreamDestroy(code_stream);
+
+            if (decode_status != NVIMGCODEC_PROCESSING_STATUS_SUCCESS) {
+                throw std::runtime_error("JPEG2000 decoding failed: " +
+                                         std::string(processing_status_to_string(decode_status)));
+            }
+        }
+
+        Tensor output_tensor = Tensor::empty(
+            is_grayscale ? TensorShape({height, width})
+                         : TensorShape({height, width, num_components}),
+            Device::CUDA,
+            DataType::Float32);
+        if (cuda_stream) {
+            output_tensor.set_stream(static_cast<cudaStream_t>(cuda_stream));
+        }
+        cuda::launch_uint16_hwc_to_float32_hwc(
+            reinterpret_cast<const uint16_t*>(uint16_tensor.data_ptr()),
+            output_tensor.ptr<float>(),
+            height, width, num_components, static_cast<cudaStream_t>(cuda_stream));
+
+        if (synchronize && cuda_stream) {
+            if (const cudaError_t err = cudaStreamSynchronize(static_cast<cudaStream_t>(cuda_stream));
+                err != cudaSuccess) {
+                throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
+            }
+        } else if (synchronize) {
+            if (const cudaError_t err = cudaDeviceSynchronize(); err != cudaSuccess) {
+                throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
+            }
+        }
+
+        return output_tensor;
+    }
+
+    std::vector<lfs::core::Tensor> NvCodecImageLoader::decode_jpeg2k_16bit_batch_from_spans(
+        const std::vector<std::pair<const uint8_t*, size_t>>& jpeg2k_spans,
+        void* cuda_stream,
+        const bool synchronize) {
+
+        using namespace lfs::core;
+
+        if (jpeg2k_spans.empty()) {
+            return {};
+        }
+
+        const size_t decoder_idx = impl_->acquire_decoder();
+        nvimgcodecDecoder_t decoder = impl_->decoder_pool[decoder_idx];
+        struct DecoderGuard {
+            NvCodecImageLoader::Impl* impl;
+            size_t idx;
+            ~DecoderGuard() { impl->release_decoder(idx); }
+        } guard{impl_.get(), decoder_idx};
+
+        const size_t batch_size = jpeg2k_spans.size();
+        std::vector<nvimgcodecCodeStream_t> code_streams(batch_size, nullptr);
+        std::vector<nvimgcodecImage_t> nv_images(batch_size, nullptr);
+        std::vector<Tensor> uint16_tensors(batch_size);
+        std::vector<size_t> heights(batch_size);
+        std::vector<size_t> widths(batch_size);
+        std::vector<size_t> components(batch_size);
+        nvimgcodecFuture_t decode_future = nullptr;
+
+        const auto cleanup = [&] {
+            if (decode_future) {
+                nvimgcodecFutureDestroy(decode_future);
+                decode_future = nullptr;
+            }
+            for (size_t i = 0; i < batch_size; ++i) {
+                if (nv_images[i]) {
+                    nvimgcodecImageDestroy(nv_images[i]);
+                    nv_images[i] = nullptr;
+                }
+                if (code_streams[i]) {
+                    nvimgcodecCodeStreamDestroy(code_streams[i]);
+                    code_streams[i] = nullptr;
+                }
+            }
+        };
+
+        std::vector<nvimgcodecProcessingStatus_t> decode_statuses(
+            batch_size, NVIMGCODEC_PROCESSING_STATUS_UNKNOWN);
+
+        try {
+            cudaSetDevice(impl_->device_id);
+            for (size_t i = 0; i < batch_size; ++i) {
+                const auto [data, size] = jpeg2k_spans[i];
+                if (!data || size == 0) {
+                    throw std::runtime_error("Empty JPEG2000 batch input");
+                }
+
+                auto status = nvimgcodecCodeStreamCreateFromHostMem(
+                    impl_->instance, &code_streams[i], data, size);
+                if (status != NVIMGCODEC_STATUS_SUCCESS) {
+                    throw std::runtime_error("Failed to create JPEG2000 batch code stream");
+                }
+
+                nvimgcodecImageInfo_t image_info{};
+                image_info.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
+                image_info.struct_size = sizeof(nvimgcodecImageInfo_t);
+                status = nvimgcodecCodeStreamGetImageInfo(code_streams[i], &image_info);
+                if (status != NVIMGCODEC_STATUS_SUCCESS ||
+                    std::string(image_info.codec_name) != "jpeg2k") {
+                    throw std::runtime_error("Invalid JPEG2000 batch input");
+                }
+                if (image_info.plane_info[0].sample_type != NVIMGCODEC_SAMPLE_DATA_TYPE_UINT16) {
+                    throw std::runtime_error("JPEG2000 batch input is not UINT16");
+                }
+
+                components[i] = std::max(
+                    static_cast<size_t>(image_info.num_planes),
+                    static_cast<size_t>(image_info.plane_info[0].num_channels));
+                if (components[i] != 1 && components[i] != 3) {
+                    throw std::runtime_error("JPEG2000 batch input is not grayscale or RGB");
+                }
+                heights[i] = image_info.plane_info[0].height;
+                widths[i] = image_info.plane_info[0].width;
+
+                uint16_tensors[i] = Tensor::empty(
+                    components[i] == 1
+                        ? TensorShape({heights[i], widths[i]})
+                        : TensorShape({heights[i], widths[i], components[i]}),
+                    Device::CUDA,
+                    DataType::Float16);
+                if (cuda_stream) {
+                    uint16_tensors[i].set_stream(static_cast<cudaStream_t>(cuda_stream));
+                }
+
+                nvimgcodecImageInfo_t output_info{};
+                output_info.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
+                output_info.struct_size = sizeof(nvimgcodecImageInfo_t);
+                output_info.sample_format = components[i] == 1
+                                                ? NVIMGCODEC_SAMPLEFORMAT_P_Y
+                                                : NVIMGCODEC_SAMPLEFORMAT_I_RGB;
+                output_info.color_spec = components[i] == 1
+                                             ? NVIMGCODEC_COLORSPEC_GRAY
+                                             : NVIMGCODEC_COLORSPEC_SRGB;
+                output_info.chroma_subsampling = components[i] == 1
+                                                     ? NVIMGCODEC_SAMPLING_GRAY
+                                                     : NVIMGCODEC_SAMPLING_444;
+                output_info.num_planes = 1;
+                output_info.plane_info[0].height = heights[i];
+                output_info.plane_info[0].width = widths[i];
+                output_info.plane_info[0].row_stride =
+                    widths[i] * components[i] * sizeof(uint16_t);
+                output_info.plane_info[0].num_channels = components[i];
+                output_info.plane_info[0].sample_type = NVIMGCODEC_SAMPLE_DATA_TYPE_UINT16;
+                output_info.plane_info[0].precision = 16;
+                output_info.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
+                output_info.buffer = uint16_tensors[i].data_ptr();
+                output_info.buffer_size = uint16_tensors[i].bytes();
+                output_info.cuda_stream = static_cast<cudaStream_t>(cuda_stream);
+
+                status = nvimgcodecImageCreate(impl_->instance, &nv_images[i], &output_info);
+                if (status != NVIMGCODEC_STATUS_SUCCESS) {
+                    throw std::runtime_error("Failed to create JPEG2000 batch image descriptor");
+                }
+            }
+
+            nvimgcodecDecodeParams_t decode_params{};
+            decode_params.struct_type = NVIMGCODEC_STRUCTURE_TYPE_DECODE_PARAMS;
+            decode_params.struct_size = sizeof(nvimgcodecDecodeParams_t);
+            decode_params.apply_exif_orientation = 0;
+
+            {
+                ScopedNvCodecVramProbe vram_probe(impl_->vram_account);
+                const auto status = nvimgcodecDecoderDecode(
+                    decoder,
+                    code_streams.data(),
+                    nv_images.data(),
+                    static_cast<int>(batch_size),
+                    &decode_params,
+                    &decode_future);
+                if (status != NVIMGCODEC_STATUS_SUCCESS) {
+                    throw std::runtime_error("JPEG2000 batch decode launch failed");
+                }
+                if (nvimgcodecFutureWaitForAll(decode_future) != NVIMGCODEC_STATUS_SUCCESS) {
+                    throw std::runtime_error("Failed to wait for JPEG2000 batch decode");
+                }
+                size_t status_size = batch_size;
+                nvimgcodecFutureGetProcessingStatus(
+                    decode_future, decode_statuses.data(), &status_size);
+            }
+            cleanup();
+
+            std::vector<Tensor> outputs;
+            outputs.reserve(batch_size);
+            for (size_t i = 0; i < batch_size; ++i) {
+                if (decode_statuses[i] != NVIMGCODEC_PROCESSING_STATUS_SUCCESS) {
+                    throw std::runtime_error("JPEG2000 batch item failed: " +
+                                             std::string(processing_status_to_string(decode_statuses[i])));
+                }
+
+                auto output = Tensor::empty(
+                    components[i] == 1
+                        ? TensorShape({heights[i], widths[i]})
+                        : TensorShape({heights[i], widths[i], components[i]}),
+                    Device::CUDA,
+                    DataType::Float32);
+                if (cuda_stream) {
+                    output.set_stream(static_cast<cudaStream_t>(cuda_stream));
+                }
+                cuda::launch_uint16_hwc_to_float32_hwc(
+                    reinterpret_cast<const uint16_t*>(uint16_tensors[i].data_ptr()),
+                    output.ptr<float>(),
+                    heights[i], widths[i], components[i],
+                    static_cast<cudaStream_t>(cuda_stream));
+                outputs.push_back(std::move(output));
+            }
+
+            if (synchronize && cuda_stream) {
+                if (const cudaError_t err = cudaStreamSynchronize(static_cast<cudaStream_t>(cuda_stream));
+                    err != cudaSuccess) {
+                    throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
+                }
+            } else if (synchronize) {
+                if (const cudaError_t err = cudaDeviceSynchronize(); err != cudaSuccess) {
+                    throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
+                }
+            }
+            return outputs;
+        } catch (...) {
+            cleanup();
+            throw;
+        }
     }
 
     std::vector<uint8_t> NvCodecImageLoader::encode_grayscale_to_jpeg(

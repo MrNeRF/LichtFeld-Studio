@@ -273,7 +273,8 @@ namespace lfs::io::video {
         if (angle == 90) {
             const int h = width;
             const int w = height;
-            if (x >= w || y >= h) return;
+            if (x >= w || y >= h)
+                return;
             // 90° CW: dst[y][x] = src[height-1-x][y]
             const int src_x = y;
             const int src_y = height - 1 - x;
@@ -283,7 +284,8 @@ namespace lfs::io::video {
             dst[dst_idx + 1] = src[src_idx + 1];
             dst[dst_idx + 2] = src[src_idx + 2];
         } else if (angle == 180) {
-            if (x >= width || y >= height) return;
+            if (x >= width || y >= height)
+                return;
             // 180°: dst[y][x] = src[height-1-y][width-1-x]
             const int src_x = width - 1 - x;
             const int src_y = height - 1 - y;
@@ -295,7 +297,8 @@ namespace lfs::io::video {
         } else { // 270
             const int h = width;
             const int w = height;
-            if (x >= w || y >= h) return;
+            if (x >= w || y >= h)
+                return;
             // 270° CW (= 90° CCW): dst[y][x] = src[x][width-1-y]
             const int src_x = width - 1 - y;
             const int src_y = x;

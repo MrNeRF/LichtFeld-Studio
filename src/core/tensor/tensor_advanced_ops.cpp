@@ -8,41 +8,31 @@
 #include <cmath>
 #include <numeric>
 
-#define CHECK_CUDA(call)                              \
-    do {                                              \
-        cudaError_t error = call;                     \
-        if (error != cudaSuccess) {                   \
-            LOG_ERROR("CUDA error at {}:{} - {}: {}", \
-                      __FILE__, __LINE__,             \
-                      cudaGetErrorName(error),        \
-                      cudaGetErrorString(error));     \
-        }                                             \
+#define CHECK_CUDA(call)                                        \
+    do {                                                        \
+        const cudaError_t error = (call);                       \
+        LFS_ASSERT_MSG(error == cudaSuccess,                    \
+                       std::string("CUDA operation failed: ") + \
+                           cudaGetErrorString(error));          \
     } while (0)
 
 namespace lfs::core {
 
     // ============= PAIRWISE DISTANCE (CDIST) =============
     Tensor Tensor::cdist(const Tensor& other, float p) const {
-        if (!is_valid() || !other.is_valid()) {
-            LOG_ERROR("Invalid tensors for cdist");
-            return Tensor();
-        }
-
-        if (ndim() != 2 || other.ndim() != 2) {
-            LOG_ERROR("cdist requires 2D tensors, got {}D and {}D", ndim(), other.ndim());
-            return Tensor();
-        }
-
-        if (size(1) != other.size(1)) {
-            LOG_ERROR("Feature dimensions must match: {} vs {}", size(1), other.size(1));
-            return Tensor();
-        }
+        LFS_ASSERT_MSG(is_valid() && other.is_valid(), "cdist requires valid tensors");
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32 && other.dtype() == DataType::Float32,
+                       "cdist currently supports only Float32 tensors");
+        LFS_ASSERT_MSG(device_ == other.device(), "cdist requires tensors on the same device");
+        LFS_ASSERT_MSG(ndim() == 2 && other.ndim() == 2, "cdist requires rank-2 tensors");
+        LFS_ASSERT_MSG(size(1) == other.size(1), "cdist feature dimensions must match");
+        LFS_ASSERT_MSG(std::isfinite(p) && p > 0.0f, "cdist p must be finite and positive");
 
         size_t N = size(0);
         size_t M = other.size(0);
         size_t D = size(1);
 
-        auto other_same_device = (other.device() == device_) ? other.clone() : other.to(device_);
+        auto other_same_device = other.clone();
         auto result = empty({N, M}, device_, dtype_);
 
         if (device_ == Device::CUDA) {
@@ -101,10 +91,10 @@ namespace lfs::core {
         LOG_DEBUG("  dim: {}, keepdim: {}", dim, keepdim);
         LOG_DEBUG("  numel: {}", numel());
 
-        if (!is_valid() || numel() == 0) {
-            LOG_ERROR("Invalid tensor or empty tensor");
-            return {Tensor(), Tensor()};
-        }
+        LFS_ASSERT_MSG(is_valid(), "min_with_indices requires a valid tensor");
+        LFS_ASSERT_MSG(numel() > 0, "min_with_indices requires a non-empty tensor");
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32,
+                       "min_with_indices currently supports only Float32");
 
         // Move to CPU for computation
         LOG_DEBUG("  Moving to CPU if needed...");
@@ -115,10 +105,8 @@ namespace lfs::core {
         dim = cpu_tensor.resolve_dim(dim);
         LOG_DEBUG("  Resolved dim: {}", dim);
 
-        if (dim < 0 || dim >= static_cast<int>(cpu_tensor.ndim())) {
-            LOG_ERROR("Invalid dimension: {} for rank {}", dim, cpu_tensor.ndim());
-            return {Tensor(), Tensor()};
-        }
+        LFS_ASSERT_MSG(dim >= 0 && dim < static_cast<int>(cpu_tensor.ndim()),
+                       "min_with_indices dimension is out of range");
 
         // Handle 1D scalar reduction
         if (cpu_tensor.ndim() == 1 && dim == 0 && !keepdim) {
@@ -319,15 +307,10 @@ namespace lfs::core {
         LOG_DEBUG("  Input device: {}", device_name(device_));
         LOG_DEBUG("  dim: {}, keepdim: {}", dim, keepdim);
 
-        if (!is_valid()) {
-            LOG_ERROR("max_with_indices on invalid tensor");
-            return {Tensor(), Tensor()};
-        }
-
-        if (numel() == 0) {
-            LOG_ERROR("max_with_indices on empty tensor");
-            return {Tensor(), Tensor()};
-        }
+        LFS_ASSERT_MSG(is_valid(), "max_with_indices requires a valid tensor");
+        LFS_ASSERT_MSG(numel() > 0, "max_with_indices requires a non-empty tensor");
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32,
+                       "max_with_indices currently supports only Float32");
 
         // Move to CPU for computation
         LOG_DEBUG("  Moving to CPU if needed...");
@@ -338,10 +321,8 @@ namespace lfs::core {
         dim = cpu_tensor.resolve_dim(dim);
         LOG_DEBUG("  Resolved dim: {}", dim);
 
-        if (dim < 0 || dim >= static_cast<int>(cpu_tensor.ndim())) {
-            LOG_ERROR("Invalid dimension for max_with_indices: {}", dim);
-            return {Tensor(), Tensor()};
-        }
+        LFS_ASSERT_MSG(dim >= 0 && dim < static_cast<int>(cpu_tensor.ndim()),
+                       "max_with_indices dimension is out of range");
 
         // For 1D tensors with dim=0 (returns scalar)
         if (cpu_tensor.ndim() == 1 && dim == 0 && !keepdim) {
@@ -495,16 +476,13 @@ namespace lfs::core {
 
     // ============= SORTING =============
     std::pair<Tensor, Tensor> Tensor::sort(int dim, bool descending) const {
-        if (!is_valid()) {
-            LOG_ERROR("sort on invalid tensor");
-            return {Tensor(), Tensor()};
-        }
+        LFS_ASSERT_MSG(is_valid(), "sort requires a valid tensor");
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32, "sort currently supports only Float32");
+        LFS_ASSERT_MSG(numel() > 0, "sort requires a non-empty tensor");
 
         dim = resolve_dim(dim);
-        if (dim < 0 || dim >= static_cast<int>(ndim())) {
-            LOG_ERROR("Invalid dimension for sort: {}", dim);
-            return {Tensor(), Tensor()};
-        }
+        LFS_ASSERT_MSG(dim >= 0 && dim < static_cast<int>(ndim()),
+                       "sort dimension is out of range");
 
         // Create output tensors on same device
         auto sorted = clone();
@@ -601,14 +579,16 @@ namespace lfs::core {
 
     // ============= SCALAR BOOLEAN REDUCTIONS =============
     bool Tensor::any_scalar() const {
-        if (!is_valid() || numel() == 0) {
+        LFS_ASSERT_MSG(is_valid(), "any_scalar requires a valid tensor");
+        if (numel() == 0) {
             return false;
         }
         return count_nonzero() > 0;
     }
 
     bool Tensor::all_scalar() const {
-        if (!is_valid() || numel() == 0) {
+        LFS_ASSERT_MSG(is_valid(), "all_scalar requires a valid tensor");
+        if (numel() == 0) {
             return true;
         }
         return count_nonzero() == numel();

@@ -28,7 +28,6 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -773,8 +772,6 @@ void main() {
             }
 
             [[nodiscard]] VkDevice device() const { return device_; }
-            [[nodiscard]] VkPhysicalDevice physicalDevice() const { return physical_device_; }
-            [[nodiscard]] VkQueue queue() const { return queue_; }
 
             [[nodiscard]] uint32_t findMemoryType(uint32_t type_filter,
                                                   VkMemoryPropertyFlags properties,
@@ -1248,9 +1245,7 @@ void main() {
         };
 
         [[nodiscard]] std::expected<std::vector<MaterialTextures>, std::string> upload_material_textures(VulkanMesh2SplatContext& ctx,
-                                                                                                         const MeshData& mesh,
-                                                                                                         const Image& dummy) {
-            (void)dummy;
+                                                                                                         const MeshData& mesh) {
             std::vector<MaterialTextures> textures(mesh.materials.size());
             for (size_t i = 0; i < mesh.materials.size(); ++i) {
                 const auto& mat = mesh.materials[i];
@@ -1629,7 +1624,7 @@ void main() {
         auto dummy_texture = create_dummy_texture(ctx);
         if (!dummy_texture)
             return std::unexpected(dummy_texture.error());
-        auto material_textures = upload_material_textures(ctx, mesh, *dummy_texture);
+        auto material_textures = upload_material_textures(ctx, mesh);
         if (!material_textures)
             return std::unexpected(material_textures.error());
 

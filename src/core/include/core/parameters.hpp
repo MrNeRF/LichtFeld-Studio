@@ -129,9 +129,16 @@ namespace lfs::core {
             bool use_alpha_as_mask = true;            // Auto-use alpha channel from RGBA images as mask
 
             // Depth supervision
-            bool use_depth_loss = false;                        // Use dataset depth maps when available
-            float depth_loss_weight = 2.0f;                     // Depth supervision weight
-            std::string depth_loss_mode = "adaptive-warped-l1"; // pearson or adaptive-warped-l1
+            bool use_depth_loss = false;         // Use dataset depth maps when available
+            float depth_loss_weight = 2.0f;      // Depth supervision weight (decays over training)
+            std::string depth_loss_mode = "ssi"; // ssi (auto prior), ssi-disparity, or ssi-depth
+
+            // Normal supervision
+            bool use_normal_loss = false;            // Use dataset normal maps when available
+            float normal_loss_weight = 0.05f;        // Prior normal supervision weight
+            float normal_consistency_weight = 0.05f; // Depth-normal consistency weight
+            float normal_flatten_weight = 1.0f;      // L1 on the smallest scale axis while normal supervision is active
+            std::string normal_loss_space = "auto";  // auto, camera-opencv, camera-opengl, or world
 
             // Mip filter (anti-aliasing)
             bool mip_filter = false;
@@ -260,6 +267,17 @@ namespace lfs::core {
             static ServerConfig from_json(const nlohmann::json& j);
         };
 
+        // Headless camera-path -> video render mode (see --render-camera-path)
+        struct LFS_CORE_API RenderPathConfig {
+            std::filesystem::path camera_path; // sequencer::Timeline JSON keyframe path
+            std::filesystem::path load_path;   // trained scene: .ply/.sog/.spz or .resume checkpoint
+            std::filesystem::path output_path; // destination .mp4
+            int width = 1920;
+            int height = 1080;
+            int fps = 30;
+            int crf = 18;
+        };
+
         struct LFS_CORE_API TrainingParameters {
             DatasetConfig dataset;
             OptimizationParameters optimization;
@@ -281,6 +299,9 @@ namespace lfs::core {
 
             // Checkpoint to resume training from
             std::optional<std::filesystem::path> resume_checkpoint = std::nullopt;
+
+            // Headless camera-path -> video render mode (see --render-camera-path)
+            std::optional<RenderPathConfig> render_path = std::nullopt;
 
             // Python scripts to execute for custom training callbacks
             std::vector<std::filesystem::path> python_scripts;
@@ -352,6 +373,7 @@ namespace lfs::core {
             std::int64_t num_tokens = 1800;
             int threads = 0;
             int png_compression = 1;
+            int bit_depth = 16;
             bool force_cpu = false;
             bool overwrite = false;
             bool no_download = false;

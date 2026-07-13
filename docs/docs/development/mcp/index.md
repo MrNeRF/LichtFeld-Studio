@@ -72,6 +72,7 @@ When a tool can block or keep running, use the runtime APIs instead of sleeping:
 
 ## Recommended Reading Order
 
+- [Connecting MCP Clients](connecting-clients.md) for client setup (Claude Desktop, Claude Code, in-repo agents)
 - [Bootstrap](bootstrap.md) for the discovery-first workflow
 - [Recipes](recipes/) for concrete task sequences
 

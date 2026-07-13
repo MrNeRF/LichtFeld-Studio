@@ -18,6 +18,7 @@
 #include "input/key_codes.hpp"
 #include "input/sdl_key_mapping.hpp"
 #include "io/loader.hpp"
+#include "io/video/video_extensions.hpp"
 #include "operator/operator_context.hpp"
 #include "operator/operator_id.hpp"
 #include "operator/operator_registry.hpp"
@@ -2230,6 +2231,16 @@ namespace lfs::vis {
         std::optional<std::filesystem::path> environment_map_path;
         std::vector<std::string> unrecognized_files;
 
+        if (paths.size() == 1) {
+            const std::filesystem::path dropped_path = lfs::core::utf8_to_path(paths.front());
+            if (lfs::io::video::is_supported_video_extension(dropped_path.extension().string())) {
+                cmd::ShowVideoExtractor{.video_path = dropped_path}.emit();
+                LOG_INFO("Opening video extractor via drag-and-drop: {}",
+                         lfs::core::path_to_utf8(dropped_path.filename()));
+                return;
+            }
+        }
+
         for (const auto& path_str : paths) {
             std::filesystem::path filepath = lfs::core::utf8_to_path(path_str);
             LOG_DEBUG("Processing dropped file: {}", lfs::core::path_to_utf8(filepath));
@@ -2321,10 +2332,11 @@ namespace lfs::vis {
         }
 
         if (!unrecognized_files.empty() && splat_files.empty() && !dataset_path && !environment_map_path) {
-            static constexpr auto SUPPORTED_FORMATS =
-                "Supported formats: .ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz, .obj, .fbx, .gltf, .glb, .stl, .dae, .hdr, .exr, .json, .resume, or dataset directories";
+            const std::string supported_formats = std::format(
+                "Supported formats: .ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz, .obj, .fbx, .gltf, .glb, .stl, .dae, .hdr, .exr, .json, .resume, {}, or dataset directories",
+                lfs::io::video::supported_video_extensions_display());
             LOG_DEBUG("Dropped {} unrecognized file(s)", unrecognized_files.size());
-            state::FileDropFailed{.files = unrecognized_files, .error = SUPPORTED_FORMATS}.emit();
+            state::FileDropFailed{.files = unrecognized_files, .error = supported_formats}.emit();
         }
     }
 

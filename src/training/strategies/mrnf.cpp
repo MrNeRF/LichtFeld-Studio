@@ -939,6 +939,9 @@ namespace lfs::training {
             _optimizer->add_new_params(ParamType::Scaling, append_scaling, true);
             _optimizer->add_new_params(ParamType::Rotation, append_rotation, true);
             _optimizer->add_new_params(ParamType::Opacity, append_opacity, true);
+            if (_splat_data->has_frozen_ranges()) {
+                apply_frozen_ranges_to_optimizer(*_splat_data, *_optimizer);
+            }
         }
 
         LOG_DEBUG("MRNF: split {} splats at iter {} (reused: {}, appended: {}, active: {}, total slots: {})",
@@ -1225,7 +1228,7 @@ namespace lfs::training {
         if (auto frozen_mask = make_frozen_mask(*_splat_data, _splat_data->size(), indices.device());
             frozen_mask.is_valid()) {
             auto trainable = frozen_mask.index_select(0, indices).logical_not();
-            target_indices = indices.masked_select(trainable);
+            target_indices = indices.index_select(0, trainable.nonzero().squeeze(-1));
             if (target_indices.numel() == 0) {
                 return;
             }
@@ -1256,7 +1259,7 @@ namespace lfs::training {
         if (auto frozen_mask = make_frozen_mask(*_splat_data, current_size, free_indices.device());
             frozen_mask.is_valid() && free_indices.numel() > 0) {
             auto trainable = frozen_mask.index_select(0, free_indices).logical_not();
-            free_indices = free_indices.masked_select(trainable);
+            free_indices = free_indices.index_select(0, trainable.nonzero().squeeze(-1));
         }
         const int64_t num_free = free_indices.numel();
 
@@ -1324,7 +1327,7 @@ namespace lfs::training {
             }
             if (active_indices.numel() > 0) {
                 auto trainable = frozen_mask.index_select(0, active_indices).logical_not();
-                active_indices = active_indices.masked_select(trainable);
+                active_indices = active_indices.index_select(0, trainable.nonzero().squeeze(-1));
             }
         }
         if (active_indices.is_valid()) {

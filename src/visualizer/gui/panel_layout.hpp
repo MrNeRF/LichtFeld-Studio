@@ -123,7 +123,6 @@ namespace lfs::vis::gui {
 
         float getRightPanelWidth() const { return right_panel_width_; }
         float getScenePanelRatio() const { return scene_panel_ratio_; }
-        void setScenePanelRatio(float r) { scene_panel_ratio_ = std::clamp(r, 0.15f, 0.85f); }
         void adjustScenePanelRatio(float delta_y, const ScreenState& screen);
         float getPythonConsoleWidth() const { return python_console_width_; }
         float getBottomDockHeight() const { return bottom_dock_height_; }
@@ -131,7 +130,6 @@ namespace lfs::vis::gui {
         float bottomDockTopY() const { return bottom_dock_top_y_; }
         float getLeftDockWidth() const { return left_dock_width_; }
         bool isLeftDockVisible() const { return left_dock_visible_; }
-        float leftDockRightX() const { return left_dock_right_x_; }
         bool isShowSequencer() const { return show_sequencer_; }
         void setShowSequencer(bool v) { show_sequencer_ = v; }
 
@@ -179,7 +177,6 @@ namespace lfs::vis::gui {
         bool left_dock_resizing_ = false;
         bool left_dock_hovering_edge_ = false;
         bool left_dock_visible_ = false;
-        float left_dock_right_x_ = -1.0f;
 
         bool show_sequencer_ = false;
         std::string active_tab_id_;

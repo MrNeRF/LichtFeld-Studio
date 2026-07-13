@@ -51,19 +51,6 @@ namespace lfs::vis::gui {
     namespace {
 
         constexpr std::string_view kContextActionPrefix = "scene_panel:";
-        constexpr std::array kTypeClasses{
-            "splat",
-            "group",
-            "dataset",
-            "camera",
-            "camera_group",
-            "cropbox",
-            "ellipsoid",
-            "pointcloud",
-            "mesh",
-            "keyframe_group",
-            "keyframe",
-        };
 
         [[nodiscard]] std::string tr(const char* key) {
             const std::string value = LOC(key);
@@ -896,40 +883,6 @@ namespace lfs::vis::gui {
         });
         if (snapshot.has_children && !collapsed_ids_.contains(snapshot.id))
             rows.insert(rows.end(), child_rows.begin(), child_rows.end());
-    }
-
-    void SceneGraphElement::appendVisibleSubtreeRows(const core::NodeId node_id,
-                                                     const int depth,
-                                                     std::vector<FlatRow>& rows) const {
-        const auto it = node_snapshots_.find(node_id);
-        if (it == node_snapshots_.end())
-            return;
-
-        const NodeSnapshot& snapshot = it->second;
-
-        rows.push_back(FlatRow{
-            .id = snapshot.id,
-            .type = snapshot.type,
-            .depth = depth,
-            .visible = snapshot.visible,
-            .has_children = snapshot.has_children,
-            .collapsed = collapsed_ids_.contains(snapshot.id),
-            .draggable = snapshot.draggable,
-            .training_enabled = snapshot.training_enabled,
-            .name = snapshot.name,
-            .label = snapshot.label,
-            .node_id_text = std::to_string(snapshot.id),
-            .encoded_label = encode(snapshot.label),
-            .padding_left_dp = formatDp(4 + depth * 16),
-            .has_mask = snapshot.has_mask,
-            .deletable = snapshot.deletable,
-            .camera_loss_icon_color = snapshot.camera_loss_icon_color,
-        });
-
-        if (snapshot.has_children && !collapsed_ids_.contains(snapshot.id)) {
-            for (const core::NodeId child_id : snapshot.children)
-                appendVisibleSubtreeRows(child_id, depth + 1, rows);
-        }
     }
 
     void SceneGraphElement::rebuildIndex() {

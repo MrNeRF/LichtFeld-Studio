@@ -64,7 +64,7 @@ namespace lfs::io::cuda {
             return;
 
         const float scaled = fminf(fmaxf(input[idx] * 65535.0f, 0.0f), 65535.0f);
-        output[idx] = static_cast<uint16_t>(scaled);
+        output[idx] = static_cast<uint16_t>(scaled + 0.5f);
     }
 
     __global__ void uint16_hwc_to_float_hwc_kernel(
@@ -76,6 +76,85 @@ namespace lfs::io::cuda {
         if (idx >= total)
             return;
         output[idx] = static_cast<float>(input[idx]) * NORMALIZE_SCALE_U16;
+    }
+
+    __global__ void normal_chw_to_jpeg2k_hwc_kernel(
+        const float* __restrict__ input,
+        float* __restrict__ output,
+        const size_t pixel_count) {
+
+        const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= pixel_count)
+            return;
+
+#pragma unroll
+        for (int c = 0; c < 3; ++c) {
+            const float encoded = fminf(fmaxf(input[c * pixel_count + idx] * 0.5f + 0.5f, 0.0f), 1.0f);
+            output[idx * 3 + c] = encoded;
+        }
+    }
+
+    __global__ void jpeg2k_hwc_to_normal_chw_kernel(
+        const float* __restrict__ input,
+        float* __restrict__ output,
+        const size_t pixel_count) {
+
+        const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= pixel_count)
+            return;
+
+#pragma unroll
+        for (int c = 0; c < 3; ++c) {
+            output[c * pixel_count + idx] = input[idx * 3 + c] * 2.0f - 1.0f;
+        }
+    }
+
+    namespace {
+        __device__ __forceinline__ float srgb_encoding_to_linear_device(const float v) {
+            if (v <= 0.04045f) {
+                return v / 12.92f;
+            }
+            return powf((v + 0.055f) / 1.055f, 2.4f);
+        }
+    } // namespace
+
+    template <typename T>
+    __global__ void normal_prior_hwc_to_float32_chw_kernel(
+        const T* __restrict__ input,
+        float* __restrict__ output,
+        const size_t pixel_count,
+        const NormalPriorTransform transform) {
+
+        const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= pixel_count)
+            return;
+
+        constexpr float scale = sizeof(T) == 2 ? NORMALIZE_SCALE_U16 : NORMALIZE_SCALE_U8;
+        float n[3];
+#pragma unroll
+        for (int c = 0; c < 3; ++c) {
+            float encoded = static_cast<float>(input[idx * 3 + c]) * scale;
+            if (transform.srgb) {
+                encoded = srgb_encoding_to_linear_device(encoded);
+            }
+            n[c] = encoded * 2.0f - 1.0f;
+        }
+        if (transform.flip_yz) {
+            n[1] = -n[1];
+            n[2] = -n[2];
+        }
+        if (transform.world_to_camera) {
+            const float x = n[0];
+            const float y = n[1];
+            const float z = n[2];
+            n[0] = transform.w2c[0] * x + transform.w2c[1] * y + transform.w2c[2] * z;
+            n[1] = transform.w2c[3] * x + transform.w2c[4] * y + transform.w2c[5] * z;
+            n[2] = transform.w2c[6] * x + transform.w2c[7] * y + transform.w2c[8] * z;
+        }
+#pragma unroll
+        for (int c = 0; c < 3; ++c) {
+            output[c * pixel_count + idx] = n[c];
+        }
     }
 
     __global__ void uint8_hwc_to_uint8_chw_kernel(
@@ -168,6 +247,36 @@ namespace lfs::io::cuda {
             input, output, height, width, channels);
     }
 
+    void launch_normal_prior_u8_hwc_to_float32_chw(
+        const uint8_t* input,
+        float* output,
+        size_t height,
+        size_t width,
+        const NormalPriorTransform& transform,
+        cudaStream_t stream) {
+
+        const size_t pixel_count = height * width;
+        const int num_blocks = static_cast<int>((pixel_count + BLOCK_SIZE - 1) / BLOCK_SIZE);
+
+        normal_prior_hwc_to_float32_chw_kernel<uint8_t><<<num_blocks, BLOCK_SIZE, 0, stream>>>(
+            input, output, pixel_count, transform);
+    }
+
+    void launch_normal_prior_u16_hwc_to_float32_chw(
+        const uint16_t* input,
+        float* output,
+        size_t height,
+        size_t width,
+        const NormalPriorTransform& transform,
+        cudaStream_t stream) {
+
+        const size_t pixel_count = height * width;
+        const int num_blocks = static_cast<int>((pixel_count + BLOCK_SIZE - 1) / BLOCK_SIZE);
+
+        normal_prior_hwc_to_float32_chw_kernel<uint16_t><<<num_blocks, BLOCK_SIZE, 0, stream>>>(
+            input, output, pixel_count, transform);
+    }
+
     void launch_float32_hwc_to_uint16_hwc(
         const float* input,
         uint16_t* output,
@@ -196,6 +305,34 @@ namespace lfs::io::cuda {
 
         uint16_hwc_to_float_hwc_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
             input, output, total);
+    }
+
+    void launch_normal_chw_to_jpeg2k_hwc(
+        const float* input,
+        float* output,
+        size_t height,
+        size_t width,
+        cudaStream_t stream) {
+
+        const size_t pixel_count = height * width;
+        const int num_blocks = static_cast<int>((pixel_count + BLOCK_SIZE - 1) / BLOCK_SIZE);
+
+        normal_chw_to_jpeg2k_hwc_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
+            input, output, pixel_count);
+    }
+
+    void launch_jpeg2k_hwc_to_normal_chw(
+        const float* input,
+        float* output,
+        size_t height,
+        size_t width,
+        cudaStream_t stream) {
+
+        const size_t pixel_count = height * width;
+        const int num_blocks = static_cast<int>((pixel_count + BLOCK_SIZE - 1) / BLOCK_SIZE);
+
+        jpeg2k_hwc_to_normal_chw_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
+            input, output, pixel_count);
     }
 
     void launch_uint8_hwc_to_uint8_chw(

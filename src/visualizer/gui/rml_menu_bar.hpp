@@ -112,6 +112,10 @@ namespace lfs::vis::gui {
         bool isOpen() const { return open_menu_index_ >= 0; }
         float barHeight() const;
 
+        // Keeps the render-on-demand loop ticking while a tooltip is counting
+        // down so it reveals on time without needing a mouse jiggle.
+        [[nodiscard]] bool needsAnimationFrame() const { return tooltip_.revealDue(); }
+
     private:
         bool updateTheme();
         void rebuildLabels();

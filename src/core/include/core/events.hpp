@@ -63,6 +63,7 @@ namespace lfs::core {
             EVENT(ImportColmapCameras, std::filesystem::path sparse_path;);
             EVENT(LoadConfigFile, std::filesystem::path path;);
             EVENT(ShowDatasetLoadPopup, std::filesystem::path dataset_path;);
+            EVENT(ShowVideoExtractor, std::filesystem::path video_path;);
             EVENT(ShowResumeCheckpointPopup, std::filesystem::path checkpoint_path;);
             EVENT(NewProject, );
             EVENT(RequestExit, );

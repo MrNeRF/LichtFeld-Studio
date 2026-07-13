@@ -42,7 +42,6 @@ do
         --test-every 8 \
         --eval \
         --headless \
-        --save-eval-images \
         --config eval/mrnf_optimization_params.json
     scene_end=$(date +%s.%N)
     scene_elapsed=$(echo "$scene_end - $scene_start" | bc -l)

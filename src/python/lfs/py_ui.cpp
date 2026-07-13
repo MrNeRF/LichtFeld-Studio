@@ -4594,6 +4594,70 @@ namespace lfs::python {
             "Returns true if ground-truth comparison split view is currently enabled.");
 
         m.def(
+            "get_gt_comparison_mode",
+            []() -> const char* {
+                auto* rm = lfs::python::get_rendering_manager();
+                if (!rm)
+                    return "rgb";
+                switch (rm->getSettings().gt_comparison_mode) {
+                case vis::GTComparisonMode::Normal: return "normal";
+                case vis::GTComparisonMode::Depth: return "depth";
+                case vis::GTComparisonMode::RGB:
+                default: return "rgb";
+                }
+            },
+            "Get ground-truth comparison mode: rgb, normal, or depth.");
+
+        m.def(
+            "set_gt_comparison_mode",
+            [](const std::string& mode) {
+                auto* rm = lfs::python::get_rendering_manager();
+                if (!rm)
+                    return;
+                auto settings = rm->getSettings();
+                if (mode == "rgb" || mode == "color" || mode == "image") {
+                    settings.gt_comparison_mode = vis::GTComparisonMode::RGB;
+                } else if (mode == "normal" || mode == "normals") {
+                    settings.gt_comparison_mode = vis::GTComparisonMode::Normal;
+                } else if (mode == "depth") {
+                    settings.gt_comparison_mode = vis::GTComparisonMode::Depth;
+                } else {
+                    throw nb::value_error("GT comparison mode must be 'rgb', 'normal', or 'depth'");
+                }
+                rm->updateSettings(settings, vis::DirtyFlag::ALL);
+            },
+            nb::arg("mode"), "Set ground-truth comparison mode.");
+
+        m.def(
+            "cycle_gt_comparison_mode",
+            []() -> const char* {
+                auto* rm = lfs::python::get_rendering_manager();
+                if (!rm)
+                    return "rgb";
+                auto settings = rm->getSettings();
+                switch (settings.gt_comparison_mode) {
+                case vis::GTComparisonMode::RGB:
+                    settings.gt_comparison_mode = vis::GTComparisonMode::Normal;
+                    break;
+                case vis::GTComparisonMode::Normal:
+                    settings.gt_comparison_mode = vis::GTComparisonMode::Depth;
+                    break;
+                case vis::GTComparisonMode::Depth:
+                default:
+                    settings.gt_comparison_mode = vis::GTComparisonMode::RGB;
+                    break;
+                }
+                rm->updateSettings(settings, vis::DirtyFlag::ALL);
+                switch (settings.gt_comparison_mode) {
+                case vis::GTComparisonMode::Normal: return "normal";
+                case vis::GTComparisonMode::Depth: return "depth";
+                case vis::GTComparisonMode::RGB:
+                default: return "rgb";
+                }
+            },
+            "Cycle ground-truth comparison mode: rgb -> normal -> depth -> rgb.");
+
+        m.def(
             "reveal_in_file_manager",
             [](const std::string& utf8_path) {
                 return lfs::core::reveal_in_file_manager(lfs::core::utf8_to_path(utf8_path));

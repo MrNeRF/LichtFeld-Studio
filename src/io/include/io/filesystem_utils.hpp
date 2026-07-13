@@ -9,8 +9,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <filesystem>
 #include <functional>
+#include <span>
 #include <string>
 #include <system_error>
 #include <unordered_map>
@@ -78,6 +80,17 @@ namespace lfs::io {
         ".tif",
         ".tiff",
         ".depth.png",
+    };
+
+    inline constexpr std::array<const char*, 2> NORMAL_SEARCH_FOLDERS = {
+        "normal",
+        "normals",
+    };
+
+    inline constexpr std::array<const char*, 3> NORMAL_SEARCH_EXTENSIONS = {
+        ".png",
+        ".tif",
+        ".tiff",
     };
 
     // Safe filesystem operations that don't throw
@@ -185,7 +198,46 @@ namespace lfs::io {
                     !inserted && it_basename->second != entry.path()) {
                     ambiguous_basenames_.insert(basename_key);
                 }
+
+                if (const std::string digit_key =
+                        trailing_digit_run(entry.path().stem().string());
+                    !digit_key.empty()) {
+                    if (auto [it_digits, inserted] =
+                            digit_entries_.emplace(digit_key, entry.path());
+                        !inserted && it_digits->second != entry.path()) {
+                        ambiguous_digits_.insert(digit_key);
+                    }
+                }
             }
+        }
+
+        // Trailing digit run of a filename stem ("RENDER_0042" -> "0042").
+        // Runs shorter than two digits are ignored to avoid accidental pairing.
+        [[nodiscard]] static std::string trailing_digit_run(const std::string& stem) {
+            size_t end = stem.size();
+            size_t begin = end;
+            while (begin > 0 && std::isdigit(static_cast<unsigned char>(stem[begin - 1]))) {
+                --begin;
+            }
+            if (end - begin < 2) {
+                return {};
+            }
+            return stem.substr(begin, end - begin);
+        }
+
+        // Frame-index fallback for sidecar files whose names share only the
+        // numeric suffix with the image (e.g. RENDER_0042.png / DEPTH_0042.png).
+        [[nodiscard]] FileLookupResult lookup_by_digit_suffix(const std::string& digit_key) const {
+            if (digit_key.empty()) {
+                return {};
+            }
+            if (ambiguous_digits_.contains(digit_key)) {
+                return FileLookupResult{LookupStatus::Ambiguous, {}};
+            }
+            if (auto it = digit_entries_.find(digit_key); it != digit_entries_.end()) {
+                return FileLookupResult{LookupStatus::Found, it->second};
+            }
+            return {};
         }
 
         [[nodiscard]] FileLookupResult lookup(const fs::path& relative_or_name) const {
@@ -223,6 +275,8 @@ namespace lfs::io {
         std::unordered_map<std::string, fs::path> exact_entries_;
         std::unordered_map<std::string, fs::path> basename_entries_;
         std::unordered_set<std::string> ambiguous_basenames_;
+        std::unordered_map<std::string, fs::path> digit_entries_;
+        std::unordered_set<std::string> ambiguous_digits_;
     };
 
     // Get standard COLMAP search paths for a base directory
@@ -337,19 +391,23 @@ namespace lfs::io {
         std::vector<RecursiveFileCache> dir_indices_;
     };
 
-    // Pre-scanned directory cache for fast case-insensitive depth-map lookups.
-    class DepthDirCache {
+    // Pre-scanned directory cache for fast case-insensitive sidecar lookups
+    // (depth maps, normal maps) with a trailing-frame-number fallback.
+    class SidecarDirCache {
     public:
-        explicit DepthDirCache(const fs::path& base_path,
-                               const CancelCallback& cancel_requested = nullptr) {
-            for (const auto* folder : DEPTH_SEARCH_FOLDERS) {
+        SidecarDirCache(const fs::path& base_path,
+                        std::span<const char* const> search_folders,
+                        std::span<const char* const> search_extensions,
+                        const CancelCallback& cancel_requested = nullptr)
+            : extensions_(search_extensions) {
+            for (const auto* folder : search_folders) {
                 detail::throw_if_scan_cancel_requested(cancel_requested,
-                                                       "Depth directory scan cancelled");
-                const fs::path depth_dir = base_path / folder;
-                if (!safe_is_directory(depth_dir))
+                                                       "Sidecar directory scan cancelled");
+                const fs::path sidecar_dir = base_path / folder;
+                if (!safe_is_directory(sidecar_dir))
                     continue;
 
-                dir_indices_.emplace_back(depth_dir, cancel_requested);
+                dir_indices_.emplace_back(sidecar_dir, cancel_requested);
             }
         }
 
@@ -370,12 +428,25 @@ namespace lfs::io {
                 }
             }
 
+            // Frame-number fallback. Ambiguity here means the convention does
+            // not apply (e.g. several sidecar kinds per frame), so it degrades
+            // to "no match" instead of failing the dataset.
+            const std::string digit_key = RecursiveFileCache::trailing_digit_run(
+                lfs::core::utf8_to_path(image_name).stem().string());
+            for (const auto& dir_index : dir_indices_) {
+                if (auto result = dir_index.lookup_by_digit_suffix(digit_key); result.found()) {
+                    return result;
+                }
+            }
+
             if (saw_ambiguous_match) {
                 return FileLookupResult{LookupStatus::Ambiguous, {}};
             }
 
             return {};
         }
+
+        [[nodiscard]] bool has_dirs() const { return !dir_indices_.empty(); }
 
         [[nodiscard]] fs::path find(const std::string& image_name) const {
             if (auto result = lookup(image_name); result.found()) {
@@ -385,13 +456,13 @@ namespace lfs::io {
         }
 
     private:
-        static std::vector<fs::path> build_lookup_keys(const std::string& image_name) {
+        std::vector<fs::path> build_lookup_keys(const std::string& image_name) const {
             const fs::path img_path = lfs::core::utf8_to_path(image_name);
             const fs::path stem_path = img_path.parent_path() / img_path.stem();
 
             std::vector<fs::path> keys;
             std::unordered_set<std::string> seen_keys;
-            keys.reserve(1 + 2 * DEPTH_SEARCH_EXTENSIONS.size());
+            keys.reserve(1 + 2 * extensions_.size());
 
             auto append_key = [&](const fs::path& key) {
                 const std::string normalized_key = detail::normalize_lookup_key(key);
@@ -402,13 +473,13 @@ namespace lfs::io {
 
             append_key(img_path);
 
-            for (const auto* ext : DEPTH_SEARCH_EXTENSIONS) {
+            for (const auto* ext : extensions_) {
                 fs::path target = stem_path;
                 target += ext;
                 append_key(target);
             }
 
-            for (const auto* ext : DEPTH_SEARCH_EXTENSIONS) {
+            for (const auto* ext : extensions_) {
                 fs::path target = img_path;
                 target += ext;
                 append_key(target);
@@ -417,7 +488,30 @@ namespace lfs::io {
             return keys;
         }
 
+        std::span<const char* const> extensions_;
         std::vector<RecursiveFileCache> dir_indices_;
+    };
+
+    // Pre-scanned directory cache for fast case-insensitive depth-map lookups.
+    class DepthDirCache : public SidecarDirCache {
+    public:
+        explicit DepthDirCache(const fs::path& base_path,
+                               const CancelCallback& cancel_requested = nullptr)
+            : SidecarDirCache(base_path, DEPTH_SEARCH_FOLDERS, DEPTH_SEARCH_EXTENSIONS,
+                              cancel_requested) {}
+
+        [[nodiscard]] bool has_depth_dirs() const { return has_dirs(); }
+    };
+
+    // Pre-scanned directory cache for fast case-insensitive normal-map lookups.
+    class NormalDirCache : public SidecarDirCache {
+    public:
+        explicit NormalDirCache(const fs::path& base_path,
+                                const CancelCallback& cancel_requested = nullptr)
+            : SidecarDirCache(base_path, NORMAL_SEARCH_FOLDERS, NORMAL_SEARCH_EXTENSIONS,
+                              cancel_requested) {}
+
+        [[nodiscard]] bool has_normal_dirs() const { return has_dirs(); }
     };
 
     inline bool paths_equivalent_or_lexically_equal(const fs::path& lhs, const fs::path& rhs) {
@@ -480,11 +574,14 @@ namespace lfs::io {
         fs::path sparse_path;
         fs::path masks_path;
         fs::path depths_path;
+        fs::path normals_path;
         bool has_masks = false;
         bool has_depths = false;
+        bool has_normals = false;
         int image_count = 0;
         int mask_count = 0;
         int depth_count = 0;
+        int normal_count = 0;
     };
 
     inline DatasetInfo detect_dataset_info(const fs::path& base_path) {
@@ -540,6 +637,15 @@ namespace lfs::io {
                 info.depths_path = base_path / name;
                 info.has_depths = true;
                 info.depth_count = count_image_files(info.depths_path, true);
+                break;
+            }
+        }
+
+        for (const auto* name : NORMAL_SEARCH_FOLDERS) {
+            if (safe_is_directory(base_path / name)) {
+                info.normals_path = base_path / name;
+                info.has_normals = true;
+                info.normal_count = count_image_files(info.normals_path, true);
                 break;
             }
         }

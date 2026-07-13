@@ -121,8 +121,9 @@
       <div class="setting-row" data-tooltip="training.tooltip.depth_loss_mode" data-if="dep_depth_loss">
         <span class="prop-label">{{label_depth_loss_mode}}</span>
         <select data-value="depth_loss_mode_str">
-          <option value="pearson" data-tooltip="training.tooltip.opt.depth_loss_mode.pearson">{{label_depth_loss_pearson}}</option>
-          <option value="adaptive-warped-l1" data-tooltip="training.tooltip.opt.depth_loss_mode.adaptive_warped_l1">{{label_depth_loss_adaptive_warped_l1}}</option>
+          <option value="ssi" data-tooltip="training.tooltip.opt.depth_loss_mode.ssi">{{label_depth_loss_ssi}}</option>
+          <option value="ssi-disparity" data-tooltip="training.tooltip.opt.depth_loss_mode.ssi_disparity">{{label_depth_loss_ssi_disparity}}</option>
+          <option value="ssi-depth" data-tooltip="training.tooltip.opt.depth_loss_mode.ssi_depth">{{label_depth_loss_ssi_depth}}</option>
         </select>
       </div>
       <div class="setting-row" data-tooltip="training.tooltip.depth_loss_weight" data-if="dep_depth_loss">
@@ -130,6 +131,28 @@
         <input type="text" class="number-input" data-value="depth_loss_weight_str" />
         <button class="num-step-btn" data-event-mousedown="num_step('depth_loss_weight', -1)">-</button>
         <button class="num-step-btn" data-event-mousedown="num_step('depth_loss_weight', 1)">+</button>
+      </div>
+      <div class="setting-row" data-tooltip="training.tooltip.use_normal_loss">
+        <span class="prop-label">{{label_use_normal_loss}}</span>
+        <input type="checkbox" data-checked="use_normal_loss" />
+      </div>
+      <div class="setting-row" data-tooltip="training.tooltip.normal_loss_weight" data-if="dep_normal_loss">
+        <span class="prop-label">{{label_normal_loss_weight}}</span>
+        <input type="text" class="number-input" data-value="normal_loss_weight_str" />
+        <button class="num-step-btn" data-event-mousedown="num_step('normal_loss_weight', -1)">-</button>
+        <button class="num-step-btn" data-event-mousedown="num_step('normal_loss_weight', 1)">+</button>
+      </div>
+      <div class="setting-row" data-tooltip="training.tooltip.normal_consistency_weight" data-if="dep_normal_loss">
+        <span class="prop-label">{{label_normal_consistency_weight}}</span>
+        <input type="text" class="number-input" data-value="normal_consistency_weight_str" />
+        <button class="num-step-btn" data-event-mousedown="num_step('normal_consistency_weight', -1)">-</button>
+        <button class="num-step-btn" data-event-mousedown="num_step('normal_consistency_weight', 1)">+</button>
+      </div>
+      <div class="setting-row" data-tooltip="training.tooltip.normal_flatten_weight" data-if="dep_normal_loss">
+        <span class="prop-label">{{label_normal_flatten_weight}}</span>
+        <input type="text" class="number-input" data-value="normal_flatten_weight_str" />
+        <button class="num-step-btn" data-event-mousedown="num_step('normal_flatten_weight', -1)">-</button>
+        <button class="num-step-btn" data-event-mousedown="num_step('normal_flatten_weight', 1)">+</button>
       </div>
       <div class="mask-settings-group" data-if="dep_mask_mode">
         <div class="setting-row" data-tooltip="training.tooltip.invert_masks">

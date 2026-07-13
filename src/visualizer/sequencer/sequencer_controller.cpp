@@ -202,11 +202,6 @@ namespace lfs::vis {
         return keyframe && keyframe->is_loop_point;
     }
 
-    bool SequencerController::isEditableKeyframe(const size_t index) const {
-        const auto* const keyframe = timeline_.getKeyframe(index);
-        return keyframe && !keyframe->is_loop_point;
-    }
-
     void SequencerController::removeLoopKeyframe() {
         for (size_t index = timeline_.size(); index-- > 0;) {
             const auto* const keyframe = timeline_.getKeyframe(index);
@@ -359,14 +354,6 @@ namespace lfs::vis {
         rebuildLoopKeyframe();
         markTimelineChanged();
         return true;
-    }
-
-    bool SequencerController::updateKeyframe(const size_t index, const glm::vec3& position,
-                                             const glm::quat& rotation, const float focal_length_mm) {
-        const auto* const keyframe = timeline_.getKeyframe(index);
-        if (!keyframe || keyframe->is_loop_point)
-            return false;
-        return updateKeyframeById(keyframe->id, position, rotation, focal_length_mm);
     }
 
     bool SequencerController::updateKeyframeById(const sequencer::KeyframeId id, const glm::vec3& position,
@@ -534,17 +521,6 @@ namespace lfs::vis {
         if (playhead_ > timeline_.clipDuration())
             playhead_ = timeline_.clipDuration();
         markTimelineChanged();
-    }
-
-    bool SequencerController::setPlySequenceFrameNodeName(const size_t frame_index, std::string node_name) {
-        if (!ply_sequence_ || frame_index >= ply_sequence_->frames.size())
-            return false;
-        if (ply_sequence_->frames[frame_index].node_name == node_name)
-            return true;
-
-        ply_sequence_->frames[frame_index].node_name = std::move(node_name);
-        markTimelineChanged();
-        return true;
     }
 
     std::optional<size_t> SequencerController::plySequenceFrameIndex(const float time) const {

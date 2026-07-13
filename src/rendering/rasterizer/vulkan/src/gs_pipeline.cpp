@@ -668,7 +668,6 @@ bool VulkanGSPipeline::writeTimestamp(int delta) {
         _THROW_ERROR("attempt to write exit timestamp while stack is empty");
     vkCmdWriteTimestamp(
         command_buffer,
-        // delta == 1 ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
         timestamp_query_pool, timestampNumWritten);
     timestampNumWritten += 1;
@@ -687,7 +686,6 @@ bool VulkanGSPipeline::writeTimestampNoExcept(int delta) {
         return false;
     vkCmdWriteTimestamp(
         command_buffer,
-        // delta == 1 ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
         timestamp_query_pool, timestampNumWritten);
     timestampNumWritten += 1;

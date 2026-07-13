@@ -11,6 +11,7 @@
 #include <limits>
 
 // Thrust headers
+#include "core/assert.hpp"
 #include <thrust/copy.h>
 #include <thrust/count.h>
 #include <thrust/device_ptr.h>
@@ -37,6 +38,28 @@ namespace lfs::core::tensor_ops {
             auto end = thrust::make_zip_iterator(thrust::make_tuple(data_ptr + n, mask_ptr + n));
             thrust::transform(thrust::cuda::par.on(stream), begin, end, data_ptr,
                               ops::masked_fill_op<T>(val));
+        }
+
+        template <typename T>
+        void launch_masked_select_impl(const T* input, const unsigned char* mask,
+                                       T* output, size_t n, size_t output_size, cudaStream_t stream) {
+            if (n == 0 || output_size == 0)
+                return;
+
+            auto input_ptr = thrust::device_pointer_cast(input);
+            auto mask_ptr = thrust::device_pointer_cast(mask);
+            auto output_ptr = thrust::device_pointer_cast(output);
+
+            auto begin = thrust::make_zip_iterator(thrust::make_tuple(input_ptr, mask_ptr));
+            auto end = thrust::make_zip_iterator(thrust::make_tuple(input_ptr + n, mask_ptr + n));
+
+            auto transform_begin = thrust::make_transform_iterator(begin, ops::extract_value_op());
+            auto transform_end = thrust::make_transform_iterator(end, ops::extract_value_op());
+            auto mask_begin = thrust::make_transform_iterator(begin, ops::extract_mask_op());
+
+            thrust::copy_if(thrust::cuda::par.on(stream),
+                            transform_begin, transform_end, mask_begin, output_ptr,
+                            [] __device__(bool x) { return x; });
         }
     } // namespace
 
@@ -365,22 +388,27 @@ namespace lfs::core::tensor_ops {
 
     void launch_masked_select(const float* input, const unsigned char* mask,
                               float* output, size_t n, size_t output_size, cudaStream_t stream) {
-        if (n == 0 || output_size == 0)
-            return;
+        launch_masked_select_impl(input, mask, output, n, output_size, stream);
+    }
 
-        auto input_ptr = thrust::device_pointer_cast(input);
-        auto mask_ptr = thrust::device_pointer_cast(mask);
-        auto output_ptr = thrust::device_pointer_cast(output);
+    void launch_masked_select(const __half* input, const unsigned char* mask,
+                              __half* output, size_t n, size_t output_size, cudaStream_t stream) {
+        launch_masked_select_impl(input, mask, output, n, output_size, stream);
+    }
 
-        auto begin = thrust::make_zip_iterator(thrust::make_tuple(input_ptr, mask_ptr));
-        auto end = thrust::make_zip_iterator(thrust::make_tuple(input_ptr + n, mask_ptr + n));
+    void launch_masked_select(const int32_t* input, const unsigned char* mask,
+                              int32_t* output, size_t n, size_t output_size, cudaStream_t stream) {
+        launch_masked_select_impl(input, mask, output, n, output_size, stream);
+    }
 
-        auto transform_begin = thrust::make_transform_iterator(begin, ops::extract_value_op());
-        auto transform_end = thrust::make_transform_iterator(end, ops::extract_value_op());
-        auto mask_begin = thrust::make_transform_iterator(begin, ops::extract_mask_op());
+    void launch_masked_select(const int64_t* input, const unsigned char* mask,
+                              int64_t* output, size_t n, size_t output_size, cudaStream_t stream) {
+        launch_masked_select_impl(input, mask, output, n, output_size, stream);
+    }
 
-        thrust::copy_if(thrust::cuda::par.on(stream),
-                        transform_begin, transform_end, mask_begin, output_ptr, [] __device__(bool x) { return x; });
+    void launch_masked_select(const uint8_t* input, const unsigned char* mask,
+                              uint8_t* output, size_t n, size_t output_size, cudaStream_t stream) {
+        launch_masked_select_impl(input, mask, output, n, output_size, stream);
     }
 
     __global__ void masked_scatter_compact_kernel(float* data, const unsigned char* mask,
@@ -522,11 +550,14 @@ namespace lfs::core::tensor_ops {
         else if (boundary == 2)
             sel = ((sel % (int)dim_size) + dim_size) % dim_size;
         else if (sel < 0 || sel >= dim_size) {
+            LFS_DEBUG_ASSERT(sel >= 0 && sel < static_cast<int>(dim_size));
             out[tid] = 0;
             return;
         }
 
-        out[tid] = in[o * dim_size * inner + sel * inner + j];
+        const size_t src_idx = o * dim_size * inner + static_cast<size_t>(sel) * inner + j;
+        LFS_DEBUG_ASSERT(src_idx < outer * dim_size * inner);
+        out[tid] = in[src_idx];
     }
 
     // Float32 overload
@@ -706,6 +737,7 @@ namespace lfs::core::tensor_ops {
         } else if (boundary == 2) {
             gather_idx = ((gather_idx % (int)in_shape[dim]) + in_shape[dim]) % in_shape[dim];
         } else if (gather_idx < 0 || gather_idx >= in_shape[dim]) {
+            LFS_DEBUG_ASSERT(gather_idx >= 0 && gather_idx < static_cast<int>(in_shape[dim]));
             out[tid] = 0;
             return;
         }
@@ -722,6 +754,7 @@ namespace lfs::core::tensor_ops {
             }
 
             if (coord >= in_shape[d]) {
+                LFS_DEBUG_ASSERT(coord < in_shape[d]);
                 out[tid] = 0;
                 return;
             }
@@ -729,12 +762,20 @@ namespace lfs::core::tensor_ops {
             src_idx += coord * in_strides[d];
         }
 
+        size_t input_elements = 1;
+        for (size_t d = 0; d < in_rank; ++d) {
+            input_elements *= in_shape[d];
+        }
+        LFS_DEBUG_ASSERT(src_idx < input_elements);
         out[tid] = in[src_idx];
     }
 
     void launch_gather(const float* in, const int* idx, float* out,
                        const size_t* in_shape, const size_t* idx_shape,
                        size_t rank, int dim, size_t total, int boundary, cudaStream_t stream) {
+        if (total == 0) {
+            return;
+        }
         CudaDeviceMemory<size_t> d_in_shape(10);
         CudaDeviceMemory<size_t> d_idx_shape(10);
 
@@ -784,6 +825,9 @@ namespace lfs::core::tensor_ops {
     void launch_gather(const int64_t* in, const int* idx, int64_t* out,
                        const size_t* in_shape, const size_t* idx_shape,
                        size_t rank, int dim, size_t total, int boundary, cudaStream_t stream) {
+        if (total == 0) {
+            return;
+        }
         CudaDeviceMemory<size_t> d_in_shape(10);
         CudaDeviceMemory<size_t> d_idx_shape(10);
 
@@ -892,10 +936,13 @@ namespace lfs::core::tensor_ops {
         size_t inner_idx = tid % inner;
 
         int scatter_idx = idx[idx_pos];
-        if (scatter_idx < 0 || scatter_idx >= dim_sz)
+        if (scatter_idx < 0 || scatter_idx >= dim_sz) {
+            LFS_DEBUG_ASSERT(scatter_idx >= 0 && scatter_idx < static_cast<int>(dim_sz));
             return;
+        }
 
         size_t dst_idx = outer_idx * dim_sz * inner + scatter_idx * inner + inner_idx;
+        LFS_DEBUG_ASSERT(dst_idx < outer * dim_sz * inner);
 
         if (mode == 1) {
             scatter_add(&out[dst_idx], in[tid]);

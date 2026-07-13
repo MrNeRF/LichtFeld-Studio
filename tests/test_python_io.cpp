@@ -7,6 +7,7 @@
 #include <fstream>
 #include <gtest/gtest.h>
 #include <iterator>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -253,6 +254,107 @@ protected:
         if (!out.good()) {
             throw std::runtime_error("Failed to write test PLY");
         }
+    }
+
+    static void append_float(std::string& bytes, const float value) {
+        bytes.append(reinterpret_cast<const char*>(&value), sizeof(value));
+    }
+
+    template <size_t N>
+    static void append_floats(std::string& bytes, const std::array<float, N>& values) {
+        for (const float value : values) {
+            append_float(bytes, value);
+        }
+    }
+
+    static void write_binary_test_ply(const fs::path& path, const std::string& header, const std::string& body) {
+        std::ofstream out(path, std::ios::binary);
+        if (!out.is_open()) {
+            throw std::runtime_error("Failed to open test PLY for writing");
+        }
+
+        out.write(header.data(), static_cast<std::streamsize>(header.size()));
+        out.write(body.data(), static_cast<std::streamsize>(body.size()));
+        if (!out.good()) {
+            throw std::runtime_error("Failed to write test PLY");
+        }
+    }
+
+    static void write_basic_gaussian_ply(const fs::path& path,
+                                         const std::vector<std::array<float, 11>>& vertices) {
+        std::string body;
+        body.reserve(vertices.size() * 11 * sizeof(float));
+        for (const auto& vertex : vertices) {
+            append_floats(body, vertex);
+        }
+
+        write_binary_test_ply(
+            path,
+            "ply\n"
+            "format binary_little_endian 1.0\n"
+            "element vertex " +
+                std::to_string(vertices.size()) +
+                "\n"
+                "property float x\n"
+                "property float y\n"
+                "property float z\n"
+                "property float scale_0\n"
+                "property float scale_1\n"
+                "property float scale_2\n"
+                "property float opacity\n"
+                "property float rot_0\n"
+                "property float rot_1\n"
+                "property float rot_2\n"
+                "property float rot_3\n"
+                "end_header\n",
+            body);
+    }
+
+    static void write_partial_rotation_ply(const fs::path& path) {
+        std::string body;
+        append_floats(body, std::array<float, 6>{1.0f, 2.0f, 3.0f, 1.0f, 0.0f, 0.0f});
+
+        write_binary_test_ply(
+            path,
+            "ply\n"
+            "format binary_little_endian 1.0\n"
+            "element vertex 1\n"
+            "property float x\n"
+            "property float y\n"
+            "property float z\n"
+            "property float rot_0\n"
+            "property float rot_1\n"
+            "property float rot_2\n"
+            "end_header\n",
+            body);
+    }
+
+    static void write_gaussian_ply_with_extra_uchar_property(const fs::path& path) {
+        std::string body;
+        body.reserve(11 * sizeof(float) + 1);
+        append_float(body, 1.0f);
+        body.push_back(static_cast<char>(7));
+        append_floats(body, std::array<float, 10>{2.0f, 3.0f, -2.0f, -2.0f, -2.0f, 0.25f, 1.0f, 0.0f, 0.0f, 0.0f});
+
+        write_binary_test_ply(
+            path,
+            "ply\n"
+            "format binary_little_endian 1.0\n"
+            "element vertex 1\n"
+            "property float x\n"
+            "property uchar source_id\n"
+            "property float y\n"
+            "property float z\n"
+            "property float scale_0\n"
+            "property float scale_1\n"
+            "property float scale_2\n"
+            "property float opacity\n"
+            "property float rot_0\n"
+            "property float rot_1\n"
+            "property float rot_2\n"
+            "property float rot_3\n"
+            "end_header\n",
+            body);
     }
 
     static std::vector<float> read_binary_ply_body_as_floats(const fs::path& path) {
@@ -588,6 +690,63 @@ TEST_F(PythonIOTest, PlyLoadMapsExternalChannelMajorShOrderToInternalLayout) {
     for (size_t i = 0; i < expected_rest.size(); ++i) {
         EXPECT_FLOAT_EQ(shN_ptr[i], expected_rest[i]) << "Mismatch at shN index " << i;
     }
+}
+
+TEST_F(PythonIOTest, PlyLoadDiscardsInvalidGaussianRowsBeforeImport) {
+    const fs::path input_path = temp_dir / "invalid_gaussian_rows.ply";
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    write_basic_gaussian_ply(
+        input_path,
+        {
+            std::array<float, 11>{1.0f, 2.0f, 3.0f, -2.0f, -2.0f, -2.0f, 0.25f, 1.0f, 0.0f, 0.0f, 0.0f},
+            std::array<float, 11>{0.0f, 0.0f, 0.0f, -2.0f, -2.0f, -2.0f, 0.25f, 0.0f, 0.0f, 0.0f, 0.0f},
+            std::array<float, 11>{nan, 4.0f, 5.0f, -2.0f, -2.0f, -2.0f, 0.25f, 1.0f, 0.0f, 0.0f, 0.0f},
+        });
+
+    auto loaded = load_ply(input_path);
+    ASSERT_TRUE(loaded.has_value()) << "Failed to load test PLY: " << loaded.error();
+    EXPECT_EQ(loaded->size(), 1UL);
+
+    const auto means = loaded->means().cpu().contiguous();
+    ASSERT_EQ(means.numel(), 3);
+    const auto* means_ptr = means.ptr<float>();
+    EXPECT_FLOAT_EQ(means_ptr[0], 1.0f);
+    EXPECT_FLOAT_EQ(means_ptr[1], 2.0f);
+    EXPECT_FLOAT_EQ(means_ptr[2], 3.0f);
+
+    const auto rotation = loaded->rotation_raw().cpu().contiguous();
+    ASSERT_EQ(rotation.numel(), 4);
+    const auto* rotation_ptr = rotation.ptr<float>();
+    EXPECT_FLOAT_EQ(rotation_ptr[0], 1.0f);
+    EXPECT_FLOAT_EQ(rotation_ptr[1], 0.0f);
+    EXPECT_FLOAT_EQ(rotation_ptr[2], 0.0f);
+    EXPECT_FLOAT_EQ(rotation_ptr[3], 0.0f);
+}
+
+TEST_F(PythonIOTest, PlyLoadRejectsPartialRotationSchema) {
+    const fs::path input_path = temp_dir / "partial_rotation_schema.ply";
+    write_partial_rotation_ply(input_path);
+
+    const auto loaded = load_ply(input_path);
+    ASSERT_FALSE(loaded.has_value());
+    EXPECT_NE(loaded.error().find("rotation properties must include rot_0, rot_1, rot_2, and rot_3"),
+              std::string::npos);
+}
+
+TEST_F(PythonIOTest, PlyLoadAccountsForNonFloatVertexProperties) {
+    const fs::path input_path = temp_dir / "extra_uchar_property.ply";
+    write_gaussian_ply_with_extra_uchar_property(input_path);
+
+    auto loaded = load_ply(input_path);
+    ASSERT_TRUE(loaded.has_value()) << "Failed to load test PLY: " << loaded.error();
+    EXPECT_EQ(loaded->size(), 1UL);
+
+    const auto means = loaded->means().cpu().contiguous();
+    ASSERT_EQ(means.numel(), 3);
+    const auto* means_ptr = means.ptr<float>();
+    EXPECT_FLOAT_EQ(means_ptr[0], 1.0f);
+    EXPECT_FLOAT_EQ(means_ptr[1], 2.0f);
+    EXPECT_FLOAT_EQ(means_ptr[2], 3.0f);
 }
 
 TEST_F(PythonIOTest, PlySaveUsesExternalChannelMajorShOrder) {

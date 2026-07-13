@@ -29,26 +29,15 @@ namespace lfs::core {
     } // namespace
 
     Tensor Tensor::mm(const Tensor& other) const {
-        if (!is_valid() || !other.is_valid()) {
-            LOG_ERROR("Invalid tensors for matrix multiplication");
-            return Tensor();
-        }
-
-        if (shape_.rank() != 2 || other.shape_.rank() != 2) {
-            LOG_ERROR("Matrix multiplication requires 2D tensors");
-            return Tensor();
-        }
-
-        if (shape_[1] != other.shape_[0]) {
-            LOG_ERROR("Matrix dimensions don't match: {}x{} @ {}x{}",
-                      shape_[0], shape_[1], other.shape_[0], other.shape_[1]);
-            return Tensor();
-        }
-
-        if (device_ != other.device_) {
-            LOG_ERROR("Matrix multiplication requires tensors on same device");
-            return Tensor();
-        }
+        LFS_ASSERT_MSG(is_valid() && other.is_valid(), "mm requires valid tensors");
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32 && other.dtype_ == DataType::Float32,
+                       "mm currently supports only Float32 tensors");
+        LFS_ASSERT_MSG(shape_.rank() == 2 && other.shape_.rank() == 2,
+                       "mm requires rank-2 tensors");
+        LFS_ASSERT_MSG(shape_[1] == other.shape_[0],
+                       std::format("mm dimension mismatch: {}x{} @ {}x{}",
+                                   shape_[0], shape_[1], other.shape_[0], other.shape_[1]));
+        LFS_ASSERT_MSG(device_ == other.device_, "mm requires tensors on the same device");
 
         const size_t m = shape_[0];
         const size_t k = shape_[1];
@@ -71,31 +60,16 @@ namespace lfs::core {
     }
 
     Tensor Tensor::bmm(const Tensor& other) const {
-        if (!is_valid() || !other.is_valid()) {
-            LOG_ERROR("Invalid tensors for bmm");
-            return Tensor();
-        }
-
-        if (shape_.rank() != 3 || other.shape_.rank() != 3) {
-            LOG_ERROR("BMM requires 3D tensors");
-            return Tensor();
-        }
-
-        if (shape_[0] != other.shape_[0]) {
-            LOG_ERROR("Batch dimensions must match for bmm");
-            return Tensor();
-        }
-
-        if (shape_[2] != other.shape_[1]) {
-            LOG_ERROR("Matrix dimensions incompatible for bmm: {}x{} @ {}x{}",
-                      shape_[1], shape_[2], other.shape_[1], other.shape_[2]);
-            return Tensor();
-        }
-
-        if (device_ != other.device_) {
-            LOG_ERROR("BMM requires tensors on same device");
-            return Tensor();
-        }
+        LFS_ASSERT_MSG(is_valid() && other.is_valid(), "bmm requires valid tensors");
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32 && other.dtype_ == DataType::Float32,
+                       "bmm currently supports only Float32 tensors");
+        LFS_ASSERT_MSG(shape_.rank() == 3 && other.shape_.rank() == 3,
+                       "bmm requires rank-3 tensors");
+        LFS_ASSERT_MSG(shape_[0] == other.shape_[0], "bmm batch dimensions must match");
+        LFS_ASSERT_MSG(shape_[2] == other.shape_[1],
+                       std::format("bmm dimension mismatch: {}x{} @ {}x{}",
+                                   shape_[1], shape_[2], other.shape_[1], other.shape_[2]));
+        LFS_ASSERT_MSG(device_ == other.device_, "bmm requires tensors on the same device");
 
         const size_t batch_size = shape_[0];
         const size_t m = shape_[1];
@@ -136,43 +110,29 @@ namespace lfs::core {
     Tensor Tensor::matmul(const Tensor& other) const {
         debug::OpTraceGuard trace("matmul", *this, other);
 
-        if (!is_valid() || !other.is_valid()) {
-            LOG_ERROR("Invalid tensors for matmul");
-            return Tensor();
-        }
-
-        if (device_ != other.device_) {
-            LOG_ERROR("Matmul requires tensors on same device");
-            return Tensor();
-        }
+        LFS_ASSERT_MSG(is_valid() && other.is_valid(), "matmul requires valid tensors");
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32 && other.dtype_ == DataType::Float32,
+                       "matmul currently supports only Float32 tensors");
+        LFS_ASSERT_MSG(device_ == other.device_, "matmul requires tensors on the same device");
 
         const Tensor& a = is_contiguous() ? *this : contiguous();
         const Tensor& b = other.is_contiguous() ? other : other.contiguous();
 
         // Vector dot product
         if (a.shape_.rank() == 1 && b.shape_.rank() == 1) {
-            if (a.shape_[0] != b.shape_[0]) {
-                LOG_ERROR("Vector dimensions don't match for dot product");
-                return Tensor();
-            }
+            LFS_ASSERT_MSG(a.shape_[0] == b.shape_[0], "matmul vector dimensions must match");
             return a.dot(b);
         }
 
         // Vector-matrix: [k] @ [k, n] -> [n]
         if (a.shape_.rank() == 1 && b.shape_.rank() == 2) {
-            if (a.shape_[0] != b.shape_[0]) {
-                LOG_ERROR("Dimension mismatch for vector-matrix multiplication");
-                return Tensor();
-            }
+            LFS_ASSERT_MSG(a.shape_[0] == b.shape_[0], "matmul vector-matrix dimensions must match");
             return a.unsqueeze(0).mm(b).squeeze(0);
         }
 
         // Matrix-vector: [m, k] @ [k] -> [m]
         if (a.shape_.rank() == 2 && b.shape_.rank() == 1) {
-            if (a.shape_[1] != b.shape_[0]) {
-                LOG_ERROR("Dimension mismatch for matrix-vector multiplication");
-                return Tensor();
-            }
+            LFS_ASSERT_MSG(a.shape_[1] == b.shape_[0], "matmul matrix-vector dimensions must match");
             return a.mm(b.unsqueeze(1)).squeeze(1);
         }
 
@@ -188,10 +148,7 @@ namespace lfs::core {
 
         // 2D @ 3D: broadcast [m, k] @ [B, k, n] -> [B, m, n]
         if (a.shape_.rank() == 2 && b.shape_.rank() == 3) {
-            if (a.shape_[1] != b.shape_[1]) {
-                LOG_ERROR("Dimension mismatch for 2D @ 3D matmul");
-                return Tensor();
-            }
+            LFS_ASSERT_MSG(a.shape_[1] == b.shape_[1], "matmul 2D @ 3D dimensions must match");
             const size_t batch = b.shape_[0];
             const size_t m = a.shape_[0];
             const size_t k = a.shape_[1];
@@ -203,10 +160,7 @@ namespace lfs::core {
 
         // 3D @ 2D: broadcast [B, m, k] @ [k, n] -> [B, m, n]
         if (a.shape_.rank() == 3 && b.shape_.rank() == 2) {
-            if (a.shape_[2] != b.shape_[0]) {
-                LOG_ERROR("Dimension mismatch for 3D @ 2D matmul");
-                return Tensor();
-            }
+            LFS_ASSERT_MSG(a.shape_[2] == b.shape_[0], "matmul 3D @ 2D dimensions must match");
             const size_t batch = a.shape_[0];
             const size_t k = b.shape_[0];
             const size_t n = b.shape_[1];
@@ -216,30 +170,19 @@ namespace lfs::core {
             return a.bmm(expanded);
         }
 
-        LOG_ERROR("MatMul not implemented for {}D @ {}D", a.shape_.rank(), b.shape_.rank());
-        return Tensor();
+        LFS_ASSERT_MSG(false,
+                       std::format("matmul is unsupported for rank {} @ rank {}",
+                                   a.shape_.rank(), b.shape_.rank()));
     }
 
     Tensor Tensor::dot(const Tensor& other) const {
-        if (!is_valid() || !other.is_valid()) {
-            LOG_ERROR("Invalid tensors for dot product");
-            return Tensor();
-        }
-
-        if (shape_.rank() != 1 || other.shape_.rank() != 1) {
-            LOG_ERROR("Dot product requires 1D tensors");
-            return Tensor();
-        }
-
-        if (shape_[0] != other.shape_[0]) {
-            LOG_ERROR("Vector dimensions don't match for dot product");
-            return Tensor();
-        }
-
-        if (device_ != other.device_) {
-            LOG_ERROR("Dot product requires tensors on same device");
-            return Tensor();
-        }
+        LFS_ASSERT_MSG(is_valid() && other.is_valid(), "dot requires valid tensors");
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32 && other.dtype_ == DataType::Float32,
+                       "dot currently supports only Float32 tensors");
+        LFS_ASSERT_MSG(shape_.rank() == 1 && other.shape_.rank() == 1,
+                       "dot requires rank-1 tensors");
+        LFS_ASSERT_MSG(shape_[0] == other.shape_[0], "dot vector dimensions must match");
+        LFS_ASSERT_MSG(device_ == other.device_, "dot requires tensors on the same device");
 
         const Tensor& a = is_contiguous() ? *this : contiguous();
         const Tensor& b = other.is_contiguous() ? other : other.contiguous();

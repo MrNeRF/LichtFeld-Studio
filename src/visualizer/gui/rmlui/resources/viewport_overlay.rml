@@ -628,6 +628,23 @@
         </div>
     </div>
 
+    <div id="gt-compare-mode-block" class="viewport-depth-overlay hidden">
+        <div class="viewport-transform-panel viewport-depth-panel viewport-gt-compare-panel" data-tooltip="tooltip.gt_compare_mode">
+            <div class="viewport-transform-header viewport-depth-header">
+                <div class="viewport-transform-meta viewport-depth-meta">
+                    <span class="viewport-transform-meta__tool">{{gt_compare_tool_label}}</span>
+                    <select class="viewport-depth-mode-select viewport-gt-compare-mode-select"
+                            data-value="gt_compare_mode_value"
+                            data-tooltip="tooltip.gt_compare_mode">
+                        <option value="rgb">RGB</option>
+                        <option value="normal">Normal</option>
+                        <option value="depth">Depth</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div id="viewport-export-block" class="viewport-depth-overlay viewport-export-overlay hidden">
         <div class="viewport-transform-panel viewport-export-panel"
              data-class-has-custom="viewport_export_show_custom_size"

@@ -45,6 +45,7 @@ set(TENSOR_SOURCES
 
 # Core module sources
 set(CORE_SOURCES
+        abi.cpp
         operator_callbacks.cpp
         animatable_property.cpp
         argument_parser.cpp

@@ -144,15 +144,7 @@ namespace lfs::vis {
         [[nodiscard]] bool isHovered() const { return hovered_; }
         [[nodiscard]] bool wantsKeyboard() const { return wants_keyboard_; }
 
-        [[nodiscard]] float zoomLevel() const { return zoom_level_; }
-        [[nodiscard]] float panOffset() const { return pan_offset_; }
-        [[nodiscard]] float cachedPanelX() const { return cached_panel_x_; }
         [[nodiscard]] float cachedPanelY() const { return cached_panel_y_; }
-        [[nodiscard]] float cachedPanelWidth() const { return cached_panel_width_; }
-        [[nodiscard]] float cachedHeight() const { return cached_height_; }
-        [[nodiscard]] float cachedDpRatio() const { return cached_dp_ratio_; }
-        [[nodiscard]] float cachedPlayheadScreenX() const { return cached_playhead_screen_x_; }
-        [[nodiscard]] bool isPlayheadInRange() const { return playhead_in_range_; }
         [[nodiscard]] float getDisplayEndTime() const;
         [[nodiscard]] std::optional<sequencer::KeyframeId> hoveredKeyframeId() const;
 

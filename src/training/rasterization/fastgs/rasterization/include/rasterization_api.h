@@ -47,6 +47,7 @@ namespace fast_lfs::rasterization {
         void* grad_depth_helper = nullptr;
         void* grad_opacity_helper = nullptr;
         void* grad_color_helper = nullptr;
+        void* primitive_normals = nullptr;
         // Error handling for OOM
         bool success = false;
         const char* error_message = nullptr;
@@ -64,6 +65,7 @@ namespace fast_lfs::rasterization {
         float* image_ptr,                      // Device pointer [3*H*W]
         float* alpha_ptr,                      // Device pointer [H*W]
         float* depth_ptr,                      // Device pointer [H*W]
+        float* normal_ptr,                     // Device pointer [3*H*W] or nullptr — enables the normal render channel
         int n_primitives,
         int active_sh_bases,
         int sh_layout_bases,
@@ -91,6 +93,7 @@ namespace fast_lfs::rasterization {
         const float* grad_image_ptr,              // Device pointer [3*H*W]
         const float* grad_alpha_ptr,              // Device pointer [H*W]
         const float* grad_depth_ptr,              // Device pointer [H*W] or nullptr
+        const float* grad_normal_ptr,             // Device pointer [3*H*W] or nullptr
         const float* image_ptr,                   // Device pointer [3*H*W]
         const float* alpha_ptr,                   // Device pointer [H*W]
         const float* means_ptr,                   // Device pointer [N*3]
@@ -113,8 +116,7 @@ namespace fast_lfs::rasterization {
         float center_y,
         bool mip_filter,
         DensificationType densification_type,
-        const FusedAdamSettings* fused_adam,
-        bool detach_depth_weights = false);
+        const FusedAdamSettings* fused_adam);
 
     // Pre-compile all CUDA kernels to avoid JIT delays during rendering
     void warmup_kernels();

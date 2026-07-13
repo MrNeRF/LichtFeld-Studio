@@ -37,8 +37,6 @@ namespace PerfTimer {
     };
 #undef _
 
-    void reset();
-
     void hostTic();
     void hostToc();
 
@@ -46,7 +44,6 @@ namespace PerfTimer {
     struct Timer {
         VulkanGSPipeline* module;
         std::chrono::time_point<std::chrono::high_resolution_clock> then;
-        // static std::mutex mutex;
 
         Timer(VulkanGSPipeline* module);
         ~Timer();
@@ -58,11 +55,9 @@ namespace PerfTimer {
     using Marker = std::pair<int, int>;
 
     std::vector<Marker> takeMarkers();
-    std::vector<std::pair<size_t, double>> update(std::vector<double> times);
     std::vector<std::pair<size_t, double>> update(std::vector<double> times,
                                                   const std::vector<Marker>& batch_marks);
 
-    std::map<std::string, std::tuple<size_t, double>> get_summary();
     const char* stage_name(size_t stage);
     size_t stage_count();
 

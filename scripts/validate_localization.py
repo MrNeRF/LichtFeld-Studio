@@ -27,7 +27,7 @@ import re
 from collections import OrderedDict
 from copy import deepcopy
 from pathlib import Path
-from typing import Dict, Set, Tuple
+from typing import Dict, Set
 
 
 class Colors:
@@ -120,18 +120,28 @@ def extract_keys_from_cpp_header(header_path: Path) -> Set[str]:
 
 
 def extract_keys_from_code(code_dir: Path) -> Set[str]:
-    """Extract LOC() usage from C++ source files"""
-    keys = set()
-    pattern = r'LOC\s*\(\s*"([^"]+)"\s*\)'
+    """Extract localization keys referenced from all consumer surfaces.
 
-    for cpp_file in code_dir.rglob('*.cpp'):
+    Keys are consumed from C++ (LOC), Python/JS plugins (tr), and RML markup
+    (data-tooltip), so scanning only C++ LOC() calls misses most of them.
+    """
+    keys = set()
+    patterns = [
+        r'LOC\s*\(\s*"([^"]+)"\s*\)',
+        r'\btr\s*\(\s*["\']([^"\']+)["\']',
+        r'(?<![\w-])data-tooltip\s*=\s*"([^"]+)"',
+    ]
+    source_exts = {'.cpp', '.hpp', '.h', '.cc', '.cu', '.cuh', '.py', '.rml', '.rcss', '.js'}
+
+    for src_file in code_dir.rglob('*'):
+        if src_file.suffix not in source_exts:
+            continue
         try:
-            with open(cpp_file, 'r', encoding='utf-8') as f:
-                content = f.read()
-                matches = re.findall(pattern, content)
-                keys.update(matches)
+            content = src_file.read_text(encoding='utf-8')
         except Exception:
-            pass  # Skip unreadable files silently
+            continue  # Skip unreadable files silently
+        for pattern in patterns:
+            keys.update(re.findall(pattern, content))
 
     return keys
 
@@ -150,7 +160,7 @@ def validate_localization(project_root: Path, fix: bool = False, langs: list|Non
     """
     locale_dir = project_root / 'src/visualizer/gui/resources/locales'
     header_path = project_root / 'src/visualizer/gui/string_keys.hpp'
-    code_dir = project_root / 'src/visualizer/gui'
+    code_dir = project_root / 'src'
 
     if not locale_dir.exists():
         print(f"{Colors.RED}✗ Locale directory not found: {locale_dir}{Colors.END}")
@@ -262,27 +272,28 @@ def validate_localization(project_root: Path, fix: bool = False, langs: list|Non
                     print(f"  ... and {len(missing_in_json) - 10} more")
 
             if missing_in_header:
-                has_errors = True
-                print(f"{Colors.YELLOW}⚠ Keys in en.json but not in header:{Colors.END}")
-                for key in sorted(missing_in_header)[:10]:
-                    print(f"  - {key}")
-                if len(missing_in_header) > 10:
-                    print(f"  ... and {len(missing_in_header) - 10} more")
+                print(f"{Colors.CYAN}ℹ {len(missing_in_header)} en.json key(s) not in header "
+                      f"(header is a C++-only convenience subset; Python/RML/JS keys live only in en.json){Colors.END}")
 
-            if not missing_in_json and not missing_in_header:
-                print(f"{Colors.GREEN}✓ Header and JSON are in sync{Colors.END}")
+            if not missing_in_json:
+                print(f"{Colors.GREEN}✓ Every header constant resolves to an en.json key{Colors.END}")
         print()
 
     # Check for keys used in code
     print(f"{Colors.BOLD}Checking code usage:{Colors.END}")
     code_keys = extract_keys_from_code(code_dir)
-    all_used_keys = code_keys | header_keys  # LOC("...") + LOC(Strings::X) via string_keys.hpp
+    all_used_keys = code_keys | header_keys
     if all_used_keys:
-        print(f"  {Colors.CYAN}{len(code_keys)} LOC(\"...\") + {len(header_keys)} header = "
+        print(f"  {Colors.CYAN}{len(code_keys)} code reference(s) + {len(header_keys)} header = "
               f"{len(all_used_keys)} referenced keys{Colors.END}")
 
         unused = reference_keys - all_used_keys
-        undefined = all_used_keys - reference_keys
+        # A referenced key that is a strict prefix of a real key is a dynamically
+        # built key (e.g. "histogram.metric." + name), not an undefined one.
+        dynamic_prefixes = {rk.rsplit('.', 1)[0] for rk in reference_keys}
+        undefined = {k for k in (all_used_keys - reference_keys)
+                     if k not in dynamic_prefixes
+                     and not any(rk.startswith(k + '.') for rk in reference_keys)}
 
         if undefined:
             has_errors = True

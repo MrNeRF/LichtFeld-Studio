@@ -219,6 +219,7 @@ namespace lfs::vis::gui {
         bool is_native;
         float initial_width;
         float initial_height;
+        uint64_t float_stack_order;
     };
 
     struct PanelSnapshot {
@@ -262,7 +263,6 @@ namespace lfs::vis::gui {
                          const PanelInputState* input = nullptr);
         void preload_panels(PanelSpace space, const PanelDrawContext& ctx);
         void draw_single_panel(const std::string& id, const PanelDrawContext& ctx);
-        void draw_child_panels(const std::string& parent_id, const PanelDrawContext& ctx);
         bool has_panels(PanelSpace space) const;
 
         float draw_panels_direct(PanelSpace space, float x, float y, float w, float max_h,
@@ -309,7 +309,7 @@ namespace lfs::vis::gui {
         std::optional<PanelDetails> get_panel(const std::string& id);
         bool isPositionOverFloatingPanel(double x, double y) const;
         void set_panel_enabled(const std::string& id, bool enabled);
-        void set_panel_disabled_override(const std::string& id);
+        bool bring_panel_to_front(const std::string& id);
         bool is_panel_enabled(const std::string& id) const;
         void rescale_floating_panels(float previous_scale, float new_scale);
         bool needsAnimationFrame() const;

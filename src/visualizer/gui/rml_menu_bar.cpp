@@ -1054,6 +1054,7 @@ namespace lfs::vis::gui {
             tooltip_changed = tooltip_.apply(body_el_, last_mouse_x_, last_mouse_y_, ctx_w, ctx_h);
         }
         rml_manager_->setContextNeedsPassiveMouseMoveFrames(rml_context_, tooltip_.needsFrame());
+        rml_manager_->setContextTooltipRevealDeadline(rml_context_, tooltip_.revealDeadline());
 
         const bool size_changed = (ctx_w != last_ctx_w_ || ctx_h != last_ctx_h_);
         const bool refresh_cache = render_needed_ || theme_changed || size_changed ||

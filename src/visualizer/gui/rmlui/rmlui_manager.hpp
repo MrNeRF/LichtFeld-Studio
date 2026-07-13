@@ -8,9 +8,11 @@
 
 #include <RmlUi/Core/Types.h>
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -98,7 +100,6 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool isResizeDeferring() const { return resize_deferring_; }
 
         void activateTheme(const std::string& theme_id);
-        const std::string& activeThemeId() const { return active_theme_id_; }
 
         RenderInterface_VK* getVulkanRenderInterface() const { return vulkan_render_interface_; }
         RmlTextInputHandler* getTextInputHandler() const { return text_input_handler_.get(); }
@@ -126,15 +127,27 @@ namespace lfs::vis::gui {
         void endVulkanFrame();
 
         void beginFrameCursorTracking();
-        void trackContextFrame(const Rml::Context* context, int window_x, int window_y);
+        void trackContextFrame(const Rml::Context* context, int window_x, int window_y,
+                               std::optional<RmlRect> active_overlay = std::nullopt);
         void setContextNeedsPassiveMouseMoveFrames(const Rml::Context* context, bool needs_frames);
+        // Registers (or clears, on nullopt) the time a context's pending tooltip
+        // is due to appear, so the idle loop can wake exactly at that moment.
+        void setContextTooltipRevealDeadline(
+            const Rml::Context* context,
+            std::optional<std::chrono::steady_clock::time_point> deadline);
+        // Seconds until the earliest pending tooltip is due across all contexts,
+        // or empty when none is counting down.
+        [[nodiscard]] std::optional<double> secondsUntilTooltipReveal() const;
         RmlCursorRequest consumeCursorRequest();
         [[nodiscard]] bool passiveMouseMoveNeedsRender(float window_x, float window_y) const;
+        [[nodiscard]] bool activeOverlayContainsPoint(float window_x, float window_y) const;
+        [[nodiscard]] bool activeOverlayOccludesContext(const Rml::Context* context,
+                                                        float window_x,
+                                                        float window_y) const;
 
         // Focus-state aggregators across all live RmlUi contexts. These replace prior
         // ImGui::GetIO().WantCapture* / ImGui::IsAnyItemActive() reads so viewport input
         // suppression reflects the actual GUI surface the user is interacting with.
-        [[nodiscard]] bool wantsCaptureMouse() const;
         [[nodiscard]] bool wantsCaptureKeyboard() const;
         [[nodiscard]] bool wantsTextInput() const;
         [[nodiscard]] bool anyItemActive() const;
@@ -167,6 +180,7 @@ namespace lfs::vis::gui {
             int height = 0;
             std::uint64_t order = 0;
             bool needs_passive_mouse_move_frames = false;
+            std::optional<RmlRect> active_overlay;
         };
 
         bool initWithRenderInterface(SDL_Window* window,
@@ -184,6 +198,9 @@ namespace lfs::vis::gui {
         std::unordered_map<std::string, Rml::Context*> contexts_;
         std::unordered_map<const Rml::Context*, std::string> context_names_;
         std::unordered_map<const Rml::Context*, TrackedContextFrame> tracked_context_frames_;
+        std::unordered_map<const Rml::Context*, TrackedContextFrame> previous_context_frames_;
+        std::unordered_map<const Rml::Context*, std::chrono::steady_clock::time_point>
+            tooltip_reveal_deadlines_;
         std::vector<VulkanContextCommand> vulkan_queue_;
         std::vector<VulkanContextCommand> vulkan_foreground_queue_;
         SDL_Window* window_ = nullptr;

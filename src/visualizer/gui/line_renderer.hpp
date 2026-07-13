@@ -55,7 +55,6 @@ namespace lfs::vis::gui {
     constexpr OverlayColor OVERLAY_COL32_BLACK = overlayColor(0, 0, 0, 255);
 
     [[nodiscard]] LFS_VIS_API glm::vec4 overlayColorToVec4(OverlayColor color);
-    [[nodiscard]] LFS_VIS_API OverlayColor overlayColorWithAlpha(OverlayColor color, float alpha);
 
     struct NativeGizmoInput {
         glm::vec2 mouse_pos{0.0f};
@@ -73,7 +72,6 @@ namespace lfs::vis::gui {
         void AddConvexPolyFilled(const glm::vec2* points, int count, OverlayColor color);
         void AddPolyline(const glm::vec2* points, int count, OverlayColor color, bool closed, float thickness = 1.0f);
         void AddRectFilled(glm::vec2 min, glm::vec2 max, OverlayColor color, float rounding = 0.0f);
-        void AddRect(glm::vec2 min, glm::vec2 max, OverlayColor color, float rounding = 0.0f, float thickness = 1.0f);
         void AddCircleFilled(glm::vec2 center, float radius, OverlayColor color, int segments = 16);
         void AddCircle(glm::vec2 center, float radius, OverlayColor color, int segments = 16, float thickness = 1.0f);
 

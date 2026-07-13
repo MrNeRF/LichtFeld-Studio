@@ -428,6 +428,7 @@ namespace lfs::vis {
             settings_.gut = lfs::rendering::isGutBackend(settings_.raster_backend);
             enforceProjectionBackend(settings_);
             sanitizeDepthViewSettings(settings_);
+            sanitizeGTComparisonSettings(settings_);
             settings_.grid_plane = clampGridPlane(settings_.grid_plane);
             if (split_view_service_.isIndependentDualActive(settings_)) {
                 if (grid_plane_changed) {

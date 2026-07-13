@@ -36,6 +36,7 @@
 #include <chrono>
 #include <cmath>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <unordered_map>
 #ifdef WIN32
@@ -55,6 +56,7 @@ namespace lfs::vis {
         }
 
         constexpr double kResizeSettleMinWaitSeconds = 0.001;
+        constexpr double kTooltipRevealMinWaitSeconds = 0.001;
 #if defined(__linux__)
         constexpr auto kWindowResizePaintDemandWindow = std::chrono::milliseconds(160);
 #endif
@@ -1321,6 +1323,14 @@ namespace lfs::vis {
             const double settle_wait = rendering_manager_->secondsUntilViewportResizeSettleReady();
             wait_seconds = std::min(wait_seconds,
                                     std::max(kResizeSettleMinWaitSeconds, settle_wait));
+        }
+
+        // Wake exactly when a pending tooltip is due so the reveal costs a single
+        // frame instead of rendering continuously through the hover delay.
+        if (gui_manager_) {
+            if (const auto tooltip_wait = gui_manager_->secondsUntilTooltipReveal())
+                wait_seconds = std::min(wait_seconds,
+                                        std::max(kTooltipRevealMinWaitSeconds, *tooltip_wait));
         }
 
         if (is_training) {

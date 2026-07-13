@@ -921,16 +921,6 @@ namespace lfs::vis::gui {
         return impl_->uploadRgba(rgba, expected_width, expected_height);
     }
 
-    bool VulkanUiTexture::uploadCudaTensor(const lfs::core::Tensor& image,
-                                           const int expected_width,
-                                           const int expected_height,
-                                           const bool flip_y) {
-        if (!impl_) {
-            impl_ = new Impl();
-        }
-        return impl_->uploadCudaTensorImpl(image, expected_width, expected_height, flip_y);
-    }
-
     std::uintptr_t VulkanUiTexture::textureId() const {
         if (!impl_) {
             return 0;

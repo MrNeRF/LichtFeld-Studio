@@ -4,6 +4,7 @@
 
 #include "app/application.hpp"
 #include "app/converter.hpp"
+#include "core/abi.hpp"
 #include "core/argument_parser.hpp"
 #include "core/executable_path.hpp"
 #include "core/logger.hpp"
@@ -11,6 +12,7 @@
 #include "diagnostics/vram_profiler.hpp"
 #include "git_version.h"
 #include "gui/gpu_memory_query.hpp"
+#include "lfs_core_abi_stamp.h"
 #include "preprocessing/preprocess.hpp"
 #include "python/plugin_runner.hpp"
 #include "python/runner.hpp"
@@ -20,6 +22,7 @@
 #include <curand.h>
 #include <filesystem>
 #include <print>
+#include <string_view>
 
 // pxr/base/tf/hashset.h pulls in the deprecated <ext/hash_set> GNU extension.
 #if defined(__GNUC__) && !defined(__clang__)
@@ -181,6 +184,16 @@ namespace {
 } // namespace
 
 int main(int argc, char* argv[]) {
+    const std::string_view loaded_core_stamp = lfs_core_abi_stamp();
+    if (!lfs_core_abi_matches(LFS_CORE_ABI_STAMP)) {
+        std::println(stderr,
+                     "Fatal: lfs_core ABI mismatch. The application expects '{}' but loaded '{}'. "
+                     "Remove stale binaries and rebuild LichtFeld Studio.",
+                     LFS_CORE_ABI_STAMP,
+                     loaded_core_stamp);
+        return 2;
+    }
+
     auto result = lfs::core::args::parse_args(argc, argv);
     if (!result) {
         std::println(stderr, "Error: {}", result.error());

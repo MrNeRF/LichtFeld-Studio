@@ -415,9 +415,9 @@ TEST_F(TensorBasicTest, MoveConstructor) {
     Tensor tensor2(std::move(tensor1));
 
     EXPECT_EQ(tensor2.data_ptr(), original_ptr);
-    EXPECT_EQ(tensor1.data_ptr(), nullptr); // tensor1 should be cleared
     EXPECT_TRUE(tensor2.is_valid());
     EXPECT_FALSE(tensor1.is_valid());
+    EXPECT_THROW((void)tensor1.data_ptr(), std::runtime_error);
 }
 
 TEST_F(TensorBasicTest, MoveAssignment) {
@@ -425,14 +425,13 @@ TEST_F(TensorBasicTest, MoveAssignment) {
     void* original_ptr = tensor1.data_ptr();
 
     auto tensor2 = Tensor::zeros({2, 2}, Device::CUDA);
-    void* tensor2_original = tensor2.data_ptr();
 
     tensor2 = std::move(tensor1);
 
     EXPECT_EQ(tensor2.data_ptr(), original_ptr);
-    EXPECT_EQ(tensor1.data_ptr(), nullptr);
     EXPECT_TRUE(tensor2.is_valid());
     EXPECT_FALSE(tensor1.is_valid());
+    EXPECT_THROW((void)tensor1.data_ptr(), std::runtime_error);
 }
 
 // ============= Properties Tests =============
@@ -478,12 +477,8 @@ TEST_F(TensorBasicTest, InvalidTensor) {
     EXPECT_TRUE(invalid_tensor.is_empty());
     EXPECT_EQ(invalid_tensor.numel(), 0);
 
-    // These should not crash but return invalid tensors
-    auto result = invalid_tensor.clone();
-    EXPECT_FALSE(result.is_valid());
-
-    result = invalid_tensor.add(1.0f);
-    EXPECT_FALSE(result.is_valid());
+    EXPECT_THROW((void)invalid_tensor.clone(), std::runtime_error);
+    EXPECT_THROW((void)invalid_tensor.add(1.0f), std::runtime_error);
 }
 
 TEST_F(TensorBasicTest, EmptyTensor) {

@@ -26,7 +26,6 @@ namespace lfs::vis::gui::panels {
     public:
         static PythonScriptManagerState& getInstance();
 
-        void addScript(const std::filesystem::path& path);
         void setScripts(const std::vector<std::filesystem::path>& paths);
         void setScriptEnabled(size_t index, bool enabled);
         void setScriptError(size_t index, const std::string& error);
@@ -35,15 +34,12 @@ namespace lfs::vis::gui::panels {
 
         std::vector<ScriptInfo> scriptsSnapshot() const;
         std::vector<std::filesystem::path> enabledScripts() const;
-        bool needsReload() const { return needs_reload_; }
-        void setNeedsReload(bool val) { needs_reload_ = val; }
 
     private:
         PythonScriptManagerState() = default;
 
         std::vector<ScriptInfo> scripts_;
         std::uint64_t generation_ = 0;
-        bool needs_reload_ = false;
         mutable std::mutex mutex_;
     };
 

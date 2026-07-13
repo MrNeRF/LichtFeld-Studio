@@ -47,7 +47,9 @@ class TranslateNodeOp(Operator):
             t = components["translation"]
             new_t = [t[0] + self.offset[0], t[1] + self.offset[1], t[2] + self.offset[2]]
             new_matrix = lf.compose_transform(
-                new_t, components["euler"], components["scale"]
+                translation=new_t,
+                euler_deg=components["rotation_euler_deg"],
+                scale=components["scale"],
             )
             lf.set_node_transform(name, new_matrix)
             lf.log.info(f"Translated '{name}' by {self.offset}")

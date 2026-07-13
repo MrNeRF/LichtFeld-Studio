@@ -7,6 +7,7 @@
 #include "core/export.hpp"
 #include "io/video/video_encoder_interface.hpp"
 
+#include <filesystem>
 #include <functional>
 #include <memory>
 
@@ -21,6 +22,10 @@ namespace lfs::gui {
     public:
         virtual ~IVideoExtractorWidget() = default;
         [[nodiscard]] virtual bool isVideoPlaying() const = 0;
+        [[nodiscard]] virtual bool openVideoPath(const std::filesystem::path& path) {
+            (void)path;
+            return false;
+        }
         virtual void shutdown() = 0;
 
         [[nodiscard]] virtual bool supportsDirectDraw() const { return false; }

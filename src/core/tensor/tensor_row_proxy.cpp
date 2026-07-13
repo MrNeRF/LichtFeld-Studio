@@ -2,8 +2,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "internal/tensor_impl.hpp"
+#include <cmath>
 #include <cstring>
 #include <cuda_runtime.h>
+#include <string_view>
 #include <vector>
 
 namespace lfs::core {
@@ -14,10 +16,21 @@ namespace lfs::core {
             if (err == cudaSuccess) {
                 err = cudaStreamSynchronize(stream);
             }
-            if (err != cudaSuccess) {
-                throw std::runtime_error(
-                    std::string("CUDA memcpy failed in ") + context + ": " + cudaGetErrorString(err));
-            }
+            LFS_ASSERT_MSG(err == cudaSuccess,
+                           std::string("CUDA copy failed in ") + context + ": " +
+                               cudaGetErrorString(err));
+        }
+
+        void assert_proxy_tensor(const Tensor* tensor,
+                                 const size_t row_index,
+                                 const std::string_view operation) {
+            LFS_ASSERT_MSG(tensor != nullptr && tensor->is_valid(),
+                           std::string(operation) + " requires a valid tensor");
+            LFS_ASSERT_MSG(tensor->ndim() > 0,
+                           std::string(operation) +
+                               " requires a tensor with at least one dimension");
+            LFS_ASSERT_MSG(row_index < tensor->shape()[0],
+                           std::string(operation) + " row index is out of bounds");
         }
     } // namespace
 
@@ -54,29 +67,18 @@ namespace lfs::core {
     // ============= TensorRowProxy 2D Access =============
 
     float& TensorRowProxy::operator[](size_t col_index) {
-        if (!tensor_ || !tensor_->is_valid()) {
-            throw std::runtime_error("TensorRowProxy: invalid tensor pointer");
-        }
-
-        if (tensor_->shape().rank() < 2) {
-            throw std::runtime_error(
-                "TensorRowProxy: Cannot use tensor[i][j] on " + std::to_string(tensor_->shape().rank()) +
-                "-D tensor. Use tensor[i] for 1-D access, or tensor.unsqueeze() to add dimensions.");
-        }
-
-        if (col_index >= tensor_->shape()[1]) {
-            throw std::out_of_range(
-                "Column index " + std::to_string(col_index) + " out of bounds for dimension 1 with size " +
-                std::to_string(tensor_->shape()[1]));
-        }
+        assert_proxy_tensor(tensor_, row_index_, "TensorRowProxy::operator[]");
+        LFS_ASSERT_MSG(tensor_->shape().rank() >= 2,
+                       "TensorRowProxy::operator[] requires a tensor with rank at least 2");
+        LFS_ASSERT_MSG(col_index < tensor_->shape()[1],
+                       "TensorRowProxy column index is out of bounds");
+        LFS_ASSERT_MSG(tensor_->dtype() == DataType::Float32,
+                       "TensorRowProxy mutable element access requires Float32");
 
         // Use actual strides for proper indexing on non-contiguous tensors
         size_t linear_idx = row_index_ * tensor_->stride(0) + col_index * tensor_->stride(1);
 
         if (tensor_->device() != Device::CPU) {
-            if (tensor_->dtype() != DataType::Float32) {
-                throw std::runtime_error("TensorRowProxy::operator[] mutable access requires Float32 tensor");
-            }
             // Commit any previously staged element before staging another one.
             flush_cuda_staging();
             cuda_copy_async_sync(
@@ -91,36 +93,23 @@ namespace lfs::core {
             return cuda_staging_;
         }
 
-        if (tensor_->dtype() != DataType::Float32) {
-            throw std::runtime_error("TensorRowProxy::operator[] mutable access requires Float32 tensor");
-        }
         return tensor_->ptr<float>()[linear_idx];
     }
 
     float TensorRowProxy::operator[](size_t col_index) const {
-        if (!tensor_ || !tensor_->is_valid()) {
-            throw std::runtime_error("TensorRowProxy: invalid tensor pointer");
-        }
+        assert_proxy_tensor(tensor_, row_index_, "TensorRowProxy::operator[] const");
         flush_cuda_staging();
-
-        if (tensor_->shape().rank() < 2) {
-            throw std::runtime_error(
-                "TensorRowProxy: tensor rank " + std::to_string(tensor_->shape().rank()) + " < 2");
-        }
-
-        if (col_index >= tensor_->shape()[1]) {
-            throw std::out_of_range(
-                "Column index " + std::to_string(col_index) + " out of bounds for dimension 1 with size " +
-                std::to_string(tensor_->shape()[1]));
-        }
+        LFS_ASSERT_MSG(tensor_->shape().rank() >= 2,
+                       "TensorRowProxy::operator[] requires a tensor with rank at least 2");
+        LFS_ASSERT_MSG(col_index < tensor_->shape()[1],
+                       "TensorRowProxy column index is out of bounds");
+        LFS_ASSERT_MSG(tensor_->dtype() == DataType::Float32,
+                       "TensorRowProxy const element access requires Float32");
 
         // Use actual strides for proper indexing on non-contiguous tensors
         size_t linear_idx = row_index_ * tensor_->stride(0) + col_index * tensor_->stride(1);
 
         if (tensor_->device() == Device::CUDA) {
-            if (tensor_->dtype() != DataType::Float32) {
-                throw std::runtime_error("TensorRowProxy::operator[] const access requires Float32 tensor");
-            }
             float value = 0.0f;
             cuda_copy_async_sync(
                 &value,
@@ -131,9 +120,6 @@ namespace lfs::core {
                 "TensorRowProxy::operator[] const");
             return value;
         } else {
-            if (tensor_->dtype() != DataType::Float32) {
-                throw std::runtime_error("TensorRowProxy::operator[] const access requires Float32 tensor");
-            }
             return tensor_->ptr<float>()[linear_idx];
         }
     }
@@ -141,9 +127,7 @@ namespace lfs::core {
     // ============= TensorRowProxy 1D Access =============
 
     float TensorRowProxy::item() const {
-        if (!tensor_ || !tensor_->is_valid()) {
-            throw std::runtime_error("TensorRowProxy::item(): invalid tensor pointer");
-        }
+        assert_proxy_tensor(tensor_, row_index_, "TensorRowProxy::item()");
         flush_cuda_staging();
 
         // Handle 2D tensors with shape [N, 1] (like nonzero() output)
@@ -153,25 +137,15 @@ namespace lfs::core {
         }
 
         // Standard 1D case
-        if (tensor_->shape().rank() != 1) {
-            throw std::runtime_error(
-                "TensorRowProxy::item(): only valid for 1D tensors, got rank " +
-                std::to_string(tensor_->shape().rank()));
-        }
-
-        if (row_index_ >= tensor_->numel()) {
-            throw std::out_of_range(
-                "TensorRowProxy::item(): index " + std::to_string(row_index_) +
-                " out of bounds for size " + std::to_string(tensor_->numel()));
-        }
+        LFS_ASSERT_MSG(tensor_->shape().rank() == 1,
+                       "TensorRowProxy::item() requires a 1D or [N,1] tensor");
+        LFS_ASSERT_MSG(tensor_->dtype() == DataType::Float32,
+                       "TensorRowProxy::item() currently supports only Float32");
 
         // Use stride for proper indexing on non-contiguous 1D tensors
         size_t linear_idx = row_index_ * tensor_->stride(0);
 
         if (tensor_->device() == Device::CUDA) {
-            if (tensor_->dtype() != DataType::Float32) {
-                throw std::runtime_error("TensorRowProxy::item() currently supports Float32 tensors on CUDA");
-            }
             float value = 0.0f;
             cuda_copy_async_sync(
                 &value,
@@ -182,49 +156,40 @@ namespace lfs::core {
                 "TensorRowProxy::item()");
             return value;
         } else {
-            if (tensor_->dtype() != DataType::Float32) {
-                throw std::runtime_error("TensorRowProxy::item() currently supports Float32 tensors on CPU");
-            }
             return tensor_->ptr<float>()[linear_idx];
         }
     }
 
     TensorRowProxy::operator float() const {
-        if (!tensor_ || !tensor_->is_valid()) {
-            throw std::runtime_error("TensorRowProxy: invalid tensor pointer in float conversion");
-        }
+        assert_proxy_tensor(tensor_, row_index_, "TensorRowProxy float conversion");
         flush_cuda_staging();
 
         if (tensor_->shape().rank() == 1) {
             return item();
         } else if (tensor_->shape().rank() == 2 && tensor_->shape()[1] == 1) {
             return item();
-        } else {
-            throw std::runtime_error(
-                "Implicit float conversion only valid for 1D or [N,1] tensors, got rank " +
-                std::to_string(tensor_->shape().rank()) + " with shape " + tensor_->shape().str() +
-                ". Use .item() or convert to Tensor first.");
         }
+        LFS_ASSERT_MSG(false,
+                       "TensorRowProxy float conversion requires a 1D or [N,1] tensor");
     }
 
     // ============= TensorRowProxy Conversion to Tensor =============
 
     TensorRowProxy::operator Tensor() const {
-        if (!tensor_ || !tensor_->is_valid()) {
-            throw std::runtime_error("TensorRowProxy: invalid tensor pointer");
-        }
+        assert_proxy_tensor(tensor_, row_index_, "TensorRowProxy tensor conversion");
         flush_cuda_staging();
 
         if (tensor_->shape().rank() > 1) {
             // Build a proper row view so storage offsets/strides are respected for non-contiguous tensors.
             Tensor row_view = tensor_->slice(0, row_index_, row_index_ + 1).squeeze(0);
-            if (!row_view.is_valid()) {
-                throw std::runtime_error("TensorRowProxy: failed to create row view");
-            }
+            LFS_ASSERT_MSG(row_view.is_valid(),
+                           "TensorRowProxy failed to create a row view");
             return row_view.clone();
         }
 
         // For 1D tensors, return a scalar tensor
+        LFS_ASSERT_MSG(tensor_->dtype() == DataType::Float32,
+                       "TensorRowProxy scalar tensor conversion currently supports only Float32");
         float val = item();
 
         auto result = Tensor::empty({1}, tensor_->device(), tensor_->dtype());
@@ -247,6 +212,9 @@ namespace lfs::core {
     // ============= TensorRowProxy Assignment Operators =============
 
     TensorRowProxy& TensorRowProxy::operator=(const TensorRowProxy& other) {
+        assert_proxy_tensor(tensor_, row_index_, "TensorRowProxy assignment");
+        assert_proxy_tensor(other.tensor_, other.row_index_,
+                            "TensorRowProxy source assignment");
         if (this == &other) {
             return *this;
         }
@@ -257,17 +225,18 @@ namespace lfs::core {
     }
 
     TensorRowProxy& TensorRowProxy::operator=(const Tensor& other) {
-        if (!tensor_ || !tensor_->is_valid()) {
-            return *this;
-        }
+        assert_proxy_tensor(tensor_, row_index_, "TensorRowProxy tensor assignment");
+        LFS_ASSERT_MSG(other.is_valid(),
+                       "TensorRowProxy assignment requires a valid source tensor");
+        LFS_ASSERT_MSG(other.dtype() == tensor_->dtype(),
+                       "TensorRowProxy assignment requires matching dtypes");
         flush_cuda_staging();
 
         if (tensor_->shape().rank() > 1) {
             // Multi-dimensional: assign entire row slice while preserving view aliasing semantics.
             Tensor row_slice = tensor_->slice(0, row_index_, row_index_ + 1);
-            if (!row_slice.is_valid()) {
-                throw std::runtime_error("TensorRowProxy: failed to create row slice for assignment");
-            }
+            LFS_ASSERT_MSG(row_slice.is_valid(),
+                           "TensorRowProxy failed to create a row slice for assignment");
 
             std::vector<size_t> expected_dims;
             const auto& row_shape_dims = row_slice.shape().dims();
@@ -277,26 +246,22 @@ namespace lfs::core {
             }
             TensorShape expected_shape(expected_dims);
 
-            if (other.shape() != expected_shape && other.shape() != row_slice.shape()) {
-                throw std::runtime_error(
-                    "Shape mismatch in row assignment: expected " + expected_shape.str() +
-                    " (or " + row_slice.shape().str() + "), got " + other.shape().str());
-            }
+            LFS_ASSERT_MSG(other.shape() == expected_shape ||
+                               other.shape() == row_slice.shape(),
+                           "TensorRowProxy assignment source shape does not match the row");
 
             auto other_copy = (other.device() == tensor_->device())
                                   ? other.clone()
                                   : other.to(tensor_->device());
-            if (!other_copy.is_valid()) {
-                throw std::runtime_error("TensorRowProxy: failed to convert source row for assignment");
-            }
+            LFS_ASSERT_MSG(other_copy.is_valid(),
+                           "TensorRowProxy failed to convert its assignment source");
 
             Tensor source_for_copy = other_copy;
             if (source_for_copy.shape() == expected_shape) {
                 source_for_copy = source_for_copy.unsqueeze(0);
             }
-            if (source_for_copy.shape() != row_slice.shape()) {
-                throw std::runtime_error("TensorRowProxy: failed to align source shape for row assignment");
-            }
+            LFS_ASSERT_MSG(source_for_copy.shape() == row_slice.shape(),
+                           "TensorRowProxy failed to align the assignment source shape");
 
             if (tensor_->device() == Device::CPU) {
                 if (!source_for_copy.is_contiguous()) {
@@ -333,10 +298,10 @@ namespace lfs::core {
             }
         } else {
             // 1D: assign single element
-            if (other.numel() != 1) {
-                throw std::runtime_error(
-                    "Cannot assign tensor with " + std::to_string(other.numel()) + " elements to single position");
-            }
+            LFS_ASSERT_MSG(other.numel() == 1,
+                           "TensorRowProxy scalar assignment requires a one-element source");
+            LFS_ASSERT_MSG(tensor_->dtype() == DataType::Float32,
+                           "TensorRowProxy scalar assignment currently supports only Float32");
 
             float val = other.item();
 
@@ -359,22 +324,14 @@ namespace lfs::core {
     }
 
     TensorRowProxy& TensorRowProxy::operator=(float value) {
-        if (!tensor_ || !tensor_->is_valid()) {
-            throw std::runtime_error("TensorRowProxy: invalid tensor pointer in float assignment");
-        }
+        assert_proxy_tensor(tensor_, row_index_, "TensorRowProxy float assignment");
         flush_cuda_staging();
-
-        if (tensor_->shape().rank() != 1) {
-            throw std::runtime_error(
-                "Float assignment only valid for 1D tensors, got rank " +
-                std::to_string(tensor_->shape().rank()));
-        }
-
-        if (row_index_ >= tensor_->numel()) {
-            throw std::out_of_range(
-                "Index " + std::to_string(row_index_) + " out of bounds for size " +
-                std::to_string(tensor_->numel()));
-        }
+        LFS_ASSERT_MSG(tensor_->shape().rank() == 1,
+                       "TensorRowProxy float assignment requires a 1D tensor");
+        LFS_ASSERT_MSG(tensor_->dtype() == DataType::Float32,
+                       "TensorRowProxy float assignment requires Float32");
+        LFS_ASSERT_MSG(std::isfinite(value),
+                       "TensorRowProxy float assignment requires a finite value");
 
         // Use stride for proper indexing on non-contiguous 1D tensors
         size_t linear_idx = row_index_ * tensor_->stride(0);

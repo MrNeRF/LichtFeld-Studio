@@ -19,11 +19,6 @@
 
 #include "buffer.h"
 
-union Uniform32_t {
-    uint32_t u;
-    float f;
-};
-
 class VulkanGSPipeline {
 public:
     using TimerCallback = std::function<void(const std::vector<std::pair<size_t, double>>&)>;
@@ -274,7 +269,6 @@ class [[nodiscard]] DeviceGuard {
 
 public:
     DeviceGuard(VulkanGSPipeline* pipeline, const char* debugInfo1 = nullptr, const int debugInfo2 = -1) {
-        // printf("DeviceGuard constructor\n");
         this->pipeline = pipeline;
         cbip = pipeline->isCommandBatchInProgress();
         if (!cbip) {
@@ -298,7 +292,6 @@ public:
         this->signal_value = signal_value;
     }
     ~DeviceGuard() noexcept(false) {
-        // printf("DeviceGuard destructor\n");
         if (!cbip) {
             pipeline->endCommandBatch(use_fence, signal_semaphore, signal_value);
             if (debugInfo1) {
@@ -319,7 +312,6 @@ class [[nodiscard]] HostGuard {
 
 public:
     HostGuard(VulkanGSPipeline* pipeline, const char* debugInfo1 = nullptr, const int debugInfo2 = -1) {
-        // printf("HostGuard constructor\n");
         this->pipeline = pipeline;
         cbip = pipeline->isCommandBatchInProgress();
         if (cbip) {
@@ -332,7 +324,6 @@ public:
         }
     }
     ~HostGuard() noexcept(false) {
-        // printf("HostGuard destructor\n");
         if (cbip) {
             pipeline->beginCommandBatch();
             if (debugInfo1) {
@@ -344,9 +335,6 @@ public:
         }
     }
 };
-
-// #define DeviceGuard(args) DeviceGuard(args, __FILE__, __LINE__)
-// #define HostGuard(args) HostGuard(args, __FILE__, __LINE__)
 
 #define DEVICE_GUARD auto deviceGuard = DeviceGuard(this)
 #define HOST_GUARD   auto hostGuard = HostGuard(this)

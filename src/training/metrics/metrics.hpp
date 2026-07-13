@@ -140,8 +140,5 @@ namespace lfs::training {
         lfs::core::Tensor load_eval_mask(lfs::core::Camera* cam, lfs::core::Tensor& gt_image,
                                          bool alpha_as_mask) const;
         lfs::core::Tensor apply_depth_colormap(const lfs::core::Tensor& depth_normalized) const;
-
-        // Create dataloader from dataset
-        auto make_dataloader(std::shared_ptr<CameraDataset> dataset, const int workers = 1) const;
     };
 } // namespace lfs::training

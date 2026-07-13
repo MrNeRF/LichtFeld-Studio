@@ -73,7 +73,6 @@ namespace lfs::vis::editor {
 
         [[nodiscard]] bool isReady() const;
         [[nodiscard]] bool isAvailable() const;
-        [[nodiscard]] std::string statusText() const;
 
     private:
         struct Impl;

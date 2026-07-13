@@ -73,22 +73,6 @@ namespace lichtfeld::Strings {
             inline constexpr const char* BUILD_TYPE = "about.build_info.build_type";
             inline constexpr const char* PLATFORM = "about.build_info.platform";
         } // namespace BuildInfo
-
-        namespace BuildType {
-            inline constexpr const char* DEBUG = "about.build_type.debug";
-            inline constexpr const char* RELEASE = "about.build_type.release";
-        } // namespace BuildType
-
-        namespace Platform {
-            inline constexpr const char* WINDOWS = "about.platform.windows";
-            inline constexpr const char* LINUX = "about.platform.linux";
-            inline constexpr const char* UNKNOWN = "about.platform.unknown";
-        } // namespace Platform
-
-        namespace Interop {
-            inline constexpr const char* ENABLED = "about.interop.enabled";
-            inline constexpr const char* DISABLED = "about.interop.disabled";
-        } // namespace Interop
     } // namespace About
 
     namespace Training {
@@ -145,14 +129,6 @@ namespace lichtfeld::Strings {
             inline constexpr const char* RESET_EVERY = "training.refinement.reset_every";
             inline constexpr const char* SH_UPGRADE_EVERY = "training.refinement.sh_upgrade_every";
         } // namespace Refinement
-
-        namespace Mask {
-            inline constexpr const char* INVERT = "training.mask.invert";
-            inline constexpr const char* THRESHOLD = "training.mask.threshold";
-            inline constexpr const char* PENALTY_WEIGHT = "training.mask.penalty_weight";
-            inline constexpr const char* PENALTY_POWER = "training.mask.penalty_power";
-            inline constexpr const char* NO_MASKS = "training.mask.no_masks";
-        } // namespace Mask
 
         namespace Bilateral {
             inline constexpr const char* GRID_X = "training.bilateral.grid_x";
@@ -550,19 +526,6 @@ namespace lichtfeld::Strings {
         inline constexpr const char* NODES_SELECTED = "transform.nodes_selected";
     } // namespace Transform
 
-    namespace CropBox {
-        inline constexpr const char* TITLE = "cropbox.title";
-        inline constexpr const char* NOT_VISIBLE = "cropbox.not_visible";
-        inline constexpr const char* NO_SELECTION = "cropbox.no_selection";
-        inline constexpr const char* INVALID = "cropbox.invalid";
-        inline constexpr const char* POSITION = "cropbox.position";
-        inline constexpr const char* ROTATION = "cropbox.rotation";
-        inline constexpr const char* SIZE = "cropbox.size";
-        inline constexpr const char* APPEARANCE = "cropbox.appearance";
-        inline constexpr const char* LINE_WIDTH = "cropbox.line_width";
-        inline constexpr const char* INSTRUCTIONS = "cropbox.instructions";
-    } // namespace CropBox
-
     namespace Ellipsoid {
         inline constexpr const char* TITLE = "ellipsoid.title";
         inline constexpr const char* NOT_VISIBLE = "ellipsoid.not_visible";
@@ -676,11 +639,6 @@ namespace lichtfeld::Strings {
         inline constexpr const char* SH_DEGREE = "export_dialog.sh_degree";
         inline constexpr const char* EXPORT_MERGED = "export_dialog.export_merged";
     } // namespace ExportDialog
-
-    namespace SelectionGroup {
-        inline constexpr const char* LOCK = "selection_group.lock";
-        inline constexpr const char* UNLOCK = "selection_group.unlock";
-    } // namespace SelectionGroup
 
     namespace Progress {
         inline constexpr const char* LOSS = "progress.loss";

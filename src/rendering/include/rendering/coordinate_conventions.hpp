@@ -41,13 +41,9 @@ namespace lfs::rendering {
                                                             0, -1, 0, 0,
                                                             0, 0, -1, 0,
                                                             0, 0, 0, 1};
-    inline const glm::mat4 VISUALIZER_TO_DATA_CAMERA_AXES_4 = DATA_TO_VISUALIZER_CAMERA_AXES_4;
     inline const glm::mat3 DATA_TO_VISUALIZER_WORLD_AXES = DATA_TO_VISUALIZER_CAMERA_AXES;
-    inline const glm::mat3 VISUALIZER_TO_DATA_WORLD_AXES = DATA_TO_VISUALIZER_WORLD_AXES;
     inline const glm::mat4 DATA_TO_VISUALIZER_WORLD_AXES_4 = DATA_TO_VISUALIZER_CAMERA_AXES_4;
     inline const glm::mat4 VISUALIZER_TO_DATA_WORLD_AXES_4 = DATA_TO_VISUALIZER_WORLD_AXES_4;
-    inline const glm::mat3 VISUALIZER_TO_RASTER_CAMERA_AXES{1, 0, 0, 0, 1, 0, 0, 0, -1};
-    inline const glm::mat3 RASTER_TO_VISUALIZER_CAMERA_AXES = VISUALIZER_TO_RASTER_CAMERA_AXES;
 
     inline glm::vec3 cameraRight(const glm::mat3& rotation) {
         return glm::normalize(rotation[0]);
@@ -73,16 +69,8 @@ namespace lfs::rendering {
         return visualizer_rotation * VISUALIZER_TO_DATA_CAMERA_AXES;
     }
 
-    inline glm::mat3 rasterCameraToWorldFromVisualizerRotation(const glm::mat3& visualizer_rotation) {
-        return visualizer_rotation * VISUALIZER_TO_RASTER_CAMERA_AXES;
-    }
-
     inline glm::vec3 visualizerWorldPointFromDataWorld(const glm::vec3& data_point) {
         return DATA_TO_VISUALIZER_WORLD_AXES * data_point;
-    }
-
-    inline glm::vec3 dataWorldPointFromVisualizerWorld(const glm::vec3& visualizer_point) {
-        return VISUALIZER_TO_DATA_WORLD_AXES * visualizer_point;
     }
 
     inline glm::mat4 dataWorldTransformToVisualizerWorld(const glm::mat4& data_world_transform) {

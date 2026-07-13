@@ -71,8 +71,6 @@ namespace lfs::vis {
             void setPivotMode(PivotMode mode);
             [[nodiscard]] MultiTransformMode getMultiTransformMode() const { return multi_transform_mode_; }
             void setMultiTransformMode(MultiTransformMode mode);
-            [[nodiscard]] GizmoOperation getCurrentOperation() const { return current_operation_; }
-            void setCurrentOperation(GizmoOperation op) { current_operation_ = op; }
             [[nodiscard]] SelectionSubMode getSelectionSubMode() const { return selection_mode_; }
 
             [[nodiscard]] bool isCropboxGizmoActive() const;

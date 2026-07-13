@@ -66,11 +66,17 @@ namespace lfs::vis::editor {
             EditorColor() = default;
 
             EditorColor(float red, float green, float blue, float alpha)
-                : x(red), y(green), z(blue), w(alpha) {}
+                : x(red),
+                  y(green),
+                  z(blue),
+                  w(alpha) {}
 
             template <typename Color>
             EditorColor(const Color& color)
-                : x(color.x), y(color.y), z(color.z), w(color.w) {}
+                : x(color.x),
+                  y(color.y),
+                  z(color.z),
+                  w(color.w) {}
 
             template <typename Color>
             EditorColor& operator=(const Color& color) {
@@ -2447,23 +2453,6 @@ namespace lfs::vis::editor {
             mouse_selection_head.reset();
         }
 
-        [[nodiscard]] std::optional<lfs::python::PythonByteRange> currentSelectionByteRange() const {
-            const auto selection = currentSelectionRange();
-            if (!selection.has_value()) {
-                return std::nullopt;
-            }
-
-            const auto end = selectionEndExclusive(*selection);
-            if (!selection->first.Valid() || !end.Valid() || !(selection->first < end)) {
-                return std::nullopt;
-            }
-
-            return lfs::python::PythonByteRange{
-                .start_byte = static_cast<size_t>(std::max(0l, selection->first.Index())),
-                .end_byte = static_cast<size_t>(std::max(0l, end.Index())),
-            };
-        }
-
         bool ensureSyntaxDocumentCurrent(const std::string& text, const size_t cursor_byte) {
             if (!syntax_analysis_pending && syntax_document.hasTree()) {
                 current_syntax_scope = syntax_document.scopeAt(cursor_byte);
@@ -2511,38 +2500,6 @@ namespace lfs::vis::editor {
             }
             window->SetBufferCursor(cursor);
             current_syntax_scope = syntax_document.scopeAt(std::min(byte_offset, text.size()));
-            editor->RequestRefresh();
-            focusEditor();
-            return true;
-        }
-
-        bool selectSyntaxByteRange(const lfs::python::PythonByteRange& range) {
-            if (buffer == nullptr || editor == nullptr || range.start_byte >= range.end_byte) {
-                return false;
-            }
-
-            auto* window = editor->GetActiveWindow();
-            if (window == nullptr) {
-                return false;
-            }
-
-            const std::string text = getText();
-            if (range.end_byte > text.size()) {
-                return false;
-            }
-
-            const auto begin = Zep::GlyphIterator(buffer, static_cast<long>(range.start_byte));
-            const auto end = Zep::GlyphIterator(buffer, static_cast<long>(range.end_byte));
-            if (!begin.Valid() || !end.Valid() || !(begin < end)) {
-                return false;
-            }
-
-            buffer->SetSelection(Zep::GlyphRange(begin, end));
-            window->SetBufferCursor(end);
-            if (auto* mode = buffer->GetMode()) {
-                mode->SwitchMode(Zep::EditorMode::Visual);
-            }
-            current_syntax_scope = syntax_document.scopeAt(range.start_byte);
             editor->RequestRefresh();
             focusEditor();
             return true;
@@ -2647,114 +2604,6 @@ namespace lfs::vis::editor {
             focusEditor();
         }
 
-        bool selectEnclosingSyntaxBlock() {
-            if (buffer == nullptr || editor == nullptr) {
-                return false;
-            }
-
-            const std::string text = getText();
-            const CursorLocation cursor = getCursorLocation(text);
-            if (!ensureSyntaxDocumentCurrent(text, cursor.byte_index)) {
-                return false;
-            }
-
-            const auto range = syntax_document.enclosingBlockRange(cursor.byte_index);
-            if (!range.has_value()) {
-                return false;
-            }
-
-            return selectSyntaxByteRange(*range);
-        }
-
-        [[nodiscard]] std::optional<lfs::python::PythonByteRange> innermostFoldRangeAt(
-            const size_t byte_offset) const {
-            std::optional<lfs::python::PythonByteRange> best;
-            for (const auto& fold : syntax_document.foldRanges()) {
-                if (fold.start_byte > byte_offset || byte_offset > fold.end_byte) {
-                    continue;
-                }
-                if (!best.has_value() ||
-                    (fold.end_byte - fold.start_byte) < (best->end_byte - best->start_byte)) {
-                    best = lfs::python::PythonByteRange{
-                        .start_byte = fold.start_byte,
-                        .end_byte = fold.end_byte,
-                    };
-                }
-            }
-            return best;
-        }
-
-        bool expandSyntaxSelection() {
-            if (buffer == nullptr || editor == nullptr) {
-                return false;
-            }
-
-            const std::string text = getText();
-            const CursorLocation cursor = getCursorLocation(text);
-            if (!ensureSyntaxDocumentCurrent(text, cursor.byte_index)) {
-                return false;
-            }
-
-            const auto selection = currentSelectionByteRange();
-            if (!selection.has_value()) {
-                return selectEnclosingSyntaxBlock();
-            }
-
-            const auto ranges = syntax_document.enclosingBlockRanges(selection->start_byte);
-            for (const auto& range : ranges) {
-                if (range.start_byte <= selection->start_byte && range.end_byte >= selection->end_byte &&
-                    (range.start_byte < selection->start_byte || range.end_byte > selection->end_byte)) {
-                    return selectSyntaxByteRange(range);
-                }
-            }
-
-            return false;
-        }
-
-        bool selectCurrentSyntaxFold() {
-            if (buffer == nullptr || editor == nullptr) {
-                return false;
-            }
-
-            const std::string text = getText();
-            const CursorLocation cursor = getCursorLocation(text);
-            if (!ensureSyntaxDocumentCurrent(text, cursor.byte_index)) {
-                return false;
-            }
-
-            const auto range = innermostFoldRangeAt(cursor.byte_index);
-            if (!range.has_value()) {
-                return false;
-            }
-
-            return selectSyntaxByteRange(*range);
-        }
-
-        bool toggleCurrentSyntaxFold() {
-            if (buffer == nullptr || editor == nullptr) {
-                return false;
-            }
-
-            const std::string text = getText();
-            const CursorLocation cursor = getCursorLocation(text);
-            if (!ensureSyntaxDocumentCurrent(text, cursor.byte_index)) {
-                return false;
-            }
-
-            const auto range = innermostFoldRangeAt(cursor.byte_index);
-            if (!range.has_value()) {
-                return false;
-            }
-
-            const bool changed =
-                buffer->ToggleFoldAtByte(static_cast<Zep::ByteIndex>(range->start_byte));
-            if (changed) {
-                editor->RequestRefresh();
-                focusEditor();
-            }
-            return changed;
-        }
-
         bool foldAllSyntaxBlocks() {
             if (buffer == nullptr || editor == nullptr) {
                 return false;
@@ -2785,70 +2634,6 @@ namespace lfs::vis::editor {
                 focusEditor();
             }
             return changed;
-        }
-
-        bool jumpToParentSyntaxBlock() {
-            if (buffer == nullptr || editor == nullptr) {
-                return false;
-            }
-
-            const std::string text = getText();
-            const CursorLocation cursor = getCursorLocation(text);
-            if (!ensureSyntaxDocumentCurrent(text, cursor.byte_index)) {
-                return false;
-            }
-
-            const auto ranges = syntax_document.enclosingBlockRanges(cursor.byte_index);
-            if (ranges.empty()) {
-                return false;
-            }
-
-            const auto& target = ranges.front().start_byte == cursor.byte_index && ranges.size() > 1
-                                     ? ranges[1]
-                                     : ranges.front();
-            return moveCursorToByte(target.start_byte);
-        }
-
-        bool jumpToChildSyntaxBlock() {
-            if (buffer == nullptr || editor == nullptr) {
-                return false;
-            }
-
-            const std::string text = getText();
-            const CursorLocation cursor = getCursorLocation(text);
-            if (!ensureSyntaxDocumentCurrent(text, cursor.byte_index)) {
-                return false;
-            }
-
-            const auto parent = syntax_document.enclosingBlockRange(cursor.byte_index).value_or(lfs::python::PythonByteRange{.start_byte = 0, .end_byte = text.size()});
-            std::optional<lfs::python::PythonByteRange> first_child;
-            std::optional<lfs::python::PythonByteRange> next_child;
-
-            for (const auto& fold : syntax_document.foldRanges()) {
-                if (fold.start_byte <= parent.start_byte || fold.end_byte > parent.end_byte) {
-                    continue;
-                }
-
-                const lfs::python::PythonByteRange range{
-                    .start_byte = fold.start_byte,
-                    .end_byte = fold.end_byte,
-                };
-                if (!first_child.has_value() || range.start_byte < first_child->start_byte) {
-                    first_child = range;
-                }
-                if (range.start_byte > cursor.byte_index &&
-                    (!next_child.has_value() || range.start_byte < next_child->start_byte)) {
-                    next_child = range;
-                }
-            }
-
-            if (next_child.has_value()) {
-                return moveCursorToByte(next_child->start_byte);
-            }
-            if (first_child.has_value()) {
-                return moveCursorToByte(first_child->start_byte);
-            }
-            return false;
         }
 
         bool jumpToSyntaxSymbol(const size_t index) {
@@ -2890,13 +2675,6 @@ namespace lfs::vis::editor {
                 return false;
             }
             return moveCursorToByte(breadcrumbs[index].byte_offset);
-        }
-
-        bool jumpToSyntaxFold(const size_t index) {
-            if (buffer == nullptr || index >= buffer->GetFoldRanges().size()) {
-                return false;
-            }
-            return moveCursorToByte(static_cast<size_t>(buffer->GetFoldRanges()[index].range.first));
         }
 
         bool toggleSyntaxFold(const size_t index) {
@@ -3284,8 +3062,6 @@ namespace lfs::vis::editor {
 
     void PythonEditor::clear() {
         impl_->setTextSilently("", std::nullopt);
-        history_index_ = -1;
-        current_input_.clear();
     }
 
     bool PythonEditor::consumeExecuteRequested() {
@@ -3298,60 +3074,6 @@ namespace lfs::vis::editor {
         const bool changed = impl_->text_changed;
         impl_->text_changed = false;
         return changed;
-    }
-
-    bool PythonEditor::hasSyntaxErrors() const {
-        return impl_->syntax_document.analysis().status == lfs::python::PythonBufferStatus::SyntaxError;
-    }
-
-    bool PythonEditor::syntaxDiagnosticsAvailable() const {
-        return impl_->syntax_document.analysis().status != lfs::python::PythonBufferStatus::ParserUnavailable;
-    }
-
-    std::string PythonEditor::syntaxSummary() const {
-        if (!impl_->syntax_document.analysis().summary.empty()) {
-            return impl_->syntax_document.analysis().summary;
-        }
-        return "Python syntax analysis pending";
-    }
-
-    std::string PythonEditor::syntaxStructureSummary() const {
-        int class_count = 0;
-        int function_count = 0;
-        int import_count = 0;
-        int variable_count = 0;
-        for (const auto& symbol : impl_->syntax_document.symbols()) {
-            switch (symbol.kind) {
-            case lfs::python::PythonSymbolKind::Class:
-                ++class_count;
-                break;
-            case lfs::python::PythonSymbolKind::Function:
-                ++function_count;
-                break;
-            case lfs::python::PythonSymbolKind::Import:
-                ++import_count;
-                break;
-            case lfs::python::PythonSymbolKind::Variable:
-                ++variable_count;
-                break;
-            }
-        }
-
-        std::string summary = std::format("{} import{}, {} class{}, {} function{}, {} variable{}, {} fold{}",
-                                          import_count,
-                                          import_count == 1 ? "" : "s",
-                                          class_count,
-                                          class_count == 1 ? "" : "es",
-                                          function_count,
-                                          function_count == 1 ? "" : "s",
-                                          variable_count,
-                                          variable_count == 1 ? "" : "s",
-                                          impl_->syntax_document.foldRanges().size(),
-                                          impl_->syntax_document.foldRanges().size() == 1 ? "" : "s");
-        if (!impl_->syntax_document.structureCurrent()) {
-            summary += " (partial)";
-        }
-        return summary;
     }
 
     std::vector<PythonEditorSymbol> PythonEditor::syntaxSymbols() const {
@@ -3414,39 +3136,11 @@ namespace lfs::vis::editor {
         return folds;
     }
 
-    bool PythonEditor::syntaxStructureCurrent() const {
-        return impl_->syntax_document.structureCurrent();
-    }
-
-    std::size_t PythonEditor::syntaxFoldCount() const {
-        return impl_->syntax_document.foldRanges().size();
-    }
-
-    std::string PythonEditor::currentSyntaxScope() const {
-        return impl_->current_syntax_scope;
-    }
-
     void PythonEditor::refreshSyntaxDiagnostics() {
         impl_->scheduleSyntaxAnalysis(std::chrono::milliseconds(0));
         if (impl_->editor != nullptr) {
             impl_->editor->RequestRefresh();
         }
-    }
-
-    bool PythonEditor::selectEnclosingSyntaxBlock() {
-        return impl_->selectEnclosingSyntaxBlock();
-    }
-
-    bool PythonEditor::expandSyntaxSelection() {
-        return impl_->expandSyntaxSelection();
-    }
-
-    bool PythonEditor::selectCurrentSyntaxFold() {
-        return impl_->selectCurrentSyntaxFold();
-    }
-
-    bool PythonEditor::toggleCurrentSyntaxFold() {
-        return impl_->toggleCurrentSyntaxFold();
     }
 
     bool PythonEditor::foldAllSyntaxBlocks() {
@@ -3457,14 +3151,6 @@ namespace lfs::vis::editor {
         return impl_->unfoldAllSyntaxBlocks();
     }
 
-    bool PythonEditor::jumpToParentSyntaxBlock() {
-        return impl_->jumpToParentSyntaxBlock();
-    }
-
-    bool PythonEditor::jumpToChildSyntaxBlock() {
-        return impl_->jumpToChildSyntaxBlock();
-    }
-
     bool PythonEditor::jumpToSyntaxSymbol(const std::size_t index) {
         return impl_->jumpToSyntaxSymbol(index);
     }
@@ -3473,59 +3159,8 @@ namespace lfs::vis::editor {
         return impl_->jumpToSyntaxBreadcrumb(index);
     }
 
-    bool PythonEditor::jumpToSyntaxFold(const std::size_t index) {
-        return impl_->jumpToSyntaxFold(index);
-    }
-
     bool PythonEditor::toggleSyntaxFold(const std::size_t index) {
         return impl_->toggleSyntaxFold(index);
-    }
-
-    void PythonEditor::updateTheme(const Theme& theme) {
-        impl_->applyTheme(theme);
-    }
-
-    void PythonEditor::addToHistory(const std::string& cmd) {
-        if (cmd.empty()) {
-            return;
-        }
-        if (!history_.empty() && history_.back() == cmd) {
-            return;
-        }
-        history_.push_back(cmd);
-        history_index_ = -1;
-    }
-
-    void PythonEditor::historyUp() {
-        if (history_.empty()) {
-            return;
-        }
-
-        if (history_index_ == -1) {
-            current_input_ = getText();
-            history_index_ = static_cast<int>(history_.size()) - 1;
-        } else if (history_index_ > 0) {
-            --history_index_;
-        }
-
-        impl_->setTextSilently(history_[history_index_], history_[history_index_].size());
-        focus();
-    }
-
-    void PythonEditor::historyDown() {
-        if (history_index_ < 0) {
-            return;
-        }
-
-        if (history_index_ + 1 < static_cast<int>(history_.size())) {
-            ++history_index_;
-            impl_->setTextSilently(history_[history_index_], history_[history_index_].size());
-        } else {
-            history_index_ = -1;
-            impl_->setTextSilently(current_input_, current_input_.size());
-        }
-
-        focus();
     }
 
     void PythonEditor::focus() {
@@ -3568,10 +3203,6 @@ namespace lfs::vis::editor {
         if (readonly) {
             impl_->completion.clear();
         }
-    }
-
-    bool PythonEditor::isReadOnly() const {
-        return impl_->read_only;
     }
 
 } // namespace lfs::vis::editor

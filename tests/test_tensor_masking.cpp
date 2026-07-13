@@ -229,6 +229,32 @@ TEST_F(TensorMaskingTest, MaskedSelectEmpty) {
     EXPECT_EQ(selected_torch.numel(), 0);
 }
 
+TEST_F(TensorMaskingTest, MaskedSelectInt64PreservesValues) {
+    std::vector<int64_t> data = {
+        4'294'967'297LL,
+        -8'589'934'590LL,
+        17'179'869'187LL,
+        -34'359'738'364LL,
+    };
+    const std::vector<bool> mask_data = {true, false, true, false};
+    const std::vector<int64_t> expected = {data[0], data[2]};
+
+    for (const Device device : {Device::CPU, Device::CUDA}) {
+        SCOPED_TRACE(device_name(device));
+        auto input = Tensor::from_blob(data.data(), {data.size()}, Device::CPU, DataType::Int64).clone();
+        auto mask = Tensor::from_vector(mask_data, {mask_data.size()}, Device::CPU);
+        if (device == Device::CUDA) {
+            input = input.to(Device::CUDA);
+            mask = mask.to(Device::CUDA);
+        }
+
+        const auto selected = input.masked_select(mask);
+        ASSERT_TRUE(selected.is_valid());
+        EXPECT_EQ(selected.dtype(), DataType::Int64);
+        EXPECT_EQ(selected.to_vector_int64(), expected);
+    }
+}
+
 // ============= Masked Fill Tests =============
 
 TEST_F(TensorMaskingTest, MaskedFillInplace) {
@@ -1769,15 +1795,14 @@ TEST_F(TensorMaskingTest, ErrorHandlingMismatchedShapes) {
     auto tensor_custom = Tensor::from_vector(data, {2, 2}, Device::CUDA);
     auto wrong_mask_custom = Tensor::ones_bool({3, 3}, Device::CUDA);
 
-    // This should fail gracefully
-    auto result_custom = tensor_custom.masked_select(wrong_mask_custom);
+    EXPECT_THROW((void)tensor_custom.masked_select(wrong_mask_custom),
+                 std::runtime_error);
 
     // PyTorch also fails with mismatched shapes
     auto tensor_torch = torch::tensor({1.0f, 2.0f, 3.0f, 4.0f}, torch::kCUDA).reshape({2, 2});
     auto wrong_mask_torch = torch::ones({3, 3}, torch::TensorOptions().dtype(torch::kBool).device(torch::kCUDA));
 
     EXPECT_THROW(tensor_torch.masked_select(wrong_mask_torch), c10::Error);
-    EXPECT_FALSE(result_custom.is_valid());
 }
 
 TEST_F(TensorMaskingTest, ErrorHandlingWrongDevice) {
@@ -1785,15 +1810,14 @@ TEST_F(TensorMaskingTest, ErrorHandlingWrongDevice) {
     auto cuda_tensor_custom = Tensor::from_vector(data, {2, 2}, Device::CUDA);
     auto cpu_mask_custom = Tensor::ones_bool({2, 2}, Device::CPU);
 
-    // This should fail gracefully
-    auto result_custom = cuda_tensor_custom.masked_select(cpu_mask_custom);
+    EXPECT_THROW((void)cuda_tensor_custom.masked_select(cpu_mask_custom),
+                 std::runtime_error);
 
     // PyTorch also fails with wrong device
     auto cuda_tensor_torch = torch::tensor({1.0f, 2.0f, 3.0f, 4.0f}, torch::kCUDA).reshape({2, 2});
     auto cpu_mask_torch = torch::ones({2, 2}, torch::TensorOptions().dtype(torch::kBool).device(torch::kCPU));
 
     EXPECT_THROW(cuda_tensor_torch.masked_select(cpu_mask_torch), c10::Error);
-    EXPECT_FALSE(result_custom.is_valid());
 }
 
 // ============= Additional Edge Cases =============

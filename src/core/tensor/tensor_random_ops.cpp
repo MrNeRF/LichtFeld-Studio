@@ -9,24 +9,20 @@
 #include <curand_kernel.h>
 #include <random>
 
-#define CHECK_CUDA(call)                              \
-    do {                                              \
-        cudaError_t error = call;                     \
-        if (error != cudaSuccess) {                   \
-            LOG_ERROR("CUDA error at {}:{} - {}: {}", \
-                      __FILE__, __LINE__,             \
-                      cudaGetErrorName(error),        \
-                      cudaGetErrorString(error));     \
-        }                                             \
+#define CHECK_CUDA(call)                                        \
+    do {                                                        \
+        const cudaError_t error = (call);                       \
+        LFS_ASSERT_MSG(error == cudaSuccess,                    \
+                       std::string("CUDA operation failed: ") + \
+                           cudaGetErrorString(error));          \
     } while (0)
 
-#define CHECK_CURAND(call)                             \
-    do {                                               \
-        curandStatus_t error = call;                   \
-        if (error != CURAND_STATUS_SUCCESS) {          \
-            LOG_ERROR("CURAND error at {}:{} - {}",    \
-                      __FILE__, __LINE__, (int)error); \
-        }                                              \
+#define CHECK_CURAND(call)                                                   \
+    do {                                                                     \
+        const curandStatus_t error = (call);                                 \
+        LFS_ASSERT_MSG(error == CURAND_STATUS_SUCCESS,                       \
+                       std::string("CURAND operation failed with status ") + \
+                           std::to_string(static_cast<int>(error)));         \
     } while (0)
 
 namespace lfs::core {
@@ -108,6 +104,8 @@ namespace lfs::core {
 
     void* RandomGenerator::get_generator(Device device) {
         auto* impl = static_cast<RandomGeneratorImpl*>(impl_);
+        LFS_ASSERT_MSG(device == Device::CPU || device == Device::CUDA,
+                       "random generator received an invalid device");
         if (device == Device::CUDA) {
             return impl->cuda_generator_;
         } else {
@@ -118,12 +116,11 @@ namespace lfs::core {
     // ============= In-place Random Operations =============
 
     Tensor& Tensor::uniform_(float low, float high) {
-        if (dtype_ != DataType::Float32) {
-            LOG_ERROR("uniform_ only implemented for float32");
-            return *this;
-        }
-
-        if (!is_valid() || numel() == 0) {
+        LFS_ASSERT_MSG(is_valid(), "uniform_ requires a valid tensor");
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32, "uniform_ requires Float32 dtype");
+        LFS_ASSERT_MSG(std::isfinite(low) && std::isfinite(high) && low <= high,
+                       "uniform_ bounds must be finite and ordered");
+        if (numel() == 0) {
             return *this;
         }
 
@@ -150,12 +147,11 @@ namespace lfs::core {
     }
 
     Tensor& Tensor::normal_(float mean, float std) {
-        if (dtype_ != DataType::Float32) {
-            LOG_ERROR("normal_ only implemented for float32");
-            return *this;
-        }
-
-        if (!is_valid() || numel() == 0) {
+        LFS_ASSERT_MSG(is_valid(), "normal_ requires a valid tensor");
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32, "normal_ requires Float32 dtype");
+        LFS_ASSERT_MSG(std::isfinite(mean) && std::isfinite(std) && std > 0.0f,
+                       "normal_ mean and standard deviation must be finite, with std > 0");
+        if (numel() == 0) {
             return *this;
         }
 
@@ -173,8 +169,13 @@ namespace lfs::core {
 
             // curandGenerateNormal requires even number of elements
             if (n % 2 == 1) {
-                // For odd sizes, generate n+1 and ignore the last element
-                CHECK_CURAND(curandGenerateNormal(*gen, ptr<float>(), n + 1, mean, std));
+                // Generate into an n+1 scratch allocation. Writing n+1 values into
+                // the n-element destination was a one-float buffer overflow.
+                auto scratch = Tensor::empty({n + 1}, Device::CUDA, DataType::Float32);
+                CHECK_CURAND(curandGenerateNormal(*gen, scratch.ptr<float>(), n + 1, mean, std));
+                CHECK_CUDA(cudaMemcpyAsync(ptr<float>(), scratch.ptr<float>(), n * sizeof(float),
+                                           cudaMemcpyDeviceToDevice, stream()));
+                CHECK_CUDA(cudaStreamSynchronize(stream()));
             } else {
                 CHECK_CURAND(curandGenerateNormal(*gen, ptr<float>(), n, mean, std));
             }

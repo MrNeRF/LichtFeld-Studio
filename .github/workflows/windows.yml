@@ -188,3 +188,19 @@ jobs:
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           set PATH=%CD%\%BUILD_DIR%;%CD%\%BUILD_DIR%\vcpkg_installed\x64-windows\bin;%PATH%
           cmake --build %BUILD_DIR% -j %NUMBER_OF_PROCESSORS%
+
+      - name: Verify nvJPEG2000 runtime bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $runtime = Join-Path $env:BUILD_DIR 'nvjpeg2k_0.dll'
+          $extensionDir = Join-Path $env:BUILD_DIR 'extensions'
+          $extensions = @(Get-ChildItem $extensionDir -Filter 'nvjpeg2k_ext*.dll' -ErrorAction SilentlyContinue)
+          if (-not (Test-Path $runtime)) {
+            throw "nvJPEG2000 runtime DLL was not bundled next to the binary: $runtime"
+          }
+          if ($extensions.Count -eq 0) {
+            throw "nvjpeg2k extension DLL was not bundled in $extensionDir"
+          }
+          Write-Host "Found nvJPEG2000 runtime: $runtime"
+          $extensions | ForEach-Object { Write-Host "Found nvjpeg2k extension: $($_.FullName)" }

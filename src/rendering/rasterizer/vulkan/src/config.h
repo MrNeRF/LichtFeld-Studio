@@ -2,8 +2,7 @@
 
 #include <cstdint>
 
-#define ENABLE_VULKAN_VALIDATION_LAYER 0
-#define ENABLE_ASSERTION               0
+#define ENABLE_ASSERTION 0
 
 #ifndef SUBGROUP_SIZE
 #define SUBGROUP_SIZE 32
@@ -37,21 +36,11 @@
 // reordering for better memory colaescing
 // see config.slang for details
 #define SH_REORDER_SIZE SUBGROUP_SIZE
-// #define SH_REORDER_SIZE 1
 
 typedef int32_t sortingKey_t;
-// typedef int64_t sortingKey_t;
 
-#define RASTERIZE_BACKWARD_USE_SCHEDULING 1
-
-#include <cstdio>
-#define _DEBUG_PRINT                           \
-    do {                                       \
-        printf("%s %d\n", __FILE__, __LINE__); \
-        fflush(stdout);                        \
-    } while (0)
-// #define _DEBUG_PRINT ;
 #include <cassert>
+#include <cstdio>
 
 #include <stdexcept>
 

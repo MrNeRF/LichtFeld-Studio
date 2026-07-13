@@ -661,24 +661,15 @@ TEST_F(TensorMoveTest, MovedFromTensorState) {
     EXPECT_EQ(gs_moved.numel(), 300);
     EXPECT_EQ(gs_moved.ptr<float>(), orig_ptr);
 
-    // CRITICAL TEST: What is the state of gs_orig after move?
-    // According to your implementation, is_valid() checks initialized_ flag
+    // A moved-from tensor is invalid, and public data access must reject it.
     std::println("  After move - gs_orig.is_valid(): {}", gs_orig.is_valid());
     std::println("  After move - gs_orig.numel(): {}", gs_orig.numel());
-    std::println("  After move - gs_orig.ptr<float>(): {}", static_cast<void*>(gs_orig.ptr<float>()));
     std::println("  After move - gs_orig.data_owner_.use_count(): {}",
                  gs_orig.owns_memory() ? "owns" : "doesn't own");
 
-    // The moved-from tensor state depends on implementation
-    // If initialized_ is set to false, is_valid() returns false
-    // But shape metadata might still be there
-
-    if (!gs_orig.is_valid()) {
-        std::println("  ✓ Moved-from tensor is invalid (as expected)");
-    } else {
-        std::println("  ⚠ Moved-from tensor still reports valid!");
-        std::println("    This means is_valid() is NOT checking correctly");
-    }
+    EXPECT_FALSE(gs_orig.is_valid());
+    EXPECT_THROW((void)gs_orig.ptr<float>(), std::runtime_error);
+    std::println("  ✓ Moved-from tensor is invalid and rejects data access");
 
     std::println("✓ MovedFromTensorState: State documented");
 }

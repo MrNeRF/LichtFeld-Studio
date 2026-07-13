@@ -79,7 +79,6 @@ namespace lfs::vis {
         bool setKeyframeTimeById(sequencer::KeyframeId id, float new_time);
         bool previewKeyframeTimeById(sequencer::KeyframeId id, float new_time);
         bool commitKeyframeTimeById(sequencer::KeyframeId id);
-        bool updateKeyframe(size_t index, const glm::vec3& position, const glm::quat& rotation, float focal_length_mm);
         bool updateKeyframeById(sequencer::KeyframeId id, const glm::vec3& position, const glm::quat& rotation, float focal_length_mm);
         bool updateSelectedKeyframe(const glm::vec3& position, const glm::quat& rotation, float focal_length_mm);
         bool setKeyframeFocalLength(size_t index, float focal_length_mm);
@@ -102,8 +101,6 @@ namespace lfs::vis {
         [[nodiscard]] const PlySequenceClip* plySequence() const { return hasPlySequence() ? &*ply_sequence_ : nullptr; }
         [[nodiscard]] float plySequenceFps() const { return ply_sequence_ ? ply_sequence_->fps : DEFAULT_SEQUENCE_FPS; }
         void setPlySequenceFps(float fps);
-        bool setPlySequenceFrameNodeName(size_t frame_index, std::string node_name);
-        [[nodiscard]] float plySequenceDuration() const { return ply_sequence_ ? ply_sequence_->duration() : 0.0f; }
         [[nodiscard]] std::optional<size_t> plySequenceFrameIndex(float time) const;
         [[nodiscard]] std::optional<size_t> currentPlySequenceFrameIndex() const { return plySequenceFrameIndex(playhead_); }
 
@@ -126,7 +123,6 @@ namespace lfs::vis {
         void setLoopMode(LoopMode mode);
         void toggleLoop();
         [[nodiscard]] bool isLoopKeyframe(size_t index) const;
-        [[nodiscard]] bool isEditableKeyframe(size_t index) const;
 
         [[nodiscard]] float playbackSpeed() const { return playback_speed_; }
         void setPlaybackSpeed(const float speed) { playback_speed_ = std::clamp(speed, MIN_PLAYBACK_SPEED, MAX_PLAYBACK_SPEED); }

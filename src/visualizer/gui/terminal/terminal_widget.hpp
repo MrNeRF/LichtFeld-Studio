@@ -85,9 +85,6 @@ namespace lfs::vis::terminal {
         TerminalWidget(const TerminalWidget&) = delete;
         TerminalWidget& operator=(const TerminalWidget&) = delete;
 
-        // Spawn shell. Empty = default shell, "python3" for Python REPL
-        void spawn(const std::string& shell = "");
-
         // Create PTY pair without forking. Returns fds for the Python-side I/O.
         EmbeddedFds spawnEmbedded();
 
@@ -95,8 +92,6 @@ namespace lfs::vis::terminal {
         void update();
         void resize(int cols, int rows);
         [[nodiscard]] TerminalSnapshot snapshot() const;
-        [[nodiscard]] int cols() const { return cols_; }
-        [[nodiscard]] int rows() const { return rows_; }
 
         void setFocused(bool focused);
         void sendText(std::string_view text);
@@ -110,7 +105,6 @@ namespace lfs::vis::terminal {
 
         // State
         [[nodiscard]] bool is_running() const { return pty_.is_running(); }
-        [[nodiscard]] bool has_output() const { return has_new_output_.load(); }
         [[nodiscard]] bool isFocused() const { return is_focused_.load(); }
         [[nodiscard]] bool needsRedraw() const { return rendered_generation_.load() != redraw_generation_.load(); }
         [[nodiscard]] uint64_t redrawGeneration() const { return redraw_generation_.load(); }
@@ -139,9 +133,6 @@ namespace lfs::vis::terminal {
         // Read-only mode (disables keyboard input, for output-only terminals)
         void setReadOnly(bool readonly) { read_only_.store(readonly); }
         [[nodiscard]] bool isReadOnly() const { return read_only_.load(); }
-
-        // Send text to PTY (for executing code programmatically)
-        void sendToPty(const std::string& text);
 
         // Send interrupt signal (Ctrl+C) to stop running process
         void interrupt();

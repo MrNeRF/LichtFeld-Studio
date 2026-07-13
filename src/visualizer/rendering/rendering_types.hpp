@@ -39,6 +39,12 @@ namespace lfs::vis {
         IndependentDual
     };
 
+    enum class GTComparisonMode {
+        RGB = 0,
+        Normal = 1,
+        Depth = 2,
+    };
+
     enum class SplitViewPanelId : uint8_t {
         Left = 0,
         Right = 1
@@ -232,6 +238,7 @@ namespace lfs::vis {
 
         // Split view
         SplitViewMode split_view_mode = SplitViewMode::Disabled;
+        GTComparisonMode gt_comparison_mode = GTComparisonMode::RGB;
         float split_position = 0.5f;
         size_t split_view_offset = 0;
 
@@ -310,6 +317,18 @@ namespace lfs::vis {
             break;
         default:
             settings.depth_visualization_mode = lfs::rendering::DepthVisualizationMode::Palette;
+            break;
+        }
+    }
+
+    inline void sanitizeGTComparisonSettings(RenderSettings& settings) {
+        switch (settings.gt_comparison_mode) {
+        case GTComparisonMode::RGB:
+        case GTComparisonMode::Normal:
+        case GTComparisonMode::Depth:
+            break;
+        default:
+            settings.gt_comparison_mode = GTComparisonMode::RGB;
             break;
         }
     }
