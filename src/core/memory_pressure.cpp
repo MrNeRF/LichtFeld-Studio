@@ -8,6 +8,8 @@
 #include "core/environment.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "core/pinned_memory_allocator.hpp"
+#include "tensor/internal/memory_pool.hpp"
 
 #include <cuda_runtime_api.h>
 
@@ -72,6 +74,45 @@ namespace lfs::core {
                 return 0;
             }
             return total_bytes;
+        }
+
+        [[noreturn]] void throw_cuda_unavailable_allocation(
+            const size_t bytes,
+            const cudaStream_t stream,
+            const char* const label,
+            const char* const operation) {
+            throw MemoryAllocationError(AllocationFailure{
+                .domain = MemoryDomain::CudaDevice,
+                .requested_bytes = bytes,
+                .alignment = 0,
+                .device = -1,
+                .stream = reinterpret_cast<uintptr_t>(stream),
+                .label = label,
+                .operation = operation,
+                .native_error = cudaErrorInitializationError,
+            });
+        }
+
+        void* try_allocate_direct_cuda_storage(const size_t bytes) {
+            void* ptr = nullptr;
+            const auto pre_call_state = sample_cuda_pre_call_state();
+            const cudaError_t status = cudaMalloc(&ptr, bytes);
+            if (status == cudaSuccess) {
+                return ptr;
+            }
+            ensure_cuda_success(
+                status, pre_call_state, "cudaMalloc(direct tensor storage)",
+                std::format("requested_bytes={}", bytes),
+                std::source_location::current(), CudaFailureDisposition::LogOnly);
+            if (ptr != nullptr) {
+                const cudaError_t cleanup_status = cudaFree(ptr);
+                if (cleanup_status != cudaSuccess) {
+                    ensure_cuda_success(
+                        cleanup_status, "cudaFree(failed direct tensor storage allocation)", {},
+                        std::source_location::current(), CudaFailureDisposition::LogOnly);
+                }
+            }
+            return nullptr;
         }
 
     } // namespace
@@ -175,7 +216,33 @@ namespace lfs::core {
     thread_local bool MemoryPressureCoordinator::Impl::in_episode = false;
 
     MemoryPressureCoordinator::MemoryPressureCoordinator()
-        : impl_(new Impl()) {}
+        : impl_(new Impl()) {
+        register_client(PressureClient{
+            .name = "tensor-cuda-pool",
+            .priority = 10,
+            .domain = MemoryDomain::CudaDevice,
+            .affinity = PressureAffinity::ImmediateThreadSafe,
+            .estimate = nullptr,
+            .shrink = [](const PressureRequest&) {
+                CudaMemoryPool::instance().trim_cached_memory();
+                return ReclaimResult{};
+            },
+        });
+        register_client(PressureClient{
+            .name = "pinned-host-cache",
+            .priority = 10,
+            .domain = MemoryDomain::PinnedHost,
+            .affinity = PressureAffinity::ImmediateThreadSafe,
+            .estimate = [](const PressureRequest&) -> size_t {
+                return PinnedMemoryAllocator::instance().get_stats().cached_bytes;
+            },
+            .shrink = [](const PressureRequest&) {
+                auto& allocator = PinnedMemoryAllocator::instance();
+                const size_t before = allocator.get_stats().cached_bytes;
+                allocator.empty_cache();
+                return ReclaimResult{.logical_bytes_released = before}; },
+        });
+    }
 
     MemoryPressureCoordinator::~MemoryPressureCoordinator() {
         delete impl_;
@@ -184,6 +251,58 @@ namespace lfs::core {
     MemoryPressureCoordinator& MemoryPressureCoordinator::instance() {
         static MemoryPressureCoordinator coordinator;
         return coordinator;
+    }
+
+    void* allocate_cuda_storage(const size_t bytes,
+                                const cudaStream_t stream,
+                                const CudaStorageMode mode,
+                                const char* const label,
+                                const char* const operation) {
+        if (bytes == 0) {
+            return nullptr;
+        }
+        if (cuda_is_unavailable()) [[unlikely]] {
+            throw_cuda_unavailable_allocation(bytes, stream, label, operation);
+        }
+
+        auto& coordinator = MemoryPressureCoordinator::instance();
+        const auto try_allocate = [&]() -> void* {
+            if (coordinator.probe_should_fail(MemoryDomain::CudaDevice, bytes)) {
+                return nullptr;
+            }
+            if (mode == CudaStorageMode::Direct) {
+                return try_allocate_direct_cuda_storage(bytes);
+            }
+            return CudaMemoryPool::instance().try_allocate(bytes, stream);
+        };
+
+        void* ptr = try_allocate();
+        if (ptr != nullptr) {
+            return ptr;
+        }
+        if (cuda_is_unavailable()) {
+            throw_cuda_unavailable_allocation(bytes, stream, label, operation);
+        }
+
+        int device = 0;
+        cudaGetDevice(&device);
+        const AllocationFailure failure{
+            .domain = MemoryDomain::CudaDevice,
+            .requested_bytes = bytes,
+            .alignment = 0,
+            .device = device,
+            .stream = reinterpret_cast<uintptr_t>(stream),
+            .label = label,
+            .operation = operation,
+            .native_error = cudaErrorMemoryAllocation,
+        };
+        if (coordinator.relieve_and_should_retry(failure)) {
+            ptr = try_allocate();
+        }
+        if (ptr == nullptr) {
+            throw MemoryAllocationError(failure);
+        }
+        return ptr;
     }
 
     size_t MemoryPressureCoordinator::reserve_bytes() const noexcept {

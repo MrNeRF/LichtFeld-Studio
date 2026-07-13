@@ -34,6 +34,18 @@ namespace lfs::core {
                                        Async,
                                        Direct };
 
+    enum class CudaStorageMode : uint8_t {
+        Pooled,
+        Direct,
+    };
+
+    LFS_CORE_API void* allocate_cuda_storage(
+        size_t bytes,
+        cudaStream_t stream = nullptr,
+        CudaStorageMode mode = CudaStorageMode::Pooled,
+        const char* label = "tensor.storage",
+        const char* operation = "tensor.allocate");
+
     // Multi-tier CUDA memory pool: slab (≤256KB), bucketed (≤16GB), cudaMallocAsync.
     class LFS_CORE_API CudaMemoryPool {
     public:
@@ -87,6 +99,10 @@ namespace lfs::core {
         }
 
         void* allocate(size_t bytes, cudaStream_t stream = nullptr) {
+            return allocate_cuda_storage(bytes, stream);
+        }
+
+        void* try_allocate(size_t bytes, cudaStream_t stream = nullptr) {
             LFS_CUDA_BREADCRUMB_STREAM("tensor.pool.allocate", stream);
             if (bytes == 0)
                 return nullptr;
@@ -177,7 +193,7 @@ namespace lfs::core {
             }
 #endif
 
-            return allocate_direct(bytes);
+            return try_allocate_direct(bytes);
         }
 
         // Marks `ptr` as used by `stream` beyond its home stream. The free will
@@ -474,37 +490,17 @@ namespace lfs::core {
             shutdown();
         }
 
-        void* allocate_direct(size_t bytes) {
+        void* try_allocate_direct(size_t bytes) {
             void* ptr = nullptr;
 
             const auto pre_call_state = sample_cuda_pre_call_state();
-            cudaError_t err = cudaMalloc(&ptr, bytes);
+            const cudaError_t err = cudaMalloc(&ptr, bytes);
             if (err != cudaSuccess) {
                 ensure_cuda_success(err, pre_call_state, "cudaMalloc(direct tier)",
-                                    std::format("requested_bytes={}, recovery=trim-and-retry", bytes),
+                                    std::format("requested_bytes={}", bytes),
                                     std::source_location::current(),
                                     CudaFailureDisposition::LogOnly);
-                const cudaError_t sync_status = cudaDeviceSynchronize();
-                if (sync_status != cudaSuccess) {
-                    ensure_cuda_success(
-                        sync_status, "cudaDeviceSynchronize(direct allocation recovery)",
-                        std::format("requested_bytes={}", bytes),
-                        std::source_location::current(), CudaFailureDisposition::LogOnly);
-                    return nullptr;
-                }
-                SizeBucketedPool::instance().trim_cache();
-#if CUDART_VERSION >= 12080
-                trim_default_pool("direct-allocation recovery");
-#endif
-                err = cudaMalloc(&ptr, bytes);
-                if (err != cudaSuccess) {
-                    ensure_cuda_success(err, pre_call_state, "cudaMalloc(direct tier retry)",
-                                        std::format("requested_bytes={}", bytes),
-                                        std::source_location::current(),
-                                        CudaFailureDisposition::LogOnly);
-                    cudaGetLastError(); // Clear sticky error state for clean recovery
-                    return nullptr;
-                }
+                return nullptr;
             }
 
             stats_.direct_allocs.fetch_add(1, std::memory_order_relaxed);

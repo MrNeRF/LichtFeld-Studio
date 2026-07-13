@@ -2886,25 +2886,9 @@ namespace lfs::core {
         // Allocate new buffer
         void* new_data = nullptr;
         if (device_ == Device::CUDA) {
-            const cudaError_t status = cudaMalloc(&new_data, new_bytes);
-            if (status != cudaSuccess) {
-                if (new_data != nullptr) {
-                    const cudaError_t cleanup_status = cudaFree(new_data);
-                    if (cleanup_status != cudaSuccess) {
-                        ensure_cuda_success(
-                            cleanup_status, "cudaFree(failed tensor reserve allocation)", {},
-                            std::source_location::current(), CudaFailureDisposition::LogOnly);
-                    }
-                }
-                ensure_cuda_success(
-                    status, "cudaMalloc(tensor reserve)",
-                    std::format("bytes={}, requested_capacity={}, row_size={}, "
-                                "tensor_shape={}",
-                                new_bytes, new_capacity, row_size, shape_.str()),
-                    std::source_location::current(), CudaFailureDisposition::LogOnly);
-                (void)cudaGetLastError();
-                throw std::runtime_error("Tensor reserve CUDA allocation failed");
-            }
+            new_data = allocate_cuda_storage(
+                new_bytes, stream(), CudaStorageMode::Direct,
+                "Tensor reserve CUDA allocation failed", "tensor.reserve");
             LFS_ASSERT_MSG(new_data != nullptr,
                            "reserve CPU allocation failed");
             LOG_DEBUG("  ✓ CUDA allocation succeeded: {} MB at {}", new_bytes / (1024.0 * 1024.0), new_data);
@@ -3023,19 +3007,12 @@ namespace lfs::core {
             return t;
         }
 
-        // Direct cudaMalloc bypassing pool
-        void* data_ptr = nullptr;
-        cudaError_t err = cudaMalloc(&data_ptr, total_bytes);
-        if (err != cudaSuccess) {
-            ensure_cuda_success(
-                err, "cudaMalloc(zeros_direct)",
-                std::format("bytes={} ({:.2f} GiB); try reducing max_cap, sh_degree, "
-                            "or image resolution",
-                            total_bytes, total_bytes / (1024.0 * 1024.0 * 1024.0)));
-        }
+        void* data_ptr = allocate_cuda_storage(
+            total_bytes, nullptr, CudaStorageMode::Direct,
+            "cudaMalloc(zeros_direct)", "tensor.zeros_direct");
 
         // Zero full capacity
-        err = cudaMemset(data_ptr, 0, total_bytes);
+        cudaError_t err = cudaMemset(data_ptr, 0, total_bytes);
         if (err != cudaSuccess) {
             const cudaError_t cleanup_status = cudaFree(data_ptr);
             if (cleanup_status != cudaSuccess) {
