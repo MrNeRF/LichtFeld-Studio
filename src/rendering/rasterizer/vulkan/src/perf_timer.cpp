@@ -98,7 +98,7 @@ namespace PerfTimer {
         if (!module->writeTimestamp(-1)) {
             _THROW_ERROR(std::format(
                 "PerfTimer::pushMarker could not write an exit timestamp (module={:#x}, marker_count={}, pushed_marker_count={})",
-                lfsVkHandleValue(module),
+                lfs::rendering::vkHandleValue(module),
                 marks.size(),
                 pushedMarks.size()));
         }
@@ -115,7 +115,7 @@ namespace PerfTimer {
         }
         _THROW_ERROR(std::format(
             "PerfTimer::pushMarker found no matching open marker (module={:#x}, marker_count={}, pushed_marker_count={}, search_depth={})",
-            lfsVkHandleValue(module),
+            lfs::rendering::vkHandleValue(module),
             marks.size(),
             pushedMarks.size(),
             depth));
@@ -129,7 +129,7 @@ namespace PerfTimer {
             if (!module->writeTimestamp(1)) {
                 _THROW_ERROR(std::format(
                     "PerfTimer::popMarkers could not reopen a paused marker (module={:#x}, stage={}, remaining_pushed={}, marker_count={})",
-                    lfsVkHandleValue(module),
+                    lfs::rendering::vkHandleValue(module),
                     static_cast<int>(stage),
                     pushedMarks.size(),
                     marks.size()));

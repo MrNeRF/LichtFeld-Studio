@@ -427,7 +427,7 @@ namespace lfs::vis {
         return false;
     }
 
-    bool VulkanContext::vkCheckFailed(std::string message) {
+    bool VulkanContext::setVkFailure(std::string message) {
         last_error_ = std::move(message);
         LOG_ERROR("Vulkan: {}", last_error_);
         return false;
@@ -520,9 +520,9 @@ namespace lfs::vis {
         saveAndDestroyPipelineCache();
         destroyAllocator();
         if (device_ != VK_NULL_HANDLE) {
+            debug_name_writer_.reset();
             vkDestroyDevice(device_, nullptr);
             device_ = VK_NULL_HANDLE;
-            vk_set_debug_utils_object_name_ = nullptr;
         }
         if (surface_ != VK_NULL_HANDLE && instance_ != VK_NULL_HANDLE) {
             SDL_Vulkan_DestroySurface(instance_, surface_, nullptr);
@@ -1684,13 +1684,13 @@ namespace lfs::vis {
         std::vector<const char*> extensions(sdl_extensions, sdl_extensions + extension_count);
 
         uint32_t available_extension_count = 0;
-        LFS_VK_CHECK_MSG(
+        LFS_VK_CONTEXT_CHECK_MSG(
             vkEnumerateInstanceExtensionProperties(nullptr, &available_extension_count, nullptr),
             "Failed to enumerate Vulkan instance-extension count (observed_count={})",
             available_extension_count);
         std::vector<VkExtensionProperties> available_extensions(available_extension_count);
         if (available_extension_count > 0) {
-            LFS_VK_CHECK_MSG(
+            LFS_VK_CONTEXT_CHECK_MSG(
                 vkEnumerateInstanceExtensionProperties(
                     nullptr, &available_extension_count, available_extensions.data()),
                 "Failed to enumerate Vulkan instance extensions (destination_capacity={}, observed_count={})",
@@ -1723,13 +1723,13 @@ namespace lfs::vis {
         }
 
         uint32_t available_layer_count = 0;
-        LFS_VK_CHECK_MSG(
+        LFS_VK_CONTEXT_CHECK_MSG(
             vkEnumerateInstanceLayerProperties(&available_layer_count, nullptr),
             "Failed to enumerate Vulkan instance-layer count (observed_count={})",
             available_layer_count);
         std::vector<VkLayerProperties> available_layers(available_layer_count);
         if (available_layer_count > 0) {
-            LFS_VK_CHECK_MSG(
+            LFS_VK_CONTEXT_CHECK_MSG(
                 vkEnumerateInstanceLayerProperties(&available_layer_count, available_layers.data()),
                 "Failed to enumerate Vulkan instance layers (destination_capacity={}, observed_count={})",
                 available_layers.size(),
@@ -1954,21 +1954,21 @@ namespace lfs::vis {
 
     bool VulkanContext::pickPhysicalDevice() {
         uint32_t count = 0;
-        LFS_VK_CHECK_MSG(vkEnumeratePhysicalDevices(instance_, &count, nullptr),
-                         "Failed to enumerate physical-device count (instance={:#x}, observed_count={})",
-                         vkHandleValue(instance_),
-                         count);
+        LFS_VK_CONTEXT_CHECK_MSG(vkEnumeratePhysicalDevices(instance_, &count, nullptr),
+                                 "Failed to enumerate physical-device count (instance={:#x}, observed_count={})",
+                                 vkHandleValue(instance_),
+                                 count);
         if (count == 0) {
             return fail(std::format("No Vulkan physical devices found (instance={:#x}, observed_count=0)",
                                     vkHandleValue(instance_)));
         }
 
         std::vector<VkPhysicalDevice> devices(count);
-        LFS_VK_CHECK_MSG(vkEnumeratePhysicalDevices(instance_, &count, devices.data()),
-                         "Failed to enumerate physical devices (instance={:#x}, destination_capacity={}, observed_count={})",
-                         vkHandleValue(instance_),
-                         devices.size(),
-                         count);
+        LFS_VK_CONTEXT_CHECK_MSG(vkEnumeratePhysicalDevices(instance_, &count, devices.data()),
+                                 "Failed to enumerate physical devices (instance={:#x}, destination_capacity={}, observed_count={})",
+                                 vkHandleValue(instance_),
+                                 devices.size(),
+                                 count);
         devices.resize(count);
 
         VkPhysicalDevice fallback = VK_NULL_HANDLE;
@@ -2083,7 +2083,7 @@ namespace lfs::vis {
         }
 
         uint32_t available_extension_count = 0;
-        LFS_VK_CHECK_MSG(
+        LFS_VK_CONTEXT_CHECK_MSG(
             vkEnumerateDeviceExtensionProperties(
                 physical_device_, nullptr, &available_extension_count, nullptr),
             "Failed to enumerate selected-device extension count (physical_device={:#x}, observed_count={})",
@@ -2091,7 +2091,7 @@ namespace lfs::vis {
             available_extension_count);
         std::vector<VkExtensionProperties> available_extensions(available_extension_count);
         if (available_extension_count > 0) {
-            LFS_VK_CHECK_MSG(
+            LFS_VK_CONTEXT_CHECK_MSG(
                 vkEnumerateDeviceExtensionProperties(physical_device_,
                                                      nullptr,
                                                      &available_extension_count,
@@ -2306,9 +2306,8 @@ namespace lfs::vis {
         }
 
         if (debug_utils_enabled_) {
-            vk_set_debug_utils_object_name_ = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(
-                vkGetDeviceProcAddr(device_, "vkSetDebugUtilsObjectNameEXT"));
-            if (vk_set_debug_utils_object_name_ == nullptr) {
+            debug_name_writer_.initialize(device_);
+            if (!debug_name_writer_.enabled()) {
                 LOG_WARN("VK_EXT_debug_utils is enabled, but vkSetDebugUtilsObjectNameEXT could not be loaded");
             }
         }
@@ -3656,7 +3655,7 @@ namespace lfs::vis {
         }
         setDebugObjectName(VK_OBJECT_TYPE_SWAPCHAIN_KHR, swapchain_, "swapchain.main");
 
-        LFS_VK_CHECK_MSG(
+        LFS_VK_CONTEXT_CHECK_MSG(
             vkGetSwapchainImagesKHR(device_, swapchain_, &image_count, nullptr),
             "swapchain image-count query returned no usable array (device={:#x}, swapchain={:#x}, requested_min_images={}, observed_image_count={})",
             vkHandleValue(device_),
@@ -3673,7 +3672,7 @@ namespace lfs::vis {
                 extent.height));
         }
         swapchain_images_.resize(image_count);
-        LFS_VK_CHECK_MSG(
+        LFS_VK_CONTEXT_CHECK_MSG(
             vkGetSwapchainImagesKHR(device_, swapchain_, &image_count, swapchain_images_.data()),
             "swapchain image query failed (device={:#x}, swapchain={:#x}, destination_capacity={}, observed_image_count={})",
             vkHandleValue(device_),
@@ -4072,21 +4071,8 @@ namespace lfs::vis {
     void VulkanContext::setDebugObjectName(const VkObjectType object_type,
                                            const std::uint64_t object_handle,
                                            const std::string_view name) const {
-        if (device_ == VK_NULL_HANDLE ||
-            vk_set_debug_utils_object_name_ == nullptr ||
-            object_handle == 0 ||
-            name.empty()) {
-            return;
-        }
-
         const std::string owned_name{name};
-        VkDebugUtilsObjectNameInfoEXT name_info{};
-        name_info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
-        name_info.objectType = object_type;
-        name_info.objectHandle = object_handle;
-        name_info.pObjectName = owned_name.c_str();
-
-        const VkResult result = vk_set_debug_utils_object_name_(device_, &name_info);
+        const VkResult result = debug_name_writer_.set(object_type, object_handle, owned_name);
         if (result != VK_SUCCESS) {
             LOG_WARN("vkSetDebugUtilsObjectNameEXT failed for '{}': {}", owned_name, vkResultToString(result));
         }

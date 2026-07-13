@@ -461,15 +461,13 @@ namespace lfs::vis {
             if (result != VK_SUCCESS) {
                 buffer = VK_NULL_HANDLE;
                 allocation = VK_NULL_HANDLE;
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vmaCreateBuffer(allocator, &buffer_info, &allocation_info, &buffer, &allocation, nullptr)",
                     result,
                     std::format("Viewport host-visible buffer allocation failed (allocator={:#x}, requested_size={}, usage={:#x})",
                                 reinterpret_cast<std::uintptr_t>(allocator),
                                 size,
-                                static_cast<std::uint32_t>(usage)),
-                    __FILE__,
-                    __LINE__));
+                                static_cast<std::uint32_t>(usage)));
             }
             return true;
         }
@@ -478,7 +476,7 @@ namespace lfs::vis {
                                            const void* const source,
                                            const VkDeviceSize size) const {
             if (allocation == VK_NULL_HANDLE || !source || size == 0) {
-                return vkCheckFailed(std::format(
+                return logVkFailure(std::format(
                     "Viewport buffer write requires an allocation, source pointer, and non-zero size (allocation={:#x}, source={:#x}, write_size={}) ({}:{})",
                     reinterpret_cast<std::uintptr_t>(allocation),
                     reinterpret_cast<std::uintptr_t>(source),
@@ -489,19 +487,17 @@ namespace lfs::vis {
             void* mapped = nullptr;
             const VkResult map_result = vmaMapMemory(allocator, allocation, &mapped);
             if (map_result != VK_SUCCESS) {
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vmaMapMemory(allocator, allocation, &mapped)",
                     map_result,
                     std::format("Viewport buffer allocation could not be mapped (allocator={:#x}, allocation={:#x}, source={:#x}, write_size={})",
                                 reinterpret_cast<std::uintptr_t>(allocator),
                                 reinterpret_cast<std::uintptr_t>(allocation),
                                 reinterpret_cast<std::uintptr_t>(source),
-                                size),
-                    __FILE__,
-                    __LINE__));
+                                size));
             }
             if (mapped == nullptr) {
-                return vkCheckFailed(std::format(
+                return logVkFailure(std::format(
                     "Viewport buffer mapping returned success with a null pointer (allocator={:#x}, allocation={:#x}, source={:#x}, write_size={}, mapped={:#x}) ({}:{})",
                     reinterpret_cast<std::uintptr_t>(allocator),
                     reinterpret_cast<std::uintptr_t>(allocation),
@@ -515,15 +511,13 @@ namespace lfs::vis {
             const VkResult flush_result = vmaFlushAllocation(allocator, allocation, 0, size);
             vmaUnmapMemory(allocator, allocation);
             if (flush_result != VK_SUCCESS) {
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vmaFlushAllocation(allocator, allocation, 0, size)",
                     flush_result,
                     std::format("Viewport buffer flush failed (allocator={:#x}, allocation={:#x}, offset=0, flush_size={})",
                                 reinterpret_cast<std::uintptr_t>(allocator),
                                 reinterpret_cast<std::uintptr_t>(allocation),
-                                size),
-                    __FILE__,
-                    __LINE__));
+                                size));
             }
             return true;
         }
@@ -803,14 +797,12 @@ namespace lfs::vis {
             VkCommandPool pool = VK_NULL_HANDLE;
             VkResult result = vkCreateCommandPool(device, &pool_info, nullptr, &pool);
             if (result != VK_SUCCESS) {
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vkCreateCommandPool(device, &pool_info, nullptr, &pool)",
                     result,
                     std::format("One-shot graphics command-pool creation failed (device={:#x}, queue_family={})",
                                 vkHandleValue(device),
-                                graphics_queue_family),
-                    __FILE__,
-                    __LINE__));
+                                graphics_queue_family));
             }
             context->setDebugObjectName(VK_OBJECT_TYPE_COMMAND_POOL,
                                         pool,
@@ -832,7 +824,7 @@ namespace lfs::vis {
                     __FILE__,
                     __LINE__);
                 vkDestroyCommandPool(device, pool, nullptr);
-                return vkCheckFailed(error);
+                return logVkFailure(error);
             }
             context->setDebugObjectName(VK_OBJECT_TYPE_COMMAND_BUFFER,
                                         cb,
@@ -852,7 +844,7 @@ namespace lfs::vis {
                     __LINE__);
                 vkFreeCommandBuffers(device, pool, 1, &cb);
                 vkDestroyCommandPool(device, pool, nullptr);
-                return vkCheckFailed(error);
+                return logVkFailure(error);
             }
             record(cb);
             result = vkEndCommandBuffer(cb);
@@ -867,7 +859,7 @@ namespace lfs::vis {
                     __LINE__);
                 vkFreeCommandBuffers(device, pool, 1, &cb);
                 vkDestroyCommandPool(device, pool, nullptr);
-                return vkCheckFailed(error);
+                return logVkFailure(error);
             }
             VkSubmitInfo submit{};
             submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -944,7 +936,7 @@ namespace lfs::vis {
             vkFreeCommandBuffers(device, pool, 1, &cb);
             vkDestroyCommandPool(device, pool, nullptr);
             if (!error.empty()) {
-                return vkCheckFailed(std::move(error));
+                return logVkFailure(std::move(error));
             }
             return true;
         }
@@ -1131,29 +1123,6 @@ namespace lfs::vis {
             return true;
         }
 
-        [[nodiscard]] VkShaderModule createShaderModule(const std::span<const std::uint32_t> spirv) const {
-            VkShaderModuleCreateInfo create_info{};
-            create_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            create_info.codeSize = spirv.size() * sizeof(std::uint32_t);
-            create_info.pCode = spirv.data();
-            VkShaderModule module = VK_NULL_HANDLE;
-            const VkResult result = vkCreateShaderModule(device, &create_info, nullptr, &module);
-            if (result != VK_SUCCESS) {
-                LOG_ERROR("Vulkan: {}",
-                          formatVkCheckFailure(
-                              "vkCreateShaderModule(device, &create_info, nullptr, &module)",
-                              result,
-                              std::format("Viewport shader-module creation failed (device={:#x}, code_ptr={:#x}, code_size={})",
-                                          vkHandleValue(device),
-                                          reinterpret_cast<std::uintptr_t>(spirv.data()),
-                                          create_info.codeSize),
-                              __FILE__,
-                              __LINE__));
-                return VK_NULL_HANDLE;
-            }
-            return module;
-        }
-
         enum class PipelineVertexLayout {
             ScreenQuad,
             PositionOnly,
@@ -1173,8 +1142,8 @@ namespace lfs::vis {
                                           VkPipelineLayout& pipeline_layout,
                                           VkPipeline& pipeline,
                                           VkDescriptorSetLayout extra_descriptor_layout = VK_NULL_HANDLE) {
-            VkShaderModule vertex_module = createShaderModule(vertex_spv);
-            VkShaderModule fragment_module = createShaderModule(fragment_spv);
+            VkShaderModule vertex_module = lfs::vis::createShaderModule(device, vertex_spv, "Viewport");
+            VkShaderModule fragment_module = lfs::vis::createShaderModule(device, fragment_spv, "Viewport");
             if (vertex_module == VK_NULL_HANDLE || fragment_module == VK_NULL_HANDLE) {
                 if (vertex_module != VK_NULL_HANDLE)
                     vkDestroyShaderModule(device, vertex_module, nullptr);
@@ -1341,7 +1310,7 @@ namespace lfs::vis {
             if (layout_result != VK_SUCCESS) {
                 vkDestroyShaderModule(device, vertex_module, nullptr);
                 vkDestroyShaderModule(device, fragment_module, nullptr);
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vkCreatePipelineLayout(device, &layout_info, nullptr, &pipeline_layout)",
                     layout_result,
                     std::format("Viewport pipeline-layout creation failed (label='{}', device={:#x}, descriptor_layout={:#x}, extra_descriptor_layout={:#x}, set_layout_count={}, push_constant_bytes={})",
@@ -1350,9 +1319,7 @@ namespace lfs::vis {
                                 vkHandleValue(descriptor_layout),
                                 vkHandleValue(extra_descriptor_layout),
                                 layout_info.setLayoutCount,
-                                push_constant != nullptr ? push_constant->size : 0),
-                    __FILE__,
-                    __LINE__));
+                                push_constant != nullptr ? push_constant->size : 0));
             }
             context->setDebugObjectNamef(VK_OBJECT_TYPE_PIPELINE_LAYOUT,
                                          pipeline_layout,
@@ -1388,7 +1355,7 @@ namespace lfs::vis {
             vkDestroyShaderModule(device, vertex_module, nullptr);
             vkDestroyShaderModule(device, fragment_module, nullptr);
             if (pipeline_result != VK_SUCCESS) {
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vkCreateGraphicsPipelines(device, pipeline_cache, 1, &pipeline_info, nullptr, &pipeline)",
                     pipeline_result,
                     std::format("Viewport graphics pipeline creation failed (device={:#x}, pipeline_cache={:#x}, pipeline_layout={:#x}, color_format={}, depth_stencil_format={})",
@@ -1396,9 +1363,7 @@ namespace lfs::vis {
                                 vkHandleValue(pipeline_cache),
                                 vkHandleValue(pipeline_layout),
                                 static_cast<int>(color_format),
-                                static_cast<int>(depth_stencil_format)),
-                    __FILE__,
-                    __LINE__));
+                                static_cast<int>(depth_stencil_format)));
             }
             context->setDebugObjectNamef(VK_OBJECT_TYPE_PIPELINE,
                                          pipeline,

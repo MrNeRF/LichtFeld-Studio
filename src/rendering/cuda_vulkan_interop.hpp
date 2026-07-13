@@ -10,7 +10,6 @@
 #include <cstdint>
 #include <cuda_runtime.h>
 #include <optional>
-#include <source_location>
 #include <string>
 #include <vector>
 
@@ -87,11 +86,6 @@ namespace lfs::rendering {
         [[nodiscard]] const std::string& lastError() const { return last_error_; }
 
     private:
-        [[nodiscard]] bool failCuda(
-            const char* operation,
-            cudaError_t status,
-            std::source_location location = std::source_location::current());
-
         cudaStream_t stream_ = nullptr;
         std::string last_error_;
     };
@@ -143,14 +137,6 @@ namespace lfs::rendering {
         [[nodiscard]] bool signal(std::uint64_t value, cudaStream_t stream) const;
 
     private:
-        [[nodiscard]] bool fail(
-            std::string message,
-            std::source_location location = std::source_location::current()) const;
-        [[nodiscard]] bool failCuda(
-            const char* operation,
-            cudaError_t status,
-            std::source_location location = std::source_location::current()) const;
-
         cudaExternalMemory_t cuda_mem_ = nullptr;
         cudaMipmappedArray_t cuda_mip_ = nullptr;
         cudaArray_t cuda_array_ = nullptr;
@@ -196,14 +182,6 @@ namespace lfs::rendering {
         [[nodiscard]] bool cudaWait(std::uint64_t value, cudaStream_t stream) const;
 
     private:
-        [[nodiscard]] bool fail(
-            std::string message,
-            std::source_location location = std::source_location::current()) const;
-        [[nodiscard]] bool failCuda(
-            const char* operation,
-            cudaError_t status,
-            std::source_location location = std::source_location::current()) const;
-
         cudaExternalSemaphore_t cuda_timeline_ = nullptr;
         mutable std::uint64_t last_signaled_ = 0;
         mutable std::uint64_t last_waited_ = 0;
@@ -240,14 +218,6 @@ namespace lfs::rendering {
                                           cudaStream_t stream) const;
 
     private:
-        [[nodiscard]] bool fail(
-            std::string message,
-            std::source_location location = std::source_location::current()) const;
-        [[nodiscard]] bool failCuda(
-            const char* operation,
-            cudaError_t status,
-            std::source_location location = std::source_location::current()) const;
-
         cudaExternalMemory_t cuda_mem_ = nullptr;
         void* device_ptr_ = nullptr;
         std::size_t allocation_size_ = 0;

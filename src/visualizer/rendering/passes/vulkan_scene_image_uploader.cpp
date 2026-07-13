@@ -41,7 +41,7 @@ namespace lfs::vis {
             allocator = vulkan_context.allocator();
             scene_sampler = sampler;
             if (device == VK_NULL_HANDLE || allocator == VK_NULL_HANDLE || scene_sampler == VK_NULL_HANDLE) {
-                return vkCheckFailed(std::format(
+                return logVkFailure(std::format(
                     "Vulkan scene image uploader requires a live device, allocator, and sampler (device={:#x}, allocator={:#x}, scene_sampler={:#x}) ({}:{})",
                     vkHandleValue(device),
                     reinterpret_cast<std::uintptr_t>(allocator),
@@ -114,7 +114,7 @@ namespace lfs::vis {
 
         [[nodiscard]] bool ensureSceneImage(const glm::ivec2 size, const VkDescriptorSet scene_descriptor_set) {
             if (size.x <= 0 || size.y <= 0) {
-                return vkCheckFailed(std::format(
+                return logVkFailure(std::format(
                     "Viewport scene image requires positive dimensions (observed_width={}, observed_height={}, descriptor_set={:#x}) ({}:{})",
                     size.x,
                     size.y,
@@ -152,7 +152,7 @@ namespace lfs::vis {
                                                          &created_allocation_info);
             if (image_result != VK_SUCCESS) {
                 destroySceneImage();
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vmaCreateImage(allocator, &image_info, &allocation_info, &scene_image, &scene_image_allocation, &created_allocation_info)",
                     image_result,
                     std::format("Viewport scene image allocation failed (allocator={:#x}, requested_extent={}x{}, format={}, usage={:#x})",
@@ -160,9 +160,7 @@ namespace lfs::vis {
                                 size.x,
                                 size.y,
                                 static_cast<int>(image_info.format),
-                                static_cast<std::uint32_t>(image_info.usage)),
-                    __FILE__,
-                    __LINE__));
+                                static_cast<std::uint32_t>(image_info.usage)));
             }
             context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE,
                                          scene_image,
@@ -190,7 +188,7 @@ namespace lfs::vis {
                 vkCreateImageView(device, &view_info, nullptr, &scene_image_view);
             if (view_result != VK_SUCCESS) {
                 destroySceneImage();
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vkCreateImageView(device, &view_info, nullptr, &scene_image_view)",
                     view_result,
                     std::format("Viewport scene image-view creation failed (device={:#x}, image={:#x}, extent={}x{}, format={}, aspect_mask={:#x})",
@@ -199,9 +197,7 @@ namespace lfs::vis {
                                 size.x,
                                 size.y,
                                 static_cast<int>(view_info.format),
-                                static_cast<std::uint32_t>(view_info.subresourceRange.aspectMask)),
-                    __FILE__,
-                    __LINE__));
+                                static_cast<std::uint32_t>(view_info.subresourceRange.aspectMask)));
             }
             context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE_VIEW,
                                          scene_image_view,

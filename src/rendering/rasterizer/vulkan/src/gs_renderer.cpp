@@ -42,7 +42,7 @@ namespace {
                 "{} requires a live indirect-buffer view satisfying {} (buffer={:#x}, layout_constant='{}', required_words={}, required_bytes={}, active_bytes={}, view_capacity={}, backing_bytes={}, base_offset={}, label='{}')",
                 operation,
                 layout.word_count_constant,
-                lfsVkHandleValue(buffer.buffer),
+                lfs::rendering::vkHandleValue(buffer.buffer),
                 layout.word_count_constant,
                 layout.word_count,
                 required_bytes,
@@ -88,10 +88,10 @@ void VulkanGSRenderer::tagDeferredVisibleCountReadback(const VkSemaphore semapho
         if (semaphore == VK_NULL_HANDLE || value == 0) {
             _THROW_ERROR(std::format(
                 "Visible-count readback requires a valid completion timeline tag (semaphore={:#x}, value={}, pending={}, prior_semaphore={:#x}, prior_value={})",
-                lfsVkHandleValue(semaphore),
+                lfs::rendering::vkHandleValue(semaphore),
                 value,
                 visible_count_readback_pending_,
-                lfsVkHandleValue(visible_count_readback_signal_),
+                lfs::rendering::vkHandleValue(visible_count_readback_signal_),
                 visible_count_readback_value_));
         }
         visible_count_readback_signal_ = semaphore;
@@ -105,10 +105,10 @@ void VulkanGSRenderer::tagDeferredLodSelectionReadback(const VkSemaphore semapho
         if (semaphore == VK_NULL_HANDLE || value == 0) {
             _THROW_ERROR(std::format(
                 "LOD-selection readback requires a valid completion timeline tag (semaphore={:#x}, value={}, pending={}, prior_semaphore={:#x}, prior_value={})",
-                lfsVkHandleValue(semaphore),
+                lfs::rendering::vkHandleValue(semaphore),
                 value,
                 lod_selection_readback_pending_,
-                lfsVkHandleValue(lod_selection_readback_signal_),
+                lfs::rendering::vkHandleValue(lod_selection_readback_signal_),
                 lod_selection_readback_value_));
         }
         lod_selection_readback_signal_ = semaphore;
@@ -123,10 +123,10 @@ void VulkanGSRenderer::tagDeferredInstanceCountReadback(const VkSemaphore semaph
         if (semaphore == VK_NULL_HANDLE || value == 0) {
             _THROW_ERROR(std::format(
                 "Tile-instance readback requires a valid completion timeline tag (semaphore={:#x}, value={}, pending={}, prior_semaphore={:#x}, prior_value={})",
-                lfsVkHandleValue(semaphore),
+                lfs::rendering::vkHandleValue(semaphore),
                 value,
                 instance_count_readback_pending_,
-                lfsVkHandleValue(instance_count_readback_signal_),
+                lfs::rendering::vkHandleValue(instance_count_readback_signal_),
                 instance_count_readback_value_));
         }
         instance_count_readback_signal_ = semaphore;
@@ -158,11 +158,11 @@ void VulkanGSRenderer::ensureInstanceCountReadback() {
     if (create_result != VK_SUCCESS) {
         instance_count_readback_buffer_.buffer = VK_NULL_HANDLE;
         instance_count_readback_buffer_.allocation = VK_NULL_HANDLE;
-        _CHECK_FATAL(std::format(
+        _THROW_ERROR(std::format(
             "Tile-instance readback buffer allocation failed (requested_bytes={}, allocator={:#x}, result={}({}))",
             info.size,
-            lfsVkHandleValue(allocator),
-            lfsVkResultToString(create_result),
+            lfs::rendering::vkHandleValue(allocator),
+            lfs::rendering::vkResultToString(create_result),
             static_cast<int>(create_result)));
     }
     instance_count_readback_buffer_.allocSize = 2 * sizeof(uint32_t);
@@ -176,12 +176,12 @@ void VulkanGSRenderer::ensureInstanceCountReadback() {
                          failed_buffer,
                          failed_allocation);
         instance_count_readback_buffer_ = {};
-        _CHECK_FATAL(std::format(
+        _THROW_ERROR(std::format(
             "Tile-instance readback allocation was not persistently mapped (requested_bytes={}, buffer={:#x}, allocation={:#x}, mapped_pointer={:#x})",
             info.size,
-            lfsVkHandleValue(failed_buffer),
-            lfsVkHandleValue(failed_allocation),
-            lfsVkHandleValue(instance_count_readback_mapped_)));
+            lfs::rendering::vkHandleValue(failed_buffer),
+            lfs::rendering::vkHandleValue(failed_allocation),
+            lfs::rendering::vkHandleValue(instance_count_readback_mapped_)));
     }
     instance_count_readback_mapped_[0] = 0;
     instance_count_readback_mapped_[1] = 0;
@@ -217,7 +217,7 @@ void VulkanGSRenderer::recordInstanceCountReadback(VulkanGSPipelineBuffers& buff
         count_buffer.size != 2 * sizeof(uint32_t)) {
         _THROW_ERROR(std::format(
             "Tile-instance readback requires the indirect-count buffer's two-word contract (buffer={:#x}, offset={}, active_bytes={}, allocation_bytes={}, required_bytes={})",
-            lfsVkHandleValue(count_buffer.buffer),
+            lfs::rendering::vkHandleValue(count_buffer.buffer),
             count_buffer.offset,
             count_buffer.size,
             count_buffer.allocSize,
@@ -348,11 +348,11 @@ void VulkanGSRenderer::ensureVisibleCountReadback() {
     if (create_result != VK_SUCCESS) {
         visible_count_readback_buffer_.buffer = VK_NULL_HANDLE;
         visible_count_readback_buffer_.allocation = VK_NULL_HANDLE;
-        _CHECK_FATAL(std::format(
+        _THROW_ERROR(std::format(
             "Visible-count readback buffer allocation failed (requested_bytes={}, allocator={:#x}, result={}({}))",
             info.size,
-            lfsVkHandleValue(allocator),
-            lfsVkResultToString(create_result),
+            lfs::rendering::vkHandleValue(allocator),
+            lfs::rendering::vkResultToString(create_result),
             static_cast<int>(create_result)));
     }
     visible_count_readback_buffer_.allocSize = 2 * sizeof(uint32_t);
@@ -364,12 +364,12 @@ void VulkanGSRenderer::ensureVisibleCountReadback() {
         const VmaAllocation failed_allocation = visible_count_readback_buffer_.allocation;
         vmaDestroyBuffer(allocator, failed_buffer, failed_allocation);
         visible_count_readback_buffer_ = {};
-        _CHECK_FATAL(std::format(
+        _THROW_ERROR(std::format(
             "Visible-count readback allocation was not persistently mapped (requested_bytes={}, buffer={:#x}, allocation={:#x}, mapped_pointer={:#x})",
             info.size,
-            lfsVkHandleValue(failed_buffer),
-            lfsVkHandleValue(failed_allocation),
-            lfsVkHandleValue(visible_count_readback_mapped_)));
+            lfs::rendering::vkHandleValue(failed_buffer),
+            lfs::rendering::vkHandleValue(failed_allocation),
+            lfs::rendering::vkHandleValue(visible_count_readback_mapped_)));
     }
     visible_count_readback_mapped_[0] = 0;
     visible_count_readback_mapped_[1] = 0;
@@ -431,12 +431,12 @@ void VulkanGSRenderer::ensureLodSelectionReadback(const size_t chunk_capacity) {
     if (create_result != VK_SUCCESS) {
         lod_selection_readback_buffer_.buffer = VK_NULL_HANDLE;
         lod_selection_readback_buffer_.allocation = VK_NULL_HANDLE;
-        _CHECK_FATAL(std::format(
+        _THROW_ERROR(std::format(
             "LOD-selection readback buffer allocation failed (requested_bytes={}, payload_words={}, allocator={:#x}, result={}({}))",
             byte_size,
             2 + chunk_capacity,
-            lfsVkHandleValue(allocator),
-            lfsVkResultToString(create_result),
+            lfs::rendering::vkHandleValue(allocator),
+            lfs::rendering::vkResultToString(create_result),
             static_cast<int>(create_result)));
     }
     lod_selection_readback_buffer_.allocSize = byte_size;
@@ -448,12 +448,12 @@ void VulkanGSRenderer::ensureLodSelectionReadback(const size_t chunk_capacity) {
         const VmaAllocation failed_allocation = lod_selection_readback_buffer_.allocation;
         vmaDestroyBuffer(allocator, failed_buffer, failed_allocation);
         lod_selection_readback_buffer_ = {};
-        _CHECK_FATAL(std::format(
+        _THROW_ERROR(std::format(
             "LOD-selection readback allocation was not persistently mapped (requested_bytes={}, buffer={:#x}, allocation={:#x}, mapped_pointer={:#x})",
             byte_size,
-            lfsVkHandleValue(failed_buffer),
-            lfsVkHandleValue(failed_allocation),
-            lfsVkHandleValue(lod_selection_readback_mapped_)));
+            lfs::rendering::vkHandleValue(failed_buffer),
+            lfs::rendering::vkHandleValue(failed_allocation),
+            lfs::rendering::vkHandleValue(lod_selection_readback_mapped_)));
     }
     std::memset(lod_selection_readback_mapped_, 0, byte_size);
     setDebugObjectName(VK_OBJECT_TYPE_BUFFER,
@@ -551,7 +551,7 @@ void VulkanGSRenderer::recordVisibleCountReadback(VulkanGSPipelineBuffers& buffe
     if (count_buffer.buffer == VK_NULL_HANDLE || count_buffer.size != 2 * sizeof(uint32_t)) {
         _THROW_ERROR(std::format(
             "Visible-count readback requires a two-word count buffer (buffer={:#x}, offset={}, active_bytes={}, allocation_bytes={}, required_bytes={})",
-            lfsVkHandleValue(count_buffer.buffer),
+            lfs::rendering::vkHandleValue(count_buffer.buffer),
             count_buffer.offset,
             count_buffer.size,
             count_buffer.allocSize,
@@ -633,8 +633,8 @@ bool VulkanGSRenderer::invalidateReadbackBuffer(_VulkanBuffer& buffer, VkDeviceS
     if (buffer.allocation == VK_NULL_HANDLE) {
         _THROW_ERROR(std::format(
             "invalidateReadbackBuffer requires a VMA-owned allocation (buffer={:#x}, allocation={:#x}, requested_bytes={}, allocation_bytes={}, label='{}')",
-            lfsVkHandleValue(buffer.buffer),
-            lfsVkHandleValue(buffer.allocation),
+            lfs::rendering::vkHandleValue(buffer.buffer),
+            lfs::rendering::vkHandleValue(buffer.allocation),
             size,
             buffer.allocSize,
             buffer.label ? buffer.label : "<unlabeled>"));
@@ -643,11 +643,11 @@ bool VulkanGSRenderer::invalidateReadbackBuffer(_VulkanBuffer& buffer, VkDeviceS
     if (result != VK_SUCCESS) {
         _THROW_ERROR(std::format(
             "vmaInvalidateAllocation failed for a VkSplat readback (buffer={:#x}, allocation={:#x}, requested_bytes={}, allocation_bytes={}, result={}({}))",
-            lfsVkHandleValue(buffer.buffer),
-            lfsVkHandleValue(buffer.allocation),
+            lfs::rendering::vkHandleValue(buffer.buffer),
+            lfs::rendering::vkHandleValue(buffer.allocation),
             size,
             buffer.allocSize,
-            lfsVkResultToString(result),
+            lfs::rendering::vkResultToString(result),
             static_cast<int>(result)));
     }
     return true;
@@ -1709,7 +1709,7 @@ void VulkanGSRenderer::executePrepareTileSort(
     if (buffers.tile_sort_count.deviceBuffer.size != 2 * sizeof(uint32_t)) {
         _THROW_ERROR(std::format(
             "prepare_tile_sort count buffer must contain exactly two uint32 words (buffer={:#x}, active_bytes={}, allocation_bytes={}, required_bytes={})",
-            lfsVkHandleValue(buffers.tile_sort_count.deviceBuffer.buffer),
+            lfs::rendering::vkHandleValue(buffers.tile_sort_count.deviceBuffer.buffer),
             buffers.tile_sort_count.deviceBuffer.size,
             buffers.tile_sort_count.deviceBuffer.allocSize,
             2 * sizeof(uint32_t)));
@@ -1818,9 +1818,9 @@ void VulkanGSRenderer::executeSortIndirectCountImpl(
             "Indirect radix sort requires a two-word count, bit count in [1, 32], and INT32-bounded capacity (capacity={}, int32_max={}, count_buffer={:#x}, count_bytes={}, dispatch_buffer={:#x}, dispatch_bytes={}, dispatch_layout='{}', dispatch_words={}, radix_word_offset={}, num_bits={})",
             capacity,
             std::numeric_limits<int32_t>::max(),
-            lfsVkHandleValue(count_buffer.buffer),
+            lfs::rendering::vkHandleValue(count_buffer.buffer),
             count_buffer.size,
-            lfsVkHandleValue(dispatch_args_buffer.buffer),
+            lfs::rendering::vkHandleValue(dispatch_args_buffer.buffer),
             dispatch_args_buffer.size,
             dispatch_layout.word_count_constant,
             dispatch_layout.word_count,
@@ -2902,7 +2902,7 @@ void VulkanGSRenderer::executeCalculateIndexBufferOffsetVisible(
         if (buffers.tile_sort_count.deviceBuffer.size != 2 * sizeof(uint32_t)) {
             _THROW_ERROR(std::format(
                 "Visible-chain prepare_tile_sort count buffer must contain exactly two uint32 words (buffer={:#x}, active_bytes={}, allocation_bytes={}, required_bytes={})",
-                lfsVkHandleValue(buffers.tile_sort_count.deviceBuffer.buffer),
+                lfs::rendering::vkHandleValue(buffers.tile_sort_count.deviceBuffer.buffer),
                 buffers.tile_sort_count.deviceBuffer.size,
                 buffers.tile_sort_count.deviceBuffer.allocSize,
                 2 * sizeof(uint32_t)));

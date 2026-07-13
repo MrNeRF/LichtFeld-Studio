@@ -356,7 +356,7 @@ namespace lfs::vis {
         viewport_artifact_service_.clearViewportOutput();
         gt_comparison_image_cache_ = {};
         clearVulkanViewportImageState();
-        last_vksplat_render_error_.clear();
+        last_logged_vksplat_render_error_.clear();
         vulkan_viewport_image_generation_ = 0;
         split_view_image_generation_ = 0;
 

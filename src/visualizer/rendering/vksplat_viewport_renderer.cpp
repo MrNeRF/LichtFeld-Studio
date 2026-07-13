@@ -51,24 +51,6 @@ namespace lfs::vis {
         using lfs::core::Device;
         using lfs::core::Tensor;
 
-        struct ScopedStagingBuffer {
-            VmaAllocator allocator = VK_NULL_HANDLE;
-            VkBuffer buffer = VK_NULL_HANDLE;
-            VmaAllocation allocation = VK_NULL_HANDLE;
-            VmaAllocationInfo allocation_info{};
-            std::string vram_scope;
-            std::string vram_label;
-
-            ~ScopedStagingBuffer() {
-                if (allocator != VK_NULL_HANDLE && buffer != VK_NULL_HANDLE) {
-                    if (!vram_scope.empty() && !vram_label.empty()) {
-                        lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(vram_scope, vram_label, 0);
-                    }
-                    vmaDestroyBuffer(allocator, buffer, allocation);
-                }
-            }
-        };
-
         constexpr std::uint32_t kVkSplatCameraModelPinhole = 0u;
         constexpr std::uint32_t kVkSplatCameraModelOrthographic = 1u;
         constexpr std::uint32_t kVkSplatCameraModelEquirectangular = 3u;
@@ -1659,6 +1641,47 @@ namespace lfs::vis {
         }
     };
 
+    std::expected<void, std::string>
+    VksplatViewportRenderer::CudaTimelineHandoff::initialize(
+        VulkanContext& context,
+        const std::string_view error_label,
+        const std::string_view debug_name) {
+        if (!context.createExternalTimelineSemaphore(0, vk_semaphore)) {
+            return std::unexpected(std::format(
+                "{} creation failed: {}", error_label, context.lastError()));
+        }
+
+        const auto handle = context.releaseExternalSemaphoreNativeHandle(vk_semaphore);
+        if (!VulkanContext::externalNativeHandleValid(handle)) {
+            context.destroyExternalSemaphore(vk_semaphore);
+            return std::unexpected(std::format("{} export failed", error_label));
+        }
+
+        lfs::rendering::CudaVulkanExternalSemaphoreImport import{
+            .semaphore_handle = handle,
+            .initial_value = vk_semaphore.initial_value,
+        };
+        if (!cuda_semaphore.init(import)) {
+            const std::string error = cuda_semaphore.lastError();
+            context.destroyExternalSemaphore(vk_semaphore);
+            return std::unexpected(std::format("{} CUDA import failed: {}", error_label, error));
+        }
+
+        value = 0;
+        context.setDebugObjectName(VK_OBJECT_TYPE_SEMAPHORE, vk_semaphore.semaphore, debug_name);
+        return {};
+    }
+
+    void VksplatViewportRenderer::CudaTimelineHandoff::reset(VulkanContext* const context) {
+        cuda_semaphore.reset();
+        if (context != nullptr) {
+            context->destroyExternalSemaphore(vk_semaphore);
+        } else {
+            vk_semaphore = {};
+        }
+        value = 0;
+    }
+
     VksplatViewportRenderer::VksplatViewportRenderer() {
         // Created here (not in ensureInitialized) so the trainer↔viewer
         // handshake can target the render stream from the very first frame.
@@ -1922,33 +1945,13 @@ namespace lfs::vis {
             snap = {};
         }
         for (auto& timeline : upload_timelines_) {
-            timeline.cuda_semaphore.reset();
-            if (context_) {
-                context_->destroyExternalSemaphore(timeline.vk_semaphore);
-            }
-            timeline.vk_semaphore = {};
-            timeline.value = 0;
+            timeline.reset(context_);
         }
         for (auto& timeline : overlay_upload_timelines_) {
-            timeline.cuda_semaphore.reset();
-            if (context_) {
-                context_->destroyExternalSemaphore(timeline.vk_semaphore);
-            }
-            timeline.vk_semaphore = {};
-            timeline.value = 0;
+            timeline.reset(context_);
         }
-        selection_query_timeline_.cuda_semaphore.reset();
-        if (context_) {
-            context_->destroyExternalSemaphore(selection_query_timeline_.vk_semaphore);
-        }
-        selection_query_timeline_.vk_semaphore = {};
-        selection_query_timeline_.value = 0;
-        lod_engine_timeline_.cuda_semaphore.reset();
-        if (context_) {
-            context_->destroyExternalSemaphore(lod_engine_timeline_.vk_semaphore);
-        }
-        lod_engine_timeline_.vk_semaphore = {};
-        lod_engine_timeline_.value = 0;
+        selection_query_timeline_.reset(context_);
+        lod_engine_timeline_.reset(context_);
         if (context_) {
             for (auto& logical_slot : output_slots_) {
                 for (auto& slot : logical_slot) {
@@ -1979,11 +1982,7 @@ namespace lfs::vis {
         render_complete_external_ = {};
         render_complete_timeline_ = VK_NULL_HANDLE;
         vulkan_render_complete_timeline_ = VK_NULL_HANDLE;
-        render_complete_value_ = 0;
-        // The fresh timeline restarts at 0; clear the published value too, else
-        // renderCompleteValue() would hand the trainer a stale value from the old
-        // timeline that the new CUDA semaphore will never signal.
-        last_signaled_render_value_ = 0;
+        last_submitted_render_value_ = 0;
         last_lod_page_borrow_value_ = 0;
         retired_input_storages_.clear();
         latest_output_ring_slot_ = {};
@@ -3631,16 +3630,16 @@ namespace lfs::vis {
             old = {};
             return;
         }
-        // render_complete_value_ is the value the most recently submitted batch
+        // last_submitted_render_value_ is the value the most recently submitted batch
         // signals; that batch is the last one that could reference this buffer
         // (the current frame rebinds to the new import before recording). When no
         // frame has been submitted, the buffer was never seen by the GPU.
-        if (render_complete_timeline_ == VK_NULL_HANDLE || render_complete_value_ == 0) {
+        if (render_complete_timeline_ == VK_NULL_HANDLE || last_submitted_render_value_ == 0) {
             context_->destroyExternalBuffer(old);
             old = {};
             return;
         }
-        retired_scratch_buffers_.emplace_back(render_complete_value_, std::move(old));
+        retired_scratch_buffers_.emplace_back(last_submitted_render_value_, std::move(old));
         old = {};
     }
 
@@ -3687,8 +3686,8 @@ namespace lfs::vis {
         // confirmed value down to it: the unsubmitted batch never read those
         // storages, so reclaiming them when the last real frame completes is safe.
         for (auto& entry : retired_input_storages_) {
-            if (entry.first > last_signaled_render_value_) {
-                entry.first = last_signaled_render_value_;
+            if (entry.first > last_submitted_render_value_) {
+                entry.first = last_submitted_render_value_;
             }
         }
     }
@@ -4197,124 +4196,42 @@ namespace lfs::vis {
             context.setDebugObjectName(VK_OBJECT_TYPE_SEMAPHORE,
                                        vulkan_render_complete_timeline_,
                                        "vksplat.timeline.render.vulkan");
-            render_complete_value_ = 0;
+            last_submitted_render_value_ = 0;
         } catch (const std::exception& e) {
             return std::unexpected(std::format("VkSplat initialization failed: {}", e.what()));
         }
 
-        // Per-ring-slot upload timeline: a Vulkan-exportable timeline semaphore
-        // imported into CUDA so we can signal CUDA-side after the upload's
-        // cudaMemcpyAsync and have Vulkan compute wait on it, replacing the
-        // per-frame cudaStreamSynchronize that previously blocked the CPU.
         for (std::size_t slot = 0; slot < upload_timelines_.size(); ++slot) {
-            auto& timeline = upload_timelines_[slot];
-            if (!context.createExternalTimelineSemaphore(0, timeline.vk_semaphore)) {
-                return std::unexpected(std::format(
-                    "VkSplat upload timeline semaphore creation failed: {}",
-                    context.lastError()));
+            const auto result = upload_timelines_[slot].initialize(
+                context,
+                "VkSplat upload timeline semaphore",
+                std::format("interop.timeline.upload[{}]", slot));
+            if (!result) {
+                return result;
             }
-            const auto handle = context.releaseExternalSemaphoreNativeHandle(timeline.vk_semaphore);
-            if (!VulkanContext::externalNativeHandleValid(handle)) {
-                context.destroyExternalSemaphore(timeline.vk_semaphore);
-                return std::unexpected("VkSplat upload timeline semaphore export failed");
-            }
-            lfs::rendering::CudaVulkanExternalSemaphoreImport import{};
-            import.semaphore_handle = handle;
-            import.initial_value = timeline.vk_semaphore.initial_value;
-            if (!timeline.cuda_semaphore.init(import)) {
-                std::string err = timeline.cuda_semaphore.lastError();
-                context.destroyExternalSemaphore(timeline.vk_semaphore);
-                return std::unexpected(std::format(
-                    "VkSplat upload timeline semaphore CUDA import failed: {}", err));
-            }
-            timeline.value = 0;
-            context.setDebugObjectNamef(VK_OBJECT_TYPE_SEMAPHORE,
-                                        timeline.vk_semaphore.semaphore,
-                                        "interop.timeline.upload[{}]",
-                                        slot);
         }
         for (std::size_t slot = 0; slot < overlay_upload_timelines_.size(); ++slot) {
-            auto& timeline = overlay_upload_timelines_[slot];
-            if (!context.createExternalTimelineSemaphore(0, timeline.vk_semaphore)) {
-                return std::unexpected(std::format(
-                    "VkSplat overlay upload timeline semaphore creation failed: {}",
-                    context.lastError()));
+            const auto result = overlay_upload_timelines_[slot].initialize(
+                context,
+                "VkSplat overlay upload timeline semaphore",
+                std::format("interop.timeline.overlay[{}]", slot));
+            if (!result) {
+                return result;
             }
-            const auto handle = context.releaseExternalSemaphoreNativeHandle(timeline.vk_semaphore);
-            if (!VulkanContext::externalNativeHandleValid(handle)) {
-                context.destroyExternalSemaphore(timeline.vk_semaphore);
-                return std::unexpected("VkSplat overlay upload timeline semaphore export failed");
-            }
-            lfs::rendering::CudaVulkanExternalSemaphoreImport import{};
-            import.semaphore_handle = handle;
-            import.initial_value = timeline.vk_semaphore.initial_value;
-            if (!timeline.cuda_semaphore.init(import)) {
-                std::string err = timeline.cuda_semaphore.lastError();
-                context.destroyExternalSemaphore(timeline.vk_semaphore);
-                return std::unexpected(std::format(
-                    "VkSplat overlay upload timeline semaphore CUDA import failed: {}", err));
-            }
-            timeline.value = 0;
-            context.setDebugObjectNamef(VK_OBJECT_TYPE_SEMAPHORE,
-                                        timeline.vk_semaphore.semaphore,
-                                        "interop.timeline.overlay[{}]",
-                                        slot);
         }
-        {
-            auto& timeline = lod_engine_timeline_;
-            if (!context.createExternalTimelineSemaphore(0, timeline.vk_semaphore)) {
-                return std::unexpected(std::format(
-                    "VkSplat LOD upload engine timeline semaphore creation failed: {}",
-                    context.lastError()));
-            }
-            const auto handle = context.releaseExternalSemaphoreNativeHandle(timeline.vk_semaphore);
-            if (!VulkanContext::externalNativeHandleValid(handle)) {
-                context.destroyExternalSemaphore(timeline.vk_semaphore);
-                timeline.vk_semaphore = {};
-                return std::unexpected("VkSplat LOD upload engine timeline semaphore export failed");
-            }
-            lfs::rendering::CudaVulkanExternalSemaphoreImport import{};
-            import.semaphore_handle = handle;
-            import.initial_value = timeline.vk_semaphore.initial_value;
-            if (!timeline.cuda_semaphore.init(import)) {
-                std::string err = timeline.cuda_semaphore.lastError();
-                context.destroyExternalSemaphore(timeline.vk_semaphore);
-                timeline.vk_semaphore = {};
-                return std::unexpected(std::format(
-                    "VkSplat LOD upload engine timeline semaphore CUDA import failed: {}", err));
-            }
-            timeline.value = 0;
-            context.setDebugObjectName(VK_OBJECT_TYPE_SEMAPHORE,
-                                       timeline.vk_semaphore.semaphore,
-                                       "interop.timeline.lod_engine");
+        if (const auto result = lod_engine_timeline_.initialize(
+                context,
+                "VkSplat LOD upload engine timeline semaphore",
+                "interop.timeline.lod_engine");
+            !result) {
+            return result;
         }
-        {
-            auto& timeline = selection_query_timeline_;
-            if (!context.createExternalTimelineSemaphore(0, timeline.vk_semaphore)) {
-                return std::unexpected(std::format(
-                    "VkSplat selection query timeline semaphore creation failed: {}",
-                    context.lastError()));
-            }
-            const auto handle = context.releaseExternalSemaphoreNativeHandle(timeline.vk_semaphore);
-            if (!VulkanContext::externalNativeHandleValid(handle)) {
-                context.destroyExternalSemaphore(timeline.vk_semaphore);
-                timeline.vk_semaphore = {};
-                return std::unexpected("VkSplat selection query timeline semaphore export failed");
-            }
-            lfs::rendering::CudaVulkanExternalSemaphoreImport import{};
-            import.semaphore_handle = handle;
-            import.initial_value = timeline.vk_semaphore.initial_value;
-            if (!timeline.cuda_semaphore.init(import)) {
-                std::string err = timeline.cuda_semaphore.lastError();
-                context.destroyExternalSemaphore(timeline.vk_semaphore);
-                timeline.vk_semaphore = {};
-                return std::unexpected(std::format(
-                    "VkSplat selection query timeline semaphore CUDA import failed: {}", err));
-            }
-            timeline.value = 0;
-            context.setDebugObjectName(VK_OBJECT_TYPE_SEMAPHORE,
-                                       timeline.vk_semaphore.semaphore,
-                                       "interop.timeline.selection_query");
+        if (const auto result = selection_query_timeline_.initialize(
+                context,
+                "VkSplat selection query timeline semaphore",
+                "interop.timeline.selection_query");
+            !result) {
+            return result;
         }
 
         initialization_committed = true;
@@ -4331,22 +4248,22 @@ namespace lfs::vis {
                 pass,
                 vkHandleValue(render_complete_timeline_),
                 vkHandleValue(vulkan_render_complete_timeline_),
-                render_complete_value_));
+                last_submitted_render_value_));
         }
-        if (render_complete_value_ == std::numeric_limits<std::uint64_t>::max()) {
+        if (last_submitted_render_value_ == std::numeric_limits<std::uint64_t>::max()) {
             return std::unexpected(std::format(
                 "VkSplat {} completion timeline exhausted uint64 values "
                 "(timeline={:#x}, last_submitted_value={}, uint64_max={})",
                 pass,
                 vkHandleValue(render_complete_timeline_),
-                render_complete_value_,
+                last_submitted_render_value_,
                 std::numeric_limits<std::uint64_t>::max()));
         }
 
-        // Failed recording leaves render_complete_value_ unchanged. The caller
+        // Failed recording leaves last_submitted_render_value_ unchanged. The caller
         // commits only after vkQueueSubmit accepts the timeline signal; a host
         // cancellation signal could overtake an outstanding queue signal.
-        return render_complete_value_ + 1;
+        return last_submitted_render_value_ + 1;
     }
 
     std::expected<void, std::string> VksplatViewportRenderer::waitForRingSlot(
@@ -5522,6 +5439,70 @@ namespace lfs::vis {
         return {};
     }
 
+    std::expected<void, std::string> VksplatViewportRenderer::submitReadbackAndWait(
+        VulkanContext& context,
+        const VkCommandBuffer command_buffer,
+        const std::uint64_t completion_value,
+        const VkPipelineStageFlags wait_stage,
+        const VkDeviceSize byte_count,
+        const std::string_view validation_label,
+        const std::string_view operation_label,
+        const bool reset_fence,
+        const std::source_location location) const {
+        VkSubmitInfo submit_info{};
+        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submit_info.commandBufferCount = 1;
+        submit_info.pCommandBuffers = &command_buffer;
+        TimelineSubmitWait render_wait{};
+        render_wait.attach(
+            submit_info, vulkan_render_complete_timeline_, completion_value, wait_stage);
+
+        const VkQueue submit_queue = context.graphicsQueue();
+        if (auto error = validateQueueSubmit(
+                validation_label, submit_queue, submit_info, readback_fence_, true, location)) {
+            return std::unexpected(std::move(*error));
+        }
+
+        const VkDevice device = context.device();
+        if (reset_fence) {
+            const VkResult result = vkResetFences(device, 1, &readback_fence_);
+            if (result != VK_SUCCESS) {
+                return std::unexpected(vkError(
+                    std::format("vkResetFences({})", operation_label),
+                    result,
+                    std::string_view{},
+                    location));
+            }
+        }
+
+        VkResult result = vkQueueSubmit(submit_queue, 1, &submit_info, readback_fence_);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(vkError(
+                std::format("vkQueueSubmit({})", operation_label),
+                result,
+                std::string_view{},
+                location));
+        }
+        result = vkWaitForFences(device, 1, &readback_fence_, VK_TRUE, UINT64_MAX);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(vkError(
+                std::format("vkWaitForFences({})", operation_label),
+                result,
+                std::string_view{},
+                location));
+        }
+        result = vmaInvalidateAllocation(
+            context.allocator(), readback_staging_allocation_, 0, byte_count);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(vkError(
+                std::format("vmaInvalidateAllocation({})", operation_label),
+                result,
+                std::string_view{},
+                location));
+        }
+        return {};
+    }
+
     std::expected<glm::ivec2, std::string> VksplatViewportRenderer::latestOutputImageSize(
         const OutputSlot output_slot) const {
         std::lock_guard<std::mutex> readback_lock(readback_mutex_);
@@ -5657,7 +5638,7 @@ namespace lfs::vis {
 
         const auto& output = output_slots_[outputSlotIndex(output_slot)][latestOutputRingSlot(output_slot)];
         const std::uint64_t completion_value =
-            std::max(output.completion_value, last_signaled_render_value_);
+            std::max(output.completion_value, last_submitted_render_value_);
         if (vulkan_render_complete_timeline_ == VK_NULL_HANDLE || completion_value == 0) {
             return std::unexpected(
                 "VkSplat depth readback has no submitted render completion to wait on");
@@ -5692,7 +5673,6 @@ namespace lfs::vis {
             return std::unexpected(ready.error());
         }
         VkResult result = VK_SUCCESS;
-        const VkDevice device = context.device();
         const VkCommandBuffer command_buffer = readback_cmd_;
         result = vkResetCommandBuffer(command_buffer, 0);
         if (result != VK_SUCCESS) {
@@ -5736,39 +5716,16 @@ namespace lfs::vis {
         if (result != VK_SUCCESS) {
             return std::unexpected(vkError("vkEndCommandBuffer(VkSplat depth readback)", result));
         }
-        VkSubmitInfo submit_info{};
-        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submit_info.commandBufferCount = 1;
-        submit_info.pCommandBuffers = &command_buffer;
-        TimelineSubmitWait render_wait{};
-        render_wait.attach(submit_info,
-                           vulkan_render_complete_timeline_,
-                           completion_value,
-                           VK_PIPELINE_STAGE_TRANSFER_BIT);
-        const VkQueue submit_queue = context.graphicsQueue();
-        if (auto error = validateQueueSubmit("VkSplat depth readback submit",
-                                             submit_queue,
-                                             submit_info,
-                                             readback_fence_,
-                                             true)) {
-            return std::unexpected(std::move(*error));
-        }
-        result = vkResetFences(device, 1, &readback_fence_);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkResetFences(VkSplat depth readback)", result));
-        }
-        result = vkQueueSubmit(submit_queue, 1, &submit_info, readback_fence_);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkQueueSubmit(VkSplat depth readback)", result));
-        }
-        result = vkWaitForFences(device, 1, &readback_fence_, VK_TRUE, UINT64_MAX);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkWaitForFences(VkSplat depth readback)", result));
-        }
-        result = vmaInvalidateAllocation(
-            context.allocator(), readback_staging_allocation_, 0, byte_count);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vmaInvalidateAllocation(VkSplat depth readback)", result));
+        if (const auto submitted = submitReadbackAndWait(
+                context,
+                command_buffer,
+                completion_value,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                byte_count,
+                "VkSplat depth readback submit",
+                "VkSplat depth readback");
+            !submitted) {
+            return std::unexpected(submitted.error());
         }
 
         auto tensor = lfs::core::Tensor::empty(
@@ -5827,41 +5784,15 @@ namespace lfs::vis {
             return std::unexpected("VkSplat output depth readback received an empty image");
         }
 
-        ScopedStagingBuffer staging{};
-        staging.allocator = context.allocator();
-        VkBufferCreateInfo buffer_info{};
-        buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        buffer_info.size = byte_count;
-        buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-        buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        VmaAllocationCreateInfo alloc_info{};
-        alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
-        alloc_info.flags =
-            VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
-            VMA_ALLOCATION_CREATE_MAPPED_BIT;
-        VkResult result = vmaCreateBuffer(
-            staging.allocator,
-            &buffer_info,
-            &alloc_info,
-            &staging.buffer,
-            &staging.allocation,
-            &staging.allocation_info);
-        if (result != VK_SUCCESS || staging.buffer == VK_NULL_HANDLE) {
-            return std::unexpected(vkError("vmaCreateBuffer(VkSplat output depth readback)", result));
-        }
-        staging.vram_scope = "vulkan.vksplat.depth_readback_buffer";
-        staging.vram_label = std::format("output_depth:{}x{}", output.size.x, output.size.y);
-        lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
-            staging.vram_scope,
-            staging.vram_label,
-            static_cast<std::size_t>(staging.allocation_info.size));
-        if (staging.allocation_info.pMappedData == nullptr) {
-            return std::unexpected("VkSplat output depth readback staging buffer is not host-mapped");
+        if (const auto staging_ready = ensureReadbackStagingBuffer(context, byte_count);
+            !staging_ready) {
+            return std::unexpected(staging_ready.error());
         }
 
         if (const auto ready = ensureReadbackContext(); !ready) {
             return std::unexpected(ready.error());
         }
+        VkResult result = VK_SUCCESS;
         const VkCommandBuffer command_buffer = readback_cmd_;
         result = vkResetCommandBuffer(command_buffer, 0);
         if (result != VK_SUCCESS) {
@@ -5895,7 +5826,7 @@ namespace lfs::vis {
         vkCmdCopyImageToBuffer(command_buffer,
                                output.depth_image.image,
                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                               staging.buffer,
+                               readback_staging_buffer_,
                                1,
                                &copy_region);
 
@@ -5914,34 +5845,17 @@ namespace lfs::vis {
             return std::unexpected(vkError("vkResetFences(VkSplat output depth readback)", result));
         }
 
-        VkSubmitInfo submit_info{};
-        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submit_info.commandBufferCount = 1;
-        submit_info.pCommandBuffers = &command_buffer;
-        TimelineSubmitWait render_wait{};
-        render_wait.attach(submit_info,
-                           vulkan_render_complete_timeline_,
-                           output.completion_value,
-                           kOutputImageReadbackWaitStage);
-        const VkQueue submit_queue = context.graphicsQueue();
-        if (auto error = validateQueueSubmit("VkSplat output depth readback submit",
-                                             submit_queue,
-                                             submit_info,
-                                             readback_fence_,
-                                             true)) {
-            return std::unexpected(std::move(*error));
-        }
-        result = vkQueueSubmit(submit_queue, 1, &submit_info, readback_fence_);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkQueueSubmit(VkSplat output depth readback)", result));
-        }
-        result = vkWaitForFences(device, 1, &readback_fence_, VK_TRUE, UINT64_MAX);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkWaitForFences(VkSplat output depth readback)", result));
-        }
-        result = vmaInvalidateAllocation(staging.allocator, staging.allocation, 0, byte_count);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vmaInvalidateAllocation(VkSplat output depth readback)", result));
+        if (const auto submitted = submitReadbackAndWait(
+                context,
+                command_buffer,
+                output.completion_value,
+                kOutputImageReadbackWaitStage,
+                byte_count,
+                "VkSplat output depth readback submit",
+                "VkSplat output depth readback",
+                false);
+            !submitted) {
+            return std::unexpected(submitted.error());
         }
 
         auto tensor = lfs::core::Tensor::empty(
@@ -5951,7 +5865,7 @@ namespace lfs::vis {
         if (!tensor.is_valid()) {
             return std::unexpected("VkSplat output depth readback failed to allocate CPU tensor");
         }
-        const auto* const src = static_cast<const float*>(staging.allocation_info.pMappedData);
+        const auto* const src = static_cast<const float*>(readback_staging_info_.pMappedData);
         auto* const dst = tensor.ptr<float>();
         if (src == nullptr || dst == nullptr) {
             return std::unexpected("VkSplat output depth readback has null mapped data");
@@ -6020,7 +5934,6 @@ namespace lfs::vis {
             return std::unexpected(context.lastError());
         }
 
-        const VkDevice device = context.device();
         const VkDeviceSize byte_count =
             static_cast<VkDeviceSize>(output.size.x) *
             static_cast<VkDeviceSize>(output.size.y) *
@@ -6085,42 +5998,16 @@ namespace lfs::vis {
             return std::unexpected(vkError("vkEndCommandBuffer(VkSplat readback)", result));
         }
 
-        VkSubmitInfo submit_info{};
-        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submit_info.commandBufferCount = 1;
-        submit_info.pCommandBuffers = &command_buffer;
-        TimelineSubmitWait render_wait{};
-        render_wait.attach(submit_info,
-                           vulkan_render_complete_timeline_,
-                           output.completion_value,
-                           kOutputImageReadbackWaitStage);
-        const VkQueue submit_queue = context.graphicsQueue();
-        if (auto error = validateQueueSubmit("VkSplat color readback submit",
-                                             submit_queue,
-                                             submit_info,
-                                             readback_fence_,
-                                             true)) {
-            return std::unexpected(std::move(*error));
-        }
-
-        result = vkResetFences(device, 1, &readback_fence_);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkResetFences(VkSplat readback)", result));
-        }
-
-        result = vkQueueSubmit(submit_queue, 1, &submit_info, readback_fence_);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkQueueSubmit(VkSplat readback)", result));
-        }
-        result = vkWaitForFences(device, 1, &readback_fence_, VK_TRUE, UINT64_MAX);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkWaitForFences(VkSplat readback)", result));
-        }
-
-        result = vmaInvalidateAllocation(
-            context.allocator(), readback_staging_allocation_, 0, byte_count);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vmaInvalidateAllocation(VkSplat readback)", result));
+        if (const auto submitted = submitReadbackAndWait(
+                context,
+                command_buffer,
+                output.completion_value,
+                kOutputImageReadbackWaitStage,
+                byte_count,
+                "VkSplat color readback submit",
+                "VkSplat readback");
+            !submitted) {
+            return submitted;
         }
 
         const auto* const rgba = static_cast<const std::uint8_t*>(readback_staging_info_.pMappedData);
@@ -6226,7 +6113,6 @@ namespace lfs::vis {
             return std::unexpected(context.lastError());
         }
 
-        const VkDevice device = context.device();
         constexpr VkDeviceSize byte_count = sizeof(float);
         if (const auto staging_ready = ensureReadbackStagingBuffer(context, byte_count);
             !staging_ready) {
@@ -6282,42 +6168,16 @@ namespace lfs::vis {
             return std::unexpected(vkError("vkEndCommandBuffer(VkSplat depth sample)", result));
         }
 
-        VkSubmitInfo submit_info{};
-        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submit_info.commandBufferCount = 1;
-        submit_info.pCommandBuffers = &command_buffer;
-        TimelineSubmitWait render_wait{};
-        render_wait.attach(submit_info,
-                           vulkan_render_complete_timeline_,
-                           output.completion_value,
-                           kOutputImageReadbackWaitStage);
-        const VkQueue submit_queue = context.graphicsQueue();
-        if (auto error = validateQueueSubmit("VkSplat depth-sample submit",
-                                             submit_queue,
-                                             submit_info,
-                                             readback_fence_,
-                                             true)) {
-            return std::unexpected(std::move(*error));
-        }
-
-        result = vkResetFences(device, 1, &readback_fence_);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkResetFences(VkSplat depth sample)", result));
-        }
-
-        result = vkQueueSubmit(submit_queue, 1, &submit_info, readback_fence_);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkQueueSubmit(VkSplat depth sample)", result));
-        }
-        result = vkWaitForFences(device, 1, &readback_fence_, VK_TRUE, UINT64_MAX);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkWaitForFences(VkSplat depth sample)", result));
-        }
-
-        result = vmaInvalidateAllocation(
-            context.allocator(), readback_staging_allocation_, 0, byte_count);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vmaInvalidateAllocation(VkSplat depth sample)", result));
+        if (const auto submitted = submitReadbackAndWait(
+                context,
+                command_buffer,
+                output.completion_value,
+                kOutputImageReadbackWaitStage,
+                byte_count,
+                "VkSplat depth-sample submit",
+                "VkSplat depth sample");
+            !submitted) {
+            return std::unexpected(submitted.error());
         }
 
         float depth = -1.0f;
@@ -7102,8 +6962,7 @@ namespace lfs::vis {
             // proves that vkQueueSubmit accepted the signal; no completion wait
             // is needed on either path.
             if (renderer_.wasTimelineSignalSubmitted(render_complete_timeline_, completion_value)) {
-                render_complete_value_ = completion_value;
-                last_signaled_render_value_ = completion_value;
+                last_submitted_render_value_ = completion_value;
                 if (overlay_arena_guard) {
                     overlay_arena_guard->noteVulkanRelease(render_complete_cuda_.handle(), completion_value);
                 }
@@ -7116,10 +6975,9 @@ namespace lfs::vis {
                 "(timeline={:#x}, candidate_value={}, last_submitted_value={})",
                 vkHandleValue(render_complete_timeline_),
                 completion_value,
-                render_complete_value_));
+                last_submitted_render_value_));
         }
-        render_complete_value_ = completion_value;
-        last_signaled_render_value_ = completion_value;
+        last_submitted_render_value_ = completion_value;
         if (overlay_arena_guard) {
             overlay_arena_guard->noteVulkanRelease(render_complete_cuda_.handle(), completion_value);
         }
@@ -8249,8 +8107,7 @@ namespace lfs::vis {
             // post-submit bookkeeping failure is distinguished by the pipeline's
             // host-side submission record, so neither path waits on the GPU.
             if (renderer_.wasTimelineSignalSubmitted(render_complete_timeline_, completion_value)) {
-                render_complete_value_ = completion_value;
-                last_signaled_render_value_ = completion_value;
+                last_submitted_render_value_ = completion_value;
                 if (shared_arena_guard) {
                     shared_arena_guard->noteVulkanRelease(render_complete_cuda_.handle(), completion_value);
                 }
@@ -8266,13 +8123,12 @@ namespace lfs::vis {
                 "(timeline={:#x}, candidate_value={}, last_submitted_value={})",
                 vkHandleValue(render_complete_timeline_),
                 completion_value,
-                render_complete_value_));
+                last_submitted_render_value_));
         }
         // The batch (and its timeline signal) is submitted; hand the release to
         // the arena and the trainer before the guard/locks let them reuse the
         // scratch this batch still reads.
-        render_complete_value_ = completion_value;
-        last_signaled_render_value_ = completion_value;
+        last_submitted_render_value_ = completion_value;
         last_render_used_macro_chain_ = higs_active;
         resident_sort_capacity_ = shared_sort_capacity;
         if (shared_arena_guard) {

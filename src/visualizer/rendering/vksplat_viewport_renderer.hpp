@@ -23,6 +23,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <source_location>
 #include <span>
 #include <string>
 #include <string_view>
@@ -151,7 +152,7 @@ namespace lfs::vis {
         [[nodiscard]] cudaExternalSemaphore_t renderCompleteFence() const {
             return render_complete_cuda_.handle();
         }
-        [[nodiscard]] std::uint64_t renderCompleteValue() const { return last_signaled_render_value_; }
+        [[nodiscard]] std::uint64_t renderCompleteValue() const { return last_submitted_render_value_; }
 
         // Eagerly create the render stream + completion fence so the trainer↔viewer
         // handshake can be installed before the first live frame submits (covers
@@ -458,6 +459,16 @@ namespace lfs::vis {
         [[nodiscard]] std::expected<void, std::string> ensureReadbackStagingBuffer(
             VulkanContext& context,
             VkDeviceSize required_bytes) const;
+        [[nodiscard]] std::expected<void, std::string> submitReadbackAndWait(
+            VulkanContext& context,
+            VkCommandBuffer command_buffer,
+            std::uint64_t completion_value,
+            VkPipelineStageFlags wait_stage,
+            VkDeviceSize byte_count,
+            std::string_view validation_label,
+            std::string_view operation_label,
+            bool reset_fence = true,
+            std::source_location location = std::source_location::current()) const;
         [[nodiscard]] std::expected<glm::ivec2, std::string> latestOutputImageSize(OutputSlot output_slot) const;
 
         VulkanContext* context_ = nullptr;
@@ -589,14 +600,9 @@ namespace lfs::vis {
         VkSemaphore vulkan_render_complete_timeline_ = VK_NULL_HANDLE;
         VkSemaphore render_complete_timeline_ = VK_NULL_HANDLE;
         // Last value whose signal operation was accepted by vkQueueSubmit.
-        // Failed recording/cancel paths leave it unchanged, so the next attempt
-        // safely reuses the same candidate instead of creating an unsignaled gap.
-        std::uint64_t render_complete_value_ = 0;
-        // The latest completion value a submit actually signaled (or is guaranteed
-        // to signal). renderCompleteValue() returns this — never an uncommitted
-        // candidate — so the trainer/arena never wait a value a failed frame left
-        // unsignaled.
-        std::uint64_t last_signaled_render_value_ = 0;
+        // Failed recording leaves it unchanged, so no consumer waits on an
+        // unsignaled candidate.
+        std::uint64_t last_submitted_render_value_ = 0;
         // When set, render() takes the legacy per-pixel chain so the depth
         // readback captures per-pixel depth (see setDepthCaptureMode).
         bool depth_capture_mode_ = false;
@@ -659,14 +665,20 @@ namespace lfs::vis {
         // cudaStreamSynchronize that previously blocked the CPU after every
         // upload (P15). Values are monotonic; on each upload we bump the slot's
         // counter, signal CUDA-side, and queue a Vulkan-side wait.
-        struct UploadTimeline {
+        struct CudaTimelineHandoff {
             VulkanContext::ExternalSemaphore vk_semaphore{};
             lfs::rendering::CudaTimelineSemaphore cuda_semaphore{};
             std::uint64_t value = 0;
+
+            [[nodiscard]] std::expected<void, std::string> initialize(
+                VulkanContext& context,
+                std::string_view error_label,
+                std::string_view debug_name);
+            void reset(VulkanContext* context);
         };
-        std::array<UploadTimeline, kInputRingSize> upload_timelines_{};
-        std::array<UploadTimeline, kInputRingSize> overlay_upload_timelines_{};
-        UploadTimeline selection_query_timeline_{};
+        std::array<CudaTimelineHandoff, kInputRingSize> upload_timelines_{};
+        std::array<CudaTimelineHandoff, kInputRingSize> overlay_upload_timelines_{};
+        CudaTimelineHandoff selection_query_timeline_{};
 
         cudaStream_t render_stream_ = nullptr;
 
@@ -691,7 +703,7 @@ namespace lfs::vis {
 
         // Async RAD page streaming: decoded pages are packed and copied on the
         // engine's own thread/stream; render frames only publish completions.
-        UploadTimeline lod_engine_timeline_{};
+        CudaTimelineHandoff lod_engine_timeline_{};
         LodUploadEngine lod_upload_engine_;
         std::uint64_t lod_upload_log_batches_ = 0;
         bool lod_upload_log_converged_ = false;

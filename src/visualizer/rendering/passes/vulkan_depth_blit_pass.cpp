@@ -31,29 +31,6 @@ namespace lfs::vis {
         };
         static_assert(sizeof(DepthBlitPush) == 16);
 
-        VkShaderModule createShaderModule(VkDevice device, const std::uint32_t* code, std::size_t bytes) {
-            VkShaderModuleCreateInfo info{};
-            info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            info.codeSize = bytes;
-            info.pCode = code;
-            VkShaderModule m = VK_NULL_HANDLE;
-            const VkResult result = vkCreateShaderModule(device, &info, nullptr, &m);
-            if (result != VK_SUCCESS) {
-                LOG_ERROR("Vulkan: {}",
-                          formatVkCheckFailure(
-                              "vkCreateShaderModule(device, &info, nullptr, &m)",
-                              result,
-                              std::format("Depth-blit shader-module creation failed (device={:#x}, code_ptr={:#x}, code_size={})",
-                                          vkHandleValue(device),
-                                          reinterpret_cast<std::uintptr_t>(code),
-                                          bytes),
-                              __FILE__,
-                              __LINE__));
-                return VK_NULL_HANDLE;
-            }
-            return m;
-        }
-
     } // namespace
 
     struct VulkanDepthBlitPass::Impl {
@@ -106,7 +83,7 @@ namespace lfs::vis {
             pipeline_cache = ctx.pipelineCache();
             screen_quad_buffer = screen_quad;
             if (device == VK_NULL_HANDLE || allocator == VK_NULL_HANDLE) {
-                return vkCheckFailed(std::format(
+                return logVkFailure(std::format(
                     "Depth-blit initialization requires a live device and allocator (device={:#x}, allocator={:#x}, graphics_queue={:#x}, screen_quad_buffer={:#x}) ({}:{})",
                     vkHandleValue(device),
                     reinterpret_cast<std::uintptr_t>(allocator),
@@ -252,15 +229,13 @@ namespace lfs::vis {
             if (fence_result != VK_SUCCESS) {
                 vkFreeCommandBuffers(device, transfer_pool, 1, &transfer_cmd);
                 transfer_cmd = VK_NULL_HANDLE;
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vkCreateFence(device, &fi, nullptr, &transfer_fence)",
                     fence_result,
                     std::format("Depth-blit transfer fence creation failed (device={:#x}, command_pool={:#x}, flags={:#x})",
                                 vkHandleValue(device),
                                 vkHandleValue(transfer_pool),
-                                static_cast<std::uint32_t>(fi.flags)),
-                    __FILE__,
-                    __LINE__));
+                                static_cast<std::uint32_t>(fi.flags)));
             }
             context->setDebugObjectName(VK_OBJECT_TYPE_FENCE,
                                         transfer_fence,
@@ -419,8 +394,8 @@ namespace lfs::vis {
 
         bool createPipeline(VkFormat color_format, VkFormat depth_format) {
             using namespace viewport_shaders;
-            VkShaderModule vert = createShaderModule(device, kScreenQuadVertSpv, sizeof(kScreenQuadVertSpv));
-            VkShaderModule frag = createShaderModule(device, kDepthBlitFragSpv, sizeof(kDepthBlitFragSpv));
+            VkShaderModule vert = createShaderModule(device, kScreenQuadVertSpv, "Depth-blit");
+            VkShaderModule frag = createShaderModule(device, kDepthBlitFragSpv, "Depth-blit");
             if (vert == VK_NULL_HANDLE || frag == VK_NULL_HANDLE) {
                 if (vert)
                     vkDestroyShaderModule(device, vert, nullptr);
@@ -514,16 +489,14 @@ namespace lfs::vis {
             if (layout_result != VK_SUCCESS) {
                 vkDestroyShaderModule(device, vert, nullptr);
                 vkDestroyShaderModule(device, frag, nullptr);
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vkCreatePipelineLayout(device, &layout_info, nullptr, &pipeline_layout)",
                     layout_result,
                     std::format("Depth-blit pipeline-layout creation failed (device={:#x}, descriptor_layout={:#x}, set_layout_count={}, push_constant_bytes={})",
                                 vkHandleValue(device),
                                 vkHandleValue(desc_layout),
                                 layout_info.setLayoutCount,
-                                push.size),
-                    __FILE__,
-                    __LINE__));
+                                push.size));
             }
             context->setDebugObjectName(VK_OBJECT_TYPE_PIPELINE_LAYOUT,
                                         pipeline_layout,
@@ -555,7 +528,7 @@ namespace lfs::vis {
             vkDestroyShaderModule(device, vert, nullptr);
             vkDestroyShaderModule(device, frag, nullptr);
             if (r != VK_SUCCESS) {
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vkCreateGraphicsPipelines(device, pipeline_cache, 1, &pi, nullptr, &pipeline)",
                     r,
                     std::format("Depth-blit graphics-pipeline creation failed (device={:#x}, pipeline_cache={:#x}, pipeline_layout={:#x}, color_format={}, depth_format={})",
@@ -563,9 +536,7 @@ namespace lfs::vis {
                                 vkHandleValue(pipeline_cache),
                                 vkHandleValue(pipeline_layout),
                                 static_cast<int>(color_format),
-                                static_cast<int>(depth_format)),
-                    __FILE__,
-                    __LINE__));
+                                static_cast<int>(depth_format)));
             }
             context->setDebugObjectName(VK_OBJECT_TYPE_PIPELINE,
                                         pipeline,
@@ -686,7 +657,7 @@ namespace lfs::vis {
             const VkResult view_result = vkCreateImageView(device, &vi, nullptr, &image_view);
             if (view_result != VK_SUCCESS) {
                 destroyImage();
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vkCreateImageView(device, &vi, nullptr, &image_view)",
                     view_result,
                     std::format("Depth-blit image-view creation failed (device={:#x}, image={:#x}, requested_extent={}x{}, format={}, aspect_mask={:#x})",
@@ -695,9 +666,7 @@ namespace lfs::vis {
                                 w,
                                 h,
                                 static_cast<int>(vi.format),
-                                static_cast<std::uint32_t>(vi.subresourceRange.aspectMask)),
-                    __FILE__,
-                    __LINE__));
+                                static_cast<std::uint32_t>(vi.subresourceRange.aspectMask)));
             }
             context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE_VIEW,
                                          image_view,
@@ -711,7 +680,7 @@ namespace lfs::vis {
 
         bool uploadDepth(const lfs::core::Tensor& depth) {
             if (depth.ndim() != 3 || depth.size(0) != 1) {
-                return vkCheckFailed(std::format(
+                return logVkFailure(std::format(
                     "Depth upload requires a [1,H,W] tensor (observed_rank={}, observed_channel_count={}) ({}:{})",
                     depth.ndim(),
                     depth.ndim() > 0 ? depth.size(0) : -1,
@@ -721,7 +690,7 @@ namespace lfs::vis {
             const std::uint32_t h = static_cast<std::uint32_t>(depth.size(1));
             const std::uint32_t w = static_cast<std::uint32_t>(depth.size(2));
             if (w == 0 || h == 0) {
-                return vkCheckFailed(std::format(
+                return logVkFailure(std::format(
                     "Depth upload requires non-zero dimensions (observed_width={}, observed_height={}, tensor_rank={}) ({}:{})",
                     w,
                     h,
@@ -740,7 +709,7 @@ namespace lfs::vis {
                 staging_mapped == nullptr || staging_capacity < bytes || image == VK_NULL_HANDLE ||
                 transfer_cmd == VK_NULL_HANDLE || transfer_fence == VK_NULL_HANDLE ||
                 graphics_queue == VK_NULL_HANDLE) {
-                return vkCheckFailed(std::format(
+                return logVkFailure(std::format(
                     "Depth upload resources must cover the copy before recording (staging_buffer={:#x}, staging_allocation={:#x}, staging_mapped={:#x}, staging_capacity={}, copy_size={}, image={:#x}, command_buffer={:#x}, fence={:#x}, queue={:#x}) ({}:{})",
                     vkHandleValue(staging_buffer),
                     reinterpret_cast<std::uintptr_t>(staging_alloc),
@@ -759,16 +728,14 @@ namespace lfs::vis {
             std::memcpy(staging_mapped, host.ptr<float>(), static_cast<std::size_t>(bytes));
             VkResult result = vmaFlushAllocation(allocator, staging_alloc, 0, bytes);
             if (result != VK_SUCCESS) {
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vmaFlushAllocation(allocator, staging_alloc, 0, bytes)",
                     result,
                     std::format("Depth-blit staging flush failed (allocator={:#x}, allocation={:#x}, offset=0, flush_size={}, capacity={})",
                                 reinterpret_cast<std::uintptr_t>(allocator),
                                 reinterpret_cast<std::uintptr_t>(staging_alloc),
                                 bytes,
-                                staging_capacity),
-                    __FILE__,
-                    __LINE__));
+                                staging_capacity));
             }
 
             // Wait for any prior submit on this transfer CB before re-recording.
@@ -776,15 +743,13 @@ namespace lfs::vis {
             result = vkWaitForFences(device, 1, &transfer_fence, VK_TRUE,
                                      std::numeric_limits<std::uint64_t>::max());
             if (result != VK_SUCCESS) {
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vkWaitForFences(device, 1, &transfer_fence, VK_TRUE, UINT64_MAX)",
                     result,
                     std::format("Depth-blit prior upload did not retire before command-buffer reuse (device={:#x}, fence={:#x}, command_buffer={:#x}, fence_count=1)",
                                 vkHandleValue(device),
                                 vkHandleValue(transfer_fence),
-                                vkHandleValue(transfer_cmd)),
-                    __FILE__,
-                    __LINE__));
+                                vkHandleValue(transfer_cmd)));
             }
             result = vkResetFences(device, 1, &transfer_fence);
             if (result != VK_SUCCESS) {
