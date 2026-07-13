@@ -6,6 +6,7 @@
 #include "core/tensor/internal/lazy_config.hpp"
 #include "core/tensor/internal/lazy_executor.hpp"
 #include "core/tensor/internal/lazy_ir.hpp"
+#include "core/tensor/internal/memory_pool.hpp"
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <optional>
@@ -49,6 +50,11 @@ namespace {
         int device_count = 0;
         const auto status = cudaGetDeviceCount(&device_count);
         return status == cudaSuccess && device_count > 0;
+    }
+
+    void destroyStreamSafely(cudaStream_t stream) {
+        CudaMemoryPool::instance().release_stream(stream);
+        cudaStreamDestroy(stream);
     }
 
     torch::Tensor create_torch_cuda_tensor(const std::vector<float>& host, int64_t rows, int64_t cols) {
@@ -1675,7 +1681,7 @@ TEST(TensorLazyRuntimeTest, ErankExpressionMatchesTorchOnInheritedStream) {
     auto torch_erank = torch_entropy.exp();
     expect_tensor_matches_torch_vector(actual_cpu, torch_erank);
 
-    cudaStreamDestroy(stream);
+    destroyStreamSafely(stream);
 }
 
 TEST(TensorLazyRuntimeTest, FusedSegmentedSquareSumMatchesTorchOnInheritedStream) {
@@ -1715,7 +1721,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedSquareSumMatchesTorchOnInheritedStream
     auto torch_sum = torch_scaling.square().sum(1, true);
     expect_tensor_matches_torch_vector(actual_cpu, torch_sum);
 
-    cudaStreamDestroy(stream);
+    destroyStreamSafely(stream);
 }
 
 TEST(TensorLazyRuntimeTest, DeferredMaterializationKeepsActualExecutionStream) {
@@ -1754,8 +1760,8 @@ TEST(TensorLazyRuntimeTest, DeferredMaterializationKeepsActualExecutionStream) {
     EXPECT_FLOAT_EQ(values.front(), 3.0f);
     EXPECT_FLOAT_EQ(values.back(), 3.0f);
 
-    cudaStreamDestroy(consumer);
-    cudaStreamDestroy(producer);
+    destroyStreamSafely(consumer);
+    destroyStreamSafely(producer);
 }
 
 TEST(TensorLazyRuntimeTest, DeferredViewChainPreservesSourceStreamHint) {
@@ -1792,7 +1798,7 @@ TEST(TensorLazyRuntimeTest, DeferredViewChainPreservesSourceStreamHint) {
         EXPECT_FLOAT_EQ(value, 3.0f);
     }
 
-    cudaStreamDestroy(stream);
+    destroyStreamSafely(stream);
 }
 
 TEST(TensorLazyRuntimeTest, DeferredHintedChainWaitsForProducerWhenConsumedWithoutGuard) {
@@ -1847,8 +1853,8 @@ TEST(TensorLazyRuntimeTest, DeferredHintedChainWaitsForProducerWhenConsumedWitho
     EXPECT_FLOAT_EQ(values.back(), 9.0f);
 
     ASSERT_EQ(cudaEventDestroy(gate), cudaSuccess);
-    cudaStreamDestroy(hinted_consumer);
-    cudaStreamDestroy(producer);
+    destroyStreamSafely(hinted_consumer);
+    destroyStreamSafely(producer);
 }
 
 TEST(TensorLazyRuntimeTest, FusedSegmentedReduceMaxGPU) {
