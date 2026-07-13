@@ -2146,11 +2146,6 @@ namespace lfs::vis {
             appendUniqueExtension(extensions, VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME);
         }
 
-        const bool enable_subgroup_size_control =
-            extensionAvailable(available_extensions, VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);
-        if (enable_subgroup_size_control) {
-            appendUniqueExtension(extensions, VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);
-        }
         const bool enable_shader_atomic_float =
             extensionAvailable(available_extensions, VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
         if (enable_shader_atomic_float) {
@@ -2174,18 +2169,13 @@ namespace lfs::vis {
 
         VkPhysicalDeviceShaderAtomicFloatFeaturesEXT supported_atomic_float_features{};
         supported_atomic_float_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
-        VkPhysicalDeviceSubgroupSizeControlFeaturesEXT supported_subgroup_size_control_features{};
-        supported_subgroup_size_control_features.sType =
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES_EXT;
-        supported_subgroup_size_control_features.pNext =
+        VkPhysicalDeviceVulkan13Features supported_features13{};
+        supported_features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+        supported_features13.pNext =
             enable_shader_atomic_float ? static_cast<void*>(&supported_atomic_float_features) : nullptr;
         VkPhysicalDeviceVulkan12Features supported_features12{};
         supported_features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-        supported_features12.pNext = enable_subgroup_size_control
-                                         ? static_cast<void*>(&supported_subgroup_size_control_features)
-                                     : enable_shader_atomic_float
-                                         ? static_cast<void*>(&supported_atomic_float_features)
-                                         : nullptr;
+        supported_features12.pNext = &supported_features13;
 
         // Query extension feature structs separately so the main Vulkan 1.2
         // supported-feature chain remains stable.
@@ -2225,36 +2215,22 @@ namespace lfs::vis {
         features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
         features13.synchronization2 = VK_TRUE;
         features13.dynamicRendering = VK_TRUE;
+        features13.subgroupSizeControl = supported_features13.subgroupSizeControl;
+        features13.computeFullSubgroups = supported_features13.computeFullSubgroups;
 
         VkPhysicalDeviceShaderAtomicFloatFeaturesEXT atomic_float_features{};
         atomic_float_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_ATOMIC_FLOAT_FEATURES_EXT;
-        atomic_float_features.pNext = &features13;
         atomic_float_features.shaderBufferFloat32AtomicAdd =
             enable_shader_atomic_float && supported_atomic_float_features.shaderBufferFloat32AtomicAdd
                 ? VK_TRUE
                 : VK_FALSE;
-
-        VkPhysicalDeviceSubgroupSizeControlFeaturesEXT subgroup_size_control_features{};
-        subgroup_size_control_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES_EXT;
-        subgroup_size_control_features.pNext = enable_shader_atomic_float
-                                                   ? static_cast<void*>(&atomic_float_features)
-                                                   : static_cast<void*>(&features13);
-        subgroup_size_control_features.subgroupSizeControl =
-            enable_subgroup_size_control && supported_subgroup_size_control_features.subgroupSizeControl
-                ? VK_TRUE
-                : VK_FALSE;
-        subgroup_size_control_features.computeFullSubgroups =
-            enable_subgroup_size_control && supported_subgroup_size_control_features.computeFullSubgroups
-                ? VK_TRUE
-                : VK_FALSE;
+        features13.pNext = enable_shader_atomic_float
+                               ? static_cast<void*>(&atomic_float_features)
+                               : nullptr;
 
         VkPhysicalDeviceVulkan12Features features12{};
         features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-        features12.pNext = enable_subgroup_size_control
-                               ? static_cast<void*>(&subgroup_size_control_features)
-                           : enable_shader_atomic_float
-                               ? static_cast<void*>(&atomic_float_features)
-                               : static_cast<void*>(&features13);
+        features12.pNext = &features13;
         features12.timelineSemaphore = VK_TRUE;
         features12.shaderFloat16 = supported_features12.shaderFloat16;
 
