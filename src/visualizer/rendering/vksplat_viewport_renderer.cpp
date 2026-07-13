@@ -51,24 +51,6 @@ namespace lfs::vis {
         using lfs::core::Device;
         using lfs::core::Tensor;
 
-        struct ScopedStagingBuffer {
-            VmaAllocator allocator = VK_NULL_HANDLE;
-            VkBuffer buffer = VK_NULL_HANDLE;
-            VmaAllocation allocation = VK_NULL_HANDLE;
-            VmaAllocationInfo allocation_info{};
-            std::string vram_scope;
-            std::string vram_label;
-
-            ~ScopedStagingBuffer() {
-                if (allocator != VK_NULL_HANDLE && buffer != VK_NULL_HANDLE) {
-                    if (!vram_scope.empty() && !vram_label.empty()) {
-                        lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(vram_scope, vram_label, 0);
-                    }
-                    vmaDestroyBuffer(allocator, buffer, allocation);
-                }
-            }
-        };
-
         constexpr std::uint32_t kVkSplatCameraModelPinhole = 0u;
         constexpr std::uint32_t kVkSplatCameraModelOrthographic = 1u;
         constexpr std::uint32_t kVkSplatCameraModelEquirectangular = 3u;
@@ -5762,41 +5744,15 @@ namespace lfs::vis {
             return std::unexpected("VkSplat output depth readback received an empty image");
         }
 
-        ScopedStagingBuffer staging{};
-        staging.allocator = context.allocator();
-        VkBufferCreateInfo buffer_info{};
-        buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        buffer_info.size = byte_count;
-        buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-        buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        VmaAllocationCreateInfo alloc_info{};
-        alloc_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
-        alloc_info.flags =
-            VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
-            VMA_ALLOCATION_CREATE_MAPPED_BIT;
-        VkResult result = vmaCreateBuffer(
-            staging.allocator,
-            &buffer_info,
-            &alloc_info,
-            &staging.buffer,
-            &staging.allocation,
-            &staging.allocation_info);
-        if (result != VK_SUCCESS || staging.buffer == VK_NULL_HANDLE) {
-            return std::unexpected(vkError("vmaCreateBuffer(VkSplat output depth readback)", result));
-        }
-        staging.vram_scope = "vulkan.vksplat.depth_readback_buffer";
-        staging.vram_label = std::format("output_depth:{}x{}", output.size.x, output.size.y);
-        lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
-            staging.vram_scope,
-            staging.vram_label,
-            static_cast<std::size_t>(staging.allocation_info.size));
-        if (staging.allocation_info.pMappedData == nullptr) {
-            return std::unexpected("VkSplat output depth readback staging buffer is not host-mapped");
+        if (const auto staging_ready = ensureReadbackStagingBuffer(context, byte_count);
+            !staging_ready) {
+            return std::unexpected(staging_ready.error());
         }
 
         if (const auto ready = ensureReadbackContext(); !ready) {
             return std::unexpected(ready.error());
         }
+        VkResult result = VK_SUCCESS;
         const VkCommandBuffer command_buffer = readback_cmd_;
         result = vkResetCommandBuffer(command_buffer, 0);
         if (result != VK_SUCCESS) {
@@ -5830,7 +5786,7 @@ namespace lfs::vis {
         vkCmdCopyImageToBuffer(command_buffer,
                                output.depth_image.image,
                                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                               staging.buffer,
+                               readback_staging_buffer_,
                                1,
                                &copy_region);
 
@@ -5874,7 +5830,8 @@ namespace lfs::vis {
         if (result != VK_SUCCESS) {
             return std::unexpected(vkError("vkWaitForFences(VkSplat output depth readback)", result));
         }
-        result = vmaInvalidateAllocation(staging.allocator, staging.allocation, 0, byte_count);
+        result = vmaInvalidateAllocation(
+            context.allocator(), readback_staging_allocation_, 0, byte_count);
         if (result != VK_SUCCESS) {
             return std::unexpected(vkError("vmaInvalidateAllocation(VkSplat output depth readback)", result));
         }
@@ -5886,7 +5843,7 @@ namespace lfs::vis {
         if (!tensor.is_valid()) {
             return std::unexpected("VkSplat output depth readback failed to allocate CPU tensor");
         }
-        const auto* const src = static_cast<const float*>(staging.allocation_info.pMappedData);
+        const auto* const src = static_cast<const float*>(readback_staging_info_.pMappedData);
         auto* const dst = tensor.ptr<float>();
         if (src == nullptr || dst == nullptr) {
             return std::unexpected("VkSplat output depth readback has null mapped data");
