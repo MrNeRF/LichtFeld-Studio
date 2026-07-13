@@ -3,6 +3,7 @@
 
 #include "core/memory_pressure.hpp"
 
+#include "core/checked_arithmetic.hpp"
 #include "core/cuda_error.hpp"
 #include "core/environment.hpp"
 #include "core/events.hpp"
@@ -43,12 +44,6 @@ namespace lfs::core {
         std::string format_bytes(size_t bytes) {
             constexpr double mib = 1024.0 * 1024.0;
             return std::format("{:.1f} MiB", static_cast<double>(bytes) / mib);
-        }
-
-        constexpr size_t saturating_add(const size_t left, const size_t right) noexcept {
-            return right > std::numeric_limits<size_t>::max() - left
-                       ? std::numeric_limits<size_t>::max()
-                       : left + right;
         }
 
         // Consumes only a sticky OOM before querying so an unrelated asynchronous

@@ -9,13 +9,12 @@
 #include <curand_kernel.h>
 #include <random>
 
-#define CHECK_CURAND(call)                                                            \
-    do {                                                                              \
-        const curandStatus_t error = (call);                                          \
-        LFS_ASSERT_MSG(error == CURAND_STATUS_SUCCESS,                                \
-                       std::format("{} failed (curand_status={}, success_status={})", \
-                                   #call, static_cast<int>(error),                    \
-                                   static_cast<int>(CURAND_STATUS_SUCCESS)));         \
+#define CHECK_CURAND(call)                                                   \
+    do {                                                                     \
+        const curandStatus_t error = (call);                                 \
+        LFS_ASSERT_MSG(error == CURAND_STATUS_SUCCESS,                       \
+                       std::string("CURAND operation failed with status ") + \
+                           std::to_string(static_cast<int>(error)));         \
     } while (0)
 
 namespace lfs::core {
@@ -98,10 +97,7 @@ namespace lfs::core {
     void* RandomGenerator::get_generator(Device device) {
         auto* impl = static_cast<RandomGeneratorImpl*>(impl_);
         LFS_ASSERT_MSG(device == Device::CPU || device == Device::CUDA,
-                       std::format("random generator requires a supported device enum "
-                                   "(device={}({}), valid_devices=[cpu({}),cuda({})])",
-                                   device_name(device), static_cast<int>(device),
-                                   static_cast<int>(Device::CPU), static_cast<int>(Device::CUDA)));
+                       "random generator received an invalid device");
         if (device == Device::CUDA) {
             return impl->cuda_generator_;
         } else {
@@ -113,19 +109,11 @@ namespace lfs::core {
 
     Tensor& Tensor::uniform_(float low, float high) {
         LFS_ASSERT_MSG(is_valid(),
-                       std::format("uniform_ requires a valid destination tensor "
-                                   "(destination={})",
-                                   str()));
+                       "uniform_ requires a valid tensor");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32,
-                       std::format("uniform_ requires a Float32 destination "
-                                   "(destination_dtype={}({}), destination_shape={}, "
-                                   "destination_device={})",
-                                   dtype_name(dtype_), static_cast<int>(dtype_),
-                                   shape_.str(), device_name(device_)));
+                       "uniform_ requires Float32 dtype");
         LFS_ASSERT_MSG(std::isfinite(low) && std::isfinite(high) && low <= high,
-                       std::format("uniform_ bounds must be finite and ordered low <= high "
-                                   "(low={}, high={}, low_finite={}, high_finite={})",
-                                   low, high, std::isfinite(low), std::isfinite(high)));
+                       "uniform_ bounds must be finite and ordered");
         if (numel() == 0) {
             return *this;
         }
@@ -154,19 +142,11 @@ namespace lfs::core {
 
     Tensor& Tensor::normal_(float mean, float std) {
         LFS_ASSERT_MSG(is_valid(),
-                       std::format("normal_ requires a valid destination tensor "
-                                   "(destination={})",
-                                   str()));
+                       "normal_ requires a valid tensor");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32,
-                       std::format("normal_ requires a Float32 destination "
-                                   "(destination_dtype={}({}), destination_shape={}, "
-                                   "destination_device={})",
-                                   dtype_name(dtype_), static_cast<int>(dtype_),
-                                   shape_.str(), device_name(device_)));
+                       "normal_ requires Float32 dtype");
         LFS_ASSERT_MSG(std::isfinite(mean) && std::isfinite(std) && std > 0.0f,
-                       std::format("normal_ mean and standard deviation must be finite with std > 0 "
-                                   "(mean={}, std={}, mean_finite={}, std_finite={})",
-                                   mean, std, std::isfinite(mean), std::isfinite(std)));
+                       "normal_ mean and standard deviation must be finite, with std > 0");
         if (numel() == 0) {
             return *this;
         }

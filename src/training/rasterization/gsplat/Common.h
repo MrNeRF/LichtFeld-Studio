@@ -5,15 +5,15 @@
 #pragma once
 
 #include "core/assert.hpp"
+#include "core/checked_arithmetic.hpp"
+#include "core/cuda_allocation.hpp"
 #include "core/cuda_error.hpp"
 
-#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <format>
-#include <limits>
-#include <string>
 #include <string_view>
+#include <utility>
 
 // cuda.h defines CUDA_VERSION which GLM needs to detect CUDA version properly
 // Must be included before any GLM headers
@@ -77,16 +77,13 @@ namespace gsplat_lfs {
     inline size_t checked_multiply(const size_t lhs,
                                    const size_t rhs,
                                    const std::string_view quantity) {
-        LFS_ASSERT_MSG(
-            lhs == 0 || rhs <= std::numeric_limits<size_t>::max() / lhs,
-            std::format("{} size overflow: {} * {}", quantity, lhs, rhs));
-        return lhs * rhs;
+        return lfs::core::checked_product(lhs, rhs, quantity);
     }
 
     inline size_t checked_bytes(const size_t count,
                                 const size_t element_size,
                                 const std::string_view allocation) {
-        return checked_multiply(count, element_size, allocation);
+        return lfs::core::checked_product(count, element_size, allocation);
     }
 
 #if LFS_CUDA_FAILURE_INJECTION_ENABLED
@@ -102,113 +99,33 @@ namespace gsplat_lfs {
     inline void maybe_inject_cuda_allocation_failure(std::string_view) noexcept {}
 #endif
 
-    inline void checked_cuda_malloc(void** ptr,
-                                    const size_t bytes,
-                                    const std::string_view label) {
-        LFS_ASSERT(ptr != nullptr);
-        LFS_ASSERT_MSG(bytes > 0, "CUDA allocation requires a nonzero size");
-        maybe_inject_cuda_allocation_failure(label);
-        LFS_CUDA_CHECK_MSG(cudaMalloc(ptr, bytes),
-                           "gsplat CUDA allocation '{}' ({} bytes)", label, bytes);
-        LFS_ASSERT_MSG(*ptr != nullptr,
-                       std::format("CUDA allocation for '{}' returned null ({} bytes)", label, bytes));
-    }
-
-    class StreamOrderedDeviceBuffer {
-    public:
-        StreamOrderedDeviceBuffer() = default;
-
-        StreamOrderedDeviceBuffer(const size_t bytes,
-                                  const cudaStream_t stream,
-                                  const std::string_view label) {
-            allocate(bytes, stream, label);
-        }
-
-        ~StreamOrderedDeviceBuffer() {
-            reset();
-        }
-
-        StreamOrderedDeviceBuffer(const StreamOrderedDeviceBuffer&) = delete;
-        StreamOrderedDeviceBuffer& operator=(const StreamOrderedDeviceBuffer&) = delete;
-        StreamOrderedDeviceBuffer(StreamOrderedDeviceBuffer&&) = delete;
-        StreamOrderedDeviceBuffer& operator=(StreamOrderedDeviceBuffer&&) = delete;
-
-        void allocate(const size_t bytes,
-                      const cudaStream_t stream,
-                      const std::string_view label) {
-            LFS_ASSERT_MSG(ptr_ == nullptr, "Stream-ordered CUDA buffer cannot be allocated twice");
-            LFS_ASSERT_MSG(bytes > 0, "Stream-ordered CUDA buffer requires a nonzero size");
+    struct GsplatAllocationHooks {
+        void before_allocate(const std::string_view label) const {
             maybe_inject_cuda_allocation_failure(label);
-
-            void* ptr = nullptr;
-#if CUDART_VERSION >= 11020
-            LFS_CUDA_CHECK_MSG(cudaMallocAsync(&ptr, bytes, stream),
-                               "gsplat stream-ordered allocation '{}' ({} bytes)", label, bytes);
-#else
-            LFS_CUDA_CHECK_MSG(cudaMalloc(&ptr, bytes),
-                               "gsplat allocation '{}' ({} bytes)", label, bytes);
-#endif
-            LFS_ASSERT_MSG(ptr != nullptr,
-                           std::format("CUDA allocation for '{}' returned null ({} bytes)", label, bytes));
-            ptr_ = ptr;
-            stream_ = stream;
-            bytes_ = bytes;
         }
 
-        void reset() noexcept {
-            if (!ptr_) {
-                return;
-            }
-#if CUDART_VERSION >= 11020
-            const cudaError_t status = cudaFreeAsync(ptr_, stream_);
-#else
-            const cudaError_t status = cudaFree(ptr_);
-#endif
-            if (status != cudaSuccess) {
-                lfs::core::ensure_cuda_success(
-                    status, "gsplat stream-ordered buffer free",
-                    std::format("ptr={}, bytes={}", ptr_, bytes_),
-                    std::source_location::current(),
-                    lfs::core::CudaFailureDisposition::LogOnly);
-                cudaGetLastError();
-            }
-            ptr_ = nullptr;
-            bytes_ = 0;
-        }
-
-        void* get() const noexcept { return ptr_; }
-
-        template <typename T>
-        T* as() const noexcept {
-            return static_cast<T*>(ptr_);
-        }
-
-        size_t size() const noexcept { return bytes_; }
-
-    private:
-        void* ptr_ = nullptr;
-        cudaStream_t stream_ = nullptr;
-        size_t bytes_ = 0;
+        void after_allocate(void*, size_t, std::string_view) const noexcept {}
+        void before_deallocate(void*) const noexcept {}
     };
+
+    struct GsplatCubWorkspaceTraits {
+        static constexpr std::string_view allocation_label = "rasterizer.gsplat.cub_workspace";
+        static constexpr std::string_view diagnostic_scope = "gsplat";
+    };
+
+    using DirectDeviceBuffer = lfs::core::UniqueCudaAllocation<
+        lfs::core::DirectCudaAllocator, GsplatAllocationHooks>;
+    using StreamOrderedDeviceBuffer = lfs::core::UniqueCudaAllocation<
+        lfs::core::StreamOrderedCudaAllocator, GsplatAllocationHooks>;
+    using GsplatCubWorkspace = lfs::core::CudaCubWorkspace<
+        StreamOrderedDeviceBuffer, GsplatCubWorkspaceTraits>;
 
     template <typename Operation>
     void run_cub_operation(const std::string_view name,
                            const cudaStream_t stream,
                            Operation&& operation) {
-        size_t workspace_bytes = 0;
-        LFS_CUDA_CHECK_MSG(operation(nullptr, workspace_bytes),
-                           "{} workspace query", name);
-        LFS_ASSERT_MSG(
-            workspace_bytes > 0,
-            std::format("{} returned an empty workspace for a nonempty operation", name));
-
-        StreamOrderedDeviceBuffer workspace(
-            workspace_bytes, stream, "rasterizer.gsplat.cub_workspace");
-        LFS_ASSERT_MSG(
-            workspace.get() != nullptr,
-            std::format("{} cannot execute with null workspace ({} bytes)", name, workspace_bytes));
-        LFS_CUDA_CHECK_MSG(operation(workspace.get(), workspace_bytes),
-                           "gsplat CUB workspace operation: {}", name);
+        lfs::core::run_cub_operation<GsplatCubWorkspace>(
+            name, stream, std::forward<Operation>(operation));
     }
 
     //

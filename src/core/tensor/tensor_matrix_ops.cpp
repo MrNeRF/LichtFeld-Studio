@@ -28,29 +28,16 @@ namespace lfs::core {
     } // namespace
 
     Tensor Tensor::mm(const Tensor& other) const {
-        LFS_ASSERT_MSG(is_valid() && other.is_valid(),
-                       std::format("mm requires valid input tensors "
-                                   "(left={}, right={})",
-                                   str(), other.str()));
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32 && other.dtype_ == DataType::Float32,
-                       std::format("mm requires Float32 inputs "
-                                   "(left_dtype={}({}), right_dtype={}({}), "
-                                   "left_shape={}, right_shape={})",
-                                   dtype_name(dtype_), static_cast<int>(dtype_),
-                                   dtype_name(other.dtype_), static_cast<int>(other.dtype_),
-                                   shape_.str(), other.shape_.str()));
+        tensor_contract::require_valid(*this, "mm", "left");
+        tensor_contract::require_valid(other, "mm", "right");
+        tensor_contract::require_dtype(*this, DataType::Float32, "mm", "left");
+        tensor_contract::require_dtype(other, DataType::Float32, "mm", "right");
         LFS_ASSERT_MSG(shape_.rank() == 2 && other.shape_.rank() == 2,
-                       std::format("mm requires rank-2 inputs "
-                                   "(left_rank={}, right_rank={}, left_shape={}, right_shape={})",
-                                   shape_.rank(), other.shape_.rank(),
-                                   shape_.str(), other.shape_.str()));
+                       "mm requires rank-2 tensors");
         LFS_ASSERT_MSG(shape_[1] == other.shape_[0],
                        std::format("mm dimension mismatch: {}x{} @ {}x{}",
                                    shape_[0], shape_[1], other.shape_[0], other.shape_[1]));
-        LFS_ASSERT_MSG(device_ == other.device_,
-                       std::format("mm inputs must be on the same device "
-                                   "(left_device={}, right_device={})",
-                                   device_name(device_), device_name(other.device_)));
+        tensor_contract::require_same_device(*this, other, "mm", "left", "right");
 
         const size_t m = shape_[0];
         const size_t k = shape_[1];
@@ -73,34 +60,18 @@ namespace lfs::core {
     }
 
     Tensor Tensor::bmm(const Tensor& other) const {
-        LFS_ASSERT_MSG(is_valid() && other.is_valid(),
-                       std::format("bmm requires valid input tensors "
-                                   "(left={}, right={})",
-                                   str(), other.str()));
-        LFS_ASSERT_MSG(dtype_ == DataType::Float32 && other.dtype_ == DataType::Float32,
-                       std::format("bmm requires Float32 inputs "
-                                   "(left_dtype={}({}), right_dtype={}({}), "
-                                   "left_shape={}, right_shape={})",
-                                   dtype_name(dtype_), static_cast<int>(dtype_),
-                                   dtype_name(other.dtype_), static_cast<int>(other.dtype_),
-                                   shape_.str(), other.shape_.str()));
+        tensor_contract::require_valid(*this, "bmm", "left");
+        tensor_contract::require_valid(other, "bmm", "right");
+        tensor_contract::require_dtype(*this, DataType::Float32, "bmm", "left");
+        tensor_contract::require_dtype(other, DataType::Float32, "bmm", "right");
         LFS_ASSERT_MSG(shape_.rank() == 3 && other.shape_.rank() == 3,
-                       std::format("bmm requires rank-3 inputs "
-                                   "(left_rank={}, right_rank={}, left_shape={}, right_shape={})",
-                                   shape_.rank(), other.shape_.rank(),
-                                   shape_.str(), other.shape_.str()));
+                       "bmm requires rank-3 tensors");
         LFS_ASSERT_MSG(shape_[0] == other.shape_[0],
-                       std::format("bmm batch dimensions must match "
-                                   "(left_batch={}, right_batch={}, "
-                                   "left_shape={}, right_shape={})",
-                                   shape_[0], other.shape_[0], shape_.str(), other.shape_.str()));
+                       "bmm batch dimensions must match");
         LFS_ASSERT_MSG(shape_[2] == other.shape_[1],
                        std::format("bmm dimension mismatch: {}x{} @ {}x{}",
                                    shape_[1], shape_[2], other.shape_[1], other.shape_[2]));
-        LFS_ASSERT_MSG(device_ == other.device_,
-                       std::format("bmm inputs must be on the same device "
-                                   "(left_device={}, right_device={})",
-                                   device_name(device_), device_name(other.device_)));
+        tensor_contract::require_same_device(*this, other, "bmm", "left", "right");
 
         const size_t batch_size = shape_[0];
         const size_t m = shape_[1];
@@ -142,20 +113,11 @@ namespace lfs::core {
         debug::OpTraceGuard trace("matmul", *this, other);
 
         LFS_ASSERT_MSG(is_valid() && other.is_valid(),
-                       std::format("matmul requires valid input tensors "
-                                   "(left={}, right={})",
-                                   str(), other.str()));
+                       "matmul requires valid tensors");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32 && other.dtype_ == DataType::Float32,
-                       std::format("matmul requires Float32 inputs "
-                                   "(left_dtype={}({}), right_dtype={}({}), "
-                                   "left_shape={}, right_shape={})",
-                                   dtype_name(dtype_), static_cast<int>(dtype_),
-                                   dtype_name(other.dtype_), static_cast<int>(other.dtype_),
-                                   shape_.str(), other.shape_.str()));
+                       "matmul currently supports only Float32 tensors");
         LFS_ASSERT_MSG(device_ == other.device_,
-                       std::format("matmul inputs must be on the same device "
-                                   "(left_device={}, right_device={})",
-                                   device_name(device_), device_name(other.device_)));
+                       "matmul requires tensors on the same device");
 
         const Tensor& a = is_contiguous() ? *this : contiguous();
         const Tensor& b = other.is_contiguous() ? other : other.contiguous();
@@ -163,29 +125,21 @@ namespace lfs::core {
         // Vector dot product
         if (a.shape_.rank() == 1 && b.shape_.rank() == 1) {
             LFS_ASSERT_MSG(a.shape_[0] == b.shape_[0],
-                           std::format("matmul vector dimensions must match "
-                                       "(left_size={}, right_size={}, left_shape={}, right_shape={})",
-                                       a.shape_[0], b.shape_[0], a.shape_.str(), b.shape_.str()));
+                           "matmul vector dimensions must match");
             return a.dot(b);
         }
 
         // Vector-matrix: [k] @ [k, n] -> [n]
         if (a.shape_.rank() == 1 && b.shape_.rank() == 2) {
             LFS_ASSERT_MSG(a.shape_[0] == b.shape_[0],
-                           std::format("matmul vector-matrix inner dimensions must match "
-                                       "(vector_size={}, matrix_rows={}, "
-                                       "left_shape={}, right_shape={})",
-                                       a.shape_[0], b.shape_[0], a.shape_.str(), b.shape_.str()));
+                           "matmul vector-matrix dimensions must match");
             return a.unsqueeze(0).mm(b).squeeze(0);
         }
 
         // Matrix-vector: [m, k] @ [k] -> [m]
         if (a.shape_.rank() == 2 && b.shape_.rank() == 1) {
             LFS_ASSERT_MSG(a.shape_[1] == b.shape_[0],
-                           std::format("matmul matrix-vector inner dimensions must match "
-                                       "(matrix_columns={}, vector_size={}, "
-                                       "left_shape={}, right_shape={})",
-                                       a.shape_[1], b.shape_[0], a.shape_.str(), b.shape_.str()));
+                           "matmul matrix-vector dimensions must match");
             return a.mm(b.unsqueeze(1)).squeeze(1);
         }
 
@@ -202,10 +156,7 @@ namespace lfs::core {
         // 2D @ 3D: broadcast [m, k] @ [B, k, n] -> [B, m, n]
         if (a.shape_.rank() == 2 && b.shape_.rank() == 3) {
             LFS_ASSERT_MSG(a.shape_[1] == b.shape_[1],
-                           std::format("matmul 2D @ 3D inner dimensions must match "
-                                       "(left_columns={}, right_inner={}, "
-                                       "left_shape={}, right_shape={})",
-                                       a.shape_[1], b.shape_[1], a.shape_.str(), b.shape_.str()));
+                           "matmul 2D @ 3D dimensions must match");
             const size_t batch = b.shape_[0];
             const size_t m = a.shape_[0];
             const size_t k = a.shape_[1];
@@ -218,10 +169,7 @@ namespace lfs::core {
         // 3D @ 2D: broadcast [B, m, k] @ [k, n] -> [B, m, n]
         if (a.shape_.rank() == 3 && b.shape_.rank() == 2) {
             LFS_ASSERT_MSG(a.shape_[2] == b.shape_[0],
-                           std::format("matmul 3D @ 2D inner dimensions must match "
-                                       "(left_inner={}, right_rows={}, "
-                                       "left_shape={}, right_shape={})",
-                                       a.shape_[2], b.shape_[0], a.shape_.str(), b.shape_.str()));
+                           "matmul 3D @ 2D dimensions must match");
             const size_t batch = a.shape_[0];
             const size_t k = b.shape_[0];
             const size_t n = b.shape_[1];
@@ -238,29 +186,15 @@ namespace lfs::core {
 
     Tensor Tensor::dot(const Tensor& other) const {
         LFS_ASSERT_MSG(is_valid() && other.is_valid(),
-                       std::format("dot requires valid input tensors "
-                                   "(left={}, right={})",
-                                   str(), other.str()));
+                       "dot requires valid tensors");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32 && other.dtype_ == DataType::Float32,
-                       std::format("dot requires Float32 inputs "
-                                   "(left_dtype={}({}), right_dtype={}({}), "
-                                   "left_shape={}, right_shape={})",
-                                   dtype_name(dtype_), static_cast<int>(dtype_),
-                                   dtype_name(other.dtype_), static_cast<int>(other.dtype_),
-                                   shape_.str(), other.shape_.str()));
+                       "dot currently supports only Float32 tensors");
         LFS_ASSERT_MSG(shape_.rank() == 1 && other.shape_.rank() == 1,
-                       std::format("dot requires rank-1 inputs "
-                                   "(left_rank={}, right_rank={}, left_shape={}, right_shape={})",
-                                   shape_.rank(), other.shape_.rank(),
-                                   shape_.str(), other.shape_.str()));
+                       "dot requires rank-1 tensors");
         LFS_ASSERT_MSG(shape_[0] == other.shape_[0],
-                       std::format("dot vector dimensions must match "
-                                   "(left_size={}, right_size={}, left_shape={}, right_shape={})",
-                                   shape_[0], other.shape_[0], shape_.str(), other.shape_.str()));
+                       "dot vector dimensions must match");
         LFS_ASSERT_MSG(device_ == other.device_,
-                       std::format("dot inputs must be on the same device "
-                                   "(left_device={}, right_device={})",
-                                   device_name(device_), device_name(other.device_)));
+                       "dot requires tensors on the same device");
 
         const Tensor& a = is_contiguous() ? *this : contiguous();
         const Tensor& b = other.is_contiguous() ? other : other.contiguous();

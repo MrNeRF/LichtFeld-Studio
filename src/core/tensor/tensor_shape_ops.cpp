@@ -14,9 +14,7 @@ namespace lfs::core {
 
     Tensor Tensor::reshape(TensorShape new_shape) const {
         LFS_ASSERT_MSG(is_valid(),
-                       std::format("reshape requires a valid input tensor "
-                                   "(input={}, requested_shape={})",
-                                   str(), new_shape.str()));
+                       "reshape requires a valid tensor");
 
         if (new_shape.rank() == 0 && numel() == 1) {
             return create_view(new_shape);
@@ -31,7 +29,7 @@ namespace lfs::core {
 
     Tensor Tensor::t() const {
         LFS_ASSERT_MSG(is_valid(),
-                       std::format("t() requires a valid input tensor (input={})", str()));
+                       "t() requires a valid tensor");
 
         if (shape_.rank() <= 1) {
             return clone();
@@ -42,9 +40,7 @@ namespace lfs::core {
 
     Tensor Tensor::permute(std::span<const int> axes) const {
         LFS_ASSERT_MSG(is_valid(),
-                       std::format("permute requires a valid input tensor "
-                                   "(input={}, axis_count={})",
-                                   str(), axes.size()));
+                       "permute requires a valid tensor");
 
         const size_t rank = shape_.rank();
         LFS_ASSERT_MSG(axes.size() == rank,
@@ -146,15 +142,10 @@ namespace lfs::core {
 
     Tensor Tensor::expand(const TensorShape& target_shape) const {
         LFS_ASSERT_MSG(is_valid(),
-                       std::format("expand requires a valid input tensor "
-                                   "(input={}, target_shape={})",
-                                   str(), target_shape.str()));
+                       "expand requires a valid tensor");
 
         LFS_ASSERT_MSG(target_shape.rank() >= shape_.rank(),
-                       std::format("expand cannot reduce tensor rank "
-                                   "(input_rank={}, target_rank={}, input_shape={}, target_shape={})",
-                                   shape_.rank(), target_shape.rank(),
-                                   shape_.str(), target_shape.str()));
+                       "expand cannot reduce tensor rank");
 
         std::vector<size_t> padded_shape = shape_.dims();
         while (padded_shape.size() < target_shape.rank()) {
@@ -167,10 +158,7 @@ namespace lfs::core {
 
             if (target_dim == static_cast<size_t>(-1)) {
                 LFS_ASSERT_MSG(i < padded_shape.size(),
-                               std::format("expand cannot use -1 for a new dimension "
-                                           "(dimension={}, padded_rank={}, input_shape={}, "
-                                           "target_shape={})",
-                                           i, padded_shape.size(), shape_.str(), target_shape.str()));
+                               "expand cannot use -1 for a new dimension");
                 final_shape[i] = padded_shape[i];
             } else {
                 LFS_ASSERT_MSG(padded_shape[i] == 1 || padded_shape[i] == target_dim,
@@ -186,14 +174,10 @@ namespace lfs::core {
 
     Tensor Tensor::slice(std::span<const std::pair<int, int>> ranges) const {
         LFS_ASSERT_MSG(is_valid(),
-                       std::format("slice requires a valid input tensor "
-                                   "(input={}, range_count={})",
-                                   str(), ranges.size()));
+                       "slice requires a valid tensor");
 
         LFS_ASSERT_MSG(ranges.size() <= shape_.rank(),
-                       std::format("slice range count must not exceed tensor rank "
-                                   "(range_count={}, tensor_rank={}, input_shape={})",
-                                   ranges.size(), shape_.rank(), shape_.str()));
+                       "slice has more ranges than tensor dimensions");
 
         std::vector<size_t> starts(shape_.rank());
         std::vector<size_t> ends(shape_.rank());
@@ -264,9 +248,7 @@ namespace lfs::core {
 
     Tensor Tensor::slice(size_t dim, size_t start, size_t end) const {
         LFS_ASSERT_MSG(is_valid(),
-                       std::format("slice requires a valid input tensor "
-                                   "(input={}, dimension={}, start={}, end={})",
-                                   str(), dim, start, end));
+                       "slice requires a valid tensor");
 
         LFS_ASSERT_MSG(dim < shape_.rank(),
                        std::format("slice dimension {} is out of range for rank {}", dim, shape_.rank()));
@@ -371,11 +353,7 @@ namespace lfs::core {
                               const std::vector<size_t>& ends,
                               const std::vector<size_t>& new_shape) const {
         LFS_ASSERT_MSG(dtype_ == DataType::Float32,
-                       std::format("non-contiguous slice copying currently supports only Float32 "
-                                   "(source_dtype={}({}), source_shape={}, output_shape={}, "
-                                   "start_count={}, end_count={})",
-                                   dtype_name(dtype_), static_cast<int>(dtype_), shape_.str(),
-                                   TensorShape(new_shape).str(), starts.size(), ends.size()));
+                       "non-contiguous slice copying currently supports only Float32");
         auto result = empty(TensorShape(new_shape), device_, dtype_);
 
         if (device_ == Device::CUDA) {
