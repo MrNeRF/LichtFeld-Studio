@@ -1300,3 +1300,162 @@ control. Proof is
 
 No tests were added or changed; the existing focused, cross-round, Python, headless, and GUI
 coverage exercised both fixes directly.
+
+## Validation layer fixes
+
+Validation marker: `VALIDATION-LAYER-FIXES-2026-07-13`.
+
+### Validation setup
+
+The validation sweep used `VK_LAYER_KHRONOS_validation` 1.4.313 on an NVIDIA GeForce RTX
+4090 with driver 575.57.08. The device exposes graphics family 0 and a dedicated
+compute/transfer family 2. Release builds can now request the layer directly with
+`LFS_VK_VALIDATION=1`; `LFS_VK_VALIDATION_FATAL=1` still converts error-severity callbacks
+into a fatal failure. Loader injection remains usable, for example:
+
+```sh
+VK_LAYER_PATH=/usr/share/vulkan/explicit_layer.d \
+VK_LOADER_LAYERS_ENABLE=VK_LAYER_KHRONOS_validation \
+LFS_VK_VALIDATION=1 \
+./build/LichtFeld-Studio --view splat_64400.ply
+```
+
+The final single-PLY fatal proof used the same command with
+`LFS_VK_VALIDATION_FATAL=1`. The startup log confirmed that validation, debug utils, and
+fatal validation handling were all active.
+
+### Initial VUID root causes and fixes
+
+- `VUID-vkCmdPipelineBarrier2-srcStageMask-09675` and
+  `VUID-vkCmdPipelineBarrier2-dstStageMask-09676`: the image-layout tracker inferred
+  `FRAGMENT_SHADER` for every shader-read layout. VkSplat output transitions are recorded in
+  command buffers allocated from the dedicated compute-family pool, where fragment stages are
+  invalid. Cross-queue transitions now receive explicit producer and consumer scopes: compute
+  or transfer scopes stay in the compute command buffer, while the compute-to-graphics timeline
+  semaphore carries the fragment consumer dependency. Graphics-only transitions retain their
+  precise graphics scopes. The shared VkSplat batch barrier is limited to transfer, compute,
+  and indirect-dispatch stages/accesses supported by the compute queue; no blanket
+  `ALL_COMMANDS` replacement was used.
+
+- `VUID-vkDestroyDevice-device-05137`: debug names reduced the single-view leak to
+  `rmlui.cache[scene_panel_native].image/view`; the training flow additionally exposed
+  process-global icon and camera-thumbnail `ui.texture.cpu[1024x1024]` images, views, and
+  descriptor layouts. Native panel render caches, sequencer graphics, the camera atlas, and the
+  icon cache now release while the RmlUi render interface and Vulkan allocator are alive.
+  Texture destruction now follows descriptor set, image view, then VMA image/allocation order.
+
+- `VUID-VkImageMemoryBarrier2-image-03320`: the actual layer message showed
+  `mesh.shadow.dummy.depth[1]` using `VK_FORMAT_D32_SFLOAT_S8_UINT` with a depth-only barrier.
+  Because `separateDepthStencilLayouts` is not enabled, the barrier must transition both aspects.
+  Mesh shadow barriers now use the context's format-derived depth/stencil aspect mask.
+
+- `VUID-VkPipelineRasterizationStateCreateInfo-polygonMode-01507`: the mesh pass created a
+  `VK_POLYGON_MODE_LINE` pipeline without enabling `fillModeNonSolid`. Device creation now
+  queries and enables supported `fillModeNonSolid` and `wideLines` features. The wireframe
+  pipeline is not created when non-solid fill is unavailable, the Python/RmlUi control reports
+  and honors that capability, and non-wide-line devices use line width 1.0. Supported wide
+  widths are clamped to the physical-device range.
+
+- `VUID-VkDeviceCreateInfo-pNext-06532`: the device chain contained both
+  `VkPhysicalDeviceVulkan13Features` and the promoted
+  `VkPhysicalDeviceSubgroupSizeControlFeaturesEXT`. The extension feature struct was removed;
+  subgroup-size support is queried and enabled through the Vulkan 1.3 feature struct. The
+  unpromoted shader-atomic-float extension remains chained once.
+
+### Additional core-validation findings
+
+The wider training and resize flows exposed two external-timeline VUIDs after the initial five
+families were removed:
+
+- `VUID-vkQueuePresentKHR-pWaitSemaphores-03268`: Vulkan validation cannot observe a CUDA
+  external-timeline signal, so it considered the dependent Vulkan wait unresolved. When
+  validation is active, the CPU first observes the imported timeline value with
+  `vkWaitSemaphores`; the Vulkan queue wait is retained because it is the real external-memory
+  acquire. Production rendering remains asynchronous.
+
+- `VUID-VkSubmitInfo-pSignalSemaphores-03242`: the initial Vulkan layout-transition signal was
+  still pending when CUDA imported and advanced the same timeline. Every one-time interop setup
+  now waits for that initialization submit before exporting the memory and semaphore handles.
+  Per-frame ownership handoffs remain asynchronous.
+
+Core validation also reported unused vertex attributes in the grid and procedural pivot
+pipelines. Their pipeline vertex layouts now match the shaders (`PositionOnly` for the grid and
+no vertex input for the procedural pivot). Interactive resize preserves the last complete scene
+image binding while interop target replacement is deferred, instead of temporarily clearing a
+live descriptor. Split view reserves both grid-uniform entries up front, avoiding replacement of
+a descriptor-backed buffer when the second grid appears.
+
+The training shutdown sweep also found cached CUDA allocations retaining already-destroyed
+decoder/upload stream handles. Stream retirement now covers allocation-map removal through
+suballocator routing with a shared/exclusive lifecycle gate. Shutdown establishes device-wide
+completion, merges per-stream slab state, and retags cached bucket allocations before freeing
+them. `SizeBucketedPool::instance()` is out-of-line and exported so the executable and shared
+Python module use one singleton rather than separate header-local instances.
+
+### Synchronization-validation sweep
+
+Synchronization validation initially found four concrete hazard groups:
+
+- swapchain acquire-to-first-use `WRITE_AFTER_READ`: the first transition could execute before
+  the acquire semaphore's color-output wait scope. The acquire transition now uses
+  color-attachment-output on both sides with no invented source access;
+- cross-batch `WRITE_AFTER_WRITE` on the rotating VkSplat command buffers' shared scratch,
+  indirect, and host-readback buffers: each batch now begins with the precise
+  transfer/compute/indirect memory dependency described above;
+- radix-sort histogram `WRITE_AFTER_WRITE`: the global histogram is sized for every radix pass,
+  and explicit compute-to-transfer plus compute-to-compute barriers cover clearing and reuse of
+  the global and partition histograms;
+- async-compute output/readback `WRITE_RACING_WRITE`: a second, Vulkan-only render-completion
+  timeline is signalled alongside the CUDA-exported timeline. Each output-ring image records the
+  value only after successful submission, and graphics-queue buffer/image readbacks wait on that
+  exact Vulkan-visible value before their transfer acquire and layout transition.
+
+With `VK_LAYER_ENABLES=VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT`, the final
+single-PLY, three-PLY/split-view, and 500-step GUI-training/GT-comparison flows all completed with
+zero synchronization hazards, zero VUIDs, zero validation error callbacks, and zero application
+error lines.
+
+### GPU-assisted validation limitation
+
+Combined GPU-assisted plus synchronization validation completed the 3M-Gaussian single-PLY
+flow, including resize and shutdown, with zero VUIDs or error-severity callbacks. The layer
+emitted only its expected GPU-AV performance/internal-feature warnings.
+
+The multi-PLY path is not usable as a correctness oracle with the installed 1.4.313 layer. It
+reports `VUID-*-storageBuffers-06936` after push-descriptor changes while describing the previous
+descriptor snapshot. Application-side tracing at the Vulkan call boundary showed, for example,
+an upsweep binding with a 36,000,000-byte range while GPU-AV claimed 4 bytes, a 384-byte macro
+binding inheriting a preceding binding's size, and a resized 384-byte grid binding reported as
+the prior 192-byte range. A diagnostic common-layout experiment made the one-update lag explicit
+and was fully reverted.
+
+The packaged layer calls its GPU-AV `UpdateBoundDescriptors` from
+`PreCallRecordCmdPushDescriptorSet`, before core state has recorded the current push write. The
+[current upstream implementation](https://github.com/KhronosGroup/Vulkan-ValidationLayers/blob/main/layers/gpuav/core/gpuav_record.cpp)
+has replaced that descriptor-tracking path. No duplicate descriptor pushes, robustness feature
+changes, message filters, or validation suppressions were added to hide the reports. Because the
+installed GPU-AV is unstable on the multi-PLY push-descriptor workload, GPU-AV training was not
+treated as valid evidence; synchronization validation remained enabled for all three core flows.
+
+### Final proof
+
+- Basic + fatal, single PLY: `splat_64400.ply` loaded as 3,000,000 Gaussians, resized through
+  `1280x720`, `1024x640`, and `1400x900`, then shut down normally with validation fatal active;
+  zero VUIDs, validation callbacks, or error lines.
+- Basic, multi PLY: `baseline_7k.ply`, `gamma15_7k.ply`, and `sharpen05_7k.ply` loaded from the
+  requested directory; independent split view was enabled and disabled, the window was resized,
+  and shutdown was clean; zero VUIDs, validation callbacks, or error lines.
+- Basic, GUI training: the requested bicycle/MCMC command completed iteration 500 and wrote its
+  checkpoint; RGB, normal, and depth GT comparison modes were toggled, comparison was disabled,
+  the window was resized, and shutdown was clean; zero VUIDs, validation callbacks, or error
+  lines.
+- Synchronization validation: the same single, multi/split, and training/GT/resize flows each
+  completed with zero hazard, VUID, callback-error, or application-error lines.
+- Headless smoke: bicycle/MCMC completed 1,000 iterations, wrote `splat_1000.ply` and the
+  iteration-1000 checkpoint, and emitted zero error, critical, fatal, or exception lines.
+- Commit gates: `cmake --build build -j6` passed; the mandated cross-round gtest filter passed
+  292/292 across 17 suites; `test_async_plugin_loading.py` passed 10/10.
+
+The temporary validation logs, layer-source package, diagnostic output directories, and normal
+crash-handler files created by these runs were removed after extracting this record. No tests
+were added or changed.
