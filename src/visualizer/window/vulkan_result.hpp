@@ -61,6 +61,28 @@ namespace lfs::vis {
                            line);
     }
 
+    [[nodiscard]] inline std::string formatVkCheckFailure(
+        const std::string_view expression,
+        const VkResult result,
+        const std::string_view context,
+        const std::source_location location = std::source_location::current()) {
+        return formatVkCheckFailure(
+            expression, result, context, location.file_name(), static_cast<int>(location.line()));
+    }
+
+    [[nodiscard]] inline bool logVkFailure(std::string message) {
+        LOG_ERROR("Vulkan: {}", message);
+        return false;
+    }
+
+    [[nodiscard]] inline bool reportVkFailure(
+        const std::string_view expression,
+        const VkResult result,
+        const std::string_view context,
+        const std::source_location location = std::source_location::current()) {
+        return logVkFailure(formatVkCheckFailure(expression, result, context, location));
+    }
+
     [[nodiscard]] inline VkShaderModule createShaderModule(
         const VkDevice device,
         const std::span<const std::uint32_t> spirv,
@@ -90,24 +112,24 @@ namespace lfs::vis {
         return module;
     }
 
-    // Namespace-level fallback for visualizer helpers that use bool-return
-    // failure paths but do not own VulkanContext::lastError(). VulkanContext
-    // supplies a member with the same name so unqualified macro lookup routes
-    // failures into its persistent error state instead.
-    [[nodiscard]] inline bool vkCheckFailed(std::string message) {
-        LOG_ERROR("Vulkan: {}", message);
-        return false;
-    }
-
 } // namespace lfs::vis
 
-#define LFS_VK_CHECK_MSG(expr, ...)                                                          \
-    do {                                                                                     \
-        const VkResult lfs_vk_check_result_ = (expr);                                        \
-        if (lfs_vk_check_result_ != VK_SUCCESS) {                                            \
-            return vkCheckFailed(::lfs::vis::formatVkCheckFailure(                           \
-                #expr, lfs_vk_check_result_, std::format(__VA_ARGS__), __FILE__, __LINE__)); \
-        }                                                                                    \
+#define LFS_VK_CHECK_MSG(expr, ...)                                     \
+    do {                                                                \
+        const VkResult lfs_vk_check_result_ = (expr);                   \
+        if (lfs_vk_check_result_ != VK_SUCCESS) {                       \
+            return ::lfs::vis::reportVkFailure(                         \
+                #expr, lfs_vk_check_result_, std::format(__VA_ARGS__)); \
+        }                                                               \
+    } while (false)
+
+#define LFS_VK_CONTEXT_CHECK_MSG(expr, ...)                              \
+    do {                                                                 \
+        const VkResult lfs_vk_check_result_ = (expr);                    \
+        if (lfs_vk_check_result_ != VK_SUCCESS) {                        \
+            return this->setVkFailure(::lfs::vis::formatVkCheckFailure(  \
+                #expr, lfs_vk_check_result_, std::format(__VA_ARGS__))); \
+        }                                                                \
     } while (false)
 
 #ifndef LFS_VK_DEBUG_ASSERT

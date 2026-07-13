@@ -164,7 +164,7 @@ namespace lfs::vis {
             graphics_queue = ctx.graphicsQueue();
             screen_quad_buffer = screen_quad;
             if (device == VK_NULL_HANDLE || allocator == VK_NULL_HANDLE) {
-                return vkCheckFailed(std::format(
+                return logVkFailure(std::format(
                     "Split-view initialization requires a live device and allocator (device={:#x}, allocator={:#x}, graphics_queue={:#x}, screen_quad_buffer={:#x}) ({}:{})",
                     vkHandleValue(device),
                     reinterpret_cast<std::uintptr_t>(allocator),
@@ -425,16 +425,14 @@ namespace lfs::vis {
             if (layout_result != VK_SUCCESS) {
                 vkDestroyShaderModule(device, vert, nullptr);
                 vkDestroyShaderModule(device, frag, nullptr);
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vkCreatePipelineLayout(device, &layout_info, nullptr, &pipeline_layout)",
                     layout_result,
                     std::format("Split-view pipeline-layout creation failed (device={:#x}, descriptor_layout={:#x}, set_layout_count={}, push_constant_bytes={})",
                                 vkHandleValue(device),
                                 vkHandleValue(desc_layout),
                                 layout_info.setLayoutCount,
-                                push.size),
-                    __FILE__,
-                    __LINE__));
+                                push.size));
             }
             context->setDebugObjectName(VK_OBJECT_TYPE_PIPELINE_LAYOUT,
                                         pipeline_layout,
@@ -466,7 +464,7 @@ namespace lfs::vis {
             vkDestroyShaderModule(device, vert, nullptr);
             vkDestroyShaderModule(device, frag, nullptr);
             if (r != VK_SUCCESS) {
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vkCreateGraphicsPipelines(device, pipeline_cache, 1, &pi, nullptr, &pipeline)",
                     r,
                     std::format("Split-view graphics-pipeline creation failed (device={:#x}, pipeline_cache={:#x}, pipeline_layout={:#x}, color_format={}, depth_format={})",
@@ -474,9 +472,7 @@ namespace lfs::vis {
                                 vkHandleValue(pipeline_cache),
                                 vkHandleValue(pipeline_layout),
                                 static_cast<int>(color_format),
-                                static_cast<int>(depth_format)),
-                    __FILE__,
-                    __LINE__));
+                                static_cast<int>(depth_format)));
             }
             context->setDebugObjectName(VK_OBJECT_TYPE_PIPELINE,
                                         pipeline,
@@ -639,16 +635,14 @@ namespace lfs::vis {
             if (fence_result != VK_SUCCESS) {
                 vkFreeCommandBuffers(device, transfer_pool, 1, &p.cmd);
                 p.cmd = VK_NULL_HANDLE;
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vkCreateFence(device, &fi, nullptr, &p.fence)",
                     fence_result,
                     std::format("Split-view panel transfer-fence creation failed (side={}, device={:#x}, command_pool={:#x}, flags={:#x})",
                                 side,
                                 vkHandleValue(device),
                                 vkHandleValue(transfer_pool),
-                                static_cast<std::uint32_t>(fi.flags)),
-                    __FILE__,
-                    __LINE__));
+                                static_cast<std::uint32_t>(fi.flags)));
             }
             context->setDebugObjectNamef(VK_OBJECT_TYPE_FENCE,
                                          p.fence,
@@ -762,7 +756,7 @@ namespace lfs::vis {
             const VkResult view_result = vkCreateImageView(device, &vi, nullptr, &p.view);
             if (view_result != VK_SUCCESS) {
                 destroyPanel(p);
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vkCreateImageView(device, &vi, nullptr, &p.view)",
                     view_result,
                     std::format("Split-view panel image-view creation failed (side={}, device={:#x}, image={:#x}, requested_extent={}x{}, format={}, aspect_mask={:#x})",
@@ -772,9 +766,7 @@ namespace lfs::vis {
                                 w,
                                 h,
                                 static_cast<int>(vi.format),
-                                static_cast<std::uint32_t>(vi.subresourceRange.aspectMask)),
-                    __FILE__,
-                    __LINE__));
+                                static_cast<std::uint32_t>(vi.subresourceRange.aspectMask)));
             }
             context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE_VIEW,
                                          p.view,
@@ -792,7 +784,7 @@ namespace lfs::vis {
             // Probe size from the tensor; resize the persistent pack buffer only when
             // the tensor's resolution exceeds the current capacity.
             if (!tensor.is_valid() || tensor.ndim() != 3) {
-                return vkCheckFailed(std::format(
+                return logVkFailure(std::format(
                     "Split-view panel upload requires a valid rank-3 image tensor (side={}, tensor_valid={}, observed_rank={}) ({}:{})",
                     side,
                     tensor.is_valid(),
@@ -808,7 +800,7 @@ namespace lfs::vis {
                                                      ? tensor.size(0)
                                                      : tensor.size(1));
             if (probe_w <= 0 || probe_h <= 0) {
-                return vkCheckFailed(std::format(
+                return logVkFailure(std::format(
                     "Split-view panel upload requires positive image dimensions (side={}, layout={}, observed_width={}, observed_height={}, tensor_rank={}) ({}:{})",
                     side,
                     static_cast<int>(layout),
@@ -826,7 +818,7 @@ namespace lfs::vis {
             std::uint32_t pkt_w = 0;
             std::uint32_t pkt_h = 0;
             if (!packPanelToRgba8(tensor, panel.pack_bytes.data(), pkt_w, pkt_h)) {
-                return vkCheckFailed(std::format(
+                return logVkFailure(std::format(
                     "Split-view panel packing failed for a valid upload request (side={}, tensor_rank={}, layout={}, probe_size={}x{}, destination_capacity={}) ({}:{})",
                     side,
                     tensor.ndim(),
@@ -850,7 +842,7 @@ namespace lfs::vis {
                 panel.staging_mapped == nullptr || panel.staging_capacity < bytes ||
                 panel.image == VK_NULL_HANDLE || panel.cmd == VK_NULL_HANDLE ||
                 panel.fence == VK_NULL_HANDLE || graphics_queue == VK_NULL_HANDLE) {
-                return vkCheckFailed(std::format(
+                return logVkFailure(std::format(
                     "Split-view panel upload resources must cover the copy before recording (side={}, staging_buffer={:#x}, staging_allocation={:#x}, staging_mapped={:#x}, staging_capacity={}, copy_size={}, image={:#x}, command_buffer={:#x}, fence={:#x}, queue={:#x}) ({}:{})",
                     side,
                     vkHandleValue(panel.staging_buffer),
@@ -868,7 +860,7 @@ namespace lfs::vis {
             std::memcpy(panel.staging_mapped, panel.pack_bytes.data(), static_cast<std::size_t>(bytes));
             VkResult result = vmaFlushAllocation(allocator, panel.staging_alloc, 0, bytes);
             if (result != VK_SUCCESS) {
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vmaFlushAllocation(allocator, panel.staging_alloc, 0, bytes)",
                     result,
                     std::format("Split-view panel staging flush failed (side={}, allocator={:#x}, allocation={:#x}, offset=0, flush_size={}, capacity={})",
@@ -876,9 +868,7 @@ namespace lfs::vis {
                                 reinterpret_cast<std::uintptr_t>(allocator),
                                 reinterpret_cast<std::uintptr_t>(panel.staging_alloc),
                                 bytes,
-                                panel.staging_capacity),
-                    __FILE__,
-                    __LINE__));
+                                panel.staging_capacity));
             }
 
             // Wait for any prior submit on this command buffer before re-recording. The fence is
@@ -886,16 +876,14 @@ namespace lfs::vis {
             result = vkWaitForFences(device, 1, &panel.fence, VK_TRUE,
                                      std::numeric_limits<std::uint64_t>::max());
             if (result != VK_SUCCESS) {
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vkWaitForFences(device, 1, &panel.fence, VK_TRUE, UINT64_MAX)",
                     result,
                     std::format("Split-view prior panel upload did not retire before command-buffer reuse (side={}, device={:#x}, fence={:#x}, command_buffer={:#x}, fence_count=1)",
                                 side,
                                 vkHandleValue(device),
                                 vkHandleValue(panel.fence),
-                                vkHandleValue(panel.cmd)),
-                    __FILE__,
-                    __LINE__));
+                                vkHandleValue(panel.cmd)));
             }
             result = vkResetFences(device, 1, &panel.fence);
             if (result != VK_SUCCESS) {
@@ -949,7 +937,7 @@ namespace lfs::vis {
             if (si.commandBufferCount != 1 || si.pCommandBuffers == nullptr ||
                 si.pCommandBuffers[0] == VK_NULL_HANDLE || panel.fence == VK_NULL_HANDLE ||
                 graphics_queue == VK_NULL_HANDLE) {
-                return vkCheckFailed(std::format(
+                return logVkFailure(std::format(
                     "Split-view panel submit requires a non-null queue, one command buffer, and a non-null fence (side={}, queue={:#x}, command_buffer_count={}, command_buffer_array={:#x}, command_buffer={:#x}, fence={:#x}) ({}:{})",
                     side,
                     vkHandleValue(graphics_queue),

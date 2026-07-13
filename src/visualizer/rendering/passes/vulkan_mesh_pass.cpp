@@ -195,7 +195,7 @@ namespace lfs::vis {
             graphics_queue = ctx.graphicsQueue();
             if (device == VK_NULL_HANDLE || allocator == VK_NULL_HANDLE ||
                 graphics_queue == VK_NULL_HANDLE) {
-                return vkCheckFailed(std::format(
+                return logVkFailure(std::format(
                     "Mesh-pass initialization requires a live device, allocator, and graphics queue (device={:#x}, allocator={:#x}, graphics_queue={:#x}, pipeline_cache={:#x}) ({}:{})",
                     vkHandleValue(device),
                     reinterpret_cast<std::uintptr_t>(allocator),
@@ -281,14 +281,12 @@ namespace lfs::vis {
             VkResult r = vkEndCommandBuffer(cb);
             if (r != VK_SUCCESS) {
                 vkFreeCommandBuffers(device, transfer_pool, 1, &cb);
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vkEndCommandBuffer(cb)",
                     r,
                     std::format("Mesh one-shot command buffer did not leave recording state (command_buffer={:#x}, command_pool={:#x})",
                                 vkHandleValue(cb),
-                                vkHandleValue(transfer_pool)),
-                    __FILE__,
-                    __LINE__));
+                                vkHandleValue(transfer_pool)));
             }
             VkSubmitInfo submit{};
             submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -355,12 +353,10 @@ namespace lfs::vis {
             }
             vkFreeCommandBuffers(device, transfer_pool, 1, &cb);
             if (r != VK_SUCCESS) {
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     failed_expression,
                     r,
-                    failed_context,
-                    __FILE__,
-                    __LINE__));
+                    failed_context);
             }
             return true;
         }
@@ -589,7 +585,7 @@ namespace lfs::vis {
 
         bool createShadowTarget(int resolution, ShadowTarget& out) {
             if (resolution <= 0) {
-                return vkCheckFailed(std::format(
+                return logVkFailure(std::format(
                     "Mesh shadow target resolution must be positive (observed_resolution={}, shadow_format={}, target_address={:#x}) ({}:{})",
                     resolution,
                     static_cast<int>(shadow_format),
@@ -650,7 +646,7 @@ namespace lfs::vis {
             const VkResult view_result = vkCreateImageView(device, &vi, nullptr, &out.view);
             if (view_result != VK_SUCCESS) {
                 destroyShadow(out);
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vkCreateImageView(device, &vi, nullptr, &out.view)",
                     view_result,
                     std::format("Mesh shadow image-view creation failed (device={:#x}, image={:#x}, target_address={:#x}, resolution={}, format={}, aspect_mask={:#x})",
@@ -659,9 +655,7 @@ namespace lfs::vis {
                                 reinterpret_cast<std::uintptr_t>(&out),
                                 resolution,
                                 static_cast<int>(vi.format),
-                                static_cast<std::uint32_t>(vi.subresourceRange.aspectMask)),
-                    __FILE__,
-                    __LINE__));
+                                static_cast<std::uint32_t>(vi.subresourceRange.aspectMask)));
             }
             if (is_dummy) {
                 context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE_VIEW,
@@ -714,22 +708,20 @@ namespace lfs::vis {
             void* mapped = nullptr;
             const VkResult map_result = vmaMapMemory(allocator, alloc, &mapped);
             if (map_result != VK_SUCCESS) {
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vmaMapMemory(allocator, alloc, &mapped)",
                     map_result,
                     std::format("Mesh buffer allocation could not be mapped (allocator={:#x}, allocation={:#x}, source={:#x}, write_size={})",
                                 reinterpret_cast<std::uintptr_t>(allocator),
                                 reinterpret_cast<std::uintptr_t>(alloc),
                                 reinterpret_cast<std::uintptr_t>(src),
-                                bytes),
-                    __FILE__,
-                    __LINE__));
+                                bytes));
             }
             if (mapped == nullptr || src == nullptr || bytes == 0) {
                 if (mapped != nullptr) {
                     vmaUnmapMemory(allocator, alloc);
                 }
-                return vkCheckFailed(std::format(
+                return logVkFailure(std::format(
                     "Mesh buffer write requires mapped memory, a source pointer, and non-zero size (allocator={:#x}, allocation={:#x}, mapped={:#x}, source={:#x}, write_size={}) ({}:{})",
                     reinterpret_cast<std::uintptr_t>(allocator),
                     reinterpret_cast<std::uintptr_t>(alloc),
@@ -743,15 +735,13 @@ namespace lfs::vis {
             const VkResult flush_result = vmaFlushAllocation(allocator, alloc, 0, bytes);
             vmaUnmapMemory(allocator, alloc);
             if (flush_result != VK_SUCCESS) {
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vmaFlushAllocation(allocator, alloc, 0, bytes)",
                     flush_result,
                     std::format("Mesh buffer flush failed (allocator={:#x}, allocation={:#x}, offset=0, flush_size={})",
                                 reinterpret_cast<std::uintptr_t>(allocator),
                                 reinterpret_cast<std::uintptr_t>(alloc),
-                                bytes),
-                    __FILE__,
-                    __LINE__));
+                                bytes));
             }
             return true;
         }
@@ -800,15 +790,13 @@ namespace lfs::vis {
             if (allocation_result != VK_SUCCESS) {
                 vkDestroyDescriptorPool(device, pool, nullptr);
                 material_descriptor_pools.pop_back();
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vkAllocateDescriptorSets(device, &alloc, &material.descriptor)",
                     allocation_result,
                     std::format("Mesh material descriptor allocation failed for a new pool (device={:#x}, descriptor_pool={:#x}, descriptor_layout={:#x}, requested_count=1)",
                                 vkHandleValue(device),
                                 vkHandleValue(pool),
-                                vkHandleValue(material_layout)),
-                    __FILE__,
-                    __LINE__));
+                                vkHandleValue(material_layout)));
             }
             material.descriptor_pool = pool;
             context->setDebugObjectNamef(VK_OBJECT_TYPE_DESCRIPTOR_SET,
@@ -823,7 +811,7 @@ namespace lfs::vis {
                 return true;
             }
             if (required > std::numeric_limits<std::uint32_t>::max()) {
-                return vkCheckFailed(std::format(
+                return logVkFailure(std::format(
                     "Mesh light draw count must fit a Vulkan descriptor count (frame_slot={}, required_count={}, maximum_count={}) ({}:{})",
                     frame_slot,
                     required,
@@ -887,7 +875,7 @@ namespace lfs::vis {
                                                                nullptr);
                 if (buffer_result != VK_SUCCESS) {
                     vkDestroyDescriptorPool(device, new_pool, nullptr);
-                    return vkCheckFailed(formatVkCheckFailure(
+                    return reportVkFailure(
                         "vmaCreateBuffer(allocator, &buffer_info, &allocation_info, &draw.buffer, &draw.allocation, nullptr)",
                         buffer_result,
                         std::format("Mesh light UBO allocation failed (allocator={:#x}, frame_slot={}, required_count={}, capacity={}, draw_index={}, requested_size={})",
@@ -896,9 +884,7 @@ namespace lfs::vis {
                                     required,
                                     capacity,
                                     static_cast<std::size_t>(&draw - frame.draws.data()),
-                                    buffer_info.size),
-                        __FILE__,
-                        __LINE__));
+                                    buffer_info.size));
                 }
                 context->setDebugObjectNamef(VK_OBJECT_TYPE_BUFFER,
                                              draw.buffer,
@@ -918,7 +904,7 @@ namespace lfs::vis {
                 vkAllocateDescriptorSets(device, &alloc_info, descriptors.data());
             if (descriptors_result != VK_SUCCESS) {
                 vkDestroyDescriptorPool(device, new_pool, nullptr);
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vkAllocateDescriptorSets(device, &alloc_info, descriptors.data())",
                     descriptors_result,
                     std::format("Mesh light descriptor-set allocation failed (device={:#x}, frame_slot={}, descriptor_pool={:#x}, descriptor_layout={:#x}, requested_count={})",
@@ -926,9 +912,7 @@ namespace lfs::vis {
                                 frame_slot,
                                 vkHandleValue(new_pool),
                                 vkHandleValue(light_layout),
-                                alloc_info.descriptorSetCount),
-                    __FILE__,
-                    __LINE__));
+                                alloc_info.descriptorSetCount));
             }
 
             std::vector<VkDescriptorBufferInfo> buffer_infos(capacity);
@@ -970,7 +954,7 @@ namespace lfs::vis {
                            GpuTexture& out,
                            std::string_view label = "texture") {
             if (rgba == nullptr || w <= 0 || h <= 0) {
-                return vkCheckFailed(std::format(
+                return logVkFailure(std::format(
                     "Mesh texture upload requires source pixels and positive dimensions (label='{}', source={:#x}, observed_width={}, observed_height={}) ({}:{})",
                     label,
                     reinterpret_cast<std::uintptr_t>(rgba),
@@ -1031,16 +1015,14 @@ namespace lfs::vis {
                 vmaCreateBuffer(allocator, &sb, &sa, &staging, &staging_alloc, nullptr);
             if (result != VK_SUCCESS) {
                 destroyTexture(out);
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vmaCreateBuffer(allocator, &sb, &sa, &staging, &staging_alloc, nullptr)",
                     result,
                     std::format("Mesh texture staging-buffer allocation failed (label='{}', allocator={:#x}, requested_size={}, usage={:#x})",
                                 label,
                                 reinterpret_cast<std::uintptr_t>(allocator),
                                 bytes,
-                                static_cast<std::uint32_t>(sb.usage)),
-                    __FILE__,
-                    __LINE__));
+                                static_cast<std::uint32_t>(sb.usage)));
             }
             context->setDebugObjectNamef(VK_OBJECT_TYPE_BUFFER,
                                          staging,
@@ -1052,7 +1034,7 @@ namespace lfs::vis {
             if (result != VK_SUCCESS) {
                 vmaDestroyBuffer(allocator, staging, staging_alloc);
                 destroyTexture(out);
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vmaMapMemory(allocator, staging_alloc, &mapped)",
                     result,
                     std::format("Mesh texture staging allocation could not be mapped (label='{}', allocator={:#x}, allocation={:#x}, buffer={:#x}, requested_size={})",
@@ -1060,9 +1042,7 @@ namespace lfs::vis {
                                 reinterpret_cast<std::uintptr_t>(allocator),
                                 reinterpret_cast<std::uintptr_t>(staging_alloc),
                                 vkHandleValue(staging),
-                                bytes),
-                    __FILE__,
-                    __LINE__));
+                                bytes));
             }
             std::memcpy(mapped, rgba, static_cast<std::size_t>(bytes));
             const VkResult flush_result = vmaFlushAllocation(allocator, staging_alloc, 0, bytes);
@@ -1070,7 +1050,7 @@ namespace lfs::vis {
             if (flush_result != VK_SUCCESS) {
                 vmaDestroyBuffer(allocator, staging, staging_alloc);
                 destroyTexture(out);
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vmaFlushAllocation(allocator, staging_alloc, 0, bytes)",
                     flush_result,
                     std::format("Mesh texture staging flush failed (label='{}', allocator={:#x}, allocation={:#x}, buffer={:#x}, offset=0, flush_size={})",
@@ -1078,9 +1058,7 @@ namespace lfs::vis {
                                 reinterpret_cast<std::uintptr_t>(allocator),
                                 reinterpret_cast<std::uintptr_t>(staging_alloc),
                                 vkHandleValue(staging),
-                                bytes),
-                    __FILE__,
-                    __LINE__));
+                                bytes));
             }
 
             VkCommandBuffer cb = beginSingleTimeCommands();
@@ -1126,7 +1104,7 @@ namespace lfs::vis {
             const VkResult view_result = vkCreateImageView(device, &vi, nullptr, &out.view);
             if (view_result != VK_SUCCESS) {
                 destroyTexture(out);
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vkCreateImageView(device, &vi, nullptr, &out.view)",
                     view_result,
                     std::format("Mesh texture image-view creation failed (label='{}', device={:#x}, image={:#x}, extent={}x{}, format={}, aspect_mask={:#x})",
@@ -1136,9 +1114,7 @@ namespace lfs::vis {
                                 w,
                                 h,
                                 static_cast<int>(vi.format),
-                                static_cast<std::uint32_t>(vi.subresourceRange.aspectMask)),
-                    __FILE__,
-                    __LINE__));
+                                static_cast<std::uint32_t>(vi.subresourceRange.aspectMask)));
             }
             context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE_VIEW,
                                          out.view,
@@ -1306,7 +1282,7 @@ namespace lfs::vis {
             if (layout_result != VK_SUCCESS) {
                 vkDestroyShaderModule(device, vert, nullptr);
                 vkDestroyShaderModule(device, frag, nullptr);
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vkCreatePipelineLayout(device, &layout_info, nullptr, &pipeline_layout)",
                     layout_result,
                     std::format("Mesh main pipeline-layout creation failed (device={:#x}, light_layout={:#x}, material_layout={:#x}, set_layout_count={}, push_constant_bytes={})",
@@ -1314,9 +1290,7 @@ namespace lfs::vis {
                                 vkHandleValue(light_layout),
                                 vkHandleValue(material_layout),
                                 layout_info.setLayoutCount,
-                                push.size),
-                    __FILE__,
-                    __LINE__));
+                                push.size));
             }
             context->setDebugObjectName(VK_OBJECT_TYPE_PIPELINE_LAYOUT,
                                         pipeline_layout,
@@ -1362,7 +1336,7 @@ namespace lfs::vis {
                                                                   nullptr,
                                                                   &out);
                 if (result != VK_SUCCESS) {
-                    return vkCheckFailed(formatVkCheckFailure(
+                    return reportVkFailure(
                         "vkCreateGraphicsPipelines(device, pipeline_cache, 1, &pipeline_info, nullptr, &out)",
                         result,
                         std::format("Mesh main graphics-pipeline creation failed (device={:#x}, pipeline_cache={:#x}, pipeline_layout={:#x}, cull_mode={:#x}, color_format={}, depth_format={})",
@@ -1371,9 +1345,7 @@ namespace lfs::vis {
                                     vkHandleValue(pipeline_layout),
                                     static_cast<std::uint32_t>(cull),
                                     static_cast<int>(color_format),
-                                    static_cast<int>(depth_format)),
-                        __FILE__,
-                        __LINE__));
+                                    static_cast<int>(depth_format)));
                 }
                 return true;
             };
@@ -1489,15 +1461,13 @@ namespace lfs::vis {
             if (layout_result != VK_SUCCESS) {
                 vkDestroyShaderModule(device, vert, nullptr);
                 vkDestroyShaderModule(device, frag, nullptr);
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vkCreatePipelineLayout(device, &layout_info, nullptr, &shadow_pipeline_layout)",
                     layout_result,
                     std::format("Mesh shadow pipeline-layout creation failed (device={:#x}, set_layout_count={}, push_constant_bytes={})",
                                 vkHandleValue(device),
                                 layout_info.setLayoutCount,
-                                push.size),
-                    __FILE__,
-                    __LINE__));
+                                push.size));
             }
             context->setDebugObjectName(VK_OBJECT_TYPE_PIPELINE_LAYOUT,
                                         shadow_pipeline_layout,
@@ -1529,16 +1499,14 @@ namespace lfs::vis {
             vkDestroyShaderModule(device, vert, nullptr);
             vkDestroyShaderModule(device, frag, nullptr);
             if (result != VK_SUCCESS) {
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vkCreateGraphicsPipelines(device, pipeline_cache, 1, &pipeline_info, nullptr, &shadow_pipeline)",
                     result,
                     std::format("Mesh shadow graphics-pipeline creation failed (device={:#x}, pipeline_cache={:#x}, pipeline_layout={:#x}, depth_format={})",
                                 vkHandleValue(device),
                                 vkHandleValue(pipeline_cache),
                                 vkHandleValue(shadow_pipeline_layout),
-                                static_cast<int>(depth_format)),
-                    __FILE__,
-                    __LINE__));
+                                static_cast<int>(depth_format)));
             }
             context->setDebugObjectName(VK_OBJECT_TYPE_PIPELINE,
                                         shadow_pipeline,
@@ -1651,15 +1619,13 @@ namespace lfs::vis {
             if (layout_result != VK_SUCCESS) {
                 vkDestroyShaderModule(device, vert, nullptr);
                 vkDestroyShaderModule(device, frag, nullptr);
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vkCreatePipelineLayout(device, &layout_info, nullptr, &wireframe_pipeline_layout)",
                     layout_result,
                     std::format("Mesh wireframe pipeline-layout creation failed (device={:#x}, set_layout_count={}, push_constant_bytes={})",
                                 vkHandleValue(device),
                                 layout_info.setLayoutCount,
-                                push.size),
-                    __FILE__,
-                    __LINE__));
+                                push.size));
             }
             context->setDebugObjectName(VK_OBJECT_TYPE_PIPELINE_LAYOUT,
                                         wireframe_pipeline_layout,
@@ -1692,7 +1658,7 @@ namespace lfs::vis {
             vkDestroyShaderModule(device, vert, nullptr);
             vkDestroyShaderModule(device, frag, nullptr);
             if (result != VK_SUCCESS) {
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vkCreateGraphicsPipelines(device, pipeline_cache, 1, &pipeline_info, nullptr, &wireframe_pipeline)",
                     result,
                     std::format("Mesh wireframe graphics-pipeline creation failed (device={:#x}, pipeline_cache={:#x}, pipeline_layout={:#x}, color_format={}, depth_format={})",
@@ -1700,9 +1666,7 @@ namespace lfs::vis {
                                 vkHandleValue(pipeline_cache),
                                 vkHandleValue(wireframe_pipeline_layout),
                                 static_cast<int>(color_format),
-                                static_cast<int>(depth_format)),
-                    __FILE__,
-                    __LINE__));
+                                static_cast<int>(depth_format)));
             }
             context->setDebugObjectName(VK_OBJECT_TYPE_PIPELINE,
                                         wireframe_pipeline,
@@ -1893,7 +1857,7 @@ namespace lfs::vis {
             const std::int64_t vcount = mesh.vertex_count();
             const std::int64_t fcount = mesh.face_count();
             if (vcount <= 0 || fcount <= 0) {
-                return vkCheckFailed(std::format(
+                return logVkFailure(std::format(
                     "Mesh upload requires positive vertex and face counts (observed_vertices={}, observed_faces={}, generation={}) ({}:{})",
                     vcount,
                     fcount,
@@ -2069,7 +2033,7 @@ namespace lfs::vis {
                 vmaDestroyBuffer(allocator, vertex_staging, vertex_staging_alloc);
                 vmaDestroyBuffer(allocator, index_staging, index_staging_alloc);
                 destroyMesh(gpu);
-                return vkCheckFailed(error);
+                return logVkFailure(error);
             }
             vkCmdCopyBuffer(upload_commands, vertex_staging, gpu.vertex_buffer, 1, &vertex_copy);
             vkCmdCopyBuffer(upload_commands, index_staging, gpu.index_buffer, 1, &index_copy);

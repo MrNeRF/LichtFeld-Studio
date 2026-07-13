@@ -160,7 +160,7 @@ namespace lfs::vis {
                                ManagedBuffer& staging_scratch) {
             if (allocator == VK_NULL_HANDLE || cb == VK_NULL_HANDLE || src == nullptr ||
                 bytes == 0 || dst.buffer == VK_NULL_HANDLE || bytes > dst.size) {
-                return vkCheckFailed(std::format(
+                return logVkFailure(std::format(
                     "Point-cloud staging upload requires live handles and a copy range within the destination allocation (allocator={:#x}, command_buffer={:#x}, source={:#x}, copy_size={}, destination_buffer={:#x}, destination_size={}) ({}:{})",
                     reinterpret_cast<std::uintptr_t>(allocator),
                     vkHandleValue(cb),

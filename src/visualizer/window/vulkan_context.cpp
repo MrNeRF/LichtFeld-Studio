@@ -427,7 +427,7 @@ namespace lfs::vis {
         return false;
     }
 
-    bool VulkanContext::vkCheckFailed(std::string message) {
+    bool VulkanContext::setVkFailure(std::string message) {
         last_error_ = std::move(message);
         LOG_ERROR("Vulkan: {}", last_error_);
         return false;
@@ -1684,13 +1684,13 @@ namespace lfs::vis {
         std::vector<const char*> extensions(sdl_extensions, sdl_extensions + extension_count);
 
         uint32_t available_extension_count = 0;
-        LFS_VK_CHECK_MSG(
+        LFS_VK_CONTEXT_CHECK_MSG(
             vkEnumerateInstanceExtensionProperties(nullptr, &available_extension_count, nullptr),
             "Failed to enumerate Vulkan instance-extension count (observed_count={})",
             available_extension_count);
         std::vector<VkExtensionProperties> available_extensions(available_extension_count);
         if (available_extension_count > 0) {
-            LFS_VK_CHECK_MSG(
+            LFS_VK_CONTEXT_CHECK_MSG(
                 vkEnumerateInstanceExtensionProperties(
                     nullptr, &available_extension_count, available_extensions.data()),
                 "Failed to enumerate Vulkan instance extensions (destination_capacity={}, observed_count={})",
@@ -1723,13 +1723,13 @@ namespace lfs::vis {
         }
 
         uint32_t available_layer_count = 0;
-        LFS_VK_CHECK_MSG(
+        LFS_VK_CONTEXT_CHECK_MSG(
             vkEnumerateInstanceLayerProperties(&available_layer_count, nullptr),
             "Failed to enumerate Vulkan instance-layer count (observed_count={})",
             available_layer_count);
         std::vector<VkLayerProperties> available_layers(available_layer_count);
         if (available_layer_count > 0) {
-            LFS_VK_CHECK_MSG(
+            LFS_VK_CONTEXT_CHECK_MSG(
                 vkEnumerateInstanceLayerProperties(&available_layer_count, available_layers.data()),
                 "Failed to enumerate Vulkan instance layers (destination_capacity={}, observed_count={})",
                 available_layers.size(),
@@ -1954,21 +1954,21 @@ namespace lfs::vis {
 
     bool VulkanContext::pickPhysicalDevice() {
         uint32_t count = 0;
-        LFS_VK_CHECK_MSG(vkEnumeratePhysicalDevices(instance_, &count, nullptr),
-                         "Failed to enumerate physical-device count (instance={:#x}, observed_count={})",
-                         vkHandleValue(instance_),
-                         count);
+        LFS_VK_CONTEXT_CHECK_MSG(vkEnumeratePhysicalDevices(instance_, &count, nullptr),
+                                 "Failed to enumerate physical-device count (instance={:#x}, observed_count={})",
+                                 vkHandleValue(instance_),
+                                 count);
         if (count == 0) {
             return fail(std::format("No Vulkan physical devices found (instance={:#x}, observed_count=0)",
                                     vkHandleValue(instance_)));
         }
 
         std::vector<VkPhysicalDevice> devices(count);
-        LFS_VK_CHECK_MSG(vkEnumeratePhysicalDevices(instance_, &count, devices.data()),
-                         "Failed to enumerate physical devices (instance={:#x}, destination_capacity={}, observed_count={})",
-                         vkHandleValue(instance_),
-                         devices.size(),
-                         count);
+        LFS_VK_CONTEXT_CHECK_MSG(vkEnumeratePhysicalDevices(instance_, &count, devices.data()),
+                                 "Failed to enumerate physical devices (instance={:#x}, destination_capacity={}, observed_count={})",
+                                 vkHandleValue(instance_),
+                                 devices.size(),
+                                 count);
         devices.resize(count);
 
         VkPhysicalDevice fallback = VK_NULL_HANDLE;
@@ -2083,7 +2083,7 @@ namespace lfs::vis {
         }
 
         uint32_t available_extension_count = 0;
-        LFS_VK_CHECK_MSG(
+        LFS_VK_CONTEXT_CHECK_MSG(
             vkEnumerateDeviceExtensionProperties(
                 physical_device_, nullptr, &available_extension_count, nullptr),
             "Failed to enumerate selected-device extension count (physical_device={:#x}, observed_count={})",
@@ -2091,7 +2091,7 @@ namespace lfs::vis {
             available_extension_count);
         std::vector<VkExtensionProperties> available_extensions(available_extension_count);
         if (available_extension_count > 0) {
-            LFS_VK_CHECK_MSG(
+            LFS_VK_CONTEXT_CHECK_MSG(
                 vkEnumerateDeviceExtensionProperties(physical_device_,
                                                      nullptr,
                                                      &available_extension_count,
@@ -3656,7 +3656,7 @@ namespace lfs::vis {
         }
         setDebugObjectName(VK_OBJECT_TYPE_SWAPCHAIN_KHR, swapchain_, "swapchain.main");
 
-        LFS_VK_CHECK_MSG(
+        LFS_VK_CONTEXT_CHECK_MSG(
             vkGetSwapchainImagesKHR(device_, swapchain_, &image_count, nullptr),
             "swapchain image-count query returned no usable array (device={:#x}, swapchain={:#x}, requested_min_images={}, observed_image_count={})",
             vkHandleValue(device_),
@@ -3673,7 +3673,7 @@ namespace lfs::vis {
                 extent.height));
         }
         swapchain_images_.resize(image_count);
-        LFS_VK_CHECK_MSG(
+        LFS_VK_CONTEXT_CHECK_MSG(
             vkGetSwapchainImagesKHR(device_, swapchain_, &image_count, swapchain_images_.data()),
             "swapchain image query failed (device={:#x}, swapchain={:#x}, destination_capacity={}, observed_image_count={})",
             vkHandleValue(device_),

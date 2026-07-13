@@ -242,7 +242,7 @@ namespace lfs::vis {
     private:
         bool fail(std::string message,
                   std::source_location location = std::source_location::current());
-        bool vkCheckFailed(std::string message);
+        bool setVkFailure(std::string message);
 
         struct QueueFamilies {
             std::optional<uint32_t> graphics;

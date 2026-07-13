@@ -98,7 +98,7 @@ namespace lfs::vis {
             screen_quad_buffer = quad;
             if (device == VK_NULL_HANDLE || allocator == VK_NULL_HANDLE ||
                 graphics_queue == VK_NULL_HANDLE || screen_quad_buffer == VK_NULL_HANDLE) {
-                return vkCheckFailed(std::format(
+                return logVkFailure(std::format(
                     "Environment-pass initialization requires a live device, allocator, graphics queue, and screen quad (device={:#x}, allocator={:#x}, graphics_queue={:#x}, screen_quad_buffer={:#x}) ({}:{})",
                     vkHandleValue(device),
                     reinterpret_cast<std::uintptr_t>(allocator),
@@ -411,16 +411,14 @@ namespace lfs::vis {
             if (layout_result != VK_SUCCESS) {
                 vkDestroyShaderModule(device, vert, nullptr);
                 vkDestroyShaderModule(device, frag, nullptr);
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vkCreatePipelineLayout(device, &li, nullptr, &pipeline_layout)",
                     layout_result,
                     std::format("Environment pipeline-layout creation failed (device={:#x}, descriptor_layout={:#x}, set_layout_count={}, push_constant_bytes={})",
                                 vkHandleValue(device),
                                 vkHandleValue(desc_layout),
                                 li.setLayoutCount,
-                                push.size),
-                    __FILE__,
-                    __LINE__));
+                                push.size));
             }
             context->setDebugObjectName(VK_OBJECT_TYPE_PIPELINE_LAYOUT,
                                         pipeline_layout,
@@ -452,7 +450,7 @@ namespace lfs::vis {
             vkDestroyShaderModule(device, vert, nullptr);
             vkDestroyShaderModule(device, frag, nullptr);
             if (r != VK_SUCCESS) {
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vkCreateGraphicsPipelines(device, pipeline_cache, 1, &pci, nullptr, &pipeline)",
                     r,
                     std::format("Environment graphics-pipeline creation failed (device={:#x}, pipeline_cache={:#x}, pipeline_layout={:#x}, color_format={}, depth_format={})",
@@ -460,9 +458,7 @@ namespace lfs::vis {
                                 vkHandleValue(pipeline_cache),
                                 vkHandleValue(pipeline_layout),
                                 static_cast<int>(color_format),
-                                static_cast<int>(depth_format)),
-                    __FILE__,
-                    __LINE__));
+                                static_cast<int>(depth_format)));
             }
             context->setDebugObjectName(VK_OBJECT_TYPE_PIPELINE,
                                         pipeline,
@@ -518,14 +514,12 @@ namespace lfs::vis {
             VkResult r = vkEndCommandBuffer(cb);
             if (r != VK_SUCCESS) {
                 vkFreeCommandBuffers(device, transfer_pool, 1, &cb);
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vkEndCommandBuffer(cb)",
                     r,
                     std::format("Environment upload command buffer did not leave recording state (command_buffer={:#x}, command_pool={:#x})",
                                 vkHandleValue(cb),
-                                vkHandleValue(transfer_pool)),
-                    __FILE__,
-                    __LINE__));
+                                vkHandleValue(transfer_pool)));
             }
             VkSubmitInfo si{};
             si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -590,12 +584,10 @@ namespace lfs::vis {
                 vkDestroyFence(device, fence, nullptr);
             vkFreeCommandBuffers(device, transfer_pool, 1, &cb);
             if (r != VK_SUCCESS) {
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     failed_expression,
                     r,
-                    failed_context,
-                    __FILE__,
-                    __LINE__));
+                    failed_context);
             }
             return true;
         }
@@ -704,16 +696,14 @@ namespace lfs::vis {
                 vmaCreateBuffer(allocator, &bi, &sa, &staging, &staging_alloc, nullptr);
             if (result != VK_SUCCESS) {
                 destroyImage();
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vmaCreateBuffer(allocator, &bi, &sa, &staging, &staging_alloc, nullptr)",
                     result,
                     std::format("Environment staging-buffer allocation failed (allocator={:#x}, path='{}', requested_size={}, usage={:#x})",
                                 reinterpret_cast<std::uintptr_t>(allocator),
                                 utf8,
                                 bytes,
-                                static_cast<std::uint32_t>(bi.usage)),
-                    __FILE__,
-                    __LINE__));
+                                static_cast<std::uint32_t>(bi.usage)));
             }
             context->setDebugObjectNamef(VK_OBJECT_TYPE_BUFFER,
                                          staging,
@@ -724,16 +714,14 @@ namespace lfs::vis {
             if (result != VK_SUCCESS) {
                 vmaDestroyBuffer(allocator, staging, staging_alloc);
                 destroyImage();
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vmaMapMemory(allocator, staging_alloc, &mapped)",
                     result,
                     std::format("Environment staging allocation could not be mapped (allocator={:#x}, allocation={:#x}, buffer={:#x}, requested_size={})",
                                 reinterpret_cast<std::uintptr_t>(allocator),
                                 reinterpret_cast<std::uintptr_t>(staging_alloc),
                                 vkHandleValue(staging),
-                                bytes),
-                    __FILE__,
-                    __LINE__));
+                                bytes));
             }
             std::memcpy(mapped, rgba.data(), static_cast<std::size_t>(bytes));
             const VkResult flush_result = vmaFlushAllocation(allocator, staging_alloc, 0, bytes);
@@ -741,16 +729,14 @@ namespace lfs::vis {
             if (flush_result != VK_SUCCESS) {
                 vmaDestroyBuffer(allocator, staging, staging_alloc);
                 destroyImage();
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vmaFlushAllocation(allocator, staging_alloc, 0, bytes)",
                     flush_result,
                     std::format("Environment staging flush failed (allocator={:#x}, allocation={:#x}, buffer={:#x}, offset=0, flush_size={})",
                                 reinterpret_cast<std::uintptr_t>(allocator),
                                 reinterpret_cast<std::uintptr_t>(staging_alloc),
                                 vkHandleValue(staging),
-                                bytes),
-                    __FILE__,
-                    __LINE__));
+                                bytes));
             }
 
             VkCommandBuffer cb = beginCmds();
@@ -794,7 +780,7 @@ namespace lfs::vis {
             const VkResult view_result = vkCreateImageView(device, &iv, nullptr, &image_view);
             if (view_result != VK_SUCCESS) {
                 destroyImage();
-                return vkCheckFailed(formatVkCheckFailure(
+                return reportVkFailure(
                     "vkCreateImageView(device, &iv, nullptr, &image_view)",
                     view_result,
                     std::format("Environment image-view creation failed (device={:#x}, image={:#x}, path='{}', extent={}x{}, format={}, aspect_mask={:#x})",
@@ -804,9 +790,7 @@ namespace lfs::vis {
                                 w,
                                 h,
                                 static_cast<int>(iv.format),
-                                static_cast<std::uint32_t>(iv.subresourceRange.aspectMask)),
-                    __FILE__,
-                    __LINE__));
+                                static_cast<std::uint32_t>(iv.subresourceRange.aspectMask)));
             }
             context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE_VIEW,
                                          image_view,
