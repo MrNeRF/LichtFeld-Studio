@@ -102,16 +102,27 @@ namespace lfs::core {
             return allocate_cuda_storage(bytes, stream);
         }
 
-        void* try_allocate(size_t bytes, cudaStream_t stream = nullptr) {
+        void* try_allocate(size_t bytes,
+                           cudaStream_t stream = nullptr,
+                           cudaError_t* failure_status = nullptr) {
             LFS_CUDA_BREADCRUMB_STREAM("tensor.pool.allocate", stream);
+            if (failure_status) {
+                *failure_status = cudaSuccess;
+            }
             if (bytes == 0)
                 return nullptr;
 
             if (shutdown_.load(std::memory_order_acquire)) {
                 LOG_ERROR("Attempted to allocate CUDA memory after shutdown!");
+                if (failure_status) {
+                    *failure_status = cudaErrorUnknown;
+                }
                 return nullptr;
             }
             if (cuda_is_unavailable()) [[unlikely]] {
+                if (failure_status) {
+                    *failure_status = cudaErrorInitializationError;
+                }
                 return nullptr;
             }
 
@@ -193,7 +204,7 @@ namespace lfs::core {
             }
 #endif
 
-            return try_allocate_direct(bytes);
+            return try_allocate_direct(bytes, failure_status);
         }
 
         // Marks `ptr` as used by `stream` beyond its home stream. The free will
@@ -490,12 +501,15 @@ namespace lfs::core {
             shutdown();
         }
 
-        void* try_allocate_direct(size_t bytes) {
+        void* try_allocate_direct(size_t bytes, cudaError_t* failure_status) {
             void* ptr = nullptr;
 
             const auto pre_call_state = sample_cuda_pre_call_state();
             const cudaError_t err = cudaMalloc(&ptr, bytes);
             if (err != cudaSuccess) {
+                if (failure_status) {
+                    *failure_status = err;
+                }
                 ensure_cuda_success(err, pre_call_state, "cudaMalloc(direct tier)",
                                     std::format("requested_bytes={}", bytes),
                                     std::source_location::current(),

@@ -93,12 +93,16 @@ namespace lfs::core {
             });
         }
 
-        void* try_allocate_direct_cuda_storage(const size_t bytes) {
+        void* try_allocate_direct_cuda_storage(const size_t bytes,
+                                               cudaError_t* const failure_status) {
             void* ptr = nullptr;
             const auto pre_call_state = sample_cuda_pre_call_state();
             const cudaError_t status = cudaMalloc(&ptr, bytes);
             if (status == cudaSuccess) {
                 return ptr;
+            }
+            if (failure_status) {
+                *failure_status = status;
             }
             ensure_cuda_success(
                 status, pre_call_state, "cudaMalloc(direct tensor storage)",
@@ -113,6 +117,24 @@ namespace lfs::core {
                 }
             }
             return nullptr;
+        }
+
+        [[noreturn]] void throw_non_oom_cuda_allocation(
+            const cudaError_t status,
+            const size_t bytes,
+            const char* const label,
+            const char* const operation) {
+            if (status == cudaSuccess) {
+                throw std::runtime_error(std::format(
+                    "CUDA allocator returned no storage without a CUDA error: "
+                    "requested_bytes={}, label='{}', operation='{}'",
+                    bytes, label ? label : "", operation ? operation : ""));
+            }
+            throw std::runtime_error(std::format(
+                "CUDA allocation failed with {} ({}): requested_bytes={}, label='{}', "
+                "operation='{}'",
+                cudaGetErrorName(status), cudaGetErrorString(status), bytes,
+                label ? label : "", operation ? operation : ""));
         }
 
     } // namespace
@@ -266,22 +288,28 @@ namespace lfs::core {
         }
 
         auto& coordinator = MemoryPressureCoordinator::instance();
-        const auto try_allocate = [&]() -> void* {
+        const auto try_allocate = [&](cudaError_t* const failure_status) -> void* {
+            *failure_status = cudaSuccess;
             if (coordinator.probe_should_fail(MemoryDomain::CudaDevice, bytes)) {
+                *failure_status = cudaErrorMemoryAllocation;
                 return nullptr;
             }
             if (mode == CudaStorageMode::Direct) {
-                return try_allocate_direct_cuda_storage(bytes);
+                return try_allocate_direct_cuda_storage(bytes, failure_status);
             }
-            return CudaMemoryPool::instance().try_allocate(bytes, stream);
+            return CudaMemoryPool::instance().try_allocate(bytes, stream, failure_status);
         };
 
-        void* ptr = try_allocate();
+        cudaError_t failure_status = cudaSuccess;
+        void* ptr = try_allocate(&failure_status);
         if (ptr != nullptr) {
             return ptr;
         }
         if (cuda_is_unavailable()) {
             throw_cuda_unavailable_allocation(bytes, stream, label, operation);
+        }
+        if (failure_status != cudaErrorMemoryAllocation) {
+            throw_non_oom_cuda_allocation(failure_status, bytes, label, operation);
         }
 
         int device = 0;
@@ -297,9 +325,15 @@ namespace lfs::core {
             .native_error = cudaErrorMemoryAllocation,
         };
         if (coordinator.relieve_and_should_retry(failure)) {
-            ptr = try_allocate();
+            ptr = try_allocate(&failure_status);
         }
         if (ptr == nullptr) {
+            if (cuda_is_unavailable()) {
+                throw_cuda_unavailable_allocation(bytes, stream, label, operation);
+            }
+            if (failure_status != cudaErrorMemoryAllocation) {
+                throw_non_oom_cuda_allocation(failure_status, bytes, label, operation);
+            }
             throw MemoryAllocationError(failure);
         }
         return ptr;
