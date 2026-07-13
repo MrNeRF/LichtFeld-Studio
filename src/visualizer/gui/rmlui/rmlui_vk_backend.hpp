@@ -35,6 +35,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -101,6 +102,7 @@ public:
     // The view+sampler must remain alive while any element references this URL. The
     // returned URL form is "lfs-vk://?v=<view_hex>&s=<sampler_hex>&w=W&h=H".
     static std::string MakeExternalTextureSource(VkImageView image_view, VkSampler sampler, int width, int height);
+    void SetTextureDebugName(Rml::TextureHandle texture_handle, std::string_view debug_name) const;
 
     // -- Inherited from Rml::RenderInterface --
 

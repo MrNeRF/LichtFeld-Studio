@@ -181,6 +181,12 @@ namespace lfs::vis::gui {
         document_ = nullptr;
     }
 
+    void RmlPanelHost::releaseRendererResources() {
+        if (manager_ && manager_->isInitialized())
+            manager_->releaseCachedVulkanContext(direct_cache_);
+        direct_cache_dirty_ = true;
+    }
+
     bool RmlPanelHost::syncThemeProperties() {
         if (!document_)
             return false;

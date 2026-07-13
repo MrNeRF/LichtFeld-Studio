@@ -764,6 +764,8 @@ namespace lfs::vis::gui {
                             vulkan_render_interface_->SetContextClipRect(fleft, ftop, fright, fbottom);
                             command.context->Render();
                             command.cache->texture = vulkan_render_interface_->SaveLayerAsTexture();
+                            vulkan_render_interface_->SetTextureDebugName(command.cache->texture,
+                                                                          command.context_name);
                             vulkan_render_interface_->PopLayer();
                             const bool saved = command.cache->texture != 0;
                             command.cache->width = saved ? vis_w : 0;
@@ -824,6 +826,8 @@ namespace lfs::vis::gui {
                                                                      static_cast<float>(command.cache_height));
                         command.context->Render();
                         command.cache->texture = vulkan_render_interface_->SaveLayerAsTexture();
+                        vulkan_render_interface_->SetTextureDebugName(command.cache->texture,
+                                                                      command.context_name);
                         vulkan_render_interface_->PopLayer();
                         const bool saved = command.cache->texture != 0;
                         command.cache->width = saved ? command.cache_width : 0;

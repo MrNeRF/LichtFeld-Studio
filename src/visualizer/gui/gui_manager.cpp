@@ -40,6 +40,7 @@
 
 #include "gui/gpu_memory_query.hpp"
 #include "gui/gui_focus_state.hpp"
+#include "gui/icon_cache.hpp"
 #include "input/frame_input_buffer.hpp"
 #include "input/input_controller.hpp"
 #include "input/sdl_key_mapping.hpp"
@@ -3787,17 +3788,29 @@ namespace lfs::vis::gui {
         rml_right_panel_.shutdown();
         rml_shell_frame_.shutdown();
         startup_overlay_.shutdown();
+        sequencer_ui_.destroyGraphicsResources();
+        for (const auto& panel : native_panel_storage_) {
+            if (panel)
+                panel->releaseRendererResources();
+        }
         PanelRegistry::instance().unregister_all_non_native();
         rmlui_manager_.shutdown();
 
         if (need_gil)
             lfs::python::release_gil_main_thread();
 
-        sequencer_ui_.destroyGraphicsResources();
         drag_drop_.shutdown();
         destroyCustomCursors();
         lfs::rendering::ScreenOverlayRenderer::setTextMeasureFn({});
         g_overlay_atlas = {};
+        // The process-wide camera cache owns device-local atlas pages. Dataset
+        // camera thumbnails can span several pages, so release all of them while
+        // the Vulkan context and its allocator are still alive.
+        cameraThumbnailCache().clear();
+        // IconCache is process-global, but its Vulkan textures belong to this
+        // device. Release them while the context and allocator are still alive;
+        // static destruction happens after VulkanContext::shutdown().
+        IconCache::instance().clear();
         setVulkanUiTextureContext(nullptr);
         if (!vulkan_interop_upload_stream_.synchronize()) {
             LOG_WARN("CUDA/Vulkan GUI upload stream synchronization failed during shutdown: {}",

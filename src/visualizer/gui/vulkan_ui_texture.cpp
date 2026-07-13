@@ -495,6 +495,16 @@ namespace lfs::vis::gui {
                 destroyImage();
                 return false;
             }
+            context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE,
+                                         image,
+                                         "ui.texture.cpu[{}x{}]",
+                                         new_width,
+                                         new_height);
+            context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE_VIEW,
+                                         image_view,
+                                         "ui.texture.cpu[{}x{}].view",
+                                         new_width,
+                                         new_height);
             image_barriers.registerImage(image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
 
             if (descriptor_set == VK_NULL_HANDLE) {

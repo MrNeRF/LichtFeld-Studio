@@ -47,6 +47,7 @@ namespace lfs::vis::gui {
         bool ensureContext();
         bool ensureDocumentLoaded();
         bool reloadDocument();
+        void releaseRendererResources();
 
         void setInput(const PanelInputState* input) { input_ = input; }
         bool hasInput() const { return input_ != nullptr; }
