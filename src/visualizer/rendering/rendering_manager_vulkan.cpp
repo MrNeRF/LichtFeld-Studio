@@ -1188,7 +1188,7 @@ namespace lfs::vis {
             model_change.changed) {
             gt_comparison_image_cache_ = {};
             clearVulkanViewportImageState();
-            last_vksplat_render_error_.clear();
+            last_logged_vksplat_render_error_.clear();
             if (vksplat_viewport_renderer_) {
                 if (is_training && lfs::rendering::isVkSplatBackend(frame_settings.raster_backend)) {
                     LOG_DEBUG("Preserving VkSplat renderer across training model change");
@@ -1276,7 +1276,7 @@ namespace lfs::vis {
                  frame_dirty, has_renderable_model, has_point_cloud, has_meshes, has_environment);
         if (!has_render_content) {
             clearVulkanViewportImageState();
-            last_vksplat_render_error_.clear();
+            last_logged_vksplat_render_error_.clear();
             viewport_artifact_service_.clearViewportOutput();
             clearVulkanMeshFrame();
             render_lock.reset();
@@ -2991,7 +2991,7 @@ namespace lfs::vis {
                         lfs::core::Tensor::trim_memory_pool();
                     }
                     if (render_result) {
-                        last_vksplat_render_error_.clear();
+                        last_logged_vksplat_render_error_.clear();
                         return publish_vksplat_result(*render_result);
                     }
                     const bool shared_scratch_retryable =
@@ -3234,8 +3234,8 @@ namespace lfs::vis {
                 lfs::rendering::isVkSplatBackend(frame_settings.raster_backend)) {
                 const std::string degraded_error =
                     render_error.empty() ? "missing image payload" : render_error;
-                if (last_vksplat_render_error_ != degraded_error) {
-                    last_vksplat_render_error_ = degraded_error;
+                if (last_logged_vksplat_render_error_ != degraded_error) {
+                    last_logged_vksplat_render_error_ = degraded_error;
                     LOG_ERROR("VkSplat entered degraded mode; retaining the last good viewport image: {}",
                               degraded_error);
                 }

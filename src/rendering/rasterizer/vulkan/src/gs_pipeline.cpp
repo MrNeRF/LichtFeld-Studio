@@ -1474,7 +1474,7 @@ void VulkanGSPipeline::executeCompute(
     for (std::size_t idx = 0; idx < num_buffers; ++idx) {
         const int binding = pipeline.buffer_layouts[idx];
         if (binding < 0 || static_cast<std::size_t>(binding) >= buffers.size()) {
-            _CHECK_FATAL(std::format(
+            _THROW_ERROR(std::format(
                 "executeCompute binding index is outside the supplied buffer array (pipeline='{}', binding={}, buffer_count={}, descriptor_index={})",
                 pipeline.diagnostic_name,
                 binding,
@@ -1608,7 +1608,7 @@ void VulkanGSPipeline::executeComputeIndirect(
     for (std::size_t idx = 0; idx < num_buffers; ++idx) {
         const int binding = pipeline.buffer_layouts[idx];
         if (binding < 0 || static_cast<std::size_t>(binding) >= buffers.size()) {
-            _CHECK_FATAL(std::format(
+            _THROW_ERROR(std::format(
                 "executeComputeIndirect binding index is outside the supplied buffer array (pipeline='{}', binding={}, buffer_count={}, descriptor_index={})",
                 pipeline.diagnostic_name,
                 binding,

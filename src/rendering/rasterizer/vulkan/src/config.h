@@ -57,9 +57,6 @@ typedef int32_t sortingKey_t;
 
 #define _THROW_ERROR(...) _THROW_ERROR_ALWAYS(__VA_ARGS__)
 
-// Retained as a semantic alias at call sites that guard driver-facing handles.
-#define _CHECK_FATAL(...) _THROW_ERROR(__VA_ARGS__)
-
 // Vulkan keeps its call-site idiom while sharing the core debug primitive.
 // In Release, neither the condition nor the formatting arguments are evaluated.
 #ifndef LFS_VK_DEBUG_ASSERT

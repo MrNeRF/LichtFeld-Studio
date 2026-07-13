@@ -158,7 +158,7 @@ void VulkanGSRenderer::ensureInstanceCountReadback() {
     if (create_result != VK_SUCCESS) {
         instance_count_readback_buffer_.buffer = VK_NULL_HANDLE;
         instance_count_readback_buffer_.allocation = VK_NULL_HANDLE;
-        _CHECK_FATAL(std::format(
+        _THROW_ERROR(std::format(
             "Tile-instance readback buffer allocation failed (requested_bytes={}, allocator={:#x}, result={}({}))",
             info.size,
             lfs::rendering::vkHandleValue(allocator),
@@ -176,7 +176,7 @@ void VulkanGSRenderer::ensureInstanceCountReadback() {
                          failed_buffer,
                          failed_allocation);
         instance_count_readback_buffer_ = {};
-        _CHECK_FATAL(std::format(
+        _THROW_ERROR(std::format(
             "Tile-instance readback allocation was not persistently mapped (requested_bytes={}, buffer={:#x}, allocation={:#x}, mapped_pointer={:#x})",
             info.size,
             lfs::rendering::vkHandleValue(failed_buffer),
@@ -348,7 +348,7 @@ void VulkanGSRenderer::ensureVisibleCountReadback() {
     if (create_result != VK_SUCCESS) {
         visible_count_readback_buffer_.buffer = VK_NULL_HANDLE;
         visible_count_readback_buffer_.allocation = VK_NULL_HANDLE;
-        _CHECK_FATAL(std::format(
+        _THROW_ERROR(std::format(
             "Visible-count readback buffer allocation failed (requested_bytes={}, allocator={:#x}, result={}({}))",
             info.size,
             lfs::rendering::vkHandleValue(allocator),
@@ -364,7 +364,7 @@ void VulkanGSRenderer::ensureVisibleCountReadback() {
         const VmaAllocation failed_allocation = visible_count_readback_buffer_.allocation;
         vmaDestroyBuffer(allocator, failed_buffer, failed_allocation);
         visible_count_readback_buffer_ = {};
-        _CHECK_FATAL(std::format(
+        _THROW_ERROR(std::format(
             "Visible-count readback allocation was not persistently mapped (requested_bytes={}, buffer={:#x}, allocation={:#x}, mapped_pointer={:#x})",
             info.size,
             lfs::rendering::vkHandleValue(failed_buffer),
@@ -431,7 +431,7 @@ void VulkanGSRenderer::ensureLodSelectionReadback(const size_t chunk_capacity) {
     if (create_result != VK_SUCCESS) {
         lod_selection_readback_buffer_.buffer = VK_NULL_HANDLE;
         lod_selection_readback_buffer_.allocation = VK_NULL_HANDLE;
-        _CHECK_FATAL(std::format(
+        _THROW_ERROR(std::format(
             "LOD-selection readback buffer allocation failed (requested_bytes={}, payload_words={}, allocator={:#x}, result={}({}))",
             byte_size,
             2 + chunk_capacity,
@@ -448,7 +448,7 @@ void VulkanGSRenderer::ensureLodSelectionReadback(const size_t chunk_capacity) {
         const VmaAllocation failed_allocation = lod_selection_readback_buffer_.allocation;
         vmaDestroyBuffer(allocator, failed_buffer, failed_allocation);
         lod_selection_readback_buffer_ = {};
-        _CHECK_FATAL(std::format(
+        _THROW_ERROR(std::format(
             "LOD-selection readback allocation was not persistently mapped (requested_bytes={}, buffer={:#x}, allocation={:#x}, mapped_pointer={:#x})",
             byte_size,
             lfs::rendering::vkHandleValue(failed_buffer),
