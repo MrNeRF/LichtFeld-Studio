@@ -1570,6 +1570,12 @@ namespace lfs::vis {
         }
 
         bool createWireframePipeline(VkFormat color_format, VkFormat depth_format) {
+            if (context == nullptr || !context->hasFillModeNonSolid()) {
+                // VK_POLYGON_MODE_LINE is optional. Keep the pass usable on
+                // conformant devices that do not expose fillModeNonSolid; the UI
+                // reports the same capability and does not offer the overlay.
+                return true;
+            }
             using namespace viewport_shaders;
             VkShaderModule vert = createShaderModule(device, kMeshWireframeVertSpv, sizeof(kMeshWireframeVertSpv));
             VkShaderModule frag = createShaderModule(device, kMeshWireframeFragSpv, sizeof(kMeshWireframeFragSpv));
@@ -2554,7 +2560,12 @@ namespace lfs::vis {
                 // Wireframe overlay drawn on top of the shaded mesh.
                 if (item.wireframe_overlay && wireframe_pipeline != VK_NULL_HANDLE) {
                     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, wireframe_pipeline);
-                    vkCmdSetLineWidth(cb, std::max(item.wireframe_width, 1.0f));
+                    const float line_width = context->hasWideLines()
+                                                 ? std::clamp(item.wireframe_width,
+                                                              context->minLineWidth(),
+                                                              context->maxLineWidth())
+                                                 : 1.0f;
+                    vkCmdSetLineWidth(cb, line_width);
                     WireframePush wpush{};
                     std::memcpy(wpush.mvp, &mvp[0][0], sizeof(wpush.mvp));
                     wpush.color[0] = item.wireframe_color.r;

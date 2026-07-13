@@ -2282,6 +2282,8 @@ namespace lfs::vis {
         features2.pNext = &features12;
         features2.features.shaderInt16 = supported_features2.features.shaderInt16;
         features2.features.shaderInt64 = supported_features2.features.shaderInt64;
+        features2.features.fillModeNonSolid = supported_features2.features.fillModeNonSolid;
+        features2.features.wideLines = supported_features2.features.wideLines;
 
         VkDeviceCreateInfo create_info{};
         create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -2338,6 +2340,12 @@ namespace lfs::vis {
         has_float16_storage_ = features12.shaderFloat16 == VK_TRUE &&
                                features11.storageBuffer16BitAccess == VK_TRUE;
         has_host_image_copy_ = enable_host_image_copy_feature;
+        has_fill_mode_non_solid_ = features2.features.fillModeNonSolid == VK_TRUE;
+        has_wide_lines_ = features2.features.wideLines == VK_TRUE;
+        VkPhysicalDeviceProperties device_properties{};
+        vkGetPhysicalDeviceProperties(physical_device_, &device_properties);
+        line_width_range_[0] = device_properties.limits.lineWidthRange[0];
+        line_width_range_[1] = device_properties.limits.lineWidthRange[1];
         if (!external_memory_interop_enabled_) {
             return fail("Vulkan external memory interop is required (KHR_external_memory + platform variant); device is missing the extension(s)");
         }
@@ -2347,10 +2355,12 @@ namespace lfs::vis {
         LOG_INFO("Vulkan external memory interop enabled{}",
                  external_memory_dedicated_allocation_enabled_ ? " with dedicated allocations" : "");
         LOG_INFO("Vulkan external timeline semaphore interop enabled");
-        LOG_INFO("Vulkan optional features: push_descriptor={} host_image_copy={} swapchain_maintenance1={}",
+        LOG_INFO("Vulkan optional features: push_descriptor={} host_image_copy={} swapchain_maintenance1={} fill_mode_non_solid={} wide_lines={}",
                  has_push_descriptor_,
                  has_host_image_copy_,
-                 swapchain_maintenance1_enabled_);
+                 swapchain_maintenance1_enabled_,
+                 has_fill_mode_non_solid_,
+                 has_wide_lines_);
         return true;
     }
 

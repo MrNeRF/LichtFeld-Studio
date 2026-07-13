@@ -146,6 +146,10 @@ namespace lfs::vis {
         [[nodiscard]] PFN_vkCmdPushDescriptorSetKHR vkCmdPushDescriptorSet() const { return vk_cmd_push_descriptor_set_; }
         [[nodiscard]] bool hasHostImageCopy() const { return has_host_image_copy_; }
         [[nodiscard]] bool hasFloat16Storage() const { return has_float16_storage_; }
+        [[nodiscard]] bool hasFillModeNonSolid() const { return has_fill_mode_non_solid_; }
+        [[nodiscard]] bool hasWideLines() const { return has_wide_lines_; }
+        [[nodiscard]] float minLineWidth() const { return line_width_range_[0]; }
+        [[nodiscard]] float maxLineWidth() const { return line_width_range_[1]; }
         // Optional dedicated async-compute queue. When hasDedicatedComputeQueue() is
         // true, computeQueue() / computeQueueFamily() are distinct from graphicsQueue();
         // otherwise they alias the graphics queue and submitting on either is equivalent.
@@ -418,6 +422,9 @@ namespace lfs::vis {
         bool has_push_descriptor_ = false;
         bool has_float16_storage_ = false;
         bool has_host_image_copy_ = false;
+        bool has_fill_mode_non_solid_ = false;
+        bool has_wide_lines_ = false;
+        std::array<float, 2> line_width_range_{1.0f, 1.0f};
         PFN_vkSetDebugUtilsObjectNameEXT vk_set_debug_utils_object_name_ = nullptr;
         PFN_vkCmdPushDescriptorSetKHR vk_cmd_push_descriptor_set_ = nullptr;
         uint32_t active_image_index_ = 0;

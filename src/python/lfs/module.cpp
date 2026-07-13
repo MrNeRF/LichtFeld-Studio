@@ -78,6 +78,7 @@
 #include "visualizer/scene_coordinate_utils.hpp"
 #include "visualizer/training/training_manager.hpp"
 #include "visualizer/visualizer.hpp"
+#include "visualizer/window/vulkan_context.hpp"
 #include "visualizer/window/window_manager.hpp"
 
 #include <atomic>
@@ -1558,6 +1559,22 @@ NB_MODULE(lichtfeld, m) {
             return wm ? wm->isFullscreen() : false;
         },
         "Check if the window is in fullscreen mode");
+    m.def(
+        "get_vulkan_capabilities", []() {
+            nb::dict capabilities;
+            const auto* const window = lfs::vis::services().windowOrNull();
+            const auto* const context = window != nullptr ? window->getVulkanContext() : nullptr;
+            capabilities["mesh_wireframe"] =
+                context != nullptr && context->hasFillModeNonSolid();
+            capabilities["wide_lines"] =
+                context != nullptr && context->hasWideLines();
+            capabilities["line_width_min"] =
+                context != nullptr ? context->minLineWidth() : 1.0f;
+            capabilities["line_width_max"] =
+                context != nullptr ? context->maxLineWidth() : 1.0f;
+            return capabilities;
+        },
+        "Return Vulkan device capabilities used to gate rendering controls");
     m.def(
         "toggle_ui", []() { lfs::core::events::ui::ToggleUI{}.emit(); },
         "Toggle UI overlay visibility");
