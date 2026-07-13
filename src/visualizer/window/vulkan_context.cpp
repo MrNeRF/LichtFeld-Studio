@@ -210,17 +210,20 @@ namespace lfs::vis {
             return missing;
         }
 
+        [[nodiscard]] bool environmentFlagEnabled(const char* const name) {
+            const char* const value = std::getenv(name);
+            return value != nullptr && std::string_view(value) == "1";
+        }
+
         [[nodiscard]] bool validationRequestedByBuild() {
+            if (environmentFlagEnabled("LFS_VK_VALIDATION")) {
+                return true;
+            }
 #if defined(DEBUG_BUILD) || !defined(NDEBUG)
             return true;
 #else
             return false;
 #endif
-        }
-
-        [[nodiscard]] bool environmentFlagEnabled(const char* const name) {
-            const char* const value = std::getenv(name);
-            return value != nullptr && std::string_view(value) == "1";
         }
 
         VKAPI_ATTR VkBool32 VKAPI_CALL vulkanDebugCallback(
