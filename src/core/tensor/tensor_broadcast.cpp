@@ -11,9 +11,7 @@ namespace lfs::core {
 
     Tensor broadcast_to(const Tensor& src, const TensorShape& target) {
         LFS_ASSERT_MSG(src.is_valid(),
-                       std::format("broadcast_to requires a valid source tensor "
-                                   "(source={})",
-                                   src.str()));
+                       "Cannot broadcast an invalid tensor");
         const bool supported_dtype =
             src.dtype() == DataType::Float32 || src.dtype() == DataType::Bool ||
             (src.device() == Device::CPU && src.dtype() == DataType::Int32);
@@ -80,11 +78,7 @@ namespace lfs::core {
                 }
             } else {
                 LFS_ASSERT_MSG(false,
-                               std::format("CUDA broadcast dispatch reached an unsupported dtype "
-                                           "(source_dtype={}({}), source_device={}, "
-                                           "source_shape={}, target_shape={})",
-                                           dtype_name(src.dtype()), static_cast<int>(src.dtype()),
-                                           device_name(src.device()), src.shape().str(), target.str()));
+                               "Unsupported dtype reached CUDA broadcast dispatch");
             }
         } else {
             if (!src.is_contiguous())
@@ -133,11 +127,7 @@ namespace lfs::core {
                 }
             } else {
                 LFS_ASSERT_MSG(false,
-                               std::format("CPU broadcast dispatch reached an unsupported dtype "
-                                           "(source_dtype={}({}), source_device={}, "
-                                           "source_shape={}, target_shape={})",
-                                           dtype_name(src.dtype()), static_cast<int>(src.dtype()),
-                                           device_name(src.device()), src.shape().str(), target.str()));
+                               "Unsupported dtype reached CPU broadcast dispatch");
             }
         }
 

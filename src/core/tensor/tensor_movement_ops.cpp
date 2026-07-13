@@ -22,25 +22,16 @@ namespace lfs::core {
         for (size_t i = 0; i < shape.size(); ++i) {
             if (shape[i] == -1) {
                 LFS_ASSERT_MSG(infer_dim == -1,
-                               std::format("reshape can infer only one dimension "
-                                           "(second_infer_index={}, first_infer_index={}, "
-                                           "dimension_count={}, total_elements={})",
-                                           i, infer_dim, shape.size(), total_elements));
+                               "reshape can infer only one dimension");
                 infer_dim = i;
                 result.push_back(1); // Placeholder
             } else {
                 LFS_ASSERT_MSG(shape[i] >= 0,
-                               std::format("reshape dimensions must be non-negative or -1 "
-                                           "(dimension={}, value={}, dimension_count={})",
-                                           i, shape[i], shape.size()));
+                               "reshape dimensions must be non-negative or -1");
                 LFS_ASSERT_MSG(shape[i] == 0 ||
                                    known_size <= std::numeric_limits<size_t>::max() /
                                                      static_cast<size_t>(shape[i]),
-                               std::format("reshape dimension product must not overflow size_t "
-                                           "(dimension={}, value={}, product_before={}, "
-                                           "size_t_max={})",
-                                           i, shape[i], known_size,
-                                           std::numeric_limits<size_t>::max()));
+                               "reshape dimension product overflow");
                 result.push_back(shape[i]);
                 known_size *= shape[i];
             }
@@ -48,12 +39,7 @@ namespace lfs::core {
 
         if (infer_dim != -1) {
             LFS_ASSERT_MSG(known_size != 0 && total_elements % known_size == 0,
-                           std::format("reshape inferred dimension must divide the element count "
-                                       "exactly with a non-zero known product "
-                                       "(infer_dimension={}, known_product={}, total_elements={}, "
-                                       "remainder={})",
-                                       infer_dim, known_size, total_elements,
-                                       known_size == 0 ? total_elements : total_elements % known_size));
+                           "reshape inferred dimension is ambiguous or non-integral");
             result[infer_dim] = total_elements / known_size;
         }
 
@@ -80,36 +66,26 @@ namespace lfs::core {
     // ============= Unified Movement Operation =============
     Tensor Tensor::movement(MovementOp op, const MovementArgs& args) const {
         LFS_ASSERT_MSG(is_valid(),
-                       std::format("movement operation requires a valid input tensor "
-                                   "(input={}, operation={}, argument_variant={})",
-                                   str(), static_cast<int>(op), args.args.index()));
+                       "movement operation requires a valid tensor");
 
         switch (op) {
         case MovementOp::Reshape: {
             if (auto* vec = std::get_if<std::vector<int>>(&args.args)) {
                 auto new_shape = infer_shape(*vec, numel());
                 LFS_ASSERT_MSG(!new_shape.empty(),
-                               std::format("reshape requires at least one output dimension "
-                                           "(requested_dimension_count={}, input_shape={}, "
-                                           "input_numel={})",
-                                           vec->size(), shape_.str(), numel()));
+                               "reshape requires at least one output dimension");
 
                 size_t total = 1;
                 for (auto d : new_shape)
                     total *= d;
 
                 LFS_ASSERT_MSG(total == numel(),
-                               std::format("reshape must preserve the element count "
-                                           "(requested_elements={}, input_numel={}, "
-                                           "requested_shape={}, input_shape={})",
-                                           total, numel(), TensorShape(new_shape).str(), shape_.str()));
+                               "reshape element count must remain unchanged");
 
                 return create_view(TensorShape(new_shape));
             }
             LFS_ASSERT_MSG(false,
-                           std::format("reshape movement requires vector<int> arguments "
-                                       "(argument_variant={}, operation={})",
-                                       args.args.index(), static_cast<int>(op)));
+                           "reshape requires vector<int> arguments");
         }
 
         case MovementOp::Permute: {
@@ -117,9 +93,7 @@ namespace lfs::core {
                 return permute(std::span<const int>(*vec));
             }
             LFS_ASSERT_MSG(false,
-                           std::format("permute movement requires vector<int> arguments "
-                                       "(argument_variant={}, operation={})",
-                                       args.args.index(), static_cast<int>(op)));
+                           "permute requires vector<int> arguments");
         }
 
         case MovementOp::Expand: {
@@ -128,18 +102,13 @@ namespace lfs::core {
                 for (size_t i = 0; i < vec->size(); ++i) {
                     const int dim = (*vec)[i];
                     LFS_ASSERT_MSG(dim >= -1,
-                                   std::format("expand dimensions must be non-negative or -1 "
-                                               "(dimension={}, value={}, target_rank={}, "
-                                               "input_shape={})",
-                                               i, dim, vec->size(), shape_.str()));
+                                   "expand dimensions must be non-negative or -1");
                     target_shape.push_back(static_cast<size_t>(dim));
                 }
                 return expand(TensorShape(target_shape));
             }
             LFS_ASSERT_MSG(false,
-                           std::format("expand movement requires vector<int> arguments "
-                                       "(argument_variant={}, operation={})",
-                                       args.args.index(), static_cast<int>(op)));
+                           "expand requires vector<int> arguments");
         }
 
         case MovementOp::Transpose: {
@@ -149,12 +118,7 @@ namespace lfs::core {
 
                 LFS_ASSERT_MSG(dim1 >= 0 && dim1 < static_cast<int>(shape_.rank()) &&
                                    dim2 >= 0 && dim2 < static_cast<int>(shape_.rank()),
-                               std::format("transpose dimensions must be in range "
-                                           "(requested_dimensions=[{},{}], "
-                                           "resolved_dimensions=[{},{}], valid_range=[0,{}), "
-                                           "input_shape={})",
-                                           pair->first, pair->second, dim1, dim2,
-                                           shape_.rank(), shape_.str()));
+                               "transpose dimensions are out of range");
 
                 if (state_ && state_->has_deferred_expr) {
                     std::vector<int> axes(shape_.rank());
@@ -219,10 +183,7 @@ namespace lfs::core {
                     int resolved = resolve_dim(dim);
 
                     LFS_ASSERT_MSG(resolved >= 0 && resolved < static_cast<int>(shape_.rank()),
-                                   std::format("squeeze dimension must be in range "
-                                               "(requested_dimension={}, resolved_dimension={}, "
-                                               "valid_range=[0,{}), input_shape={})",
-                                               dim, resolved, shape_.rank(), shape_.str()));
+                                   "squeeze dimension is out of range");
 
                     // Check if the dimension has size 1
                     if (shape_[resolved] != 1) {
@@ -248,9 +209,7 @@ namespace lfs::core {
             }
 
             LFS_ASSERT_MSG(false,
-                           std::format("squeeze movement requires an integer dimension "
-                                       "(argument_variant={}, operation={})",
-                                       args.args.index(), static_cast<int>(op)));
+                           "squeeze requires an integer dimension");
         }
 
         case MovementOp::Unsqueeze: {
@@ -261,10 +220,7 @@ namespace lfs::core {
                     resolved = static_cast<int>(shape_.rank()) + resolved + 1;
                 }
                 LFS_ASSERT_MSG(resolved >= 0 && resolved <= static_cast<int>(shape_.rank()),
-                               std::format("unsqueeze dimension must be in the new-rank range "
-                                           "(requested_dimension={}, resolved_dimension={}, "
-                                           "valid_range=[0,{}], input_shape={})",
-                                           *dim, resolved, shape_.rank(), shape_.str()));
+                               "unsqueeze dimension is out of range");
 
                 std::vector<size_t> new_shape;
                 for (int i = 0; i < resolved; ++i) {
@@ -278,9 +234,7 @@ namespace lfs::core {
                 return create_view(TensorShape(new_shape));
             }
             LFS_ASSERT_MSG(false,
-                           std::format("unsqueeze movement requires an integer dimension "
-                                       "(argument_variant={}, operation={})",
-                                       args.args.index(), static_cast<int>(op)));
+                           "unsqueeze requires an integer dimension");
         }
 
         case MovementOp::Flatten: {
@@ -290,12 +244,7 @@ namespace lfs::core {
 
                 LFS_ASSERT_MSG(start >= 0 && start < static_cast<int>(shape_.rank()) &&
                                    end >= 0 && end < static_cast<int>(shape_.rank()) && start <= end,
-                               std::format("flatten dimensions must be ordered and in range "
-                                           "(requested_start={}, requested_end={}, "
-                                           "resolved_start={}, resolved_end={}, "
-                                           "valid_range=[0,{}), input_shape={})",
-                                           pair->first, pair->second, start, end,
-                                           shape_.rank(), shape_.str()));
+                               "flatten dimensions are invalid");
 
                 std::vector<size_t> new_shape;
                 for (int i = 0; i < start; ++i) {
@@ -322,67 +271,37 @@ namespace lfs::core {
                 return slice(std::span<const std::pair<int, int>>(*ranges));
             }
             LFS_ASSERT_MSG(false,
-                           std::format("slice movement requires range arguments "
-                                       "(argument_variant={}, operation={})",
-                                       args.args.index(), static_cast<int>(op)));
+                           "slice requires range arguments");
         }
 
         case MovementOp::Cat: {
             if (auto* cat_args = std::get_if<std::pair<void*, int>>(&args.args)) {
                 LFS_ASSERT_MSG(cat_args->first != nullptr,
-                               std::format("cat movement requires a non-null source tensor pointer "
-                                           "(source_pointer={}, requested_dimension={}, "
-                                           "input_shape={})",
-                                           cat_args->first, cat_args->second, shape_.str()));
+                               "cat movement requires a non-null source tensor");
                 const Tensor& other = *static_cast<const Tensor*>(cat_args->first);
                 int dim = resolve_dim(cat_args->second);
                 LFS_ASSERT_MSG(other.is_valid(),
-                               std::format("cat movement requires a valid source tensor "
-                                           "(source={}, destination={})",
-                                           other.str(), str()));
+                               "cat movement requires a valid source tensor");
                 LFS_ASSERT_MSG(shape_.rank() > 0,
-                               std::format("cat movement cannot concatenate rank-0 tensors "
-                                           "(destination_rank={}, destination_shape={}, "
-                                           "source_shape={})",
-                                           shape_.rank(), shape_.str(), other.shape().str()));
+                               "cat movement cannot concatenate rank-0 tensors");
                 LFS_ASSERT_MSG(dim == 0,
-                               std::format("cat movement currently supports only dimension 0 "
-                                           "(requested_dimension={}, resolved_dimension={}, "
-                                           "destination_shape={}, source_shape={})",
-                                           cat_args->second, dim, shape_.str(), other.shape().str()));
+                               "cat movement currently supports only dimension 0");
                 LFS_ASSERT_MSG(shape_.rank() == other.shape().rank(),
-                               std::format("cat movement tensor ranks must match "
-                                           "(destination_rank={}, source_rank={}, "
-                                           "destination_shape={}, source_shape={})",
-                                           shape_.rank(), other.shape().rank(),
-                                           shape_.str(), other.shape().str()));
+                               "cat movement tensor ranks must match");
                 LFS_ASSERT_MSG(device_ == other.device(),
-                               std::format("cat movement tensors must share a device "
-                                           "(destination_device={}, source_device={})",
-                                           device_name(device_), device_name(other.device())));
+                               "cat movement tensors must share a device");
                 LFS_ASSERT_MSG(dtype_ == other.dtype(),
-                               std::format("cat movement tensor dtypes must match "
-                                           "(destination_dtype={}({}), source_dtype={}({}))",
-                                           dtype_name(dtype_), static_cast<int>(dtype_),
-                                           dtype_name(other.dtype()), static_cast<int>(other.dtype())));
+                               "cat movement tensor dtypes must match");
 
                 for (size_t i = 0; i < shape_.rank(); ++i) {
                     LFS_ASSERT_MSG(i == static_cast<size_t>(dim) ||
                                        shape_[i] == other.shape()[i],
-                                   std::format("cat movement non-concatenated dimensions must match "
-                                               "(dimension={}, concatenate_dimension={}, "
-                                               "destination_size={}, source_size={}, "
-                                               "destination_shape={}, source_shape={})",
-                                               i, dim, shape_[i], other.shape()[i],
-                                               shape_.str(), other.shape().str()));
+                                   "cat movement non-concatenated dimensions must match");
                 }
 
                 LFS_ASSERT_MSG(shape_[0] <=
                                    std::numeric_limits<size_t>::max() - other.shape()[0],
-                               std::format("cat movement concatenated dimension must not overflow size_t "
-                                           "(destination_size={}, source_size={}, size_t_max={})",
-                                           shape_[0], other.shape()[0],
-                                           std::numeric_limits<size_t>::max()));
+                               "cat movement dimension size overflow");
 
                 std::vector<size_t> result_dims = shape_.dims();
                 result_dims[dim] = shape_[dim] + other.shape()[dim];
@@ -427,32 +346,22 @@ namespace lfs::core {
                 return result;
             }
             LFS_ASSERT_MSG(false,
-                           std::format("cat movement requires tensor-pointer and dimension arguments "
-                                       "(argument_variant={}, operation={})",
-                                       args.args.index(), static_cast<int>(op)));
+                           "cat movement requires tensor and dimension arguments");
         }
 
         case MovementOp::Pad: {
             if (auto* padding = std::get_if<std::vector<std::pair<int, int>>>(&args.args)) {
                 LFS_ASSERT_MSG(padding->size() <= shape_.rank(),
-                               std::format("pad entry count must not exceed tensor rank "
-                                           "(padding_count={}, tensor_rank={}, input_shape={})",
-                                           padding->size(), shape_.rank(), shape_.str()));
+                               "pad has more entries than tensor dimensions");
                 LFS_ASSERT_MSG(dtype_ == DataType::Float32,
-                               std::format("pad currently requires Float32 input "
-                                           "(input_dtype={}({}), input_shape={}, input_device={})",
-                                           dtype_name(dtype_), static_cast<int>(dtype_),
-                                           shape_.str(), device_name(device_)));
+                               "pad currently supports only Float32");
                 std::vector<size_t> new_shape = shape_.dims();
                 std::vector<size_t> pad_before(shape_.rank(), 0);
                 std::vector<size_t> pad_after(shape_.rank(), 0);
 
                 for (size_t i = 0; i < padding->size() && i < shape_.rank(); ++i) {
                     LFS_ASSERT_MSG((*padding)[i].first >= 0 && (*padding)[i].second >= 0,
-                                   std::format("pad widths must be non-negative "
-                                               "(dimension={}, before={}, after={}, input_shape={})",
-                                               i, (*padding)[i].first, (*padding)[i].second,
-                                               shape_.str()));
+                                   "pad widths must be non-negative");
                     pad_before[i] = (*padding)[i].first;
                     pad_after[i] = (*padding)[i].second;
                     new_shape[i] += pad_before[i] + pad_after[i];
@@ -495,18 +404,13 @@ namespace lfs::core {
                 return result;
             }
             LFS_ASSERT_MSG(false,
-                           std::format("pad movement requires width-pair arguments "
-                                       "(argument_variant={}, operation={})",
-                                       args.args.index(), static_cast<int>(op)));
+                           "pad requires width arguments");
         }
 
         case MovementOp::Flip: {
             if (auto* vec = std::get_if<std::vector<int>>(&args.args)) {
                 LFS_ASSERT_MSG(device_ == Device::CPU && dtype_ == DataType::Float32,
-                               std::format("flip currently requires a CPU Float32 input "
-                                           "(input_device={}, input_dtype={}({}), input_shape={})",
-                                           device_name(device_), dtype_name(dtype_),
-                                           static_cast<int>(dtype_), shape_.str()));
+                               "flip currently supports only CPU Float32 tensors");
                 auto result = clone();
 
                 if (device_ == Device::CPU && dtype_ == DataType::Float32) {
@@ -516,10 +420,7 @@ namespace lfs::core {
                         const int requested_axis = axis;
                         axis = resolve_dim(axis);
                         LFS_ASSERT_MSG(axis >= 0 && axis < static_cast<int>(shape_.rank()),
-                                       std::format("flip axis must be in range "
-                                                   "(requested_axis={}, resolved_axis={}, "
-                                                   "valid_range=[0,{}), input_shape={})",
-                                                   requested_axis, axis, shape_.rank(), shape_.str()));
+                                       "flip axis is out of range");
 
                         size_t stride = 1;
                         for (size_t i = axis + 1; i < shape_.rank(); ++i) {
@@ -550,16 +451,12 @@ namespace lfs::core {
                 return result;
             }
             LFS_ASSERT_MSG(false,
-                           std::format("flip movement requires axis-vector arguments "
-                                       "(argument_variant={}, operation={})",
-                                       args.args.index(), static_cast<int>(op)));
+                           "flip requires axis arguments");
         }
 
         default:
             LFS_ASSERT_MSG(false,
-                           std::format("tensor movement received an unknown operation enum "
-                                       "(operation={}, argument_variant={}, input_shape={})",
-                                       static_cast<int>(op), args.args.index(), shape_.str()));
+                           "unknown tensor movement operation");
         }
     }
 

@@ -15,18 +15,11 @@ namespace lfs::core {
 
     Tensor Tensor::linspace(float start, float end, size_t steps, Device device) {
         LFS_ASSERT_MSG(steps > 0,
-                       std::format("linspace step count must be positive "
-                                   "(steps={}, start={}, end={}, device={}({}))",
-                                   steps, start, end, device_name(device), static_cast<int>(device)));
+                       "linspace steps must be positive");
         LFS_ASSERT_MSG(device == Device::CPU || device == Device::CUDA,
-                       std::format("linspace requires a supported device enum "
-                                   "(device={}({}), valid_devices=[cpu({}),cuda({})])",
-                                   device_name(device), static_cast<int>(device),
-                                   static_cast<int>(Device::CPU), static_cast<int>(Device::CUDA)));
+                       "linspace received an invalid device");
         LFS_ASSERT_MSG(std::isfinite(start) && std::isfinite(end),
-                       std::format("linspace endpoints must be finite "
-                                   "(start={}, end={}, start_finite={}, end_finite={}, steps={})",
-                                   start, end, std::isfinite(start), std::isfinite(end), steps));
+                       "linspace endpoints must be finite");
 
         if (steps == 1) {
             return Tensor::full({1}, start, device);
@@ -53,16 +46,11 @@ namespace lfs::core {
 
     Tensor Tensor::diag(const Tensor& diagonal) {
         LFS_ASSERT_MSG(diagonal.is_valid(),
-                       std::format("diag requires a valid input tensor (input={})", diagonal.str()));
+                       "diag requires a valid tensor");
         LFS_ASSERT_MSG(diagonal.ndim() == 1,
-                       std::format("diag requires a rank-1 input tensor "
-                                   "(input_rank={}, input_shape={})",
-                                   diagonal.ndim(), diagonal.shape().str()));
+                       "diag requires a rank-1 tensor");
         LFS_ASSERT_MSG(diagonal.dtype() == DataType::Float32,
-                       std::format("diag requires Float32 input "
-                                   "(input_dtype={}({}), input_shape={}, input_device={})",
-                                   dtype_name(diagonal.dtype()), static_cast<int>(diagonal.dtype()),
-                                   diagonal.shape().str(), device_name(diagonal.device())));
+                       "diag currently supports only Float32");
 
         size_t n = diagonal.numel();
         auto result = Tensor::zeros({n, n}, diagonal.device());
@@ -129,18 +117,11 @@ namespace lfs::core::functional {
 
     Tensor map(const Tensor& input, std::function<float(float)> func) {
         LFS_ASSERT_MSG(input.is_valid(),
-                       std::format("functional::map requires a valid input tensor "
-                                   "(input={})",
-                                   input.str()));
+                       "functional::map requires a valid tensor");
         LFS_ASSERT_MSG(input.dtype() == DataType::Float32,
-                       std::format("functional::map requires Float32 input "
-                                   "(input_dtype={}({}), input_shape={}, input_device={})",
-                                   dtype_name(input.dtype()), static_cast<int>(input.dtype()),
-                                   input.shape().str(), device_name(input.device())));
+                       "functional::map currently supports only Float32");
         LFS_ASSERT_MSG(static_cast<bool>(func),
-                       std::format("functional::map requires a callable "
-                                   "(callable_present={}, input_shape={})",
-                                   static_cast<bool>(func), input.shape().str()));
+                       "functional::map requires a callable");
         auto result = Tensor::empty(input.shape(), input.device());
 
         if (input.device() == Device::CUDA) {
@@ -170,22 +151,13 @@ namespace lfs::core::functional {
 
     float reduce(const Tensor& input, float init, std::function<float(float, float)> func) {
         LFS_ASSERT_MSG(input.is_valid(),
-                       std::format("functional::reduce requires a valid input tensor "
-                                   "(input={})",
-                                   input.str()));
+                       "functional::reduce requires a valid tensor");
         LFS_ASSERT_MSG(input.dtype() == DataType::Float32,
-                       std::format("functional::reduce requires Float32 input "
-                                   "(input_dtype={}({}), input_shape={}, input_device={})",
-                                   dtype_name(input.dtype()), static_cast<int>(input.dtype()),
-                                   input.shape().str(), device_name(input.device())));
+                       "functional::reduce currently supports only Float32");
         LFS_ASSERT_MSG(std::isfinite(init),
-                       std::format("functional::reduce initial value must be finite "
-                                   "(initial_value={}, initial_value_finite={})",
-                                   init, std::isfinite(init)));
+                       "functional::reduce initial value must be finite");
         LFS_ASSERT_MSG(static_cast<bool>(func),
-                       std::format("functional::reduce requires a callable "
-                                   "(callable_present={}, input_shape={})",
-                                   static_cast<bool>(func), input.shape().str()));
+                       "functional::reduce requires a callable");
         auto values = input.to_vector();
         float result = init;
 
@@ -198,18 +170,11 @@ namespace lfs::core::functional {
 
     Tensor filter(const Tensor& input, std::function<bool(float)> predicate) {
         LFS_ASSERT_MSG(input.is_valid(),
-                       std::format("functional::filter requires a valid input tensor "
-                                   "(input={})",
-                                   input.str()));
+                       "functional::filter requires a valid tensor");
         LFS_ASSERT_MSG(input.dtype() == DataType::Float32,
-                       std::format("functional::filter requires Float32 input "
-                                   "(input_dtype={}({}), input_shape={}, input_device={})",
-                                   dtype_name(input.dtype()), static_cast<int>(input.dtype()),
-                                   input.shape().str(), device_name(input.device())));
+                       "functional::filter currently supports only Float32");
         LFS_ASSERT_MSG(static_cast<bool>(predicate),
-                       std::format("functional::filter requires a predicate "
-                                   "(predicate_present={}, input_shape={})",
-                                   static_cast<bool>(predicate), input.shape().str()));
+                       "functional::filter requires a callable");
         auto result = Tensor::empty(input.shape(), input.device());
 
         if (input.device() == Device::CUDA) {
