@@ -1459,3 +1459,231 @@ treated as valid evidence; synchronization validation remained enabled for all t
 The temporary validation logs, layer-source package, diagnostic output directories, and normal
 crash-handler files created by these runs were removed after extracting this record. No tests
 were added or changed.
+
+## Shader race fix
+
+### Root cause and repair
+
+The final source-built GPU-assisted layer reported `SharedMemoryDataRace-RaceOnStore` in
+`vksplat.rasterize_forward/standard.shader`. The active-thread reduction reused the
+`collected_idx` workgroup array in place: every participating lane loaded one element and wrote
+another during the same reduction step. The barrier at the end of the step ordered one step
+against the next, but could not order the loads against the stores already racing within the
+current step. The raster loop also had no unconditional trailing workgroup barrier between the
+last shared-array read in one batch and the next batch's overwrite.
+
+Commit `355773341` replaces the in-place reduction with an exact-size `active_subgroups` array.
+The first lane of each subgroup publishes one `WaveActiveAnyTrue` result, the workgroup
+synchronizes, lane zero serially reduces those disjoint entries, and a second workgroup barrier
+publishes the uniform decision. The existing collection-to-shading barrier remains, and every
+batch now ends with `GroupMemoryBarrierWithGroupSync()` before any lane can reuse the shared
+splat arrays. The same algorithm and trailing reuse barrier were applied to the dense
+`tile_batch_shader.slang` raster path. No atomics, `volatile`, validation filters, or feature
+disables were introduced.
+
+The final GUI-training gate found a separate synchronization error before training began. The
+point-cloud renderer uses `VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL`, while
+`VulkanImageBarrierTracker` only assigned depth-attachment scopes to the combined
+`VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL` layout. It therefore emitted a layout
+transition with zero source stage/access masks, causing depth store/transition/clear
+`WRITE_AFTER_WRITE` hazards. Commit `d4c6d8433` maps the depth-only layout to early and late
+fragment tests plus depth-stencil attachment access, the same execution and memory scopes as
+the combined layout.
+
+### Sibling-shader audit
+
+All forward shaders emitted by `src/rendering/rasterizer/vulkan/CMakeLists.txt` were checked at
+their workgroup-shared publish, consume, and reuse boundaries:
+
+- the standard, plain, light, 3DGUT, and dense tile-batch variants now share the corrected
+  active-subgroup protocol;
+- `macro_raster.slang` (HiGS, FP32, and overlay variants) already has uniform workgroup barriers
+  after batch publication, queue publication, and shared-mask reuse;
+- every `cumsum.slang` phase and the radix `upsweep`, `spine`, and `downsweep` phases order their
+  local shared-memory reuse; the radix global-buffer dependencies are command-buffer barriers,
+  not workgroup barriers;
+- `tile_shader.slang`, `prepare_tile_sort.slang`, `prepare_visible_sort.slang`, and
+  `prepare_visible_chain.slang` do not declare workgroup-shared arrays; and
+- `selection_polygon_rasterize.slang` has one collective vertex publication followed by a
+  workgroup barrier before reads.
+
+The backward Slang files are dormant source files and are not outputs of the Vulkan CMake
+shader build; they are not claimed as runtime-covered. No second instance of the reported
+forward shared-memory race was found.
+
+### Shader diagnostics and final validation
+
+`LFS_ENABLE_VULKAN_SHADER_DEBUG_INFO` now adds Slang `-g3` and GLSL `-gVS`. It defaults to
+`OFF` in Release and `ON` in Debug/RelWithDebInfo. A rebuild regenerated every Vulkan shader
+variant; the resulting Slang and GLSL SPIR-V contain `NonSemantic.Shader.DebugInfo.100`, and
+the raster and radix modules contain their source paths. Future GPU-assisted diagnostics can
+therefore identify source files and lines without changing release defaults.
+
+The final proof used source-built Vulkan-ValidationLayers commit `7055d5f45c26` from
+`../Vulkan-ValidationLayers/build/layers`, with GPU-assisted and synchronization validation
+enabled together. All GUI flows initialized MCP, listed 136 tools and 23 resources, read the
+bootstrap runtime/UI/scene/selection resources, performed real viewport and full-window
+captures, and exited through the in-app API.
+
+| Flow | Exercised result | Validation result |
+| --- | --- | --- |
+| Single PLY | `splat_64400.ply`, one visible 3,000,000-Gaussian node, live viewport and window captures | exit 0; zero error/critical callbacks, VUIDs, race reports, or application error lines |
+| Multi PLY | `baseline_7k`, `gamma15_7k`, and `sharpen05_7k`, 9,000,000 visible Gaussians, about 84 seconds after load plus both captures | exit 0; zero error/critical callbacks, VUIDs, race reports, or application error lines |
+| GUI training | bicycle `images_4`, 194 cameras and 54,275 initial points, MCMC 300/300, checkpoint and PLY saved, trained viewport and window captures | exit 0; zero error/critical callbacks, VUIDs, race reports, or application error lines |
+
+The only layer output in those runs was non-error configuration/performance guidance: the
+forced-layer notice, `VK_LAYER_ENABLES` deprecation/settings-adjustment notices, and
+GPU-assisted instrumentation cost warnings. There were no validation errors of any kind.
+
+## Flag consolidation
+
+The pre-cleanup inventory contained 47 runtime environment names across application, bridge,
+test, and benchmark code, with direct `getenv`/`os.environ` reads and build definitions spread
+across targets. The final runtime surface is 25 names: 15 application variables, five standalone
+MCP bridge variables, and five test/benchmark selectors. Twenty-three names were retired and
+one consolidated hot-reload name was added, for a net reduction of 22 runtime variables.
+
+The retired names were:
+
+```text
+LFS_ARENA_LEGACY_SYNC
+LFS_ASSET_MANAGER_PERF_LOG_MS
+LFS_DEPTH_LOSS_DIAG
+LFS_DEPTH_LOSS_DIAG_INTERVAL
+LFS_DISABLE_STARTUP_OVERLAY
+LFS_GRAPHICS_BACKEND
+LFS_LOD_PAGE_CAPACITY
+LFS_MEM_BREAKDOWN
+LFS_NORMAL_LOSS_DIAG
+LFS_NORMAL_LOSS_DIAG_INTERVAL
+LFS_NO_DEPRECATION_WARNINGS
+LFS_NO_MODEL_ACCESS_LOCK
+LFS_NO_SHARED_SCRATCH
+LFS_PLY_SEQUENCE_CACHE_DIR
+LFS_PYTHON_HOT_RELOAD
+LFS_RESOURCE_HOT_RELOAD
+LFS_VRAM_PRESSURE_DISABLE
+LICHTFELD_ASSET_MANAGER_DIR
+TENSOR_LAZY_EXEC_DIAGNOSTICS
+TENSOR_LAZY_IR_MAX_NODES
+TENSOR_LAZY_SIZE_HEURISTIC
+TENSOR_LAZY_SIZE_THRESHOLD
+LFS_RAD_GPU_ENCODE
+```
+
+`LOG_LEVEL`, the five `LICHTFELD_*` bridge variables, and
+`LICHTFELD_TEST_DATA_PATH` were normalized to `LFS_*`. The existing plugin-registry override
+and all C++ and built-in Python reads now go through one accessor per language:
+`core/environment.hpp` and `lfs_plugins.environment`. The standalone bridge remains independent
+of the application libraries, but uses the same prefix and one documented block.
+
+The compile-time surface is centralized in `cmake/DeveloperOptions.cmake`:
+
+- `LFS_ENABLE_VULKAN_VALIDATION`
+- `LFS_ENABLE_VULKAN_SHADER_DEBUG_INFO`
+- `LFS_ENABLE_CUDA_DEVICE_DEBUG`
+- `LFS_ENABLE_CUDA_FAILURE_INJECTION`
+- `LFS_ENABLE_ALLOCATION_PROFILING`
+- `LFS_DEV_IMPORT_SOURCE_PYTHON`
+- `LFS_DEV_IMPORT_SOURCE_RESOURCES`
+
+Release defaults exclude validation, shader debug information, CUDA device debug code, failure
+injection in non-test builds, and allocation stack profiling. Generated target definitions now
+derive from these options instead of target-local cache variables or duplicated build-type
+functions. Failure injection compiles out completely when disabled.
+
+Runtime hardware and debugger policy remains runtime-selectable: Vulkan validation, crash
+handler opt-out, CUDA synchronization attribution, VRAM reserve, pinned-cache budget, and
+automation/path overrides. Product behavior stays with its existing owner. In particular,
+RAD GPU quantization is an explicit `RadGpuQuantization` choice instead of an environment
+variable; training/LOD/overlay controls were not converted into replacement environment flags;
+and per-plugin startup enablement remains persisted settings, with `LFS_PLUGIN_AUTOLOAD` only an
+automation override.
+
+The canonical final inventory, defaults, ownership rules, and build-type behavior are in
+`docs/docs/development/flags.md`. `scripts/run_vulkan_validation.sh` and the `validate-gui`
+target provide the source-layer GPU-assisted plus synchronization workflow without requiring a
+developer to reconstruct the environment invocation.
+
+## Cleanup pass
+
+### Candid assessment
+
+Before appending this record, the reviewed branch surface was 370 files and +33,909/-9,793
+against `origin/master`; the record itself adds 228 documentation lines. The slop was not
+uniformly distributed. It was moderate overall and substantial in the diagnostic flag and
+completed-round scaffolding: repeated environment parsing, stale diagnostic paths, and
+interfaces carrying values no caller consumed. The branch did not contain pervasive narrative
+comments or broad copy-pasted architecture; most long comments describe real CUDA stream,
+Vulkan lifetime, or failure-containment contracts and were retained.
+
+The deletion-focused flag commit removed 851 lines and added 156 (net -695). The focused core
+cleanup removed 88 lines and added 29 (net -59). Including the consolidation helper, launcher,
+and canonical documentation, Jobs 2 and 3 together are +610/-1,280, a net reduction of 670
+lines.
+
+Proven dead branch-added surface removed in `31c98d835`:
+
+- unused `LFS_VK_CHECK`, while the used `LFS_VK_CHECK_MSG` remains;
+- unread `crash_log_path()`;
+- memory-pressure registration ids, unregister API, id storage/counter, generation counter and
+  accessor, and unconsumed reclaim-result change flags;
+- unused `OperationMemoryPlan::host_peak_bytes`; and
+- stale Vulkan-result cases plus two comments that narrated implementation history.
+
+The usage proof covered C++, Python bindings/plugins, MCP registrations, tests, and docs. Items
+that existed on `origin/master` or had different lifetime semantics were not removed merely
+because a local text search was sparse.
+
+### Architecture outcome and deferrals
+
+Environment parsing, hot-reload policy, diagnostic build defaults, and the validation launcher
+now each have one owner. The memory-pressure coordinator remains in core, but its public surface
+now exposes only capabilities current process-lifetime clients use. The process-wide
+CUDA-unavailable latch also remains in core; moving either into a renderer or training strategy
+would create a layering violation.
+
+Three CUDA scratch-buffer wrappers were not mechanically unified. Training/MRNF owns a
+non-movable profiler-aware buffer, gsplat owns an injection-aware backend-local buffer without a
+training dependency, and FastGS transfers/relinquishes sorted-index ownership across the forward
+call. A future unification should first introduce a policy-based stream-ordered RAII primitive
+in core CUDA, with explicit move, injection, profiler, and release policies; merging the current
+types directly would widen dependencies or change ownership behavior.
+
+Two larger findings are deliberately deferred rather than hidden in a behavior-preserving
+cleanup:
+
+- `VramProfiler::recordAllocation`/`recordDeallocation` can allocate and throw, while some
+  FastGS/arena diagnostic calls occur in `noexcept` cleanup paths. The correct repair is an
+  internally non-throwing, transactional diagnostics API, not scattered catch-and-ignore
+  blocks.
+- Host-memory preflight has no authoritative availability/reclaim domain. The unused
+  `host_peak_bytes` field was removed; a real design needs a host budget owner and reclaim
+  accounting before reintroducing host estimates.
+
+No cleanup commit mixed in either behavior change. The depth-layout synchronization bug found by
+the final runtime gate was fixed separately in `d4c6d8433`.
+
+### Final gates
+
+- Per-commit gates: every code commit built with `cmake --build build -j6`; the mandated
+  cross-round filter passed 292/292; `test_async_plugin_loading.py` passed 10/10.
+- Final headless smoke on `d4c6d8433`: bicycle/MCMC reached iteration 1,000, wrote exactly one
+  `splat_1000.ply` and one iteration-1,000 checkpoint, exited 0, and logged zero diagnostic
+  errors.
+- Final source-layer validation: single PLY, multi PLY, and GUI training all produced zero
+  validation errors and zero application error lines, with successful interactive captures and
+  clean in-app exit.
+- Formatting and hygiene: `git diff --check` and per-commit clang-format checks passed. Runtime
+  output and crash-handler files created by this round were removed after recording these
+  results; no repository-local validation artifacts were added.
+
+Code commits for this pass:
+
+```text
+355773341 fix(vulkan): synchronize shared raster batches
+6bbe08424 refactor(config): remove stale runtime switches
+53ce2ccf8 build(dev): consolidate diagnostic controls
+31c98d835 refactor(core): trim unused hardening surface
+d4c6d8433 fix(vulkan): track depth attachment access scopes
+```
