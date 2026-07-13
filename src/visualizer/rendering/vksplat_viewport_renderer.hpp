@@ -23,6 +23,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <source_location>
 #include <span>
 #include <string>
 #include <string_view>
@@ -458,6 +459,16 @@ namespace lfs::vis {
         [[nodiscard]] std::expected<void, std::string> ensureReadbackStagingBuffer(
             VulkanContext& context,
             VkDeviceSize required_bytes) const;
+        [[nodiscard]] std::expected<void, std::string> submitReadbackAndWait(
+            VulkanContext& context,
+            VkCommandBuffer command_buffer,
+            std::uint64_t completion_value,
+            VkPipelineStageFlags wait_stage,
+            VkDeviceSize byte_count,
+            std::string_view validation_label,
+            std::string_view operation_label,
+            bool reset_fence = true,
+            std::source_location location = std::source_location::current()) const;
         [[nodiscard]] std::expected<glm::ivec2, std::string> latestOutputImageSize(OutputSlot output_slot) const;
 
         VulkanContext* context_ = nullptr;

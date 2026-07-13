@@ -5439,6 +5439,70 @@ namespace lfs::vis {
         return {};
     }
 
+    std::expected<void, std::string> VksplatViewportRenderer::submitReadbackAndWait(
+        VulkanContext& context,
+        const VkCommandBuffer command_buffer,
+        const std::uint64_t completion_value,
+        const VkPipelineStageFlags wait_stage,
+        const VkDeviceSize byte_count,
+        const std::string_view validation_label,
+        const std::string_view operation_label,
+        const bool reset_fence,
+        const std::source_location location) const {
+        VkSubmitInfo submit_info{};
+        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submit_info.commandBufferCount = 1;
+        submit_info.pCommandBuffers = &command_buffer;
+        TimelineSubmitWait render_wait{};
+        render_wait.attach(
+            submit_info, vulkan_render_complete_timeline_, completion_value, wait_stage);
+
+        const VkQueue submit_queue = context.graphicsQueue();
+        if (auto error = validateQueueSubmit(
+                validation_label, submit_queue, submit_info, readback_fence_, true, location)) {
+            return std::unexpected(std::move(*error));
+        }
+
+        const VkDevice device = context.device();
+        if (reset_fence) {
+            const VkResult result = vkResetFences(device, 1, &readback_fence_);
+            if (result != VK_SUCCESS) {
+                return std::unexpected(vkError(
+                    std::format("vkResetFences({})", operation_label),
+                    result,
+                    std::string_view{},
+                    location));
+            }
+        }
+
+        VkResult result = vkQueueSubmit(submit_queue, 1, &submit_info, readback_fence_);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(vkError(
+                std::format("vkQueueSubmit({})", operation_label),
+                result,
+                std::string_view{},
+                location));
+        }
+        result = vkWaitForFences(device, 1, &readback_fence_, VK_TRUE, UINT64_MAX);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(vkError(
+                std::format("vkWaitForFences({})", operation_label),
+                result,
+                std::string_view{},
+                location));
+        }
+        result = vmaInvalidateAllocation(
+            context.allocator(), readback_staging_allocation_, 0, byte_count);
+        if (result != VK_SUCCESS) {
+            return std::unexpected(vkError(
+                std::format("vmaInvalidateAllocation({})", operation_label),
+                result,
+                std::string_view{},
+                location));
+        }
+        return {};
+    }
+
     std::expected<glm::ivec2, std::string> VksplatViewportRenderer::latestOutputImageSize(
         const OutputSlot output_slot) const {
         std::lock_guard<std::mutex> readback_lock(readback_mutex_);
@@ -5609,7 +5673,6 @@ namespace lfs::vis {
             return std::unexpected(ready.error());
         }
         VkResult result = VK_SUCCESS;
-        const VkDevice device = context.device();
         const VkCommandBuffer command_buffer = readback_cmd_;
         result = vkResetCommandBuffer(command_buffer, 0);
         if (result != VK_SUCCESS) {
@@ -5653,39 +5716,16 @@ namespace lfs::vis {
         if (result != VK_SUCCESS) {
             return std::unexpected(vkError("vkEndCommandBuffer(VkSplat depth readback)", result));
         }
-        VkSubmitInfo submit_info{};
-        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submit_info.commandBufferCount = 1;
-        submit_info.pCommandBuffers = &command_buffer;
-        TimelineSubmitWait render_wait{};
-        render_wait.attach(submit_info,
-                           vulkan_render_complete_timeline_,
-                           completion_value,
-                           VK_PIPELINE_STAGE_TRANSFER_BIT);
-        const VkQueue submit_queue = context.graphicsQueue();
-        if (auto error = validateQueueSubmit("VkSplat depth readback submit",
-                                             submit_queue,
-                                             submit_info,
-                                             readback_fence_,
-                                             true)) {
-            return std::unexpected(std::move(*error));
-        }
-        result = vkResetFences(device, 1, &readback_fence_);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkResetFences(VkSplat depth readback)", result));
-        }
-        result = vkQueueSubmit(submit_queue, 1, &submit_info, readback_fence_);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkQueueSubmit(VkSplat depth readback)", result));
-        }
-        result = vkWaitForFences(device, 1, &readback_fence_, VK_TRUE, UINT64_MAX);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkWaitForFences(VkSplat depth readback)", result));
-        }
-        result = vmaInvalidateAllocation(
-            context.allocator(), readback_staging_allocation_, 0, byte_count);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vmaInvalidateAllocation(VkSplat depth readback)", result));
+        if (const auto submitted = submitReadbackAndWait(
+                context,
+                command_buffer,
+                completion_value,
+                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                byte_count,
+                "VkSplat depth readback submit",
+                "VkSplat depth readback");
+            !submitted) {
+            return std::unexpected(submitted.error());
         }
 
         auto tensor = lfs::core::Tensor::empty(
@@ -5805,35 +5845,17 @@ namespace lfs::vis {
             return std::unexpected(vkError("vkResetFences(VkSplat output depth readback)", result));
         }
 
-        VkSubmitInfo submit_info{};
-        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submit_info.commandBufferCount = 1;
-        submit_info.pCommandBuffers = &command_buffer;
-        TimelineSubmitWait render_wait{};
-        render_wait.attach(submit_info,
-                           vulkan_render_complete_timeline_,
-                           output.completion_value,
-                           kOutputImageReadbackWaitStage);
-        const VkQueue submit_queue = context.graphicsQueue();
-        if (auto error = validateQueueSubmit("VkSplat output depth readback submit",
-                                             submit_queue,
-                                             submit_info,
-                                             readback_fence_,
-                                             true)) {
-            return std::unexpected(std::move(*error));
-        }
-        result = vkQueueSubmit(submit_queue, 1, &submit_info, readback_fence_);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkQueueSubmit(VkSplat output depth readback)", result));
-        }
-        result = vkWaitForFences(device, 1, &readback_fence_, VK_TRUE, UINT64_MAX);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkWaitForFences(VkSplat output depth readback)", result));
-        }
-        result = vmaInvalidateAllocation(
-            context.allocator(), readback_staging_allocation_, 0, byte_count);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vmaInvalidateAllocation(VkSplat output depth readback)", result));
+        if (const auto submitted = submitReadbackAndWait(
+                context,
+                command_buffer,
+                output.completion_value,
+                kOutputImageReadbackWaitStage,
+                byte_count,
+                "VkSplat output depth readback submit",
+                "VkSplat output depth readback",
+                false);
+            !submitted) {
+            return std::unexpected(submitted.error());
         }
 
         auto tensor = lfs::core::Tensor::empty(
@@ -5912,7 +5934,6 @@ namespace lfs::vis {
             return std::unexpected(context.lastError());
         }
 
-        const VkDevice device = context.device();
         const VkDeviceSize byte_count =
             static_cast<VkDeviceSize>(output.size.x) *
             static_cast<VkDeviceSize>(output.size.y) *
@@ -5977,42 +5998,16 @@ namespace lfs::vis {
             return std::unexpected(vkError("vkEndCommandBuffer(VkSplat readback)", result));
         }
 
-        VkSubmitInfo submit_info{};
-        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submit_info.commandBufferCount = 1;
-        submit_info.pCommandBuffers = &command_buffer;
-        TimelineSubmitWait render_wait{};
-        render_wait.attach(submit_info,
-                           vulkan_render_complete_timeline_,
-                           output.completion_value,
-                           kOutputImageReadbackWaitStage);
-        const VkQueue submit_queue = context.graphicsQueue();
-        if (auto error = validateQueueSubmit("VkSplat color readback submit",
-                                             submit_queue,
-                                             submit_info,
-                                             readback_fence_,
-                                             true)) {
-            return std::unexpected(std::move(*error));
-        }
-
-        result = vkResetFences(device, 1, &readback_fence_);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkResetFences(VkSplat readback)", result));
-        }
-
-        result = vkQueueSubmit(submit_queue, 1, &submit_info, readback_fence_);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkQueueSubmit(VkSplat readback)", result));
-        }
-        result = vkWaitForFences(device, 1, &readback_fence_, VK_TRUE, UINT64_MAX);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkWaitForFences(VkSplat readback)", result));
-        }
-
-        result = vmaInvalidateAllocation(
-            context.allocator(), readback_staging_allocation_, 0, byte_count);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vmaInvalidateAllocation(VkSplat readback)", result));
+        if (const auto submitted = submitReadbackAndWait(
+                context,
+                command_buffer,
+                output.completion_value,
+                kOutputImageReadbackWaitStage,
+                byte_count,
+                "VkSplat color readback submit",
+                "VkSplat readback");
+            !submitted) {
+            return submitted;
         }
 
         const auto* const rgba = static_cast<const std::uint8_t*>(readback_staging_info_.pMappedData);
@@ -6118,7 +6113,6 @@ namespace lfs::vis {
             return std::unexpected(context.lastError());
         }
 
-        const VkDevice device = context.device();
         constexpr VkDeviceSize byte_count = sizeof(float);
         if (const auto staging_ready = ensureReadbackStagingBuffer(context, byte_count);
             !staging_ready) {
@@ -6174,42 +6168,16 @@ namespace lfs::vis {
             return std::unexpected(vkError("vkEndCommandBuffer(VkSplat depth sample)", result));
         }
 
-        VkSubmitInfo submit_info{};
-        submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        submit_info.commandBufferCount = 1;
-        submit_info.pCommandBuffers = &command_buffer;
-        TimelineSubmitWait render_wait{};
-        render_wait.attach(submit_info,
-                           vulkan_render_complete_timeline_,
-                           output.completion_value,
-                           kOutputImageReadbackWaitStage);
-        const VkQueue submit_queue = context.graphicsQueue();
-        if (auto error = validateQueueSubmit("VkSplat depth-sample submit",
-                                             submit_queue,
-                                             submit_info,
-                                             readback_fence_,
-                                             true)) {
-            return std::unexpected(std::move(*error));
-        }
-
-        result = vkResetFences(device, 1, &readback_fence_);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkResetFences(VkSplat depth sample)", result));
-        }
-
-        result = vkQueueSubmit(submit_queue, 1, &submit_info, readback_fence_);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkQueueSubmit(VkSplat depth sample)", result));
-        }
-        result = vkWaitForFences(device, 1, &readback_fence_, VK_TRUE, UINT64_MAX);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vkWaitForFences(VkSplat depth sample)", result));
-        }
-
-        result = vmaInvalidateAllocation(
-            context.allocator(), readback_staging_allocation_, 0, byte_count);
-        if (result != VK_SUCCESS) {
-            return std::unexpected(vkError("vmaInvalidateAllocation(VkSplat depth sample)", result));
+        if (const auto submitted = submitReadbackAndWait(
+                context,
+                command_buffer,
+                output.completion_value,
+                kOutputImageReadbackWaitStage,
+                byte_count,
+                "VkSplat depth-sample submit",
+                "VkSplat depth sample");
+            !submitted) {
+            return std::unexpected(submitted.error());
         }
 
         float depth = -1.0f;
