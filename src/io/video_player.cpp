@@ -118,13 +118,21 @@ namespace lfs::io {
                 rotation_ = std::atoi(tag->value);
             } else {
                 // Try display matrix side data (common in MP4/MOV from smartphones)
+                int32_t* display_matrix = nullptr;
+
+                // Check codecpar coded_side_data
                 for (int i = 0; i < stream->codecpar->nb_coded_side_data; i++) {
                     if (stream->codecpar->coded_side_data[i].type == AV_PKT_DATA_DISPLAYMATRIX) {
-                        double angle = av_display_rotation_get(
-                            reinterpret_cast<int32_t*>(stream->codecpar->coded_side_data[i].data));
-                        rotation_ = static_cast<int>(std::round(angle));
+                        display_matrix = reinterpret_cast<int32_t*>(
+                            stream->codecpar->coded_side_data[i].data);
                         break;
                     }
+                }
+
+                if (display_matrix) {
+                    const double angle = av_display_rotation_get(display_matrix);
+                    // av_display_rotation_get returns CCW, our convention is CW
+                    rotation_ = static_cast<int>(std::round(-angle));
                 }
             }
             rotation_ = ((rotation_ % 360) + 360) % 360; // normalize
@@ -210,6 +218,22 @@ namespace lfs::io {
                 display_buffer_ = std::move(decoded_frame_.data);
                 current_time_ = decoded_frame_.pts;
                 current_frame_ = decoded_frame_.frame_number;
+
+                // Fallback: check decoded frame for display matrix
+                if (rotation_ == 0 && frame_) {
+                    for (int i = 0; i < frame_->nb_side_data; i++) {
+                        if (frame_->side_data[i]->type == AV_FRAME_DATA_DISPLAYMATRIX) {
+                            const double angle = av_display_rotation_get(
+                                reinterpret_cast<int32_t*>(frame_->side_data[i]->data));
+                            // av_display_rotation_get returns CCW, our convention is CW
+                            rotation_ = static_cast<int>(std::round(-angle));
+                            break;
+                        }
+                    }
+                    rotation_ = ((rotation_ % 360) + 360) % 360;
+                    if (rotation_ != 0 && rotation_ != 90 && rotation_ != 180 && rotation_ != 270)
+                        rotation_ = 0;
+                }
             }
 
             is_open_ = true;
