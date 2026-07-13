@@ -14,7 +14,7 @@
 
 namespace lfs::training {
 
-    class ImprovedGSPlus : public IStrategy {
+    class ImprovedGSPlus : public IStrategy, public ICheckpointStateAdopter {
     public:
         ImprovedGSPlus() = delete;
 

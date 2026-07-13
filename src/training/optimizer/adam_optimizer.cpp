@@ -16,6 +16,8 @@
 #include <cuda_runtime.h>
 #include <optional>
 #include <stdexcept>
+#include <type_traits>
+#include <utility>
 
 namespace lfs::training {
 
@@ -1380,13 +1382,8 @@ namespace lfs::training {
     }
 
     void AdamOptimizer::adopt_checkpoint_state(AdamOptimizer& loaded) noexcept {
-        config_.lr = loaded.config_.lr;
-        config_.beta1 = loaded.config_.beta1;
-        config_.beta2 = loaded.config_.beta2;
-        config_.eps = loaded.config_.eps;
-        config_.growth_factor = loaded.config_.growth_factor;
-        config_.initial_capacity = loaded.config_.initial_capacity;
-        config_.param_lrs.swap(loaded.config_.param_lrs);
+        static_assert(std::is_nothrow_swappable_v<AdamConfig>);
+        std::swap(config_, loaded.config_);
         states_.swap(loaded.states_);
     }
 

@@ -980,19 +980,17 @@ namespace lfs::training {
     }
 
     void MCMC::adopt_checkpoint_state(IStrategy& loaded) noexcept {
-        auto* source = dynamic_cast<MCMC*>(&loaded);
-        if (!source || !can_adopt_checkpoint_state(*source))
-            return;
+        auto& source = checked_checkpoint_source<MCMC>(loaded);
         if (_optimizer)
-            _optimizer->adopt_checkpoint_state(*source->_optimizer);
+            _optimizer->adopt_checkpoint_state(*source._optimizer);
         if (_scheduler)
-            _scheduler->adopt_checkpoint_state(*source->_scheduler);
-        _params.swap(source->_params);
-        std::swap(_n_max, source->_n_max);
-        std::swap(_noise_buffer, source->_noise_buffer);
-        std::swap(_ones_int32, source->_ones_int32);
-        std::swap(_error_score_max, source->_error_score_max);
-        std::swap(_error_score_windows, source->_error_score_windows);
+            _scheduler->adopt_checkpoint_state(*source._scheduler);
+        _params.swap(source._params);
+        std::swap(_n_max, source._n_max);
+        std::swap(_noise_buffer, source._noise_buffer);
+        std::swap(_ones_int32, source._ones_int32);
+        std::swap(_error_score_max, source._error_score_max);
+        std::swap(_error_score_windows, source._error_score_windows);
     }
 
     void MCMC::reserve_optimizer_capacity(size_t capacity) {

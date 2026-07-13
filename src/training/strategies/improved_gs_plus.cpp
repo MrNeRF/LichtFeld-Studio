@@ -1247,23 +1247,21 @@ namespace lfs::training {
     }
 
     void ImprovedGSPlus::adopt_checkpoint_state(IStrategy& loaded) noexcept {
-        auto* source = dynamic_cast<ImprovedGSPlus*>(&loaded);
-        if (!source || !can_adopt_checkpoint_state(*source))
-            return;
+        auto& source = checked_checkpoint_source<ImprovedGSPlus>(loaded);
         if (_optimizer)
-            _optimizer->adopt_checkpoint_state(*source->_optimizer);
+            _optimizer->adopt_checkpoint_state(*source._optimizer);
         if (_scheduler)
-            _scheduler->adopt_checkpoint_state(*source->_scheduler);
-        _params.swap(source->_params);
-        std::swap(_initial_points, source->_initial_points);
-        std::swap(_current_step, source->_current_step);
-        std::swap(_total_steps, source->_total_steps);
-        _budget_schedule.swap(source->_budget_schedule);
-        std::swap(_precomputed_scores, source->_precomputed_scores);
-        std::swap(_error_score_max, source->_error_score_max);
-        std::swap(_precompute_valid, source->_precompute_valid);
-        std::swap(_free_mask, source->_free_mask);
-        std::swap(_pending_failure_snapshot, source->_pending_failure_snapshot);
+            _scheduler->adopt_checkpoint_state(*source._scheduler);
+        _params.swap(source._params);
+        std::swap(_initial_points, source._initial_points);
+        std::swap(_current_step, source._current_step);
+        std::swap(_total_steps, source._total_steps);
+        _budget_schedule.swap(source._budget_schedule);
+        std::swap(_precomputed_scores, source._precomputed_scores);
+        std::swap(_error_score_max, source._error_score_max);
+        std::swap(_precompute_valid, source._precompute_valid);
+        std::swap(_free_mask, source._free_mask);
+        std::swap(_pending_failure_snapshot, source._pending_failure_snapshot);
     }
 
 } // namespace lfs::training

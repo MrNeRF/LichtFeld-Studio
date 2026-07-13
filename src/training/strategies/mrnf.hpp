@@ -28,7 +28,7 @@ class MRNFStrategyTest_LineBoundsUseFiniteSceneScaleForMeanLearningRate_Test;
 
 namespace lfs::training {
 
-    class MRNF : public IStrategy {
+    class MRNF : public IStrategy, public ICheckpointStateAdopter {
     public:
         MRNF() = delete;
         explicit MRNF(lfs::core::SplatData& splat_data);

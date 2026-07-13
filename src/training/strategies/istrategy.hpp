@@ -7,6 +7,7 @@
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "optimizer/render_output.hpp"
+#include <exception>
 #include <istream>
 #include <memory>
 #include <ostream>
@@ -54,13 +55,6 @@ namespace lfs::training {
         virtual void serialize(std::ostream& os) const = 0;
         virtual void deserialize(std::istream& is) = 0;
 
-        // A checkpoint is parsed into an isolated strategy first. Built-in strategies
-        // then transfer that validated state without rebinding their scene-owned model.
-        // Custom strategies that serialize state must opt in to the same transaction.
-        virtual bool has_checkpoint_runtime_state() const noexcept { return false; }
-        virtual bool can_adopt_checkpoint_state(const IStrategy&) const noexcept { return false; }
-        virtual void adopt_checkpoint_state(IStrategy&) noexcept {}
-
         // Strategy type identifier for checkpoint compatibility
         virtual const char* strategy_type() const = 0;
 
@@ -74,5 +68,21 @@ namespace lfs::training {
         virtual void set_training_dataset(std::shared_ptr<CameraDataset>) {}
 
         virtual void set_image_loader(lfs::io::PipelinedImageLoader*) {}
+    };
+
+    class ICheckpointStateAdopter {
+    public:
+        virtual ~ICheckpointStateAdopter() = default;
+        virtual bool has_checkpoint_runtime_state() const noexcept = 0;
+        virtual bool can_adopt_checkpoint_state(const IStrategy& source) const noexcept = 0;
+        virtual void adopt_checkpoint_state(IStrategy& source) noexcept = 0;
+
+    protected:
+        template <typename Strategy>
+        static Strategy& checked_checkpoint_source(IStrategy& source) noexcept {
+            if (auto* typed_source = dynamic_cast<Strategy*>(&source))
+                return *typed_source;
+            std::terminate();
+        }
     };
 } // namespace lfs::training

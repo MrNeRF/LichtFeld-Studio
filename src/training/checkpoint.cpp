@@ -373,12 +373,13 @@ namespace lfs::training {
             if (!loaded_strategy_result)
                 throw std::runtime_error("Cannot construct checkpoint strategy: " + loaded_strategy_result.error());
             auto loaded_strategy = std::move(*loaded_strategy_result);
-            if (strategy.has_checkpoint_runtime_state())
+            auto* checkpoint_adopter = dynamic_cast<ICheckpointStateAdopter*>(&strategy);
+            if (checkpoint_adopter && checkpoint_adopter->has_checkpoint_runtime_state())
                 loaded_strategy->initialize(loaded_params.optimization);
             else
                 loaded_strategy->set_optimization_params(loaded_params.optimization);
             loaded_strategy->deserialize(file);
-            if (!strategy.can_adopt_checkpoint_state(*loaded_strategy)) {
+            if (!checkpoint_adopter || !checkpoint_adopter->can_adopt_checkpoint_state(*loaded_strategy)) {
                 throw std::runtime_error(
                     "Strategy does not support transactional checkpoint state adoption");
             }
@@ -451,7 +452,7 @@ namespace lfs::training {
             // allocate. The live state therefore changes as one commit boundary.
             std::swap(params, loaded_params);
             strategy.get_model() = std::move(loaded_model);
-            strategy.adopt_checkpoint_state(*loaded_strategy);
+            checkpoint_adopter->adopt_checkpoint_state(*loaded_strategy);
             if (loaded_bilateral_grid) {
                 bilateral_grid->adopt_checkpoint_state(*loaded_bilateral_grid);
                 LOG_INFO("Bilateral grid restored (step={}, lr={:.2e})",
