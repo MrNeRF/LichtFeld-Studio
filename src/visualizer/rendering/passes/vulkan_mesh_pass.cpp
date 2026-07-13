@@ -706,7 +706,7 @@ namespace lfs::vis {
                 destroyShadow(out);
                 return false;
             }
-            cmdImageBarrier2(cb, out.image, VK_IMAGE_ASPECT_DEPTH_BIT,
+            cmdImageBarrier2(cb, out.image, context->depthStencilAspectMask(),
                              VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
                              VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, VK_ACCESS_2_NONE,
                              VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
@@ -2253,7 +2253,7 @@ namespace lfs::vis {
                 return false;
             }
 
-            cmdImageBarrier2(cb, gpu.shadow.image, VK_IMAGE_ASPECT_DEPTH_BIT,
+            cmdImageBarrier2(cb, gpu.shadow.image, context->depthStencilAspectMask(),
                              VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
                              VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
                              VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT,
@@ -2305,7 +2305,7 @@ namespace lfs::vis {
 
             vkCmdEndRendering(cb);
 
-            cmdImageBarrier2(cb, gpu.shadow.image, VK_IMAGE_ASPECT_DEPTH_BIT,
+            cmdImageBarrier2(cb, gpu.shadow.image, context->depthStencilAspectMask(),
                              VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
                              VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
                              VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,

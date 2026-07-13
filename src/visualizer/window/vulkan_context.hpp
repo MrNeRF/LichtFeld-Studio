@@ -127,6 +127,7 @@ namespace lfs::vis {
         [[nodiscard]] VkColorSpaceKHR swapchainColorSpace() const { return swapchain_color_space_; }
         [[nodiscard]] bool hasHdr() const noexcept { return has_hdr_; }
         [[nodiscard]] VkFormat depthStencilFormat() const { return depth_stencil_format_; }
+        [[nodiscard]] VkImageAspectFlags depthStencilAspectMask() const;
         [[nodiscard]] VkImageView depthStencilImageView() const {
             return active_frame_index_ < depth_stencil_resources_.size()
                        ? depth_stencil_resources_[active_frame_index_].view
@@ -316,7 +317,6 @@ namespace lfs::vis {
                                                        const VkSurfacePresentScalingCapabilitiesEXT* scaling_capabilities) const;
         [[nodiscard]] VkFormat chooseDepthStencilFormat() const;
         [[nodiscard]] uint32_t findMemoryType(uint32_t type_filter, VkMemoryPropertyFlags properties) const;
-        [[nodiscard]] VkImageAspectFlags depthStencilAspectMask() const;
         [[nodiscard]] std::string makeAllocationDiagnosticLabel(std::string_view label);
         VkInstance instance_ = VK_NULL_HANDLE;
         VkDebugUtilsMessengerEXT debug_messenger_ = VK_NULL_HANDLE;
