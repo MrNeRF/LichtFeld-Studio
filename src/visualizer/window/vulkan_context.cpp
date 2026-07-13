@@ -30,6 +30,10 @@
 #include <unistd.h>
 #endif
 
+#ifndef LFS_VULKAN_VALIDATION_DEFAULT
+#define LFS_VULKAN_VALIDATION_DEFAULT 0
+#endif
+
 namespace lfs::vis {
     namespace {
 #ifdef _WIN32
@@ -212,12 +216,8 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] bool validationRequestedByBuild() {
-#if defined(DEBUG_BUILD) || !defined(NDEBUG)
-            constexpr bool enabled_by_default = true;
-#else
-            constexpr bool enabled_by_default = false;
-#endif
-            return lfs::core::environment::flag("LFS_VK_VALIDATION", enabled_by_default);
+            return lfs::core::environment::flag(
+                "LFS_VK_VALIDATION", LFS_VULKAN_VALIDATION_DEFAULT != 0);
         }
 
         VKAPI_ATTR VkBool32 VKAPI_CALL vulkanDebugCallback(

@@ -10,6 +10,7 @@
 // (node counts, level distribution, per-level integrated alpha).
 
 #include "core/bhatt_lod.hpp"
+#include "core/environment.hpp"
 #include "core/octree_lod.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
@@ -24,7 +25,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <numeric>
@@ -290,13 +290,13 @@ namespace {
 } // namespace
 
 TEST(LodBuilderBench, CompareBuilders) {
-    const char* const env = std::getenv("LFS_LOD_BUILDER_BENCH");
-    if (env == nullptr || env[0] == '\0') {
+    const auto env = lfs::core::environment::value("LFS_LOD_BUILDER_BENCH");
+    if (!env) {
         GTEST_SKIP() << "set LFS_LOD_BUILDER_BENCH=synthetic[:count] or =<file.ply> to run";
     }
 
     RawSplats raw;
-    const std::string spec(env);
+    const std::string spec(*env);
     if (spec.starts_with("synthetic")) {
         std::size_t count = kBucketSplats;
         if (const auto sep = spec.find(':'); sep != std::string::npos) {

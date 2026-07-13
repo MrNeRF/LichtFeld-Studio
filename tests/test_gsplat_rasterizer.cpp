@@ -69,7 +69,9 @@ protected:
     }
 
     void TearDown() override {
+#if LFS_CUDA_FAILURE_INJECTION_ENABLED
         gsplat_lfs::set_cuda_allocation_failure_for_testing(false);
+#endif
     }
 
     std::unique_ptr<SplatData> splat_data_;
@@ -78,6 +80,7 @@ protected:
     Tensor bg_color_;
 };
 
+#if LFS_CUDA_FAILURE_INJECTION_ENABLED
 TEST_F(GsplatRasterizerTest, CudaAllocationFailureAbortsAndRecovers) {
     gsplat_lfs::set_cuda_allocation_failure_for_testing(true);
     EXPECT_THROW(
@@ -101,6 +104,7 @@ TEST_F(GsplatRasterizerTest, CudaAllocationFailureAbortsAndRecovers) {
     }
     GlobalArenaManager::instance().get_arena().end_frame(ctx.frame_id);
 }
+#endif
 
 TEST_F(GsplatRasterizerTest, ForwardPassBasic) {
     // Just test that forward pass doesn't crash

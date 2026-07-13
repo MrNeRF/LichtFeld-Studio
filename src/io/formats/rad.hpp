@@ -162,6 +162,11 @@ namespace lfs::io {
         const std::uint32_t* child_start = nullptr; // [count], LOD tree only
     };
 
+    enum class RadGpuQuantization {
+        Auto,
+        Disabled,
+    };
+
     // Streams LOD RAD chunks to disk with bounded memory. The chunk index area
     // is reserved up front (total node count must be known) and backpatched on
     // finish(); the decoder tolerates the trailing space padding.
@@ -177,7 +182,8 @@ namespace lfs::io {
                         bool lod_tree,
                         int compression_level = 6,
                         bool emit_meta_sidecar = false,
-                        std::uint32_t chunk_size = kRadStreamableChunkSplats);
+                        std::uint32_t chunk_size = kRadStreamableChunkSplats,
+                        RadGpuQuantization gpu_quantization = RadGpuQuantization::Auto);
         ~RadStreamWriter();
         RadStreamWriter(const RadStreamWriter&) = delete;
         RadStreamWriter& operator=(const RadStreamWriter&) = delete;

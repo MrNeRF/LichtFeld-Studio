@@ -88,6 +88,14 @@ set(_VULKAN_SLANG_FLAGS
         -line-directive-mode none
         -target spirv
 )
+set(_VULKAN_GLSL_FLAGS
+        -V
+        --target-env vulkan1.2
+)
+if(LFS_ENABLE_VULKAN_SHADER_DEBUG_INFO)
+        list(APPEND _VULKAN_SLANG_FLAGS -g3)
+        list(APPEND _VULKAN_GLSL_FLAGS -gVS)
+endif()
 
 set(VULKAN_RASTERIZER_SHADER_OUTPUTS "")
 
@@ -121,8 +129,7 @@ function(_vulkan_add_glsl_shader OUT_NAME SRC_FILE)
         add_custom_command(
                 OUTPUT ${_out}
                 COMMAND ${GLSLANG}
-                        -V
-                        --target-env vulkan1.2
+                        ${_VULKAN_GLSL_FLAGS}
                         ${_defs}
                         ${_VULKAN_SHADER_SRC}/radix_sort/${SRC_FILE}
                         -o ${_out}

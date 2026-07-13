@@ -22,6 +22,10 @@
 
 #include <glm/gtc/type_ptr.hpp>
 
+#ifndef LFS_CUDA_FAILURE_INJECTION_ENABLED
+#define LFS_CUDA_FAILURE_INJECTION_ENABLED 0
+#endif
+
 //
 // Camera Types (at global scope for compatibility with Cameras.cuh)
 //
@@ -62,7 +66,7 @@ namespace gsplat_lfs {
 
 // Redundant pointer validation is debug-only; public tensor/device contracts are
 // established by the caller before this low-level backend boundary.
-#ifdef DEBUG
+#ifdef DEBUG_BUILD
     inline void debug_validate_cuda_pointer(const void* pointer, const std::string_view name) {
         lfs::core::validate_cuda_device_pointer(pointer, name);
     }
@@ -85,6 +89,7 @@ namespace gsplat_lfs {
         return checked_multiply(count, element_size, allocation);
     }
 
+#if LFS_CUDA_FAILURE_INJECTION_ENABLED
     void set_cuda_allocation_failure_for_testing(bool fail);
     bool cuda_allocation_failure_is_forced();
 
@@ -93,6 +98,9 @@ namespace gsplat_lfs {
             LFS_ASSERT_MSG(false, std::format("CUDA allocation for '{}' failed (injected)", label));
         }
     }
+#else
+    inline void maybe_inject_cuda_allocation_failure(std::string_view) noexcept {}
+#endif
 
     inline void checked_cuda_malloc(void** ptr,
                                     const size_t bytes,

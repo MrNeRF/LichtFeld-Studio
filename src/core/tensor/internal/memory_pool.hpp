@@ -115,7 +115,7 @@ namespace lfs::core {
                     stats_.slab_bytes.fetch_add(bytes, std::memory_order_relaxed);
                     track_allocation(ptr, bytes, AllocMethod::Slab, stream);
 
-                    if constexpr (ENABLE_ALLOCATION_PROFILING) {
+                    if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {
                         AllocationProfiler::instance().record_allocation(bytes, 3);
                     }
                     return ptr;
@@ -128,7 +128,7 @@ namespace lfs::core {
                     stats_.bucket_cache_hits.fetch_add(1, std::memory_order_relaxed);
                     stats_.bucket_bytes.fetch_add(bytes, std::memory_order_relaxed);
                     track_allocation(ptr, bytes, AllocMethod::Bucketed, stream);
-                    if constexpr (ENABLE_ALLOCATION_PROFILING) {
+                    if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {
                         AllocationProfiler::instance().record_allocation(bytes, 3);
                     }
                     return ptr;
@@ -144,7 +144,7 @@ namespace lfs::core {
                     stats_.bucket_bytes.fetch_add(bytes, std::memory_order_relaxed);
                     stats_.bucket_waste.fetch_add(bucket_size - bytes, std::memory_order_relaxed);
                     track_allocation(ptr, bytes, AllocMethod::Bucketed, stream);
-                    if constexpr (ENABLE_ALLOCATION_PROFILING) {
+                    if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {
                         AllocationProfiler::instance().record_allocation(bytes, 3);
                     }
                     log_stats_periodically();
@@ -165,7 +165,7 @@ namespace lfs::core {
                     stats_.async_allocs.fetch_add(1, std::memory_order_relaxed);
                     stats_.async_bytes.fetch_add(bytes, std::memory_order_relaxed);
                     track_allocation(ptr, bytes, AllocMethod::Async, stream);
-                    if constexpr (ENABLE_ALLOCATION_PROFILING) {
+                    if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {
                         AllocationProfiler::instance().record_allocation(bytes, 3);
                     }
                     return ptr;
@@ -266,7 +266,7 @@ namespace lfs::core {
                 return;
             }
 
-            if constexpr (ENABLE_ALLOCATION_PROFILING) {
+            if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {
                 AllocationProfiler::instance().record_deallocation(ptr);
             }
 
@@ -294,13 +294,13 @@ namespace lfs::core {
         }
 
         void set_iteration(int iteration) {
-            if constexpr (ENABLE_ALLOCATION_PROFILING) {
+            if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {
                 AllocationProfiler::instance().set_iteration(iteration);
             }
         }
 
         void record_tensor(void* ptr, const std::vector<size_t>& shape, size_t bytes, const std::string& dtype) {
-            if constexpr (ENABLE_ALLOCATION_PROFILING) {
+            if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {
                 AllocationProfiler::instance().record_tensor_allocation(ptr, shape, bytes, dtype, 3);
             }
         }
@@ -513,7 +513,7 @@ namespace lfs::core {
 
             track_allocation(ptr, bytes, AllocMethod::Direct);
 
-            if constexpr (ENABLE_ALLOCATION_PROFILING) {
+            if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {
                 AllocationProfiler::instance().record_allocation(bytes, 3);
             }
 
@@ -601,7 +601,7 @@ namespace lfs::core {
         void log_stats_periodically() {
             static std::atomic<int> log_counter{0};
             if (++log_counter % 2000 == 0) {
-                if constexpr (ENABLE_ALLOCATION_PROFILING) {
+                if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {
                     AllocationProfiler::instance().print_top_allocators(30);
                     AllocationProfiler::instance().print_active_allocations(30);
                     AllocationProfiler::instance().print_tensor_allocations(30);

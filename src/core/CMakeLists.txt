@@ -197,33 +197,9 @@ if(WIN32 AND _IS_MULTI_CONFIG)
     )
 endif()
 
-# Configure build type
-function(configure_build_type target)
-    get_target_property(target_type ${target} TYPE)
-
-    if(target_type STREQUAL "INTERFACE_LIBRARY")
-        if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-            target_compile_definitions(${target} INTERFACE DEBUG_BUILD)
-        elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
-            target_compile_definitions(${target} INTERFACE RELEASE_BUILD)
-        endif()
-    else()
-        if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-            target_compile_definitions(${target} PRIVATE DEBUG_BUILD)
-        elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
-            target_compile_definitions(${target} PRIVATE RELEASE_BUILD)
-        endif()
-    endif()
-endfunction()
-
-configure_build_type(lfs_core)
-
 # Allocation profiling
-if(ENABLE_ALLOCATION_PROFILING)
-    target_compile_definitions(lfs_core PUBLIC ENABLE_ALLOCATION_PROFILING=1)
-else()
-    target_compile_definitions(lfs_core PUBLIC ENABLE_ALLOCATION_PROFILING=0)
-endif()
+target_compile_definitions(lfs_core PUBLIC
+    LFS_ALLOCATION_PROFILING_ENABLED=$<BOOL:${LFS_ENABLE_ALLOCATION_PROFILING}>)
 
 message(STATUS "+------------------------------------------------------------------+")
 message(STATUS "|  lfs_core - Core + Tensor Library (SHARED)                       |")

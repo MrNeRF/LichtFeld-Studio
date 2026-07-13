@@ -22,8 +22,8 @@
 namespace lfs::core {
 
 // Enable/disable profiling at compile time (controlled by CMake)
-#ifndef ENABLE_ALLOCATION_PROFILING
-#define ENABLE_ALLOCATION_PROFILING 0 // Default to disabled if not set by CMake
+#ifndef LFS_ALLOCATION_PROFILING_ENABLED
+#define LFS_ALLOCATION_PROFILING_ENABLED 0 // Default to disabled if not set by CMake
 #endif
 
     struct TensorAllocation {
@@ -107,7 +107,7 @@ namespace lfs::core {
 
         // Capture stack trace and record allocation
         void record_allocation(size_t bytes, int skip_frames = 2) {
-            if constexpr (!ENABLE_ALLOCATION_PROFILING) {
+            if constexpr (!LFS_ALLOCATION_PROFILING_ENABLED) {
                 return;
             }
 
@@ -124,7 +124,7 @@ namespace lfs::core {
 
         // Set current iteration number (call from training loop)
         void set_iteration(int iteration) {
-            if constexpr (!ENABLE_ALLOCATION_PROFILING) {
+            if constexpr (!LFS_ALLOCATION_PROFILING_ENABLED) {
                 return;
             }
             current_iteration_.store(iteration, std::memory_order_relaxed);
@@ -133,7 +133,7 @@ namespace lfs::core {
         // Record tensor allocation with shape and dtype (with pointer tracking for lifetime analysis)
         void record_tensor_allocation(void* ptr, const std::vector<size_t>& shape, size_t bytes,
                                       const std::string& dtype, int skip_frames = 2) {
-            if constexpr (!ENABLE_ALLOCATION_PROFILING) {
+            if constexpr (!LFS_ALLOCATION_PROFILING_ENABLED) {
                 return;
             }
 
@@ -169,7 +169,7 @@ namespace lfs::core {
 
         // Record tensor deallocation (for lifetime tracking)
         void record_deallocation(void* ptr) {
-            if constexpr (!ENABLE_ALLOCATION_PROFILING) {
+            if constexpr (!LFS_ALLOCATION_PROFILING_ENABLED) {
                 return;
             }
 
@@ -310,7 +310,7 @@ namespace lfs::core {
     public:
         // Print top N allocation sites
         void print_top_allocators(int top_n = 20) {
-            if constexpr (!ENABLE_ALLOCATION_PROFILING) {
+            if constexpr (!LFS_ALLOCATION_PROFILING_ENABLED) {
                 return;
             }
 
@@ -384,7 +384,7 @@ namespace lfs::core {
 
         // Print detailed tensor allocations grouped by shape
         void print_tensor_allocations(int limit = 50) {
-            if constexpr (!ENABLE_ALLOCATION_PROFILING) {
+            if constexpr (!LFS_ALLOCATION_PROFILING_ENABLED) {
                 return;
             }
 
@@ -454,7 +454,7 @@ namespace lfs::core {
 
         // Print lifetime statistics (how long tensors live before being freed)
         void print_lifetime_stats(int limit = 20) {
-            if constexpr (!ENABLE_ALLOCATION_PROFILING) {
+            if constexpr (!LFS_ALLOCATION_PROFILING_ENABLED) {
                 return;
             }
 
@@ -526,7 +526,7 @@ namespace lfs::core {
 
         // Print detailed lifetime statistics by origin (where allocations come from)
         void print_lifetime_stats_by_origin(int limit = 20) {
-            if constexpr (!ENABLE_ALLOCATION_PROFILING) {
+            if constexpr (!LFS_ALLOCATION_PROFILING_ENABLED) {
                 return;
             }
 
@@ -606,7 +606,7 @@ namespace lfs::core {
         }
 
         void print_active_allocations(int limit = 50) {
-            if constexpr (!ENABLE_ALLOCATION_PROFILING) {
+            if constexpr (!LFS_ALLOCATION_PROFILING_ENABLED) {
                 return;
             }
 

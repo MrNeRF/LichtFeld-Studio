@@ -18,6 +18,7 @@ from urllib.parse import quote
 import lichtfeld as lf
 
 from . import rml_widgets
+from .environment import value as environment_value
 from .asset_manager_integration import (
     clear_active_asset_manager_panel,
     ensure_dataset_catalog_context,
@@ -140,21 +141,21 @@ class AssetManagerPanel(Panel):
     def _storage_candidates(cls) -> List[Path]:
         candidates: List[Path] = []
 
-        env_value = os.environ.get("LFS_ASSET_MANAGER_DIR", "").strip()
+        env_value = environment_value("LFS_ASSET_MANAGER_DIR")
         if env_value:
             candidates.append(Path(env_value))
 
         candidates.append(resolve_asset_manager_storage_path())
 
-        xdg_data_home = os.environ.get("XDG_DATA_HOME", "").strip()
+        xdg_data_home = environment_value("XDG_DATA_HOME")
         if xdg_data_home:
             candidates.append(Path(xdg_data_home) / "LichtFeldStudio" / "asset_manager")
 
-        appdata = os.environ.get("APPDATA", "").strip()
+        appdata = environment_value("APPDATA")
         if appdata:
             candidates.append(Path(appdata) / "LichtFeldStudio" / "asset_manager")
 
-        local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
+        local_appdata = environment_value("LOCALAPPDATA")
         if local_appdata:
             candidates.append(Path(local_appdata) / "LichtFeldStudio" / "asset_manager")
 

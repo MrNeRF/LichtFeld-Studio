@@ -629,7 +629,7 @@ per-plugin `.venv` and its stamp were absent for launch, and the exact applicati
 was run with debug logging:
 
 ```sh
-LOG_LEVEL=debug ./build/LichtFeld-Studio --view splat_64400.ply
+LFS_LOG_LEVEL=debug ./build/LichtFeld-Studio --view splat_64400.ply
 ```
 
 The global `uv` cache was intentionally left intact, so this was a cold per-plugin
@@ -696,7 +696,7 @@ and its stamp were restored after the run.
 3. Launch from the repository root and retain the complete log:
 
    ```sh
-   LOG_LEVEL=debug ./build/LichtFeld-Studio --view splat_64400.ply \
+   LFS_LOG_LEVEL=debug ./build/LichtFeld-Studio --view splat_64400.ply \
      > /tmp/plugin-async-frame-budget.log 2>&1
    ```
 

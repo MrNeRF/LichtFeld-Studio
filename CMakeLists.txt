@@ -200,14 +200,10 @@ get_filename_component(PROJ_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}" ABSOLUTE)
 
 option(BUILD_TESTS "Build tests" OFF)
 option(BUILD_UNICODE_TEST_ONLY "Build only Unicode path test (no CUDA)" OFF)
-option(ENABLE_ALLOCATION_PROFILING "Enable tensor allocation profiling" OFF)
 option(LFS_FAST_COMPILE "Optimize measured slow C++ components for build speed instead of runtime speed (WIN32 only)" OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# Debug options
-option(ENABLE_TENSOR_VALIDATION "Enable runtime tensor NaN/Inf validation" OFF)
-option(ENABLE_CUDA_DEBUG_SYNC "Enable synchronous CUDA kernel checking (slow)" OFF)
-option(ENABLE_TENSOR_OP_TRACING "Enable tensor operation tracing" OFF)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/DeveloperOptions.cmake")
 
 # Add -rdynamic for backtrace symbol resolution
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -505,26 +501,22 @@ configure_file(
 # Project-wide definitions
 add_definitions(-DPROJECT_ROOT_PATH="${PROJ_ROOT_DIR}")
 
-# CUDA device debugging (-G flag) generates huge object files. Disable in CI.
-option(CUDA_DEVICE_DEBUG "Enable CUDA device debugging (-G flag)" ON)
-
-if(CUDA_DEVICE_DEBUG)
-    set(LFS_CUDA_DEVICE_DEBUG_FLAGS "-G" CACHE INTERNAL "")
-else()
-    set(LFS_CUDA_DEVICE_DEBUG_FLAGS "" CACHE INTERNAL "")
-endif()
-
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
-    if(CUDA_DEVICE_DEBUG)
-        set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -g -G -O0")
-    else()
-        set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -g -O0")
-    endif()
+    set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -g -O0")
 endif()
 
 # External dependencies (EXCLUDE_FROM_ALL to handle install ourselves)
 add_subdirectory(external EXCLUDE_FROM_ALL)
+
+if(LFS_ENABLE_CUDA_DEVICE_DEBUG)
+    add_compile_options($<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-G>)
+endif()
+
+add_compile_definitions(
+    $<$<CONFIG:Debug>:DEBUG_BUILD>
+    $<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:RELEASE_BUILD>
+)
 
 # =============================================================================
 # LIBRARY MODULES
@@ -1149,58 +1141,16 @@ elseif(WIN32)
     endif()
 endif()
 
-# Build type configuration function
-function(configure_build_type target)
-    get_target_property(target_type ${target} TYPE)
-
-    if(target_type STREQUAL "INTERFACE_LIBRARY")
-        if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-            target_compile_definitions(${target} INTERFACE DEBUG_BUILD)
-        elseif(CMAKE_BUILD_TYPE STREQUAL "Release|RelWithDebInfo|MinSizeRel")
-            target_compile_definitions(${target} INTERFACE RELEASE_BUILD)
-        endif()
-        # Debug options for interface libraries
-        if(ENABLE_TENSOR_VALIDATION)
-            target_compile_definitions(${target} INTERFACE TENSOR_VALIDATION_ENABLED)
-        endif()
-        if(ENABLE_CUDA_DEBUG_SYNC)
-            target_compile_definitions(${target} INTERFACE CUDA_DEBUG_SYNC)
-        endif()
-        if(ENABLE_TENSOR_OP_TRACING)
-            target_compile_definitions(${target} INTERFACE TENSOR_OP_TRACING)
-        endif()
-    else()
-        if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-            target_compile_definitions(${target} PRIVATE DEBUG_BUILD)
-        elseif(CMAKE_BUILD_TYPE STREQUAL "Release|RelWithDebInfo|MinSizeRel")
-            target_compile_definitions(${target} PRIVATE RELEASE_BUILD)
-        endif()
-        # Debug options for regular libraries
-        if(ENABLE_TENSOR_VALIDATION)
-            target_compile_definitions(${target} PRIVATE TENSOR_VALIDATION_ENABLED)
-        endif()
-        if(ENABLE_CUDA_DEBUG_SYNC)
-            target_compile_definitions(${target} PRIVATE CUDA_DEBUG_SYNC)
-        endif()
-        if(ENABLE_TENSOR_OP_TRACING)
-            target_compile_definitions(${target} PRIVATE TENSOR_OP_TRACING)
-        endif()
-    endif()
-endfunction()
-
-# Apply build configuration to all targets
-configure_build_type(fastlfs_backend)
-configure_build_type(lfs_core)
-configure_build_type(lfs_core_cuda)
-configure_build_type(lfs_training)
-configure_build_type(lfs_preprocessing)
-configure_build_type(lfs_rendering_tensor)
-configure_build_type(lfs_rendering)
-configure_build_type(lfs_visualizer)
-configure_build_type(lfs_io)
-configure_build_type(lfs_geometry)
-configure_build_type(lfs_tcp)
-configure_build_type(${PROJECT_NAME})
+if(UNIX)
+    add_custom_target(validate-gui
+        COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_vulkan_validation.sh"
+                --binary "$<TARGET_FILE:${PROJECT_NAME}>"
+        DEPENDS ${PROJECT_NAME}
+        USES_TERMINAL
+        COMMENT "Launching LichtFeld Studio with source-built Vulkan validation"
+        VERBATIM
+    )
+endif()
 
 if(LFS_FAST_COMPILE AND MSVC)
     function(lfs_enable_fast_cxx_compile target)

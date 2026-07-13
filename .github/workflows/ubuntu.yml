@@ -161,7 +161,7 @@ jobs:
             -DBUILD_PYTHON_STUBS=OFF \
             -DLFS_DEV_IMPORT_SOURCE_PYTHON=OFF \
             -DLFS_DEV_IMPORT_SOURCE_RESOURCES=OFF \
-            -DCUDA_DEVICE_DEBUG=OFF \
+            -DLFS_ENABLE_CUDA_DEVICE_DEBUG=OFF \
             -DCMAKE_C_FLAGS="-pipe -gz" \
             -DCMAKE_CXX_FLAGS="-pipe -gz" \
             -DCMAKE_EXE_LINKER_FLAGS="-Wl,--compress-debug-sections=zlib" \

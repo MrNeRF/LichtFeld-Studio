@@ -81,13 +81,12 @@ complete report.
 building the report. A damaged context is printed as `unavailable` with the
 query's own CUDA status rather than causing a second crash.
 
-## Diagnostic environment flags
+## Diagnostic controls
 
-| Variable | Effect |
-|---|---|
-| `LFS_CUDA_SYNC_DEBUG=1` | Synchronizes and peeks before and after every central CUDA check. Startup logs once when active. This is an attribution mode, not a production performance setting. |
-| `LFS_VK_VALIDATION_FATAL=1` | Routes a Vulkan validation ERROR through the fatal path instead of logging and continuing. |
-| `LFS_NO_CRASH_HANDLER=1` | Leaves terminate, fatal-signal, and unhandled-exception handling to a debugger or sanitizer. |
+The canonical CMake and runtime control surface is documented in
+[Developer flags and diagnostics](flags). Do not add an environment read at a
+call site; add a narrowly justified `LFS_` entry through the shared accessor and
+document it there.
 
 Normal CUDA reports sample `cudaPeekAtLastError` before the checked call. If it
 was already non-success, the report says explicitly that the detection site is
@@ -137,34 +136,9 @@ the central debug primitive.
   counts, enum names, frame/slot/image indices, semaphore values, and expected
   state whenever they determine why the call failed.
 
-Vulkan validation is opt-in through the existing validation-layer setting.
-Set `LFS_VK_VALIDATION_FATAL=1` in CI or a development run to route a validation
-ERROR through the fatal path and abort with the driver message. The default is
-off. Startup logs report whether validation layers, debug utils, and fatal
-validation routing are active.
-
-### Vulkan validation reference layer
-
-Use the validation layer built from upstream `main` for Vulkan validation on this
-workstation:
-
-```sh
-VK_LAYER_PATH=/home/paja/projects/Vulkan-ValidationLayers/build/layers \
-VK_LOADER_LAYERS_ENABLE=VK_LAYER_KHRONOS_validation \
-VK_LAYER_ENABLES=VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT,VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT \
-LFS_VK_VALIDATION=1 \
-./build/LichtFeld-Studio ...
-```
-
-The packaged `1.4.313.0~rc2` layer is not a reliable reference for this codebase:
-its old GPU-assisted push-descriptor recording path reports stale descriptors,
-while the same layer missed a real host-image-copy image-usage violation. Upstream
-`main` has removed that push-descriptor path and detects the host-copy violation.
-Do not suppress either class of message or use the packaged layer as proof.
-
-`LFS_VK_VALIDATION=1` requests validation explicitly, including in release builds.
-Add `LFS_VK_VALIDATION_FATAL=1` to abort on the first error-severity callback; it
-does not enable the layer by itself.
+Vulkan validation defaults, fatal routing, shader source information, and the
+source-built validation-layer launcher are documented in
+[Developer flags and diagnostics](flags#source-built-vulkan-validation-workflow).
 
 ## Release versus debug placement
 
