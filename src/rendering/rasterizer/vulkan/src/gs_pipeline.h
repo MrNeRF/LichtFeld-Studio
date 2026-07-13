@@ -260,7 +260,7 @@ protected:
     void setDebugObjectName(const VkObjectType type,
                             const VkHandle handle,
                             const std::string_view name) const {
-        setDebugObjectName(type, lfsVkHandleValue(handle), name);
+        setDebugObjectName(type, lfs::rendering::vkHandleValue(handle), name);
     }
 
     void createComputeDescriptorSetLayout(_ComputePipeline& pipeline);
