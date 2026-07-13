@@ -22,10 +22,13 @@ actual state, shape, dtype, handle, index, or count do not meet this policy.
 
 ## Shared vocabulary
 
-`src/core/include/core/assert.hpp` and `core/cuda_error.hpp` are one documented
-failure family. Both tensor contracts and CUDA runtime errors emit one
-consolidated `LFS FAILURE REPORT` block before following their established
-throw/return path.
+`src/core/include/core/assert.hpp` and `core/cuda_error.hpp` use the same
+`LFS FAILURE REPORT` envelope, but they are different diagnostic families.
+Generic contract failures contain the contract, failed expression, detection
+site, context, and host stack. CUDA runtime failures add the native CUDA error,
+pre-call attribution, device/runtime and VRAM snapshots, CUDA breadcrumbs, and
+the asynchronous-error hint. Each path then follows its established
+throw/return behavior.
 
 | Check | Use it for | Cost class | Release behavior |
 |---|---|---|---|
@@ -54,7 +57,7 @@ diagnostic into unrelated lines. A shortened CUDA example is annotated below:
 
 ```text
 ========== LFS FAILURE REPORT ==========
-Family: CUDA runtime error                         # CUDA or tensor contract
+Family: CUDA runtime error                         # this example is CUDA-specific
 Error: cudaErrorMemoryAllocation (2): out of memory
 Failed expression: cudaMalloc(&new_buffer, bytes) # expression that returned the status
 Detection site: .../memory_arena.cu:1390 (...)    # where it was detected
@@ -72,10 +75,11 @@ Hint: CUDA reports async errors at the next sync point. Set LFS_CUDA_SYNC_DEBUG=
 ========================================
 ```
 
-Tensor contract failures use the same detection site, runtime snapshot,
-breadcrumbs, and host stack. The stack is captured only on failure and must
-retain the public caller; a dtype error that names only `masked_select` is not a
-complete report.
+Tensor contract failures use the generic envelope: contract, failed expression,
+detection site, context, and host stack. They deliberately do not query the CUDA
+runtime or include CUDA breadcrumbs. The stack is captured only on failure and
+must retain the public caller; a dtype error that names only `masked_select` is
+not a complete report.
 
 `cudaMemGetInfo`, current-device, and device-count queries are guarded while
 building the report. A damaged context is printed as `unavailable` with the
@@ -95,8 +99,8 @@ performed before and after the call so asynchronous execution failures surface
 at the nearest boundary.
 
 At startup, LichtFeld pre-opens a per-process crash log and prints its path.
-`std::terminate` reports the active exception type, `what()`, breadcrumbs, and
-host stack through the shared reporter, flushes the logger, then aborts. POSIX
+`std::terminate` reports the active exception type, `what()`, and host stack
+through the generic reporter, flushes the logger, then aborts. POSIX
 SIGSEGV/SIGABRT/SIGFPE/SIGBUS handling writes only to the pre-opened descriptor,
 uses `backtrace_symbols_fd`, restores the default disposition, and re-raises.
 Windows installs `SetUnhandledExceptionFilter` as a best-effort address trace;
@@ -114,8 +118,9 @@ symbolization remains a postmortem debugger step.
 4. Preserve the caller's established failure control flow. If a subsystem must
    recover or fall back, use the central status adapter with its explicit
    log-only disposition; do not silently clear the CUDA status.
-5. Add a failure-path test that asserts the shared sections and the public
-   caller in the host stack. Do not test only the short exception string.
+5. Add a failure-path test that asserts the sections belonging to that failure
+   family and the public caller in the host stack. Do not test only the short
+   exception string.
 
 ## Vulkan domain wrappers
 
