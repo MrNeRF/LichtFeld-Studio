@@ -116,46 +116,9 @@ endif()
 # Disable C++20 module scanning
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
-# Get git version info
-execute_process(
-    COMMAND git rev-parse --short HEAD
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    OUTPUT_VARIABLE GIT_COMMIT_HASH_SHORT
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET
-)
-execute_process(
-    COMMAND git describe --tags --dirty --always --match "v*"
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    OUTPUT_VARIABLE GIT_TAGGED_VERSION
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET
-)
-if(NOT GIT_COMMIT_HASH_SHORT AND DEFINED ENV{GITHUB_SHA} AND NOT "$ENV{GITHUB_SHA}" STREQUAL "")
-    string(SUBSTRING "$ENV{GITHUB_SHA}" 0 7 GIT_COMMIT_HASH_SHORT)
-endif()
-if(NOT GIT_TAGGED_VERSION)
-    if(DEFINED ENV{GITHUB_REF_TYPE} AND "$ENV{GITHUB_REF_TYPE}" STREQUAL "tag" AND
-       DEFINED ENV{GITHUB_REF_NAME} AND NOT "$ENV{GITHUB_REF_NAME}" STREQUAL "")
-        set(GIT_TAGGED_VERSION "$ENV{GITHUB_REF_NAME}")
-    elseif(GIT_COMMIT_HASH_SHORT)
-        set(GIT_TAGGED_VERSION "${GIT_COMMIT_HASH_SHORT}")
-    endif()
-endif()
-if(NOT GIT_COMMIT_HASH_SHORT)
-    set(GIT_COMMIT_HASH_SHORT "unknown")
-endif()
-if(NOT GIT_TAGGED_VERSION)
-    set(GIT_TAGGED_VERSION "unknown")
-endif()
-
-execute_process(
-    COMMAND ${CMAKE_COMMAND}
-            "-DGIT_SRC_DIR=${CMAKE_SOURCE_DIR}"
-            "-DGIT_VERSION_HEADER=${CMAKE_BINARY_DIR}/include/git_version.h"
-            -P "${CMAKE_SOURCE_DIR}/cmake/GenerateGitVersion.cmake"
-    COMMAND_ERROR_IS_FATAL ANY
-)
+set(GIT_SRC_DIR "${CMAKE_SOURCE_DIR}")
+set(GIT_VERSION_HEADER "${CMAKE_BINARY_DIR}/include/git_version.h")
+include("${CMAKE_SOURCE_DIR}/cmake/GenerateGitVersion.cmake")
 add_custom_target(lfs_git_version ALL
     BYPRODUCTS "${CMAKE_BINARY_DIR}/include/git_version.h"
     COMMAND ${CMAKE_COMMAND}

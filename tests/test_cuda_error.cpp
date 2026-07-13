@@ -52,9 +52,41 @@ namespace {
     class CudaErrorDiagnostics : public ::testing::Test {
     protected:
         void SetUp() override {
-            lfs::core::reset_failure_report_dedup_for_testing();
+            lfs::core::reset_cuda_diagnostics_for_testing();
+        }
+
+        void TearDown() override {
+            lfs::core::reset_cuda_diagnostics_for_testing();
         }
     };
+
+    TEST_F(CudaErrorDiagnostics, CudaErrorClassifier) {
+        EXPECT_TRUE(lfs::core::is_cuda_unavailable_error(cudaErrorInitializationError));
+        EXPECT_TRUE(lfs::core::is_cuda_unavailable_error(cudaErrorNoDevice));
+        EXPECT_TRUE(lfs::core::is_cuda_unavailable_error(cudaErrorInsufficientDriver));
+        EXPECT_FALSE(lfs::core::is_cuda_unavailable_error(cudaErrorMemoryAllocation));
+        EXPECT_FALSE(lfs::core::is_cuda_unavailable_error(cudaSuccess));
+        EXPECT_FALSE(lfs::core::is_cuda_unavailable_error(cudaErrorInvalidDevice));
+    }
+
+    TEST_F(CudaErrorDiagnostics, CudaUnavailableLatchIsOnceAndTerminal) {
+        EXPECT_FALSE(lfs::core::cuda_is_unavailable());
+        EXPECT_TRUE(lfs::core::latch_cuda_unavailable(cudaErrorInitializationError));
+        EXPECT_FALSE(lfs::core::latch_cuda_unavailable(cudaErrorInitializationError));
+        EXPECT_TRUE(lfs::core::cuda_is_unavailable());
+    }
+
+    TEST_F(CudaErrorDiagnostics, FailureReportDedupEmitsFullThenRepeats) {
+        uint64_t count = 0;
+        EXPECT_TRUE(lfs::core::decide_failure_report_for_testing("F", 7, "site.cpp:10", count));
+        EXPECT_EQ(count, 1u);
+        EXPECT_FALSE(lfs::core::decide_failure_report_for_testing("F", 7, "site.cpp:10", count));
+        EXPECT_EQ(count, 2u);
+        EXPECT_FALSE(lfs::core::decide_failure_report_for_testing("F", 7, "site.cpp:10", count));
+        EXPECT_EQ(count, 3u);
+        EXPECT_TRUE(lfs::core::decide_failure_report_for_testing("F", 7, "other.cpp:10", count));
+        EXPECT_EQ(count, 1u);
+    }
 
     TEST_F(CudaErrorDiagnostics, BreadcrumbRingWrapsMostRecentFirst) {
         lfs::core::clear_cuda_breadcrumbs_for_testing();

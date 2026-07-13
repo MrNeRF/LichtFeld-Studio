@@ -16,6 +16,7 @@
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
+#include "core/json_utils.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/scene.hpp"
@@ -1673,38 +1674,6 @@ namespace lfs::app {
             return product;
         }
 
-        bool add_bounded_json_cost(const json& value, size_t& cost, const size_t limit) {
-            constexpr size_t NODE_OVERHEAD = 64;
-            if (cost > limit || NODE_OVERHEAD > limit - cost)
-                return false;
-            cost += NODE_OVERHEAD;
-
-            if (value.is_string()) {
-                const auto& text = value.get_ref<const std::string&>();
-                if (text.size() > limit - cost)
-                    return false;
-                cost += text.size();
-                return true;
-            }
-            if (value.is_array()) {
-                for (const auto& item : value) {
-                    if (!add_bounded_json_cost(item, cost, limit))
-                        return false;
-                }
-                return true;
-            }
-            if (value.is_object()) {
-                for (const auto& [key, item] : value.items()) {
-                    if (key.size() > limit - cost)
-                        return false;
-                    cost += key.size();
-                    if (!add_bounded_json_cost(item, cost, limit))
-                        return false;
-                }
-            }
-            return true;
-        }
-
         class EventSubscriptionRegistry {
         public:
             static EventSubscriptionRegistry& instance() {
@@ -1890,7 +1859,7 @@ namespace lfs::app {
                 });
                 size_t estimated_bytes = 0;
                 const bool payload_fits =
-                    add_bounded_json_cost(*event_payload, estimated_bytes, MAX_MCP_EVENT_BYTES);
+                    core::add_bounded_json_cost(*event_payload, estimated_bytes, MAX_MCP_EVENT_BYTES);
 
                 std::lock_guard lock(mutex_);
                 prune_expired_locked(Clock::now());

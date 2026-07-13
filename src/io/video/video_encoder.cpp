@@ -325,25 +325,17 @@ namespace lfs::io::video {
         }
 
         [[nodiscard]] std::expected<void, std::string> allocateGpuBuffers() {
-            const auto allocate = [](const cudaError_t status, const char* const operation)
-                -> std::expected<void, std::string> {
-                if (status == cudaSuccess)
-                    return {};
-                return std::unexpected(std::format(
-                    "{} failed: {} ({})", operation, cudaGetErrorString(status), cudaGetErrorName(status)));
-            };
-
-            if (auto result = allocate(cudaMalloc(&y_gpu_, y_plane_bytes_), "Video Y-plane GPU allocation"); !result)
+            if (auto result = checkCuda(cudaMalloc(&y_gpu_, y_plane_bytes_), "Video Y-plane GPU allocation"); !result)
                 return result;
-            if (auto result = allocate(cudaMalloc(&u_gpu_, uv_plane_bytes_), "Video U-plane GPU allocation"); !result)
+            if (auto result = checkCuda(cudaMalloc(&u_gpu_, uv_plane_bytes_), "Video U-plane GPU allocation"); !result)
                 return result;
-            if (auto result = allocate(cudaMalloc(&v_gpu_, uv_plane_bytes_), "Video V-plane GPU allocation"); !result)
+            if (auto result = checkCuda(cudaMalloc(&v_gpu_, uv_plane_bytes_), "Video V-plane GPU allocation"); !result)
                 return result;
-            if (auto result = allocate(cudaMallocHost(&y_pinned_, y_plane_bytes_), "Video Y-plane pinned allocation"); !result)
+            if (auto result = checkCuda(cudaMallocHost(&y_pinned_, y_plane_bytes_), "Video Y-plane pinned allocation"); !result)
                 return result;
-            if (auto result = allocate(cudaMallocHost(&u_pinned_, uv_plane_bytes_), "Video U-plane pinned allocation"); !result)
+            if (auto result = checkCuda(cudaMallocHost(&u_pinned_, uv_plane_bytes_), "Video U-plane pinned allocation"); !result)
                 return result;
-            return allocate(cudaMallocHost(&v_pinned_, uv_plane_bytes_), "Video V-plane pinned allocation");
+            return checkCuda(cudaMallocHost(&v_pinned_, uv_plane_bytes_), "Video V-plane pinned allocation");
         }
 
         [[nodiscard]] static std::expected<void, std::string> checkCuda(
