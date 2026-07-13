@@ -143,6 +143,29 @@ ERROR through the fatal path and abort with the driver message. The default is
 off. Startup logs report whether validation layers, debug utils, and fatal
 validation routing are active.
 
+### Vulkan validation reference layer
+
+Use the validation layer built from upstream `main` for Vulkan validation on this
+workstation:
+
+```sh
+VK_LAYER_PATH=/home/paja/projects/Vulkan-ValidationLayers/build/layers \
+VK_LOADER_LAYERS_ENABLE=VK_LAYER_KHRONOS_validation \
+VK_LAYER_ENABLES=VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT,VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT \
+LFS_VK_VALIDATION=1 \
+./build/LichtFeld-Studio ...
+```
+
+The packaged `1.4.313.0~rc2` layer is not a reliable reference for this codebase:
+its old GPU-assisted push-descriptor recording path reports stale descriptors,
+while the same layer missed a real host-image-copy image-usage violation. Upstream
+`main` has removed that push-descriptor path and detects the host-copy violation.
+Do not suppress either class of message or use the packaged layer as proof.
+
+`LFS_VK_VALIDATION=1` requests validation explicitly, including in release builds.
+Add `LFS_VK_VALIDATION_FATAL=1` to abort on the first error-severity callback; it
+does not enable the layer by itself.
+
 ## Release versus debug placement
 
 Keep these checks always-on:
