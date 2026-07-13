@@ -654,14 +654,20 @@ namespace lfs::vis {
         // cudaStreamSynchronize that previously blocked the CPU after every
         // upload (P15). Values are monotonic; on each upload we bump the slot's
         // counter, signal CUDA-side, and queue a Vulkan-side wait.
-        struct UploadTimeline {
+        struct CudaTimelineHandoff {
             VulkanContext::ExternalSemaphore vk_semaphore{};
             lfs::rendering::CudaTimelineSemaphore cuda_semaphore{};
             std::uint64_t value = 0;
+
+            [[nodiscard]] std::expected<void, std::string> initialize(
+                VulkanContext& context,
+                std::string_view error_label,
+                std::string_view debug_name);
+            void reset(VulkanContext* context);
         };
-        std::array<UploadTimeline, kInputRingSize> upload_timelines_{};
-        std::array<UploadTimeline, kInputRingSize> overlay_upload_timelines_{};
-        UploadTimeline selection_query_timeline_{};
+        std::array<CudaTimelineHandoff, kInputRingSize> upload_timelines_{};
+        std::array<CudaTimelineHandoff, kInputRingSize> overlay_upload_timelines_{};
+        CudaTimelineHandoff selection_query_timeline_{};
 
         cudaStream_t render_stream_ = nullptr;
 
@@ -686,7 +692,7 @@ namespace lfs::vis {
 
         // Async RAD page streaming: decoded pages are packed and copied on the
         // engine's own thread/stream; render frames only publish completions.
-        UploadTimeline lod_engine_timeline_{};
+        CudaTimelineHandoff lod_engine_timeline_{};
         LodUploadEngine lod_upload_engine_;
         std::uint64_t lod_upload_log_batches_ = 0;
         bool lod_upload_log_converged_ = false;

@@ -1659,6 +1659,47 @@ namespace lfs::vis {
         }
     };
 
+    std::expected<void, std::string>
+    VksplatViewportRenderer::CudaTimelineHandoff::initialize(
+        VulkanContext& context,
+        const std::string_view error_label,
+        const std::string_view debug_name) {
+        if (!context.createExternalTimelineSemaphore(0, vk_semaphore)) {
+            return std::unexpected(std::format(
+                "{} creation failed: {}", error_label, context.lastError()));
+        }
+
+        const auto handle = context.releaseExternalSemaphoreNativeHandle(vk_semaphore);
+        if (!VulkanContext::externalNativeHandleValid(handle)) {
+            context.destroyExternalSemaphore(vk_semaphore);
+            return std::unexpected(std::format("{} export failed", error_label));
+        }
+
+        lfs::rendering::CudaVulkanExternalSemaphoreImport import{
+            .semaphore_handle = handle,
+            .initial_value = vk_semaphore.initial_value,
+        };
+        if (!cuda_semaphore.init(import)) {
+            const std::string error = cuda_semaphore.lastError();
+            context.destroyExternalSemaphore(vk_semaphore);
+            return std::unexpected(std::format("{} CUDA import failed: {}", error_label, error));
+        }
+
+        value = 0;
+        context.setDebugObjectName(VK_OBJECT_TYPE_SEMAPHORE, vk_semaphore.semaphore, debug_name);
+        return {};
+    }
+
+    void VksplatViewportRenderer::CudaTimelineHandoff::reset(VulkanContext* const context) {
+        cuda_semaphore.reset();
+        if (context != nullptr) {
+            context->destroyExternalSemaphore(vk_semaphore);
+        } else {
+            vk_semaphore = {};
+        }
+        value = 0;
+    }
+
     VksplatViewportRenderer::VksplatViewportRenderer() {
         // Created here (not in ensureInitialized) so the trainer↔viewer
         // handshake can target the render stream from the very first frame.
@@ -1922,33 +1963,13 @@ namespace lfs::vis {
             snap = {};
         }
         for (auto& timeline : upload_timelines_) {
-            timeline.cuda_semaphore.reset();
-            if (context_) {
-                context_->destroyExternalSemaphore(timeline.vk_semaphore);
-            }
-            timeline.vk_semaphore = {};
-            timeline.value = 0;
+            timeline.reset(context_);
         }
         for (auto& timeline : overlay_upload_timelines_) {
-            timeline.cuda_semaphore.reset();
-            if (context_) {
-                context_->destroyExternalSemaphore(timeline.vk_semaphore);
-            }
-            timeline.vk_semaphore = {};
-            timeline.value = 0;
+            timeline.reset(context_);
         }
-        selection_query_timeline_.cuda_semaphore.reset();
-        if (context_) {
-            context_->destroyExternalSemaphore(selection_query_timeline_.vk_semaphore);
-        }
-        selection_query_timeline_.vk_semaphore = {};
-        selection_query_timeline_.value = 0;
-        lod_engine_timeline_.cuda_semaphore.reset();
-        if (context_) {
-            context_->destroyExternalSemaphore(lod_engine_timeline_.vk_semaphore);
-        }
-        lod_engine_timeline_.vk_semaphore = {};
-        lod_engine_timeline_.value = 0;
+        selection_query_timeline_.reset(context_);
+        lod_engine_timeline_.reset(context_);
         if (context_) {
             for (auto& logical_slot : output_slots_) {
                 for (auto& slot : logical_slot) {
@@ -4198,119 +4219,37 @@ namespace lfs::vis {
             return std::unexpected(std::format("VkSplat initialization failed: {}", e.what()));
         }
 
-        // Per-ring-slot upload timeline: a Vulkan-exportable timeline semaphore
-        // imported into CUDA so we can signal CUDA-side after the upload's
-        // cudaMemcpyAsync and have Vulkan compute wait on it, replacing the
-        // per-frame cudaStreamSynchronize that previously blocked the CPU.
         for (std::size_t slot = 0; slot < upload_timelines_.size(); ++slot) {
-            auto& timeline = upload_timelines_[slot];
-            if (!context.createExternalTimelineSemaphore(0, timeline.vk_semaphore)) {
-                return std::unexpected(std::format(
-                    "VkSplat upload timeline semaphore creation failed: {}",
-                    context.lastError()));
+            const auto result = upload_timelines_[slot].initialize(
+                context,
+                "VkSplat upload timeline semaphore",
+                std::format("interop.timeline.upload[{}]", slot));
+            if (!result) {
+                return result;
             }
-            const auto handle = context.releaseExternalSemaphoreNativeHandle(timeline.vk_semaphore);
-            if (!VulkanContext::externalNativeHandleValid(handle)) {
-                context.destroyExternalSemaphore(timeline.vk_semaphore);
-                return std::unexpected("VkSplat upload timeline semaphore export failed");
-            }
-            lfs::rendering::CudaVulkanExternalSemaphoreImport import{};
-            import.semaphore_handle = handle;
-            import.initial_value = timeline.vk_semaphore.initial_value;
-            if (!timeline.cuda_semaphore.init(import)) {
-                std::string err = timeline.cuda_semaphore.lastError();
-                context.destroyExternalSemaphore(timeline.vk_semaphore);
-                return std::unexpected(std::format(
-                    "VkSplat upload timeline semaphore CUDA import failed: {}", err));
-            }
-            timeline.value = 0;
-            context.setDebugObjectNamef(VK_OBJECT_TYPE_SEMAPHORE,
-                                        timeline.vk_semaphore.semaphore,
-                                        "interop.timeline.upload[{}]",
-                                        slot);
         }
         for (std::size_t slot = 0; slot < overlay_upload_timelines_.size(); ++slot) {
-            auto& timeline = overlay_upload_timelines_[slot];
-            if (!context.createExternalTimelineSemaphore(0, timeline.vk_semaphore)) {
-                return std::unexpected(std::format(
-                    "VkSplat overlay upload timeline semaphore creation failed: {}",
-                    context.lastError()));
+            const auto result = overlay_upload_timelines_[slot].initialize(
+                context,
+                "VkSplat overlay upload timeline semaphore",
+                std::format("interop.timeline.overlay[{}]", slot));
+            if (!result) {
+                return result;
             }
-            const auto handle = context.releaseExternalSemaphoreNativeHandle(timeline.vk_semaphore);
-            if (!VulkanContext::externalNativeHandleValid(handle)) {
-                context.destroyExternalSemaphore(timeline.vk_semaphore);
-                return std::unexpected("VkSplat overlay upload timeline semaphore export failed");
-            }
-            lfs::rendering::CudaVulkanExternalSemaphoreImport import{};
-            import.semaphore_handle = handle;
-            import.initial_value = timeline.vk_semaphore.initial_value;
-            if (!timeline.cuda_semaphore.init(import)) {
-                std::string err = timeline.cuda_semaphore.lastError();
-                context.destroyExternalSemaphore(timeline.vk_semaphore);
-                return std::unexpected(std::format(
-                    "VkSplat overlay upload timeline semaphore CUDA import failed: {}", err));
-            }
-            timeline.value = 0;
-            context.setDebugObjectNamef(VK_OBJECT_TYPE_SEMAPHORE,
-                                        timeline.vk_semaphore.semaphore,
-                                        "interop.timeline.overlay[{}]",
-                                        slot);
         }
-        {
-            auto& timeline = lod_engine_timeline_;
-            if (!context.createExternalTimelineSemaphore(0, timeline.vk_semaphore)) {
-                return std::unexpected(std::format(
-                    "VkSplat LOD upload engine timeline semaphore creation failed: {}",
-                    context.lastError()));
-            }
-            const auto handle = context.releaseExternalSemaphoreNativeHandle(timeline.vk_semaphore);
-            if (!VulkanContext::externalNativeHandleValid(handle)) {
-                context.destroyExternalSemaphore(timeline.vk_semaphore);
-                timeline.vk_semaphore = {};
-                return std::unexpected("VkSplat LOD upload engine timeline semaphore export failed");
-            }
-            lfs::rendering::CudaVulkanExternalSemaphoreImport import{};
-            import.semaphore_handle = handle;
-            import.initial_value = timeline.vk_semaphore.initial_value;
-            if (!timeline.cuda_semaphore.init(import)) {
-                std::string err = timeline.cuda_semaphore.lastError();
-                context.destroyExternalSemaphore(timeline.vk_semaphore);
-                timeline.vk_semaphore = {};
-                return std::unexpected(std::format(
-                    "VkSplat LOD upload engine timeline semaphore CUDA import failed: {}", err));
-            }
-            timeline.value = 0;
-            context.setDebugObjectName(VK_OBJECT_TYPE_SEMAPHORE,
-                                       timeline.vk_semaphore.semaphore,
-                                       "interop.timeline.lod_engine");
+        if (const auto result = lod_engine_timeline_.initialize(
+                context,
+                "VkSplat LOD upload engine timeline semaphore",
+                "interop.timeline.lod_engine");
+            !result) {
+            return result;
         }
-        {
-            auto& timeline = selection_query_timeline_;
-            if (!context.createExternalTimelineSemaphore(0, timeline.vk_semaphore)) {
-                return std::unexpected(std::format(
-                    "VkSplat selection query timeline semaphore creation failed: {}",
-                    context.lastError()));
-            }
-            const auto handle = context.releaseExternalSemaphoreNativeHandle(timeline.vk_semaphore);
-            if (!VulkanContext::externalNativeHandleValid(handle)) {
-                context.destroyExternalSemaphore(timeline.vk_semaphore);
-                timeline.vk_semaphore = {};
-                return std::unexpected("VkSplat selection query timeline semaphore export failed");
-            }
-            lfs::rendering::CudaVulkanExternalSemaphoreImport import{};
-            import.semaphore_handle = handle;
-            import.initial_value = timeline.vk_semaphore.initial_value;
-            if (!timeline.cuda_semaphore.init(import)) {
-                std::string err = timeline.cuda_semaphore.lastError();
-                context.destroyExternalSemaphore(timeline.vk_semaphore);
-                timeline.vk_semaphore = {};
-                return std::unexpected(std::format(
-                    "VkSplat selection query timeline semaphore CUDA import failed: {}", err));
-            }
-            timeline.value = 0;
-            context.setDebugObjectName(VK_OBJECT_TYPE_SEMAPHORE,
-                                       timeline.vk_semaphore.semaphore,
-                                       "interop.timeline.selection_query");
+        if (const auto result = selection_query_timeline_.initialize(
+                context,
+                "VkSplat selection query timeline semaphore",
+                "interop.timeline.selection_query");
+            !result) {
+            return result;
         }
 
         initialization_committed = true;
