@@ -23,6 +23,7 @@ namespace lfs::vis {
                                             VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT),
                 };
             case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+            case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL:
                 return {
                     VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
                         VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
