@@ -12,6 +12,7 @@
 #include <cuda_runtime.h>
 #include <limits>
 #include <string_view>
+#include <utility>
 
 namespace gsplat_lfs {
 
@@ -24,54 +25,10 @@ namespace gsplat_lfs {
             return required + headroom;
         }
 
-        void free_device_memory(void* ptr) noexcept {
-            if (!ptr) {
-                return;
-            }
-            const cudaError_t status = cudaFree(ptr);
-            if (status != cudaSuccess) {
-                lfs::core::ensure_cuda_success(
-                    status, "cudaFree(gsplat device memory)", {},
-                    std::source_location::current(),
-                    lfs::core::CudaFailureDisposition::LogOnly);
-                cudaGetLastError();
-            }
-        }
-
-        class PendingDeviceAllocation {
-        public:
-            PendingDeviceAllocation(const size_t bytes, const std::string_view label) {
-                checked_cuda_malloc(&ptr_, bytes, label);
-            }
-
-            ~PendingDeviceAllocation() {
-                free_device_memory(ptr_);
-            }
-
-            PendingDeviceAllocation(const PendingDeviceAllocation&) = delete;
-            PendingDeviceAllocation& operator=(const PendingDeviceAllocation&) = delete;
-
-            template <typename T>
-            T* as() const noexcept {
-                return static_cast<T*>(ptr_);
-            }
-
-            void* get() const noexcept { return ptr_; }
-
-            void* release() noexcept {
-                void* ptr = ptr_;
-                ptr_ = nullptr;
-                return ptr;
-            }
-
-        private:
-            void* ptr_ = nullptr;
-        };
-
         struct IntersectBufferCache {
-            int64_t* cum_tiles = nullptr;
-            int64_t* isect_ids_sort = nullptr;
-            int32_t* flatten_ids_sort = nullptr;
+            DirectDeviceBuffer cum_tiles;
+            DirectDeviceBuffer isect_ids_sort;
+            DirectDeviceBuffer flatten_ids_sort;
             size_t cum_tiles_capacity = 0;
             size_t sort_capacity = 0;
             cudaEvent_t sort_reuse_event = nullptr;
@@ -80,15 +37,13 @@ namespace gsplat_lfs {
             void ensure_cum_tiles(size_t n_elements) {
                 if (n_elements > cum_tiles_capacity) {
                     const size_t new_cap = growth_capacity(n_elements, "gsplat cumulative tiles");
-                    PendingDeviceAllocation replacement(
+                    DirectDeviceBuffer replacement(
                         checked_bytes(new_cap, sizeof(int64_t), "gsplat cumulative tiles"),
+                        nullptr,
                         "rasterizer.gsplat.cumulative_tiles");
 
-                    int64_t* old = cum_tiles;
-                    cum_tiles = replacement.as<int64_t>();
+                    cum_tiles = std::move(replacement);
                     cum_tiles_capacity = new_cap;
-                    (void)replacement.release();
-                    free_device_memory(old);
                 }
             }
 
@@ -105,22 +60,18 @@ namespace gsplat_lfs {
                 }
                 if (n_isects > sort_capacity) {
                     const size_t new_cap = growth_capacity(n_isects, "gsplat sort buffers");
-                    PendingDeviceAllocation replacement_isect_ids(
+                    DirectDeviceBuffer replacement_isect_ids(
                         checked_bytes(new_cap, sizeof(int64_t), "gsplat sorted intersection ids"),
+                        nullptr,
                         "rasterizer.gsplat.sorted_intersection_ids");
-                    PendingDeviceAllocation replacement_flatten_ids(
+                    DirectDeviceBuffer replacement_flatten_ids(
                         checked_bytes(new_cap, sizeof(int32_t), "gsplat sorted flatten ids"),
+                        nullptr,
                         "rasterizer.gsplat.sorted_flatten_ids");
 
-                    int64_t* old_isect_ids = isect_ids_sort;
-                    int32_t* old_flatten_ids = flatten_ids_sort;
-                    isect_ids_sort = replacement_isect_ids.as<int64_t>();
-                    flatten_ids_sort = replacement_flatten_ids.as<int32_t>();
+                    isect_ids_sort = std::move(replacement_isect_ids);
+                    flatten_ids_sort = std::move(replacement_flatten_ids);
                     sort_capacity = new_cap;
-                    (void)replacement_isect_ids.release();
-                    (void)replacement_flatten_ids.release();
-                    free_device_memory(old_isect_ids);
-                    free_device_memory(old_flatten_ids);
                 }
             }
 
@@ -146,9 +97,9 @@ namespace gsplat_lfs {
             }
 
             ~IntersectBufferCache() {
-                free_device_memory(cum_tiles);
-                free_device_memory(isect_ids_sort);
-                free_device_memory(flatten_ids_sort);
+                cum_tiles.reset();
+                isect_ids_sort.reset();
+                flatten_ids_sort.reset();
                 if (sort_reuse_event) {
                     const cudaError_t status = cudaEventDestroy(sort_reuse_event);
                     if (status != cudaSuccess) {
@@ -222,7 +173,7 @@ namespace gsplat_lfs {
         // GPU-based inclusive scan using CUB (replaces slow CPU cumsum)
         auto& cache = get_cache();
         cache.ensure_cum_tiles(n_elements);
-        int64_t* d_cum_tiles = cache.cum_tiles;
+        int64_t* d_cum_tiles = cache.cum_tiles.as<int64_t>();
 
         // Compute cumulative sum on GPU with int32→int64 promotion
         compute_cumsum_gpu(tiles_per_gauss_out, d_cum_tiles, n_elements, stream);
@@ -243,13 +194,15 @@ namespace gsplat_lfs {
             return result;
         }
 
-        PendingDeviceAllocation isect_ids(
+        DirectDeviceBuffer isect_ids(
             checked_bytes(static_cast<size_t>(n_isects), sizeof(int64_t),
                           "gsplat output intersection ids"),
+            nullptr,
             "rasterizer.gsplat.intersection_ids");
-        PendingDeviceAllocation flatten_ids(
+        DirectDeviceBuffer flatten_ids(
             checked_bytes(static_cast<size_t>(n_isects), sizeof(int32_t),
                           "gsplat output flatten ids"),
+            nullptr,
             "rasterizer.gsplat.flatten_ids");
 
         // Second pass: compute isect_ids and flatten_ids
@@ -272,20 +225,20 @@ namespace gsplat_lfs {
                 radix_sort_double_buffer(
                     n_isects, tile_n_bits, cam_n_bits,
                     isect_ids.as<int64_t>(), flatten_ids.as<int32_t>(),
-                    cache.isect_ids_sort, cache.flatten_ids_sort,
+                    cache.isect_ids_sort.as<int64_t>(), cache.flatten_ids_sort.as<int32_t>(),
                     stream);
 
                 // Copy sorted results back (sort may have used either buffer)
                 LFS_CUDA_CHECK_MSG(
                     cudaMemcpyAsync(
-                        isect_ids.get(), cache.isect_ids_sort,
+                        isect_ids.get(), cache.isect_ids_sort.get(),
                         checked_bytes(static_cast<size_t>(n_isects), sizeof(int64_t),
                                       "gsplat sorted intersection output"),
                         cudaMemcpyDeviceToDevice, stream),
                     "gsplat sorted intersection output copy");
                 LFS_CUDA_CHECK_MSG(
                     cudaMemcpyAsync(
-                        flatten_ids.get(), cache.flatten_ids_sort,
+                        flatten_ids.get(), cache.flatten_ids_sort.get(),
                         checked_bytes(static_cast<size_t>(n_isects), sizeof(int32_t),
                                       "gsplat sorted flatten output"),
                         cudaMemcpyDeviceToDevice, stream),
