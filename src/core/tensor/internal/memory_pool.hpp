@@ -67,6 +67,20 @@ namespace lfs::core {
             if (suspend_deallocations_.load(std::memory_order_acquire)) {
                 return;
             }
+            // Cached async allocations remember the stream that ordered their
+            // final use. Some short-lived decoder/upload lanes are already
+            // retired by process shutdown, so those handles cannot be passed to
+            // cudaFreeAsync. First establish device-wide completion, then make
+            // every cache entry stream-independent before releasing storage.
+            const cudaError_t sync_status = cudaDeviceSynchronize();
+            if (sync_status == cudaSuccess) {
+                GPUSlabAllocator::instance().merge_all_streams_into_virgin();
+                SizeBucketedPool::instance().retag_all_streams(nullptr);
+            } else {
+                ensure_cuda_success(
+                    sync_status, "cudaDeviceSynchronize(memory-pool shutdown)", {},
+                    std::source_location::current(), CudaFailureDisposition::LogOnly);
+            }
             SizeBucketedPool::instance().shutdown();
             GPUSlabAllocator::instance().shutdown();
             CudaEventPool::instance().shutdown();
@@ -84,6 +98,13 @@ namespace lfs::core {
             if (cuda_is_unavailable()) [[unlikely]] {
                 return nullptr;
             }
+
+            // release_stream() must see a reusable block either in its cache or
+            // in allocation_map_. Cover cache removal, any cross-stream bridge,
+            // and allocation tracking as one stream-routing operation; otherwise
+            // a concurrent stream retirement can miss the block in transit and
+            // destroy the stream that remains recorded as its home.
+            std::shared_lock stream_routing_lock(stream_routing_mutex_);
 
             void* ptr = nullptr;
 

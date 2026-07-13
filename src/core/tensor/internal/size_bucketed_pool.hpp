@@ -4,6 +4,7 @@
 #pragma once
 
 #include "core/cuda_error.hpp"
+#include "core/export.hpp"
 #include "core/logger.hpp"
 #include "cuda_event_pool.hpp"
 #include "diagnostics/vram_profiler.hpp"
@@ -44,10 +45,7 @@ namespace lfs::core {
             std::atomic<uint64_t> cross_stream_reuse{0};
         };
 
-        static SizeBucketedPool& instance() {
-            static SizeBucketedPool pool;
-            return pool;
-        }
+        static LFS_CORE_API SizeBucketedPool& instance();
 
         void shutdown() {
             bool expected = false;
