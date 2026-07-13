@@ -107,8 +107,13 @@ namespace lfs::vis {
     bool TrainingStateMachine::transitionToImpl(TrainingState new_state, FinishReason finish_reason) {
         StateChangeCallback callback;
         TrainingState old_state;
+        bool owns_callback_dispatch = false;
+        const auto current_thread = std::this_thread::get_id();
         {
-            std::lock_guard lock(mutex_);
+            std::unique_lock lock(mutex_);
+            callback_dispatch_idle_.wait(lock, [this, current_thread] {
+                return !callback_dispatch_active_ || callback_dispatch_owner_ == current_thread;
+            });
             old_state = getState();
 
             if (!isValidTransition(old_state, new_state)) {
@@ -122,18 +127,46 @@ namespace lfs::vis {
             finish_reason_ = new_state == TrainingState::Finished ? finish_reason : FinishReason::None;
             state_.store(new_state, std::memory_order_release);
             callback = on_state_change_;
+            if (callback && !callback_dispatch_active_) {
+                callback_dispatch_active_ = true;
+                callback_dispatch_owner_ = current_thread;
+                owns_callback_dispatch = true;
+            }
         }
 
         if (callback) {
-            callback(old_state, new_state);
+            try {
+                callback(old_state, new_state);
+            } catch (...) {
+                if (owns_callback_dispatch) {
+                    finishCallbackDispatch();
+                }
+                throw;
+            }
+        }
+        if (owns_callback_dispatch) {
+            finishCallbackDispatch();
         }
 
         return true;
     }
 
     void TrainingStateMachine::setStateChangeCallback(StateChangeCallback callback) {
-        std::lock_guard lock(mutex_);
+        const auto current_thread = std::this_thread::get_id();
+        std::unique_lock lock(mutex_);
+        callback_dispatch_idle_.wait(lock, [this, current_thread] {
+            return !callback_dispatch_active_ || callback_dispatch_owner_ == current_thread;
+        });
         on_state_change_ = std::move(callback);
+    }
+
+    void TrainingStateMachine::finishCallbackDispatch() noexcept {
+        {
+            std::lock_guard lock(mutex_);
+            callback_dispatch_active_ = false;
+            callback_dispatch_owner_ = {};
+        }
+        callback_dispatch_idle_.notify_all();
     }
 
     bool TrainingStateMachine::isValidTransition(TrainingState from, TrainingState to) const {

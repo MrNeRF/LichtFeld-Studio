@@ -4145,12 +4145,8 @@ namespace lfs::vis::gui {
             if (!context.transitionImageLayoutImmediate(target->image.image,
                                                         VK_IMAGE_LAYOUT_UNDEFINED,
                                                         VK_IMAGE_LAYOUT_GENERAL,
-                                                        VK_IMAGE_ASPECT_COLOR_BIT,
-                                                        VK_NULL_HANDLE,
-                                                        0,
-                                                        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                                                        target->semaphore.semaphore,
-                                                        vulkan_ready_value)) {
+                                                        VulkanContext::ImmediateTransitionOptions::signalAt(
+                                                            {target->semaphore.semaphore, vulkan_ready_value}))) {
                 const std::string error = std::format("image initialization failed: {}", context.lastError());
                 target->destroy(context);
                 fail_required_interop(error);
@@ -4210,12 +4206,8 @@ namespace lfs::vis::gui {
             if (!context.transitionImageLayoutImmediate(target.image.image,
                                                         target.layout,
                                                         VK_IMAGE_LAYOUT_GENERAL,
-                                                        VK_IMAGE_ASPECT_COLOR_BIT,
-                                                        VK_NULL_HANDLE,
-                                                        0,
-                                                        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                                                        target.semaphore.semaphore,
-                                                        vulkan_ready_value)) {
+                                                        VulkanContext::ImmediateTransitionOptions::signalAt(
+                                                            {target.semaphore.semaphore, vulkan_ready_value}))) {
                 fail_required_interop(std::format("image transition to GENERAL failed: {}", context.lastError()));
             }
             target.layout = VK_IMAGE_LAYOUT_GENERAL;
@@ -4247,10 +4239,9 @@ namespace lfs::vis::gui {
             if (!context.transitionImageLayoutImmediate(target.image.image,
                                                         VK_IMAGE_LAYOUT_GENERAL,
                                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                                        VK_IMAGE_ASPECT_COLOR_BIT,
-                                                        target.semaphore.semaphore,
-                                                        signal_value,
-                                                        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)) {
+                                                        VulkanContext::ImmediateTransitionOptions::waitOn(
+                                                            {target.semaphore.semaphore, signal_value},
+                                                            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT))) {
                 fail_required_interop(std::format("Vulkan wait for CUDA signal failed: {}", context.lastError()));
             }
         }
@@ -4403,12 +4394,8 @@ namespace lfs::vis::gui {
             if (!context.transitionImageLayoutImmediate(target->image.image,
                                                         VK_IMAGE_LAYOUT_UNDEFINED,
                                                         VK_IMAGE_LAYOUT_GENERAL,
-                                                        VK_IMAGE_ASPECT_COLOR_BIT,
-                                                        VK_NULL_HANDLE,
-                                                        0,
-                                                        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                                                        target->semaphore.semaphore,
-                                                        vulkan_ready_value)) {
+                                                        VulkanContext::ImmediateTransitionOptions::signalAt(
+                                                            {target->semaphore.semaphore, vulkan_ready_value}))) {
                 const std::string error = std::format("image initialization failed: {}", context.lastError());
                 target->destroy(context);
                 fail_required_interop(error);
@@ -4461,12 +4448,8 @@ namespace lfs::vis::gui {
             if (!context.transitionImageLayoutImmediate(target.image.image,
                                                         target.layout,
                                                         VK_IMAGE_LAYOUT_GENERAL,
-                                                        VK_IMAGE_ASPECT_COLOR_BIT,
-                                                        VK_NULL_HANDLE,
-                                                        0,
-                                                        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                                                        target.semaphore.semaphore,
-                                                        vulkan_ready_value)) {
+                                                        VulkanContext::ImmediateTransitionOptions::signalAt(
+                                                            {target.semaphore.semaphore, vulkan_ready_value}))) {
                 fail_required_interop(std::format("image transition to GENERAL failed: {}", context.lastError()));
             }
             target.layout = VK_IMAGE_LAYOUT_GENERAL;
@@ -4490,10 +4473,9 @@ namespace lfs::vis::gui {
         if (!context.transitionImageLayoutImmediate(target.image.image,
                                                     VK_IMAGE_LAYOUT_GENERAL,
                                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                                    VK_IMAGE_ASPECT_COLOR_BIT,
-                                                    target.semaphore.semaphore,
-                                                    signal_value,
-                                                    VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)) {
+                                                    VulkanContext::ImmediateTransitionOptions::waitOn(
+                                                        {target.semaphore.semaphore, signal_value},
+                                                        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT))) {
             fail_required_interop(std::format("Vulkan wait for CUDA signal failed: {}", context.lastError()));
         }
         target.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -4649,12 +4631,8 @@ namespace lfs::vis::gui {
             if (!context.transitionImageLayoutImmediate(target->image.image,
                                                         VK_IMAGE_LAYOUT_UNDEFINED,
                                                         VK_IMAGE_LAYOUT_GENERAL,
-                                                        VK_IMAGE_ASPECT_COLOR_BIT,
-                                                        VK_NULL_HANDLE,
-                                                        0,
-                                                        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                                                        target->semaphore.semaphore,
-                                                        vulkan_ready_value)) {
+                                                        VulkanContext::ImmediateTransitionOptions::signalAt(
+                                                            {target->semaphore.semaphore, vulkan_ready_value}))) {
                 const std::string error = std::format("image initialization failed: {}", context.lastError());
                 target->destroy(context);
                 fail_required_interop(error);
@@ -4707,12 +4685,8 @@ namespace lfs::vis::gui {
             if (!context.transitionImageLayoutImmediate(target.image.image,
                                                         target.layout,
                                                         VK_IMAGE_LAYOUT_GENERAL,
-                                                        VK_IMAGE_ASPECT_COLOR_BIT,
-                                                        VK_NULL_HANDLE,
-                                                        0,
-                                                        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                                                        target.semaphore.semaphore,
-                                                        vulkan_ready_value)) {
+                                                        VulkanContext::ImmediateTransitionOptions::signalAt(
+                                                            {target.semaphore.semaphore, vulkan_ready_value}))) {
                 fail_required_interop(std::format("image transition to GENERAL failed: {}", context.lastError()));
             }
             target.layout = VK_IMAGE_LAYOUT_GENERAL;
@@ -4736,10 +4710,9 @@ namespace lfs::vis::gui {
         if (!context.transitionImageLayoutImmediate(target.image.image,
                                                     VK_IMAGE_LAYOUT_GENERAL,
                                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                                    VK_IMAGE_ASPECT_COLOR_BIT,
-                                                    target.semaphore.semaphore,
-                                                    signal_value,
-                                                    VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)) {
+                                                    VulkanContext::ImmediateTransitionOptions::waitOn(
+                                                        {target.semaphore.semaphore, signal_value},
+                                                        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT))) {
             fail_required_interop(std::format("Vulkan wait for CUDA signal failed: {}", context.lastError()));
         }
         target.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;

@@ -3260,12 +3260,7 @@ namespace lfs::vis {
     bool VulkanContext::transitionImageLayoutImmediate(const VkImage image,
                                                        const VkImageLayout old_layout,
                                                        const VkImageLayout new_layout,
-                                                       const VkImageAspectFlags aspect_mask,
-                                                       const VkSemaphore wait_semaphore,
-                                                       const std::uint64_t wait_value,
-                                                       const VkPipelineStageFlags wait_stage,
-                                                       const VkSemaphore signal_semaphore,
-                                                       const std::uint64_t signal_value) {
+                                                       const ImmediateTransitionOptions& options) {
         if (device_ == VK_NULL_HANDLE || immediate_command_pool_ == VK_NULL_HANDLE ||
             graphics_queue_ == VK_NULL_HANDLE || image == VK_NULL_HANDLE) {
             return fail(std::format(
@@ -3291,43 +3286,45 @@ namespace lfs::vis {
                 vkImageLayoutToString(new_layout),
                 static_cast<int>(new_layout)));
         }
-        if (aspect_mask == 0 ||
-            (wait_semaphore == VK_NULL_HANDLE) != (wait_value == 0) ||
-            (signal_semaphore == VK_NULL_HANDLE) != (signal_value == 0)) {
+        if (options.aspect_mask == 0 ||
+            (options.wait &&
+             (options.wait->semaphore == VK_NULL_HANDLE || options.wait->value == 0)) ||
+            (options.signal &&
+             (options.signal->semaphore == VK_NULL_HANDLE || options.signal->value == 0))) {
             return fail(std::format(
-                "Immediate image transition requires a non-zero aspect and paired timeline handles/values (image={:#x}, aspect_mask={:#x}, wait_semaphore={:#x}, wait_value={}, wait_stage={:#x}, signal_semaphore={:#x}, signal_value={})",
+                "Immediate image transition requires a non-zero aspect and valid timeline points (image={:#x}, aspect_mask={:#x}, wait_semaphore={:#x}, wait_value={}, wait_stage={:#x}, signal_semaphore={:#x}, signal_value={})",
                 vkHandleValue(image),
-                static_cast<std::uint32_t>(aspect_mask),
-                vkHandleValue(wait_semaphore),
-                wait_value,
-                static_cast<std::uint64_t>(wait_stage),
-                vkHandleValue(signal_semaphore),
-                signal_value));
+                static_cast<std::uint32_t>(options.aspect_mask),
+                vkHandleValue(options.wait ? options.wait->semaphore : VK_NULL_HANDLE),
+                options.wait ? options.wait->value : 0,
+                static_cast<std::uint64_t>(options.wait_stage),
+                vkHandleValue(options.signal ? options.signal->semaphore : VK_NULL_HANDLE),
+                options.signal ? options.signal->value : 0));
         }
         if (old_layout == new_layout) {
-            if (wait_semaphore != VK_NULL_HANDLE || signal_semaphore != VK_NULL_HANDLE) {
+            if (options.wait || options.signal) {
                 return fail(std::format(
                     "A no-op image transition cannot carry timeline synchronization (image={:#x}, layout={}({}), wait_semaphore={:#x}, wait_value={}, signal_semaphore={:#x}, signal_value={})",
                     vkHandleValue(image),
                     vkImageLayoutToString(old_layout),
                     static_cast<int>(old_layout),
-                    vkHandleValue(wait_semaphore),
-                    wait_value,
-                    vkHandleValue(signal_semaphore),
-                    signal_value));
+                    vkHandleValue(options.wait ? options.wait->semaphore : VK_NULL_HANDLE),
+                    options.wait ? options.wait->value : 0,
+                    vkHandleValue(options.signal ? options.signal->semaphore : VK_NULL_HANDLE),
+                    options.signal ? options.signal->value : 0));
             }
             last_error_.clear();
             return true;
         }
         const std::uint64_t previous_wait_value =
-            wait_semaphore != VK_NULL_HANDLE ? last_immediate_timeline_wait_values_[wait_semaphore] : 0;
+            options.wait ? last_immediate_timeline_wait_values_[options.wait->semaphore] : 0;
         const std::uint64_t previous_signal_value =
-            signal_semaphore != VK_NULL_HANDLE ? last_immediate_timeline_signal_values_[signal_semaphore] : 0;
-        if (wait_semaphore != VK_NULL_HANDLE && wait_value <= previous_wait_value) {
+            options.signal ? last_immediate_timeline_signal_values_[options.signal->semaphore] : 0;
+        if (options.wait && options.wait->value <= previous_wait_value) {
             return fail(std::format(
                 "Immediate-submit timeline waits must increase strictly (semaphore={:#x}, requested_value={}, previous_value={}, image={:#x}, old_layout={}({}), new_layout={}({}))",
-                vkHandleValue(wait_semaphore),
-                wait_value,
+                vkHandleValue(options.wait->semaphore),
+                options.wait->value,
                 previous_wait_value,
                 vkHandleValue(image),
                 vkImageLayoutToString(old_layout),
@@ -3335,11 +3332,11 @@ namespace lfs::vis {
                 vkImageLayoutToString(new_layout),
                 static_cast<int>(new_layout)));
         }
-        if (signal_semaphore != VK_NULL_HANDLE && signal_value <= previous_signal_value) {
+        if (options.signal && options.signal->value <= previous_signal_value) {
             return fail(std::format(
                 "Immediate-submit timeline signals must increase strictly (semaphore={:#x}, requested_value={}, previous_value={}, image={:#x}, old_layout={}({}), new_layout={}({}))",
-                vkHandleValue(signal_semaphore),
-                signal_value,
+                vkHandleValue(options.signal->semaphore),
+                options.signal->value,
                 previous_signal_value,
                 vkHandleValue(image),
                 vkImageLayoutToString(old_layout),
@@ -3353,18 +3350,18 @@ namespace lfs::vis {
         // so the layer sees the external half of the ownership handoff. Keep the
         // queue wait below: unlike a host wait, it supplies the external-memory
         // acquire needed before Vulkan accesses CUDA-written image contents.
-        if (validation_enabled_ && wait_semaphore != VK_NULL_HANDLE) {
+        if (validation_enabled_ && options.wait) {
             VkSemaphoreWaitInfo wait_info{};
             wait_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
             wait_info.semaphoreCount = 1;
-            wait_info.pSemaphores = &wait_semaphore;
-            wait_info.pValues = &wait_value;
+            wait_info.pSemaphores = &options.wait->semaphore;
+            wait_info.pValues = &options.wait->value;
             const VkResult wait_result = vkWaitSemaphores(device_, &wait_info, UINT64_MAX);
             if (wait_result != VK_SUCCESS) {
                 return fail(std::format(
                     "vkWaitSemaphores failed while observing an external timeline for validation (semaphore={:#x}, value={}, image={:#x}, result={}({}))",
-                    vkHandleValue(wait_semaphore),
-                    wait_value,
+                    vkHandleValue(options.wait->semaphore),
+                    options.wait->value,
                     vkHandleValue(image),
                     vkResultToString(wait_result),
                     static_cast<int>(wait_result)));
@@ -3407,64 +3404,26 @@ namespace lfs::vis {
             return fail(std::format("vkBeginCommandBuffer(layout transition) failed: {}", vkResultToString(result)));
         }
 
-        VkPipelineStageFlags2 src_stage = VK_PIPELINE_STAGE_2_NONE;
-        VkPipelineStageFlags2 dst_stage = VK_PIPELINE_STAGE_2_NONE;
+        const auto source = VulkanImageBarrierTracker::layoutAccess(
+            old_layout, VulkanImageBarrierTracker::AccessDirection::Source);
+        const auto destination = VulkanImageBarrierTracker::layoutAccess(
+            new_layout, VulkanImageBarrierTracker::AccessDirection::Destination);
         VkImageMemoryBarrier2 barrier{};
         barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        barrier.srcStageMask = source.stage;
+        barrier.srcAccessMask = source.access;
+        barrier.dstStageMask = destination.stage;
+        barrier.dstAccessMask = destination.access;
         barrier.oldLayout = old_layout;
         barrier.newLayout = new_layout;
         barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.image = image;
-        barrier.subresourceRange.aspectMask = aspect_mask;
+        barrier.subresourceRange.aspectMask = options.aspect_mask;
         barrier.subresourceRange.baseMipLevel = 0;
         barrier.subresourceRange.levelCount = 1;
         barrier.subresourceRange.baseArrayLayer = 0;
         barrier.subresourceRange.layerCount = 1;
-
-        switch (old_layout) {
-        case VK_IMAGE_LAYOUT_UNDEFINED:
-            barrier.srcAccessMask = VK_ACCESS_2_NONE;
-            src_stage = VK_PIPELINE_STAGE_2_NONE;
-            break;
-        case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
-            barrier.srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            src_stage = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-            break;
-        case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-            barrier.srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-            src_stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-            break;
-        case VK_IMAGE_LAYOUT_GENERAL:
-            barrier.srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
-            src_stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            break;
-        default:
-            barrier.srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
-            src_stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            break;
-        }
-
-        switch (new_layout) {
-        case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
-            barrier.dstAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT;
-            dst_stage = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
-            break;
-        case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-            barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
-            dst_stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
-            break;
-        case VK_IMAGE_LAYOUT_GENERAL:
-            barrier.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
-            dst_stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            break;
-        default:
-            barrier.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
-            dst_stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            break;
-        }
-        barrier.srcStageMask = src_stage;
-        barrier.dstStageMask = dst_stage;
 
         VkDependencyInfo dependency{};
         dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
@@ -3483,43 +3442,28 @@ namespace lfs::vis {
         submit_info.commandBufferCount = 1;
         submit_info.pCommandBuffers = &command_buffer;
         VkTimelineSemaphoreSubmitInfo timeline_submit_info{};
-        VkPipelineStageFlags resolved_wait_stage = wait_stage == 0
+        VkPipelineStageFlags resolved_wait_stage = options.wait_stage == 0
                                                        ? static_cast<VkPipelineStageFlags>(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)
-                                                       : wait_stage;
+                                                       : options.wait_stage;
         // The submit-time wait gates the GPU on the external (CUDA) timeline.
         // The validation-only host observation above is solely for a layer that
         // cannot otherwise see CUDA's signal; normal rendering remains async.
-        if (wait_semaphore != VK_NULL_HANDLE) {
+        if (options.wait) {
             timeline_submit_info.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
             timeline_submit_info.waitSemaphoreValueCount = 1;
-            timeline_submit_info.pWaitSemaphoreValues = &wait_value;
+            timeline_submit_info.pWaitSemaphoreValues = &options.wait->value;
             submit_info.pNext = &timeline_submit_info;
             submit_info.waitSemaphoreCount = 1;
-            submit_info.pWaitSemaphores = &wait_semaphore;
+            submit_info.pWaitSemaphores = &options.wait->semaphore;
             submit_info.pWaitDstStageMask = &resolved_wait_stage;
         }
-        if (signal_semaphore != VK_NULL_HANDLE) {
+        if (options.signal) {
             timeline_submit_info.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
             timeline_submit_info.signalSemaphoreValueCount = 1;
-            timeline_submit_info.pSignalSemaphoreValues = &signal_value;
+            timeline_submit_info.pSignalSemaphoreValues = &options.signal->value;
             submit_info.pNext = &timeline_submit_info;
             submit_info.signalSemaphoreCount = 1;
-            submit_info.pSignalSemaphores = &signal_semaphore;
-        }
-        if (timeline_submit_info.waitSemaphoreValueCount != submit_info.waitSemaphoreCount ||
-            timeline_submit_info.signalSemaphoreValueCount != submit_info.signalSemaphoreCount ||
-            submit_info.commandBufferCount != 1 || submit_info.pCommandBuffers == nullptr ||
-            command_buffer == VK_NULL_HANDLE) {
-            vkFreeCommandBuffers(device_, immediate_command_pool_, 1, &command_buffer);
-            return fail(std::format(
-                "Immediate-submit arrays disagree with VkSubmitInfo counts (image={:#x}, command_buffer={:#x}, command_buffer_count={}, wait_count={}, timeline_wait_count={}, signal_count={}, timeline_signal_count={})",
-                vkHandleValue(image),
-                vkHandleValue(command_buffer),
-                submit_info.commandBufferCount,
-                submit_info.waitSemaphoreCount,
-                timeline_submit_info.waitSemaphoreValueCount,
-                submit_info.signalSemaphoreCount,
-                timeline_submit_info.signalSemaphoreValueCount));
+            submit_info.pSignalSemaphores = &options.signal->semaphore;
         }
         VkFenceCreateInfo fence_info{};
         fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
@@ -3540,17 +3484,17 @@ namespace lfs::vis {
             vkFreeCommandBuffers(device_, immediate_command_pool_, 1, &command_buffer);
             return fail(std::format("Immediate Vulkan image layout transition submit failed: {}", vkResultToString(result)));
         }
-        if (wait_semaphore != VK_NULL_HANDLE) {
-            last_immediate_timeline_wait_values_[wait_semaphore] = wait_value;
+        if (options.wait) {
+            last_immediate_timeline_wait_values_[options.wait->semaphore] = options.wait->value;
         }
-        if (signal_semaphore != VK_NULL_HANDLE) {
-            last_immediate_timeline_signal_values_[signal_semaphore] = signal_value;
+        if (options.signal) {
+            last_immediate_timeline_signal_values_[options.signal->semaphore] = options.signal->value;
         }
         // Fire-and-forget: queue cmd+fence for lazy reaping. Vulkan queues are
         // FIFO per VkQueue, so subsequent submits on graphics_queue_ correctly
         // observe the layout transition without any CPU-side wait.
         pending_immediate_submits_.push_back({command_buffer, submit_fence});
-        if (validation_enabled_ && signal_semaphore != VK_NULL_HANDLE) {
+        if (validation_enabled_ && options.signal) {
             // Finish Vulkan's half before CUDA is allowed to advance this same
             // imported timeline. Without this observation, validation may see
             // CUDA's later value while the preceding Vulkan signal is still
@@ -3559,14 +3503,14 @@ namespace lfs::vis {
             VkSemaphoreWaitInfo wait_info{};
             wait_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
             wait_info.semaphoreCount = 1;
-            wait_info.pSemaphores = &signal_semaphore;
-            wait_info.pValues = &signal_value;
+            wait_info.pSemaphores = &options.signal->semaphore;
+            wait_info.pValues = &options.signal->value;
             const VkResult wait_result = vkWaitSemaphores(device_, &wait_info, UINT64_MAX);
             if (wait_result != VK_SUCCESS) {
                 return fail(std::format(
                     "vkWaitSemaphores failed while publishing a Vulkan timeline signal for validation (semaphore={:#x}, value={}, image={:#x}, result={}({}))",
-                    vkHandleValue(signal_semaphore),
-                    signal_value,
+                    vkHandleValue(options.signal->semaphore),
+                    options.signal->value,
                     vkHandleValue(image),
                     vkResultToString(wait_result),
                     static_cast<int>(wait_result)));

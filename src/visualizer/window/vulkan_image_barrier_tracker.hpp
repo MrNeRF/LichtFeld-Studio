@@ -17,6 +17,11 @@ namespace lfs::vis {
             VkAccessFlags2 access = VK_ACCESS_2_NONE;
         };
 
+        enum class AccessDirection {
+            Source,
+            Destination,
+        };
+
         struct ImageState {
             VkImageAspectFlags aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT;
             VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -32,6 +37,9 @@ namespace lfs::vis {
 
         [[nodiscard]] VkImageLayout imageLayout(VkImage image,
                                                 VkImageLayout fallback = VK_IMAGE_LAYOUT_UNDEFINED) const;
+
+        [[nodiscard]] static AccessScope layoutAccess(VkImageLayout layout,
+                                                      AccessDirection direction) noexcept;
 
         void transitionImage(VkCommandBuffer command_buffer,
                              VkImage image,

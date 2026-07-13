@@ -573,12 +573,8 @@ namespace lfs::vis::gui {
             if (!context->transitionImageLayoutImmediate(interop_image.image,
                                                          VK_IMAGE_LAYOUT_UNDEFINED,
                                                          VK_IMAGE_LAYOUT_GENERAL,
-                                                         VK_IMAGE_ASPECT_COLOR_BIT,
-                                                         VK_NULL_HANDLE,
-                                                         0,
-                                                         VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                                                         interop_semaphore.semaphore,
-                                                         vulkan_ready_value)) {
+                                                         VulkanContext::ImmediateTransitionOptions::signalAt(
+                                                             {interop_semaphore.semaphore, vulkan_ready_value}))) {
                 LOG_WARN("Vulkan UI texture interop initial transition failed: {}", context->lastError());
                 destroyImage();
                 interop_disabled = true;
@@ -647,12 +643,8 @@ namespace lfs::vis::gui {
                 if (!ctx->transitionImageLayoutImmediate(image,
                                                          image_layout,
                                                          VK_IMAGE_LAYOUT_GENERAL,
-                                                         VK_IMAGE_ASPECT_COLOR_BIT,
-                                                         VK_NULL_HANDLE,
-                                                         0,
-                                                         VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                                                         interop_semaphore.semaphore,
-                                                         vulkan_ready_value)) {
+                                                         VulkanContext::ImmediateTransitionOptions::signalAt(
+                                                             {interop_semaphore.semaphore, vulkan_ready_value}))) {
                     LOG_ERROR("Vulkan UI texture interop transition to GENERAL failed: {}", ctx->lastError());
                     return false;
                 }
@@ -678,10 +670,9 @@ namespace lfs::vis::gui {
             if (!ctx->transitionImageLayoutImmediate(image,
                                                      VK_IMAGE_LAYOUT_GENERAL,
                                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                                     VK_IMAGE_ASPECT_COLOR_BIT,
-                                                     interop_semaphore.semaphore,
-                                                     signal_value,
-                                                     VK_PIPELINE_STAGE_ALL_COMMANDS_BIT)) {
+                                                     VulkanContext::ImmediateTransitionOptions::waitOn(
+                                                         {interop_semaphore.semaphore, signal_value},
+                                                         VK_PIPELINE_STAGE_ALL_COMMANDS_BIT))) {
                 LOG_ERROR("Vulkan UI texture interop transition to read-only failed: {}", ctx->lastError());
                 return false;
             }
