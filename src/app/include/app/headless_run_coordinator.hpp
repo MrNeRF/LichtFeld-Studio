@@ -6,7 +6,6 @@
 #include <atomic>
 #include <chrono>
 #include <csignal>
-#include <functional>
 #include <stdexcept>
 #include <stop_token>
 #include <thread>
@@ -15,10 +14,7 @@ namespace lfs::app {
 
     class HeadlessRunCoordinator {
     public:
-        using InterruptCallback = std::function<void(int)>;
-
-        explicit HeadlessRunCoordinator(InterruptCallback callback = {})
-            : callback_(std::move(callback)) {
+        HeadlessRunCoordinator() {
             pending_signal_ = 0;
             previous_sigint_ = std::signal(SIGINT, &HeadlessRunCoordinator::signal_handler);
             previous_sigterm_ = std::signal(SIGTERM, &HeadlessRunCoordinator::signal_handler);
@@ -82,14 +78,6 @@ namespace lfs::app {
                 if (signal != 0) {
                     received_signal_.store(signal, std::memory_order_release);
                     stop_source_.request_stop();
-                    if (callback_) {
-                        try {
-                            callback_(signal);
-                        } catch (...) {
-                            // The interrupt request remains recorded even if an
-                            // optional lifecycle wake-up callback fails.
-                        }
-                    }
                     return;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -98,7 +86,6 @@ namespace lfs::app {
 
         inline static volatile std::sig_atomic_t pending_signal_ = 0;
 
-        InterruptCallback callback_;
         SignalHandler previous_sigint_ = SIG_DFL;
         SignalHandler previous_sigterm_ = SIG_DFL;
         std::stop_source stop_source_;

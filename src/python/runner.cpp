@@ -62,17 +62,8 @@ namespace lfs::python {
         Cancelled,
     };
 
-    enum class PluginPreloadPhase : std::uint8_t {
-        Idle,
-        Environment,
-        Dependencies,
-        Import,
-        Activation,
-    };
-
     struct PluginPreloadResult {
         std::string name;
-        std::string error;
         bool success = false;
     };
 
@@ -81,9 +72,9 @@ namespace lfs::python {
         std::condition_variable cv;
         std::jthread worker;
         std::atomic<PluginPreloadState> state{PluginPreloadState::NotStarted};
-        std::atomic<PluginPreloadPhase> phase{PluginPreloadPhase::Idle};
         std::atomic<bool> stop_requested{false};
         std::thread::id owner_thread;
+        std::string phase = "idle";
         std::string current_plugin;
         std::string detail;
         std::size_t attempted = 0;
@@ -247,27 +238,12 @@ _add_dll_dirs()
             return "unknown";
         }
 
-        const char* plugin_preload_phase_name(const PluginPreloadPhase phase) {
-            switch (phase) {
-            case PluginPreloadPhase::Idle: return "idle";
-            case PluginPreloadPhase::Environment: return "environment";
-            case PluginPreloadPhase::Dependencies: return "dependencies";
-            case PluginPreloadPhase::Import: return "import";
-            case PluginPreloadPhase::Activation: return "activation";
+        std::string normalized_plugin_preload_phase(const std::string_view phase) {
+            if (phase == "environment" || phase == "dependencies" ||
+                phase == "import" || phase == "activation") {
+                return std::string{phase};
             }
-            return "unknown";
-        }
-
-        PluginPreloadPhase parse_plugin_preload_phase(const std::string_view phase) {
-            if (phase == "environment")
-                return PluginPreloadPhase::Environment;
-            if (phase == "dependencies")
-                return PluginPreloadPhase::Dependencies;
-            if (phase == "import")
-                return PluginPreloadPhase::Import;
-            if (phase == "activation")
-                return PluginPreloadPhase::Activation;
-            return PluginPreloadPhase::Idle;
+            return "idle";
         }
 
         StartupPluginLoadStatus plugin_preload_status_snapshot() {
@@ -276,8 +252,7 @@ _add_dll_dirs()
                 std::lock_guard lock(g_plugin_preload.mutex);
                 status.state = plugin_preload_state_name(
                     g_plugin_preload.state.load(std::memory_order_acquire));
-                status.phase = plugin_preload_phase_name(
-                    g_plugin_preload.phase.load(std::memory_order_acquire));
+                status.phase = g_plugin_preload.phase;
                 status.plugin = g_plugin_preload.current_plugin;
                 status.detail = g_plugin_preload.detail;
                 status.attempted = g_plugin_preload.attempted;
@@ -315,16 +290,24 @@ _add_dll_dirs()
             publish_plugin_preload_status();
         }
 
+        void update_plugin_preload_stage(const std::string_view phase, std::string detail) {
+            {
+                std::lock_guard lock(g_plugin_preload.mutex);
+                g_plugin_preload.phase = normalized_plugin_preload_phase(phase);
+                g_plugin_preload.detail = bounded_plugin_stage(std::move(detail));
+            }
+            publish_plugin_preload_status();
+        }
+
         void finish_plugin_preload(const PluginPreloadState terminal_state,
                                    std::string detail,
                                    const bool mark_loaded) {
             assert(plugin_preload_terminal(terminal_state));
             if (mark_loaded)
                 mark_plugins_loaded();
-            g_plugin_preload.phase.store(PluginPreloadPhase::Idle,
-                                         std::memory_order_release);
             {
                 std::lock_guard lock(g_plugin_preload.mutex);
+                g_plugin_preload.phase = "idle";
                 g_plugin_preload.detail = bounded_plugin_stage(std::move(detail));
                 g_plugin_preload.current_plugin.clear();
                 g_plugin_preload.owner_thread = {};
@@ -754,9 +737,7 @@ _add_dll_dirs()
             if (!PyArg_ParseTuple(args, "ss", &phase, &detail))
                 return nullptr;
 
-            g_plugin_preload.phase.store(parse_plugin_preload_phase(phase),
-                                         std::memory_order_release);
-            update_plugin_preload_detail(detail);
+            update_plugin_preload_stage(phase, detail);
             Py_RETURN_NONE;
         }
 
@@ -932,10 +913,9 @@ _add_dll_dirs()
                     }
 
                     const auto& name = to_load[index];
-                    g_plugin_preload.phase.store(PluginPreloadPhase::Environment,
-                                                 std::memory_order_release);
                     {
                         std::lock_guard lock(g_plugin_preload.mutex);
+                        g_plugin_preload.phase = "environment";
                         g_plugin_preload.current_plugin = name;
                         g_plugin_preload.detail = std::format(
                             "Loading plugin {}/{}: {}", index + 1, to_load.size(), name);
@@ -961,7 +941,6 @@ _add_dll_dirs()
                     {
                         std::lock_guard lock(g_plugin_preload.mutex);
                         g_plugin_preload.results.push_back({.name = name,
-                                                            .error = attempt.error,
                                                             .success = success});
                         g_plugin_preload.attempted = index + 1;
                         g_plugin_preload.detail = success
@@ -1029,12 +1008,11 @@ _add_dll_dirs()
                 return false;
             }
 
-            g_plugin_preload.phase.store(PluginPreloadPhase::Idle,
-                                         std::memory_order_release);
             g_plugin_preload.stop_requested.store(false, std::memory_order_release);
             {
                 std::lock_guard lock(g_plugin_preload.mutex);
                 g_plugin_preload.owner_thread = {};
+                g_plugin_preload.phase = "idle";
                 g_plugin_preload.current_plugin.clear();
                 g_plugin_preload.detail = "Discovering plugins";
                 g_plugin_preload.attempted = 0;
@@ -1054,7 +1032,7 @@ _add_dll_dirs()
             {
                 std::lock_guard lock(g_plugin_preload.mutex);
                 try {
-                    g_plugin_preload.worker = std::jthread([](std::stop_token) {
+                    g_plugin_preload.worker = std::jthread([] {
                         run_plugin_preload_pipeline();
                     });
                     worker_started = true;
@@ -1241,8 +1219,6 @@ _add_dll_dirs()
         g_plugin_preload.stop_requested.store(true, std::memory_order_release);
         {
             std::lock_guard lock(g_plugin_preload.mutex);
-            if (g_plugin_preload.worker.joinable())
-                g_plugin_preload.worker.request_stop();
             g_plugin_preload.detail = "Cancelling plugin loading";
         }
         publish_plugin_preload_status();

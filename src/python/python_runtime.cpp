@@ -251,19 +251,6 @@ namespace lfs::python {
         g_main_loop_wake_callback = cb;
     }
 
-    void notify_startup_plugin_load_state(bool active, float progress, const char* stage) {
-        auto status = get_startup_plugin_load_status();
-        status.active = active;
-        status.progress = progress;
-        status.detail = stage ? stage : "";
-        if (active) {
-            status.state = "loading";
-        } else if (status.state != "not_started") {
-            status.state = "completed";
-        }
-        set_startup_plugin_load_status(status);
-    }
-
     void set_startup_plugin_load_status(const StartupPluginLoadStatus& status) {
         {
             std::lock_guard lock(g_startup_plugin_load_status_mutex);

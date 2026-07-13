@@ -1297,8 +1297,6 @@ namespace lfs::io {
             return *this;
         }
 
-        [[nodiscard]] size_t bytes() const { return count * sizeof(float); }
-
     private:
         void swap(HostBuffer& other) noexcept {
             std::swap(ptr, other.ptr);
