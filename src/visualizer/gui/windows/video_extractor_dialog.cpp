@@ -434,6 +434,17 @@ namespace lfs::gui {
         rotation_deg_ = player_->rotation();
         if (rotation_value_el_)
             rotation_value_el_->SetInnerRML(std::to_string(rotation_deg_) + "°");
+        if (hdr_badge_el_) {
+            if (player_->isHdr()) {
+                hdr_badge_el_->SetClass("hdr-badge--hdr", true);
+                hdr_badge_el_->SetClass("hdr-badge--sdr", false);
+                hdr_badge_el_->SetInnerRML(player_->hdrInfo());
+            } else {
+                hdr_badge_el_->SetClass("hdr-badge--sdr", true);
+                hdr_badge_el_->SetClass("hdr-badge--hdr", false);
+                hdr_badge_el_->SetInnerRML("SDR");
+            }
+        }
         texture_needs_update_ = true;
         preview_src_.clear();
 
@@ -727,6 +738,7 @@ namespace lfs::gui {
         rotation_cw_btn_el_ = document_->GetElementById("btn-rotation-cw");
         rotation_ccw_btn_el_ = document_->GetElementById("btn-rotation-ccw");
         rotation_value_el_ = document_->GetElementById("rotation-value");
+        hdr_badge_el_ = document_->GetElementById("hdr-badge");
 
         bindEventListeners();
         controls_dirty_ = true;

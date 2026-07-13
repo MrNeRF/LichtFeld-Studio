@@ -139,6 +139,40 @@ namespace lfs::io {
             if (rotation_ != 0 && rotation_ != 90 && rotation_ != 180 && rotation_ != 270)
                 rotation_ = 0;
 
+            // Detect HDR from codec parameters
+            is_hdr_ = false;
+            hdr_info_ = "SDR";
+            {
+                const auto fmt = stream->codecpar->format;
+                const auto trc = stream->codecpar->color_trc;
+
+                // Check for 10+ bit depth
+                const bool bit10_or_higher =
+                    fmt == AV_PIX_FMT_YUV420P10LE || fmt == AV_PIX_FMT_YUV422P10LE ||
+                    fmt == AV_PIX_FMT_YUV444P10LE || fmt == AV_PIX_FMT_P010LE ||
+                    fmt == AV_PIX_FMT_P016LE || fmt == AV_PIX_FMT_YUV420P12LE;
+
+                // Check for Dolby Vision in codecpar side data
+                bool has_dovi = false;
+                for (int i = 0; i < stream->codecpar->nb_coded_side_data; i++) {
+                    if (stream->codecpar->coded_side_data[i].type == AV_PKT_DATA_DOVI_CONF) {
+                        has_dovi = true;
+                        break;
+                    }
+                }
+
+                if (has_dovi) {
+                    is_hdr_ = true;
+                    hdr_info_ = (trc == AVCOL_TRC_ARIB_STD_B67) ? "Dolby Vision HLG" : "Dolby Vision";
+                } else if (bit10_or_higher && trc == AVCOL_TRC_ARIB_STD_B67) {
+                    is_hdr_ = true;
+                    hdr_info_ = "HDR HLG";
+                } else if (bit10_or_higher && trc == AVCOL_TRC_SMPTE2084) {
+                    is_hdr_ = true;
+                    hdr_info_ = "HDR10";
+                }
+            }
+
             const char* hw_decoder_name = getHwDecoderName(codec_id);
             const AVCodec* codec = nullptr;
 
@@ -427,6 +461,8 @@ namespace lfs::io {
         [[nodiscard]] int sourceWidth() const { return src_width_; }
         [[nodiscard]] int sourceHeight() const { return src_height_; }
         [[nodiscard]] int rotation() const { return rotation_; }
+        [[nodiscard]] bool isHdr() const { return is_hdr_; }
+        [[nodiscard]] std::string hdrInfo() const { return hdr_info_; }
         [[nodiscard]] double currentTime() const { return current_time_; }
         [[nodiscard]] double duration() const { return duration_; }
         [[nodiscard]] int64_t currentFrameNumber() const { return current_frame_; }
@@ -586,6 +622,8 @@ namespace lfs::io {
         int64_t total_frames_ = 0;
         size_t frame_size_ = 0;
         int rotation_ = 0;
+        bool is_hdr_ = false;
+        std::string hdr_info_;
 
         std::vector<uint8_t> display_buffer_;
         double current_time_ = 0;
@@ -632,6 +670,8 @@ namespace lfs::io {
     int VideoPlayer::sourceWidth() const { return impl_->sourceWidth(); }
     int VideoPlayer::sourceHeight() const { return impl_->sourceHeight(); }
     int VideoPlayer::rotation() const { return impl_->rotation(); }
+    bool VideoPlayer::isHdr() const { return impl_->isHdr(); }
+    std::string VideoPlayer::hdrInfo() const { return impl_->hdrInfo(); }
 
     double VideoPlayer::currentTime() const { return impl_->currentTime(); }
     double VideoPlayer::duration() const { return impl_->duration(); }

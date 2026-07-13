@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace lfs::io {
@@ -54,6 +55,10 @@ namespace lfs::io {
 
         // Detected rotation from video metadata (0, 90, 180, 270)
         int rotation() const;
+
+        // HDR detection
+        bool isHdr() const;
+        std::string hdrInfo() const;
 
     private:
         class Impl;

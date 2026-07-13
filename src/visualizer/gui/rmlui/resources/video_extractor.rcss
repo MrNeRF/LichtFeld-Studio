@@ -110,6 +110,32 @@ body {
     min-width: 130dp;
 }
 
+.hdr-badge {
+    margin-left: auto;
+    display: inline-block;
+    padding: 2dp 8dp;
+    border-radius: 4dp;
+    font-size: 10dp;
+    font-weight: 700;
+    letter-spacing: 0.3dp;
+    text-transform: uppercase;
+    white-space: nowrap;
+    line-height: 18dp;
+    height: 18dp;
+    flex-shrink: 0;
+}
+
+.hdr-badge--sdr {
+    background-color: #45475a;
+    color: #bac2de;
+}
+
+.hdr-badge--hdr {
+    background-color: rgba(249, 226, 175, 0.18);
+    color: #f9e2af;
+    border: 1dp solid rgba(249, 226, 175, 0.35);
+}
+
 #timeline {
     position: relative;
     height: 20dp;
