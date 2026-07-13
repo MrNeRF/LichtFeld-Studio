@@ -31,29 +31,6 @@ namespace lfs::vis {
         };
         static_assert(sizeof(DepthBlitPush) == 16);
 
-        VkShaderModule createShaderModule(VkDevice device, const std::uint32_t* code, std::size_t bytes) {
-            VkShaderModuleCreateInfo info{};
-            info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            info.codeSize = bytes;
-            info.pCode = code;
-            VkShaderModule m = VK_NULL_HANDLE;
-            const VkResult result = vkCreateShaderModule(device, &info, nullptr, &m);
-            if (result != VK_SUCCESS) {
-                LOG_ERROR("Vulkan: {}",
-                          formatVkCheckFailure(
-                              "vkCreateShaderModule(device, &info, nullptr, &m)",
-                              result,
-                              std::format("Depth-blit shader-module creation failed (device={:#x}, code_ptr={:#x}, code_size={})",
-                                          vkHandleValue(device),
-                                          reinterpret_cast<std::uintptr_t>(code),
-                                          bytes),
-                              __FILE__,
-                              __LINE__));
-                return VK_NULL_HANDLE;
-            }
-            return m;
-        }
-
     } // namespace
 
     struct VulkanDepthBlitPass::Impl {
@@ -419,8 +396,8 @@ namespace lfs::vis {
 
         bool createPipeline(VkFormat color_format, VkFormat depth_format) {
             using namespace viewport_shaders;
-            VkShaderModule vert = createShaderModule(device, kScreenQuadVertSpv, sizeof(kScreenQuadVertSpv));
-            VkShaderModule frag = createShaderModule(device, kDepthBlitFragSpv, sizeof(kDepthBlitFragSpv));
+            VkShaderModule vert = createShaderModule(device, kScreenQuadVertSpv, "Depth-blit");
+            VkShaderModule frag = createShaderModule(device, kDepthBlitFragSpv, "Depth-blit");
             if (vert == VK_NULL_HANDLE || frag == VK_NULL_HANDLE) {
                 if (vert)
                     vkDestroyShaderModule(device, vert, nullptr);

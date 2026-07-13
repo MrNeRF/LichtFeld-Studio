@@ -1131,29 +1131,6 @@ namespace lfs::vis {
             return true;
         }
 
-        [[nodiscard]] VkShaderModule createShaderModule(const std::span<const std::uint32_t> spirv) const {
-            VkShaderModuleCreateInfo create_info{};
-            create_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            create_info.codeSize = spirv.size() * sizeof(std::uint32_t);
-            create_info.pCode = spirv.data();
-            VkShaderModule module = VK_NULL_HANDLE;
-            const VkResult result = vkCreateShaderModule(device, &create_info, nullptr, &module);
-            if (result != VK_SUCCESS) {
-                LOG_ERROR("Vulkan: {}",
-                          formatVkCheckFailure(
-                              "vkCreateShaderModule(device, &create_info, nullptr, &module)",
-                              result,
-                              std::format("Viewport shader-module creation failed (device={:#x}, code_ptr={:#x}, code_size={})",
-                                          vkHandleValue(device),
-                                          reinterpret_cast<std::uintptr_t>(spirv.data()),
-                                          create_info.codeSize),
-                              __FILE__,
-                              __LINE__));
-                return VK_NULL_HANDLE;
-            }
-            return module;
-        }
-
         enum class PipelineVertexLayout {
             ScreenQuad,
             PositionOnly,
@@ -1173,8 +1150,8 @@ namespace lfs::vis {
                                           VkPipelineLayout& pipeline_layout,
                                           VkPipeline& pipeline,
                                           VkDescriptorSetLayout extra_descriptor_layout = VK_NULL_HANDLE) {
-            VkShaderModule vertex_module = createShaderModule(vertex_spv);
-            VkShaderModule fragment_module = createShaderModule(fragment_spv);
+            VkShaderModule vertex_module = lfs::vis::createShaderModule(device, vertex_spv, "Viewport");
+            VkShaderModule fragment_module = lfs::vis::createShaderModule(device, fragment_spv, "Viewport");
             if (vertex_module == VK_NULL_HANDLE || fragment_module == VK_NULL_HANDLE) {
                 if (vertex_module != VK_NULL_HANDLE)
                     vkDestroyShaderModule(device, vertex_module, nullptr);

@@ -9,6 +9,8 @@
 #include "rendering/vulkan_result.hpp"
 
 #include <format>
+#include <source_location>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vulkan/vulkan.h>
@@ -57,6 +59,35 @@ namespace lfs::vis {
                            context,
                            file,
                            line);
+    }
+
+    [[nodiscard]] inline VkShaderModule createShaderModule(
+        const VkDevice device,
+        const std::span<const std::uint32_t> spirv,
+        const std::string_view label,
+        const std::source_location location = std::source_location::current()) {
+        VkShaderModuleCreateInfo create_info{};
+        create_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        create_info.codeSize = spirv.size_bytes();
+        create_info.pCode = spirv.data();
+
+        VkShaderModule module = VK_NULL_HANDLE;
+        const VkResult result = vkCreateShaderModule(device, &create_info, nullptr, &module);
+        if (result != VK_SUCCESS) {
+            LOG_ERROR("Vulkan: {}",
+                      formatVkCheckFailure(
+                          "vkCreateShaderModule(device, &create_info, nullptr, &module)",
+                          result,
+                          std::format("{} shader-module creation failed (device={:#x}, code_ptr={:#x}, code_size={})",
+                                      label,
+                                      vkHandleValue(device),
+                                      reinterpret_cast<std::uintptr_t>(spirv.data()),
+                                      spirv.size_bytes()),
+                          location.file_name(),
+                          static_cast<int>(location.line())));
+            return VK_NULL_HANDLE;
+        }
+        return module;
     }
 
     // Namespace-level fallback for visualizer helpers that use bool-return

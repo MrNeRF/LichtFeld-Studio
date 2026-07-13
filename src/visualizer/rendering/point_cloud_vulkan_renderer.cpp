@@ -244,30 +244,6 @@ namespace lfs::vis {
             return true;
         }
 
-        VkShaderModule createShaderModule(VkDevice device, const std::uint32_t* code,
-                                          std::size_t bytes) {
-            VkShaderModuleCreateInfo info{};
-            info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            info.codeSize = bytes;
-            info.pCode = code;
-            VkShaderModule m = VK_NULL_HANDLE;
-            const VkResult result = vkCreateShaderModule(device, &info, nullptr, &m);
-            if (result != VK_SUCCESS) {
-                LOG_ERROR("Vulkan: {}",
-                          formatVkCheckFailure(
-                              "vkCreateShaderModule(device, &info, nullptr, &m)",
-                              result,
-                              std::format("Point-cloud shader-module creation failed (device={:#x}, code_ptr={:#x}, code_size={})",
-                                          vkHandleValue(device),
-                                          reinterpret_cast<std::uintptr_t>(code),
-                                          bytes),
-                              __FILE__,
-                              __LINE__));
-                return VK_NULL_HANDLE;
-            }
-            return m;
-        }
-
         void writePushConstants(PushConstants& pc, const PointCloudVulkanRenderer::RenderRequest& req,
                                 int max_point_size, int n_transforms, int n_visibility,
                                 bool has_transform_indices, bool has_selection,
@@ -614,10 +590,8 @@ namespace lfs::vis {
 
         std::expected<void, std::string> createPipeline() {
             using namespace viewport_shaders;
-            VkShaderModule vert = createShaderModule(device, kPointCloudVertSpv,
-                                                     sizeof(kPointCloudVertSpv));
-            VkShaderModule frag = createShaderModule(device, kPointCloudFragSpv,
-                                                     sizeof(kPointCloudFragSpv));
+            VkShaderModule vert = createShaderModule(device, kPointCloudVertSpv, "Point-cloud");
+            VkShaderModule frag = createShaderModule(device, kPointCloudFragSpv, "Point-cloud");
             if (vert == VK_NULL_HANDLE || frag == VK_NULL_HANDLE) {
                 if (vert)
                     vkDestroyShaderModule(device, vert, nullptr);
