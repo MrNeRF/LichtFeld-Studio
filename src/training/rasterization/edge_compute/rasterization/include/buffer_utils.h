@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/assert.hpp"
+#include "core/cuda_error.hpp"
 #include "edge_rasterization_config.h"
 #include "helper_math.h"
 #include <cstdint>

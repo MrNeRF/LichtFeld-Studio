@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 
-#include "core/cuda_error.hpp"
+#include "core/failure_report.hpp"
 
 #include <cassert>
 #include <source_location>

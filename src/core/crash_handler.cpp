@@ -3,8 +3,8 @@
 
 #include "core/crash_handler.hpp"
 
-#include "core/cuda_error.hpp"
 #include "core/environment.hpp"
+#include "core/failure_report.hpp"
 #include "core/logger.hpp"
 
 #include <array>
@@ -154,13 +154,20 @@ namespace lfs::core {
             }
 
             try {
-                const std::string report = format_failure_report(
-                    "process termination", "std::terminate", "uncaught exception",
-                    std::format("active_exception_type={}, what={}", exception_type,
-                                what.empty() ? "<unavailable>" : what),
-                    std::source_location::current(), capture_host_stacktrace(1));
-                Logger::get().log_internal(LogLevel::Critical,
-                                           std::source_location::current(), report);
+                const auto location = std::source_location::current();
+                const std::string message = std::format(
+                    "active_exception_type={}, what={}", exception_type,
+                    what.empty() ? "<unavailable>" : what);
+                emit_failure_report(
+                    FailureReport{
+                        .family = "process termination",
+                        .contract = "std::terminate",
+                        .expression = "uncaught exception",
+                        .message = message,
+                        .location = location,
+                        .stacktrace_skip_frames = 2,
+                    },
+                    FailureReportSeverity::Critical);
                 Logger::get().flush();
             } catch (...) {
                 // Termination diagnostics are best effort; abort remains unconditional.

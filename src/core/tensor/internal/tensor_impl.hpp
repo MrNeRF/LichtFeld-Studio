@@ -3,6 +3,7 @@
 #pragma once
 
 #include "core/assert.hpp"
+#include "core/cuda_error.hpp"
 #include "core/tensor_fwd.hpp"
 #include <algorithm>
 #include <array>
@@ -2486,9 +2487,7 @@ namespace lfs::core {
 
     class LFS_CORE_API TensorError : public std::runtime_error {
     public:
-        TensorError(const std::string& msg,
-                    const Tensor* t = nullptr,
-                    const std::source_location& location = std::source_location::current());
+        TensorError(const std::string& msg, const Tensor* t = nullptr);
         const std::string& tensor_info() const { return tensor_info_; }
 
     private:
