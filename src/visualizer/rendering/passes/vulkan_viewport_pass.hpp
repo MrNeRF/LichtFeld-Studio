@@ -111,6 +111,10 @@ namespace lfs::vis {
         VkImageView external_scene_image_view = VK_NULL_HANDLE;
         VkImageLayout external_scene_image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         std::uint64_t external_scene_image_generation = 0;
+        // Interactive resize deliberately keeps the last complete interop image
+        // until the render extent settles. Do not replace that binding with an
+        // incompletely prepared image during the deferral window.
+        bool preserve_scene_image_binding = false;
 
         bool grid_enabled = false;
         glm::mat4 grid_view{1.0f};

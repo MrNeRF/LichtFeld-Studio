@@ -1156,6 +1156,7 @@ namespace lfs::vis {
 
         enum class PipelineVertexLayout {
             ScreenQuad,
+            PositionOnly,
             ColorOverlay,
             TexturedOverlay,
             ShapeOverlay,
@@ -1267,6 +1268,7 @@ namespace lfs::vis {
                 vertex_input.vertexAttributeDescriptionCount =
                     vertex_layout == PipelineVertexLayout::ShapeOverlay      ? 7u
                     : vertex_layout == PipelineVertexLayout::TexturedOverlay ? 3u
+                    : vertex_layout == PipelineVertexLayout::PositionOnly    ? 1u
                                                                              : 2u;
                 vertex_input.pVertexAttributeDescriptions = attributes.data();
             }
@@ -1439,7 +1441,7 @@ namespace lfs::vis {
                                   VK_NULL_HANDLE, &vignette_push, true, PipelineVertexLayout::ScreenQuad,
                                   vignette_pipeline_layout, vignette_pipeline) &&
                    createPipeline(kGridVertSpv, kGridFragSpv, "grid",
-                                  grid_descriptor_layout, &grid_push, true, PipelineVertexLayout::ScreenQuad,
+                                  grid_descriptor_layout, &grid_push, true, PipelineVertexLayout::PositionOnly,
                                   grid_pipeline_layout, grid_pipeline) &&
                    createPipeline(kOverlayVertSpv, kOverlayFragSpv, "overlay",
                                   VK_NULL_HANDLE, nullptr, true, PipelineVertexLayout::ColorOverlay,
@@ -1454,7 +1456,7 @@ namespace lfs::vis {
                                   textured_overlay_pipeline_layout, textured_overlay_pipeline,
                                   shape_overlay_descriptor_layout) &&
                    createPipeline(kPivotVertSpv, kPivotFragSpv, "pivot",
-                                  VK_NULL_HANDLE, &pivot_push, true, PipelineVertexLayout::ScreenQuad,
+                                  VK_NULL_HANDLE, &pivot_push, true, PipelineVertexLayout::Procedural,
                                   pivot_pipeline_layout, pivot_pipeline) &&
                    createPipeline(kFrustumVertSpv, kShapeOverlayFragSpv, "frustum",
                                   shape_overlay_descriptor_layout, &frustum_push, true,
@@ -1609,7 +1611,10 @@ namespace lfs::vis {
                 return true;
             }
 
-            std::size_t capacity = 1;
+            // The guide-panel producer emits one grid normally and two for an
+            // independent split view. Reserve both slots up front so toggling
+            // split view does not replace a descriptor-backed buffer mid-run.
+            std::size_t capacity = 2;
             while (capacity < grid_count) {
                 capacity *= 2;
             }

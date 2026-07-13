@@ -254,6 +254,9 @@ namespace lfs::vis {
         }
 
         void upload(const VulkanViewportPassParams& params, const VkDescriptorSet scene_descriptor_set) {
+            if (params.preserve_scene_image_binding) {
+                return;
+            }
             const bool has_external_image =
                 params.external_scene_image != VK_NULL_HANDLE &&
                 params.external_scene_image_view != VK_NULL_HANDLE;

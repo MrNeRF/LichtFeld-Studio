@@ -4831,6 +4831,10 @@ namespace lfs::vis::gui {
                     }
                 }
             }
+            params.preserve_scene_image_binding =
+                params.external_scene_image == VK_NULL_HANDLE &&
+                params.scene_image &&
+                shouldDeferVulkanInteropResize();
         }
 
         if (auto* const rendering_manager = viewer_ ? viewer_->getRenderingManager() : nullptr) {
