@@ -7,6 +7,7 @@
 #include "core/camera.hpp"
 #include "core/cuda_error.hpp"
 #include "core/cuda_version.hpp"
+#include "core/environment.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/image_io.hpp"
@@ -80,7 +81,6 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
-#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <format>
@@ -2566,19 +2566,6 @@ namespace lfs::vis::gui {
             return DevResourceKind::None;
         }
 
-#ifndef LFS_BUILD_PORTABLE
-        [[nodiscard]] bool envFlagEnabled(const char* name, const bool default_value) {
-            const char* value = std::getenv(name);
-            if (!value || !*value)
-                return default_value;
-            return std::string_view(value) != "0";
-        }
-
-        [[nodiscard]] bool envFlagEnabled(const char* name) {
-            return envFlagEnabled(name, false);
-        }
-#endif
-
         std::string makeRmlTabDomId(const std::string& id) {
             std::string result = "rp-tab-";
             result.reserve(result.size() + id.size());
@@ -3300,12 +3287,7 @@ namespace lfs::vis::gui {
         initDevResourceHotReload();
 
         startup_overlay_.init(&rmlui_manager_);
-#ifdef LFS_BUILD_PORTABLE
-        const bool startup_overlay_enabled = true;
-#else
-        const bool startup_overlay_enabled =
-            viewer_->options_.show_startup_overlay && !envFlagEnabled("LFS_DISABLE_STARTUP_OVERLAY");
-#endif
+        const bool startup_overlay_enabled = viewer_->options_.show_startup_overlay;
         if (!startup_overlay_enabled) {
             LOG_INFO("Startup overlay disabled");
             startup_overlay_.dismiss();
@@ -3467,7 +3449,7 @@ namespace lfs::vis::gui {
         dev_resource_watch_ = {};
 
 #if !defined(LFS_BUILD_PORTABLE) && (defined(LFS_DEV_RMLUI_SOURCE_DIR) || defined(LFS_DEV_LOCALE_SOURCE_DIR))
-        if (!envFlagEnabled("LFS_RESOURCE_HOT_RELOAD", true))
+        if (!lfs::core::environment::flag("LFS_DEV_HOT_RELOAD", true))
             return;
 
 #ifdef LFS_DEV_RMLUI_SOURCE_DIR

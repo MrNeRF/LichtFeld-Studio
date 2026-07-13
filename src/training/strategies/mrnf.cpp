@@ -20,53 +20,16 @@
 #include <climits>
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
 #include <limits>
 #include <numeric>
 #include <random>
 #include <stdexcept>
-#include <string_view>
 #include <utility>
 #include <vector>
 
 namespace lfs::training {
 
     namespace {
-        [[nodiscard]] bool mem_breakdown_enabled() {
-            static const bool enabled = [] {
-                const char* raw = std::getenv("LFS_MEM_BREAKDOWN");
-                if (!raw) {
-                    return false;
-                }
-                const std::string_view value(raw);
-                return !value.empty() &&
-                       value != "0" && value != "false" && value != "FALSE" &&
-                       value != "off" && value != "OFF" &&
-                       value != "no" && value != "NO";
-            }();
-            return enabled;
-        }
-
-        [[nodiscard]] double bytes_to_mib(const size_t bytes) {
-            return static_cast<double>(bytes) / (1024.0 * 1024.0);
-        }
-
-        [[nodiscard]] size_t tensor_reserved_bytes(const lfs::core::Tensor& tensor) {
-            if (!tensor.is_valid()) {
-                return 0;
-            }
-            if (tensor.capacity() == 0 || tensor.ndim() == 0) {
-                return tensor.bytes();
-            }
-            size_t row_elems = 1;
-            if (tensor.ndim() > 1) {
-                for (size_t dim = 1; dim < tensor.ndim(); ++dim) {
-                    row_elems *= tensor.shape()[dim];
-                }
-            }
-            return tensor.capacity() * row_elems * lfs::core::dtype_size(tensor.dtype());
-        }
-
         constexpr float MRNF_EDGE_SCORE_WEIGHT = 0.25f;
         constexpr int MRNF_EDGE_MIN_VIEW_SAMPLES = 10;
         constexpr int MRNF_BOUNDS_RECOMPUTE_INTERVAL_REFINES = 5;
@@ -439,14 +402,6 @@ namespace lfs::training {
         reset_vector_buffer(_vis_count, n, _splat_data->means().device(), tracking_capacity);
 
         compute_bounds();
-
-        if (mem_breakdown_enabled()) {
-            LOG_INFO("[MEM] MRNF persistent refine_weight_max={:.2f} MiB, vis_count={:.2f} MiB, free_mask={:.2f} MiB, densification_info={:.2f} MiB",
-                     bytes_to_mib(tensor_reserved_bytes(_refine_weight_max)),
-                     bytes_to_mib(tensor_reserved_bytes(_vis_count)),
-                     bytes_to_mib(tensor_reserved_bytes(_free_mask)),
-                     bytes_to_mib(tensor_reserved_bytes(_splat_data->_densification_info)));
-        }
 
         LOG_INFO("MRNF strategy initialized with {} Gaussians", n);
     }

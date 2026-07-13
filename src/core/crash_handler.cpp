@@ -4,6 +4,7 @@
 #include "core/crash_handler.hpp"
 
 #include "core/cuda_error.hpp"
+#include "core/environment.hpp"
 #include "core/logger.hpp"
 
 #include <array>
@@ -13,7 +14,6 @@
 #include <format>
 #include <mutex>
 #include <string>
-#include <string_view>
 #include <typeinfo>
 
 #ifdef _WIN32
@@ -168,8 +168,7 @@ namespace lfs::core {
         }
 
         [[nodiscard]] bool crash_handlers_disabled() noexcept {
-            const char* value = std::getenv("LFS_NO_CRASH_HANDLER");
-            return value && value[0] != '\0' && std::string_view(value) != "0";
+            return environment::flag("LFS_NO_CRASH_HANDLER");
         }
 
     } // namespace

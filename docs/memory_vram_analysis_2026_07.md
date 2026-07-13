@@ -154,7 +154,7 @@ Tensor-library and training edits are intentionally called out above. Ranks 1, 3
 
 1. Use the same binary, driver, GPU clocks/power state, dataset, seed, SH degree, strategy, `max_cap`, image resize, viewport size, and UI visibility for each A/B pair.
 2. Start `VramProfiler` **before dataset/model load** (`lichtfeld.set_vram_profiler_enabled(True)` or the existing UI control). Enabling it after allocation misses live records by design.
-3. Set `LFS_MEM_BREAKDOWN=1` for the training runs. Preserve the complete log, including tensor storage summaries, loader bytes, pool stats, `vksplat.memory`, and final `Arena stats`.
+3. Preserve the complete profiler and application logs, including tensor storage summaries, loader bytes, pool stats, `vksplat.memory`, and final `Arena stats`.
 4. Record host `RSS`, `VmLck`, and `VmPin` (where available), not only GPU memory. Pinned-cache and Lazy-IR fixes primarily move those values.
 5. Sample the process externally at 200 ms during each run, for example:
 
@@ -166,7 +166,7 @@ Tensor-library and training edits are intentionally called out above. Ranks 1, 3
 
 ### 4.2 Required headless 7k smoke
 
-- Run the existing headless 7k training smoke command with `LFS_MEM_BREAKDOWN=1` and identical parameters before/after.
+- Run the existing headless 7k training smoke command with identical parameters before/after.
 - Capture:
   - peak process VRAM from nvidia-smi;
   - `cuda_direct`/`vulkan_external` tensor storage summaries;

@@ -1391,7 +1391,7 @@ namespace lfs::vis {
         }
         // Held shared until all CPU/GPU frame preparation and readback paths exit.
         std::optional<std::shared_lock<std::shared_mutex>> model_read_lock;
-        if (live_trainer && lfs::training::Trainer::modelAccessLockEnabled()) {
+        if (live_trainer) {
             model_read_lock.emplace(live_trainer->getModelAccessMutex());
         }
         if (live_trainer) {

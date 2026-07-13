@@ -170,9 +170,8 @@ namespace lfs::training {
         // across a synchronous readback, so it avoids the startup deadlock that
         // gating render_mutex_ every step would hit. The GPU edges still order the
         // actual reads/writes; this lock just makes their setup mutually
-        // exclusive. Disable via LFS_NO_MODEL_ACCESS_LOCK=1 (GPU-handshake only).
+        // exclusive.
         std::shared_mutex& getModelAccessMutex() const { return model_access_mutex_; }
-        [[nodiscard]] static bool modelAccessLockEnabled();
 
         // GPU-side model-read handshake. Call both under a shared lock on
         // getRenderMutex(), bracketing every GPU read of the live model enqueued
@@ -539,14 +538,6 @@ namespace lfs::training {
         std::atomic<bool> ready_to_start_{false};
         std::atomic<bool> initialized_{false};
         std::atomic<bool> shutdown_complete_{false};
-
-        // Env-gated VRAM tracing used for benchmark/debug runs.
-        bool memory_breakdown_enabled_ = false;
-        bool memory_breakdown_logged_init_ = false;
-        bool memory_breakdown_logged_train_setup_ = false;
-        bool memory_breakdown_logged_first_batch_ = false;
-        bool memory_breakdown_logged_first_raster_ = false;
-        bool memory_breakdown_logged_first_step_ = false;
 
         // Current training state
         std::atomic<int> current_iteration_{0};

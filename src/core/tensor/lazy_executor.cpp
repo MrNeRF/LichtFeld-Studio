@@ -12,14 +12,10 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
-#include <cctype>
 #include <cmath>
-#include <cstdlib>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
-#include <string>
-#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -70,8 +66,6 @@ namespace lfs::core::internal {
 
         struct LazyExecutorDebugDumpState {
             std::atomic<int> override_enabled{-1}; // -1 unset, 0 false, 1 true
-            std::atomic<bool> cached_env_enabled{false};
-            std::atomic<bool> has_cached_env_enabled{false};
         };
 
         struct LazyExecutorPointwiseFusionState {
@@ -110,10 +104,9 @@ namespace lfs::core::internal {
         struct LazyExecutorSizeHeuristicState {
             std::atomic<int> override_enabled{-1};       // -1 unset, 0 false, 1 true
             std::atomic<int64_t> override_threshold{-1}; // -1 unset
-            std::atomic<bool> has_cached_env{false};
-            std::atomic<bool> cached_enabled{true};
-            std::atomic<size_t> cached_threshold{4096};
         };
+
+        constexpr size_t kDefaultLazySizeThreshold = 4096;
 
         LazyExecutorMemoryPlannerState& lazy_executor_memory_planner_state() {
             static LazyExecutorMemoryPlannerState state;
@@ -143,40 +136,6 @@ namespace lfs::core::internal {
             LazyExecutorContext* previous_ = nullptr;
         };
 
-        std::string trim_ascii_lower(std::string_view value) {
-            size_t begin = 0;
-            while (begin < value.size() && std::isspace(static_cast<unsigned char>(value[begin]))) {
-                ++begin;
-            }
-
-            size_t end = value.size();
-            while (end > begin && std::isspace(static_cast<unsigned char>(value[end - 1]))) {
-                --end;
-            }
-
-            std::string result(value.substr(begin, end - begin));
-            std::transform(result.begin(), result.end(), result.begin(), [](unsigned char c) {
-                return static_cast<char>(std::tolower(c));
-            });
-            return result;
-        }
-
-        bool parse_debug_dump_bool(std::string_view value, bool fallback) {
-            const std::string normalized = trim_ascii_lower(value);
-            if (normalized.empty()) {
-                return fallback;
-            }
-            if (normalized == "1" || normalized == "true" || normalized == "yes" ||
-                normalized == "on" || normalized == "enable" || normalized == "enabled") {
-                return true;
-            }
-            if (normalized == "0" || normalized == "false" || normalized == "no" ||
-                normalized == "off" || normalized == "disable" || normalized == "disabled") {
-                return false;
-            }
-            return fallback;
-        }
-
         bool lazy_executor_debug_dump_enabled() {
             auto& state = lazy_executor_debug_dump_state();
             const int override_enabled = state.override_enabled.load(std::memory_order_acquire);
@@ -184,13 +143,7 @@ namespace lfs::core::internal {
                 return override_enabled == 1;
             }
 
-            if (!state.has_cached_env_enabled.load(std::memory_order_acquire)) {
-                const char* env = std::getenv("TENSOR_LAZY_EXEC_DIAGNOSTICS");
-                const bool enabled = env ? parse_debug_dump_bool(env, false) : false;
-                state.cached_env_enabled.store(enabled, std::memory_order_release);
-                state.has_cached_env_enabled.store(true, std::memory_order_release);
-            }
-            return state.cached_env_enabled.load(std::memory_order_acquire);
+            return false;
         }
 
         bool lazy_executor_pointwise_fusion_enabled() {
@@ -916,12 +869,6 @@ namespace lfs::core::internal {
         state.override_enabled.store(-1, std::memory_order_release);
     }
 
-    void lazy_executor_clear_debug_dump_cache_for_testing() {
-        auto& state = lazy_executor_debug_dump_state();
-        state.cached_env_enabled.store(false, std::memory_order_release);
-        state.has_cached_env_enabled.store(false, std::memory_order_release);
-    }
-
     bool lazy_executor_debug_dump_enabled_for_testing() {
         return lazy_executor_debug_dump_enabled();
     }
@@ -986,29 +933,7 @@ namespace lfs::core::internal {
             return static_cast<size_t>(override_threshold);
         }
 
-        if (!state.has_cached_env.load(std::memory_order_acquire)) {
-            const char* env_threshold = std::getenv("TENSOR_LAZY_SIZE_THRESHOLD");
-            if (env_threshold) {
-                const std::string normalized = trim_ascii_lower(env_threshold);
-                if (!normalized.empty()) {
-                    char* end = nullptr;
-                    const unsigned long parsed = std::strtoul(normalized.c_str(), &end, 10);
-                    if (end != normalized.c_str() && parsed > 0) {
-                        state.cached_threshold.store(static_cast<size_t>(parsed), std::memory_order_release);
-                    }
-                }
-            }
-
-            const char* env_enabled = std::getenv("TENSOR_LAZY_SIZE_HEURISTIC");
-            if (env_enabled) {
-                state.cached_enabled.store(
-                    parse_debug_dump_bool(env_enabled, true), std::memory_order_release);
-            }
-
-            state.has_cached_env.store(true, std::memory_order_release);
-        }
-
-        return state.cached_threshold.load(std::memory_order_acquire);
+        return kDefaultLazySizeThreshold;
     }
 
     bool lazy_size_heuristic_should_defer(size_t byte_count) {
@@ -1016,19 +941,6 @@ namespace lfs::core::internal {
 
         const int override_enabled = state.override_enabled.load(std::memory_order_acquire);
         if (override_enabled == 0) {
-            return true;
-        }
-
-        bool enabled;
-        if (override_enabled == 1) {
-            enabled = true;
-        } else {
-            // Trigger env caching via threshold() call
-            lazy_executor_size_heuristic_threshold();
-            enabled = state.cached_enabled.load(std::memory_order_acquire);
-        }
-
-        if (!enabled) {
             return true;
         }
 

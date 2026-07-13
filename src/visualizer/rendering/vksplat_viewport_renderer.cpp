@@ -7423,7 +7423,6 @@ namespace lfs::vis {
             lod_request_active &&
             splat_data.lod_tree &&
             splat_data.lod_tree->rad_source.valid();
-        static const bool kDisableSharedScratch = (std::getenv("LFS_NO_SHARED_SCRATCH") != nullptr);
         std::optional<RasterizerArenaRenderGuard> shared_arena_guard;
         std::vector<LodPageCache::PendingUpload> lod_page_uploads;
         std::vector<std::uint32_t> protected_lod_chunks;
@@ -7870,7 +7869,7 @@ namespace lfs::vis {
                 completion_value);
         };
 
-        if (synchronize_input_upload && !kDisableSharedScratch) {
+        if (synchronize_input_upload) {
             // A busy training arena makes this frame fall back to the cached viewport.
             // Do not resize output images until this render is guaranteed to proceed.
             releasePrivateScratchBuffers();

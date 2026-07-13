@@ -39,12 +39,10 @@
 #include "visualizer/gui/windows/video_extractor_dialog.hpp"
 #include <cmath>
 #include <condition_variable>
-#include <cstdlib>
 #include <cuda_runtime.h>
 #include <future>
 #include <mutex>
 #include <rasterization_api.h>
-#include <string_view>
 
 #ifdef WIN32
 #include <windows.h>
@@ -55,24 +53,6 @@ namespace lfs::app {
     namespace {
 
         bool checkCudaDriverVersion();
-
-        lfs::vis::GraphicsBackend viewerGraphicsBackendFromEnv() {
-            const char* const value = std::getenv("LFS_GRAPHICS_BACKEND");
-            if (!value || !*value)
-                return lfs::vis::GraphicsBackend::Vulkan;
-
-            const std::string_view backend(value);
-            if (backend == "vulkan" || backend == "Vulkan" || backend == "VK" || backend == "vk") {
-                LOG_INFO("Viewer graphics backend requested via LFS_GRAPHICS_BACKEND=vulkan");
-                return lfs::vis::GraphicsBackend::Vulkan;
-            }
-            if (backend == "opengl" || backend == "OpenGL" || backend == "GL" || backend == "gl") {
-                LOG_WARN("Viewer graphics backend requested via LFS_GRAPHICS_BACKEND=opengl; OpenGL is no longer an active viewer backend, using Vulkan");
-                return lfs::vis::GraphicsBackend::Vulkan;
-            }
-            LOG_WARN("Unknown LFS_GRAPHICS_BACKEND='{}'; using Vulkan", backend);
-            return lfs::vis::GraphicsBackend::Vulkan;
-        }
 
         std::expected<core::param::TrainingParameters, std::string> loadCheckpointParams(const core::param::TrainingParameters& params, core::Scene& scene) {
             LOG_INFO("Resuming from checkpoint: {}", core::path_to_utf8(*params.resume_checkpoint));
@@ -595,7 +575,7 @@ namespace lfs::app {
                 return std::make_unique<lfs::io::video::VideoEncoder>();
             });
 
-            const auto graphics_backend = viewerGraphicsBackendFromEnv();
+            constexpr auto graphics_backend = lfs::vis::GraphicsBackend::Vulkan;
             auto viewer = vis::Visualizer::create({
                 .title = "LichtFeld Studio",
                 .width = 1280,

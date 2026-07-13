@@ -18,6 +18,7 @@
 #include <string_view>
 #include <thread>
 
+#include <core/environment.hpp>
 #include <core/executable_path.hpp>
 #include <core/logger.hpp>
 #include <core/path_utils.hpp>
@@ -211,22 +212,6 @@ _add_dll_dirs()
     }
 
     namespace {
-        bool env_flag_enabled(const char* name, const bool default_value) {
-            const char* value = std::getenv(name);
-            if (!value || !*value) {
-                return default_value;
-            }
-
-            const std::string_view text(value);
-            if (text == "1" || text == "true" || text == "TRUE" || text == "on" || text == "yes") {
-                return true;
-            }
-            if (text == "0" || text == "false" || text == "FALSE" || text == "off" || text == "no") {
-                return false;
-            }
-            return default_value;
-        }
-
         class ScopedGilReleaseIfHeld {
         public:
             ScopedGilReleaseIfHeld() {
@@ -401,8 +386,8 @@ _add_dll_dirs()
         }
 
         void start_dev_python_watcher(PyObject* const lfs_plugins) {
-            if (!env_flag_enabled("LFS_PYTHON_HOT_RELOAD", true)) {
-                LOG_INFO("Python dev hot reload disabled by LFS_PYTHON_HOT_RELOAD");
+            if (!lfs::core::environment::flag("LFS_DEV_HOT_RELOAD", true)) {
+                LOG_INFO("Python dev hot reload disabled by LFS_DEV_HOT_RELOAD");
                 return;
             }
             if (!lfs_plugins) {
@@ -1237,7 +1222,7 @@ _add_dll_dirs()
     }
 
     void preload_user_plugins_async() {
-        if (!env_flag_enabled("LFS_PLUGIN_AUTOLOAD", true))
+        if (!lfs::core::environment::flag("LFS_PLUGIN_AUTOLOAD", true))
             return;
 
         start_plugin_preload_worker();

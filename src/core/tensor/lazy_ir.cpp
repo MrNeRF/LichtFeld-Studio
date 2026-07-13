@@ -6,8 +6,6 @@
 #include "internal/lazy_config.hpp"
 #include "internal/tensor_impl.hpp"
 #include <algorithm>
-#include <charconv>
-#include <cstdlib>
 #include <mutex>
 #include <optional>
 #include <unordered_map>
@@ -47,21 +45,7 @@ namespace lfs::core::internal {
         constexpr size_t kDefaultLazyIrNodeLimit = 65'536;
 
         size_t configured_node_limit() {
-            static const size_t limit = [] {
-                const char* raw = std::getenv("TENSOR_LAZY_IR_MAX_NODES");
-                if (!raw || *raw == '\0') {
-                    return kDefaultLazyIrNodeLimit;
-                }
-
-                size_t parsed = 0;
-                const std::string_view text(raw);
-                const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), parsed);
-                if (error != std::errc{} || end != text.data() + text.size()) {
-                    return kDefaultLazyIrNodeLimit;
-                }
-                return parsed;
-            }();
-            return limit;
+            return kDefaultLazyIrNodeLimit;
         }
 
         size_t node_limit_locked(const LazyIrRuntime& runtime) {

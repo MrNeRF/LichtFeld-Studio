@@ -3,6 +3,7 @@
 
 #include "core/cuda_error.hpp"
 
+#include "core/environment.hpp"
 #include "core/logger.hpp"
 
 #include <algorithm>
@@ -119,11 +120,6 @@ namespace lfs::core {
             static thread_local const uint64_t id =
                 static_cast<uint64_t>(std::hash<std::thread::id>{}(std::this_thread::get_id()));
             return id;
-        }
-
-        [[nodiscard]] bool env_flag_enabled(const char* name) noexcept {
-            const char* value = std::getenv(name);
-            return value && value[0] != '\0' && std::string_view(value) != "0";
         }
 
         [[nodiscard]] std::string cuda_error_text(const cudaError_t error) {
@@ -326,7 +322,7 @@ namespace lfs::core {
     }
 
     bool cuda_sync_debug_enabled() noexcept {
-        static const bool enabled = env_flag_enabled("LFS_CUDA_SYNC_DEBUG");
+        static const bool enabled = environment::flag("LFS_CUDA_SYNC_DEBUG");
         return enabled;
     }
 

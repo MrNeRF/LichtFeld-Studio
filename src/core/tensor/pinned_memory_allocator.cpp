@@ -4,12 +4,12 @@
 #include "core/pinned_memory_allocator.hpp"
 
 #include "core/cuda_error.hpp"
+#include "core/environment.hpp"
 #include "core/logger.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "internal/cuda_event_pool.hpp"
 
 #include <algorithm>
-#include <cerrno>
 #include <chrono>
 #include <cstdlib>
 #include <limits>
@@ -25,23 +25,21 @@ namespace lfs::core {
         }
 
         size_t configured_cache_limit() {
-            const char* value = std::getenv("LFS_PINNED_CACHE_LIMIT_MB");
-            if (!value || *value == '\0') {
+            const auto value = environment::value("LFS_PINNED_CACHE_LIMIT_MB");
+            if (!value) {
                 return DEFAULT_CACHE_LIMIT;
             }
 
-            errno = 0;
-            char* end = nullptr;
-            const unsigned long long megabytes = std::strtoull(value, &end, 10);
-            if (errno != 0 || end == value || *end != '\0') {
-                LOG_WARN("Ignoring invalid LFS_PINNED_CACHE_LIMIT_MB='{}'", value);
+            const auto megabytes = environment::unsigned_integer<unsigned long long>(*value);
+            if (!megabytes) {
+                LOG_WARN("Ignoring invalid LFS_PINNED_CACHE_LIMIT_MB='{}'", *value);
                 return DEFAULT_CACHE_LIMIT;
             }
-            if (megabytes > std::numeric_limits<size_t>::max() / MIB) {
-                LOG_WARN("LFS_PINNED_CACHE_LIMIT_MB='{}' exceeds this platform's address range", value);
+            if (*megabytes > std::numeric_limits<size_t>::max() / MIB) {
+                LOG_WARN("LFS_PINNED_CACHE_LIMIT_MB='{}' exceeds this platform's address range", *value);
                 return std::numeric_limits<size_t>::max();
             }
-            return static_cast<size_t>(megabytes) * MIB;
+            return static_cast<size_t>(*megabytes) * MIB;
         }
 
     } // namespace

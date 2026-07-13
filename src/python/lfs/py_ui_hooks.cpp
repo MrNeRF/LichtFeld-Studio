@@ -8,7 +8,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cstdlib>
 #include <string>
 
 namespace lfs::python {
@@ -65,9 +64,6 @@ namespace lfs::python {
         }
 
         void warn_deprecated_ui_hooks_once(const nb::object& callback) {
-            if (std::getenv("LFS_NO_DEPRECATION_WARNINGS"))
-                return;
-
             if (is_first_party_hook(callback))
                 return;
 
@@ -77,8 +73,7 @@ namespace lfs::python {
 
             LOG_WARN("Python UI hooks are deprecated and will be removed after the reactive "
                      "RmlUi state migration. Use lfs_plugins.ui.RuntimeState and "
-                     "Rml data-model updates instead. Set LFS_NO_DEPRECATION_WARNINGS=1 "
-                     "to suppress this warning.");
+                     "Rml data-model updates instead.");
         }
         bool consume_document_dirty_with_attribution(Rml::ElementDocument* document,
                                                      const std::string& panel,

@@ -58,10 +58,9 @@ def _dedupe_paths(paths: List[Path]) -> List[Path]:
 def _storage_candidates() -> List[Path]:
     candidates: List[Path] = []
 
-    for env_name in ("LICHTFELD_ASSET_MANAGER_DIR", "LFS_ASSET_MANAGER_DIR"):
-        env_value = os.environ.get(env_name, "").strip()
-        if env_value:
-            candidates.append(Path(env_value))
+    env_value = os.environ.get("LFS_ASSET_MANAGER_DIR", "").strip()
+    if env_value:
+        candidates.append(Path(env_value))
 
     candidates.append(LEGACY_STORAGE_PATH)
 

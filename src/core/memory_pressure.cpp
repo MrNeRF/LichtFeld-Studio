@@ -4,6 +4,7 @@
 #include "core/memory_pressure.hpp"
 
 #include "core/cuda_error.hpp"
+#include "core/environment.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 
@@ -12,7 +13,6 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <cstdlib>
 #include <format>
 #include <limits>
 #include <mutex>
@@ -127,17 +127,6 @@ namespace lfs::core {
         std::once_flag reserve_once;
         size_t reserve_bytes = 0;
 
-        std::once_flag disabled_once;
-        bool disabled = false;
-
-        bool is_disabled() {
-            std::call_once(disabled_once, [this]() {
-                const char* value = std::getenv("LFS_VRAM_PRESSURE_DISABLE");
-                disabled = value != nullptr && value[0] != '\0' && value[0] != '0';
-            });
-            return disabled;
-        }
-
         static thread_local bool in_episode;
 
         size_t query_free(MemoryDomain domain) {
@@ -212,15 +201,12 @@ namespace lfs::core {
     size_t MemoryPressureCoordinator::reserve_bytes() const noexcept {
         std::call_once(impl_->reserve_once, [this]() {
             size_t reserve = static_cast<size_t>(512) * 1024 * 1024;
-            if (const char* value = std::getenv("LFS_VRAM_RESERVE_MB")) {
-                char* end = nullptr;
-                const unsigned long long mb = std::strtoull(value, &end, 10);
-                if (end != value && mb > 0) {
-                    constexpr size_t MIB = size_t{1024} * 1024;
-                    reserve = mb > std::numeric_limits<size_t>::max() / MIB
-                                  ? std::numeric_limits<size_t>::max()
-                                  : static_cast<size_t>(mb) * MIB;
-                }
+            if (const auto mb = environment::unsigned_integer<unsigned long long>("LFS_VRAM_RESERVE_MB");
+                mb && *mb > 0) {
+                constexpr size_t MIB = size_t{1024} * 1024;
+                reserve = *mb > std::numeric_limits<size_t>::max() / MIB
+                              ? std::numeric_limits<size_t>::max()
+                              : static_cast<size_t>(*mb) * MIB;
             }
             const size_t total = query_device_total_bytes();
             const size_t floor = static_cast<size_t>(128) * 1024 * 1024;
@@ -249,8 +235,8 @@ namespace lfs::core {
 
     size_t MemoryPressureCoordinator::run_episode(const AllocationFailure& failure,
                                                   PressureContext context) {
-        if (impl_->is_disabled() || Impl::in_episode) {
-            return 0; // kill-switch, or a shrink callback that re-entered reclaim
+        if (Impl::in_episode) {
+            return 0;
         }
         if (cuda_is_unavailable()) {
             return 0;

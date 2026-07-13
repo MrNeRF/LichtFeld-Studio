@@ -78,7 +78,7 @@ class RegistryClient:
         self._cache_dir = cache_dir or Path.home() / ".lichtfeld" / "cache" / "registry"
         self._cache_dir.mkdir(parents=True, exist_ok=True)
         self._index: Optional[Dict] = None
-        override = os.environ.get("LICHTFELD_PLUGIN_REGISTRY_URL", "").strip()
+        override = os.environ.get("LFS_PLUGIN_REGISTRY_URL", "").strip()
         self._registry_urls: Tuple[str, ...] = ((override,) if override else DEFAULT_REGISTRY_URLS)
 
     def search(

@@ -117,11 +117,8 @@ namespace lfs::io {
                 }
                 data.lod_tree->meta_view = *view;
             }
-            const char* const page_capacity_env = std::getenv("LFS_LOD_PAGE_CAPACITY");
-            LOG_INFO("RAD paged LOD active: deferring full CUDA tensor migration "
-                     "(chunks={}, requested_pages={})",
-                     data.lod_tree->chunk_count(),
-                     page_capacity_env != nullptr ? page_capacity_env : "auto");
+            LOG_INFO("RAD paged LOD active: deferring full CUDA tensor migration (chunks={})",
+                     data.lod_tree->chunk_count());
         } else {
             // Move tensors to CUDA for Vulkan renderer compatibility.
             data.means_raw() = data.means_raw().to(Device::CUDA);

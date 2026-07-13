@@ -21,7 +21,6 @@
 #include "core/scene.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
-#include "core/tensor/internal/gpu_slab_allocator.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
 #include "core/tensor/internal/size_bucketed_pool.hpp"
 #include "depth_anchor_cache.hpp"
@@ -56,10 +55,8 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cctype>
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
 #include <cuda_runtime.h>
 #include <expected>
 #include <format>
@@ -81,8 +78,6 @@
 namespace lfs::training {
 
     namespace {
-        constexpr double BYTES_PER_MIB = 1024.0 * 1024.0;
-        constexpr double BYTES_PER_GIB = 1024.0 * 1024.0 * 1024.0;
         constexpr float CAMERA_LOSS_EMA_ALPHA = 0.2f;
         constexpr int CAMERA_LOSS_PUBLISH_INTERVAL = 16;
 
@@ -94,22 +89,6 @@ namespace lfs::training {
                 "{} failed: {} ({})", operation, cudaGetErrorString(status), cudaGetErrorName(status));
             cudaGetLastError();
             LFS_ASSERT_MSG(status == cudaSuccess, message);
-        }
-
-        [[nodiscard]] bool env_flag_enabled(const char* name) {
-            const char* raw = std::getenv(name);
-            if (!raw) {
-                return false;
-            }
-
-            const std::string_view value(raw);
-            if (value.empty()) {
-                return false;
-            }
-
-            return value != "0" && value != "false" && value != "FALSE" &&
-                   value != "off" && value != "OFF" &&
-                   value != "no" && value != "NO";
         }
 
         // Dataset-level normal-prior convention resolution. Prior maps come in
@@ -459,20 +438,6 @@ namespace lfs::training {
             return filtered;
         }
 
-        [[nodiscard]] int env_int_or_default(const char* name, const int fallback) {
-            const char* raw = std::getenv(name);
-            if (!raw || raw[0] == '\0') {
-                return fallback;
-            }
-
-            char* end = nullptr;
-            const long parsed = std::strtol(raw, &end, 10);
-            if (end == raw || parsed <= 0 || parsed > std::numeric_limits<int>::max()) {
-                return fallback;
-            }
-            return static_cast<int>(parsed);
-        }
-
         constexpr float kDepthLossFinalScale = 0.02f;
         constexpr float kDepthLossGradientTermWeight = 1.0f;
         // Normal supervision starts once the geometry has roughly formed
@@ -548,14 +513,6 @@ namespace lfs::training {
                 return count > 0 ? abs_corr_sum / static_cast<double>(count) : 0.0;
             }
         };
-
-        [[nodiscard]] double bytes_to_mib(const size_t bytes) {
-            return static_cast<double>(bytes) / BYTES_PER_MIB;
-        }
-
-        [[nodiscard]] double bytes_to_gib(const size_t bytes) {
-            return static_cast<double>(bytes) / BYTES_PER_GIB;
-        }
 
         [[nodiscard]] std::optional<lfs::core::Tensor> compute_training_cropbox_remove_mask(
             const lfs::core::Scene& scene,
@@ -868,21 +825,6 @@ namespace lfs::training {
             return inputs;
         }
 
-        template <typename Entries>
-        void log_entry_bytes(std::string_view label, Entries entries) {
-            std::sort(entries.begin(), entries.end(), [](const auto& lhs, const auto& rhs) {
-                return lhs.second > rhs.second;
-            });
-
-            for (const auto& [name, bytes] : entries) {
-                LOG_INFO("[MEM] {} {} = {:.2f} MiB", label, name, bytes_to_mib(bytes));
-            }
-
-            const size_t total = sum_entry_bytes(entries);
-            LOG_INFO("[MEM] {} total = {:.2f} MiB ({:.2f} GiB)",
-                     label, bytes_to_mib(total), bytes_to_gib(total));
-        }
-
         [[nodiscard]] size_t photometric_workspace_bytes(const losses::PhotometricLoss& photometric_loss) {
             std::vector<std::pair<std::string, size_t>> entries;
 
@@ -953,101 +895,6 @@ namespace lfs::training {
 
         [[nodiscard]] size_t ssim_map_workspace_bytes(const kernels::SSIMMapWorkspace& workspace) {
             return tensor_reserved_bytes(workspace.ssim_map);
-        }
-
-        [[nodiscard]] size_t splat_tensor_bytes(const lfs::core::SplatData& splat) {
-            std::vector<std::pair<std::string, size_t>> entries;
-            add_tensor_entry(entries, "means", splat.means());
-            add_tensor_entry(entries, "sh0", splat.sh0());
-            add_tensor_entry(entries, "shN", splat.shN());
-            add_tensor_entry(entries, "scaling", splat.scaling_raw());
-            add_tensor_entry(entries, "rotation", splat.rotation_raw());
-            add_tensor_entry(entries, "opacity", splat.opacity_raw());
-            add_tensor_entry(entries, "deleted", splat.deleted());
-            add_tensor_entry(entries, "densification_info", splat._densification_info);
-            return sum_entry_bytes(entries);
-        }
-
-        [[nodiscard]] size_t optimizer_state_bytes(const AdamOptimizer& optimizer) {
-            size_t total = 0;
-            for (const auto type : AdamOptimizer::all_param_types()) {
-                const auto* state = optimizer.get_state(type);
-                if (!state) {
-                    continue;
-                }
-                total += tensor_reserved_bytes(state->grad);
-                total += tensor_reserved_bytes(state->exp_avg);
-                total += tensor_reserved_bytes(state->exp_avg_sq);
-            }
-            return total;
-        }
-
-        struct VramSnapshot {
-            size_t gpu_used = 0;
-            size_t gpu_total = 0;
-            size_t mempool_used = 0;
-            size_t mempool_reserved = 0;
-            size_t bucket_cached = 0;
-            size_t slab_reserved = 0;
-            std::optional<lfs::core::RasterizerMemoryArena::MemoryInfo> arena;
-        };
-
-        [[nodiscard]] VramSnapshot capture_vram_snapshot(const bool synchronize) {
-            if (synchronize) {
-                cudaDeviceSynchronize();
-            }
-
-            VramSnapshot snapshot;
-            size_t gpu_free = 0;
-            cudaMemGetInfo(&gpu_free, &snapshot.gpu_total);
-            snapshot.gpu_used = snapshot.gpu_total - gpu_free;
-
-#if CUDART_VERSION >= 12080
-            int device = 0;
-            if (cudaGetDevice(&device) == cudaSuccess) {
-                cudaMemPool_t pool;
-                if (cudaDeviceGetDefaultMemPool(&pool, device) == cudaSuccess) {
-                    cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemCurrent, &snapshot.mempool_used);
-                    cudaMemPoolGetAttribute(pool, cudaMemPoolAttrReservedMemCurrent, &snapshot.mempool_reserved);
-                }
-            }
-#endif
-
-            snapshot.bucket_cached =
-                lfs::core::SizeBucketedPool::instance().stats().bytes_cached.load(std::memory_order_relaxed);
-            snapshot.slab_reserved =
-                lfs::core::GPUSlabAllocator::instance().stats().total_slab_memory;
-
-            if (auto* arena = lfs::core::GlobalArenaManager::instance().try_get_arena()) {
-                snapshot.arena = arena->get_memory_info();
-            }
-
-            return snapshot;
-        }
-
-        void log_vram_snapshot(std::string_view label, const VramSnapshot& snapshot) {
-            LOG_INFO("[MEM] {} gpu_used={:.2f} MiB ({:.2f} GiB) / total={:.2f} GiB",
-                     label,
-                     bytes_to_mib(snapshot.gpu_used),
-                     bytes_to_gib(snapshot.gpu_used),
-                     bytes_to_gib(snapshot.gpu_total));
-            LOG_INFO("[MEM] {} mempool_used={:.2f} MiB, mempool_reserved={:.2f} MiB, slab_reserved={:.2f} MiB, bucket_cached={:.2f} MiB",
-                     label,
-                     bytes_to_mib(snapshot.mempool_used),
-                     bytes_to_mib(snapshot.mempool_reserved),
-                     bytes_to_mib(snapshot.slab_reserved),
-                     bytes_to_mib(snapshot.bucket_cached));
-
-            if (snapshot.arena) {
-                LOG_INFO("[MEM] {} arena_capacity={:.2f} MiB, arena_current={:.2f} MiB, arena_peak={:.2f} MiB, arena_reallocs={}",
-                         label,
-                         bytes_to_mib(snapshot.arena->arena_capacity),
-                         bytes_to_mib(snapshot.arena->current_usage),
-                         bytes_to_mib(snapshot.arena->peak_usage),
-                         snapshot.arena->num_reallocations);
-            } else {
-                LOG_INFO("[MEM] {} arena=not_created", label);
-            }
         }
 
         [[nodiscard]] bool live_vram_profiler_enabled() {
@@ -2357,14 +2204,6 @@ namespace lfs::training {
         return {};
     }
 
-    bool Trainer::modelAccessLockEnabled() {
-        static const bool enabled = [] {
-            const char* v = std::getenv("LFS_NO_MODEL_ACCESS_LOCK");
-            return !(v && v[0] == '1');
-        }();
-        return enabled;
-    }
-
     void Trainer::beginModelRead(cudaStream_t reader_stream) {
         std::lock_guard<std::mutex> lock(stream_sync_mutex_);
         if (params_ready_event_ && params_ready_recorded_) {
@@ -2869,13 +2708,6 @@ namespace lfs::training {
 
         try {
             params_ = params;
-            memory_breakdown_enabled_ = env_flag_enabled("LFS_MEM_BREAKDOWN");
-            memory_breakdown_logged_init_ = false;
-            memory_breakdown_logged_train_setup_ = false;
-            memory_breakdown_logged_first_batch_ = false;
-            memory_breakdown_logged_first_raster_ = false;
-            memory_breakdown_logged_first_step_ = false;
-
             if (params_.optimization.enable_sparsity) {
                 const size_t stop_refine_limit = static_cast<size_t>(std::max(0, get_regular_iterations()));
                 if (params_.optimization.stop_refine > stop_refine_limit) {
@@ -3204,71 +3036,6 @@ namespace lfs::training {
 
             initialized_ = true;
 
-            if (memory_breakdown_enabled_ && !memory_breakdown_logged_init_) {
-                const auto snapshot = capture_vram_snapshot(true);
-                log_vram_snapshot("after_trainer_initialize", snapshot);
-
-                std::vector<std::pair<std::string, size_t>> direct_entries;
-                const auto& initialized_splat = strategy_->get_model();
-                add_tensor_entry(direct_entries, "splat.means", initialized_splat.means());
-                add_tensor_entry(direct_entries, "splat.sh0", initialized_splat.sh0());
-                add_tensor_entry(direct_entries, "splat.shN", initialized_splat.shN());
-                add_tensor_entry(direct_entries, "splat.scaling", initialized_splat.scaling_raw());
-                add_tensor_entry(direct_entries, "splat.rotation", initialized_splat.rotation_raw());
-                add_tensor_entry(direct_entries, "splat.opacity", initialized_splat.opacity_raw());
-                add_tensor_entry(direct_entries, "splat.deleted", initialized_splat.deleted());
-                add_tensor_entry(direct_entries, "splat.densification_info", initialized_splat._densification_info);
-                log_entry_bytes("direct_splat", direct_entries);
-
-                std::vector<std::pair<std::string, size_t>> optimizer_entries;
-                for (const auto type : AdamOptimizer::all_param_types()) {
-                    const auto* state = strategy_->get_optimizer().get_state(type);
-                    if (!state) {
-                        continue;
-                    }
-                    const std::string prefix = std::string("optimizer.") +
-                                               (type == ParamType::Means      ? "means"
-                                                : type == ParamType::Sh0      ? "sh0"
-                                                : type == ParamType::ShN      ? "shN"
-                                                : type == ParamType::Scaling  ? "scaling"
-                                                : type == ParamType::Rotation ? "rotation"
-                                                                              : "opacity");
-                    add_tensor_entry(optimizer_entries, prefix + ".grad", state->grad);
-                    add_tensor_entry(optimizer_entries, prefix + ".exp_avg", state->exp_avg);
-                    add_tensor_entry(optimizer_entries, prefix + ".exp_avg_sq", state->exp_avg_sq);
-                }
-                log_entry_bytes("direct_optimizer", optimizer_entries);
-
-                std::vector<std::pair<std::string, size_t>> trainer_entries;
-                add_tensor_entry(trainer_entries, "trainer.background", background_);
-                add_tensor_entry(trainer_entries, "trainer.bg_mix_buffer", bg_mix_buffer_);
-                add_tensor_entry(trainer_entries, "trainer.bg_image_base", bg_image_base_);
-                add_tensor_entry(trainer_entries, "trainer.random_bg_buffer", random_bg_buffer_);
-                add_tensor_entry(trainer_entries, "trainer.loss_accumulator", loss_accumulator_);
-                add_tensor_entry(trainer_entries, "trainer.densification_error_map", densification_error_map_);
-                add_tensor_entry(trainer_entries, "trainer.pipelined_mask", pipelined_mask_);
-                if (bg_image_cache_bytes_ > 0) {
-                    trainer_entries.emplace_back("trainer.bg_image_cache", bg_image_cache_bytes_);
-                }
-                if (const size_t bytes = photometric_workspace_bytes(photometric_loss_); bytes > 0) {
-                    trainer_entries.emplace_back("trainer.photometric_workspaces", bytes);
-                }
-                if (const size_t bytes = masked_fused_workspace_bytes(masked_fused_workspace_); bytes > 0) {
-                    trainer_entries.emplace_back("trainer.masked_fused_workspace", bytes);
-                }
-                if (const size_t bytes = ssim_map_workspace_bytes(densification_ssim_workspace_); bytes > 0) {
-                    trainer_entries.emplace_back("trainer.densification_ssim_workspace", bytes);
-                }
-                log_entry_bytes("pool_backed_trainer", trainer_entries);
-
-                LOG_INFO("[MEM] model logical_size={} capacity={} direct_model_plus_optimizer={:.2f} MiB",
-                         strategy_->get_model().size(),
-                         strategy_->get_model().means().capacity(),
-                         bytes_to_mib(splat_tensor_bytes(strategy_->get_model()) +
-                                      optimizer_state_bytes(strategy_->get_optimizer())));
-                memory_breakdown_logged_init_ = true;
-            }
-
             LOG_INFO("Trainer initialization complete");
             return {};
         } catch (const std::exception& e) {
@@ -3351,10 +3118,7 @@ namespace lfs::training {
             const std::shared_lock lock(render_mutex_);
             // Exclude the non-refining optimizer writes for the metric read window
             // so the live model can't be mutated mid-render (see getModelAccessMutex).
-            std::optional<std::shared_lock<std::shared_mutex>> model_read_lock;
-            if (modelAccessLockEnabled()) {
-                model_read_lock.emplace(model_access_mutex_);
-            }
+            const std::shared_lock model_read_lock(model_access_mutex_);
             // Run the metric render on the dedicated metrics stream (its kernels
             // and tensor ops overlap training; item() readbacks drain it). Cap
             // arena acquisition so a refining iteration holding the arena can't
@@ -4645,42 +4409,6 @@ namespace lfs::training {
                                         depth_anchor,
                                         depth_stream);
 
-                                    static const bool depth_loss_diag = env_flag_enabled("LFS_DEPTH_LOSS_DIAG");
-                                    static const int depth_loss_diag_interval =
-                                        env_int_or_default("LFS_DEPTH_LOSS_DIAG_INTERVAL", 50);
-                                    if (depth_loss_diag && (iter == 1 || iter % depth_loss_diag_interval == 0)) {
-                                        namespace slots = lfs::training::kernels::depth_loss_slots;
-                                        const auto slot = [&](const int s) {
-                                            return depth_loss_partials_.slice(0, s, s + 1).item<float>();
-                                        };
-                                        const auto depth_grad_abs = depth_loss_grad_.abs();
-                                        const auto alpha_grad_abs = depth_loss_grad_alpha_.abs();
-                                        const float valid_count = slot(slots::kCount);
-                                        const float valid_fraction = num_depth_pixels > 0
-                                                                         ? valid_count / static_cast<float>(num_depth_pixels)
-                                                                         : 0.0f;
-                                        LOG_INFO("[DEPTH_LOSS] iter={} prior={} qstep={:.6f} camera='{}' loss={:.6f} weight={:.4f} valid={:.0f} model={} scale={:.6f} shift={:.6f} sigma_p={:.6f} floor={:.6f} mean_e={:.4f} valid_pixels={:.0f} valid_fraction={:.3f} grad_depth_abs_max={:.6e} grad_depth_abs_mean={:.6e} grad_alpha_abs_max={:.6e} grad_alpha_abs_mean={:.6e}",
-                                                 iter,
-                                                 depth_prior_name(depth_prior),
-                                                 depth_prior_qstep,
-                                                 cam->image_name(),
-                                                 depth_loss_scalar_.item<float>(),
-                                                 depth_weight_now,
-                                                 slot(slots::kValid),
-                                                 static_cast<int>(slot(slots::kModel)) == 0 ? "disparity" : "depth",
-                                                 slot(slots::kScale),
-                                                 slot(slots::kShift),
-                                                 slot(slots::kSigmaP),
-                                                 slot(slots::kFloor),
-                                                 slot(slots::kMeanExpectedDepth),
-                                                 valid_count,
-                                                 valid_fraction,
-                                                 depth_grad_abs.max().item<float>(),
-                                                 depth_grad_abs.mean().item<float>(),
-                                                 alpha_grad_abs.max().item<float>(),
-                                                 alpha_grad_abs.mean().item<float>());
-                                    }
-
                                     tile_loss = tile_loss + depth_loss_scalar_;
                                 }
                             } else {
@@ -4786,7 +4514,6 @@ namespace lfs::training {
                                     params_.optimization.normal_loss_weight,
                                     normal_stream);
 
-                                bool normal_prior_depth_ran = false;
                                 if (output.depth.is_valid() &&
                                     output.depth.numel() > 0 &&
                                     cam->camera_width() > 0 && cam->camera_height() > 0 &&
@@ -4848,40 +4575,8 @@ namespace lfs::training {
                                             cy,
                                             params_.optimization.normal_loss_weight,
                                             normal_stream);
-                                        normal_prior_depth_ran = true;
                                         tile_loss = tile_loss + normal_prior_depth_scalar_;
                                     }
-                                }
-
-                                static const bool normal_loss_diag = env_flag_enabled("LFS_NORMAL_LOSS_DIAG");
-                                static const int normal_loss_diag_interval =
-                                    env_int_or_default("LFS_NORMAL_LOSS_DIAG_INTERVAL", 50);
-                                if (normal_loss_diag && (iter == 1 || iter % normal_loss_diag_interval == 0)) {
-                                    namespace nslots = lfs::training::kernels::normal_loss_slots;
-                                    const auto nslot = [&](const int s) {
-                                        return normal_loss_partials_.slice(0, s, s + 1).item<float>();
-                                    };
-                                    const auto normal_grad_abs = normal_loss_grad_.abs();
-                                    const float prior_depth_loss =
-                                        normal_prior_depth_ran ? normal_prior_depth_scalar_.item<float>() : 0.0f;
-                                    const float prior_depth_grad_max =
-                                        normal_prior_depth_ran ? depth_loss_grad_.abs().max().item<float>() : 0.0f;
-                                    const float prior_alpha_grad_max =
-                                        normal_prior_depth_ran ? depth_loss_grad_alpha_.abs().max().item<float>() : 0.0f;
-                                    LOG_INFO("[NORMAL_LOSS] iter={} camera='{}' loss={:.6f} prior_depth_loss={:.6f} weight={:.4f} valid={:.0f} sum_alpha={:.1f} valid_pixels={:.0f} mean_cos={:.4f} grad_abs_max={:.6e} grad_abs_mean={:.6e} prior_depth_grad_abs_max={:.6e} prior_alpha_grad_abs_max={:.6e}",
-                                             iter,
-                                             cam->image_name(),
-                                             normal_loss_scalar_.item<float>(),
-                                             prior_depth_loss,
-                                             params_.optimization.normal_loss_weight,
-                                             nslot(nslots::kValid),
-                                             nslot(nslots::kSumAlpha),
-                                             nslot(nslots::kCount),
-                                             nslot(nslots::kMeanCos),
-                                             normal_grad_abs.max().item<float>(),
-                                             normal_grad_abs.mean().item<float>(),
-                                             prior_depth_grad_max,
-                                             prior_alpha_grad_max);
                                 }
 
                                 tile_grad_normal = normal_loss_grad_;
@@ -4993,25 +4688,6 @@ namespace lfs::training {
                                 cy,
                                 params_.optimization.normal_consistency_weight,
                                 consistency_stream);
-
-                            static const bool normal_loss_diag = env_flag_enabled("LFS_NORMAL_LOSS_DIAG");
-                            static const int normal_loss_diag_interval =
-                                env_int_or_default("LFS_NORMAL_LOSS_DIAG_INTERVAL", 50);
-                            if (normal_loss_diag && (iter == 1 || iter % normal_loss_diag_interval == 0)) {
-                                namespace cslots = lfs::training::kernels::normal_consistency_slots;
-                                const auto cslot = [&](const int s) {
-                                    return normal_consistency_partials_.slice(0, s, s + 1).item<float>();
-                                };
-                                LOG_INFO("[NORMAL_CONSISTENCY] iter={} camera='{}' loss={:.6f} weight={:.4f} valid={:.0f} sum_alpha={:.1f} valid_pixels={:.0f} mean_cos={:.4f}",
-                                         iter,
-                                         cam->image_name(),
-                                         normal_consistency_scalar_.item<float>(),
-                                         params_.optimization.normal_consistency_weight,
-                                         cslot(cslots::kValid),
-                                         cslot(cslots::kSumAlpha),
-                                         cslot(cslots::kCount),
-                                         cslot(cslots::kMeanCos));
-                            }
 
                             tile_loss = tile_loss + normal_consistency_scalar_;
                         }
@@ -5138,87 +4814,6 @@ namespace lfs::training {
                                             ssim_map_workspace_bytes(densification_ssim_workspace_));
                         record_vram_tensor("train.losses", "densification_error_map.buffer", densification_error_map_);
                         record_vram_tensor("train.losses", "edge_map_buffer", edge_map_buffer_);
-                    }
-
-                    if (memory_breakdown_enabled_ && !memory_breakdown_logged_first_raster_ && fast_ctx) {
-                        const auto snapshot = capture_vram_snapshot(true);
-                        log_vram_snapshot("during_first_fastgs_tile", snapshot);
-
-                        const size_t n_primitives = static_cast<size_t>(strategy_->get_model().size());
-                        const size_t grad_mean2d_helper_bytes = n_primitives * 2 * sizeof(float);
-                        const size_t grad_conic_helper_bytes = n_primitives * 3 * sizeof(float);
-
-                        std::vector<std::pair<std::string, size_t>> fastgs_entries;
-                        if (fast_ctx->forward_ctx.per_primitive_buffers_size > 0) {
-                            fastgs_entries.emplace_back("fastgs.per_primitive_buffers",
-                                                        fast_ctx->forward_ctx.per_primitive_buffers_size);
-                        }
-                        if (fast_ctx->forward_ctx.per_tile_buffers_size > 0) {
-                            fastgs_entries.emplace_back("fastgs.per_tile_buffers",
-                                                        fast_ctx->forward_ctx.per_tile_buffers_size);
-                        }
-                        if (fast_ctx->forward_ctx.sorted_primitive_indices_size > 0) {
-                            fastgs_entries.emplace_back("fastgs.sorted_primitive_indices_live",
-                                                        fast_ctx->forward_ctx.sorted_primitive_indices_size);
-                        }
-                        fastgs_entries.emplace_back("fastgs.grad_mean2d_helper", grad_mean2d_helper_bytes);
-                        fastgs_entries.emplace_back("fastgs.grad_conic_helper", grad_conic_helper_bytes);
-                        if (run_fastgs_gaussian_backward) {
-                            fastgs_entries.emplace_back("fastgs.fused_grad_opacity_helper", n_primitives * sizeof(float));
-                            fastgs_entries.emplace_back("fastgs.fused_grad_color_helper", n_primitives * 3 * sizeof(float));
-                        }
-                        fastgs_entries.emplace_back("render.output_image", tensor_reserved_bytes(output.image));
-                        fastgs_entries.emplace_back("render.output_alpha", tensor_reserved_bytes(output.alpha));
-                        fastgs_entries.emplace_back("render.output_depth", tensor_reserved_bytes(output.depth));
-                        fastgs_entries.emplace_back("train.gt_tile", tensor_reserved_bytes(gt_tile));
-                        if (bg_image.is_valid() && !bg_image.is_empty()) {
-                            fastgs_entries.emplace_back("train.background_image", tensor_reserved_bytes(bg_image));
-                        }
-                        if (tile_error_map.is_valid()) {
-                            fastgs_entries.emplace_back("train.tile_error_map", tensor_reserved_bytes(tile_error_map));
-                        }
-                        log_entry_bytes("first_fastgs_tile_live", fastgs_entries);
-                        if (fast_ctx->forward_ctx.per_instance_sort_total_size > 0) {
-                            LOG_INFO("[MEM] fastgs_sort_transient total_forward={:.2f} MiB, released_after_forward={:.2f} MiB, sorted_indices_live={:.2f} MiB",
-                                     bytes_to_mib(fast_ctx->forward_ctx.per_instance_sort_total_size),
-                                     bytes_to_mib(fast_ctx->forward_ctx.per_instance_sort_scratch_size),
-                                     bytes_to_mib(fast_ctx->forward_ctx.sorted_primitive_indices_size));
-                        }
-
-                        std::vector<std::pair<std::string, size_t>> trainer_entries;
-                        if (const size_t bytes = photometric_workspace_bytes(photometric_loss_); bytes > 0) {
-                            trainer_entries.emplace_back("trainer.photometric_workspaces", bytes);
-                        }
-                        if (const size_t bytes = masked_fused_workspace_bytes(masked_fused_workspace_); bytes > 0) {
-                            trainer_entries.emplace_back("trainer.masked_fused_workspace", bytes);
-                        }
-                        if (const size_t bytes = ssim_map_workspace_bytes(densification_ssim_workspace_); bytes > 0) {
-                            trainer_entries.emplace_back("trainer.densification_ssim_workspace", bytes);
-                        }
-                        add_tensor_entry(trainer_entries, "trainer.densification_error_map", densification_error_map_);
-                        add_tensor_entry(trainer_entries, "trainer.loss_accumulator", loss_accumulator_);
-                        add_tensor_entry(trainer_entries, "trainer.pipelined_mask", pipelined_mask_);
-                        add_tensor_entry(trainer_entries, "trainer.pipelined_depth", pipelined_depth_);
-                        add_tensor_entry(trainer_entries, "trainer.pipelined_normal", pipelined_normal_);
-                        add_tensor_entry(trainer_entries, "trainer.depth_loss_grad", depth_loss_grad_);
-                        add_tensor_entry(trainer_entries, "trainer.depth_loss_partials", depth_loss_partials_);
-                        log_entry_bytes("trainer_pool_backed_live", trainer_entries);
-
-                        if (auto loader = getActiveImageLoader()) {
-                            const auto stats = loader->get_stats();
-                            LOG_INFO("[MEM] first_fastgs_tile loader output_queue={}, pending_pairs={}, hot_queue={}, cold_queue={}, prefetch_queue={}",
-                                     stats.output_queue_size,
-                                     stats.pending_pairs_count,
-                                     stats.hot_queue_size,
-                                     stats.cold_queue_size,
-                                     stats.prefetch_queue_size);
-                        }
-
-                        LOG_INFO("[MEM] fastgs counts instances={}, image={}x{}",
-                                 fast_ctx->forward_ctx.n_instances,
-                                 output.width,
-                                 output.height);
-                        memory_breakdown_logged_first_raster_ = true;
                     }
 
                     loss_tensor_gpu = loss_tensor_gpu + tile_loss;
@@ -5444,7 +5039,7 @@ namespace lfs::training {
                     std::unique_lock<std::shared_mutex> model_write_lock(model_access_mutex_, std::defer_lock);
                     if (strategy_->is_refining(iter)) {
                         lock.lock();
-                    } else if (modelAccessLockEnabled()) {
+                    } else {
                         // Non-refining in-place writes: hold the model-access lock
                         // exclusive across the optimizer step so viewer/metric
                         // readers (which take it shared) cannot enter mid-write and
@@ -5623,29 +5218,6 @@ namespace lfs::training {
                 record_splat_vram_breakdown(strategy_->get_model());
                 record_optimizer_vram_breakdown(strategy_->get_optimizer());
                 lfs::diagnostics::VramProfiler::instance().sampleCudaMemory();
-            }
-
-            if (memory_breakdown_enabled_ && !memory_breakdown_logged_first_step_) {
-                const auto snapshot = capture_vram_snapshot(true);
-                log_vram_snapshot("after_first_train_step", snapshot);
-                LOG_INFO("[MEM] after_first_train_step model logical_size={} capacity={} direct_model_plus_optimizer={:.2f} MiB",
-                         strategy_->get_model().size(),
-                         strategy_->get_model().means().capacity(),
-                         bytes_to_mib(splat_tensor_bytes(strategy_->get_model()) +
-                                      optimizer_state_bytes(strategy_->get_optimizer())));
-                memory_breakdown_logged_first_step_ = true;
-            }
-
-            if (memory_breakdown_enabled_ && iter > 1 && (iter % 1000) == 0) {
-                const auto label = std::format("after_step_{}", iter);
-                const auto snapshot = capture_vram_snapshot(true);
-                log_vram_snapshot(label, snapshot);
-                LOG_INFO("[MEM] {} model logical_size={} capacity={} direct_model_plus_optimizer={:.2f} MiB",
-                         label,
-                         strategy_->get_model().size(),
-                         strategy_->get_model().means().capacity(),
-                         bytes_to_mib(splat_tensor_bytes(strategy_->get_model()) +
-                                      optimizer_state_bytes(strategy_->get_optimizer())));
             }
 
             // Return Continue if we should continue training
@@ -5905,20 +5477,6 @@ namespace lfs::training {
             setActiveImageLoader(train_dataloader->get_loader_shared());
             strategy_->set_image_loader(train_dataloader->get_loader());
 
-            if (memory_breakdown_enabled_ && !memory_breakdown_logged_train_setup_) {
-                const auto snapshot = capture_vram_snapshot(true);
-                log_vram_snapshot("after_dataloader_setup", snapshot);
-                const auto stats = train_dataloader->get_stats();
-                LOG_INFO("[MEM] dataloader setup in_flight={}, output_queue={}, pending_pairs={}, hot_queue={}, cold_queue={}, prefetch_queue={}",
-                         train_dataloader->get_loader_shared()->in_flight_count(),
-                         stats.output_queue_size,
-                         stats.pending_pairs_count,
-                         stats.hot_queue_size,
-                         stats.cold_queue_size,
-                         stats.prefetch_queue_size);
-                memory_breakdown_logged_train_setup_ = true;
-            }
-
             LOG_DEBUG("Starting training iterations");
             bool logged_epoch2_loader_cache = false;
             const size_t epoch2_loader_sample_count =
@@ -5983,26 +5541,6 @@ namespace lfs::training {
                              stats.hot_path_hits,
                              stats.cold_path_misses);
                     logged_epoch2_loader_cache = true;
-                }
-
-                if (memory_breakdown_enabled_ && !memory_breakdown_logged_first_batch_) {
-                    const auto snapshot = capture_vram_snapshot(true);
-                    log_vram_snapshot("after_first_batch_fetch", snapshot);
-                    const auto stats = train_dataloader->get_stats();
-                    const size_t channels = gt_image.ndim() > 2 ? gt_image.shape()[0] : 1;
-                    const size_t height = gt_image.ndim() > 2 ? gt_image.shape()[1] : gt_image.shape()[0];
-                    const size_t width = gt_image.ndim() > 2 ? gt_image.shape()[2] : gt_image.shape()[1];
-                    LOG_INFO("[MEM] first_batch gt_image={}x{}x{} = {:.2f} MiB, mask = {:.2f} MiB, depth = {:.2f} MiB, output_queue={}, pending_pairs={}, in_flight={}",
-                             channels,
-                             height,
-                             width,
-                             bytes_to_mib(tensor_reserved_bytes(gt_image)),
-                             bytes_to_mib(tensor_reserved_bytes(pipelined_mask_)),
-                             bytes_to_mib(tensor_reserved_bytes(pipelined_depth_)),
-                             stats.output_queue_size,
-                             stats.pending_pairs_count,
-                             train_dataloader->get_loader_shared()->in_flight_count());
-                    memory_breakdown_logged_first_batch_ = true;
                 }
 
                 auto step_result = train_step(iter, cam, gt_image, render_mode, stop_token);

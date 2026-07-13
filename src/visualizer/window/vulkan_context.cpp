@@ -4,6 +4,7 @@
 
 #include "vulkan_context.hpp"
 
+#include "core/environment.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "diagnostics/vram_profiler.hpp"
@@ -210,20 +211,13 @@ namespace lfs::vis {
             return missing;
         }
 
-        [[nodiscard]] bool environmentFlagEnabled(const char* const name) {
-            const char* const value = std::getenv(name);
-            return value != nullptr && std::string_view(value) == "1";
-        }
-
         [[nodiscard]] bool validationRequestedByBuild() {
-            if (environmentFlagEnabled("LFS_VK_VALIDATION")) {
-                return true;
-            }
 #if defined(DEBUG_BUILD) || !defined(NDEBUG)
-            return true;
+            constexpr bool enabled_by_default = true;
 #else
-            return false;
+            constexpr bool enabled_by_default = false;
 #endif
+            return lfs::core::environment::flag("LFS_VK_VALIDATION", enabled_by_default);
         }
 
         VKAPI_ATTR VkBool32 VKAPI_CALL vulkanDebugCallback(
@@ -1745,7 +1739,7 @@ namespace lfs::vis {
 
         std::vector<const char*> layers;
         const bool validation_requested = validationRequestedByBuild();
-        validation_errors_fatal_ = environmentFlagEnabled("LFS_VK_VALIDATION_FATAL");
+        validation_errors_fatal_ = lfs::core::environment::flag("LFS_VK_VALIDATION_FATAL");
         const bool validation_layer_available = layerAvailable(available_layers, "VK_LAYER_KHRONOS_validation");
         validation_enabled_ = validation_requested && validation_layer_available && debug_utils_enabled_;
         if (validation_enabled_) {

@@ -51,15 +51,7 @@ ASSET_CARD_PREFERRED_WIDTH_DP = 208.0
 ASSET_CARD_MIN_WIDTH_DP = 1.0
 ASSET_CARD_GRID_HORIZONTAL_CHROME_DP = 48.0
 
-
-def _read_perf_log_threshold_ms() -> float:
-    try:
-        return float(os.environ.get("LFS_ASSET_MANAGER_PERF_LOG_MS", "50"))
-    except (TypeError, ValueError):
-        return 50.0
-
-
-ASSET_MANAGER_PERF_LOG_THRESHOLD_MS = _read_perf_log_threshold_ms()
+ASSET_MANAGER_PERF_LOG_THRESHOLD_MS = 50.0
 
 try:
     from .asset_index import (
@@ -148,13 +140,9 @@ class AssetManagerPanel(Panel):
     def _storage_candidates(cls) -> List[Path]:
         candidates: List[Path] = []
 
-        for env_name in (
-            "LICHTFELD_ASSET_MANAGER_DIR",
-            "LFS_ASSET_MANAGER_DIR",
-        ):
-            env_value = os.environ.get(env_name, "").strip()
-            if env_value:
-                candidates.append(Path(env_value))
+        env_value = os.environ.get("LFS_ASSET_MANAGER_DIR", "").strip()
+        if env_value:
+            candidates.append(Path(env_value))
 
         candidates.append(resolve_asset_manager_storage_path())
 

@@ -64,11 +64,8 @@ namespace lfs::io {
         }
         if (pagedRadGpuResidencyRequested(model)) {
             model.set_tensor_allocator(allocator);
-            const char* const page_capacity_env = std::getenv("LFS_LOD_PAGE_CAPACITY");
-            LOG_INFO("RAD paged LOD active: skipping full renderer-storage migration "
-                     "(chunks={}, requested_pages={})",
-                     model.lod_tree->chunk_count(),
-                     page_capacity_env != nullptr ? page_capacity_env : "auto");
+            LOG_INFO("RAD paged LOD active: skipping full renderer-storage migration (chunks={})",
+                     model.lod_tree->chunk_count());
             return {};
         }
         if (splat_tensor_renderer_ready(model.means_raw()) &&

@@ -8,6 +8,7 @@
 #include "io/cuda/rad_encode_quant.hpp"
 
 #include "core/bhatt_lod.hpp"
+#include "core/environment.hpp"
 #include "core/logger.hpp"
 #include "core/mapped_file.hpp"
 #include "core/path_utils.hpp"
@@ -40,7 +41,6 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 #include <format>
 #include <fstream>
@@ -4755,9 +4755,8 @@ namespace lfs::io {
         bool gpuQuantEnabled() {
             if (!gpu_quant_resolved) {
                 gpu_quant_resolved = true;
-                const char* const env = std::getenv("LFS_RAD_GPU_ENCODE");
-                const bool env_off = env != nullptr && env[0] == '0';
-                if (!env_off && cuda::rad_encode_gpu_available()) {
+                if (lfs::core::environment::flag("LFS_RAD_GPU_ENCODE", true) &&
+                    cuda::rad_encode_gpu_available()) {
                     gpu_quant = std::make_unique<cuda::RadEncodeGpuQuantizer>();
                 }
             }

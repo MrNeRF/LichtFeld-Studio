@@ -4,6 +4,7 @@
 
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "config.h"
+#include "core/environment.hpp"
 #include "core/logger.hpp"
 #include "gui/rmlui/elements/chromaticity_element.hpp"
 #include "gui/rmlui/elements/color_picker_element.hpp"
@@ -34,7 +35,6 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
-#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -46,13 +46,6 @@
 namespace lfs::vis::gui {
 
     namespace {
-        bool envFlagEnabled(const char* name) {
-            const char* value = std::getenv(name);
-            if (!value || !*value)
-                return false;
-            return std::string_view(value) != "0";
-        }
-
         bool pointInRect(const RmlRect& rect, const float x, const float y) {
             return x >= rect.x1 && y >= rect.y1 && x < rect.x2 && y < rect.y2;
         }
@@ -115,7 +108,7 @@ namespace lfs::vis::gui {
 
         dp_ratio_ = dp_ratio;
         window_ = window;
-        debugger_enabled_ = envFlagEnabled("LFS_RML_DEBUGGER");
+        debugger_enabled_ = lfs::core::environment::flag("LFS_RML_DEBUGGER");
 
         system_interface_ = std::make_unique<RmlSystemInterface>(window);
         owned_render_interface_ = std::move(render_interface);

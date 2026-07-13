@@ -175,7 +175,7 @@ namespace lfs::core {
         // a device-wide sync, and end_frame records the event on `stream` — which
         // must be the stream all of the frame's arena work was enqueued on. Frames
         // without a stream keep the legacy cudaDeviceSynchronize and invalidate
-        // the chain. LFS_ARENA_LEGACY_SYNC=1 forces the legacy sync everywhere.
+        // the chain.
         //
         // A tenant whose arena work runs on a VULKAN queue (the viewport) must
         // call note_external_release before ending its frame: neither the chain
