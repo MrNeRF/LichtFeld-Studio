@@ -8,10 +8,11 @@
 
 #include <array>
 #include <atomic>
+#include <condition_variable>
 #include <functional>
 #include <mutex>
-#include <optional>
 #include <string_view>
+#include <thread>
 
 namespace lfs::vis {
 
@@ -80,9 +81,13 @@ namespace lfs::vis {
     private:
         [[nodiscard]] bool isValidTransition(TrainingState from, TrainingState to) const;
         [[nodiscard]] bool transitionToImpl(TrainingState new_state, FinishReason finish_reason);
+        void finishCallbackDispatch() noexcept;
 
         std::atomic<TrainingState> state_{TrainingState::Idle};
         mutable std::mutex mutex_;
+        std::condition_variable callback_dispatch_idle_;
+        std::thread::id callback_dispatch_owner_;
+        bool callback_dispatch_active_ = false;
         FinishReason finish_reason_{FinishReason::None};
 
         StateChangeCallback on_state_change_;
