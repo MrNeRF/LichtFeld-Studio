@@ -185,26 +185,22 @@ TEST_F(NaNInfGPUCheckTest, BothNaNAndInf) {
     EXPECT_TRUE(lfs_t.has_inf()) << "LFS has_inf should detect (checks both)";
 }
 
-TEST_F(NaNInfGPUCheckTest, NaNOnly_HasInfShouldAlsoDetect) {
-    // Our GPU implementation checks both NaN and Inf in has_nan() and has_inf()
+TEST_F(NaNInfGPUCheckTest, NaNOnlyMatchesTorchPredicates) {
     auto torch_t = torch::randn({1000}, torch::kCUDA);
     torch_t[500] = std::numeric_limits<float>::quiet_NaN();
     auto lfs_t = from_torch(torch_t);
 
-    // LFS has_inf() also returns true for NaN (implementation detail)
-    EXPECT_TRUE(lfs_t.has_nan()) << "LFS has_nan should detect NaN";
-    // Note: Our GPU impl checks both, so has_inf will return true for NaN too
-    EXPECT_TRUE(lfs_t.has_inf()) << "LFS has_inf uses same kernel, detects NaN too";
+    EXPECT_EQ(lfs_t.has_nan(), torch_has_nan(torch_t));
+    EXPECT_EQ(lfs_t.has_inf(), torch_has_inf(torch_t));
 }
 
-TEST_F(NaNInfGPUCheckTest, InfOnly_HasNaNShouldAlsoDetect) {
+TEST_F(NaNInfGPUCheckTest, InfOnlyMatchesTorchPredicates) {
     auto torch_t = torch::randn({1000}, torch::kCUDA);
     torch_t[500] = std::numeric_limits<float>::infinity();
     auto lfs_t = from_torch(torch_t);
 
-    EXPECT_TRUE(lfs_t.has_inf()) << "LFS has_inf should detect Inf";
-    // Note: Our GPU impl checks both, so has_nan will return true for Inf too
-    EXPECT_TRUE(lfs_t.has_nan()) << "LFS has_nan uses same kernel, detects Inf too";
+    EXPECT_EQ(lfs_t.has_nan(), torch_has_nan(torch_t));
+    EXPECT_EQ(lfs_t.has_inf(), torch_has_inf(torch_t));
 }
 
 // ============= Edge Cases =============

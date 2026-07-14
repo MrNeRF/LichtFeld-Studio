@@ -1301,7 +1301,11 @@ namespace lfs::core {
         // capacity() returns the reserved capacity along dimension 0 (0 = no reservation)
         // logical_size() returns the logical size along dimension 0 (same as shape()[0])
         size_t capacity() const { return state_->capacity; }
-        size_t logical_size() const { return state_->logical_size; }
+        size_t logical_size() const {
+            return state_->capacity > 0
+                       ? state_->logical_size
+                       : (shape_.rank() > 0 ? shape_[0] : 0);
+        }
         std::string external_storage_kind() const {
             return storage_meta_ ? storage_meta_->external_kind : std::string{};
         }

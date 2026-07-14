@@ -2773,7 +2773,7 @@ namespace lfs::core {
 
         // Use fast GPU check for CUDA tensors (only transfers 1 int back)
         if (device_ == Device::CUDA && dtype_ == DataType::Float32) {
-            return tensor_ops::has_nan_or_inf_gpu(ptr<float>(), numel(), stream());
+            return tensor_ops::has_nan_gpu(ptr<float>(), numel(), stream());
         }
 
         // CPU fallback
@@ -2790,9 +2790,8 @@ namespace lfs::core {
         }
 
         // Use fast GPU check for CUDA tensors (only transfers 1 int back)
-        // Note: has_nan_or_inf_gpu checks both NaN and Inf
         if (device_ == Device::CUDA && dtype_ == DataType::Float32) {
-            return tensor_ops::has_nan_or_inf_gpu(ptr<float>(), numel(), stream());
+            return tensor_ops::has_inf_gpu(ptr<float>(), numel(), stream());
         }
 
         // CPU fallback
