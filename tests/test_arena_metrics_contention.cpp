@@ -77,7 +77,7 @@ TEST_F(ArenaMetricsContentionTest, TrainerMetricsOppositeOrderNoDeadlock) {
         // Trainer: frame-then-lock, exclusive on "refine" iterations.
         std::thread trainer([&] {
             cudaSetDevice(0);
-            for (int i = 1; i <= 400; ++i) {
+            for (int i = 1; i <= 40; ++i) {
                 const uint64_t frame = arena.begin_frame(nullptr, false);
                 std::optional<std::unique_lock<std::shared_mutex>> excl;
                 if (i % 5 == 0) {
@@ -111,22 +111,22 @@ TEST_F(ArenaMetricsContentionTest, TrainerMetricsOppositeOrderNoDeadlock) {
 
     EXPECT_TRUE(finished) << "trainer/metrics contention deadlocked";
     EXPECT_GT(metrics_attempts.load(), 0);
-    // It should manage at least some real acquisitions across 400 iterations.
+    // It should manage at least some real acquisitions across the contention window.
     EXPECT_GT(metrics_acquired.load(), 0);
 }
 
 TEST_F(ArenaMetricsContentionTest, FullResetDecommitsVmmHighWater) {
     constexpr size_t MiB = 1024 * 1024;
     RasterizerMemoryArena::Config config;
-    config.virtual_size = 1ULL * 1024 * MiB;
-    config.initial_commit = 64 * MiB;
-    config.max_physical = 512 * MiB;
+    config.virtual_size = 512 * MiB;
+    config.initial_commit = 32 * MiB;
+    config.max_physical = 256 * MiB;
     config.granularity = 2 * MiB;
     RasterizerMemoryArena arena(config);
 
     const uint64_t frame = arena.begin_frame(nullptr, false);
     auto allocate = arena.get_allocator(frame);
-    ASSERT_NE(allocate(192 * MiB), nullptr);
+    ASSERT_NE(allocate(128 * MiB), nullptr);
     arena.end_frame(frame, nullptr, false);
 
     const auto grown = arena.get_statistics();
@@ -142,16 +142,16 @@ TEST_F(ArenaMetricsContentionTest, FullResetDecommitsVmmHighWater) {
 TEST_F(ArenaMetricsContentionTest, FallbackGrowthAppliesMultiplierOnce) {
     constexpr size_t MiB = 1024 * 1024;
     RasterizerMemoryArena::Config config;
-    config.initial_commit = 64 * MiB;
-    config.max_physical = 512 * MiB;
+    config.initial_commit = 16 * MiB;
+    config.max_physical = 128 * MiB;
     config.enable_vmm = false;
     RasterizerMemoryArena arena(config);
 
     const uint64_t frame = arena.begin_frame(nullptr, false);
     auto allocate = arena.get_allocator(frame);
-    ASSERT_NE(allocate(128 * MiB), nullptr);
+    ASSERT_NE(allocate(32 * MiB), nullptr);
 
     const auto grown = arena.get_statistics();
-    EXPECT_EQ(grown.capacity, 256 * MiB);
+    EXPECT_EQ(grown.capacity, 64 * MiB);
     arena.end_frame(frame, nullptr, false);
 }

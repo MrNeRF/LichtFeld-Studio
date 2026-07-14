@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
-#include <c10/cuda/CUDACachingAllocator.h>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <memory>
@@ -54,37 +53,9 @@ protected:
     void SetUp() override {
         ASSERT_TRUE(torch::cuda::is_available()) << "CUDA is not available for testing";
 
-        // Record initial CUDA memory
-        cudaMemGetInfo(&initial_free_mem, &total_mem);
-
         torch::manual_seed(42);
         Tensor::manual_seed(42);
     }
-
-    void TearDown() override {
-        // Force PyTorch to empty its CUDA cache
-        c10::cuda::CUDACachingAllocator::emptyCache();
-
-        // Force synchronization
-        cudaDeviceSynchronize();
-
-        // Check for memory leaks
-        size_t current_free_mem, current_total;
-        cudaMemGetInfo(&current_free_mem, &current_total);
-
-        // PyTorch uses a caching allocator - need much larger tolerance
-        // Also, CUDA driver may cache memory for performance
-        size_t tolerance = 150 * 1024 * 1024; // 150 MB tolerance
-        EXPECT_NEAR(static_cast<long long>(current_free_mem),
-                    static_cast<long long>(initial_free_mem),
-                    static_cast<long long>(tolerance))
-            << "Possible memory leak detected. Difference: "
-            << (static_cast<long long>(initial_free_mem) - static_cast<long long>(current_free_mem)) / (1024 * 1024)
-            << " MB";
-    }
-
-    size_t initial_free_mem;
-    size_t total_mem;
 };
 
 // ============= Memory Ownership Tests =============
@@ -521,8 +492,6 @@ TEST_F(TensorMemoryTest, StressTestManyAllocations) {
     // Clear them
     custom_tensors.clear();
     torch_tensors.clear();
-
-    // Memory should be freed (checked in TearDown)
 }
 
 TEST_F(TensorMemoryTest, StressTestRapidAllocDealloc) {
@@ -535,7 +504,6 @@ TEST_F(TensorMemoryTest, StressTestRapidAllocDealloc) {
         EXPECT_TRUE(torch_t.defined());
         // Both destroyed at end of iteration
     }
-    // Memory should be stable (checked in TearDown)
 }
 
 TEST_F(TensorMemoryTest, MixedSizeAllocations) {

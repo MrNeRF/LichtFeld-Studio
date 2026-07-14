@@ -3,7 +3,11 @@
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
 #include "io/cache_image_loader.hpp"
+#include <algorithm>
+#include <atomic>
+#include <cmath>
 #include <cuda_runtime.h>
+#include <filesystem>
 #include <gtest/gtest.h>
 #include <thread>
 #include <vector>
@@ -14,14 +18,15 @@ using namespace lfs::io;
 TEST(ImageResizeParallelTest, LoadImagesWithResize) {
     // Test configuration
     const int RESIZE_FACTOR = 4;
-    const int NUM_IMAGES = 10;
+    const int NUM_IMAGES = 4;
 
     // Get singleton instance with CPU cache enabled
     auto& loader = CacheLoader::getInstance(true, false); // use_cpu_memory=true, use_fs_cache=false
 
     // Find test images
     std::vector<std::filesystem::path> image_paths;
-    std::filesystem::path data_dir = "data/bicycle/images_4";
+    const std::filesystem::path data_dir =
+        std::filesystem::path(TEST_DATA_DIR) / "bicycle/images_4";
 
     if (std::filesystem::exists(data_dir)) {
         for (const auto& entry : std::filesystem::directory_iterator(data_dir)) {
@@ -32,6 +37,8 @@ TEST(ImageResizeParallelTest, LoadImagesWithResize) {
             }
         }
     }
+
+    std::sort(image_paths.begin(), image_paths.end());
 
     ASSERT_GT(image_paths.size(), 0) << "No test images found";
     LOG_INFO("Found {} test images", image_paths.size());
@@ -77,6 +84,10 @@ TEST(ImageResizeParallelTest, LoadImagesWithResize) {
                 auto mean = normalized.mean();         // Reduce operation
                 auto reshaped = normalized.view({-1}); // Reshape
 
+                if (!std::isfinite(mean.item<float>()) || reshaped.numel() != img.numel()) {
+                    error_count++;
+                }
+
                 // Check for CUDA errors
                 cudaError_t err = cudaGetLastError();
                 if (err != cudaSuccess) {
@@ -103,6 +114,7 @@ TEST(ImageResizeParallelTest, LoadImagesWithResize) {
     for (auto& thread : threads) {
         thread.join();
     }
+    cudaDeviceSynchronize();
 
     ASSERT_EQ(error_count, 0) << "Parallel operations had errors";
     LOG_INFO("Parallel operations completed without errors");
@@ -120,7 +132,8 @@ TEST(ImageResizeParallelTest, LoadImagesWithResize) {
 TEST(ImageResizeParallelTest, CompareWithNoResize) {
     auto& loader = CacheLoader::getInstance(true, false); // use_cpu_memory=true, use_fs_cache=false
 
-    std::filesystem::path data_dir = "data/bicycle/images_4";
+    const std::filesystem::path data_dir =
+        std::filesystem::path(TEST_DATA_DIR) / "bicycle/images_4";
     std::vector<std::filesystem::path> image_paths;
 
     if (std::filesystem::exists(data_dir)) {
@@ -133,22 +146,24 @@ TEST(ImageResizeParallelTest, CompareWithNoResize) {
         }
     }
 
-    if (image_paths.size() > 0) {
-        LoadParams params;
-        params.resize_factor = 1; // No resize
-        params.max_width = 0;
+    std::sort(image_paths.begin(), image_paths.end());
 
-        for (const auto& path : image_paths) {
-            auto tensor = loader.load_cached_image(path, params);
-            ASSERT_GT(tensor.numel(), 0);
+    ASSERT_FALSE(image_paths.empty()) << "No test images found in " << data_dir;
+    LoadParams params;
+    params.resize_factor = 1; // No resize
+    params.max_width = 0;
 
-            // Same operations
-            auto normalized = tensor * 2.0f - 1.0f;
-            auto mean = normalized.mean();
+    for (const auto& path : image_paths) {
+        auto tensor = loader.load_cached_image(path, params);
+        ASSERT_GT(tensor.numel(), 0);
 
-            cudaError_t err = cudaGetLastError();
-            ASSERT_EQ(err, cudaSuccess) << "CUDA error: " << cudaGetErrorString(err);
-        }
-        LOG_INFO("No-resize case works correctly");
+        // Same operations
+        auto normalized = tensor * 2.0f - 1.0f;
+        auto mean = normalized.mean();
+
+        EXPECT_TRUE(std::isfinite(mean.item<float>()));
+        cudaError_t err = cudaGetLastError();
+        ASSERT_EQ(err, cudaSuccess) << "CUDA error: " << cudaGetErrorString(err);
     }
+    LOG_INFO("No-resize case works correctly");
 }

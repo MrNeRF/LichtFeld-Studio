@@ -491,53 +491,6 @@ TEST_F(NaNInfGPUCheckTest, GaussianOpacity_5M_x_1) {
     EXPECT_EQ(torch_has_nan(torch_t), lfs_t.has_nan());
 }
 
-// ============= Performance Comparison =============
-
-TEST_F(NaNInfGPUCheckTest, Performance_LFS_vs_Torch) {
-    const int size = 5000000;
-    const int warmup_iters = 10;
-    const int bench_iters = 100;
-
-    auto torch_t = torch::randn({size}, torch::kCUDA);
-    auto lfs_t = from_torch(torch_t);
-
-    // Warmup
-    for (int i = 0; i < warmup_iters; ++i) {
-        torch_has_nan(torch_t);
-        lfs_t.has_nan();
-    }
-    cudaDeviceSynchronize();
-
-    // Benchmark Torch
-    auto torch_start = std::chrono::high_resolution_clock::now();
-    for (int i = 0; i < bench_iters; ++i) {
-        torch_has_nan(torch_t);
-    }
-    cudaDeviceSynchronize();
-    auto torch_end = std::chrono::high_resolution_clock::now();
-    auto torch_us = std::chrono::duration_cast<std::chrono::microseconds>(torch_end - torch_start).count();
-
-    // Benchmark LFS
-    auto lfs_start = std::chrono::high_resolution_clock::now();
-    for (int i = 0; i < bench_iters; ++i) {
-        lfs_t.has_nan();
-    }
-    cudaDeviceSynchronize();
-    auto lfs_end = std::chrono::high_resolution_clock::now();
-    auto lfs_us = std::chrono::duration_cast<std::chrono::microseconds>(lfs_end - lfs_start).count();
-
-    double torch_avg_us = static_cast<double>(torch_us) / bench_iters;
-    double lfs_avg_us = static_cast<double>(lfs_us) / bench_iters;
-
-    std::cout << "\n=== Performance Comparison (5M elements) ===\n";
-    std::cout << "Torch avg: " << torch_avg_us << " us\n";
-    std::cout << "LFS avg:   " << lfs_avg_us << " us\n";
-    std::cout << "Speedup:   " << torch_avg_us / lfs_avg_us << "x\n";
-
-    // LFS should be competitive with or faster than Torch
-    // Don't fail if slower, just report
-}
-
 // ============= CPU Fallback Tests =============
 
 TEST_F(NaNInfGPUCheckTest, CPU_NoNaN) {

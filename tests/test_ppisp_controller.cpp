@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 #include <sstream>
 
+#include "components/ppisp.hpp"
 #include "components/ppisp_controller.hpp"
 #include "core/tensor.hpp"
 
@@ -48,14 +49,25 @@ namespace {
         EXPECT_EQ(output_large.shape()[1], 9);
     }
 
-    TEST_F(PPISPControllerTest, BackwardPassRuns) {
-        lfs::training::PPISPController controller(10000);
+    TEST_F(PPISPControllerTest, ParameterBridgeForwardBackwardIsFinite) {
+        lfs::training::PPISPController controller(1000);
+        lfs::training::PPISP ppisp(1000);
+        ppisp.register_frame(0, 0);
+        ppisp.finalize();
 
-        auto input = lfs::core::Tensor::randn({1, 3, 64, 64}, lfs::core::Device::CUDA);
-        auto output = controller.predict(input, 1.0f);
+        const auto input = lfs::core::Tensor::uniform(
+            {3, 16, 16}, 0.1f, 0.9f, lfs::core::Device::CUDA);
+        const auto controller_params = controller.predict(input.unsqueeze(0), 1.0f);
+        const auto corrected = ppisp.apply_with_controller_params(input, controller_params, 0);
+        const auto controller_gradient = ppisp.backward_with_controller_params(
+            input, lfs::core::Tensor::ones_like(corrected), controller_params, 0);
 
-        auto grad_output = lfs::core::Tensor::randn({1, 9}, lfs::core::Device::CUDA);
-        controller.backward(grad_output);
+        EXPECT_EQ(corrected.shape(), input.shape());
+        EXPECT_FALSE(corrected.has_nan());
+        EXPECT_FALSE(corrected.has_inf());
+        EXPECT_EQ(controller_gradient.shape(), lfs::core::TensorShape({1, 9}));
+        EXPECT_FALSE(controller_gradient.has_nan());
+        EXPECT_FALSE(controller_gradient.has_inf());
     }
 
     TEST_F(PPISPControllerTest, OptimizerStepChangesWeights) {
