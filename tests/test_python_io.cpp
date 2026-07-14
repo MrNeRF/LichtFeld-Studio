@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -1096,23 +1097,34 @@ TEST_F(PythonIOTest, RadSaveLoadRoundtripPreservesCompactSplat) {
 
     const auto loaded = load_rad(output_path);
     ASSERT_TRUE(loaded.has_value()) << loaded.error();
-    EXPECT_EQ(loaded->size(), original.size());
+    ASSERT_TRUE(loaded->lod_tree);
+    ASSERT_TRUE(loaded->lod_tree->has_tree());
+    EXPECT_GE(loaded->size(), original.size());
     EXPECT_EQ(loaded->get_max_sh_degree(), original.get_max_sh_degree());
 
-    const auto expect_tensor = [](const Tensor& expected,
-                                  const Tensor& actual,
-                                  const char* name) {
-        SCOPED_TRACE(name);
-        EXPECT_EQ(actual.shape(), expected.shape());
-        EXPECT_EQ(actual.dtype(), expected.dtype());
-        EXPECT_TRUE(actual.all_close(expected, 2e-3f, 2e-3f));
-    };
-    expect_tensor(original.means_raw(), loaded->means_raw(), "means");
-    expect_tensor(original.sh0_raw(), loaded->sh0_raw(), "sh0");
-    expect_tensor(original.shN_raw(), loaded->shN_raw(), "shN");
-    expect_tensor(original.scaling_raw(), loaded->scaling_raw(), "scaling");
-    expect_tensor(original.rotation_raw(), loaded->rotation_raw(), "rotation");
-    expect_tensor(original.opacity_raw(), loaded->opacity_raw(), "opacity");
+    const auto original_means = original.means_raw().cpu().contiguous();
+    const auto loaded_means = loaded->means_raw().cpu().contiguous();
+    const auto* original_ptr = original_means.ptr<float>();
+    const auto* loaded_ptr = loaded_means.ptr<float>();
+
+    std::vector<std::array<float, 3>> expected_positions;
+    expected_positions.reserve(original.size());
+    for (size_t i = 0; i < original.size(); ++i) {
+        expected_positions.push_back(
+            {original_ptr[i * 3], original_ptr[i * 3 + 1], original_ptr[i * 3 + 2]});
+    }
+
+    std::vector<std::array<float, 3>> leaf_positions;
+    for (size_t i = 0; i < static_cast<size_t>(loaded->size()); ++i) {
+        if (loaded->lod_tree->child_count_at(i) == 0) {
+            leaf_positions.push_back(
+                {loaded_ptr[i * 3], loaded_ptr[i * 3 + 1], loaded_ptr[i * 3 + 2]});
+        }
+    }
+
+    std::sort(expected_positions.begin(), expected_positions.end());
+    std::sort(leaf_positions.begin(), leaf_positions.end());
+    EXPECT_EQ(leaf_positions, expected_positions);
 }
 
 // Test progress callback

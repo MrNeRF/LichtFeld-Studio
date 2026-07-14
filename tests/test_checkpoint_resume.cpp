@@ -27,7 +27,9 @@
 namespace {
 
     constexpr const char* TEST_IMAGES = "images_4";
-    std::unique_ptr<lfs::core::SplatData> make_checkpoint_test_splat(const size_t count) {
+    std::unique_ptr<lfs::core::SplatData> make_checkpoint_test_splat(
+        const size_t count,
+        const lfs::core::Device device = lfs::core::Device::CPU) {
         std::vector<float> means(count * 3, 0.0f);
         std::vector<float> rotations(count * 4, 0.0f);
         for (size_t i = 0; i < count; ++i) {
@@ -37,12 +39,12 @@ namespace {
 
         return std::make_unique<lfs::core::SplatData>(
             0,
-            lfs::core::Tensor::from_vector(means, {count, size_t{3}}, lfs::core::Device::CPU),
-            lfs::core::Tensor::zeros({count, size_t{1}, size_t{3}}, lfs::core::Device::CPU, lfs::core::DataType::Float32),
-            lfs::core::Tensor::zeros({size_t{0}}, lfs::core::Device::CPU, lfs::core::DataType::Float32),
-            lfs::core::Tensor::zeros({count, size_t{3}}, lfs::core::Device::CPU, lfs::core::DataType::Float32),
-            lfs::core::Tensor::from_vector(rotations, {count, size_t{4}}, lfs::core::Device::CPU),
-            lfs::core::Tensor::zeros({count, size_t{1}}, lfs::core::Device::CPU, lfs::core::DataType::Float32),
+            lfs::core::Tensor::from_vector(means, {count, size_t{3}}, device),
+            lfs::core::Tensor::zeros({count, size_t{1}, size_t{3}}, device, lfs::core::DataType::Float32),
+            lfs::core::Tensor::zeros({size_t{0}}, device, lfs::core::DataType::Float32),
+            lfs::core::Tensor::zeros({count, size_t{3}}, device, lfs::core::DataType::Float32),
+            lfs::core::Tensor::from_vector(rotations, {count, size_t{4}}, device),
+            lfs::core::Tensor::zeros({count, size_t{1}}, device, lfs::core::DataType::Float32),
             1.0f);
     }
 
@@ -334,7 +336,10 @@ namespace {
         params.optimization.sh_degree = 0;
         params.optimization.max_cap = 16;
 
-        auto source_model = make_checkpoint_test_splat(4);
+        const auto model_device = strategy_name == "igs+"
+                                      ? lfs::core::Device::CUDA
+                                      : lfs::core::Device::CPU;
+        auto source_model = make_checkpoint_test_splat(4, model_device);
         auto source_result = lfs::training::StrategyFactory::instance().create(
             strategy_name, *source_model);
         ASSERT_TRUE(source_result.has_value()) << source_result.error();
@@ -345,7 +350,7 @@ namespace {
         auto save_result = lfs::training::save_checkpoint(temp_dir, 11, *source, params);
         ASSERT_TRUE(save_result.has_value()) << save_result.error();
 
-        auto target_model = make_checkpoint_test_splat(1);
+        auto target_model = make_checkpoint_test_splat(1, model_device);
         auto target_result = lfs::training::StrategyFactory::instance().create(
             strategy_name, *target_model);
         ASSERT_TRUE(target_result.has_value()) << target_result.error();

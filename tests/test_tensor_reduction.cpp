@@ -427,9 +427,11 @@ TEST_F(TensorReductionTest, KeepDimCoversEveryReductionKindAndMultipleAxes) {
                     1e-4f, 1e-5f, "MaxKeepDim");
     compare_tensors(custom.min(2, true), std::get<0>(reference.min(2, true)),
                     1e-4f, 1e-5f, "MinKeepDim");
-    compare_tensors(custom.std(0, true), reference.std(c10::IntArrayRef{0}, true),
+    compare_tensors(custom.std(0, true),
+                    reference.std(c10::IntArrayRef{0}, true, true),
                     1e-4f, 1e-5f, "StdKeepDim");
-    compare_tensors(custom.var(1, true), reference.var(c10::IntArrayRef{1}, true),
+    compare_tensors(custom.var(1, true),
+                    reference.var(c10::IntArrayRef{1}, true, true),
                     1e-4f, 1e-5f, "VarKeepDim");
 
     const auto cuda_mean = custom.cuda().mean({0, 2}, true);

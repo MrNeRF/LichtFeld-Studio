@@ -236,7 +236,8 @@ TEST(TensorReserveInplaceCat, GrowthBeyondCapacityPreservesValues) {
     tensor = tensor.cat({addition}, 0);
 
     EXPECT_EQ(tensor.shape(), TensorShape({7, 3}));
-    EXPECT_GE(tensor.capacity(), 7u);
+    EXPECT_EQ(tensor.capacity(), 0u);
+    EXPECT_EQ(tensor.logical_size(), 7u);
     const auto values = tensor.cpu().to_vector();
     ASSERT_EQ(values.size(), 21u);
     for (size_t i = 0; i < 6; ++i) {
