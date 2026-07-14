@@ -219,15 +219,15 @@ namespace lfs::core::debug {
 } // namespace lfs::core::debug
 
 #ifdef TENSOR_OP_TRACING
-#define TRACE_OP(name, shape)                                                        \
-    lfs::core::debug::OpTraceGuard _trace_guard_##__LINE__(                         \
+#define TRACE_OP(name, shape)                               \
+    lfs::core::debug::OpTraceGuard _trace_guard_##__LINE__( \
         (name), (shape), LFS_SOURCE_SITE_CURRENT())
-#define TRACE_OP2(name, s1, s2)                                                     \
-    lfs::core::debug::OpTraceGuard _trace_guard_##__LINE__(                         \
+#define TRACE_OP2(name, s1, s2)                             \
+    lfs::core::debug::OpTraceGuard _trace_guard_##__LINE__( \
         (name), (s1), (s2), LFS_SOURCE_SITE_CURRENT())
-#define TRACE_OP_OUTPUT(shape)  _trace_guard_##__LINE__.set_output(shape)
-#define TRACE_PRINT_STACK()     lfs::core::debug::TensorOpTracer::instance().print_stack()
-#define TRACE_PRINT_HISTORY(n)  lfs::core::debug::TensorOpTracer::instance().print_history(n)
+#define TRACE_OP_OUTPUT(shape) _trace_guard_##__LINE__.set_output(shape)
+#define TRACE_PRINT_STACK()    lfs::core::debug::TensorOpTracer::instance().print_stack()
+#define TRACE_PRINT_HISTORY(n) lfs::core::debug::TensorOpTracer::instance().print_history(n)
 #else
 #define TRACE_OP(name, shape)   ((void)0)
 #define TRACE_OP2(name, s1, s2) ((void)0)

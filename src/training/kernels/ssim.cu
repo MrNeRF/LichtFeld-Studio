@@ -2,8 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/cuda_safe_format.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "lfs/kernels/loss_tensor_contract.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include "lfs/kernels/ssim_reduction.cuh"
@@ -1437,7 +1437,7 @@ namespace lfs::training::kernels {
                                    tensor.is_contiguous() && tensor.shape() == ctx.img1.shape(),
                                lfs::core::detail::format_cuda_safe(
                                    "{} must be a contiguous Float32 CUDA tensor matching {} (shape={})",
-                                           name, ctx.img1.shape().str(), tensor.shape().str()));
+                                   name, ctx.img1.shape().str(), tensor.shape().str()));
             };
             validate_derivative(ctx.dm_dmu1, "SSIM dmu derivative");
             validate_derivative(ctx.dm_dsigma1_sq, "SSIM variance derivative");
@@ -1585,7 +1585,7 @@ namespace lfs::training::kernels {
         LFS_ASSERT_MSG(img1.shape()[0] == 1,
                        lfs::core::detail::format_cuda_safe(
                            "SSIM error maps require a single-image batch (shape={})",
-                                   img1.shape().str()));
+                           img1.shape().str()));
 
         const int N = static_cast<int>(img1.shape()[0]);
         const int C = static_cast<int>(img1.shape()[1]);
@@ -1694,7 +1694,7 @@ namespace lfs::training::kernels {
         LFS_ASSERT_MSG(gradient_map.shape() == ctx.img1.shape(),
                        lfs::core::detail::format_cuda_safe(
                            "SSIM gradient map must match the context image (gradient={}, image={})",
-                                   gradient_map.shape().str(), ctx.img1.shape().str()));
+                           gradient_map.shape().str(), ctx.img1.shape().str()));
 
         constexpr float C1 = 0.01f * 0.01f;
         constexpr float C2 = 0.03f * 0.03f;
@@ -1985,7 +1985,7 @@ namespace lfs::training::kernels {
         LFS_ASSERT_MSG(corrected.shape() == raw.shape() && corrected.shape() == gt.shape(),
                        lfs::core::detail::format_cuda_safe(
                            "Decoupled loss image shapes must match (corrected={}, raw={}, target={})",
-                                   corrected.shape().str(), raw.shape().str(), gt.shape().str()));
+                           corrected.shape().str(), raw.shape().str(), gt.shape().str()));
 
         const int N = static_cast<int>(corrected.shape()[0]);
         const int C = static_cast<int>(corrected.shape()[1]);
@@ -2223,8 +2223,8 @@ namespace lfs::training::kernels {
         LFS_ASSERT_MSG(corrected.shape() == raw.shape() && corrected.shape() == gt.shape(),
                        lfs::core::detail::format_cuda_safe(
                            "Masked decoupled loss image shapes must match "
-                                   "(corrected={}, raw={}, target={})",
-                                   corrected.shape().str(), raw.shape().str(), gt.shape().str()));
+                           "(corrected={}, raw={}, target={})",
+                           corrected.shape().str(), raw.shape().str(), gt.shape().str()));
         auto mask_2d = prepare_loss_mask(mask_input, corrected);
 
         const int N = static_cast<int>(corrected.shape()[0]);
@@ -2369,7 +2369,7 @@ namespace lfs::training::kernels {
                            ssim_map.shape()[2] > 0 && ssim_map.shape()[3] > 0,
                        lfs::core::detail::format_cuda_safe(
                            "SSIM map must be contiguous Float32 CUDA [1,C,H,W] (shape={})",
-                                   ssim_map.shape().str()));
+                           ssim_map.shape().str()));
 
         const int C = static_cast<int>(ssim_map.shape()[1]);
         const int H = static_cast<int>(ssim_map.shape()[2]);
@@ -2383,8 +2383,8 @@ namespace lfs::training::kernels {
                            error_map.shape()[1] == static_cast<size_t>(W),
                        lfs::core::detail::format_cuda_safe(
                            "SSIM error map must be contiguous Float32 CUDA [H,W] "
-                                   "(map={}, expected=[{}, {}])",
-                                   error_map.shape().str(), H, W));
+                           "(map={}, expected=[{}, {}])",
+                           error_map.shape().str(), H, W));
 
         constexpr int THREADS = 256;
         dim3 grid((HW + THREADS - 1) / THREADS);

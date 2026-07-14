@@ -10,6 +10,7 @@
 #include "core/cuda_safe_format.hpp"
 #include "Rasterization.h"
 #include "Utils.cuh"
+#include "core/cuda_safe_format.hpp"
 
 namespace gsplat_lfs {
 

@@ -549,9 +549,9 @@ namespace lfs::core::tensor_ops {
         else if (sel < 0 || sel >= dim_size) {
             LFS_DEBUG_ASSERT_MSG(sel >= 0 && sel < static_cast<int>(dim_size),
                                  detail::format_cuda_safe("index_select index must be in range "
-                                             "(selected_index={}, dimension_size={}, "
-                                             "index_position={}, output_index={}, boundary_mode={})",
-                                             sel, dim_size, i, tid, boundary));
+                                                          "(selected_index={}, dimension_size={}, "
+                                                          "index_position={}, output_index={}, boundary_mode={})",
+                                                          sel, dim_size, i, tid, boundary));
             out[tid] = 0;
             return;
         }
@@ -559,10 +559,10 @@ namespace lfs::core::tensor_ops {
         const size_t src_idx = o * dim_size * inner + static_cast<size_t>(sel) * inner + j;
         LFS_DEBUG_ASSERT_MSG(src_idx < outer * dim_size * inner,
                              detail::format_cuda_safe("index_select source offset must be in range "
-                                         "(source_offset={}, source_numel={}, outer={}, "
-                                         "dimension_size={}, inner={}, output_index={})",
-                                         src_idx, outer * dim_size * inner, outer,
-                                         dim_size, inner, tid));
+                                                      "(source_offset={}, source_numel={}, outer={}, "
+                                                      "dimension_size={}, inner={}, output_index={})",
+                                                      src_idx, outer * dim_size * inner, outer,
+                                                      dim_size, inner, tid));
         out[tid] = in[src_idx];
     }
 
@@ -745,9 +745,9 @@ namespace lfs::core::tensor_ops {
         } else if (gather_idx < 0 || gather_idx >= in_shape[dim]) {
             LFS_DEBUG_ASSERT_MSG(gather_idx >= 0 && gather_idx < static_cast<int>(in_shape[dim]),
                                  detail::format_cuda_safe("gather index must be in range "
-                                             "(gather_index={}, dimension={}, dimension_size={}, "
-                                             "output_index={}, boundary_mode={})",
-                                             gather_idx, dim, in_shape[dim], tid, boundary));
+                                                          "(gather_index={}, dimension={}, dimension_size={}, "
+                                                          "output_index={}, boundary_mode={})",
+                                                          gather_idx, dim, in_shape[dim], tid, boundary));
             out[tid] = 0;
             return;
         }
@@ -766,9 +766,9 @@ namespace lfs::core::tensor_ops {
             if (coord >= in_shape[d]) {
                 LFS_DEBUG_ASSERT_MSG(coord < in_shape[d],
                                      detail::format_cuda_safe("gather coordinate must be in range "
-                                                 "(dimension={}, coordinate={}, dimension_size={}, "
-                                                 "output_index={}, gather_dimension={})",
-                                                 d, coord, in_shape[d], tid, dim));
+                                                              "(dimension={}, coordinate={}, dimension_size={}, "
+                                                              "output_index={}, gather_dimension={})",
+                                                              d, coord, in_shape[d], tid, dim));
                 out[tid] = 0;
                 return;
             }
@@ -782,9 +782,9 @@ namespace lfs::core::tensor_ops {
         }
         LFS_DEBUG_ASSERT_MSG(src_idx < input_elements,
                              detail::format_cuda_safe("gather source offset must be in range "
-                                         "(source_offset={}, source_numel={}, output_index={}, "
-                                         "input_rank={}, gather_dimension={})",
-                                         src_idx, input_elements, tid, in_rank, dim));
+                                                      "(source_offset={}, source_numel={}, output_index={}, "
+                                                      "input_rank={}, gather_dimension={})",
+                                                      src_idx, input_elements, tid, in_rank, dim));
         out[tid] = in[src_idx];
     }
 
@@ -957,19 +957,19 @@ namespace lfs::core::tensor_ops {
         if (scatter_idx < 0 || scatter_idx >= dim_sz) {
             LFS_DEBUG_ASSERT_MSG(scatter_idx >= 0 && scatter_idx < static_cast<int>(dim_sz),
                                  detail::format_cuda_safe("scatter index must be in range "
-                                             "(scatter_index={}, dimension_size={}, "
-                                             "index_position={}, input_index={}, mode={})",
-                                             scatter_idx, dim_sz, idx_pos, tid, mode));
+                                                          "(scatter_index={}, dimension_size={}, "
+                                                          "index_position={}, input_index={}, mode={})",
+                                                          scatter_idx, dim_sz, idx_pos, tid, mode));
             return;
         }
 
         size_t dst_idx = outer_idx * dim_sz * inner + scatter_idx * inner + inner_idx;
         LFS_DEBUG_ASSERT_MSG(dst_idx < outer * dim_sz * inner,
                              detail::format_cuda_safe("scatter destination offset must be in range "
-                                         "(destination_offset={}, destination_numel={}, outer={}, "
-                                         "dimension_size={}, inner={}, input_index={})",
-                                         dst_idx, outer * dim_sz * inner, outer,
-                                         dim_sz, inner, tid));
+                                                      "(destination_offset={}, destination_numel={}, outer={}, "
+                                                      "dimension_size={}, inner={}, input_index={})",
+                                                      dst_idx, outer * dim_sz * inner, outer,
+                                                      dim_sz, inner, tid));
 
         if (mode == 1) {
             scatter_add(&out[dst_idx], in[tid]);
