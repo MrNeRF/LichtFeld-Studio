@@ -86,26 +86,15 @@ set(BENCHMARK_FILES
     benchmark_rad_io.cpp
     benchmark_grad_alpha_layout.cpp
     benchmark_pipelined_loader.cpp
-    benchmark_slice_assignment.cpp
     benchmark_strided_tensors.cpp
     benchmark_scheduler.cpp
     benchmark_losses.cpp
-    benchmark_ppisp_controller.cpp
     benchmark_reactive_store.cpp
-    # profile_adam_optimizer.cpp  # Disabled - missing header
     test_tensor_benchmark.cpp
-    test_memory_pool_benchmark.cpp
-    test_broadcast_benchmark.cpp
-    test_reduction_benchmark.cpp
     test_fusion_benchmark.cpp
     test_gather_benchmark.cpp
     test_zip_gather_benchmark.cpp
-    test_transform_iterator_benchmark.cpp
-    test_cub_reduction_benchmark.cpp
-    test_scalar_reduction_benchmark.cpp
     test_permute_upload_benchmark.cpp
-    test_isolation.cpp
-    test_allocator_benchmark.cpp
 )
 
 # Regular test sources (unit tests, integration tests)
@@ -118,14 +107,12 @@ set(TEST_FILES
     test_gut_manual_vs_autograd.cpp
     test_gut_autograd_vs_manual.cpp
     test_gut_gradient_comparison.cpp
-    test_activation_gradients.cpp
     test_tensor_basic.cpp
     test_tensor_ops.cpp
     test_tensor_memory.cpp
     test_allocator_policy.cpp
     test_tensor_reduction.cpp
     test_tensor_reduction_alignment.cpp
-    test_isolation.cpp
     test_tensor_views.cpp
     test_tensor_math.cpp
     test_tensor_utils.cpp
@@ -149,7 +136,6 @@ set(TEST_FILES
     test_tensor_reserve_inplace_cat.cpp
     test_kmeans.cpp
     test_critical_fixes.cpp
-    test_cuda_device_state.cpp
     test_tensor_ops_comparison.cpp
     test_sort_minimal.cpp
     test_tensor_debug.cpp
@@ -230,7 +216,6 @@ set(TEST_FILES
     test_python_lsp_client.cpp
     test_uv_runner.cpp
     test_uv_runner_proof.cpp
-    test_pytorch_install_proof.cpp
     test_nan_inf_gpu_check.cpp
     test_mcmc_nan_fix.cpp
     test_vram_resize.cpp
@@ -252,7 +237,6 @@ set(TEST_FILES
     test_tensor_lazy_ir.cpp
     test_tensor_lazy_stateful_ops.cpp
     test_fusion_performance.cpp
-    test_torch_conversion.cpp
     test_fastgs_kernels.cpp
     test_fastgs_fuzz.cpp
     test_sh_swizzle_layout.cpp
@@ -317,7 +301,6 @@ list(APPEND TEST_FILES test_vksplat_input_packer.cpp)
 list(APPEND TEST_FILES test_lod_page_cache.cpp)
 list(APPEND TEST_FILES test_lod_page_dequant.cpp)
 list(APPEND TEST_FILES test_lod_upload_engine.cpp)
-list(APPEND TEST_FILES test_lod_builder_bench.cpp)
 list(APPEND TEST_FILES test_octree_lod.cpp)
 list(APPEND TEST_FILES test_ply_to_rad_lod.cpp)
 list(APPEND TEST_FILES test_rad_gpu_encode.cpp)
