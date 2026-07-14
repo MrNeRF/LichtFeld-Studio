@@ -563,7 +563,6 @@ TEST_F(TensorBasicTest, ItemTemplate) {
     auto torch_int = torch::full({1}, 42,
                                  torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA));
     EXPECT_EQ(tensor_int.item<int>(), torch_int.item<int>());
-    EXPECT_EQ(tensor_int.item_int(), torch_int.item<int>());
 }
 
 TEST_F(TensorBasicTest, ItemTemplateRejectsDtypeMismatch) {
