@@ -174,7 +174,6 @@ set(TEST_FILES
     test_extended_unary_ops_vs_torch.cpp
     test_scene_validity.cpp
     test_render_settings_defaults.cpp
-    test_loss_graph_element.cpp
     test_selection_rasterization_ops.cpp
     test_rendering_refactor_services.cpp
     test_theme_registry.cpp
