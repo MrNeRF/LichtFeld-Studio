@@ -13,6 +13,7 @@
 #include "tensor_expr.hpp"
 #include "tensor_functors.hpp" // For ops::compose
 #include <cuda_fp16.h>
+#include <limits>
 #include <optional>
 #include <typeinfo>
 
@@ -76,6 +77,31 @@ namespace lfs::core {
             primary.sync_to_stream(execution_stream);
             secondary.sync_to_stream(execution_stream);
             return execution_stream;
+        }
+
+        inline void validate_permutation_indices(const Tensor& input, const Tensor& indices) {
+            if (indices.numel() == 0) {
+                return;
+            }
+            if (input.numel() == 0) {
+                throw std::runtime_error("PermutationExpr: cannot index an empty tensor");
+            }
+            if (input.numel() > static_cast<size_t>(std::numeric_limits<int>::max())) {
+                throw std::runtime_error("PermutationExpr: input exceeds Int32 index range");
+            }
+
+            const auto cpu_indices = indices.device() == Device::CPU
+                                         ? indices.contiguous()
+                                         : indices.cpu().contiguous();
+            const auto* values = cpu_indices.ptr<int32_t>();
+            const auto lower = -static_cast<int64_t>(input.numel());
+            const auto upper = static_cast<int64_t>(input.numel());
+            for (size_t i = 0; i < cpu_indices.numel(); ++i) {
+                const auto value = static_cast<int64_t>(values[i]);
+                if (value < lower || value >= upper) {
+                    throw std::runtime_error("PermutationExpr: index is out of bounds");
+                }
+            }
         }
 
         // Default implementation: float -> float or Int32 -> Int32 operations
@@ -1023,6 +1049,8 @@ namespace lfs::core {
         if (indices_tensor.dtype() != DataType::Int32) {
             throw std::runtime_error("PermutationExpr: indices must be Int32 dtype");
         }
+
+        detail::validate_permutation_indices(input_tensor, indices_tensor);
 
         // Flatten input for gather
         Tensor flat_input = input_tensor.flatten();

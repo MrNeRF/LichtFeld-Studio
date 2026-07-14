@@ -1755,6 +1755,9 @@ NB_MODULE(lichtfeld, m) {
         },
         nb::arg("callback"), "Decorator for training end handler");
 
+    m.def("_clear_training_hooks", []() { ControlBoundary::instance().clear_all(); });
+    nb::module_::import_("atexit").attr("register")(m.attr("_clear_training_hooks"));
+
     // Register Tensor class
     lfs::python::register_tensor(m);
 

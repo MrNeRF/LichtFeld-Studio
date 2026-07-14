@@ -46,6 +46,16 @@ namespace lfs::core {
             }
         }
 
+        template <typename T>
+        void masked_scatter_cpu(T* data, const unsigned char* mask, const T* source, size_t n) {
+            size_t source_index = 0;
+            for (size_t i = 0; i < n; ++i) {
+                if (mask[i]) {
+                    data[i] = source[source_index++];
+                }
+            }
+        }
+
         void assert_masked_fill_value_representable(const DataType dtype, const float value) {
             switch (dtype) {
             case DataType::Float32:
@@ -2038,8 +2048,8 @@ namespace lfs::core {
     void MaskedTensorProxy::operator=(const Tensor& other) {
         LFS_ASSERT_MSG(tensor_ != nullptr && tensor_->is_valid() && other.is_valid(),
                        "masked assignment requires valid tensors");
-        LFS_ASSERT_MSG(tensor_->dtype() == DataType::Float32 && other.dtype() == DataType::Float32,
-                       "masked tensor assignment currently supports only Float32");
+        LFS_ASSERT_MSG(tensor_->dtype() == other.dtype(),
+                       "masked assignment tensors must have the same dtype");
         LFS_ASSERT_MSG(tensor_->device() == other.device(),
                        "masked assignment tensors must be on the same device");
         auto selected = tensor_->masked_select(mask_);
@@ -2047,20 +2057,59 @@ namespace lfs::core {
                        "masked assignment value count must equal selected element count");
 
         if (tensor_->device() == Device::CUDA) {
-            tensor_ops::launch_masked_scatter(const_cast<Tensor*>(tensor_)->ptr<float>(),
-                                              mask_.ptr<unsigned char>(), other.ptr<float>(),
-                                              tensor_->numel(), other.numel(), tensor_->stream());
+            switch (tensor_->dtype()) {
+            case DataType::Float32:
+                tensor_ops::launch_masked_scatter(const_cast<Tensor*>(tensor_)->ptr<float>(),
+                                                  mask_.ptr<unsigned char>(), other.ptr<float>(),
+                                                  tensor_->numel(), other.numel(), tensor_->stream());
+                break;
+            case DataType::Float16:
+                tensor_ops::launch_masked_scatter(const_cast<Tensor*>(tensor_)->ptr<__half>(),
+                                                  mask_.ptr<unsigned char>(), other.ptr<__half>(),
+                                                  tensor_->numel(), other.numel(), tensor_->stream());
+                break;
+            case DataType::Int32:
+                tensor_ops::launch_masked_scatter(const_cast<Tensor*>(tensor_)->ptr<int32_t>(),
+                                                  mask_.ptr<unsigned char>(), other.ptr<int32_t>(),
+                                                  tensor_->numel(), other.numel(), tensor_->stream());
+                break;
+            case DataType::Int64:
+                tensor_ops::launch_masked_scatter(const_cast<Tensor*>(tensor_)->ptr<int64_t>(),
+                                                  mask_.ptr<unsigned char>(), other.ptr<int64_t>(),
+                                                  tensor_->numel(), other.numel(), tensor_->stream());
+                break;
+            case DataType::UInt8:
+            case DataType::Bool:
+                tensor_ops::launch_masked_scatter(const_cast<Tensor*>(tensor_)->ptr<uint8_t>(),
+                                                  mask_.ptr<unsigned char>(), other.ptr<uint8_t>(),
+                                                  tensor_->numel(), other.numel(), tensor_->stream());
+                break;
+            }
             LFS_CUDA_CHECK(cudaGetLastError());
-            // No sync - tensor operation
         } else {
-            float* data = const_cast<Tensor*>(tensor_)->ptr<float>();
             const unsigned char* mask = mask_.ptr<unsigned char>();
-            const float* src = other.ptr<float>();
-
-            size_t src_idx = 0;
-            for (size_t i = 0; i < tensor_->numel() && src_idx < other.numel(); ++i) {
-                if (mask[i])
-                    data[i] = src[src_idx++];
+            switch (tensor_->dtype()) {
+            case DataType::Float32:
+                masked_scatter_cpu(const_cast<Tensor*>(tensor_)->ptr<float>(), mask,
+                                   other.ptr<float>(), tensor_->numel());
+                break;
+            case DataType::Float16:
+                masked_scatter_cpu(const_cast<Tensor*>(tensor_)->ptr<__half>(), mask,
+                                   other.ptr<__half>(), tensor_->numel());
+                break;
+            case DataType::Int32:
+                masked_scatter_cpu(const_cast<Tensor*>(tensor_)->ptr<int32_t>(), mask,
+                                   other.ptr<int32_t>(), tensor_->numel());
+                break;
+            case DataType::Int64:
+                masked_scatter_cpu(const_cast<Tensor*>(tensor_)->ptr<int64_t>(), mask,
+                                   other.ptr<int64_t>(), tensor_->numel());
+                break;
+            case DataType::UInt8:
+            case DataType::Bool:
+                masked_scatter_cpu(const_cast<Tensor*>(tensor_)->ptr<uint8_t>(), mask,
+                                   other.ptr<uint8_t>(), tensor_->numel());
+                break;
             }
         }
     }

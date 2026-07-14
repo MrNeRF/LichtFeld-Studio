@@ -52,45 +52,20 @@ namespace lfs::core {
     } // namespace
 
     // ============= CORE UNIFIED OPERATIONS =============
+    constexpr static int promotion_rank(DataType dtype) {
+        switch (dtype) {
+        case DataType::Bool: return 0;
+        case DataType::UInt8: return 1;
+        case DataType::Int32: return 2;
+        case DataType::Int64: return 3;
+        case DataType::Float16: return 4;
+        case DataType::Float32: return 5;
+        }
+        return -1;
+    }
+
     constexpr static DataType promote_types(DataType a, DataType b) {
-        if (a == b)
-            return a;
-
-        if (a == DataType::Bool) {
-            if (b == DataType::Float32 || b == DataType::Float16)
-                return b;
-            if (b == DataType::Int32 || b == DataType::Int64)
-                return b;
-            return DataType::Float32;
-        }
-        if (b == DataType::Bool) {
-            if (a == DataType::Float32 || a == DataType::Float16)
-                return a;
-            if (a == DataType::Int32 || a == DataType::Int64)
-                return a;
-            return DataType::Float32;
-        }
-
-        if ((a == DataType::Int32 || a == DataType::Int64) &&
-            (b == DataType::Float32 || b == DataType::Float16)) {
-            return (b == DataType::Float16) ? DataType::Float16 : DataType::Float32;
-        }
-        if ((b == DataType::Int32 || b == DataType::Int64) &&
-            (a == DataType::Float32 || a == DataType::Float16)) {
-            return (a == DataType::Float16) ? DataType::Float16 : DataType::Float32;
-        }
-
-        if ((a == DataType::Int32 && b == DataType::Int64) ||
-            (a == DataType::Int64 && b == DataType::Int32)) {
-            return DataType::Int64;
-        }
-
-        if ((a == DataType::Float16 && b == DataType::Float32) ||
-            (a == DataType::Float32 && b == DataType::Float16)) {
-            return DataType::Float32;
-        }
-
-        return DataType::Float32;
+        return promotion_rank(a) >= promotion_rank(b) ? a : b;
     }
 
     Tensor Tensor::load(LoadOp op, const LoadArgs& args) {
@@ -208,9 +183,12 @@ namespace lfs::core {
             LFS_ASSERT_MSG(std::holds_alternative<float>(args.args),
                            "constant tensor load requires a float value");
             float value = std::get<float>(args.args);
-            LFS_ASSERT_MSG(std::isfinite(value),
-                           "full/constant tensor value must be finite");
-            LFS_ASSERT_MSG(args.dtype != DataType::Float16 || std::abs(value) <= 65504.0f,
+            const bool floating_dtype =
+                args.dtype == DataType::Float32 || args.dtype == DataType::Float16;
+            LFS_ASSERT_MSG(floating_dtype || std::isfinite(value),
+                           "non-finite full/constant values require a floating-point dtype");
+            LFS_ASSERT_MSG(args.dtype != DataType::Float16 ||
+                               !std::isfinite(value) || std::abs(value) <= 65504.0f,
                            "Float16 constant is outside the finite representable range");
             LFS_ASSERT_MSG(args.dtype != DataType::Int32 ||
                                (value >= static_cast<float>(std::numeric_limits<int32_t>::lowest()) &&

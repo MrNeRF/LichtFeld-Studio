@@ -413,16 +413,18 @@ namespace lfs::core::tensor_ops {
         launch_masked_select_impl(input, mask, output, n, output_size, stream);
     }
 
-    __global__ void masked_scatter_compact_kernel(float* data, const unsigned char* mask,
-                                                  const float* src, const int* scan, size_t n) {
+    template <typename T>
+    __global__ void masked_scatter_compact_kernel(T* data, const unsigned char* mask,
+                                                  const T* src, const int* scan, size_t n) {
         size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (idx < n && mask[idx]) {
             data[idx] = src[scan[idx]];
         }
     }
 
-    void launch_masked_scatter(float* data, const unsigned char* mask,
-                               const float* src, size_t n, size_t src_size, cudaStream_t stream) {
+    template <typename T>
+    void launch_masked_scatter_impl(T* data, const unsigned char* mask,
+                                    const T* src, size_t n, size_t src_size, cudaStream_t stream) {
         if (n == 0 || src_size == 0)
             return;
 
@@ -436,8 +438,33 @@ namespace lfs::core::tensor_ops {
             });
 
         int blocks = (n + 255) / 256;
-        masked_scatter_compact_kernel<<<blocks, 256, 0, stream>>>(
+        masked_scatter_compact_kernel<T><<<blocks, 256, 0, stream>>>(
             data, mask, src, scan_result.as<int>(), n);
+    }
+
+    void launch_masked_scatter(float* data, const unsigned char* mask,
+                               const float* src, size_t n, size_t src_size, cudaStream_t stream) {
+        launch_masked_scatter_impl(data, mask, src, n, src_size, stream);
+    }
+
+    void launch_masked_scatter(__half* data, const unsigned char* mask,
+                               const __half* src, size_t n, size_t src_size, cudaStream_t stream) {
+        launch_masked_scatter_impl(data, mask, src, n, src_size, stream);
+    }
+
+    void launch_masked_scatter(int32_t* data, const unsigned char* mask,
+                               const int32_t* src, size_t n, size_t src_size, cudaStream_t stream) {
+        launch_masked_scatter_impl(data, mask, src, n, src_size, stream);
+    }
+
+    void launch_masked_scatter(int64_t* data, const unsigned char* mask,
+                               const int64_t* src, size_t n, size_t src_size, cudaStream_t stream) {
+        launch_masked_scatter_impl(data, mask, src, n, src_size, stream);
+    }
+
+    void launch_masked_scatter(uint8_t* data, const unsigned char* mask,
+                               const uint8_t* src, size_t n, size_t src_size, cudaStream_t stream) {
+        launch_masked_scatter_impl(data, mask, src, n, src_size, stream);
     }
 
     // ============= Where Operation =============
