@@ -117,6 +117,11 @@ namespace lfs::core::tensor_ops {
 
     // ============= CLAMP OPERATIONS (USING FUNCTORS) =============
 
+    __device__ __forceinline__ float clamp_preserving_nan(
+        const float value, const float min_val, const float max_val) {
+        return isnan(value) ? value : fminf(fmaxf(value, min_val), max_val);
+    }
+
     // Vectorized clamp kernel with float4 loads (2-4x faster!)
     __global__ void clamp_kernel_vectorized(float* __restrict__ data, float min_val, float max_val, size_t n) {
         const size_t vec_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -127,10 +132,10 @@ namespace lfs::core::tensor_ops {
             float4 vals = reinterpret_cast<float4*>(data)[vec_idx];
 
             // Clamp all 4 values
-            vals.x = fminf(fmaxf(vals.x, min_val), max_val);
-            vals.y = fminf(fmaxf(vals.y, min_val), max_val);
-            vals.z = fminf(fmaxf(vals.z, min_val), max_val);
-            vals.w = fminf(fmaxf(vals.w, min_val), max_val);
+            vals.x = clamp_preserving_nan(vals.x, min_val, max_val);
+            vals.y = clamp_preserving_nan(vals.y, min_val, max_val);
+            vals.z = clamp_preserving_nan(vals.z, min_val, max_val);
+            vals.w = clamp_preserving_nan(vals.w, min_val, max_val);
 
             // Store 4 floats in one transaction
             reinterpret_cast<float4*>(data)[vec_idx] = vals;
@@ -138,10 +143,7 @@ namespace lfs::core::tensor_ops {
         // Scalar fallback for remainder
         else if (idx < n) {
             for (size_t i = idx; i < n; ++i) {
-                float val = data[i];
-                val = fmaxf(val, min_val);
-                val = fminf(val, max_val);
-                data[i] = val;
+                data[i] = clamp_preserving_nan(data[i], min_val, max_val);
             }
         }
     }
@@ -154,11 +156,7 @@ namespace lfs::core::tensor_ops {
 
         // Grid-stride loop for any array size
         for (size_t i = idx; i < n; i += stride) {
-            // Single precision math, no NaN check (PyTorch doesn't check either)
-            float val = data[i];
-            val = fmaxf(val, min_val); // max(val, min)
-            val = fminf(val, max_val); // min(result, max)
-            data[i] = val;
+            data[i] = clamp_preserving_nan(data[i], min_val, max_val);
         }
     }
 
@@ -199,18 +197,15 @@ namespace lfs::core::tensor_ops {
         if (idx + 3 < n) {
             float4 vals = reinterpret_cast<const float4*>(src)[vec_idx];
 
-            vals.x = fminf(fmaxf(vals.x, min_val), max_val);
-            vals.y = fminf(fmaxf(vals.y, min_val), max_val);
-            vals.z = fminf(fmaxf(vals.z, min_val), max_val);
-            vals.w = fminf(fmaxf(vals.w, min_val), max_val);
+            vals.x = clamp_preserving_nan(vals.x, min_val, max_val);
+            vals.y = clamp_preserving_nan(vals.y, min_val, max_val);
+            vals.z = clamp_preserving_nan(vals.z, min_val, max_val);
+            vals.w = clamp_preserving_nan(vals.w, min_val, max_val);
 
             reinterpret_cast<float4*>(dst)[vec_idx] = vals;
         } else if (idx < n) {
             for (size_t i = idx; i < n; ++i) {
-                float val = src[i];
-                val = fmaxf(val, min_val);
-                val = fminf(val, max_val);
-                dst[i] = val;
+                dst[i] = clamp_preserving_nan(src[i], min_val, max_val);
             }
         }
     }
@@ -222,10 +217,7 @@ namespace lfs::core::tensor_ops {
         size_t stride = blockDim.x * gridDim.x;
 
         for (size_t i = idx; i < n; i += stride) {
-            float val = src[i];
-            val = fmaxf(val, min_val);
-            val = fminf(val, max_val);
-            dst[i] = val;
+            dst[i] = clamp_preserving_nan(src[i], min_val, max_val);
         }
     }
 
@@ -2012,6 +2004,7 @@ namespace lfs::core::tensor_ops {
     template void launch_convert_type<uint8_t, float>(const uint8_t*, float*, size_t, cudaStream_t);
     template void launch_convert_type<int, uint8_t>(const int*, uint8_t*, size_t, cudaStream_t);
     template void launch_convert_type<uint8_t, int>(const uint8_t*, int*, size_t, cudaStream_t);
+    template void launch_convert_type<uint8_t, bool>(const uint8_t*, bool*, size_t, cudaStream_t);
     template void launch_convert_type<int64_t, float>(const int64_t*, float*, size_t, cudaStream_t);
     template void launch_convert_type<float, int64_t>(const float*, int64_t*, size_t, cudaStream_t);
     template void launch_convert_type<int, int64_t>(const int*, int64_t*, size_t, cudaStream_t);

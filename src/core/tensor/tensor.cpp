@@ -1449,15 +1449,34 @@ namespace lfs::core {
         CONVERT_DTYPE_CUDA(int, uint8_t, DataType::Int32, DataType::UInt8)
         CONVERT_DTYPE_CUDA(uint8_t, int, DataType::UInt8, DataType::Int32)
 
-        // Bool <-> UInt8: Same underlying storage, just reinterpret dtype
-        if ((dtype_ == DataType::Bool && dtype == DataType::UInt8) ||
-            (dtype_ == DataType::UInt8 && dtype == DataType::Bool)) {
+        // Bool -> UInt8: Bool storage is already normalized to 0 or 1.
+        if (dtype_ == DataType::Bool && dtype == DataType::UInt8) {
             auto result = empty(shape_, device_, dtype);
             if (numel() > 0) {
                 if (device_ == Device::CUDA) {
                     LFS_CUDA_CHECK(cudaMemcpy(const_cast<void*>(result.data_ptr()), data_ptr(), bytes(), cudaMemcpyDeviceToDevice));
                 } else {
                     std::memcpy(const_cast<void*>(result.data_ptr()), data_ptr(), bytes());
+                }
+            }
+            return result;
+        }
+
+        // UInt8 -> Bool follows Torch's nonzero semantics rather than merely
+        // reinterpreting the byte storage.
+        if (dtype_ == DataType::UInt8 && dtype == DataType::Bool) {
+            auto result = empty(shape_, device_, DataType::Bool);
+            if (numel() == 0)
+                return result;
+
+            if (device_ == Device::CUDA) {
+                tensor_ops::launch_convert_type<uint8_t, bool>(
+                    ptr<uint8_t>(), result.ptr<bool>(), numel(), result.stream());
+            } else {
+                const uint8_t* src = ptr<uint8_t>();
+                uint8_t* dst = result.ptr<uint8_t>();
+                for (size_t i = 0; i < numel(); ++i) {
+                    dst[i] = src[i] != 0 ? 1 : 0;
                 }
             }
             return result;

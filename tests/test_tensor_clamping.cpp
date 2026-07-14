@@ -399,6 +399,26 @@ TEST_F(TensorClampTest, ClampWithInfinity) {
     compare_tensors(result2_custom, result2_torch, 1e-5f, 1e-7f, "ClampInfMin");
 }
 
+TEST_F(TensorClampTest, ClampPreservesNaNLikeTorch) {
+    const std::vector<float> data = {
+        std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::infinity(),
+        -std::numeric_limits<float>::infinity(),
+        0.0f};
+
+    const auto torch_cpu = torch::tensor(data);
+    const auto expected_cpu = torch_cpu.clamp(-10.0f, 10.0f);
+    const auto custom_cpu = Tensor::from_vector(data, {4}, Device::CPU);
+    compare_tensors(custom_cpu.clamp(-10.0f, 10.0f), expected_cpu,
+                    1e-5f, 1e-7f, "ClampNaNCpu");
+
+    if (torch::cuda::is_available()) {
+        const auto custom_cuda = custom_cpu.cuda().clamp(-10.0f, 10.0f);
+        compare_tensors(custom_cuda, expected_cpu.cuda(),
+                        1e-5f, 1e-7f, "ClampNaNCuda");
+    }
+}
+
 TEST_F(TensorClampTest, ClampEmptyTensor) {
     std::vector<float> empty_data;
 
