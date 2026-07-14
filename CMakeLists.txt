@@ -1209,7 +1209,7 @@ if(BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY)
     if(BUILD_UNICODE_TEST_ONLY)
         message(STATUS "Unicode path test enabled. Build with 'ninja unicode_path_test' and run with 'ctest -R UnicodePathTest'")
     else()
-        message(STATUS "Tests enabled. Build with 'ninja lichtfeld_tests' and run with 'ninja run_tests' or 'ctest'")
+        message(STATUS "Tests enabled. Build with 'ninja lichtfeld_tests' and run with 'ninja run_tests' or 'ctest -L fast'")
     endif()
 endif()
 
