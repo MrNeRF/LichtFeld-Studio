@@ -28,16 +28,21 @@ namespace lfs::core {
     } // namespace
 
     Tensor Tensor::mm(const Tensor& other) const {
-        tensor_contract::require_valid(*this, "mm", "left");
-        tensor_contract::require_valid(other, "mm", "right");
-        tensor_contract::require_dtype(*this, DataType::Float32, "mm", "left");
-        tensor_contract::require_dtype(other, DataType::Float32, "mm", "right");
+        tensor_contract::require_valid(
+            *this, "mm", "left", LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_valid(
+            other, "mm", "right", LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_dtype(
+            *this, DataType::Float32, "mm", "left", LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_dtype(
+            other, DataType::Float32, "mm", "right", LFS_SOURCE_SITE_CURRENT());
         LFS_ASSERT_MSG(shape_.rank() == 2 && other.shape_.rank() == 2,
                        "mm requires rank-2 tensors");
         LFS_ASSERT_MSG(shape_[1] == other.shape_[0],
                        std::format("mm dimension mismatch: {}x{} @ {}x{}",
                                    shape_[0], shape_[1], other.shape_[0], other.shape_[1]));
-        tensor_contract::require_same_device(*this, other, "mm", "left", "right");
+        tensor_contract::require_same_device(
+            *this, other, "mm", "left", "right", LFS_SOURCE_SITE_CURRENT());
 
         const size_t m = shape_[0];
         const size_t k = shape_[1];
@@ -60,10 +65,14 @@ namespace lfs::core {
     }
 
     Tensor Tensor::bmm(const Tensor& other) const {
-        tensor_contract::require_valid(*this, "bmm", "left");
-        tensor_contract::require_valid(other, "bmm", "right");
-        tensor_contract::require_dtype(*this, DataType::Float32, "bmm", "left");
-        tensor_contract::require_dtype(other, DataType::Float32, "bmm", "right");
+        tensor_contract::require_valid(
+            *this, "bmm", "left", LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_valid(
+            other, "bmm", "right", LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_dtype(
+            *this, DataType::Float32, "bmm", "left", LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_dtype(
+            other, DataType::Float32, "bmm", "right", LFS_SOURCE_SITE_CURRENT());
         LFS_ASSERT_MSG(shape_.rank() == 3 && other.shape_.rank() == 3,
                        "bmm requires rank-3 tensors");
         LFS_ASSERT_MSG(shape_[0] == other.shape_[0],
@@ -71,7 +80,8 @@ namespace lfs::core {
         LFS_ASSERT_MSG(shape_[2] == other.shape_[1],
                        std::format("bmm dimension mismatch: {}x{} @ {}x{}",
                                    shape_[1], shape_[2], other.shape_[1], other.shape_[2]));
-        tensor_contract::require_same_device(*this, other, "bmm", "left", "right");
+        tensor_contract::require_same_device(
+            *this, other, "bmm", "left", "right", LFS_SOURCE_SITE_CURRENT());
 
         const size_t batch_size = shape_[0];
         const size_t m = shape_[1];
@@ -110,7 +120,8 @@ namespace lfs::core {
     }
 
     Tensor Tensor::matmul(const Tensor& other) const {
-        debug::OpTraceGuard trace("matmul", *this, other);
+        debug::OpTraceGuard trace(
+            "matmul", *this, other, LFS_SOURCE_SITE_CURRENT());
 
         LFS_ASSERT_MSG(is_valid() && other.is_valid(),
                        "matmul requires valid tensors");

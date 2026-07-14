@@ -244,7 +244,8 @@ namespace lfs::core {
                                static_cast<void*>(stream));
             {
                 std::lock_guard<std::mutex> lock(map_mutex_);
-                for (auto& [ptr, info] : allocation_map_) {
+                for (auto& entry : allocation_map_) {
+                    auto& info = entry.second;
                     std::erase(info.extra_streams, stream);
                     if (info.home_stream == stream) {
                         info.home_stream = nullptr;
@@ -449,7 +450,8 @@ namespace lfs::core {
             }
             {
                 std::lock_guard<std::mutex> lock(map_mutex_);
-                for (auto& [ptr, info] : allocation_map_) {
+                for (auto& entry : allocation_map_) {
+                    auto& info = entry.second;
                     info.extra_streams.clear();
                 }
             }

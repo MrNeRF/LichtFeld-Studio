@@ -54,7 +54,7 @@ namespace lfs::core {
         if (status != cudaSuccess) {
             const cudaError_t sync_status = cudaStreamSynchronize(dependency_stream);
             if (sync_status != cudaSuccess) {
-                ensure_cuda_success(
+                LFS_ENSURE_CUDA_SUCCESS_MSG(
                     sync_status, "cudaStreamSynchronize(tensor dependency fallback)",
                     std::format("dependency_stream={}, execution_stream={}",
                                 static_cast<void*>(dependency_stream),

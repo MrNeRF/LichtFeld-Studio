@@ -624,6 +624,12 @@ namespace lfs::diagnostics {
 
     void VramProfiler::recordAllocation(void* ptr,
                                         const std::size_t bytes,
+                                        const VramAllocationMethod method) {
+        recordAllocation(ptr, bytes, method, {});
+    }
+
+    void VramProfiler::recordAllocation(void* ptr,
+                                        const std::size_t bytes,
                                         const VramAllocationMethod method,
                                         std::string_view label) {
         if (!enabled() || !ptr || bytes == 0) {

@@ -746,7 +746,9 @@ namespace lfs::vis::gui {
                         previewDependencyChanged(*command.cache);
 
                     if (refresh_cache) {
-                        lfs::core::ScopedTimer timer(timer_name + ".cache_refresh", 0.25);
+                        lfs::core::ScopedTimer timer(
+                            timer_name + ".cache_refresh", 0.25,
+                            lfs::core::LogLevel::Performance, LFS_SOURCE_SITE_CURRENT());
                         if (command.cache->texture != 0)
                             releaseCachedVulkanContext(*command.cache);
 
@@ -778,7 +780,9 @@ namespace lfs::vis::gui {
                             std::string("gui_render.rmlui_record.") +
                             (foreground ? "foreground.cached_context." : "background.cached_context.") +
                             command.context_name;
-                        lfs::core::ScopedTimer timer(blit_timer_name, 0.25);
+                        lfs::core::ScopedTimer timer(
+                            blit_timer_name, 0.25, lfs::core::LogLevel::Performance,
+                            LFS_SOURCE_SITE_CURRENT());
                         vulkan_render_interface_->ResetContextRenderState();
                         vulkan_render_interface_->SetContextClipRect(fleft, ftop, fright, fbottom);
                         vulkan_render_interface_->RenderTextureQuad(command.cache->texture,
@@ -787,7 +791,9 @@ namespace lfs::vis::gui {
                                                                     static_cast<float>(vis_w),
                                                                     static_cast<float>(vis_h));
                     } else {
-                        lfs::core::ScopedTimer timer(timer_name);
+                        lfs::core::ScopedTimer timer(
+                            timer_name, lfs::core::LogLevel::Performance,
+                            LFS_SOURCE_SITE_CURRENT());
                         vulkan_render_interface_->ResetContextRenderState();
                         vulkan_render_interface_->SetContextClipRect(command.clip_x1,
                                                                      command.clip_y1,
@@ -805,7 +811,9 @@ namespace lfs::vis::gui {
                     command.cache->height != command.cache_height ||
                     previewDependencyChanged(*command.cache);
                 if (refresh_cache) {
-                    lfs::core::ScopedTimer timer(timer_name + ".cache_refresh", 0.25);
+                    lfs::core::ScopedTimer timer(
+                        timer_name + ".cache_refresh", 0.25,
+                        lfs::core::LogLevel::Performance, LFS_SOURCE_SITE_CURRENT());
                     if (command.cache->texture != 0)
                         releaseCachedVulkanContext(*command.cache);
 
@@ -834,7 +842,9 @@ namespace lfs::vis::gui {
                         std::string("gui_render.rmlui_record.") +
                         (foreground ? "foreground.cached_context." : "background.cached_context.") +
                         command.context_name;
-                    lfs::core::ScopedTimer timer(blit_timer_name, 0.25);
+                    lfs::core::ScopedTimer timer(
+                        blit_timer_name, 0.25, lfs::core::LogLevel::Performance,
+                        LFS_SOURCE_SITE_CURRENT());
                     vulkan_render_interface_->ResetContextRenderState();
                     if (command.clip_enabled) {
                         vulkan_render_interface_->SetContextClipRect(command.clip_x1,
@@ -848,7 +858,9 @@ namespace lfs::vis::gui {
                                                                 command.draw_width,
                                                                 command.draw_height);
                 } else {
-                    lfs::core::ScopedTimer timer(timer_name);
+                    lfs::core::ScopedTimer timer(
+                        timer_name, lfs::core::LogLevel::Performance,
+                        LFS_SOURCE_SITE_CURRENT());
                     vulkan_render_interface_->ResetContextRenderState();
                     if (command.clip_enabled) {
                         vulkan_render_interface_->SetContextClipRect(command.clip_x1,
@@ -860,7 +872,9 @@ namespace lfs::vis::gui {
                     command.context->Render();
                 }
             } else {
-                lfs::core::ScopedTimer timer(timer_name);
+                lfs::core::ScopedTimer timer(
+                    timer_name, lfs::core::LogLevel::Performance,
+                    LFS_SOURCE_SITE_CURRENT());
                 vulkan_render_interface_->ResetContextRenderState();
                 if (command.clip_enabled) {
                     vulkan_render_interface_->SetContextClipRect(command.clip_x1,

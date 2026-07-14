@@ -399,6 +399,14 @@ namespace lfs::core::internal {
         register_node_locked(runtime, output.debug_id(), LazyOpKind::Reduce, op_name, std::move(inputs), output);
     }
 
+    uint64_t lazy_ir_record_deferred(const Tensor& output) {
+        return lazy_ir_record_deferred(output, "deferred_expr", {});
+    }
+
+    uint64_t lazy_ir_record_deferred(const Tensor& output, const std::string_view op_name) {
+        return lazy_ir_record_deferred(output, op_name, {});
+    }
+
     uint64_t lazy_ir_record_deferred(const Tensor& output,
                                      std::string_view op_name,
                                      const std::vector<uint64_t>& input_ids) {

@@ -25,10 +25,10 @@ namespace fast_lfs::optimizer {
         cudaStream_t stream) {
 
         // Validate pointers
-        lfs::core::validate_cuda_device_pointer(param, "param");
-        lfs::core::validate_cuda_device_pointer(exp_avg, "exp_avg");
-        lfs::core::validate_cuda_device_pointer(exp_avg_sq, "exp_avg_sq");
-        lfs::core::validate_cuda_device_pointer(param_grad, "param_grad");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(param, "param");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg, "exp_avg");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq, "exp_avg_sq");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(param_grad, "param_grad");
 
         // Validate parameters
         if (n_elements <= 0) {
@@ -70,12 +70,12 @@ namespace fast_lfs::optimizer {
         const float bias_correction2_sqrt_rcp,
         cudaStream_t stream) {
 
-        lfs::core::validate_cuda_device_pointer(param, "param");
-        lfs::core::validate_cuda_device_pointer(exp_avg_q, "exp_avg_q");
-        lfs::core::validate_cuda_device_pointer(exp_avg_scale, "exp_avg_scale");
-        lfs::core::validate_cuda_device_pointer(exp_avg_sq_q, "exp_avg_sq_q");
-        lfs::core::validate_cuda_device_pointer(exp_avg_sq_scale, "exp_avg_sq_scale");
-        lfs::core::validate_cuda_device_pointer(param_grad, "param_grad");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(param, "param");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_q, "exp_avg_q");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_scale, "exp_avg_scale");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq_q, "exp_avg_sq_q");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq_scale, "exp_avg_sq_scale");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(param_grad, "param_grad");
         if (n_rows <= 0 || row_size <= 0) {
             throw std::runtime_error("n_rows and row_size must be positive");
         }
@@ -105,12 +105,12 @@ namespace fast_lfs::optimizer {
         const float bias_correction2_sqrt_rcp,
         cudaStream_t stream) {
 
-        lfs::core::validate_cuda_device_pointer(param, "param");
-        lfs::core::validate_cuda_device_pointer(exp_avg_q, "exp_avg_q");
-        lfs::core::validate_cuda_device_pointer(exp_avg_scale, "exp_avg_scale");
-        lfs::core::validate_cuda_device_pointer(exp_avg_sq_q, "exp_avg_sq_q");
-        lfs::core::validate_cuda_device_pointer(exp_avg_sq_scale, "exp_avg_sq_scale");
-        lfs::core::validate_cuda_device_pointer(param_grad, "param_grad");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(param, "param");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_q, "exp_avg_q");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_scale, "exp_avg_scale");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq_q, "exp_avg_sq_q");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq_scale, "exp_avg_sq_scale");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(param_grad, "param_grad");
         if (n_primitives <= 0 || slots_per_primitive <= 0) {
             throw std::runtime_error("n_primitives and slots_per_primitive must be positive");
         }
@@ -132,12 +132,12 @@ namespace fast_lfs::optimizer {
         const int row_size,
         cudaStream_t stream) {
 
-        lfs::core::validate_cuda_device_pointer(exp_avg, "exp_avg");
-        lfs::core::validate_cuda_device_pointer(exp_avg_sq, "exp_avg_sq");
-        lfs::core::validate_cuda_device_pointer(exp_avg_q, "exp_avg_q");
-        lfs::core::validate_cuda_device_pointer(exp_avg_scale, "exp_avg_scale");
-        lfs::core::validate_cuda_device_pointer(exp_avg_sq_q, "exp_avg_sq_q");
-        lfs::core::validate_cuda_device_pointer(exp_avg_sq_scale, "exp_avg_sq_scale");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg, "exp_avg");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq, "exp_avg_sq");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_q, "exp_avg_q");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_scale, "exp_avg_scale");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq_q, "exp_avg_sq_q");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq_scale, "exp_avg_sq_scale");
         if (n_rows <= 0 || row_size <= 0)
             return;
 
@@ -158,12 +158,12 @@ namespace fast_lfs::optimizer {
         const int slots_per_primitive,
         cudaStream_t stream) {
 
-        lfs::core::validate_cuda_device_pointer(exp_avg, "exp_avg");
-        lfs::core::validate_cuda_device_pointer(exp_avg_sq, "exp_avg_sq");
-        lfs::core::validate_cuda_device_pointer(exp_avg_q, "exp_avg_q");
-        lfs::core::validate_cuda_device_pointer(exp_avg_scale, "exp_avg_scale");
-        lfs::core::validate_cuda_device_pointer(exp_avg_sq_q, "exp_avg_sq_q");
-        lfs::core::validate_cuda_device_pointer(exp_avg_sq_scale, "exp_avg_sq_scale");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg, "exp_avg");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq, "exp_avg_sq");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_q, "exp_avg_q");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_scale, "exp_avg_scale");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq_q, "exp_avg_sq_q");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(exp_avg_sq_scale, "exp_avg_sq_scale");
         if (n_primitives <= 0 || slots_per_primitive <= 0)
             return;
 
@@ -181,8 +181,8 @@ namespace fast_lfs::optimizer {
         cudaStream_t stream) {
 
         // Validate pointers
-        lfs::core::validate_cuda_device_pointer(tensor, "tensor");
-        lfs::core::validate_cuda_device_pointer(indices_device, "indices_device");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(tensor, "tensor");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(indices_device, "indices_device");
 
         // Validate parameters
         if (n_indices <= 0)
@@ -210,9 +210,9 @@ namespace fast_lfs::optimizer {
         const std::uint8_t zero_point,
         cudaStream_t stream) {
 
-        lfs::core::validate_cuda_device_pointer(tensor_q, "tensor_q");
-        lfs::core::validate_cuda_device_pointer(scales, "scales");
-        lfs::core::validate_cuda_device_pointer(indices_device, "indices_device");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(tensor_q, "tensor_q");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(scales, "scales");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(indices_device, "indices_device");
         if (n_indices <= 0)
             return;
         if (row_size <= 0) {

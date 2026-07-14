@@ -3,9 +3,6 @@
 #include "core/assert.hpp"
 #include "rendering/vulkan_result.hpp"
 
-#include <format>
-#include <string>
-
 #ifndef SUBGROUP_SIZE
 #define SUBGROUP_SIZE 32
 #endif
@@ -41,27 +38,29 @@
 
 typedef int32_t sortingKey_t;
 
-#include <cassert>
-#include <cstdio>
-
-#include <stdexcept>
-
-#define _THROW_ERROR_ALWAYS(message)                                                          \
-    do {                                                                                      \
-        std::string msg = std::string(message) +                                              \
-                          ". From file `" + __FILE__ + "`, line " + std::to_string(__LINE__); \
-        printf("\033[91m%s\033[m\n", msg.c_str());                                            \
-        fflush(stdout);                                                                       \
-        throw std::runtime_error(msg);                                                        \
+#define _THROW_ERROR(message)                                              \
+    do {                                                                   \
+        ::lfs::rendering::throwVulkanError((message), __FILE__, __LINE__); \
     } while (0)
-
-#define _THROW_ERROR(...) _THROW_ERROR_ALWAYS(__VA_ARGS__)
 
 // Vulkan keeps its call-site idiom while sharing the core debug primitive.
 // In Release, neither the condition nor the formatting arguments are evaluated.
 #ifndef LFS_VK_DEBUG_ASSERT
-#define LFS_VK_DEBUG_ASSERT(condition, ...) \
-    LFS_DEBUG_ASSERT_MSG(condition, std::format(__VA_ARGS__))
+#if defined(NDEBUG)
+#define LFS_VK_DEBUG_ASSERT(condition, ...) ((void)0)
+#elif defined(__CUDA_ARCH__)
+#define LFS_VK_DEBUG_ASSERT(condition, ...) assert(condition)
+#else
+#define LFS_VK_DEBUG_ASSERT(condition, ...)                            \
+    do {                                                               \
+        if (!(condition)) [[unlikely]] {                               \
+            ::lfs::core::detail::assertion_failed(                     \
+                "LFS debug invariant", #condition,                     \
+                ::lfs::rendering::formatVulkanDiagnostic(__VA_ARGS__), \
+                LFS_SOURCE_SITE_CURRENT());                            \
+        }                                                              \
+    } while (false)
+#endif
 #endif
 
 #define _CEIL_DIV(x, m)   (((x) + (m)-1) / (m))

@@ -119,7 +119,8 @@ namespace lfs::vis {
         const VkResult lfs_vk_check_result_ = (expr);                   \
         if (lfs_vk_check_result_ != VK_SUCCESS) {                       \
             return ::lfs::vis::reportVkFailure(                         \
-                #expr, lfs_vk_check_result_, std::format(__VA_ARGS__)); \
+                #expr, lfs_vk_check_result_,                            \
+                ::lfs::rendering::formatVulkanDiagnostic(__VA_ARGS__)); \
         }                                                               \
     } while (false)
 
@@ -128,11 +129,25 @@ namespace lfs::vis {
         const VkResult lfs_vk_check_result_ = (expr);                    \
         if (lfs_vk_check_result_ != VK_SUCCESS) {                        \
             return this->setVkFailure(::lfs::vis::formatVkCheckFailure(  \
-                #expr, lfs_vk_check_result_, std::format(__VA_ARGS__))); \
+                #expr, lfs_vk_check_result_,                             \
+                ::lfs::rendering::formatVulkanDiagnostic(__VA_ARGS__))); \
         }                                                                \
     } while (false)
 
 #ifndef LFS_VK_DEBUG_ASSERT
-#define LFS_VK_DEBUG_ASSERT(condition, ...) \
-    LFS_DEBUG_ASSERT_MSG(condition, std::format(__VA_ARGS__))
+#if defined(NDEBUG)
+#define LFS_VK_DEBUG_ASSERT(condition, ...) ((void)0)
+#elif defined(__CUDA_ARCH__)
+#define LFS_VK_DEBUG_ASSERT(condition, ...) assert(condition)
+#else
+#define LFS_VK_DEBUG_ASSERT(condition, ...)                            \
+    do {                                                               \
+        if (!(condition)) [[unlikely]] {                               \
+            ::lfs::core::detail::assertion_failed(                     \
+                "LFS debug invariant", #condition,                     \
+                ::lfs::rendering::formatVulkanDiagnostic(__VA_ARGS__), \
+                LFS_SOURCE_SITE_CURRENT());                            \
+        }                                                              \
+    } while (false)
+#endif
 #endif

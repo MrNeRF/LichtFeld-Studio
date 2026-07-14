@@ -14,7 +14,6 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
-#include <format>
 #include <limits>
 #include <optional>
 
@@ -63,11 +62,12 @@ namespace {
         float* pointer = nullptr;
         const cudaError_t status = cudaMalloc(&pointer, count * sizeof(float));
         if (status != cudaSuccess) {
-            lfs::core::ensure_cuda_success(
+            LFS_ENSURE_CUDA_SUCCESS_MSG(
                 status,
                 "cudaMalloc(Lanczos coefficients)",
-                std::format("axis={}, element_count={}, requested_bytes={}",
-                            axis, count, count * sizeof(float)));
+                lfs::core::detail::format_cuda_safe(
+                    "axis={}, element_count={}, requested_bytes={}",
+                    axis, count, count * sizeof(float)));
         }
 
         lfs::core::CudaDeviceMemory<float> allocation;

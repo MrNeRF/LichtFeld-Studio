@@ -90,7 +90,7 @@ namespace gsplat_lfs {
                             LFS_SOURCE_SITE_CURRENT(),
                             lfs::core::CudaFailureDisposition::LogOnly);
                     }
-                    lfs::core::ensure_cuda_success(
+                    LFS_ENSURE_CUDA_SUCCESS_MSG(
                         status, "cudaEventRecord(gsplat sort cache)",
                         "fallback=stream synchronization");
                 }

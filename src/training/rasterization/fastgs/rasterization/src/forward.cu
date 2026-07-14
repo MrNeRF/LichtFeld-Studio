@@ -13,7 +13,6 @@
 #include <cstdint>
 #include <cub/cub.cuh>
 #include <cuda_runtime.h>
-#include <format>
 #include <functional>
 #include <limits>
 #include <stdexcept>
@@ -58,10 +57,11 @@ namespace {
             const cudaError_t err = cudaMalloc(&ptr, size);
 #endif
             if (err != cudaSuccess) {
-                lfs::core::ensure_cuda_success(
+                LFS_ENSURE_CUDA_SUCCESS_MSG(
                     err, "FastGS sort-buffer allocation",
-                    std::format("requested_bytes={}, label={}", size,
-                                label_ ? label_ : "rasterizer.fastgs.scratch"));
+                    lfs::core::detail::format_cuda_safe(
+                        "requested_bytes={}, label={}", size,
+                        label_ ? label_ : "rasterizer.fastgs.scratch"));
             }
             ptr_ = ptr;
             size_ = size;
@@ -86,8 +86,9 @@ namespace {
             if (status != cudaSuccess) {
                 lfs::core::ensure_cuda_success(
                     status, "FastGS sort-buffer free",
-                    std::format("ptr={}, bytes={}, label={}", ptr_, size_,
-                                label_ ? label_ : "rasterizer.fastgs.scratch"),
+                    lfs::core::detail::format_cuda_safe(
+                        "ptr={}, bytes={}, label={}", ptr_, size_,
+                        label_ ? label_ : "rasterizer.fastgs.scratch"),
                     LFS_SOURCE_SITE_CURRENT(),
                     lfs::core::CudaFailureDisposition::LogOnly);
             }

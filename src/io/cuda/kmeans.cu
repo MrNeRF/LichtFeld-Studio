@@ -1220,7 +1220,8 @@ namespace lfs::io {
 
         for (int iter = 0; iter < iterations; ++iter) {
             auto centroids_1d = centroids.squeeze();
-            auto [sorted_centroids, sort_idx] = centroids_1d.sort(0);
+            auto sorted_result = centroids_1d.sort(0);
+            auto& sorted_centroids = sorted_result.first;
 
             binary_search_1d_kernel<<<grid_size, BLOCK_SIZE>>>(
                 data_gpu.ptr<float>(),
@@ -1255,7 +1256,9 @@ namespace lfs::io {
         cudaDeviceSynchronize();
 
         auto centroids_1d = centroids.squeeze();
-        auto [final_sorted, final_idx] = centroids_1d.sort(0);
+        auto final_sort_result = centroids_1d.sort(0);
+        auto& final_sorted = final_sort_result.first;
+        auto& final_idx = final_sort_result.second;
         centroids = final_sorted.unsqueeze(1);
 
         auto inv_map = Tensor::zeros({static_cast<size_t>(k)}, Device::CPU, DataType::Int32);

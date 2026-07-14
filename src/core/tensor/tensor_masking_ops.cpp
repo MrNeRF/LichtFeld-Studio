@@ -132,12 +132,17 @@ namespace lfs::core {
     // ============= Masking Operations =============
     Tensor Tensor::masked_select(const Tensor& mask) const {
         LFS_CUDA_BREADCRUMB_STREAM("tensor.masked_select", stream());
-        tensor_contract::require_valid(*this, "masked_select", "input");
-        tensor_contract::require_valid(mask, "masked_select", "mask");
+        tensor_contract::require_valid(
+            *this, "masked_select", "input", LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_valid(
+            mask, "masked_select", "mask", LFS_SOURCE_SITE_CURRENT());
         tensor_contract::require_dtype(
-            mask, {DataType::Bool, DataType::UInt8}, "masked_select", "mask");
-        tensor_contract::require_shape(*this, mask, "masked_select", "input", "mask");
-        tensor_contract::require_same_device(*this, mask, "masked_select", "input", "mask");
+            mask, {DataType::Bool, DataType::UInt8}, "masked_select", "mask",
+            LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_shape(
+            *this, mask, "masked_select", "input", "mask", LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_same_device(
+            *this, mask, "masked_select", "input", "mask", LFS_SOURCE_SITE_CURRENT());
 
         // Count TRUE values in mask
         size_t output_size = mask.count_nonzero();
@@ -208,12 +213,17 @@ namespace lfs::core {
     }
 
     Tensor& Tensor::masked_fill_(const Tensor& mask, float value) {
-        tensor_contract::require_valid(*this, "masked_fill_", "destination");
-        tensor_contract::require_valid(mask, "masked_fill_", "mask");
+        tensor_contract::require_valid(
+            *this, "masked_fill_", "destination", LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_valid(
+            mask, "masked_fill_", "mask", LFS_SOURCE_SITE_CURRENT());
         tensor_contract::require_dtype(
-            mask, {DataType::Bool, DataType::UInt8}, "masked_fill_", "mask");
-        tensor_contract::require_shape(*this, mask, "masked_fill_", "destination", "mask");
-        tensor_contract::require_same_device(*this, mask, "masked_fill_", "destination", "mask");
+            mask, {DataType::Bool, DataType::UInt8}, "masked_fill_", "mask",
+            LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_shape(
+            *this, mask, "masked_fill_", "destination", "mask", LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_same_device(
+            *this, mask, "masked_fill_", "destination", "mask", LFS_SOURCE_SITE_CURRENT());
         LFS_ASSERT_MSG(std::isfinite(value),
                        "masked_fill_ value must be finite");
         assert_masked_fill_value_representable(dtype_, value);

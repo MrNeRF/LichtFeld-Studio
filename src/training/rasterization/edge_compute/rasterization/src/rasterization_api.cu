@@ -40,11 +40,11 @@ namespace edge_compute::rasterization {
             stream = lfs::core::getCurrentCUDAStream();
         }
         // Validate inputs using pure CUDA validation
-        lfs::core::validate_cuda_device_pointer(means_ptr, "means_ptr");
-        lfs::core::validate_cuda_device_pointer(scales_raw_ptr, "scales_raw_ptr");
-        lfs::core::validate_cuda_device_pointer(rotations_raw_ptr, "rotations_raw_ptr");
-        lfs::core::validate_cuda_device_pointer(opacities_raw_ptr, "opacities_raw_ptr");
-        lfs::core::validate_cuda_device_pointer(w2c_ptr, "w2c_ptr");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(means_ptr, "means_ptr");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(scales_raw_ptr, "scales_raw_ptr");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(rotations_raw_ptr, "rotations_raw_ptr");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(opacities_raw_ptr, "opacities_raw_ptr");
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(w2c_ptr, "w2c_ptr");
 
         if (n_primitives <= 0 || width <= 0 || height <= 0) {
             throw std::runtime_error("Invalid dimensions in forward_raw");

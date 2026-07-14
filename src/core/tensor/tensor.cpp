@@ -302,6 +302,10 @@ namespace lfs::core {
         return oss.str();
     }
 
+    void Tensor::log_storage_memory() {
+        log_storage_memory({});
+    }
+
     void Tensor::log_storage_memory(const std::string_view label) {
         if (label.empty()) {
             LOG_INFO("{}", storage_memory_summary());
@@ -326,6 +330,14 @@ namespace lfs::core {
     Device TensorLeaf::device_impl() const { return tensor_ptr_->device(); }
     DataType TensorLeaf::dtype_impl() const { return tensor_ptr_->dtype(); }
     cudaStream_t TensorLeaf::stream_hint_impl() const { return tensor_ptr_ ? tensor_ptr_->stream() : nullptr; }
+
+    Tensor Tensor::make_deferred_expr_tensor(TensorShape shape,
+                                             const Device device,
+                                             const DataType dtype,
+                                             std::function<Tensor()> materializer) {
+        return make_deferred_expr_tensor(
+            std::move(shape), device, dtype, std::move(materializer), {});
+    }
 
     Tensor Tensor::make_deferred_expr_tensor(TensorShape shape,
                                              Device device,
@@ -843,7 +855,7 @@ namespace lfs::core {
     // ============= Deep Copy (explicit) =============
     Tensor Tensor::clone() const {
         LFS_CUDA_BREADCRUMB_STREAM("tensor.clone", stream());
-        debug::OpTraceGuard trace("clone", *this);
+        debug::OpTraceGuard trace("clone", *this, LFS_SOURCE_SITE_CURRENT());
 
         LFS_ASSERT_MSG(is_valid(),
                        "clone requires a valid tensor");
@@ -1095,7 +1107,7 @@ namespace lfs::core {
         LFS_CUDA_BREADCRUMB_STREAM("tensor.device_copy", stream);
         materialize_if_deferred();
         const char* op_name = (device == Device::CUDA) ? "to_cuda" : "to_cpu";
-        debug::OpTraceGuard trace(op_name, *this);
+        debug::OpTraceGuard trace(op_name, *this, LFS_SOURCE_SITE_CURRENT());
 
         LFS_ASSERT_MSG(is_valid(),
                        "device transfer requires a valid tensor");
@@ -2183,6 +2195,10 @@ namespace lfs::core {
 
     // ============= Debug Functions =============
 
+    void Tensor::log_info() const {
+        log_info({});
+    }
+
     void Tensor::log_info(const std::string& name) const {
         const std::string& prefix = name.empty() ? "Tensor" : name;
 
@@ -2207,6 +2223,10 @@ namespace lfs::core {
         oss << "]";
 
         LOG_INFO("{}: {}", prefix, oss.str());
+    }
+
+    void Tensor::print_formatted() const {
+        print_formatted({}, 10);
     }
 
     void Tensor::print_formatted(const std::string& name, size_t max_per_dim) const {
@@ -2665,6 +2685,10 @@ namespace lfs::core {
 
     // ============= Validation & Assertions =============
 
+    Tensor& Tensor::assert_shape(TensorShape expected) {
+        return assert_shape(std::move(expected), {});
+    }
+
     Tensor& Tensor::assert_shape(TensorShape expected, const std::string& msg) {
         if (!is_valid()) {
             std::string error_msg = "Cannot assert shape on invalid tensor";
@@ -3014,7 +3038,7 @@ namespace lfs::core {
                     cleanup_status, "cudaFree(failed zeros_direct allocation)", {},
                     LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
             }
-            ensure_cuda_success(
+            LFS_ENSURE_CUDA_SUCCESS_MSG(
                 err, "cudaMemset(zeros_direct)", std::format("bytes={}", total_bytes));
         }
 

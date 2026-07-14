@@ -64,10 +64,16 @@ namespace lfs::core {
     public:
         static Logger& get();
 
-        void init(LogLevel console_level = LogLevel::Info,
-                  const std::string& log_file = "",
-                  const std::string& filter_pattern = "",
-                  bool use_stderr = false);
+        void init();
+        void init(LogLevel console_level);
+        void init(LogLevel console_level, const std::string& log_file);
+        void init(LogLevel console_level,
+                  const std::string& log_file,
+                  const std::string& filter_pattern);
+        void init(LogLevel console_level,
+                  const std::string& log_file,
+                  const std::string& filter_pattern,
+                  bool use_stderr);
 
         LogHandlerToken add_log_handler(LogHandler handler);
         void remove_log_handler(LogHandlerToken handler_token);
@@ -192,11 +198,9 @@ namespace lfs::core {
     // Scoped timer for performance measurement
     class LFS_LOGGER_API ScopedTimer {
     public:
-        explicit ScopedTimer(std::string name, LogLevel level = LogLevel::Performance,
-                             SourceSite loc = LFS_SOURCE_SITE_CURRENT());
+        explicit ScopedTimer(std::string name, LogLevel level, SourceSite loc);
         ScopedTimer(std::string name, double min_log_ms,
-                    LogLevel level = LogLevel::Performance,
-                    SourceSite loc = LFS_SOURCE_SITE_CURRENT());
+                    LogLevel level, SourceSite loc);
         ~ScopedTimer();
 
     private:
@@ -236,10 +240,18 @@ namespace lfs::core {
 #define _LOG_TIMER_CONCAT_IMPL(x, y)  x##y
 #define _LOG_TIMER_MACRO_CONCAT(x, y) _LOG_TIMER_CONCAT_IMPL(x, y)
 
-#define LOG_TIMER(name) ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)(name)
+#define LOG_TIMER(name)                                                                  \
+    ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)(              \
+        (name), ::lfs::core::LogLevel::Performance, LFS_SOURCE_SITE_CURRENT())
 #define LOG_TIMER_THRESHOLD(name, min_log_ms) \
-    ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)(name, min_log_ms)
-#define LOG_TIMER_TRACE(name) ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)(name, ::lfs::core::LogLevel::Trace)
-#define LOG_TIMER_DEBUG(name) ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)(name, ::lfs::core::LogLevel::Debug)
+    ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)( \
+        (name), (min_log_ms), ::lfs::core::LogLevel::Performance,          \
+        LFS_SOURCE_SITE_CURRENT())
+#define LOG_TIMER_TRACE(name)                                                    \
+    ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)(      \
+        (name), ::lfs::core::LogLevel::Trace, LFS_SOURCE_SITE_CURRENT())
+#define LOG_TIMER_DEBUG(name)                                                    \
+    ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)(      \
+        (name), ::lfs::core::LogLevel::Debug, LFS_SOURCE_SITE_CURRENT())
 
 // Memory logging: use LOG_DEBUG("[MEM] ...") and filter with --log-filter "*MEM*"

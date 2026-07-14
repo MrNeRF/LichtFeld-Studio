@@ -103,7 +103,8 @@ namespace lfs::core {
         void merge_all_streams_into_virgin() {
             for (auto& lists : free_lists_) {
                 std::lock_guard<std::mutex> lock(lists.mutex);
-                for (auto& [stream, blocks] : lists.per_stream) {
+                for (auto& entry : lists.per_stream) {
+                    auto& blocks = entry.second;
                     lists.virgin.insert(lists.virgin.end(), blocks.begin(), blocks.end());
                 }
                 lists.per_stream.clear();

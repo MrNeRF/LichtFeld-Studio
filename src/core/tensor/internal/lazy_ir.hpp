@@ -73,9 +73,12 @@ namespace lfs::core {
         LFS_CORE_API void lazy_ir_record_reduce(const Tensor& input,
                                                 const Tensor& output,
                                                 std::string_view op_name);
+        LFS_CORE_API uint64_t lazy_ir_record_deferred(const Tensor& output);
         LFS_CORE_API uint64_t lazy_ir_record_deferred(const Tensor& output,
-                                                      std::string_view op_name = "deferred_expr",
-                                                      const std::vector<uint64_t>& input_ids = {});
+                                                      std::string_view op_name);
+        LFS_CORE_API uint64_t lazy_ir_record_deferred(const Tensor& output,
+                                                      std::string_view op_name,
+                                                      const std::vector<uint64_t>& input_ids);
 
     } // namespace internal
 

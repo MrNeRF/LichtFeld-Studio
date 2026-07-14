@@ -29,7 +29,8 @@ namespace lfs::training {
     public:
         using Config = PPISPControllerPoolConfig;
 
-        PPISPControllerPool(int num_cameras, int total_iterations, Config config = {});
+        PPISPControllerPool(int num_cameras, int total_iterations);
+        PPISPControllerPool(int num_cameras, int total_iterations, Config config);
         ~PPISPControllerPool() = default;
 
         PPISPControllerPool(const PPISPControllerPool&) = delete;

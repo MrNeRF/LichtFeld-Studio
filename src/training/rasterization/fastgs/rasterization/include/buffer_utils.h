@@ -173,7 +173,7 @@ namespace fast_lfs::rasterization {
                 phase ? phase : "<unknown>", n_primitives, n_tiles);
         }
 
-        lfs::core::ensure_cuda_success(err, name, message);
+        LFS_ENSURE_CUDA_SUCCESS_MSG(err, name, message);
     }
 
     inline void sync_fastgs_phase_if_requested(

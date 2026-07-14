@@ -15,7 +15,6 @@
 #include "utils.h"
 #include <cstring>
 #include <cuda_runtime.h>
-#include <format>
 #include <functional>
 #include <stdexcept>
 #include <string>
@@ -42,7 +41,8 @@ namespace fast_lfs::rasterization {
             if (status != cudaSuccess) {
                 lfs::core::ensure_cuda_success(
                     status, "FastGS sorted-index buffer free",
-                    std::format("ptr={}, stream={}", ptr, static_cast<void*>(stream)),
+                    lfs::core::detail::format_cuda_safe(
+                        "ptr={}, stream={}", ptr, static_cast<void*>(stream)),
                     LFS_SOURCE_SITE_CURRENT(),
                     lfs::core::CudaFailureDisposition::LogOnly);
             }
@@ -61,33 +61,37 @@ namespace fast_lfs::rasterization {
             int device_count = 0;
             const cudaError_t count_err = cudaGetDeviceCount(&device_count);
             if (count_err != cudaSuccess) {
-                lfs::core::ensure_cuda_success(
+                LFS_ENSURE_CUDA_SUCCESS_MSG(
                     count_err, "cudaGetDeviceCount(FastGS preflight)", phase);
             }
             LFS_ASSERT_MSG(device_count > 0,
-                           std::format("{}: no CUDA devices are visible", phase));
+                           lfs::core::detail::format_cuda_safe(
+                               "{}: no CUDA devices are visible", phase));
 
             int current_device = -1;
             const cudaError_t device_err = cudaGetDevice(&current_device);
             if (device_err != cudaSuccess) {
-                lfs::core::ensure_cuda_success(
+                LFS_ENSURE_CUDA_SUCCESS_MSG(
                     device_err, "cudaGetDevice(FastGS preflight)",
-                    std::format("phase={}, device_count={}", phase, device_count));
+                    lfs::core::detail::format_cuda_safe(
+                        "phase={}, device_count={}", phase, device_count));
             }
             LFS_ASSERT_MSG(
                 current_device >= 0 && current_device < device_count,
-                std::format("{}: current CUDA device ordinal is out of range "
-                            "(current_device={}, device_count={})",
-                            phase, current_device, device_count));
+                lfs::core::detail::format_cuda_safe(
+                    "{}: current CUDA device ordinal is out of range "
+                    "(current_device={}, device_count={})",
+                    phase, current_device, device_count));
             return current_device;
         }
 
         void checked_no_pending_cuda_error(const char* phase) {
             const cudaError_t pending_err = cudaPeekAtLastError();
             if (pending_err != cudaSuccess) {
-                lfs::core::ensure_cuda_success(
+                LFS_ENSURE_CUDA_SUCCESS_MSG(
                     pending_err, "cudaPeekAtLastError(FastGS preflight)",
-                    std::format("{}: pending CUDA error before buffer sizing", phase));
+                    lfs::core::detail::format_cuda_safe(
+                        "{}: pending CUDA error before buffer sizing", phase));
             }
         }
 
@@ -96,23 +100,26 @@ namespace fast_lfs::rasterization {
             const char* name,
             int current_device) {
             LFS_ASSERT_MSG(ptr != nullptr,
-                           std::format("FastGS forward preflight: {} is null", name));
+                           lfs::core::detail::format_cuda_safe(
+                               "FastGS forward preflight: {} is null", name));
 
             cudaPointerAttributes attrs{};
             const cudaError_t attr_err = cudaPointerGetAttributes(&attrs, ptr);
             if (attr_err != cudaSuccess) {
-                lfs::core::ensure_cuda_success(
+                LFS_ENSURE_CUDA_SUCCESS_MSG(
                     attr_err, "cudaPointerGetAttributes(FastGS preflight)", name);
             }
             LFS_ASSERT_MSG(
                 attrs.type == cudaMemoryTypeDevice,
-                std::format("FastGS forward preflight: {} is not device memory (type={})",
-                            name, cuda_memory_type_name(attrs.type)));
+                lfs::core::detail::format_cuda_safe(
+                    "FastGS forward preflight: {} is not device memory (type={})",
+                    name, cuda_memory_type_name(attrs.type)));
             LFS_ASSERT_MSG(
                 attrs.device == current_device,
-                std::format("FastGS forward preflight: {} is allocated on CUDA device {} "
-                            "but the current CUDA device is {}",
-                            name, attrs.device, current_device));
+                lfs::core::detail::format_cuda_safe(
+                    "FastGS forward preflight: {} is allocated on CUDA device {} "
+                    "but the current CUDA device is {}",
+                    name, attrs.device, current_device));
         }
 
         void validate_fastgs_forward_cuda_preflight(
@@ -457,26 +464,26 @@ namespace fast_lfs::rasterization {
 
         try {
             // Validate required inputs using pure CUDA validation
-            lfs::core::validate_cuda_device_pointer(grad_image_ptr, "grad_image_ptr");
-            lfs::core::validate_cuda_device_pointer(grad_alpha_ptr, "grad_alpha_ptr");
-            lfs::core::validate_cuda_device_pointer_optional(grad_depth_ptr, "grad_depth_ptr");
-            lfs::core::validate_cuda_device_pointer_optional(grad_normal_ptr, "grad_normal_ptr");
-            lfs::core::validate_cuda_device_pointer(image_ptr, "image_ptr");
-            lfs::core::validate_cuda_device_pointer(alpha_ptr, "alpha_ptr");
-            lfs::core::validate_cuda_device_pointer(means_ptr, "means_ptr");
-            lfs::core::validate_cuda_device_pointer(scales_raw_ptr, "scales_raw_ptr");
-            lfs::core::validate_cuda_device_pointer(rotations_raw_ptr, "rotations_raw_ptr");
-            lfs::core::validate_cuda_device_pointer(raw_opacities_ptr, "raw_opacities_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER(grad_image_ptr, "grad_image_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER(grad_alpha_ptr, "grad_alpha_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(grad_depth_ptr, "grad_depth_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(grad_normal_ptr, "grad_normal_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER(image_ptr, "image_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER(alpha_ptr, "alpha_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER(means_ptr, "means_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER(scales_raw_ptr, "scales_raw_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER(rotations_raw_ptr, "rotations_raw_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER(raw_opacities_ptr, "raw_opacities_ptr");
             if (active_sh_bases > 1) {
-                lfs::core::validate_cuda_device_pointer(sh_coefficients_rest_ptr, "sh_coefficients_rest_ptr");
+                LFS_VALIDATE_CUDA_DEVICE_POINTER(sh_coefficients_rest_ptr, "sh_coefficients_rest_ptr");
             }
-            lfs::core::validate_cuda_device_pointer(w2c_ptr, "w2c_ptr");
-            lfs::core::validate_cuda_device_pointer(cam_position_ptr, "cam_position_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER(w2c_ptr, "w2c_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER(cam_position_ptr, "cam_position_ptr");
 
             // Optional pointer
-            lfs::core::validate_cuda_device_pointer_optional(densification_info_ptr, "densification_info_ptr");
-            lfs::core::validate_cuda_device_pointer_optional(densification_error_map_ptr, "densification_error_map_ptr");
-            lfs::core::validate_cuda_device_pointer_optional(grad_w2c_ptr, "grad_w2c_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(densification_info_ptr, "densification_info_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(densification_error_map_ptr, "densification_error_map_ptr");
+            LFS_VALIDATE_CUDA_DEVICE_POINTER_OPTIONAL(grad_w2c_ptr, "grad_w2c_ptr");
         } catch (const std::exception& e) {
             release_forward_context(forward_ctx);
             last_backward_error = e.what();
