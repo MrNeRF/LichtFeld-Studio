@@ -62,7 +62,7 @@ TEST_F(MeshLoaderTest, LoadsGeometryNormalsAndBoundedIndices) {
 
     const auto* mesh_ptr = std::get_if<std::shared_ptr<MeshData>>(&result->data);
     ASSERT_NE(mesh_ptr, nullptr);
-    const auto& mesh = **mesh_ptr;
+    auto& mesh = **mesh_ptr;
     EXPECT_EQ(mesh.vertex_count(), 3);
     EXPECT_EQ(mesh.face_count(), 1);
     ASSERT_TRUE(mesh.has_normals());
