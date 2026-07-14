@@ -69,7 +69,7 @@ TEST(TensorAdvancedTest, ApplyAndInplaceChainsHaveDistinctOwnership) {
 }
 
 TEST(TensorAdvancedTest, SpecialValuesAreDetectedAndClamped) {
-    const auto tensor = Tensor::from_vector(
+    auto tensor = Tensor::from_vector(
         std::vector<float>{
             std::numeric_limits<float>::quiet_NaN(),
             std::numeric_limits<float>::infinity(),
@@ -116,8 +116,8 @@ TEST(TensorAdvancedTest, ProfilingWrapperPreservesResult) {
 }
 
 TEST(TensorAdvancedTest, MetadataAssertionsRejectMismatches) {
-    const auto cuda_float = Tensor::ones({3, 4}, Device::CUDA, DataType::Float32);
-    const auto cpu_int = Tensor::zeros({3, 4}, Device::CPU, DataType::Int32);
+    auto cuda_float = Tensor::ones({3, 4}, Device::CUDA, DataType::Float32);
+    auto cpu_int = Tensor::zeros({3, 4}, Device::CPU, DataType::Int32);
 
     EXPECT_NO_THROW(cuda_float.assert_shape({3, 4}, "shape"));
     EXPECT_THROW(cuda_float.assert_shape({4, 3}, "shape"), TensorError);
