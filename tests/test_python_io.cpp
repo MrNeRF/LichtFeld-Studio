@@ -150,7 +150,7 @@ protected:
         if (sh_coeffs > 0) {
             auto* shN_ptr = shN.ptr<float>();
             for (size_t i = 0; i < num_points * sh_coeffs * 3; ++i) {
-                shN_ptr[i] = 0.1f * static_cast<float>((i % 10) - 5);
+                shN_ptr[i] = 0.1f * static_cast<float>(static_cast<int>(i % 10) - 5);
             }
         }
 
@@ -578,8 +578,9 @@ TEST_F(PythonIOTest, LoadCOLMAPDataset) {
 
     auto loader = Loader::create();
     LoadOptions options;
-    options.resize_factor = 8; // Downscale for faster test
-    options.images_folder = "images_8";
+    // The committed masks are quarter-resolution and intentionally pair with images_4.
+    options.resize_factor = 4;
+    options.images_folder = "images_4";
 
     auto result = loader->load(bicycle_dir, options);
     ASSERT_TRUE(result.has_value()) << "Failed to load: " << result.error().format();
@@ -1080,6 +1081,37 @@ TEST_F(PythonIOTest, RadSaveReportsProgressToCompletion) {
     EXPECT_TRUE(fs::exists(output_path));
     EXPECT_GT(fs::file_size(output_path), 0);
     expect_progress_completed(updates);
+}
+
+TEST_F(PythonIOTest, RadSaveLoadRoundtripPreservesCompactSplat) {
+    const auto original = create_test_splat(64, 1);
+    const auto output_path = temp_dir / "compact_roundtrip.rad";
+
+    RadSaveOptions options;
+    options.output_path = output_path;
+    options.compression_level = 1;
+    const auto save_result = save_rad(original, options);
+    ASSERT_TRUE(save_result.has_value()) << save_result.error().format();
+
+    const auto loaded = load_rad(output_path);
+    ASSERT_TRUE(loaded.has_value()) << loaded.error();
+    EXPECT_EQ(loaded->size(), original.size());
+    EXPECT_EQ(loaded->get_max_sh_degree(), original.get_max_sh_degree());
+
+    const auto expect_tensor = [](const Tensor& expected,
+                                  const Tensor& actual,
+                                  const char* name) {
+        SCOPED_TRACE(name);
+        EXPECT_EQ(actual.shape(), expected.shape());
+        EXPECT_EQ(actual.dtype(), expected.dtype());
+        EXPECT_TRUE(actual.all_close(expected, 2e-3f, 2e-3f));
+    };
+    expect_tensor(original.means_raw(), loaded->means_raw(), "means");
+    expect_tensor(original.sh0_raw(), loaded->sh0_raw(), "sh0");
+    expect_tensor(original.shN_raw(), loaded->shN_raw(), "shN");
+    expect_tensor(original.scaling_raw(), loaded->scaling_raw(), "scaling");
+    expect_tensor(original.rotation_raw(), loaded->rotation_raw(), "rotation");
+    expect_tensor(original.opacity_raw(), loaded->opacity_raw(), "opacity");
 }
 
 // Test progress callback

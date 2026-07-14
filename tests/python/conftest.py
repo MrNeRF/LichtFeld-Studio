@@ -102,6 +102,46 @@ def isolate_asset_manager_catalog(tmp_path, monkeypatch):
     return catalog_dir
 
 
+@pytest.fixture(autouse=True)
+def isolate_lichtfeld_module_overrides():
+    """Keep test-local module stubs from leaking into later test modules.
+
+    Several UI tests replace ``lichtfeld`` and reload ``lfs_plugins`` against
+    that stub. Restoring only ``lichtfeld`` leaves already-imported plugin
+    modules holding the stub, making otherwise independent files fail according
+    to collection order. Preserve the module graph seen at test entry and put it
+    back after the test.
+    """
+    prefixes = ("lichtfeld", "lfs_plugins")
+
+    def is_managed(name):
+        return any(name == prefix or name.startswith(f"{prefix}.") for prefix in prefixes)
+
+    before = {name: module for name, module in sys.modules.items() if is_managed(name)}
+    yield
+
+    for name in [name for name in sys.modules if is_managed(name) and name not in before]:
+        del sys.modules[name]
+    sys.modules.update(before)
+
+
+@pytest.fixture
+def bypass_plugin_installer(monkeypatch):
+    """Keep manager behavior tests independent from the bundled uv runtime."""
+    from lfs_plugins.installer import PluginInstaller
+
+    monkeypatch.setattr(
+        PluginInstaller,
+        "ensure_venv",
+        lambda self, *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        PluginInstaller,
+        "install_dependencies",
+        lambda self, *args, **kwargs: True,
+    )
+
+
 @pytest.fixture(scope="session")
 def lf():
     """Import and return the lichtfeld module.

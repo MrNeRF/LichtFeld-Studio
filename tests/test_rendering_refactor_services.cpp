@@ -27,6 +27,7 @@
 #include <filesystem>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
+#include <thread>
 #include <vector>
 
 namespace lfs::vis {
@@ -79,6 +80,14 @@ namespace lfs::vis {
                     EXPECT_NEAR(actual[col][row], expected[col][row], epsilon);
                 }
             }
+        }
+
+        void waitUntilResizeSettleReady(ViewportFrameLifecycleService& service) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+            while (!service.resizeSettleReady() && std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            ASSERT_TRUE(service.resizeSettleReady());
         }
 
         void ensureCameraImageLoader() {
@@ -906,6 +915,7 @@ namespace lfs::vis {
         EXPECT_EQ(debounce_step_2.dirty, DirtyFlag::OVERLAY);
         EXPECT_FALSE(debounce_step_2.completed);
 
+        waitUntilResizeSettleReady(service);
         const auto debounce_step_3 = service.handleViewportResize({800, 600});
         EXPECT_EQ(debounce_step_3.dirty, DirtyFlag::VIEWPORT | DirtyFlag::CAMERA);
         EXPECT_TRUE(debounce_step_3.completed);
@@ -926,6 +936,7 @@ namespace lfs::vis {
         EXPECT_EQ(service.handleViewportResize({800, 600}).dirty, DirtyFlag::OVERLAY);
         EXPECT_EQ(service.handleViewportResize({800, 600}).dirty, DirtyFlag::OVERLAY);
 
+        waitUntilResizeSettleReady(service);
         const auto completed = service.handleViewportResize({800, 600});
         EXPECT_EQ(completed.dirty, DirtyFlag::VIEWPORT | DirtyFlag::CAMERA);
         EXPECT_TRUE(completed.completed);
@@ -943,6 +954,7 @@ namespace lfs::vis {
         EXPECT_EQ(service.handleViewportResize({640, 480}).dirty, DirtyFlag::OVERLAY);
         EXPECT_EQ(service.handleViewportResize({640, 480}).dirty, DirtyFlag::OVERLAY);
 
+        waitUntilResizeSettleReady(service);
         const auto completed = service.handleViewportResize({640, 480});
         EXPECT_EQ(completed.dirty, DirtyFlag::VIEWPORT | DirtyFlag::CAMERA);
         EXPECT_TRUE(completed.completed);

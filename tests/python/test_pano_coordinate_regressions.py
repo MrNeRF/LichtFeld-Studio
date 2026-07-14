@@ -42,10 +42,13 @@ def test_vksplat_equirectangular_shaders_project_rays_and_wrap_tiles():
 
 def test_viewer_equirectangular_software_projection_uses_rasterizer_mapping():
     source = _read("src/rendering/raster_rendering_engine.cpp")
+    mapping = _read("src/rendering/environment_math.hpp")
 
-    assert "const float u = 0.5f + std::atan2(dir.x, -dir.z) / (2.0f * glm::pi<float>());" in source
-    assert "const float v = 0.5f + std::asin(std::clamp(dir.y, -1.0f, 1.0f)) / glm::pi<float>();" in source
-    assert "const float py = v * static_cast<float>(height - 1);" in source
+    assert "envmath::equirectUvForDirection(envmath::normalized(rotated))" in source
+    assert "const float longitude = std::atan2(world_dir.x, -world_dir.z);" in mapping
+    assert "const float latitude = std::asin(clampf(world_dir.y, -1.0f, 1.0f));" in mapping
+    assert "return {longitude / (2.0f * kPi) + 0.5f, 0.5f - latitude / kPi};" in mapping
+    assert "const float y = v * static_cast<float>(height - 1);" in mapping
 
 
 def test_gpu_environment_pass_uses_top_down_viewport_coordinates():

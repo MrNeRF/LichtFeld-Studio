@@ -887,8 +887,9 @@ TEST_F(PythonIntegrationTest, SceneCameraExposesVisualizerRenderContract) {
 
     auto loader = lfs::io::Loader::create();
     lfs::io::LoadOptions options;
-    options.resize_factor = 8;
-    options.images_folder = "images_8";
+    // The committed masks are quarter-resolution and intentionally pair with images_4.
+    options.resize_factor = 4;
+    options.images_folder = "images_4";
 
     auto load_result = loader->load(dataset_dir, options);
     ASSERT_TRUE(load_result.has_value()) << "Failed to load dataset: " << load_result.error().format();

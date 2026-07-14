@@ -7,9 +7,12 @@
  */
 
 #include "core/tensor.hpp"
+#include <array>
 #include <gtest/gtest.h>
 #include <random>
+#include <span>
 #include <torch/torch.h>
+#include <vector>
 
 using namespace lfs::core;
 
@@ -85,6 +88,56 @@ protected:
         }
     }
 };
+
+TEST_F(BoolAnyAllTest, SumReturnsInt64CountOnCpuAndCuda) {
+    for (const auto device : {Device::CPU, Device::CUDA}) {
+        const auto values = Tensor::from_vector(
+            std::vector<bool>{true, false, true, true}, {4}, device);
+
+        const auto result = values.sum();
+
+        EXPECT_EQ(result.dtype(), DataType::Int64) << device_name(device);
+        EXPECT_EQ(result.item<int64_t>(), 3) << device_name(device);
+    }
+}
+
+TEST_F(BoolAnyAllTest, AnyScalarReturnsHostBoolOnCpuAndCuda) {
+    for (const auto device : {Device::CPU, Device::CUDA}) {
+        const auto all_false = Tensor::full_bool({4}, false, device);
+        auto one_true = all_false.clone();
+        one_true.set_bool({2}, true);
+
+        EXPECT_FALSE(all_false.any_scalar()) << device_name(device);
+        EXPECT_TRUE(one_true.any_scalar()) << device_name(device);
+    }
+}
+
+TEST_F(BoolAnyAllTest, LargeBoolSumPreservesDensificationCounts) {
+    constexpr size_t count = 5'000'000;
+
+    const auto all_false = Tensor::full_bool({count}, false, Device::CUDA);
+    const auto all_true = Tensor::full_bool({count}, true, Device::CUDA);
+
+    EXPECT_EQ(all_false.sum().item<int64_t>(), 0);
+    EXPECT_EQ(all_true.sum().item<int64_t>(), static_cast<int64_t>(count));
+}
+
+TEST_F(BoolAnyAllTest, GetBoolSupportsRanksSpansAndCuda) {
+    const auto cpu = Tensor::from_vector(
+        std::vector<bool>{false, true, false, false, false, false, true, false},
+        {2, 2, 2}, Device::CPU);
+    EXPECT_TRUE(cpu.get_bool({0, 0, 1}));
+    EXPECT_TRUE(cpu.get_bool({1, 1, 0}));
+    EXPECT_FALSE(cpu.get_bool({1, 0, 1}));
+
+    const std::array<size_t, 3> index = {1, 1, 0};
+    EXPECT_TRUE(cpu.get_bool(std::span<const size_t>(index)));
+
+    const auto cuda = cpu.to(Device::CUDA);
+    EXPECT_TRUE(cuda.get_bool({0, 0, 1}));
+    EXPECT_TRUE(cuda.get_bool({1, 1, 0}));
+    EXPECT_FALSE(cuda.get_bool({0, 1, 1}));
+}
 
 // ============= Full Reduction Tests =============
 
@@ -537,4 +590,14 @@ TEST_F(BoolAnyAllTest, CUDA_All_AxisReduction) {
 
         compare_bool_tensors(lfs_result, torch_result, "CUDA all(dim=" + std::to_string(dim) + ")");
     }
+}
+
+TEST_F(BoolAnyAllTest, CropBoxRowsRequireAllCoordinatesInside) {
+    auto inside_coordinates = Tensor::full_bool({6, 3}, false, Device::CUDA);
+    inside_coordinates.slice(0, 0, 2).fill_(true);
+    inside_coordinates.slice(0, 2, 4).slice(1, 0, 2).fill_(true);
+
+    const auto inside_rows = inside_coordinates.all(1);
+    EXPECT_EQ(inside_rows.cpu().to_vector_bool(),
+              (std::vector<bool>{true, true, false, false, false, false}));
 }

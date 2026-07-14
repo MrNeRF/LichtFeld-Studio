@@ -273,6 +273,18 @@ TEST_F(TensorBitwiseTest, BitwiseOrAllCombinations) {
     EXPECT_FALSE(values[3]); // false | false = false
 }
 
+TEST_F(TensorBitwiseTest, LogicalXorMatchesTruthTable) {
+    for (const auto device : {Device::CPU, Device::CUDA}) {
+        const auto lhs = Tensor::from_vector(
+            std::vector<bool>{false, false, true, true}, {4}, device);
+        const auto rhs = Tensor::from_vector(
+            std::vector<bool>{false, true, false, true}, {4}, device);
+
+        EXPECT_EQ(lhs.logical_xor(rhs).cpu().to_vector_bool(),
+                  (std::vector<bool>{false, true, true, false}));
+    }
+}
+
 TEST_F(TensorBitwiseTest, BitwiseOrOnNonBoolFails) {
     auto a = Tensor::ones({4}, Device::CPU);
     auto b = Tensor::zeros({4}, Device::CPU);

@@ -7,6 +7,7 @@
 #include <chrono>
 #include <gtest/gtest.h>
 #include <thread>
+#include <vector>
 
 using namespace lfs::python;
 
@@ -60,10 +61,12 @@ TEST_F(UvRunnerTest, RunUvHelp) {
     UvRunner runner;
 
     std::string output;
+    std::vector<std::string> lines;
     bool completed = false;
 
     runner.set_output_callback([&](const std::string& line, bool, bool) {
         output += line + "\n";
+        lines.push_back(line);
     });
 
     runner.set_completion_callback([&](bool, int) {
@@ -81,6 +84,11 @@ TEST_F(UvRunnerTest, RunUvHelp) {
 
     EXPECT_TRUE(completed);
     EXPECT_FALSE(output.empty());
+    ASSERT_FALSE(lines.empty());
+    for (const auto& line : lines) {
+        EXPECT_EQ(line.find('\n'), std::string::npos);
+        EXPECT_EQ(line.find('\r'), std::string::npos);
+    }
 }
 
 TEST_F(UvRunnerTest, CancelOperation) {

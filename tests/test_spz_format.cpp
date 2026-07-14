@@ -2,6 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -71,11 +73,17 @@ protected:
             scaling_ptr[i * 3 + 1] = -3.0f + 0.01f * static_cast<float>((i + 1) % 100);
             scaling_ptr[i * 3 + 2] = -3.0f + 0.01f * static_cast<float>((i + 2) % 100);
 
-            // Rotation: normalized quaternion (wxyz format)
-            rotation_ptr[i * 4 + 0] = 1.0f; // w
-            rotation_ptr[i * 4 + 1] = 0.0f; // x
-            rotation_ptr[i * 4 + 2] = 0.0f; // y
-            rotation_ptr[i * 4 + 3] = 0.0f; // z
+            // Rotation: nontrivial normalized quaternions (wxyz format)
+            constexpr float inv_sqrt_two = 0.70710678118f;
+            const std::array<std::array<float, 4>, 4> rotations = {{
+                {1.0f, 0.0f, 0.0f, 0.0f},
+                {inv_sqrt_two, inv_sqrt_two, 0.0f, 0.0f},
+                {inv_sqrt_two, 0.0f, inv_sqrt_two, 0.0f},
+                {inv_sqrt_two, 0.0f, 0.0f, inv_sqrt_two},
+            }};
+            std::copy(rotations[i % rotations.size()].begin(),
+                      rotations[i % rotations.size()].end(),
+                      rotation_ptr + i * 4);
 
             // Opacity: logit values in SPZ-safe range (avoids inf from sigmoid)
             opacity_ptr[i] = -2.0f + 0.04f * static_cast<float>(i % 100);
@@ -85,7 +93,7 @@ protected:
         if (sh_coeffs > 0) {
             auto* shN_ptr = static_cast<float*>(shN.data_ptr());
             for (size_t i = 0; i < num_points * sh_coeffs * 3; ++i) {
-                shN_ptr[i] = 0.1f * static_cast<float>((i % 10) - 5);
+                shN_ptr[i] = 0.1f * static_cast<float>(static_cast<int>(i % 10) - 5);
             }
         }
 
@@ -250,21 +258,25 @@ TEST_F(SpzFormatTest, RoundtripPreservesValues) {
 
     const auto orig_means = original.means().contiguous().to(Device::CPU);
     const auto orig_sh0 = original.sh0().contiguous().to(Device::CPU);
+    const auto orig_shN = original.shN_raw().contiguous().to(Device::CPU);
     const auto orig_scaling = original.scaling_raw().contiguous().to(Device::CPU);
     const auto orig_opacity = original.opacity_raw().contiguous().to(Device::CPU);
 
     const auto load_means = loaded.means().contiguous().to(Device::CPU);
     const auto load_sh0 = loaded.sh0().contiguous().to(Device::CPU);
+    const auto load_shN = loaded.shN_raw().contiguous().to(Device::CPU);
     const auto load_scaling = loaded.scaling_raw().contiguous().to(Device::CPU);
     const auto load_opacity = loaded.opacity_raw().contiguous().to(Device::CPU);
 
     const auto* orig_means_ptr = static_cast<const float*>(orig_means.data_ptr());
     const auto* orig_sh0_ptr = static_cast<const float*>(orig_sh0.data_ptr());
+    const auto* orig_shN_ptr = static_cast<const float*>(orig_shN.data_ptr());
     const auto* orig_scaling_ptr = static_cast<const float*>(orig_scaling.data_ptr());
     const auto* orig_opacity_ptr = static_cast<const float*>(orig_opacity.data_ptr());
 
     const auto* load_means_ptr = static_cast<const float*>(load_means.data_ptr());
     const auto* load_sh0_ptr = static_cast<const float*>(load_sh0.data_ptr());
+    const auto* load_shN_ptr = static_cast<const float*>(load_shN.data_ptr());
     const auto* load_scaling_ptr = static_cast<const float*>(load_scaling.data_ptr());
     const auto* load_opacity_ptr = static_cast<const float*>(load_opacity.data_ptr());
 
@@ -276,6 +288,11 @@ TEST_F(SpzFormatTest, RoundtripPreservesValues) {
     // Check SH0 colors (8-bit quantization)
     for (size_t i = 0; i < 100 * 3; ++i) {
         EXPECT_NEAR(load_sh0_ptr[i], orig_sh0_ptr[i], SPZ_TOLERANCE) << "SH0 mismatch at " << i;
+    }
+
+    ASSERT_EQ(load_shN.numel(), orig_shN.numel());
+    for (size_t i = 0; i < orig_shN.numel(); ++i) {
+        EXPECT_NEAR(load_shN_ptr[i], orig_shN_ptr[i], SPZ_TOLERANCE) << "SHN mismatch at " << i;
     }
 
     // Check scales (8-bit quantization, range [-10, 6])

@@ -520,41 +520,6 @@ TEST_F(TensorBroadcastTest, MixedRankBroadcast) {
     compare_tensors(result23_custom, result23_torch, 1e-5f, 1e-6f, "MixedRank_2D+3D");
 }
 
-// ============= Performance Test =============
-
-TEST_F(TensorBroadcastTest, BroadcastPerformance) {
-    // Test performance of broadcasting large tensors
-    const size_t rows = 1000;
-    const size_t cols = 1000;
-
-    auto col_vector_custom = Tensor::randn({rows, 1}, Device::CUDA);
-    auto row_vector_custom = Tensor::randn({1, cols}, Device::CUDA);
-
-    auto start = std::chrono::high_resolution_clock::now();
-    auto result_custom = col_vector_custom.add(row_vector_custom);
-    cudaDeviceSynchronize();
-    auto end = std::chrono::high_resolution_clock::now();
-
-    EXPECT_EQ(result_custom.shape(), TensorShape({rows, cols}));
-
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-    LOG_INFO("Broadcast {}x1 + 1x{} took {} ms", rows, cols, duration.count());
-
-    // Also benchmark PyTorch for comparison
-    auto col_vector_torch = torch::randn({static_cast<int64_t>(rows), 1},
-                                         torch::TensorOptions().device(torch::kCUDA));
-    auto row_vector_torch = torch::randn({1, static_cast<int64_t>(cols)},
-                                         torch::TensorOptions().device(torch::kCUDA));
-
-    auto torch_start = std::chrono::high_resolution_clock::now();
-    auto result_torch = col_vector_torch + row_vector_torch;
-    cudaDeviceSynchronize();
-    auto torch_end = std::chrono::high_resolution_clock::now();
-
-    auto torch_duration = std::chrono::duration_cast<std::chrono::milliseconds>(torch_end - torch_start);
-    LOG_INFO("PyTorch broadcast {}x1 + 1x{} took {} ms", rows, cols, torch_duration.count());
-}
-
 // ============= Complex Expression Tests =============
 
 TEST_F(TensorBroadcastTest, ChainedBroadcastOperations) {

@@ -57,7 +57,7 @@ def on_unload():
 
 
 @pytest.fixture
-def thread_plugins_dir(monkeypatch):
+def thread_plugins_dir(monkeypatch, bypass_plugin_installer):
     """Create temporary plugins directory for concurrency tests."""
     with tempfile.TemporaryDirectory() as tmpdir:
         plugins_dir = Path(tmpdir) / "plugins"

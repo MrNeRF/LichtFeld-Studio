@@ -100,6 +100,7 @@ class _ParamsStub:
         self.enable_eval = False
         self.save_steps = [7000]
         self.eval_steps = []
+        self.bg_color = (0.0, 0.0, 0.0)
         self.bg_image_path = ""
 
     def has_params(self):

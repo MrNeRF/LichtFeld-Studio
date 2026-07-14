@@ -401,6 +401,30 @@ TEST_F(TensorViewTest, TransposeBasic) {
     EXPECT_EQ(transposed_custom.numel(), tensor_custom.numel());
 }
 
+TEST_F(TensorViewTest, ViewMetadataAndMaterializationOwnership) {
+    const auto base = Tensor::arange(120.0f).to(Device::CUDA).reshape({4, 5, 6});
+    const auto transposed = base.transpose(0, 1);
+
+    EXPECT_EQ(base.strides(), (std::vector<size_t>{30, 6, 1}));
+    EXPECT_EQ(transposed.strides(), (std::vector<size_t>{6, 30, 1}));
+    EXPECT_EQ(transposed.storage_offset(), 0u);
+    EXPECT_TRUE(transposed.is_view());
+    EXPECT_FALSE(transposed.owns_memory());
+    EXPECT_FALSE(transposed.is_contiguous());
+
+    const auto sliced = base.slice(0, 1, 3);
+    EXPECT_EQ(sliced.storage_offset(), 30u);
+    EXPECT_TRUE(sliced.is_view());
+    EXPECT_FALSE(sliced.owns_memory());
+    EXPECT_TRUE(sliced.is_contiguous());
+
+    const auto materialized = transposed.contiguous();
+    EXPECT_TRUE(materialized.owns_memory());
+    EXPECT_FALSE(materialized.is_view());
+    EXPECT_TRUE(materialized.is_contiguous());
+    EXPECT_EQ(materialized.to_vector(), transposed.to_vector());
+}
+
 TEST_F(TensorViewTest, PermuteBasic) {
     auto [tensor_custom, tensor_torch] = create_test_tensors({2, 3, 4});
 
