@@ -25,6 +25,7 @@ add_library(lfs_core_cuda STATIC ${LFS_CORE_CUDA_SOURCES})
 # Keep the MSVC-hosted nvcc diagnostics surface compiling as an independent TU.
 # Linux nvcc locks the header/API shape; Windows CI remains the ICE verifier.
 add_library(lfs_cuda_diagnostics_compile_check OBJECT
+    diagnostics_compile_check.cpp
     diagnostics_compile_check.cu
 )
 
@@ -72,6 +73,7 @@ target_link_libraries(lfs_cuda_diagnostics_compile_check
         spdlog::spdlog
         glm::glm
         OpenMP::OpenMP_CXX
+        Vulkan::Vulkan
 )
 
 set_target_properties(lfs_core_cuda PROPERTIES
@@ -82,6 +84,8 @@ set_target_properties(lfs_core_cuda PROPERTIES
 )
 
 set_target_properties(lfs_cuda_diagnostics_compile_check PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
     CUDA_STANDARD 20
     CUDA_STANDARD_REQUIRED ON
     CUDA_ARCHITECTURES "${LichtFeld-Studio_CUDA_ARCH}"
@@ -98,6 +102,10 @@ target_compile_options(lfs_core_cuda PRIVATE
 )
 
 target_compile_options(lfs_cuda_diagnostics_compile_check PRIVATE
+    # Keep the C++ half of this compile-only target on MSVC's traditional
+    # preprocessor. Production C++ uses /Zc:preprocessor; this override proves
+    # that diagnostics headers remain independently portable without the flag.
+    $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:MSVC>>:/Zc:preprocessor->
     $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Debug>>:-O0 -g -lineinfo --extended-lambda --expt-relaxed-constexpr -Xcompiler=/Od -Xcompiler=/Z7 -Xcompiler=/utf-8 -Xcompiler=/D_CRT_SECURE_NO_WARNINGS --diag-suppress=27>
     $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:-O3 -use_fast_math --extended-lambda --expt-relaxed-constexpr --ptxas-options=-v -Xcompiler=/O2 -Xcompiler=/DNDEBUG -Xcompiler=/utf-8 -Xcompiler=/D_CRT_SECURE_NO_WARNINGS --diag-suppress=27>
     $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:GNU>>:-O3 -use_fast_math --extended-lambda --expt-relaxed-constexpr --ptxas-options=-v>

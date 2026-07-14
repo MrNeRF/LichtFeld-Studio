@@ -12,6 +12,37 @@
 
 namespace lfs::core::detail {
 
+    template <typename... Args>
+    class CudaSafeFormatString {
+    public:
+        template <size_t N>
+        consteval CudaSafeFormatString(const char (&format)[N])
+            : format_(format, N - 1) {
+            size_t field_count = 0;
+            for (size_t index = 0; index + 1 < N; ++index) {
+                if (format[index] == '{') {
+                    if (format[index + 1] != '}') {
+                        throw "CUDA diagnostic formatting supports only '{}' fields";
+                    }
+                    ++field_count;
+                    ++index;
+                } else if (format[index] == '}') {
+                    throw "unmatched '}' in CUDA diagnostic format string";
+                }
+            }
+            if (field_count != sizeof...(Args)) {
+                throw "CUDA diagnostic format argument count mismatch";
+            }
+        }
+
+        [[nodiscard]] constexpr std::string_view get() const noexcept {
+            return format_;
+        }
+
+    private:
+        std::string_view format_;
+    };
+
     // CUDA-parsed diagnostics use only default "{}" fields. Keep this
     // formatter scalar-only so nvcc never has to lower std::format or a helper
     // that returns formatting state as an aggregate.
@@ -118,12 +149,13 @@ namespace lfs::core::detail {
 
     template <typename... Args>
     [[nodiscard]] std::string format_cuda_safe(
-        const std::string_view format,
+        CudaSafeFormatString<std::type_identity_t<Args>...> format,
         Args&&... args) {
+        const std::string_view format_view = format.get();
         std::string output;
-        output.reserve(format.size() + sizeof...(Args) * 8);
+        output.reserve(format_view.size() + sizeof...(Args) * 8);
         format_cuda_safe_into(
-            output, format, std::forward<Args>(args)...);
+            output, format_view, std::forward<Args>(args)...);
         return output;
     }
 

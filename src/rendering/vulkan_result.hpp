@@ -5,11 +5,35 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdio>
+#include <format>
+#include <stdexcept>
+#include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <vulkan/vulkan.h>
 
 namespace lfs::rendering {
+
+    template <typename... Args>
+    [[nodiscard]] inline std::string formatVulkanDiagnostic(
+        std::format_string<Args...> format,
+        Args&&... args) {
+        return std::format(format, std::forward<Args>(args)...);
+    }
+
+    [[noreturn]] inline void throwVulkanError(std::string message,
+                                              const char* file,
+                                              const int line) {
+        message += ". From file `";
+        message += file;
+        message += "`, line ";
+        message += std::to_string(line);
+        std::printf("\033[91m%s\033[m\n", message.c_str());
+        std::fflush(stdout);
+        throw std::runtime_error(message);
+    }
 
     [[nodiscard]] inline const char* vkResultToString(const VkResult result) noexcept {
         switch (result) {

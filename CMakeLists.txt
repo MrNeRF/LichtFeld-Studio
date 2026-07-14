@@ -472,6 +472,17 @@ endif()
 # External dependencies (EXCLUDE_FROM_ALL to handle install ourselves)
 add_subdirectory(external EXCLUDE_FROM_ALL)
 
+# Keep LichtFeld's ordinary MSVC translation units on nvcc's conforming host
+# preprocessor and report the selected C++ language version accurately.
+# This is intentionally added after external/ so vendored targets keep their
+# upstream compiler settings.
+if(MSVC)
+    add_compile_options(
+        $<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>
+        $<$<COMPILE_LANGUAGE:CXX>:/Zc:__cplusplus>
+    )
+endif()
+
 if(LFS_ENABLE_CUDA_DEVICE_DEBUG)
     add_compile_options($<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-G>)
 endif()
