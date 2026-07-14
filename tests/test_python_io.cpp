@@ -21,6 +21,7 @@
 #include "core/splat_data.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/ply.hpp"
+#include "io/formats/rad.hpp"
 #include "io/formats/transforms.hpp"
 #include "io/loader.hpp"
 #include "io/nvcodec_image_loader.hpp"
