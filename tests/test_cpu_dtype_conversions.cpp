@@ -24,13 +24,14 @@ namespace {
         case DataType::Int32:
             return Tensor::from_vector(std::vector<int>{0, 1, 2}, {3}, Device::CPU);
         case DataType::Int64:
-            return Tensor::from_vector(std::vector<int64_t>{0, 1, 2}, {3}, Device::CPU);
+            return Tensor::from_vector(std::vector<int>{0, 1, 2}, {3}, Device::CPU)
+                .to(DataType::Int64);
         case DataType::UInt8: {
-            const std::array<uint8_t, 3> values = {0, 1, 2};
+            std::array<uint8_t, 3> values = {0, 1, 2};
             return Tensor::from_blob(values.data(), {3}, Device::CPU, dtype).clone();
         }
         case DataType::Bool: {
-            const std::array<uint8_t, 3> values = {0, 1, 1};
+            std::array<uint8_t, 3> values = {0, 1, 1};
             return Tensor::from_blob(values.data(), {3}, Device::CPU, dtype).clone();
         }
         default:
