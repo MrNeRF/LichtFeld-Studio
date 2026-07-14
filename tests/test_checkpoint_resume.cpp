@@ -414,8 +414,9 @@ namespace {
             params.optimization.headless = true;
             params.optimization.max_cap = 100000;
             params.optimization.refine_every = 100;
-            params.optimization.start_refine = 500;
-            params.optimization.stop_refine = iterations;
+            const size_t stop_refine = static_cast<size_t>(iterations);
+            params.optimization.start_refine = std::min<size_t>(500, stop_refine);
+            params.optimization.stop_refine = stop_refine;
             return params;
         }
 
