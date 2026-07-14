@@ -434,7 +434,7 @@ TEST_F(NaNInfGPUCheckTest, RandomPositions_100Trials) {
         auto lfs_t = from_torch(torch_t);
 
         bool torch_result = torch_has_nan_or_inf(torch_t);
-        bool lfs_result = lfs_t.has_nan(); // Our impl checks both
+        bool lfs_result = lfs_t.has_nan() || lfs_t.has_inf();
 
         EXPECT_EQ(torch_result, lfs_result)
             << "Mismatch at trial " << trial << " with type " << type;
