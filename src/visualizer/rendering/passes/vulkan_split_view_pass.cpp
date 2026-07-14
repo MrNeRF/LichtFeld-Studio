@@ -5,6 +5,7 @@
 #include "vulkan_split_view_pass.hpp"
 
 #include "core/logger.hpp"
+#include "core/tensor.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "rendering/image_layout.hpp"
 #include "window/vulkan_barrier2.hpp"

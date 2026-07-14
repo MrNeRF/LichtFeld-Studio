@@ -5,6 +5,7 @@
 #include "vulkan_depth_blit_pass.hpp"
 
 #include "core/logger.hpp"
+#include "core/tensor.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "window/vulkan_barrier2.hpp"
 #include "window/vulkan_context.hpp"

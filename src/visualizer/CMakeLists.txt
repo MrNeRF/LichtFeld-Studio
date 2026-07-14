@@ -235,7 +235,13 @@ target_link_libraries(lfs_visualizer
         CUDA::cudart
         nfd::nfd
         vterm
+        lfs_oiio
 )
+
+set_property(SOURCE
+    gui/gui_manager.cpp
+    rendering/passes/vulkan_environment_pass.cpp
+    APPEND PROPERTY COMPILE_DEFINITIONS FMT_HEADER_ONLY=1)
 
 # Linux folder pickers bypass NFD and call GTK directly so they can return
 # the currently-open folder rather than the highlighted child. Set up by
@@ -253,6 +259,7 @@ target_sources(lfs_visualizer
         rendering/vksplat_viewport_renderer.cpp
         rendering/vulkan_external_tensor.cpp
         rendering/point_cloud_vulkan_renderer.cpp)
+
 # The CPU chunk decoders round multiplies and adds separately; FMA contraction
 # in the dequant kernel would break CPU/GPU bit-parity (guarded by gtest).
 set_source_files_properties(rendering/lod_page_dequant_cuda.cu PROPERTIES

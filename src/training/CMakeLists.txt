@@ -61,11 +61,11 @@ set_target_properties(lfs_training_kernels PROPERTIES
 target_compile_options(lfs_training_kernels PRIVATE
     # CUDA device code + MSVC host compiler flags (Windows only)
     $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Debug>>:-O0 -g -lineinfo --extended-lambda --expt-relaxed-constexpr -Xcompiler=/Od -Xcompiler=/Z7 -Xcompiler=/utf-8 -Xcompiler=/D_CRT_SECURE_NO_WARNINGS --diag-suppress=27>
-    $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:-O3 -use_fast_math --extended-lambda --expt-relaxed-constexpr --ptxas-options=-v -Xcompiler=/O2 -Xcompiler=/DNDEBUG -Xcompiler=/utf-8 -Xcompiler=/D_CRT_SECURE_NO_WARNINGS --diag-suppress=27>
+    $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:-O3 -use_fast_math --extended-lambda --expt-relaxed-constexpr -Xcompiler=/O2 -Xcompiler=/DNDEBUG -Xcompiler=/utf-8 -Xcompiler=/D_CRT_SECURE_NO_WARNINGS --diag-suppress=27>
 
     # CUDA device code for non-Windows
     $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<NOT:$<CXX_COMPILER_ID:MSVC>>,$<CONFIG:Debug>>:-O0 -g -lineinfo --extended-lambda --expt-relaxed-constexpr>
-    $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<NOT:$<CXX_COMPILER_ID:MSVC>>,$<CONFIG:Release>>:-O3 -use_fast_math --extended-lambda --expt-relaxed-constexpr --ptxas-options=-v>
+    $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<NOT:$<CXX_COMPILER_ID:MSVC>>,$<CONFIG:Release>>:-O3 -use_fast_math --extended-lambda --expt-relaxed-constexpr>
 )
 
 if(MSVC)
@@ -99,8 +99,9 @@ set(TRAINING_NEW_SOURCES
     components/sparsity_optimizer.cpp
     control/command_api.cpp
     metrics/metrics.cpp
-    checkpoint.cpp
-    trainer.cpp
+        checkpoint.cpp
+        progress.cpp
+        trainer.cpp
     training_setup.cpp
 )
 
@@ -123,8 +124,8 @@ target_include_directories(lfs_training
         ${CMAKE_CURRENT_SOURCE_DIR}/rasterization/edge_compute/utils
         ${CMAKE_CURRENT_SOURCE_DIR}/rasterization  # For gsplat headers
 )
-# indicators.hpp is a PUBLIC system include so consumers (visualizer, mcp) also suppress its warnings
-target_include_directories(lfs_training SYSTEM PUBLIC
+# indicators.hpp is an implementation detail of progress.cpp.
+target_include_directories(lfs_training SYSTEM PRIVATE
     $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/external>
 )
 

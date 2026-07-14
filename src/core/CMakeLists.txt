@@ -27,6 +27,7 @@ set(TENSOR_SOURCES
         tensor/lazy_ir.cpp
         tensor/lazy_executor.cpp
         tensor/tensor.cpp
+        tensor/tensor_serialization.cpp
         tensor/tensor_factory.cpp
         tensor/tensor_utils.cpp
         tensor/tensor_matrix_ops.cpp
@@ -111,9 +112,11 @@ target_link_libraries(lfs_core
         lfs_core_cuda
         lfs_tensor_kernels
         taywee::args
-        OpenImageIO::OpenImageIO
+        lfs_oiio
         OpenMeshCore
 )
+
+set_property(SOURCE image_io.cpp APPEND PROPERTY COMPILE_DEFINITIONS FMT_HEADER_ONLY=1)
 
 # OpenMP for tensor multi-threaded operations
 find_package(OpenMP)

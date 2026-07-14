@@ -143,9 +143,46 @@ function(lfs_setup_onnxruntime)
         endif()
 
         if(DEFINED _asset)
+            set(_download_url
+                "https://github.com/microsoft/onnxruntime/releases/download/v${LFS_ONNXRUNTIME_VERSION}/${_asset}")
+            set(_cached_archive "${LFS_DOWNLOAD_CACHE_DIR}/${_asset}")
+            set(_cache_lock "${LFS_DOWNLOAD_CACHE_DIR}/.onnxruntime.lock")
+            file(LOCK "${_cache_lock}" GUARD FUNCTION TIMEOUT 600)
+
+            if(EXISTS "${_cached_archive}")
+                file(SHA256 "${_cached_archive}" _cached_sha256)
+                if(NOT "${_cached_sha256}" STREQUAL "${_sha256}")
+                    message(WARNING "Removing invalid cached ONNX Runtime archive: ${_cached_archive}")
+                    file(REMOVE "${_cached_archive}")
+                endif()
+            endif()
+
+            if(NOT EXISTS "${_cached_archive}")
+                set(_partial_archive "${_cached_archive}.part")
+                file(REMOVE "${_partial_archive}")
+                message(STATUS "ONNX Runtime: downloading ${_asset}")
+                file(DOWNLOAD
+                    "${_download_url}"
+                    "${_partial_archive}"
+                    EXPECTED_HASH "SHA256=${_sha256}"
+                    SHOW_PROGRESS
+                    STATUS _download_status
+                    TLS_VERIFY ON)
+                list(GET _download_status 0 _download_code)
+                list(GET _download_status 1 _download_message)
+                if(NOT _download_code EQUAL 0)
+                    file(REMOVE "${_partial_archive}")
+                    message(FATAL_ERROR "ONNX Runtime download failed: ${_download_message}")
+                endif()
+                file(RENAME "${_partial_archive}" "${_cached_archive}")
+            else()
+                message(STATUS "ONNX Runtime: using cached archive ${_cached_archive}")
+            endif()
+            file(LOCK "${_cache_lock}" RELEASE)
+
             include(FetchContent)
             FetchContent_Declare(lfs_onnxruntime_prebuilt
-                URL "https://github.com/microsoft/onnxruntime/releases/download/v${LFS_ONNXRUNTIME_VERSION}/${_asset}"
+                URL "${_cached_archive}"
                 URL_HASH "SHA256=${_sha256}"
                 DOWNLOAD_EXTRACT_TIMESTAMP FALSE)
             FetchContent_MakeAvailable(lfs_onnxruntime_prebuilt)

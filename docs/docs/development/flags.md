@@ -28,6 +28,15 @@ Release defaults keep instrumentation out of shipped binaries.
 | `LFS_ENABLE_CUDA_FAILURE_INJECTION` | `BUILD_TESTS` | `BUILD_TESTS` | Compiles the gsplat allocation-failure injection API. Production builds without tests have no injection branch or state. |
 | `LFS_ENABLE_ALLOCATION_PROFILING` | `OFF` | `OFF` | Captures tensor allocation stacks; enable only for focused allocator investigations. |
 
+Build-loop controls are regular CMake cache options rather than runtime
+environment variables:
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `ENABLE_COMPILER_CACHE` | `ON` | Auto-detects `sccache`, then `ccache`; disable for cold compiler measurements. |
+| `LFS_VCPKG_MAX_CONCURRENCY` | empty | Uses an explicit vcpkg environment setting or caps automatic package-build concurrency at six. |
+| `LFS_DOWNLOAD_CACHE_DIR` | platform cache directory | Stores checksum-verified ONNX Runtime and uv archives outside disposable build trees. |
+
 Multi-config generators default the configuration-dependent options to `OFF`;
 enable the required option explicitly when configuring them. Source-tree Python
 and RmlUI imports are controlled by `LFS_DEV_IMPORT_SOURCE_PYTHON` and

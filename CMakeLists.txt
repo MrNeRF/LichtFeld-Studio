@@ -13,23 +13,36 @@ endif()
 
 cmake_minimum_required(VERSION 3.30)
 
+# Keep test-only packages out of the application dependency graph. Command-line
+# cache values are visible before project(), when the vcpkg toolchain resolves
+# manifest features.
+list(REMOVE_ITEM VCPKG_MANIFEST_FEATURES tests)
+if(BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY)
+    list(APPEND VCPKG_MANIFEST_FEATURES tests)
+    list(REMOVE_DUPLICATES VCPKG_MANIFEST_FEATURES)
+endif()
+
 # vcpkg manifest install runs during CMake configure/regeneration, outside the
 # native build tool's `cmake --build -j ...` limit. Cap vcpkg separately before
 # the toolchain is loaded by project().
-set(LFS_VCPKG_MAX_CONCURRENCY "" CACHE STRING "Maximum number of concurrent jobs vcpkg may use while building packages; empty uses environment or caps auto-detection at 16")
+set(LFS_VCPKG_MAX_CONCURRENCY "" CACHE STRING "Maximum number of concurrent jobs vcpkg may use while building packages; empty uses an explicit vcpkg setting or caps auto-detection at 6")
 set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY "${LFS_VCPKG_MAX_CONCURRENCY}")
 if(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY STREQUAL "")
     if(DEFINED ENV{VCPKG_MAX_CONCURRENCY} AND NOT "$ENV{VCPKG_MAX_CONCURRENCY}" STREQUAL "")
         set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY "$ENV{VCPKG_MAX_CONCURRENCY}")
     elseif(DEFINED ENV{CMAKE_BUILD_PARALLEL_LEVEL} AND NOT "$ENV{CMAKE_BUILD_PARALLEL_LEVEL}" STREQUAL "")
         set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY "$ENV{CMAKE_BUILD_PARALLEL_LEVEL}")
+        if(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY MATCHES "^[1-9][0-9]*$" AND
+           _LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY GREATER 6)
+            set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY 6)
+        endif()
     else()
         include(ProcessorCount)
         ProcessorCount(_LFS_HOST_PROCESSOR_COUNT)
         if(_LFS_HOST_PROCESSOR_COUNT EQUAL 0)
-            set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY 16)
-        elseif(_LFS_HOST_PROCESSOR_COUNT GREATER 16)
-            set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY 16)
+            set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY 6)
+        elseif(_LFS_HOST_PROCESSOR_COUNT GREATER 6)
+            set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY 6)
         else()
             set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY "${_LFS_HOST_PROCESSOR_COUNT}")
         endif()
@@ -168,6 +181,25 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/DeveloperOptions.cmake")
 
+# Keep immutable third-party archives outside individual build trees. A clean
+# configure still verifies each declared checksum and extracts into its own
+# tree, but it does not redownload hundreds of MiB already fetched locally.
+if(WIN32 AND DEFINED ENV{LOCALAPPDATA})
+    file(TO_CMAKE_PATH "$ENV{LOCALAPPDATA}/LichtFeldStudio/downloads" _lfs_download_cache_default)
+elseif(APPLE AND DEFINED ENV{HOME})
+    set(_lfs_download_cache_default "$ENV{HOME}/Library/Caches/LichtFeldStudio/downloads")
+elseif(DEFINED ENV{XDG_CACHE_HOME} AND NOT "$ENV{XDG_CACHE_HOME}" STREQUAL "")
+    set(_lfs_download_cache_default "$ENV{XDG_CACHE_HOME}/lichtfeld/downloads")
+elseif(DEFINED ENV{HOME})
+    set(_lfs_download_cache_default "$ENV{HOME}/.cache/lichtfeld/downloads")
+else()
+    set(_lfs_download_cache_default "${CMAKE_BINARY_DIR}/_downloads")
+endif()
+set(LFS_DOWNLOAD_CACHE_DIR "${_lfs_download_cache_default}" CACHE PATH
+    "Shared cache for checksum-pinned third-party download archives")
+file(MAKE_DIRECTORY "${LFS_DOWNLOAD_CACHE_DIR}")
+unset(_lfs_download_cache_default)
+
 # Add -rdynamic for backtrace symbol resolution
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -rdynamic")
@@ -185,9 +217,9 @@ if(BUILD_PORTABLE)
     message(STATUS "Portable: PTX-only, tests disabled")
 endif()
 
-# Compiler cache is opt-in. Auto-enabling a broken local launcher can silently
-# poison object files and make the build non-reproducible.
-option(ENABLE_COMPILER_CACHE "Enable sccache/ccache compiler launchers when available" OFF)
+# Compiler caching is part of the default developer loop. Disable it for clean
+# compiler benchmarks or when diagnosing a launcher-specific problem.
+option(ENABLE_COMPILER_CACHE "Auto-detect and use sccache/ccache compiler launchers" ON)
 if(ENABLE_COMPILER_CACHE)
     # CUDA caching disabled on Windows due to nvcc compatibility issues.
     find_program(SCCACHE_PROGRAM sccache)
@@ -224,18 +256,6 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CUDA_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
-
-# Parallel build
-include(ProcessorCount)
-ProcessorCount(total_cores)
-if(total_cores GREATER 1)
-    math(EXPR used_cores "${total_cores} - 2")
-    if(used_cores GREATER 20)
-        set(used_cores 20)
-    endif()
-    set(ENV{MAKEFLAGS} "-j${used_cores}")
-    message(STATUS "Building with ${used_cores} cores")
-endif()
 
 # CUDA setup
 # On Windows, nvidia-smi.exe is in System32, but CMake might be running as 32-bit
@@ -442,6 +462,29 @@ find_package(pxr CONFIG REQUIRED)
 find_package(assimp REQUIRED)
 find_package(RmlUi CONFIG REQUIRED)
 
+# OpenImageIO's static vcpkg target exposes fmt::fmt-header-only through
+# OpenImageIO_Util. That definition is needed by TUs which include OIIO, but it
+# otherwise makes every source in a consumer instantiate fmt. Preserve OIIO's
+# own public compile interface while making the static archive closure link-only;
+# each of our five OIIO source files opts into FMT_HEADER_ONLY explicitly.
+add_library(lfs_oiio INTERFACE)
+target_link_libraries(lfs_oiio INTERFACE "$<LINK_ONLY:OpenImageIO::OpenImageIO>")
+get_target_property(_lfs_oiio_includes OpenImageIO::OpenImageIO INTERFACE_INCLUDE_DIRECTORIES)
+if(_lfs_oiio_includes)
+    target_include_directories(lfs_oiio SYSTEM INTERFACE ${_lfs_oiio_includes})
+endif()
+get_target_property(_lfs_oiio_definitions OpenImageIO::OpenImageIO INTERFACE_COMPILE_DEFINITIONS)
+if(_lfs_oiio_definitions)
+    target_compile_definitions(lfs_oiio INTERFACE ${_lfs_oiio_definitions})
+endif()
+get_target_property(_lfs_oiio_features OpenImageIO::OpenImageIO INTERFACE_COMPILE_FEATURES)
+if(_lfs_oiio_features)
+    target_compile_features(lfs_oiio INTERFACE ${_lfs_oiio_features})
+endif()
+unset(_lfs_oiio_includes)
+unset(_lfs_oiio_definitions)
+unset(_lfs_oiio_features)
+
 # Vulkan-native depth: glm::perspective/ortho/frustum must emit clip-space z in
 # [0, 1], not OpenGL's [-1, 1]. Keeps gl_FragDepth, the grid pass, the depth-
 # blit pass and the CPU-side NDC bound checks on a single convention.
@@ -577,7 +620,6 @@ target_link_libraries(${PROJECT_NAME}
         CUDA::curand
         spdlog::spdlog
         taywee::args
-        OpenImageIO::OpenImageIO
         SDL3::SDL3
 )
 

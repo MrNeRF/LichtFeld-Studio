@@ -259,7 +259,6 @@ target_link_libraries(lfs_py PRIVATE
     ${LFS_PY_INTERNAL_LINK_LIBS}
     OpenMeshCore
     OpenMeshTools
-    OpenImageIO::OpenImageIO
     CUDA::cudart
     CUDA::curand
     ${CMAKE_DL_LIBS}

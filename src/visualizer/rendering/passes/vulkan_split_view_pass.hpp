@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "core/tensor.hpp"
+#include "core/tensor_fwd.hpp"
 
 #include <cstddef>
 #include <cstdint>
