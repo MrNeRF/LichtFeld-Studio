@@ -1382,9 +1382,10 @@ namespace lfs::training {
     }
 
     void AdamOptimizer::adopt_checkpoint_state(AdamOptimizer& loaded) noexcept {
-        static_assert(std::is_nothrow_swappable_v<AdamConfig>);
-        std::swap(config_, loaded.config_);
-        states_.swap(loaded.states_);
+        static_assert(std::is_nothrow_move_assignable_v<AdamConfig>);
+        static_assert(std::is_nothrow_move_assignable_v<decltype(states_)>);
+        config_ = std::move(loaded.config_);
+        states_ = std::move(loaded.states_);
     }
 
     void AdamOptimizer::reserve_capacity(const size_t capacity) {
