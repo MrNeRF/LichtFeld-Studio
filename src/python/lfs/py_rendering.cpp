@@ -1719,8 +1719,7 @@ namespace lfs::python {
                     return static_cast<float>(self.height) / self.ortho_scale;
                 },
                 "Vertical view extent in world units (Blender-compatible orthographic scale). Larger when zoomed out, smaller when zoomed in.")
-            .def_prop_ro(
-                "position", [](const PyViewInfo& self) -> std::tuple<float, float, float> {
+            .def_prop_ro("position", [](const PyViewInfo& self) -> std::tuple<float, float, float> {
                     auto t = self.translation.tensor().cpu();
                     auto acc = t.accessor<float, 1>();
                     return {acc(0), acc(1), acc(2)}; }, "Camera position as (x, y, z) tuple");

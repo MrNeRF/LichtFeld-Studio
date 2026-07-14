@@ -1153,10 +1153,12 @@ namespace lfs::core {
                     (std::is_same_v<Value, float> && dtype_ == DataType::Float32) ||
                     (std::is_same_v<Value, __half> && dtype_ == DataType::Float16) ||
                     ((std::is_same_v<Value, int> || std::is_same_v<Value, int32_t> ||
-                      std::is_same_v<Value, uint32_t>)&&dtype_ == DataType::Int32) ||
+                      std::is_same_v<Value, uint32_t>) &&
+                     dtype_ == DataType::Int32) ||
                     (std::is_same_v<Value, int64_t> && dtype_ == DataType::Int64) ||
                     ((std::is_same_v<Value, bool> || std::is_same_v<Value, unsigned char> ||
-                      std::is_same_v<Value, uint8_t>)&&(dtype_ == DataType::Bool || dtype_ == DataType::UInt8));
+                      std::is_same_v<Value, uint8_t>) &&
+                     (dtype_ == DataType::Bool || dtype_ == DataType::UInt8));
                 LFS_ASSERT_MSG(dtype_matches,
                                "ptr<T>() type does not match tensor dtype");
             }

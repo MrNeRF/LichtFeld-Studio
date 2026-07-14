@@ -63,5 +63,5 @@ typedef int32_t sortingKey_t;
 #endif
 #endif
 
-#define _CEIL_DIV(x, m)   (((x) + (m)-1) / (m))
+#define _CEIL_DIV(x, m)   (((x) + (m) - 1) / (m))
 #define _CEIL_ROUND(x, m) (_CEIL_DIV(x, m) * (m))
