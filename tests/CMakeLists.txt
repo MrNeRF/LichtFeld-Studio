@@ -360,6 +360,7 @@ string(CONCAT LFS_NIGHTLY_TEST_FILTER
     "NaNInfGPUCheckTest.MultiDim_LargeTensors:"
     "StridedFillTest.VeryLargeGrid_3D_Fill:"
     "TensorLazyRuntimeTest.ErankExpressionMatchesTorchOnInheritedStream:"
+    "TensorLazyRuntimeTest.FusedSegmentedSquareSumMatchesTorchOnInheritedStream:"
     "PlyToRadLod.OutOfCore*:"
     "SpzFormatTest.RealPlyRoundtrip:"
     "PythonIOTest.LoadRealPlyFile:"
